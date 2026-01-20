@@ -712,22 +712,22 @@ pub struct RentLedgerArgs {
     #[arg(long = "quote", value_name = "PATH")]
     pub quote_path: PathBuf,
     /// Account responsible for paying the rent and funding bonus pools.
-    #[arg(long = "payer-account", value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long = "payer-account", value_name = "ACCOUNT_ID")]
     pub payer_account: String,
     /// Treasury or escrow account receiving the base rent before distribution.
-    #[arg(long = "treasury-account", value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long = "treasury-account", value_name = "ACCOUNT_ID")]
     pub treasury_account: String,
     /// Protocol reserve account that receives the configured reserve share.
-    #[arg(long = "protocol-reserve-account", value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long = "protocol-reserve-account", value_name = "ACCOUNT_ID")]
     pub protocol_reserve_account: String,
     /// Provider payout account that receives the base rent remainder.
-    #[arg(long = "provider-account", value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long = "provider-account", value_name = "ACCOUNT_ID")]
     pub provider_account: String,
     /// Account earmarked for PDP bonus payouts.
-    #[arg(long = "pdp-bonus-account", value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long = "pdp-bonus-account", value_name = "ACCOUNT_ID")]
     pub pdp_bonus_account: String,
     /// Account earmarked for `PoTR` bonus payouts.
-    #[arg(long = "potr-bonus-account", value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long = "potr-bonus-account", value_name = "ACCOUNT_ID")]
     pub potr_bonus_account: String,
     /// Asset definition identifier used for XOR transfers (e.g., `xor#sora`).
     #[arg(long = "asset-definition", value_name = "NAME#DOMAIN")]
@@ -742,30 +742,19 @@ impl RentLedgerArgs {
         let quote_value: Value =
             json::from_str(&quote_contents).wrap_err("failed to parse rent quote JSON")?;
         let projection = extract_rent_ledger_projection(&quote_value)?;
-        let payer: AccountId = self
-            .payer_account
-            .parse()
-            .wrap_err("failed to parse --payer-account")?;
-        let treasury: AccountId = self
-            .treasury_account
-            .parse()
-            .wrap_err("failed to parse --treasury-account")?;
-        let protocol_reserve: AccountId = self
-            .protocol_reserve_account
-            .parse()
-            .wrap_err("failed to parse --protocol-reserve-account")?;
-        let provider: AccountId = self
-            .provider_account
-            .parse()
-            .wrap_err("failed to parse --provider-account")?;
-        let pdp_bonus: AccountId = self
-            .pdp_bonus_account
-            .parse()
-            .wrap_err("failed to parse --pdp-bonus-account")?;
-        let potr_bonus: AccountId = self
-            .potr_bonus_account
-            .parse()
-            .wrap_err("failed to parse --potr-bonus-account")?;
+        let payer = crate::resolve_account_id(context, &self.payer_account)
+            .wrap_err("failed to resolve --payer-account")?;
+        let treasury = crate::resolve_account_id(context, &self.treasury_account)
+            .wrap_err("failed to resolve --treasury-account")?;
+        let protocol_reserve =
+            crate::resolve_account_id(context, &self.protocol_reserve_account)
+                .wrap_err("failed to resolve --protocol-reserve-account")?;
+        let provider = crate::resolve_account_id(context, &self.provider_account)
+            .wrap_err("failed to resolve --provider-account")?;
+        let pdp_bonus = crate::resolve_account_id(context, &self.pdp_bonus_account)
+            .wrap_err("failed to resolve --pdp-bonus-account")?;
+        let potr_bonus = crate::resolve_account_id(context, &self.potr_bonus_account)
+            .wrap_err("failed to resolve --potr-bonus-account")?;
         let asset_definition: AssetDefinitionId = self
             .asset_definition
             .parse()

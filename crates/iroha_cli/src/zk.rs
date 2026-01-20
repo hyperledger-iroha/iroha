@@ -1251,7 +1251,7 @@ pub struct ShieldArgs {
     /// `AssetDefinitionId` like `rose#wonderland`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
-    /// `AccountId` to debit (e.g., `alice@wonderland`)
+    /// Account identifier to debit (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
     #[arg(long, value_name = "ACCOUNT_ID")]
     from: String,
     /// Public amount to debit
@@ -1368,7 +1368,8 @@ impl Run for ShieldArgs {
             prelude::{AccountId, AssetDefinitionId, InstructionBox},
         };
         let asset: AssetDefinitionId = self.asset.parse()?;
-        let from: AccountId = self.from.parse()?;
+        let from =
+            crate::resolve_account_id(context, &self.from).wrap_err("failed to resolve --from")?;
         let note_commitment = parse_hex32(&self.note_commitment)?;
         let enc_payload = if let (Some(ephemeral_hex), Some(nonce_hex), Some(ciphertext_b64)) = (
             &self.ephemeral_pubkey,
@@ -1438,7 +1439,7 @@ pub struct UnshieldArgs {
     /// `AssetDefinitionId` like `rose#wonderland`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
-    /// Recipient `AccountId` to credit (e.g., `alice@wonderland`)
+    /// Recipient account identifier to credit (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
     #[arg(long, value_name = "ACCOUNT_ID")]
     to: String,
     /// Public amount to credit
@@ -1608,7 +1609,8 @@ impl Run for UnshieldArgs {
     fn run<C: RunContext>(self, context: &mut C) -> eyre::Result<()> {
         use iroha::data_model::prelude::{AccountId, AssetDefinitionId, InstructionBox};
         let asset: AssetDefinitionId = self.asset.parse()?;
-        let to: AccountId = self.to.parse()?;
+        let to =
+            crate::resolve_account_id(context, &self.to).wrap_err("failed to resolve --to")?;
         let inputs = parse_inputs_csv(&self.inputs)?;
         let proof_json_str = std::fs::read_to_string(&self.proof_json)?;
         let v: norito::json::Value = norito::json::from_str(&proof_json_str)?;

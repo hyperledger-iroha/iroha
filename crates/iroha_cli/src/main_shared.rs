@@ -1384,8 +1384,12 @@ mod domain {
                         .wrap_err("Failed to unregister domain")
                 }
                 Transfer(args) => {
+                    let from = resolve_account_id(context, &args.from)
+                        .wrap_err("failed to resolve --from account")?;
+                    let to = resolve_account_id(context, &args.to)
+                        .wrap_err("failed to resolve --to account")?;
                     let instruction =
-                        iroha::data_model::isi::Transfer::domain(args.from, args.id, args.to);
+                        iroha::data_model::isi::Transfer::domain(from, args.id, to);
                     context
                         .finish([instruction])
                         .wrap_err("Failed to transfer domain")
@@ -1402,10 +1406,10 @@ mod domain {
         pub id: DomainId,
         /// Source account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
-        pub from: AccountId,
+        pub from: String,
         /// Destination account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
-        pub to: AccountId,
+        pub to: String,
     }
 
     #[derive(clap::Args, Debug)]
@@ -1518,6 +1522,8 @@ mod account {
                 Permission(cmd) => cmd.run(context),
                 List(cmd) => cmd.run(context),
                 Get(args) => {
+                    let account_id = resolve_account_id(context, &args.id)
+                        .wrap_err("failed to resolve --id account")?;
                     let client = context.client_from_config();
                     let entries = client
                         .query(FindAccounts)
@@ -1525,19 +1531,23 @@ mod account {
                         .wrap_err("Failed to get account")?;
                     let entry = entries
                         .into_iter()
-                        .find(|e| e.id() == &args.id)
+                        .find(|e| e.id() == &account_id)
                         .ok_or_else(|| eyre!("Account not found"))?;
                     context.print_data(&entry)
                 }
                 Register(args) => {
+                    let account_id = resolve_account_id(context, &args.id)
+                        .wrap_err("failed to resolve --id account")?;
                     let instruction =
-                        iroha::data_model::isi::Register::account(Account::new(args.id));
+                        iroha::data_model::isi::Register::account(Account::new(account_id));
                     context
                         .finish([instruction])
                         .wrap_err("Failed to register account")
                 }
                 Unregister(args) => {
-                    let instruction = iroha::data_model::isi::Unregister::account(args.id);
+                    let account_id = resolve_account_id(context, &args.id)
+                        .wrap_err("failed to resolve --id account")?;
+                    let instruction = iroha::data_model::isi::Unregister::account(account_id);
                     context
                         .finish([instruction])
                         .wrap_err("Failed to unregister account")
@@ -1562,8 +1572,10 @@ mod account {
             use self::RoleCommand::*;
             match self {
                 List(args) => {
+                    let account_id = resolve_account_id(context, &args.id)
+                        .wrap_err("failed to resolve --id account")?;
                     let client = context.client_from_config();
-                    let mut builder = client.query(FindRolesByAccountId::new(args.id));
+                    let mut builder = client.query(FindRolesByAccountId::new(account_id));
                     if args.limit.is_some() || args.offset > 0 {
                         let pagination = iroha::data_model::query::parameters::Pagination::new(
                             args.limit.and_then(NonZeroU64::new),
@@ -1579,15 +1591,19 @@ mod account {
                     context.print_data(&roles)
                 }
                 Grant(args) => {
+                    let account_id = resolve_account_id(context, &args.id)
+                        .wrap_err("failed to resolve --id account")?;
                     let instruction =
-                        iroha::data_model::isi::Grant::account_role(args.role, args.id);
+                        iroha::data_model::isi::Grant::account_role(args.role, account_id);
                     context
                         .finish([instruction])
                         .wrap_err("Failed to grant the role to the account")
                 }
                 Revoke(args) => {
+                    let account_id = resolve_account_id(context, &args.id)
+                        .wrap_err("failed to resolve --id account")?;
                     let instruction =
-                        iroha::data_model::isi::Revoke::account_role(args.role, args.id);
+                        iroha::data_model::isi::Revoke::account_role(args.role, account_id);
                     context
                         .finish([instruction])
                         .wrap_err("Failed to revoke the role from the account")
@@ -1611,8 +1627,10 @@ mod account {
             use self::PermissionCommand::*;
             match self {
                 List(args) => {
+                    let account_id = resolve_account_id(context, &args.id)
+                        .wrap_err("failed to resolve --id account")?;
                     let client = context.client_from_config();
-                    let mut builder = client.query(FindPermissionsByAccountId::new(args.id));
+                    let mut builder = client.query(FindPermissionsByAccountId::new(account_id));
                     if args.limit.is_some() || args.offset > 0 {
                         let pagination = iroha::data_model::query::parameters::Pagination::new(
                             args.limit.and_then(NonZeroU64::new),
@@ -1629,16 +1647,20 @@ mod account {
                 }
                 Grant(args) => {
                     let permission: Permission = parse_json_stdin(context)?;
+                    let account_id = resolve_account_id(context, &args.id)
+                        .wrap_err("failed to resolve --id account")?;
                     let instruction =
-                        iroha::data_model::isi::Grant::account_permission(permission, args.id);
+                        iroha::data_model::isi::Grant::account_permission(permission, account_id);
                     context
                         .finish([instruction])
                         .wrap_err("Failed to grant the permission to the account")
                 }
                 Revoke(args) => {
                     let permission: Permission = parse_json_stdin(context)?;
+                    let account_id = resolve_account_id(context, &args.id)
+                        .wrap_err("failed to resolve --id account")?;
                     let instruction =
-                        iroha::data_model::isi::Revoke::account_permission(permission, args.id);
+                        iroha::data_model::isi::Revoke::account_permission(permission, account_id);
                     context
                         .finish([instruction])
                         .wrap_err("Failed to revoke the permission from the account")
@@ -1651,14 +1673,14 @@ mod account {
     pub struct Id {
         /// Account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
-        id: AccountId,
+        id: String,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct RoleList {
         /// Account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
-        id: AccountId,
+        id: String,
         /// Maximum number of items to return (server-side limit)
         #[arg(long)]
         limit: Option<u64>,
@@ -1674,7 +1696,7 @@ mod account {
     pub struct PermissionList {
         /// Account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
-        id: AccountId,
+        id: String,
         /// Maximum number of items to return (server-side limit)
         #[arg(long)]
         limit: Option<u64>,
@@ -1690,7 +1712,7 @@ mod account {
     pub struct IdRole {
         /// Account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
-        pub id: AccountId,
+        pub id: String,
         /// Role name
         #[arg(short, long)]
         pub role: RoleId,
@@ -1832,6 +1854,7 @@ mod asset {
 
     fn asset_transfer_instructions(
         args: &Transfer,
+        to: &AccountId,
         policy: Option<&AccountAdmissionPolicy>,
     ) -> Vec<InstructionBox> {
         let mut instructions: Vec<InstructionBox> = Vec::new();
@@ -1842,7 +1865,7 @@ mod asset {
             )
         {
             instructions.push(InstructionBox::from(Register::account(Account::new(
-                args.to.clone(),
+                to.clone(),
             ))));
         }
 
@@ -1850,7 +1873,7 @@ mod asset {
             iroha::data_model::isi::Transfer::asset_numeric(
                 args.id.clone(),
                 args.quantity.clone(),
-                args.to.clone(),
+                to.clone(),
             ),
         ));
         instructions
@@ -1889,14 +1912,16 @@ mod asset {
                         .wrap_err("Failed to burn numeric asset")
                 }
                 Transfer(args) => {
+                    let to = resolve_account_id(context, &args.to)
+                        .wrap_err("failed to resolve --to account")?;
                     let policy = if args.ensure_destination {
                         let client = context.client_from_config();
-                        Some(admission_policy_for_domain(&client, args.to.domain())?)
+                        Some(admission_policy_for_domain(&client, to.domain())?)
                     } else {
                         None
                     };
 
-                    let instructions = asset_transfer_instructions(&args, policy.as_ref());
+                    let instructions = asset_transfer_instructions(&args, &to, policy.as_ref());
                     context
                         .finish(instructions)
                         .wrap_err("Failed to transfer numeric asset")
@@ -1994,8 +2019,12 @@ mod asset {
                             .wrap_err("Failed to unregister asset")
                     }
                     Transfer(args) => {
+                        let from = resolve_account_id(context, &args.from)
+                            .wrap_err("failed to resolve --from account")?;
+                        let to = resolve_account_id(context, &args.to)
+                            .wrap_err("failed to resolve --to account")?;
                         let instruction = iroha::data_model::isi::Transfer::asset_definition(
-                            args.from, args.id, args.to,
+                            from, args.id, to,
                         );
                         context
                             .finish([instruction])
@@ -2042,10 +2071,10 @@ mod asset {
             pub id: AssetDefinitionId,
             /// Source account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
             #[arg(short, long)]
-            pub from: AccountId,
+            pub from: String,
             /// Destination account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
             #[arg(short, long)]
-            pub to: AccountId,
+            pub to: String,
         }
 
         #[derive(clap::Args, Debug)]
@@ -2226,7 +2255,7 @@ mod asset {
         pub id: AssetId,
         /// Destination account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
-        pub to: AccountId,
+        pub to: String,
         /// Transfer amount (integer or decimal)
         #[arg(short, long)]
         pub quantity: Numeric,
@@ -2326,7 +2355,7 @@ mod asset {
         use iroha_crypto::Algorithm;
         use iroha_primitives::numeric::Numeric;
 
-        fn sample_transfer_args(ensure_destination: bool) -> Transfer {
+        fn sample_transfer_args(ensure_destination: bool) -> (Transfer, AccountId) {
             let domain: DomainId = "wonderland".parse().expect("domain id");
             let src = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
             let dest = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
@@ -2334,13 +2363,13 @@ mod asset {
             let to = AccountId::new(domain, dest.public_key().clone());
             let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def");
             let asset_id = AssetId::new(asset_def_id, owner);
-
-            Transfer {
+            let args = Transfer {
                 id: asset_id,
-                to,
+                to: to.to_string(),
                 quantity: Numeric::new(5, 0),
                 ensure_destination,
-            }
+            };
+            (args, to)
         }
 
         fn assert_register_account(instruction: &InstructionBox, expected: &AccountId) {
@@ -2371,37 +2400,36 @@ mod asset {
 
         #[test]
         fn explicit_policy_adds_register_instruction() {
-            let args = sample_transfer_args(true);
+            let (args, to) = sample_transfer_args(true);
             let policy = AccountAdmissionPolicy {
                 mode: AccountAdmissionMode::ExplicitOnly,
                 ..AccountAdmissionPolicy::default()
             };
-
-            let instructions = asset_transfer_instructions(&args, Some(&policy));
+            let instructions = asset_transfer_instructions(&args, &to, Some(&policy));
             assert_eq!(instructions.len(), 2);
-            assert_register_account(&instructions[0], &args.to);
-            assert_transfer_destination(&instructions[1], &args.to);
+            assert_register_account(&instructions[0], &to);
+            assert_transfer_destination(&instructions[1], &to);
         }
 
         #[test]
         fn implicit_policy_skips_register_instruction() {
-            let args = sample_transfer_args(true);
+            let (args, to) = sample_transfer_args(true);
             let instructions =
-                asset_transfer_instructions(&args, Some(&AccountAdmissionPolicy::default()));
+                asset_transfer_instructions(&args, &to, Some(&AccountAdmissionPolicy::default()));
             assert_eq!(instructions.len(), 1);
-            assert_transfer_destination(&instructions[0], &args.to);
+            assert_transfer_destination(&instructions[0], &to);
         }
 
         #[test]
         fn ensure_flag_off_sends_transfer_only() {
-            let args = sample_transfer_args(false);
+            let (args, to) = sample_transfer_args(false);
             let policy = AccountAdmissionPolicy {
                 mode: AccountAdmissionMode::ExplicitOnly,
                 ..AccountAdmissionPolicy::default()
             };
-            let instructions = asset_transfer_instructions(&args, Some(&policy));
+            let instructions = asset_transfer_instructions(&args, &to, Some(&policy));
             assert_eq!(instructions.len(), 1);
-            assert_transfer_destination(&instructions[0], &args.to);
+            assert_transfer_destination(&instructions[0], &to);
         }
     }
 }
@@ -2465,8 +2493,12 @@ mod nft {
                         .wrap_err("Failed to unregister NFT")
                 }
                 Transfer(args) => {
+                    let from = resolve_account_id(context, &args.from)
+                        .wrap_err("failed to resolve --from account")?;
+                    let to = resolve_account_id(context, &args.to)
+                        .wrap_err("failed to resolve --to account")?;
                     let instruction =
-                        iroha::data_model::isi::Transfer::nft(args.from, args.id, args.to);
+                        iroha::data_model::isi::Transfer::nft(from, args.id, to);
                     context
                         .finish([instruction])
                         .wrap_err("Failed to transfer NFT")
@@ -2510,10 +2542,10 @@ mod nft {
         pub id: NftId,
         /// Source account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
-        pub from: AccountId,
+        pub from: String,
         /// Destination account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
-        pub to: AccountId,
+        pub to: String,
     }
 
     #[derive(clap::Args, Debug)]
@@ -2752,9 +2784,9 @@ mod multisig {
     }
     #[derive(clap::Args, Debug)]
     pub struct Register {
-        /// List of signatories for the multisig account
+        /// List of signatories for the multisig account (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long, num_args(2..))]
-        pub signatories: Vec<AccountId>,
+        pub signatories: Vec<String>,
         /// Relative weights of signatories' responsibilities
         #[arg(short, long, num_args(2..))]
         pub weights: Vec<u8>,
@@ -2765,7 +2797,7 @@ mod multisig {
         /// random account is generated in the signatory domain and the private
         /// key is discarded locally.
         #[arg(long)]
-        pub account: Option<AccountId>,
+        pub account: Option<String>,
         /// Time-to-live for multisig transactions.
         /// Example: "1y 6M 2w 3d 12h 30m 30s"
         #[arg(short, long, default_value_t = default_transaction_ttl())]
@@ -2779,9 +2811,14 @@ mod multisig {
     impl Run for Register {
         #[allow(clippy::too_many_lines)]
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let signatories = self.signatories;
-            if signatories.len() != self.weights.len() {
+            if self.signatories.len() != self.weights.len() {
                 return Err(eyre!("signatories and weights must be equal in length"));
+            }
+            let mut signatories = Vec::with_capacity(self.signatories.len());
+            for literal in self.signatories {
+                let account = resolve_account_id(context, &literal)
+                    .wrap_err_with(|| format!("failed to resolve signatory `{literal}`"))?;
+                signatories.push(account);
             }
             let domain = signatories
                 .first()
@@ -2793,7 +2830,9 @@ mod multisig {
                     "all signatories must belong to domain `{domain}` to register a multisig account"
                 ));
             }
-            let account = if let Some(account) = self.account {
+            let account = if let Some(literal) = self.account {
+                let account = resolve_account_id(context, &literal)
+                    .wrap_err("failed to resolve --account")?;
                 if account.domain() != &domain {
                     return Err(eyre!(
                         "multisig account `{account}` must belong to the signatory domain `{domain}`"
@@ -2830,7 +2869,7 @@ mod multisig {
     pub struct Propose {
         /// Multisig authority managing the proposed transaction
         #[arg(short, long)]
-        pub account: AccountId,
+        pub account: String,
         /// Overrides the default time-to-live for this transaction.
         /// Example: "1y 6M 2w 3d 12h 30m 30s"
         /// Must not exceed the multisig policy TTL; the CLI will preview the
@@ -2850,16 +2889,18 @@ mod multisig {
                     .and_then(NonZeroU64::new)
                     .expect("ttl should be between 1 ms and 584942417 years")
             });
+            let account = resolve_account_id(context, &self.account)
+                .wrap_err("failed to resolve --account")?;
 
             if !context.output_instructions() {
-                surface_policy_ttl(context, &self.account, transaction_ttl_ms)?;
+                surface_policy_ttl(context, &account, transaction_ttl_ms)?;
             }
 
             let instructions_hash = HashOf::new(&instructions);
             println!("{instructions_hash}");
 
             let propose_multisig_transaction =
-                MultisigPropose::new(self.account, instructions, transaction_ttl_ms);
+                MultisigPropose::new(account, instructions, transaction_ttl_ms);
 
             context
                 .finish([iroha::data_model::isi::InstructionBox::from(
@@ -2873,7 +2914,7 @@ mod multisig {
     pub struct Approve {
         /// Multisig authority of the transaction
         #[arg(short, long)]
-        pub account: AccountId,
+        pub account: String,
         /// Hash of the instructions to approve
         #[arg(short, long)]
         pub instructions_hash: ProposalKey,
@@ -2881,8 +2922,10 @@ mod multisig {
 
     impl Run for Approve {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let account = resolve_account_id(context, &self.account)
+                .wrap_err("failed to resolve --account")?;
             let approve_multisig_transaction =
-                MultisigApprove::new(self.account, self.instructions_hash);
+                MultisigApprove::new(account, self.instructions_hash);
 
             context
                 .finish([iroha::data_model::isi::InstructionBox::from(
@@ -2896,7 +2939,7 @@ mod multisig {
     pub struct Inspect {
         /// Multisig account identifier to inspect
         #[arg(short, long)]
-        pub account: AccountId,
+        pub account: String,
         /// Emit JSON instead of human-readable output
         #[arg(long)]
         pub json: bool,
@@ -2905,16 +2948,18 @@ mod multisig {
     impl Run for Inspect {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use iroha::data_model::prelude::FindAccounts;
+            let account_id = resolve_account_id(context, &self.account)
+                .wrap_err("failed to resolve --account")?;
             let client = context.client_from_config();
             let mut accounts = client.query(FindAccounts).execute_all()?;
             let account = accounts
                 .iter_mut()
-                .find(|entry| entry.id() == &self.account)
-                .ok_or_else(|| eyre!("account `{}` not found", self.account))?;
+                .find(|entry| entry.id() == &account_id)
+                .ok_or_else(|| eyre!("account `{}` not found", account_id))?;
 
             let controller =
                 account.id().controller().multisig_policy().ok_or_else(|| {
-                    eyre!("account `{}` is not multisig-controlled", self.account)
+                    eyre!("account `{}` is not multisig-controlled", account_id)
                 })?;
 
             let ctap2 = controller.encode_ctap2();
@@ -4323,9 +4368,9 @@ mod trigger {
         /// Number of permitted executions (default: indefinitely)
         #[arg(short, long)]
         pub repeats: Option<u32>,
-        /// Account executing the trigger (default: current config account)
+        /// Account executing the trigger (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(long)]
-        pub authority: Option<AccountId>,
+        pub authority: Option<String>,
         /// Filter type for the trigger
         #[arg(long, value_enum, default_value_t = FilterType::Execute)]
         pub filter: FilterType,
@@ -4341,9 +4386,9 @@ mod trigger {
         /// Data filter preset: events within a domain
         #[arg(long)]
         pub data_domain: Option<DomainId>,
-        /// Data filter preset: events for an account
+        /// Data filter preset: events for an account (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(long)]
-        pub data_account: Option<AccountId>,
+        pub data_account: Option<String>,
         /// Data filter preset: events for an asset
         #[arg(long)]
         pub data_asset: Option<AssetId>,
@@ -4447,9 +4492,11 @@ mod trigger {
             };
 
             // Resolve authority and repeat policy
-            let authority = self
-                .authority
-                .unwrap_or_else(|| context.config().account.clone());
+            let authority = match self.authority {
+                Some(literal) => resolve_account_id(context, &literal)
+                    .wrap_err("failed to resolve --authority")?,
+                None => context.config().account.clone(),
+            };
             // Build filter according to selection
             let filter_box: EventFilterBox = match self.filter {
                 FilterType::Execute => EventFilterBox::ExecuteTrigger(
@@ -4493,10 +4540,12 @@ mod trigger {
                             iroha::data_model::events::data::prelude::DomainEventFilter::new()
                                 .for_domain(dom),
                         )
-                    } else if let Some(acc) = self.data_account.clone() {
+                    } else if let Some(acc_literal) = self.data_account.as_ref() {
+                        let account = resolve_account_id(context, acc_literal)
+                            .wrap_err("failed to resolve --data-account")?;
                         DataEventFilter::from(
                             iroha::data_model::events::data::prelude::AccountEventFilter::new()
-                                .for_account(acc),
+                                .for_account(account),
                         )
                     } else if let Some(asset) = self.data_asset.clone() {
                         DataEventFilter::from(
@@ -4780,7 +4829,7 @@ mod metadata {
         #[derive(clap::Args, Debug)]
         pub struct IdKey {
             #[arg(short, long)]
-            pub id: AccountId,
+            pub id: String,
             #[arg(short, long)]
             pub key: Name,
         }
@@ -4790,6 +4839,8 @@ mod metadata {
                 use self::Command::*;
                 match self {
                     Get(args) => {
+                        let account_id = resolve_account_id(context, &args.id)
+                            .wrap_err("failed to resolve --id account")?;
                         let client = context.client_from_config();
                         let entries: Vec<Account> = client
                             .query(FindAccounts)
@@ -4797,7 +4848,7 @@ mod metadata {
                             .wrap_err("Failed to get value")?;
                         let entry = entries
                             .into_iter()
-                            .find(|e| e.id() == &args.id)
+                            .find(|e| e.id() == &account_id)
                             .ok_or_else(|| eyre!("Account not found"))?;
                         let value = entry
                             .metadata()
@@ -4809,12 +4860,21 @@ mod metadata {
                     Set(args) => {
                         let value: Json = parse_json_stdin(context)?;
                         let instruction =
-                            iroha::data_model::isi::SetKeyValue::account(args.id, args.key, value);
+                            iroha::data_model::isi::SetKeyValue::account(
+                                resolve_account_id(context, &args.id)
+                                    .wrap_err("failed to resolve --id account")?,
+                                args.key,
+                                value,
+                            );
                         context.finish([instruction])
                     }
                     Remove(args) => {
                         let instruction =
-                            iroha::data_model::isi::RemoveKeyValue::account(args.id, args.key);
+                            iroha::data_model::isi::RemoveKeyValue::account(
+                                resolve_account_id(context, &args.id)
+                                    .wrap_err("failed to resolve --id account")?,
+                                args.key,
+                            );
                         context.finish([instruction])
                     }
                 }
@@ -4990,13 +5050,13 @@ mod repo {
         pub agreement_id: RepoAgreementId,
         /// Initiating account submitting the repo
         #[arg(long)]
-        pub initiator: AccountId,
+        pub initiator: String,
         /// Counterparty receiving the repo cash leg
         #[arg(long)]
-        pub counterparty: AccountId,
+        pub counterparty: String,
         /// Optional custodian account holding pledged collateral in tri-party agreements
         #[arg(long)]
-        pub custodian: Option<AccountId>,
+        pub custodian: Option<String>,
         /// Cash asset definition identifier
         #[arg(long)]
         pub cash_asset: AssetDefinitionId,
@@ -5025,6 +5085,17 @@ mod repo {
 
     impl Initiate {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let initiator = resolve_account_id(context, &self.initiator)
+                .wrap_err("failed to resolve --initiator account")?;
+            let counterparty = resolve_account_id(context, &self.counterparty)
+                .wrap_err("failed to resolve --counterparty account")?;
+            let custodian = match self.custodian {
+                Some(literal) => Some(
+                    resolve_account_id(context, &literal)
+                        .wrap_err("failed to resolve --custodian account")?,
+                ),
+                None => None,
+            };
             let cash_leg = RepoCashLeg {
                 asset_definition_id: self.cash_asset,
                 quantity: self.cash_quantity,
@@ -5038,9 +5109,9 @@ mod repo {
                 RepoGovernance::with_defaults(self.haircut_bps, self.margin_frequency_secs);
             let instruction = RepoIsi::new(
                 self.agreement_id,
-                self.initiator,
-                self.counterparty,
-                self.custodian,
+                initiator,
+                counterparty,
+                custodian,
                 cash_leg,
                 collateral_leg,
                 self.rate_bps,
@@ -5061,10 +5132,10 @@ mod repo {
         pub agreement_id: RepoAgreementId,
         /// Initiating account performing the unwind
         #[arg(long)]
-        pub initiator: AccountId,
+        pub initiator: String,
         /// Counterparty receiving the unwind settlement
         #[arg(long)]
-        pub counterparty: AccountId,
+        pub counterparty: String,
         /// Cash asset definition identifier
         #[arg(long)]
         pub cash_asset: AssetDefinitionId,
@@ -5084,6 +5155,10 @@ mod repo {
 
     impl Unwind {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let initiator = resolve_account_id(context, &self.initiator)
+                .wrap_err("failed to resolve --initiator account")?;
+            let counterparty = resolve_account_id(context, &self.counterparty)
+                .wrap_err("failed to resolve --counterparty account")?;
             let cash_leg = RepoCashLeg {
                 asset_definition_id: self.cash_asset,
                 quantity: self.cash_quantity,
@@ -5095,8 +5170,8 @@ mod repo {
             };
             let instruction = ReverseRepoIsi::new(
                 self.agreement_id,
-                self.initiator,
-                self.counterparty,
+                initiator,
+                counterparty,
                 cash_leg,
                 collateral_leg,
                 self.settlement_timestamp_ms,
@@ -5309,10 +5384,10 @@ mod settlement {
         pub delivery_quantity: Numeric,
         /// Account delivering the asset
         #[arg(long)]
-        pub delivery_from: AccountId,
+        pub delivery_from: String,
         /// Account receiving the delivery leg
         #[arg(long)]
-        pub delivery_to: AccountId,
+        pub delivery_to: String,
         /// Regulated identifier (ISIN or CUSIP) for the delivery instrument when producing ISO previews
         #[arg(long)]
         pub delivery_instrument_id: Option<String>,
@@ -5327,10 +5402,10 @@ mod settlement {
         pub payment_quantity: Numeric,
         /// Account sending the payment leg
         #[arg(long)]
-        pub payment_from: AccountId,
+        pub payment_from: String,
         /// Account receiving the payment leg
         #[arg(long)]
-        pub payment_to: AccountId,
+        pub payment_to: String,
         /// Execution order for the two legs
         #[arg(long, value_enum, default_value = "delivery-then-payment")]
         pub order: OrderArg,
@@ -5359,19 +5434,27 @@ mod settlement {
 
     impl DvpArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let delivery_from = resolve_account_id(context, &self.delivery_from)
+                .wrap_err("failed to resolve --delivery-from account")?;
+            let delivery_to = resolve_account_id(context, &self.delivery_to)
+                .wrap_err("failed to resolve --delivery-to account")?;
+            let payment_from = resolve_account_id(context, &self.payment_from)
+                .wrap_err("failed to resolve --payment-from account")?;
+            let payment_to = resolve_account_id(context, &self.payment_to)
+                .wrap_err("failed to resolve --payment-to account")?;
             let plan = SettlementPlan::new(self.order.into(), self.atomicity.to_model());
 
             let delivery_leg = SettlementLeg::new(
                 self.delivery_asset,
                 self.delivery_quantity,
-                self.delivery_from,
-                self.delivery_to,
+                delivery_from,
+                delivery_to,
             );
             let payment_leg = SettlementLeg::new(
                 self.payment_asset,
                 self.payment_quantity,
-                self.payment_from,
-                self.payment_to,
+                payment_from,
+                payment_to,
             );
 
             let instruction = DvpIsi {
@@ -5417,10 +5500,10 @@ mod settlement {
         pub primary_quantity: Numeric,
         /// Account delivering the primary currency
         #[arg(long)]
-        pub primary_from: AccountId,
+        pub primary_from: String,
         /// Account receiving the primary currency
         #[arg(long)]
-        pub primary_to: AccountId,
+        pub primary_to: String,
         /// Counter currency leg asset definition
         #[arg(long)]
         pub counter_asset: AssetDefinitionId,
@@ -5429,10 +5512,10 @@ mod settlement {
         pub counter_quantity: Numeric,
         /// Account delivering the counter currency
         #[arg(long)]
-        pub counter_from: AccountId,
+        pub counter_from: String,
         /// Account receiving the counter currency
         #[arg(long)]
-        pub counter_to: AccountId,
+        pub counter_to: String,
         /// Execution order for the two legs
         #[arg(long, value_enum, default_value = "delivery-then-payment")]
         pub order: OrderArg,
@@ -5458,19 +5541,27 @@ mod settlement {
 
     impl PvpArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let primary_from = resolve_account_id(context, &self.primary_from)
+                .wrap_err("failed to resolve --primary-from account")?;
+            let primary_to = resolve_account_id(context, &self.primary_to)
+                .wrap_err("failed to resolve --primary-to account")?;
+            let counter_from = resolve_account_id(context, &self.counter_from)
+                .wrap_err("failed to resolve --counter-from account")?;
+            let counter_to = resolve_account_id(context, &self.counter_to)
+                .wrap_err("failed to resolve --counter-to account")?;
             let plan = SettlementPlan::new(self.order.into(), self.atomicity.to_model());
 
             let primary_leg = SettlementLeg::new(
                 self.primary_asset,
                 self.primary_quantity,
-                self.primary_from,
-                self.primary_to,
+                primary_from,
+                primary_to,
             );
             let counter_leg = SettlementLeg::new(
                 self.counter_asset,
                 self.counter_quantity,
-                self.counter_from,
-                self.counter_to,
+                counter_from,
+                counter_to,
             );
 
             let instruction = PvpIsi {
@@ -6127,6 +6218,71 @@ where
     norito::json::from_json(s).map_err(|err| eyre!("failed to parse JSON: {err}"))
 }
 
+#[derive(norito::json::JsonDeserialize)]
+struct AccountResolveResponse {
+    account_id: String,
+    domain: String,
+    #[norito(default)]
+    source: Option<String>,
+    #[norito(default)]
+    format: Option<String>,
+}
+
+fn resolve_account_id_with<F>(client: &Client, literal: &str, call: F) -> Result<AccountId>
+where
+    F: FnOnce(&Client, &str) -> Result<iroha::http::Response<Vec<u8>>>,
+{
+    let trimmed = literal.trim();
+    if trimmed.is_empty() {
+        eyre::bail!("account literal must not be empty");
+    }
+
+    if let Some((identifier, domain_literal)) = trimmed.rsplit_once('@') {
+        if identifier.is_empty() {
+            eyre::bail!("account literal must include characters before '@'");
+        }
+        if domain_literal.is_empty() {
+            eyre::bail!("account literal must include a domain after '@'");
+        }
+        if iroha::account_address::AccountAddress::parse_any(identifier, None).is_ok() {
+            eyre::bail!("encoded addresses must not append '@domain'");
+        }
+        if let Ok(public_key) = identifier.parse::<iroha_crypto::PublicKey>() {
+            let domain: DomainId = domain_literal
+                .parse()
+                .wrap_err("failed to parse account domain")?;
+            return Ok(AccountId::new(domain, public_key));
+        }
+    }
+
+    let response = call(client, trimmed)?;
+    let status = response.status();
+    let body = response.into_body();
+    if status != iroha::http::StatusCode::OK {
+        return Err(eyre!(
+            "account resolve failed with status {status}: {}",
+            String::from_utf8_lossy(&body)
+        ));
+    }
+
+    let dto: AccountResolveResponse = norito::json::from_slice(&body)
+        .wrap_err("failed to parse account resolve response")?;
+    let domain: DomainId = dto
+        .domain
+        .parse()
+        .wrap_err("failed to parse resolved account domain")?;
+    let (address, _) = iroha::account_address::AccountAddress::parse_any(&dto.account_id, None)
+        .map_err(|err| eyre!("resolved account id is invalid: {err}"))?;
+    address
+        .to_account_id(&domain)
+        .map_err(|err| eyre!("resolved account id does not match domain: {err}"))
+}
+
+pub(crate) fn resolve_account_id<C: RunContext>(context: &C, literal: &str) -> Result<AccountId> {
+    let client = context.client_from_config();
+    resolve_account_id_with(&client, literal, Client::post_account_resolve)
+}
+
 fn string_from_stdin() -> Result<String> {
     let mut buf = String::new();
     io::stdin().read_to_string(&mut buf)?;
@@ -6193,6 +6349,48 @@ mod tests {
 
     #[derive(Clone, Copy, JsonSerialize)]
     struct DummyEvent;
+
+    #[test]
+    fn resolve_account_id_with_prefers_public_key_domain() {
+        let client = Client::new(fallback_config());
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let key_pair = KeyPair::from_seed(vec![7_u8; 32], Algorithm::Ed25519);
+        let literal = format!("{}@{}", key_pair.public_key(), domain);
+
+        let resolved = resolve_account_id_with(&client, &literal, |_client, _literal| {
+            Err(eyre!("unexpected remote resolve"))
+        })
+        .expect("local resolve should succeed");
+
+        assert_eq!(resolved, AccountId::new(domain, key_pair.public_key().clone()));
+    }
+
+    #[test]
+    fn resolve_account_id_with_uses_remote_response() {
+        let client = Client::new(fallback_config());
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let key_pair = KeyPair::from_seed(vec![9_u8; 32], Algorithm::Ed25519);
+        let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
+        let canonical = account.canonical_ih58().expect("canonical ih58");
+        let body = norito::json::to_vec(&norito::json!({
+            "account_id": canonical,
+            "domain": domain.to_string(),
+            "source": "alias",
+        }))
+        .expect("response body");
+        let response = iroha::http::Response::builder()
+            .status(iroha::http::StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(body)
+            .expect("response");
+
+        let resolved = resolve_account_id_with(&client, "uaid:abcd", |_client, _literal| {
+            Ok(response)
+        })
+        .expect("remote resolve");
+
+        assert_eq!(resolved, account);
+    }
 
     #[test]
     fn stream_timeout_driver_propagates_errors() {
@@ -6754,8 +6952,8 @@ mod tests {
         parameters::{FetchSize, Pagination, QueryParams, Sorting},
     };
     use iroha::data_model::smart_contract::manifest::ContractManifest;
-    use iroha::data_model::{domain::Domain, prelude::FindDomains};
-    use iroha_crypto::Hash;
+    use iroha::data_model::{domain::{Domain, DomainId}, prelude::FindDomains};
+    use iroha_crypto::{Algorithm, Hash};
     use std::cmp::Ordering as CmpOrdering;
     use std::num::NonZeroU64;
 
@@ -6793,11 +6991,20 @@ mod tests {
         }
     }
 
+    fn sample_account_id(domain: &str, seed: u8) -> AccountId {
+        let domain_id: DomainId = domain.parse().expect("domain id");
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(domain_id, key_pair.public_key().clone())
+    }
+
     #[test]
     fn compound_predicate_json_roundtrip() {
         use iroha::data_model::query::dsl::CompoundPredicate;
 
-        let raw = r#"{"op":"eq","args":[{"FieldPath":"authority"},"alice@wonderland"]}"#;
+        let owner = sample_account_id("wonderland", 1);
+        let raw = format!(
+            r#"{{"op":"eq","args":[{{"FieldPath":"authority"}},"{owner}"]}}"#
+        );
         let predicate = super::parse_json::<CompoundPredicate<Domain>>(raw)
             .expect("predicate JSON should parse");
 
@@ -9715,10 +9922,12 @@ mod cli_integration_harness {
         use iroha::data_model::query::builder::QueryBuilder;
 
         // Prepare a mock server with two domains
+        let owner_w1 = sample_account_id("w1", 9);
+        let owner_w2 = sample_account_id("w2", 10);
         let mut server = MockQueryServer::default();
         server.domains = vec![
-            Domain::new("w1".parse().unwrap()).build(&"alice@w1".parse().unwrap()),
-            Domain::new("w2".parse().unwrap()).build(&"alice@w2".parse().unwrap()),
+            Domain::new("w1".parse().unwrap()).build(&owner_w1),
+            Domain::new("w2".parse().unwrap()).build(&owner_w2),
         ];
 
         // Build and execute the query via QueryBuilder against the mock server
@@ -9736,10 +9945,13 @@ mod cli_integration_harness {
         use iroha_primitives::json::Json;
 
         // Mock server with three domains; two have a rank key
+        let owner_w1 = sample_account_id("w1", 11);
+        let owner_w2 = sample_account_id("w2", 12);
+        let owner_w3 = sample_account_id("w3", 13);
         let mut server = MockQueryServer::default();
-        let mut w1 = Domain::new("w1".parse().unwrap()).build(&"alice@w1".parse().unwrap());
-        let mut w2 = Domain::new("w2".parse().unwrap()).build(&"alice@w2".parse().unwrap());
-        let w3 = Domain::new("w3".parse().unwrap()).build(&"alice@w3".parse().unwrap()); // no rank
+        let mut w1 = Domain::new("w1".parse().unwrap()).build(&owner_w1);
+        let mut w2 = Domain::new("w2".parse().unwrap()).build(&owner_w2);
+        let w3 = Domain::new("w3".parse().unwrap()).build(&owner_w3); // no rank
         w1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
         w2.metadata_mut()
@@ -9765,10 +9977,12 @@ mod cli_integration_harness {
         use iroha::data_model::query::parameters::QueryParams;
         use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
 
+        let owner_w1 = sample_account_id("w1", 1);
+        let owner_w2 = sample_account_id("w2", 2);
         let mut server = MockQueryServer::default();
         server.domains = vec![
-            Domain::new("w1".parse().unwrap()).build(&"alice@w1".parse().unwrap()),
-            Domain::new("w2".parse().unwrap()).build(&"alice@w2".parse().unwrap()),
+            Domain::new("w1".parse().unwrap()).build(&owner_w1),
+            Domain::new("w2".parse().unwrap()).build(&owner_w2),
         ];
 
         // Build an erased iter query with ids-only selector
@@ -9797,10 +10011,12 @@ mod cli_integration_harness {
         use iroha::data_model::query::parameters::QueryParams;
         use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
 
+        let alice = sample_account_id("w", 1);
+        let bob = sample_account_id("w", 2);
         let mut server = MockQueryServer::default();
         server.accounts = vec![
-            Account::new("alice@w".parse().unwrap()).build(&"alice@w".parse().unwrap()),
-            Account::new("bob@w".parse().unwrap()).build(&"bob@w".parse().unwrap()),
+            Account::new(alice.clone()).build(&alice),
+            Account::new(bob.clone()).build(&bob),
         ];
 
         let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
@@ -9817,14 +10033,8 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids.len(), 2);
-        assert!(
-            ids.iter()
-                .any(|id| id == &AccountId::from_str("alice@w").unwrap())
-        );
-        assert!(
-            ids.iter()
-                .any(|id| id == &AccountId::from_str("bob@w").unwrap())
-        );
+        assert!(ids.iter().any(|id| id == &alice));
+        assert!(ids.iter().any(|id| id == &bob));
     }
 
     #[test]
@@ -9835,12 +10045,13 @@ mod cli_integration_harness {
         use iroha::data_model::query::parameters::QueryParams;
         use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
 
+        let owner_w = sample_account_id("w", 1);
         let mut server = MockQueryServer::default();
         server.asset_defs = vec![
             AssetDefinition::new("rose#w".parse().unwrap(), NumericSpec::default())
-                .build(&"alice@w".parse().unwrap()),
+                .build(&owner_w),
             AssetDefinition::new("tulip#w".parse().unwrap(), NumericSpec::default())
-                .build(&"alice@w".parse().unwrap()),
+                .build(&owner_w),
         ];
 
         let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
@@ -9876,14 +10087,15 @@ mod cli_integration_harness {
         use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
         use std::num::NonZeroU64;
 
+        let owner_w = sample_account_id("w", 2);
         let mut server = MockQueryServer::default();
         server.asset_defs = vec![
             AssetDefinition::new("rose#w".parse().unwrap(), NumericSpec::default())
-                .build(&"alice@w".parse().unwrap()),
+                .build(&owner_w),
             AssetDefinition::new("tulip#w".parse().unwrap(), NumericSpec::default())
-                .build(&"alice@w".parse().unwrap()),
+                .build(&owner_w),
             AssetDefinition::new("peony#w".parse().unwrap(), NumericSpec::default())
-                .build(&"alice@w".parse().unwrap()),
+                .build(&owner_w),
         ];
 
         let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
@@ -9927,16 +10139,15 @@ mod cli_integration_harness {
         use iroha::data_model::query::parameters::{FetchSize, QueryParams};
         use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
         use std::num::NonZeroU64;
-        use std::str::FromStr;
 
+        let alice = sample_account_id("w", 3);
+        let bob = sample_account_id("w", 4);
+        let carol = sample_account_id("w", 5);
         let mut server = MockQueryServer::default();
         server.accounts = vec![
-            Account::new(AccountId::from_str("alice@w").unwrap())
-                .build(&AccountId::from_str("alice@w").unwrap()),
-            Account::new(AccountId::from_str("bob@w").unwrap())
-                .build(&AccountId::from_str("bob@w").unwrap()),
-            Account::new(AccountId::from_str("carol@w").unwrap())
-                .build(&AccountId::from_str("carol@w").unwrap()),
+            Account::new(alice.clone()).build(&alice),
+            Account::new(bob.clone()).build(&bob),
+            Account::new(carol.clone()).build(&carol),
         ];
 
         let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
@@ -9955,8 +10166,8 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids1.len(), 2);
-        assert!(ids1.contains(&AccountId::from_str("alice@w").unwrap()));
-        assert!(ids1.contains(&AccountId::from_str("bob@w").unwrap()));
+        assert!(ids1.contains(&alice));
+        assert!(ids1.contains(&bob));
         assert_eq!(rem, 1);
         let cur = cur.expect("should continue");
 
@@ -9968,7 +10179,7 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids2.len(), 1);
-        assert!(ids2.contains(&AccountId::from_str("carol@w").unwrap()));
+        assert!(ids2.contains(&carol));
         assert_eq!(rem2, 0);
         assert!(cur2.is_none());
     }
@@ -9981,11 +10192,14 @@ mod cli_integration_harness {
         use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
         use std::num::NonZeroU64;
 
+        let owner_d1 = sample_account_id("d1", 1);
+        let owner_d2 = sample_account_id("d2", 2);
+        let owner_d3 = sample_account_id("d3", 3);
         let mut server = MockQueryServer::default();
         server.domains = vec![
-            Domain::new("d1".parse().unwrap()).build(&"alice@d1".parse().unwrap()),
-            Domain::new("d2".parse().unwrap()).build(&"alice@d2".parse().unwrap()),
-            Domain::new("d3".parse().unwrap()).build(&"alice@d3".parse().unwrap()),
+            Domain::new("d1".parse().unwrap()).build(&owner_d1),
+            Domain::new("d2".parse().unwrap()).build(&owner_d2),
+            Domain::new("d3".parse().unwrap()).build(&owner_d3),
         ];
 
         let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
@@ -10032,9 +10246,12 @@ mod cli_integration_harness {
         use std::num::NonZeroU64;
 
         let mut server = MockQueryServer::default();
-        let mut w1 = Domain::new("w1".parse().unwrap()).build(&"alice@w1".parse().unwrap());
-        let mut w2 = Domain::new("w2".parse().unwrap()).build(&"alice@w2".parse().unwrap());
-        let mut w3 = Domain::new("w3".parse().unwrap()).build(&"alice@w3".parse().unwrap());
+        let owner_w1 = sample_account_id("w1", 6);
+        let owner_w2 = sample_account_id("w2", 7);
+        let owner_w3 = sample_account_id("w3", 8);
+        let mut w1 = Domain::new("w1".parse().unwrap()).build(&owner_w1);
+        let mut w2 = Domain::new("w2".parse().unwrap()).build(&owner_w2);
+        let mut w3 = Domain::new("w3".parse().unwrap()).build(&owner_w3);
         w1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
         w2.metadata_mut()
@@ -10073,7 +10290,7 @@ mod cli_integration_harness {
 
         let mut server = MockQueryServer::default();
         let asset_def_id = AssetDefinitionId::from_str("coin#wonderland").unwrap();
-        let account_id = AccountId::from_str("alice@wonderland").unwrap();
+        let account_id = sample_account_id("wonderland", 14);
         let asset_id = AssetId::new(asset_def_id, account_id);
         let asset = Asset::new(asset_id.clone(), 77_u32);
         server.assets.insert(asset_id.clone(), asset.clone());

@@ -1996,20 +1996,24 @@ mod tests {
     #[test]
     fn node_handle_threads_repair_and_gc_config() {
         let (cfg, _dir) = storage_config_with_temp_dir();
-        let mut actual_repair = iroha_config::parameters::actual::SorafsRepair::default();
-        actual_repair.enabled = true;
-        actual_repair.claim_ttl_secs = 900;
-        actual_repair.heartbeat_interval_secs = 45;
-        actual_repair.max_attempts = 6;
-        actual_repair.worker_concurrency = 9;
-        actual_repair.default_slash_penalty_nano = 42_000;
+        let actual_repair = iroha_config::parameters::actual::SorafsRepair {
+            enabled: true,
+            claim_ttl_secs: 900,
+            heartbeat_interval_secs: 45,
+            max_attempts: 6,
+            worker_concurrency: 9,
+            default_slash_penalty_nano: 42_000,
+            ..Default::default()
+        };
 
-        let mut actual_gc = iroha_config::parameters::actual::SorafsGc::default();
-        actual_gc.enabled = true;
-        actual_gc.interval_secs = 300;
-        actual_gc.max_deletions_per_run = 2_000;
-        actual_gc.retention_grace_secs = 86_400;
-        actual_gc.pre_admission_sweep = false;
+        let actual_gc = iroha_config::parameters::actual::SorafsGc {
+            enabled: true,
+            interval_secs: 300,
+            max_deletions_per_run: 2_000,
+            retention_grace_secs: 86_400,
+            pre_admission_sweep: false,
+            ..Default::default()
+        };
 
         let repair_cfg = RepairConfig::from(&actual_repair);
         let gc_cfg = GcConfig::from(&actual_gc);

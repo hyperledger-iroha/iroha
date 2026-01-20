@@ -232,20 +232,14 @@ impl RepairTaskFilters {
     }
 
     fn matches(&self, record: &RepairTaskRecordV1) -> bool {
-        if let Some(digest) = self.manifest_digest {
-            if record.manifest_digest != digest {
-                return false;
-            }
+        if let Some(digest) = self.manifest_digest && record.manifest_digest != digest {
+            return false;
         }
-        if let Some(provider_id) = self.provider_id {
-            if record.provider_id != provider_id {
-                return false;
-            }
+        if let Some(provider_id) = self.provider_id && record.provider_id != provider_id {
+            return false;
         }
-        if let Some(status) = self.status {
-            if repair_task_status(&record.state) != status {
-                return false;
-            }
+        if let Some(status) = self.status && repair_task_status(&record.state) != status {
+            return false;
         }
         true
     }
@@ -327,9 +321,6 @@ impl RepairManager {
 
         let report_evidence = report.evidence.clone();
         let ticket_id = report.ticket_id.to_string();
-        let mut report_bytes = Vec::new();
-        norito::core::NoritoSerialize::serialize(&report, &mut report_bytes)
-            .expect("serialize repair report");
         let sla_deadline = report.submitted_at_unix.checked_add(self.default_sla_secs);
         let state = RepairTaskStateV1::Queued(QueuedRepairStateV1 {
             queued_at_unix: report.submitted_at_unix,
@@ -337,7 +328,6 @@ impl RepairManager {
         });
         let mut internal = RepairTaskInternal {
             report,
-            report_bytes,
             state,
             sla_deadline_unix: sla_deadline,
             scheduler_notes: None,
@@ -499,7 +489,7 @@ impl RepairManager {
             .filter(|task| matches!(task.state, RepairTaskStateV1::Queued(..)))
             .filter(|task| {
                 task.next_attempt_after_unix
-                    .map_or(true, |retry_after| now_unix >= retry_after)
+                    .is_none_or(|retry_after| now_unix >= retry_after)
             })
             .collect();
 
@@ -560,113 +550,106 @@ impl RepairManager {
                 continue;
             }
 
-            if let Some(deadline) = task.sla_deadline_unix {
-                if now_unix >= deadline {
-                    let mut drafted = None;
-                    let mut escalated = false;
-                    let rationale = format!("SLA deadline {deadline} breached at {now_unix}");
-                    let updated = self.update_task_with_retry(&ticket_id, |task| {
-                        if matches!(
-                            repair_task_status(&task.state),
-                            RepairTaskStatusV1::Completed | RepairTaskStatusV1::Escalated
-                        ) {
-                            return Ok(());
-                        }
-                        let Some(task_deadline) = task.sla_deadline_unix else {
-                            return Ok(());
-                        };
-                        if now_unix < task_deadline {
-                            return Ok(());
-                        }
-                        let proposal =
-                            self.apply_escalation(task, now_unix, rationale.clone(), "scheduler")?;
-                        drafted = Some(proposal);
-                        escalated = true;
-                        Ok(())
-                    })?;
-                    if escalated {
-                        if let Some(proposal) = drafted {
-                            report.escalated.push(proposal);
-                        }
-                        let queued_at = queued_at_unix(&updated.state);
-                        global_sorafs_repair_otel().record_task_transition("escalated");
-                        global_or_default().inc_sorafs_repair_tasks("escalated");
-                        global_sorafs_repair_otel().record_slash_proposal("drafted");
-                        global_or_default().inc_sorafs_slash_proposals("drafted");
-                        self.observe_latency(queued_at, now_unix, "escalated");
+            if let Some(deadline) = task.sla_deadline_unix && now_unix >= deadline {
+                let mut drafted = None;
+                let mut escalated = false;
+                let rationale = format!("SLA deadline {deadline} breached at {now_unix}");
+                let updated = self.update_task_with_retry(&ticket_id, |task| {
+                    if matches!(
+                        repair_task_status(&task.state),
+                        RepairTaskStatusV1::Completed | RepairTaskStatusV1::Escalated
+                    ) {
+                        return Ok(());
                     }
-                    continue;
+                    let Some(task_deadline) = task.sla_deadline_unix else {
+                        return Ok(());
+                    };
+                    if now_unix < task_deadline {
+                        return Ok(());
+                    }
+                    let proposal =
+                        self.apply_escalation(task, now_unix, rationale.clone(), "scheduler")?;
+                    drafted = Some(proposal);
+                    escalated = true;
+                    Ok(())
+                })?;
+                if escalated {
+                    if let Some(proposal) = drafted {
+                        report.escalated.push(proposal);
+                    }
+                    let queued_at = queued_at_unix(&updated.state);
+                    global_sorafs_repair_otel().record_task_transition("escalated");
+                    global_or_default().inc_sorafs_repair_tasks("escalated");
+                    global_sorafs_repair_otel().record_slash_proposal("drafted");
+                    global_or_default().inc_sorafs_slash_proposals("drafted");
+                    self.observe_latency(queued_at, now_unix, "escalated");
                 }
+                continue;
             }
 
-            if let RepairTaskStateV1::InProgress(..) = &task.state {
-                if let Some(lease) = &task.lease {
-                    if lease.is_expired_at(now_unix) {
-                        let mut requeued = false;
-                        let mut drafted = None;
-                        let reason = "lease expired; requeued".to_string();
-                        let updated = self.update_task_with_retry(&ticket_id, |task| {
-                            let lease = match &task.lease {
-                                Some(lease) => lease,
-                                None => return Ok(()),
-                            };
-                            if !lease.is_expired_at(now_unix) {
-                                return Ok(());
-                            }
-                            task.attempts = task.attempts.saturating_add(1);
-                            let max_attempts = self.config.max_attempts();
-                            if task.attempts >= max_attempts {
-                                let rationale = format!(
-                                    "lease expired; attempts {}/{} exceeded",
-                                    task.attempts, max_attempts
-                                );
-                                let proposal = self.apply_escalation(
-                                    task,
-                                    now_unix,
-                                    rationale,
-                                    "scheduler",
-                                )?;
-                                drafted = Some(proposal);
-                                return Ok(());
-                            }
-                            let queued_at = queued_at_unix(&task.state);
-                            let retry_after = next_attempt_after_unix(
-                                now_unix,
-                                task.attempts,
-                                &self.config,
-                                &task.report.ticket_id,
-                            )?;
-                            task.state = RepairTaskStateV1::Queued(QueuedRepairStateV1 {
-                                queued_at_unix: queued_at,
-                                sla_deadline_unix: task.sla_deadline_unix,
-                            });
-                            task.scheduler_notes = Some(reason.clone());
-                            task.lease = None;
-                            task.next_attempt_after_unix = Some(retry_after);
-                            task.push_event(
-                                RepairTaskStatusV1::Queued,
-                                now_unix,
-                                Some("scheduler".into()),
-                                Some(reason.clone()),
-                                self.event_history_limit,
-                            );
-                            requeued = true;
-                            Ok(())
-                        })?;
-                        if let Some(proposal) = drafted {
-                            report.escalated.push(proposal);
-                            let queued_at = queued_at_unix(&updated.state);
-                            global_sorafs_repair_otel().record_task_transition("escalated");
-                            global_or_default().inc_sorafs_repair_tasks("escalated");
-                            global_sorafs_repair_otel().record_slash_proposal("drafted");
-                            global_or_default().inc_sorafs_slash_proposals("drafted");
-                            self.observe_latency(queued_at, now_unix, "escalated");
-                        } else if requeued {
-                            report.requeued.push(ticket_id.clone());
-                            global_sorafs_repair_otel().record_task_transition("queued");
-                            global_or_default().inc_sorafs_repair_tasks("queued");
-                        }
+            if let RepairTaskStateV1::InProgress(..) = &task.state
+                && let Some(lease) = &task.lease
+                && lease.is_expired_at(now_unix)
+            {
+                let mut requeued = false;
+                let mut drafted = None;
+                let reason = "lease expired; requeued".to_string();
+                let updated = self.update_task_with_retry(&ticket_id, |task| {
+                    let lease = match &task.lease {
+                        Some(lease) => lease,
+                        None => return Ok(()),
+                    };
+                    if !lease.is_expired_at(now_unix) {
+                        return Ok(());
                     }
+                    task.attempts = task.attempts.saturating_add(1);
+                    let max_attempts = self.config.max_attempts();
+                    if task.attempts >= max_attempts {
+                        let rationale = format!(
+                            "lease expired; attempts {}/{} exceeded",
+                            task.attempts, max_attempts
+                        );
+                        let proposal =
+                            self.apply_escalation(task, now_unix, rationale, "scheduler")?;
+                        drafted = Some(proposal);
+                        return Ok(());
+                    }
+                    let queued_at = queued_at_unix(&task.state);
+                    let retry_after = next_attempt_after_unix(
+                        now_unix,
+                        task.attempts,
+                        &self.config,
+                        &task.report.ticket_id,
+                    )?;
+                    task.state = RepairTaskStateV1::Queued(QueuedRepairStateV1 {
+                        queued_at_unix: queued_at,
+                        sla_deadline_unix: task.sla_deadline_unix,
+                    });
+                    task.scheduler_notes = Some(reason.clone());
+                    task.lease = None;
+                    task.next_attempt_after_unix = Some(retry_after);
+                    task.push_event(
+                        RepairTaskStatusV1::Queued,
+                        now_unix,
+                        Some("scheduler".into()),
+                        Some(reason.clone()),
+                        self.event_history_limit,
+                    );
+                    requeued = true;
+                    Ok(())
+                })?;
+                if let Some(proposal) = drafted {
+                    report.escalated.push(proposal);
+                    let queued_at = queued_at_unix(&updated.state);
+                    global_sorafs_repair_otel().record_task_transition("escalated");
+                    global_or_default().inc_sorafs_repair_tasks("escalated");
+                    global_sorafs_repair_otel().record_slash_proposal("drafted");
+                    global_or_default().inc_sorafs_slash_proposals("drafted");
+                    self.observe_latency(queued_at, now_unix, "escalated");
+                } else if requeued {
+                    report.requeued.push(ticket_id.clone());
+                    global_sorafs_repair_otel().record_task_transition("queued");
+                    global_or_default().inc_sorafs_repair_tasks("queued");
                 }
             }
 
@@ -689,10 +672,10 @@ impl RepairManager {
                         drafted = Some(proposal);
                         return Ok(());
                     }
-                    if let Some(retry_after) = task.next_attempt_after_unix {
-                        if now_unix < retry_after {
-                            return Ok(());
-                        }
+                    if let Some(retry_after) = task.next_attempt_after_unix
+                        && now_unix < retry_after
+                    {
+                        return Ok(());
                     }
                     let queued_at = failed_state.queued_at_unix;
                     let reason = format!("retry after failure: {}", failed_state.reason);
@@ -976,21 +959,19 @@ impl RepairManager {
                 }
             }
 
-            if let Some(lease) = &task.lease {
-                if !lease.is_expired_at(claimed_at_unix) {
-                    return Err(RepairSchedulerError::LeaseHeld {
-                        ticket_id: ticket_id.to_string(),
-                        worker_id: lease.worker_id.clone(),
-                    });
-                }
+            if let Some(lease) = &task.lease && !lease.is_expired_at(claimed_at_unix) {
+                return Err(RepairSchedulerError::LeaseHeld {
+                    ticket_id: ticket_id.to_string(),
+                    worker_id: lease.worker_id.clone(),
+                });
             }
-            if let Some(retry_after) = task.next_attempt_after_unix {
-                if claimed_at_unix < retry_after {
-                    return Err(RepairSchedulerError::BackoffActive {
-                        ticket_id: ticket_id.to_string(),
-                        retry_after_unix: retry_after,
-                    });
-                }
+            if let Some(retry_after) = task.next_attempt_after_unix
+                && claimed_at_unix < retry_after
+            {
+                return Err(RepairSchedulerError::BackoffActive {
+                    ticket_id: ticket_id.to_string(),
+                    retry_after_unix: retry_after,
+                });
             }
 
             let queued_at = queued_at_unix(&task.state);
@@ -1599,8 +1580,6 @@ struct RepairTaskInternal {
     revision: u64,
     /// Parsed report payload.
     report: RepairReportV1,
-    /// Norito-encoded bytes of the report for durable storage.
-    report_bytes: Vec<u8>,
     state: RepairTaskStateV1,
     sla_deadline_unix: Option<u64>,
     scheduler_notes: Option<String>,
@@ -1739,7 +1718,7 @@ fn next_attempt_after_unix(
     checked_add_secs(failed_at_unix, delay, ticket_id)
 }
 
-fn sort_repair_task_records(records: &mut Vec<RepairTaskRecordV1>) {
+fn sort_repair_task_records(records: &mut [RepairTaskRecordV1]) {
     records.sort_by(|left, right| {
         let left_deadline = left.sla_deadline_unix.unwrap_or(u64::MAX);
         let right_deadline = right.sla_deadline_unix.unwrap_or(u64::MAX);
@@ -1751,7 +1730,7 @@ fn sort_repair_task_records(records: &mut Vec<RepairTaskRecordV1>) {
     });
 }
 
-fn sort_repair_task_snapshots(snapshots: &mut Vec<RepairTaskSnapshot>) {
+fn sort_repair_task_snapshots(snapshots: &mut [RepairTaskSnapshot]) {
     snapshots.sort_by(|left, right| {
         let left_deadline = left.record.sla_deadline_unix.unwrap_or(u64::MAX);
         let right_deadline = right.record.sla_deadline_unix.unwrap_or(u64::MAX);
@@ -1949,10 +1928,8 @@ impl<S: PartialEq> IdempotencyCache<S> {
         if self.entries.contains_key(key) {
             return;
         }
-        if self.entries.len() >= self.capacity {
-            if let Some(evicted) = self.order.pop_front() {
-                self.entries.remove(&evicted);
-            }
+        if self.entries.len() >= self.capacity && let Some(evicted) = self.order.pop_front() {
+            self.entries.remove(&evicted);
         }
         self.order.push_back(key.to_string());
         self.entries
@@ -2053,13 +2030,9 @@ mod tests {
             queued_at_unix: report.submitted_at_unix,
             sla_deadline_unix: sla_deadline,
         });
-        let mut report_bytes = Vec::new();
-        norito::core::NoritoSerialize::serialize(&report, &mut report_bytes)
-            .expect("serialize report");
         RepairTaskInternal {
             revision: 0,
             report,
-            report_bytes,
             state,
             sla_deadline_unix: sla_deadline,
             scheduler_notes: None,
@@ -2287,9 +2260,11 @@ mod tests {
 
     #[test]
     fn attempt_cap_escalates_failed_ticket() {
-        let mut actual = actual::SorafsRepair::default();
-        actual.max_attempts = 1;
-        actual.default_slash_penalty_nano = 12_345;
+        let actual = actual::SorafsRepair {
+            max_attempts: 1,
+            default_slash_penalty_nano: 12_345,
+            ..Default::default()
+        };
         let manager = RepairManager::new_with_config(RepairConfig::from(&actual));
         let report = report("REP-454", [0xca; 32], [0xdd; 32], 1_700_000_400);
         manager
@@ -2331,8 +2306,10 @@ mod tests {
 
     #[test]
     fn watchdog_escalates_sla_breach_with_draft() {
-        let mut actual = actual::SorafsRepair::default();
-        actual.default_slash_penalty_nano = 98_765;
+        let actual = actual::SorafsRepair {
+            default_slash_penalty_nano: 98_765,
+            ..Default::default()
+        };
         let manager = RepairManager::new_with_config(RepairConfig::from(&actual));
         let report = report("REP-455", [0xee; 32], [0xff; 32], 1_700_000_500);
         manager
@@ -2356,10 +2333,12 @@ mod tests {
 
     #[test]
     fn watchdog_requeues_expired_lease_with_backoff() {
-        let mut actual = actual::SorafsRepair::default();
-        actual.claim_ttl_secs = 10;
-        actual.backoff_initial_secs = 5;
-        actual.backoff_max_secs = 5;
+        let actual = actual::SorafsRepair {
+            claim_ttl_secs: 10,
+            backoff_initial_secs: 5,
+            backoff_max_secs: 5,
+            ..Default::default()
+        };
         let manager = RepairManager::new_with_config(RepairConfig::from(&actual));
         let report = report("REP-456", [0x01; 32], [0x02; 32], 1_700_000_600);
         manager
@@ -2407,9 +2386,11 @@ mod tests {
 
     #[test]
     fn watchdog_requeues_failed_tasks_after_backoff() {
-        let mut actual = actual::SorafsRepair::default();
-        actual.backoff_initial_secs = 5;
-        actual.backoff_max_secs = 5;
+        let actual = actual::SorafsRepair {
+            backoff_initial_secs: 5,
+            backoff_max_secs: 5,
+            ..Default::default()
+        };
         let manager = RepairManager::new_with_config(RepairConfig::from(&actual));
         let report = report("REP-457", [0x03; 32], [0x04; 32], 1_700_000_700);
         manager

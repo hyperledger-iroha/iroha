@@ -3,6 +3,7 @@
 Last update: 2026-01-20
 
 - Accounts/UAID: enforce UAID→account 1:1 index, reject duplicate UAIDs on registration, and switch UAID portfolio/reward selection to the index with new unit coverage.
+- CLI account literals: resolve account identifiers through `/v1/accounts/resolve` across commands (contracts, DA/SoraFS ledgers, Kaigi, staking, ZK, subscriptions, offline filters, multisig/trigger inputs) and refresh CLI harness tests to use canonical account IDs.
 - Offline receipts: added `OfflineSpendReceipt::invoice_id()` accessor + unit test and switched executor validation/tests to use it so non-transparent builds compile.
 - Roadmap: added account identity refactor tasks (IH58-only canonical IDs, alias/UAID unification, PII-safe tokens, no compatibility shims).
 - SoraFS config: added `sorafs.repair`/`sorafs.gc` defaults and wiring, updated defaults/samples (`defaults/nexus`, `configs/soranexus/testus`), plus config docs (all locales).
@@ -16,6 +17,9 @@ Last update: 2026-01-20
 - SoraFS repair store: introduced a repair-store abstraction with CAS updates and canonical Norito payload bytes (in-memory backend; Postgres wiring TODO).
 - SoraFS repair events: record ordered RepairTaskEventV1 transitions in the scheduler and surface them in repair status responses.
 - SoraFS repair watchdog: enforce SLA/attempt caps, requeue expired leases with backoff, emit draft slash proposals, and prioritize claimable tasks by SLA/severity/provider backlog.
+- Norito derive: fix AoS enum `[u8; N]` length prefixing for u8 array variants and add an unpacked AoS enum roundtrip test.
+- Tests: `cargo clippy -p sorafs_node --all-targets -- -D warnings` (ok).
+- Tests: `cargo test -p norito enum_aos` (ok; warning about unused_mut in `crates/norito/src/core.rs:5610`).
 - Format: `cargo fmt --all` (warned about nightly-only rustfmt options in stable toolchain).
 - Tests: `cargo test -p iroha_config sorafs_repair_and_gc_parse_clamps_values` (ok).
 - Tests: `cargo test -p sorafs_node repair_and_gc_configs_preserve_fields` (ok).
@@ -49,8 +53,9 @@ Last update: 2026-01-20
 - Sumeragi pacemaker: rebroadcast cached proposals + BlockCreated payloads when the local leader already has the proposal cached, avoiding stalls when proposal messages are dropped; added `pacemaker_rebroadcasts_cached_proposal_when_leader` coverage.
 - Tests: `cargo test -p iroha_core pacemaker_rebroadcasts_cached_proposal_when_leader -- --nocapture` (ok).
 - Tests: `cargo test --workspace` failed during compile (missing `connect_startup_delay` in `iroha_p2p` integration test Network configs).
-- Integration tests (asset): submit helpers now broadcast signed transactions across peers and tolerate duplicate-enqueue responses to avoid queued timeouts; added duplicate-error detection coverage. Tests not re-run yet.
-- Integration tests (asset): widened local test consensus timing (pipeline time 6s, DA quorum/availability timeout multipliers 6/3) to reduce view-change stalls; re-run pending. `CARGO_TARGET_DIR=target/codex-test cargo test -p integration_tests --test asset fail_if_dont_satisfy_spec -- --nocapture` timed out after 15m with the test still running.
+- Integration tests (asset): exchange-rate flow now waits for seeded assets before rate lookup to avoid lagging-peer NotFound failures.
+- Integration tests (asset): submit helpers now broadcast signed transactions across peers and tolerate duplicate-enqueue responses to avoid queued timeouts; added duplicate-error detection coverage. `CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo test -p integration_tests --test asset -- --nocapture --test-threads=1` (pass).
+- Integration tests (asset): widened local test consensus timing (pipeline time 6s, DA quorum/availability timeout multipliers 6/3) to reduce view-change stalls; validated by the same asset-suite run (previous targeted run timed out after 15m).
 - Integration tests: NetworkBuilder::new now defaults to a 1s pipeline time for faster test networks; `with_default_pipeline_time` keeps Sumeragi defaults. Tests not run yet.
 - Torii/client: queue rejections now include `x-iroha-reject-code`; client ResponseReport decodes Norito error envelopes to surface codes/messages. Tests: `cargo test -p iroha --lib response_report::with_msg_decodes_norito_error_envelope`, `cargo test -p iroha_torii --lib push_into_queue_error_sets_reject_code_header` (ok).
 - Integration tests: consolidated asset mint quantity cases into one network, tightened polling delays, and moved most integration tests to a 2s pipeline time for faster runs (unstable_network and NPoS performance timing left unchanged). Tests not run yet.

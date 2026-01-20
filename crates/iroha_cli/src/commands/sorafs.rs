@@ -789,7 +789,7 @@ pub struct RepairEscalateArgs {
     #[arg(long = "rationale", value_name = "TEXT")]
     rationale: String,
     /// Optional auditor account (defaults to the CLI account).
-    #[arg(long = "auditor", value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long = "auditor", value_name = "ACCOUNT_ID")]
     auditor: Option<String>,
     /// Optional timestamp for the proposal (RFC3339 or `@unix_seconds`).
     #[arg(long = "submitted-at", value_name = "RFC3339|@UNIX")]
@@ -815,7 +815,7 @@ impl RepairEscalateArgs {
         let manifest_digest = parse_hex_array::<32>(&self.manifest_digest, "--manifest-digest")?;
         let provider_id = parse_hex_array::<32>(&self.provider_id, "--provider-id")?;
         let auditor_account = match self.auditor.as_deref() {
-            Some(raw) => parse_account_id_str(raw, "--auditor")?.to_string(),
+            Some(raw) => parse_account_id_str(context, raw, "--auditor")?.to_string(),
             None => context.config().account.to_string(),
         };
         let submitted_at_unix =
@@ -1135,13 +1135,13 @@ pub struct ReserveLedgerArgs {
     #[arg(long = "quote", value_name = "PATH")]
     pub quote_path: PathBuf,
     /// Provider account paying the rent and reserve top-ups.
-    #[arg(long = "provider-account", value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long = "provider-account", value_name = "ACCOUNT_ID")]
     pub provider_account: String,
     /// Treasury account receiving the rent payment.
-    #[arg(long = "treasury-account", value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long = "treasury-account", value_name = "ACCOUNT_ID")]
     pub treasury_account: String,
     /// Reserve escrow account receiving the reserve top-up.
-    #[arg(long = "reserve-account", value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long = "reserve-account", value_name = "ACCOUNT_ID")]
     pub reserve_account: String,
     /// Asset definition identifier used for XOR transfers (e.g., `xor#sora`).
     #[arg(long = "asset-definition", value_name = "NAME#DOMAIN")]
@@ -1159,18 +1159,12 @@ impl ReserveLedgerArgs {
         let quote_value: Value =
             norito::json::from_str(&quote_contents).wrap_err("failed to parse reserve quote")?;
         let projection = extract_ledger_projection(&quote_value)?;
-        let provider: AccountId = self
-            .provider_account
-            .parse()
-            .wrap_err("failed to parse --provider-account")?;
-        let treasury: AccountId = self
-            .treasury_account
-            .parse()
-            .wrap_err("failed to parse --treasury-account")?;
-        let reserve: AccountId = self
-            .reserve_account
-            .parse()
-            .wrap_err("failed to parse --reserve-account")?;
+        let provider = crate::resolve_account_id(context, &self.provider_account)
+            .wrap_err("failed to resolve --provider-account")?;
+        let treasury = crate::resolve_account_id(context, &self.treasury_account)
+            .wrap_err("failed to resolve --treasury-account")?;
+        let reserve = crate::resolve_account_id(context, &self.reserve_account)
+            .wrap_err("failed to resolve --reserve-account")?;
         let asset_definition: AssetDefinitionId = self
             .asset_definition
             .parse()
@@ -1260,7 +1254,7 @@ pub struct GarReceiptArgs {
     #[arg(long = "policy-digest", value_name = "HEX32")]
     policy_digest_hex: Option<String>,
     /// Operator account that executed the action.
-    #[arg(long = "operator", value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long = "operator", value_name = "ACCOUNT_ID")]
     operator: String,
     /// Human-readable reason for the enforcement action.
     #[arg(long = "reason", value_name = "TEXT")]
@@ -1289,10 +1283,8 @@ impl GarReceiptArgs {
         let expires_at = parse_optional_timestamp(self.expires_at.as_deref(), "expires-at")?;
         let policy_digest =
             parse_optional_hex_array::<32>(self.policy_digest_hex.as_deref(), "--policy-digest")?;
-        let operator: AccountId = self
-            .operator
-            .parse()
-            .wrap_err("failed to parse --operator account id")?;
+        let operator =
+            crate::resolve_account_id(context, &self.operator).wrap_err("failed to resolve --operator")?;
         let action = self
             .action
             .to_enforcement_action(self.custom_action_slug.as_deref())?;
@@ -2814,7 +2806,7 @@ impl Run for IncentivesComputeArgs {
 
         let metrics = read_metrics_file(&self.metrics)?;
         let bond = read_bond_entry(&self.bond)?;
-        let beneficiary = parse_account_id_str(&self.beneficiary, "--beneficiary")?;
+        let beneficiary = parse_account_id_str(context, &self.beneficiary, "--beneficiary")?;
 
         let instruction = engine.compute_reward(&metrics, &bond, beneficiary, Metadata::default());
 
@@ -2864,8 +2856,9 @@ pub struct IncentivesOpenDisputeArgs {
 impl Run for IncentivesOpenDisputeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let instruction = read_reward_instruction(&self.instruction)?;
-        let treasury = parse_account_id_str(&self.treasury_account, "--treasury-account")?;
-        let submitted_by = parse_account_id_str(&self.submitted_by, "--submitted-by")?;
+        let treasury =
+            parse_account_id_str(context, &self.treasury_account, "--treasury-account")?;
+        let submitted_by = parse_account_id_str(context, &self.submitted_by, "--submitted-by")?;
         let requested_amount = parse_numeric_str(&self.requested_amount, "--requested-amount")?;
         let submitted_at = self.submitted_at.unwrap_or_else(unix_now);
 
@@ -3013,7 +3006,8 @@ impl Run for IncentivesServiceInitArgs {
             ));
         }
 
-        let treasury_account = parse_account_id_str(&self.treasury_account, "--treasury-account")?;
+        let treasury_account =
+            parse_account_id_str(context, &self.treasury_account, "--treasury-account")?;
         let state = IncentivesState::new(&config, treasury_account);
         save_incentives_state(&self.state, &state)?;
         if config.budget_approval_id.is_none() {
@@ -3094,12 +3088,12 @@ impl Run for IncentivesServiceProcessArgs {
         let beneficiaries: Vec<_> = if self.beneficiary.is_empty() {
             return Err(eyre!("at least one --beneficiary value must be provided"));
         } else if self.beneficiary.len() == 1 {
-            let account = parse_account_id_str(&self.beneficiary[0], "--beneficiary")?;
+            let account = parse_account_id_str(context, &self.beneficiary[0], "--beneficiary")?;
             vec![account; metrics_count]
         } else if self.beneficiary.len() == metrics_count {
             self.beneficiary
                 .iter()
-                .map(|value| parse_account_id_str(value, "--beneficiary"))
+                .map(|value| parse_account_id_str(context, value, "--beneficiary"))
                 .collect::<Result<_, _>>()?
         } else {
             return Err(eyre!(
@@ -3299,7 +3293,7 @@ impl Run for IncentivesServiceDisputeFileArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let (mut state, mut service) = load_state_service(&self.state)?;
         let relay_id = relay_id_from_hex(&self.relay_id)?;
-        let submitted_by = parse_account_id_str(&self.submitted_by, "--submitted-by")?;
+        let submitted_by = parse_account_id_str(context, &self.submitted_by, "--submitted-by")?;
         let requested_amount = parse_numeric_str(&self.requested_amount, "--requested-amount")?;
         let requested_adjustment =
             parse_adjustment_flags(self.adjust_credit.as_ref(), self.adjust_debit.as_ref())?;
@@ -3504,7 +3498,8 @@ pub struct IncentivesServiceAuditArgs {
 impl Run for IncentivesServiceAuditArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let state = load_incentives_state(&self.state)?;
-        let config = load_daemon_config(&self.config)?;
+        let config =
+            load_daemon_config(&self.config, &|literal| crate::resolve_account_id(context, literal))?;
         let (audit_bond_enabled, audit_budget_enabled) = audit_scope_flags(&self.scopes);
 
         let mut summary = IncentivesAuditSummary::default();
@@ -3557,7 +3552,8 @@ impl Run for IncentivesServiceShadowRunArgs {
             &state_for_run,
             self.allow_missing_budget_approval,
         )?;
-        let config = load_daemon_config(&self.config)?;
+        let config =
+            load_daemon_config(&self.config, &|literal| crate::resolve_account_id(context, literal))?;
         let expected_budget =
             match require_budget_approval_id(state.reward_config.budget_approval_id.as_ref()) {
                 Ok(id) => Some(id),
@@ -3669,7 +3665,8 @@ pub struct IncentivesServiceDaemonArgs {
 
 impl Run for IncentivesServiceDaemonArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let config = load_daemon_config(&self.config)?;
+        let config =
+            load_daemon_config(&self.config, &|literal| crate::resolve_account_id(context, literal))?;
 
         if let Some(dir) = &self.instruction_out_dir {
             fs::create_dir_all(dir).wrap_err_with(|| {
@@ -4412,7 +4409,10 @@ where
         .wrap_err_with(|| format!("failed to write Norito payload to `{}`", path.display()))
 }
 
-fn load_daemon_config(path: &Path) -> Result<DaemonConfig> {
+fn load_daemon_config(
+    path: &Path,
+    resolve: &dyn Fn(&str) -> Result<AccountId>,
+) -> Result<DaemonConfig> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read daemon config from `{}`", path.display()))?;
     let file: DaemonConfigFile =
@@ -4430,7 +4430,7 @@ fn load_daemon_config(path: &Path) -> Result<DaemonConfig> {
         decode_to_slice(&normalised, &mut relay_id)
             .map_err(|err| eyre!("failed to decode relay_id `{}`: {err}", entry.relay_id))?;
 
-        let beneficiary = AccountId::from_str(entry.beneficiary.trim()).map_err(|err| {
+        let beneficiary = resolve(entry.beneficiary.trim()).map_err(|err| {
             eyre!(
                 "invalid beneficiary `{}` for relay {}: {err}",
                 entry.beneficiary,
@@ -6115,8 +6115,9 @@ impl ServiceDashboardRow {
     }
 }
 
-fn parse_account_id_str(value: &str, flag: &str) -> Result<AccountId> {
-    AccountId::from_str(value).map_err(|err| eyre!("{flag} must be a valid AccountId: {err}"))
+fn parse_account_id_str<C: RunContext>(context: &C, value: &str, flag: &str) -> Result<AccountId> {
+    crate::resolve_account_id(context, value)
+        .wrap_err_with(|| format!("{flag} must be a valid account identifier"))
 }
 
 fn parse_repair_ticket_id(value: &str, flag: &str) -> Result<RepairTicketId> {

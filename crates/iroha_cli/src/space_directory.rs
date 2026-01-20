@@ -421,7 +421,7 @@ pub struct ManifestScaffoldProfileArgs {
     #[arg(long = "profile-activation-epoch", value_name = "EPOCH")]
     pub activation_epoch: Option<u64>,
     /// Dataspace governance issuer account.
-    #[arg(long = "profile-governance-issuer", value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long = "profile-governance-issuer", value_name = "ACCOUNT_ID")]
     pub governance_issuer: Option<String>,
     /// Governance ticket/evidence label.
     #[arg(long = "profile-governance-ticket", value_name = "TEXT")]
@@ -430,7 +430,7 @@ pub struct ManifestScaffoldProfileArgs {
     #[arg(long = "profile-governance-quorum", value_name = "N")]
     pub governance_quorum: Option<u32>,
     /// Validator account identifiers.
-    #[arg(long = "profile-validator", value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long = "profile-validator", value_name = "ACCOUNT_ID")]
     pub validators: Vec<String>,
     /// Validator quorum threshold.
     #[arg(long = "profile-validator-quorum", value_name = "N")]
@@ -445,7 +445,7 @@ pub struct ManifestScaffoldProfileArgs {
     #[arg(long = "profile-da-quorum", value_name = "N")]
     pub da_quorum: Option<u32>,
     /// DA attester identifiers.
-    #[arg(long = "profile-da-attester", value_name = "ACCOUNT@DOMAIN")]
+    #[arg(long = "profile-da-attester", value_name = "ACCOUNT_ID")]
     pub da_attesters: Vec<String>,
     /// DA rotation cadence in epochs.
     #[arg(long = "profile-da-rotation-epochs", value_name = "EPOCHS")]

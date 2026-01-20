@@ -257,9 +257,13 @@ pub struct CaseExportArgs {
 }
 
 impl RegisterArgs {
-    fn build_request(&self, default_owner: &AccountId) -> Result<RegisterNameRequestV1> {
+    fn build_request(
+        &self,
+        default_owner: &AccountId,
+        resolve: &dyn Fn(&str) -> Result<AccountId>,
+    ) -> Result<RegisterNameRequestV1> {
         let owner = match &self.owner {
-            Some(raw) => AccountId::from_str(raw).wrap_err("invalid owner account id")?,
+            Some(raw) => resolve(raw).wrap_err("invalid owner account id")?,
             None => default_owner.clone(),
         };
 
@@ -272,7 +276,7 @@ impl RegisterArgs {
             self.controllers
                 .iter()
                 .map(|literal| {
-                    let account = AccountId::from_str(literal)
+                    let account = resolve(literal)
                         .wrap_err_with(|| format!("invalid controller account `{literal}`"))?;
                     account_controller(&account)
                 })
@@ -286,7 +290,7 @@ impl RegisterArgs {
 
         let governance = load_optional_governance(self.governance_json.as_ref())?;
 
-        let payment = self.payment.build(&owner)?;
+        let payment = self.payment.build(&owner, resolve)?;
 
         Ok(RegisterNameRequestV1 {
             selector,
@@ -302,7 +306,11 @@ impl RegisterArgs {
 }
 
 impl PaymentOptions {
-    fn build(&self, default_payer: &AccountId) -> Result<PaymentProofV1> {
+    fn build(
+        &self,
+        default_payer: &AccountId,
+        resolve: &dyn Fn(&str) -> Result<AccountId>,
+    ) -> Result<PaymentProofV1> {
         if let Some(path) = &self.json_path {
             return load_json_file::<PaymentProofV1>(path);
         }
@@ -319,7 +327,7 @@ impl PaymentOptions {
         let settlement_tx = parse_json_literal(settlement_literal);
         let payer = match &self.payer {
             Some(literal) => {
-                AccountId::from_str(literal).wrap_err("invalid payment payer account id")?
+                resolve(literal).wrap_err("invalid payment payer account id")?
             }
             None => default_payer.clone(),
         };
@@ -341,7 +349,9 @@ impl PaymentOptions {
 impl Run for RegisterArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = context.client_from_config();
-        let request = self.build_request(&context.config().account)?;
+        let request = self.build_request(&context.config().account, &|literal| {
+            crate::resolve_account_id(context, literal)
+        })?;
         let response = client.sns().register(&request)?;
         context.print_data(&response)
     }
@@ -352,10 +362,14 @@ impl RenewArgs {
         self.selector.trim()
     }
 
-    fn build_request(&self, default_payer: &AccountId) -> Result<RenewNameRequestV1> {
+    fn build_request(
+        &self,
+        default_payer: &AccountId,
+        resolve: &dyn Fn(&str) -> Result<AccountId>,
+    ) -> Result<RenewNameRequestV1> {
         Ok(RenewNameRequestV1 {
             term_years: self.term_years,
-            payment: self.payment.build(default_payer)?,
+            payment: self.payment.build(default_payer, resolve)?,
         })
     }
 }
@@ -363,7 +377,9 @@ impl RenewArgs {
 impl Run for RenewArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = context.client_from_config();
-        let request = self.build_request(&context.config().account)?;
+        let request = self.build_request(&context.config().account, &|literal| {
+            crate::resolve_account_id(context, literal)
+        })?;
         let record = client.sns().renew(self.selector_literal(), &request)?;
         context.print_data(&record)
     }
@@ -374,9 +390,12 @@ impl TransferArgs {
         self.selector.trim()
     }
 
-    fn build_request(&self) -> Result<TransferNameRequestV1> {
+    fn build_request(
+        &self,
+        resolve: &dyn Fn(&str) -> Result<AccountId>,
+    ) -> Result<TransferNameRequestV1> {
         let new_owner =
-            AccountId::from_str(&self.new_owner).wrap_err("invalid new owner account id")?;
+            resolve(&self.new_owner).wrap_err("invalid new owner account id")?;
         let governance =
             load_json_file::<GovernanceHookV1>(&self.governance_json).wrap_err_with(|| {
                 format!(
@@ -393,7 +412,7 @@ impl TransferArgs {
 
 impl Run for TransferArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let request = self.build_request()?;
+        let request = self.build_request(&|literal| crate::resolve_account_id(context, literal))?;
         let record = context
             .client_from_config()
             .sns()
@@ -407,14 +426,18 @@ impl UpdateControllersArgs {
         self.selector.trim()
     }
 
-    fn build_request(&self, default_controller: &AccountId) -> Result<UpdateControllersRequestV1> {
+    fn build_request(
+        &self,
+        default_controller: &AccountId,
+        resolve: &dyn Fn(&str) -> Result<AccountId>,
+    ) -> Result<UpdateControllersRequestV1> {
         let controllers = if self.controllers.is_empty() {
             vec![account_controller(default_controller)?]
         } else {
             self.controllers
                 .iter()
                 .map(|literal| {
-                    let account = AccountId::from_str(literal)
+                    let account = resolve(literal)
                         .wrap_err_with(|| format!("invalid controller account `{literal}`"))?;
                     account_controller(&account)
                 })
@@ -426,7 +449,9 @@ impl UpdateControllersArgs {
 
 impl Run for UpdateControllersArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let request = self.build_request(&context.config().account)?;
+        let request = self.build_request(&context.config().account, &|literal| {
+            crate::resolve_account_id(context, literal)
+        })?;
         let record = context
             .client_from_config()
             .sns()

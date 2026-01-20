@@ -40,6 +40,14 @@ enum AoSNamedEnum {
     Unit,
 }
 
+#[derive(
+    IntoSchema, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq,
+)]
+enum AoSU8ArrayEnum {
+    Unit,
+    Bytes([u8; 12]),
+}
+
 #[test]
 fn aos_enum_roundtrip_unit() {
     let v = AoSEnum::Unit;
@@ -84,5 +92,15 @@ fn aos_enum_roundtrip_named_variant() {
     let bytes = to_bytes(&v).unwrap();
     let view = norito::core::from_bytes_view(&bytes).unwrap();
     let back: AoSNamedEnum = view.decode().expect("decode named enum");
+    assert_eq!(v, back);
+}
+
+#[test]
+fn aos_enum_roundtrip_u8_array_unpacked() {
+    let _guard = norito::core::DecodeFlagsGuard::enter(0);
+    let v = AoSU8ArrayEnum::Bytes([0xAB; 12]);
+    let bytes = to_bytes(&v).unwrap();
+    let arch = from_bytes::<AoSU8ArrayEnum>(&bytes).unwrap();
+    let back = <AoSU8ArrayEnum as NoritoDeserialize>::deserialize(arch);
     assert_eq!(v, back);
 }
