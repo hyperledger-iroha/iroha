@@ -2,12 +2,13 @@
 //!
 //! The scheduler persists repair tickets via a repair store abstraction, tracks
 //! proof-of-retrievability failures, and emits metrics so operators can monitor
-//! SLA adherence. The in-memory store remains the default until the Postgres
-//! backend is wired into the node configuration.
+//! SLA adherence. Repair state is stored on disk using Norito snapshots.
 
 use std::{
     cmp::Reverse,
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
+    fs,
+    path::{Path, PathBuf},
     sync::{
         Arc, RwLock,
         atomic::{AtomicU64, Ordering},
@@ -31,6 +32,7 @@ use sorafs_manifest::{
 use thiserror::Error;
 
 use crate::config::RepairConfig;
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
 
 const DEFAULT_REPAIR_SLA_SECS: u64 = 4 * 60 * 60;
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
@@ -39,6 +41,10 @@ const MAX_REPAIR_NOTES_BYTES: usize = 256;
 const DEFAULT_IDEMPOTENCY_CACHE_SIZE: usize = 64;
 const MAX_REPAIR_STORE_RETRIES: usize = 3;
 const DEFAULT_REPAIR_EVENT_HISTORY_LIMIT: usize = 64;
+const REPAIR_STORE_VERSION_V1: u8 = 1;
+const REPAIR_STORE_FILE_NAME: &str = "repair_state.to";
+const REPAIR_STORE_TMP_EXT: &str = "tmp";
+static REPAIR_STORE_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Result of inserting a repair task into storage.
 #[derive(Debug, Clone)]
@@ -180,6 +186,290 @@ impl RepairStore for InMemoryRepairStore {
     fn list_tasks(&self) -> Result<Vec<RepairTaskInternal>, RepairStoreError> {
         let guard = self.tasks.read().expect("repair tasks lock poisoned");
         Ok(guard.values().cloned().collect())
+    }
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct RepairStoreSnapshot {
+    version: u8,
+    next_por_history_id: u64,
+    next_audit_sequence: u64,
+    tasks: Vec<StoredRepairTask>,
+    por_history: Vec<PorHistoryEntry>,
+}
+
+impl RepairStoreSnapshot {
+    fn from_state(state: &RepairStoreState) -> Self {
+        Self {
+            version: REPAIR_STORE_VERSION_V1,
+            next_por_history_id: state.next_por_history_id,
+            next_audit_sequence: state.next_audit_sequence,
+            tasks: state
+                .tasks
+                .values()
+                .cloned()
+                .map(StoredRepairTask::from_internal)
+                .collect(),
+            por_history: state.por_history.values().cloned().collect(),
+        }
+    }
+
+    fn into_state(self) -> Result<RepairStoreState, RepairStoreError> {
+        if self.version != REPAIR_STORE_VERSION_V1 {
+            return Err(RepairStoreError::Other(format!(
+                "unsupported repair store version {} (expected {})",
+                self.version, REPAIR_STORE_VERSION_V1
+            )));
+        }
+        let mut tasks = BTreeMap::new();
+        for task in self.tasks {
+            let internal = task.into_internal();
+            let key = internal.report.ticket_id.0.clone();
+            tasks.insert(key, internal);
+        }
+        let mut por_history = BTreeMap::new();
+        for entry in self.por_history {
+            por_history.insert(entry.id, entry);
+        }
+        Ok(RepairStoreState {
+            tasks,
+            por_history,
+            next_por_history_id: self.next_por_history_id,
+            next_audit_sequence: self.next_audit_sequence,
+        })
+    }
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct StoredRepairTask {
+    revision: u64,
+    report: RepairReportV1,
+    state: RepairTaskStateV1,
+    sla_deadline_unix: Option<u64>,
+    scheduler_notes: Option<String>,
+    slash_proposal_digest: Option<[u8; 32]>,
+    slash_proposal_bytes: Option<Vec<u8>>,
+    lease: Option<StoredRepairTaskLease>,
+    attempts: u32,
+    next_attempt_after_unix: Option<u64>,
+    events: Vec<RepairTaskEventV1>,
+}
+
+impl StoredRepairTask {
+    fn from_internal(task: RepairTaskInternal) -> Self {
+        Self {
+            revision: task.revision,
+            report: task.report,
+            state: task.state,
+            sla_deadline_unix: task.sla_deadline_unix,
+            scheduler_notes: task.scheduler_notes,
+            slash_proposal_digest: task.slash_proposal_digest,
+            slash_proposal_bytes: task.slash_proposal_bytes,
+            lease: task.lease.map(StoredRepairTaskLease::from_lease),
+            attempts: task.attempts,
+            next_attempt_after_unix: task.next_attempt_after_unix,
+            events: task.events,
+        }
+    }
+
+    fn into_internal(self) -> RepairTaskInternal {
+        RepairTaskInternal {
+            revision: self.revision,
+            report: self.report,
+            state: self.state,
+            sla_deadline_unix: self.sla_deadline_unix,
+            scheduler_notes: self.scheduler_notes,
+            slash_proposal_digest: self.slash_proposal_digest,
+            slash_proposal_bytes: self.slash_proposal_bytes,
+            lease: self.lease.map(StoredRepairTaskLease::into_lease),
+            idempotency: RepairTaskIdempotency::new(DEFAULT_IDEMPOTENCY_CACHE_SIZE),
+            attempts: self.attempts,
+            next_attempt_after_unix: self.next_attempt_after_unix,
+            events: self.events,
+        }
+    }
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct StoredRepairTaskLease {
+    worker_id: String,
+    last_heartbeat_unix: u64,
+    expires_at_unix: u64,
+}
+
+impl StoredRepairTaskLease {
+    fn from_lease(lease: RepairTaskLease) -> Self {
+        Self {
+            worker_id: lease.worker_id,
+            last_heartbeat_unix: lease.last_heartbeat_unix,
+            expires_at_unix: lease.expires_at_unix,
+        }
+    }
+
+    fn into_lease(self) -> RepairTaskLease {
+        RepairTaskLease {
+            worker_id: self.worker_id,
+            last_heartbeat_unix: self.last_heartbeat_unix,
+            expires_at_unix: self.expires_at_unix,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RepairStoreState {
+    tasks: BTreeMap<String, RepairTaskInternal>,
+    por_history: BTreeMap<u64, PorHistoryEntry>,
+    next_por_history_id: u64,
+    next_audit_sequence: u64,
+}
+
+impl RepairStoreState {
+    fn new() -> Self {
+        Self {
+            tasks: BTreeMap::new(),
+            por_history: BTreeMap::new(),
+            next_por_history_id: 1,
+            next_audit_sequence: 1,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FileRepairStore {
+    path: PathBuf,
+    state: RwLock<RepairStoreState>,
+}
+
+impl FileRepairStore {
+    fn load_or_new(path: PathBuf) -> Result<Self, RepairStoreError> {
+        let state = if path.exists() {
+            let bytes = fs::read(&path).map_err(|err| {
+                RepairStoreError::Other(format!("failed to read repair store: {err}"))
+            })?;
+            let snapshot: RepairStoreSnapshot =
+                norito::decode_from_bytes(&bytes).map_err(|err| {
+                    RepairStoreError::Other(format!("failed to decode repair store: {err}"))
+                })?;
+            snapshot.into_state()?
+        } else {
+            RepairStoreState::new()
+        };
+        Ok(Self {
+            path,
+            state: RwLock::new(state),
+        })
+    }
+
+    fn persist(&self, state: &RepairStoreState) -> Result<(), RepairStoreError> {
+        let snapshot = RepairStoreSnapshot::from_state(state);
+        let bytes = norito::to_bytes(&snapshot).map_err(|err| {
+            RepairStoreError::Other(format!("failed to encode repair store: {err}"))
+        })?;
+        write_atomic(&self.path, &bytes).map_err(|err| {
+            RepairStoreError::Other(format!("failed to persist repair store: {err}"))
+        })
+    }
+}
+
+fn write_atomic(path: &Path, data: &[u8]) -> Result<(), std::io::Error> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let counter = REPAIR_STORE_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = temp_path_for_atomic(path, std::process::id(), counter);
+    fs::write(&tmp_path, data)?;
+    fs::rename(tmp_path, path)?;
+    Ok(())
+}
+
+fn temp_path_for_atomic(path: &Path, pid: u32, counter: u64) -> PathBuf {
+    let suffix = format!("{REPAIR_STORE_TMP_EXT}-{pid}-{counter}");
+    let candidate = path.with_added_extension(&suffix);
+    match candidate.file_name().and_then(|name| name.to_str()) {
+        Some(name) => candidate.with_file_name(format!(".{name}")),
+        None => candidate,
+    }
+}
+
+impl RepairStore for FileRepairStore {
+    fn next_por_history_id(&self) -> u64 {
+        let mut guard = self.state.write().expect("repair store poisoned");
+        let id = guard.next_por_history_id;
+        guard.next_por_history_id = guard.next_por_history_id.saturating_add(1);
+        if let Err(err) = self.persist(&guard) {
+            warn!(?err, "failed to persist repair store after por history id");
+        }
+        id
+    }
+
+    fn record_por_history(&self, entry: PorHistoryEntry) -> Result<(), RepairStoreError> {
+        let mut guard = self.state.write().expect("repair store poisoned");
+        if guard.por_history.contains_key(&entry.id) {
+            return Err(RepairStoreError::Other(format!(
+                "por history id {} already stored",
+                entry.id
+            )));
+        }
+        guard.por_history.insert(entry.id, entry);
+        self.persist(&guard)
+    }
+
+    fn por_history_entry(
+        &self,
+        por_history_id: u64,
+    ) -> Result<Option<PorHistoryEntry>, RepairStoreError> {
+        let guard = self.state.read().expect("repair store poisoned");
+        Ok(guard.por_history.get(&por_history_id).cloned())
+    }
+
+    fn insert_task(
+        &self,
+        task: RepairTaskInternal,
+    ) -> Result<RepairStoreInsertResult, RepairStoreError> {
+        let mut guard = self.state.write().expect("repair store poisoned");
+        let key = task.report.ticket_id.0.clone();
+        if let Some(existing) = guard.tasks.get(&key) {
+            return Ok(RepairStoreInsertResult::Existing(existing.clone()));
+        }
+        guard.tasks.insert(key, task.clone());
+        self.persist(&guard)?;
+        Ok(RepairStoreInsertResult::Inserted(task))
+    }
+
+    fn task(
+        &self,
+        ticket_id: &RepairTicketId,
+    ) -> Result<Option<RepairTaskInternal>, RepairStoreError> {
+        let guard = self.state.read().expect("repair store poisoned");
+        Ok(guard.tasks.get(&ticket_id.0).cloned())
+    }
+
+    fn compare_and_set_task(
+        &self,
+        ticket_id: &RepairTicketId,
+        expected_revision: u64,
+        task: RepairTaskInternal,
+    ) -> Result<(), RepairStoreError> {
+        let mut guard = self.state.write().expect("repair store poisoned");
+        let existing =
+            guard
+                .tasks
+                .get(&ticket_id.0)
+                .ok_or_else(|| RepairStoreError::NotFound {
+                    ticket_id: ticket_id.to_string(),
+                })?;
+        if existing.revision != expected_revision {
+            return Err(RepairStoreError::Conflict {
+                ticket_id: ticket_id.to_string(),
+            });
+        }
+        guard.tasks.insert(ticket_id.0.clone(), task);
+        self.persist(&guard)
+    }
+
+    fn list_tasks(&self) -> Result<Vec<RepairTaskInternal>, RepairStoreError> {
+        let guard = self.state.read().expect("repair store poisoned");
+        Ok(guard.tasks.values().cloned().collect())
     }
 }
 

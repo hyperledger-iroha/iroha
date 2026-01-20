@@ -5008,7 +5008,7 @@ mod repo {
             InstructionBox,
             repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         },
-        prelude::{AccountId, AssetDefinitionId, Numeric},
+        prelude::{AssetDefinitionId, Numeric},
         query::repo::prelude::FindRepoAgreements,
         repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     };
@@ -6267,6 +6267,7 @@ where
 
     let dto: AccountResolveResponse = norito::json::from_slice(&body)
         .wrap_err("failed to parse account resolve response")?;
+    let _ = (&dto.source, &dto.format);
     let domain: DomainId = dto
         .domain
         .parse()
