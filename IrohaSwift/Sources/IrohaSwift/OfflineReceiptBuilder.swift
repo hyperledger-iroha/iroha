@@ -628,11 +628,9 @@ public enum OfflineReceiptBuilder {
         if trimmed.contains("#") || trimmed.contains("$") {
             throw OfflineReceiptBuilderError.invalidAccountId(field: field, value: trimmed)
         }
-        let components = trimmed.split(separator: "@", omittingEmptySubsequences: false)
-        guard components.count == 2 else {
-            throw OfflineReceiptBuilderError.invalidAccountId(field: field, value: trimmed)
-        }
-        guard !components[0].isEmpty, !components[1].isEmpty else {
+        do {
+            _ = try OfflineNorito.encodeAccountId(trimmed)
+        } catch {
             throw OfflineReceiptBuilderError.invalidAccountId(field: field, value: trimmed)
         }
     }

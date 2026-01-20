@@ -28,9 +28,11 @@ use hex::{decode, decode_to_slice, encode};
 use iroha::{
     client::{
         Client, SorafsAliasListFilter, SorafsGatewayFetchOptions, SorafsGatewayScoreboardOptions,
-        SorafsPinAlias, SorafsPinListFilter, SorafsPinRegisterArgs, SorafsReplicationListFilter,
-        SorafsTokenOverrides,
+        SorafsPinAlias, SorafsPinListFilter, SorafsPinRegisterArgs, SorafsRepairStatusFilter,
+        SorafsRepairWorkerClaimRequest, SorafsRepairWorkerCompleteRequest,
+        SorafsRepairWorkerFailRequest, SorafsReplicationListFilter, SorafsTokenOverrides,
     },
+    config::Config,
     http::{Response, StatusCode},
 };
 use iroha_config::{
@@ -43,7 +45,7 @@ use iroha_config::{
 };
 use iroha_core::soranet_incentives::{RelayEarningsAccumulator, RelayPayoutLedger};
 use iroha_crypto::{
-    HybridPublicKey, HybridSuite,
+    HybridPublicKey, HybridSuite, SignatureOf,
     soranet::{
         blinding::canonical_cache_key,
         certificate::CertificateValidationPhase,
@@ -77,6 +79,10 @@ use sorafs_manifest::{
     },
     provider_admission::ProviderAdmissionEnvelopeV1,
     provider_advert::{CapabilityType, ProviderCapabilityRangeV1},
+};
+use sorafs_manifest::repair::{
+    REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairSlashProposalV1,
+    RepairTicketId, RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
 };
 use sorafs_orchestrator::{
     AnonymityPolicy, PolicyOverride, TransportPolicy, WriteModeHint,
@@ -437,6 +443,12 @@ pub enum Command {
     /// GAR policy evidence helpers.
     #[command(subcommand)]
     Gar(GarCommand),
+    /// Repair queue helpers (list, claim, close, escalate).
+    #[command(subcommand)]
+    Repair(RepairCommand),
+    /// GC inspection helpers (no manual deletions).
+    #[command(subcommand)]
+    Gc(GcCommand),
     /// Orchestrate multi-provider chunk fetches via gateways.
     Fetch(FetchArgs),
 }
@@ -469,6 +481,587 @@ impl Run for GarCommand {
         match self {
             Self::Receipt(args) => args.run(context),
         }
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum RepairCommand {
+    /// List repair tickets (optionally filtered by manifest/provider/status).
+    List(RepairListArgs),
+    /// Claim a queued repair ticket as a repair worker.
+    Claim(RepairClaimArgs),
+    /// Mark a repair ticket as completed.
+    Complete(RepairCompleteArgs),
+    /// Mark a repair ticket as failed.
+    Fail(RepairFailArgs),
+    /// Escalate a repair ticket into a slash proposal.
+    Escalate(RepairEscalateArgs),
+}
+
+impl Run for RepairCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            RepairCommand::List(args) => args.run(context),
+            RepairCommand::Claim(args) => args.run(context),
+            RepairCommand::Complete(args) => args.run(context),
+            RepairCommand::Fail(args) => args.run(context),
+            RepairCommand::Escalate(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RepairListArgs {
+    /// Optional manifest digest to scope the listing.
+    #[arg(long = "manifest-digest", value_name = "HEX")]
+    manifest_digest: Option<String>,
+    /// Optional status filter (queued, verifying, in_progress, completed, failed, escalated).
+    #[arg(long)]
+    status: Option<String>,
+    /// Optional provider identifier filter (hex-encoded).
+    #[arg(long = "provider-id", value_name = "HEX")]
+    provider_id: Option<String>,
+}
+
+impl Run for RepairListArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::get_sorafs_repair_status_all,
+            Client::get_sorafs_repair_status,
+        )
+    }
+}
+
+impl RepairListArgs {
+    fn run_with<C, F, G>(&self, context: &mut C, list_all: F, list_manifest: G) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SorafsRepairStatusFilter<'_>) -> Result<Response<Vec<u8>>>,
+        G: FnOnce(&Client, &str, &SorafsRepairStatusFilter<'_>) -> Result<Response<Vec<u8>>>,
+    {
+        let manifest = self
+            .manifest_digest
+            .as_deref()
+            .map(|hex| normalize_hex_digest::<32>(hex, "--manifest-digest"))
+            .transpose()?;
+        let provider = self
+            .provider_id
+            .as_deref()
+            .map(|hex| normalize_hex_digest::<32>(hex, "--provider-id"))
+            .transpose()?;
+        let filter = SorafsRepairStatusFilter {
+            status: self.status.as_deref(),
+            provider_id: provider.as_deref(),
+        };
+        let client = context.client_from_config();
+        let response = match manifest.as_deref() {
+            Some(digest) => list_manifest(&client, digest, &filter)?,
+            None => list_all(&client, &filter)?,
+        };
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RepairClaimArgs {
+    /// Repair ticket identifier (e.g., `REP-401`).
+    #[arg(long = "ticket-id", value_name = "ID")]
+    ticket_id: String,
+    /// Manifest digest bound to the ticket (hex-encoded).
+    #[arg(long = "manifest-digest", value_name = "HEX")]
+    manifest_digest: String,
+    /// Provider identifier owning the ticket (hex-encoded).
+    #[arg(long = "provider-id", value_name = "HEX")]
+    provider_id: String,
+    /// Optional timestamp for the claim (RFC3339 or `@unix_seconds`).
+    #[arg(long = "claimed-at", value_name = "RFC3339|@UNIX")]
+    claimed_at: Option<String>,
+    /// Optional idempotency key (auto-generated when omitted).
+    #[arg(long = "idempotency-key", value_name = "KEY")]
+    idempotency_key: Option<String>,
+}
+
+impl Run for RepairClaimArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_repair_claim)
+    }
+}
+
+impl RepairClaimArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SorafsRepairWorkerClaimRequest) -> Result<Response<Vec<u8>>>,
+    {
+        ensure_optional_non_empty(self.idempotency_key.as_deref(), "idempotency-key")?;
+        let ticket_id = parse_repair_ticket_id(&self.ticket_id, "--ticket-id")?;
+        let manifest_digest = parse_hex_array::<32>(&self.manifest_digest, "--manifest-digest")?;
+        let provider_id = parse_hex_array::<32>(&self.provider_id, "--provider-id")?;
+        let claimed_at_unix = parse_timestamp_or_now(self.claimed_at.as_deref(), "claimed-at")?;
+        let idempotency_key = self
+            .idempotency_key
+            .clone()
+            .unwrap_or_else(|| generate_nonce_hex(12));
+        let action = RepairWorkerActionV1::Claim { claimed_at_unix };
+        let (worker_id, signature) = build_repair_worker_signature(
+            context.config(),
+            &ticket_id,
+            manifest_digest,
+            provider_id,
+            &idempotency_key,
+            action,
+        )?;
+        let request = SorafsRepairWorkerClaimRequest {
+            ticket_id,
+            manifest_digest_hex: encode(manifest_digest),
+            worker_id,
+            claimed_at_unix,
+            idempotency_key,
+            signature,
+        };
+        let client = context.client_from_config();
+        let response = submit(&client, &request)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RepairCompleteArgs {
+    /// Repair ticket identifier (e.g., `REP-401`).
+    #[arg(long = "ticket-id", value_name = "ID")]
+    ticket_id: String,
+    /// Manifest digest bound to the ticket (hex-encoded).
+    #[arg(long = "manifest-digest", value_name = "HEX")]
+    manifest_digest: String,
+    /// Provider identifier owning the ticket (hex-encoded).
+    #[arg(long = "provider-id", value_name = "HEX")]
+    provider_id: String,
+    /// Optional timestamp for the completion (RFC3339 or `@unix_seconds`).
+    #[arg(long = "completed-at", value_name = "RFC3339|@UNIX")]
+    completed_at: Option<String>,
+    /// Optional resolution notes.
+    #[arg(long = "resolution-notes", value_name = "TEXT")]
+    resolution_notes: Option<String>,
+    /// Optional idempotency key (auto-generated when omitted).
+    #[arg(long = "idempotency-key", value_name = "KEY")]
+    idempotency_key: Option<String>,
+}
+
+impl Run for RepairCompleteArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_repair_complete)
+    }
+}
+
+impl RepairCompleteArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SorafsRepairWorkerCompleteRequest) -> Result<Response<Vec<u8>>>,
+    {
+        ensure_optional_non_empty(self.idempotency_key.as_deref(), "idempotency-key")?;
+        ensure_optional_non_empty(self.resolution_notes.as_deref(), "resolution-notes")?;
+        let ticket_id = parse_repair_ticket_id(&self.ticket_id, "--ticket-id")?;
+        let manifest_digest = parse_hex_array::<32>(&self.manifest_digest, "--manifest-digest")?;
+        let provider_id = parse_hex_array::<32>(&self.provider_id, "--provider-id")?;
+        let completed_at_unix =
+            parse_timestamp_or_now(self.completed_at.as_deref(), "completed-at")?;
+        let idempotency_key = self
+            .idempotency_key
+            .clone()
+            .unwrap_or_else(|| generate_nonce_hex(12));
+        let action = RepairWorkerActionV1::Complete {
+            completed_at_unix,
+            resolution_notes: self.resolution_notes.clone(),
+        };
+        let (worker_id, signature) = build_repair_worker_signature(
+            context.config(),
+            &ticket_id,
+            manifest_digest,
+            provider_id,
+            &idempotency_key,
+            action,
+        )?;
+        let request = SorafsRepairWorkerCompleteRequest {
+            ticket_id,
+            manifest_digest_hex: encode(manifest_digest),
+            worker_id,
+            completed_at_unix,
+            resolution_notes: self.resolution_notes.clone(),
+            idempotency_key,
+            signature,
+        };
+        let client = context.client_from_config();
+        let response = submit(&client, &request)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RepairFailArgs {
+    /// Repair ticket identifier (e.g., `REP-401`).
+    #[arg(long = "ticket-id", value_name = "ID")]
+    ticket_id: String,
+    /// Manifest digest bound to the ticket (hex-encoded).
+    #[arg(long = "manifest-digest", value_name = "HEX")]
+    manifest_digest: String,
+    /// Provider identifier owning the ticket (hex-encoded).
+    #[arg(long = "provider-id", value_name = "HEX")]
+    provider_id: String,
+    /// Optional timestamp for the failure (RFC3339 or `@unix_seconds`).
+    #[arg(long = "failed-at", value_name = "RFC3339|@UNIX")]
+    failed_at: Option<String>,
+    /// Failure reason.
+    #[arg(long = "reason", value_name = "TEXT")]
+    reason: String,
+    /// Optional idempotency key (auto-generated when omitted).
+    #[arg(long = "idempotency-key", value_name = "KEY")]
+    idempotency_key: Option<String>,
+}
+
+impl Run for RepairFailArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_repair_fail)
+    }
+}
+
+impl RepairFailArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SorafsRepairWorkerFailRequest) -> Result<Response<Vec<u8>>>,
+    {
+        ensure_optional_non_empty(self.idempotency_key.as_deref(), "idempotency-key")?;
+        if self.reason.trim().is_empty() {
+            return Err(eyre!("--reason must not be empty"));
+        }
+        let ticket_id = parse_repair_ticket_id(&self.ticket_id, "--ticket-id")?;
+        let manifest_digest = parse_hex_array::<32>(&self.manifest_digest, "--manifest-digest")?;
+        let provider_id = parse_hex_array::<32>(&self.provider_id, "--provider-id")?;
+        let failed_at_unix = parse_timestamp_or_now(self.failed_at.as_deref(), "failed-at")?;
+        let idempotency_key = self
+            .idempotency_key
+            .clone()
+            .unwrap_or_else(|| generate_nonce_hex(12));
+        let action = RepairWorkerActionV1::Fail {
+            failed_at_unix,
+            reason: self.reason.clone(),
+        };
+        let (worker_id, signature) = build_repair_worker_signature(
+            context.config(),
+            &ticket_id,
+            manifest_digest,
+            provider_id,
+            &idempotency_key,
+            action,
+        )?;
+        let request = SorafsRepairWorkerFailRequest {
+            ticket_id,
+            manifest_digest_hex: encode(manifest_digest),
+            worker_id,
+            failed_at_unix,
+            reason: self.reason.clone(),
+            idempotency_key,
+            signature,
+        };
+        let client = context.client_from_config();
+        let response = submit(&client, &request)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RepairEscalateArgs {
+    /// Repair ticket identifier (e.g., `REP-401`).
+    #[arg(long = "ticket-id", value_name = "ID")]
+    ticket_id: String,
+    /// Manifest digest bound to the ticket (hex-encoded).
+    #[arg(long = "manifest-digest", value_name = "HEX")]
+    manifest_digest: String,
+    /// Provider identifier owning the ticket (hex-encoded).
+    #[arg(long = "provider-id", value_name = "HEX")]
+    provider_id: String,
+    /// Proposed penalty amount in nano-XOR.
+    #[arg(long = "penalty-nano", value_name = "NANO")]
+    penalty_nano: u128,
+    /// Escalation rationale for governance review.
+    #[arg(long = "rationale", value_name = "TEXT")]
+    rationale: String,
+    /// Optional auditor account (defaults to the CLI account).
+    #[arg(long = "auditor", value_name = "ACCOUNT@DOMAIN")]
+    auditor: Option<String>,
+    /// Optional timestamp for the proposal (RFC3339 or `@unix_seconds`).
+    #[arg(long = "submitted-at", value_name = "RFC3339|@UNIX")]
+    submitted_at: Option<String>,
+}
+
+impl Run for RepairEscalateArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_repair_slash)
+    }
+}
+
+impl RepairEscalateArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &RepairSlashProposalV1) -> Result<Response<Vec<u8>>>,
+    {
+        if self.rationale.trim().is_empty() {
+            return Err(eyre!("--rationale must not be empty"));
+        }
+        let ticket_id = parse_repair_ticket_id(&self.ticket_id, "--ticket-id")?;
+        let manifest_digest = parse_hex_array::<32>(&self.manifest_digest, "--manifest-digest")?;
+        let provider_id = parse_hex_array::<32>(&self.provider_id, "--provider-id")?;
+        let auditor_account = match self.auditor.as_deref() {
+            Some(raw) => parse_account_id_str(raw, "--auditor")?.to_string(),
+            None => context.config().account.to_string(),
+        };
+        let submitted_at_unix =
+            parse_timestamp_or_now(self.submitted_at.as_deref(), "submitted-at")?;
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id,
+            provider_id,
+            manifest_digest,
+            auditor_account,
+            proposed_penalty_nano: self.penalty_nano,
+            submitted_at_unix,
+            rationale: self.rationale.clone(),
+        };
+        proposal.validate().map_err(|err| {
+            eyre!("invalid repair slash proposal payload: {err}")
+        })?;
+        let client = context.client_from_config();
+        let response = submit(&client, &proposal)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum GcCommand {
+    /// Inspect retained manifests and retention deadlines.
+    Inspect(GcInspectArgs),
+    /// Report which manifests would be evicted by GC (dry-run only).
+    DryRun(GcDryRunArgs),
+}
+
+impl Run for GcCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            GcCommand::Inspect(args) => args.run(context),
+            GcCommand::DryRun(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct GcInspectArgs {
+    /// Root directory for SoraFS storage data (defaults to the node config default).
+    #[arg(long = "data-dir", value_name = "PATH")]
+    data_dir: Option<PathBuf>,
+    /// Override the reference timestamp (RFC3339 or `@unix_seconds`).
+    #[arg(long = "now", value_name = "RFC3339|@UNIX")]
+    now: Option<String>,
+    /// Override the retention grace window in seconds.
+    #[arg(long = "grace-secs", value_name = "SECONDS")]
+    grace_secs: Option<u64>,
+}
+
+impl Run for GcInspectArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let report = build_gc_report(
+            "inspect",
+            self.data_dir.as_deref(),
+            self.now.as_deref(),
+            self.grace_secs,
+            false,
+        )?;
+        context.print_data(&report)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct GcDryRunArgs {
+    /// Root directory for SoraFS storage data (defaults to the node config default).
+    #[arg(long = "data-dir", value_name = "PATH")]
+    data_dir: Option<PathBuf>,
+    /// Override the reference timestamp (RFC3339 or `@unix_seconds`).
+    #[arg(long = "now", value_name = "RFC3339|@UNIX")]
+    now: Option<String>,
+    /// Override the retention grace window in seconds.
+    #[arg(long = "grace-secs", value_name = "SECONDS")]
+    grace_secs: Option<u64>,
+}
+
+impl Run for GcDryRunArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let report = build_gc_report(
+            "dry_run",
+            self.data_dir.as_deref(),
+            self.now.as_deref(),
+            self.grace_secs,
+            true,
+        )?;
+        context.print_data(&report)
+    }
+}
+
+#[derive(Debug)]
+struct GcManifestEntry {
+    manifest_id: String,
+    manifest_digest_hex: String,
+    storage_class: ManifestStorageClass,
+    retention_epoch: u64,
+    payload_bytes: u64,
+    car_bytes: u64,
+}
+
+#[derive(Debug, norito::json::JsonSerialize)]
+struct GcReportOutput {
+    mode: String,
+    data_dir: String,
+    now_unix: u64,
+    grace_secs: u64,
+    total_manifests: usize,
+    total_payload_bytes: u64,
+    total_car_bytes: u64,
+    expired_count: usize,
+    expired_payload_bytes: u64,
+    expired_car_bytes: u64,
+    entries: Vec<GcReportEntry>,
+}
+
+#[derive(Debug, norito::json::JsonSerialize)]
+struct GcReportEntry {
+    manifest_id: String,
+    manifest_digest_hex: String,
+    storage_class: String,
+    retention_epoch: u64,
+    expires_at_unix: Option<u64>,
+    expired: bool,
+    payload_bytes: u64,
+    car_bytes: u64,
+}
+
+const SORAFS_MANIFEST_DIR: &str = "manifests";
+const SORAFS_MANIFEST_FILE: &str = "manifest.to";
+
+fn build_gc_report(
+    mode: &str,
+    data_dir: Option<&Path>,
+    now: Option<&str>,
+    grace_secs: Option<u64>,
+    only_expired: bool,
+) -> Result<GcReportOutput> {
+    let data_dir = data_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(defaults::sorafs::storage::data_dir);
+    let now_unix = parse_timestamp_or_now(now, "now")?;
+    let grace_secs = grace_secs.unwrap_or(defaults::sorafs::gc::RETENTION_GRACE_SECS);
+    let mut entries = load_gc_manifest_entries(&data_dir)?;
+    entries.sort_by(|left, right| left.manifest_id.cmp(&right.manifest_id));
+
+    let total_manifests = entries.len();
+    let mut report_entries = Vec::with_capacity(entries.len());
+    let mut total_payload_bytes = 0_u64;
+    let mut total_car_bytes = 0_u64;
+    let mut expired_count = 0_usize;
+    let mut expired_payload_bytes = 0_u64;
+    let mut expired_car_bytes = 0_u64;
+
+    for entry in entries {
+        total_payload_bytes = total_payload_bytes.saturating_add(entry.payload_bytes);
+        total_car_bytes = total_car_bytes.saturating_add(entry.car_bytes);
+        let expires_at_unix = retention_deadline(entry.retention_epoch, grace_secs);
+        let expired = expires_at_unix.is_some_and(|deadline| now_unix >= deadline);
+        if expired {
+            expired_count += 1;
+            expired_payload_bytes = expired_payload_bytes.saturating_add(entry.payload_bytes);
+            expired_car_bytes = expired_car_bytes.saturating_add(entry.car_bytes);
+        }
+        if only_expired && !expired {
+            continue;
+        }
+        report_entries.push(GcReportEntry {
+            manifest_id: entry.manifest_id,
+            manifest_digest_hex: entry.manifest_digest_hex,
+            storage_class: manifest_storage_class_label(entry.storage_class).to_string(),
+            retention_epoch: entry.retention_epoch,
+            expires_at_unix,
+            expired,
+            payload_bytes: entry.payload_bytes,
+            car_bytes: entry.car_bytes,
+        });
+    }
+
+    Ok(GcReportOutput {
+        mode: mode.to_string(),
+        data_dir: data_dir.display().to_string(),
+        now_unix,
+        grace_secs,
+        total_manifests,
+        total_payload_bytes,
+        total_car_bytes,
+        expired_count,
+        expired_payload_bytes,
+        expired_car_bytes,
+        entries: report_entries,
+    })
+}
+
+fn load_gc_manifest_entries(data_dir: &Path) -> Result<Vec<GcManifestEntry>> {
+    let manifests_dir = data_dir.join(SORAFS_MANIFEST_DIR);
+    if !manifests_dir.exists() {
+        return Err(eyre!(
+            "SoraFS manifests directory `{}` does not exist",
+            manifests_dir.display()
+        ));
+    }
+    let mut entries = Vec::new();
+    for dir_entry in fs::read_dir(&manifests_dir)
+        .wrap_err_with(|| format!("failed to read `{}`", manifests_dir.display()))?
+    {
+        let dir_entry = dir_entry?;
+        let file_type = dir_entry.file_type()?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        let manifest_id = dir_entry.file_name().to_string_lossy().to_string();
+        let manifest_path = dir_entry.path().join(SORAFS_MANIFEST_FILE);
+        let manifest_bytes = fs::read(&manifest_path).wrap_err_with(|| {
+            format!("failed to read manifest `{}`", manifest_path.display())
+        })?;
+        let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes)
+            .wrap_err_with(|| format!("failed to decode `{}`", manifest_path.display()))?;
+        let digest = manifest
+            .digest()
+            .wrap_err_with(|| format!("failed to hash `{}`", manifest_path.display()))?;
+        entries.push(GcManifestEntry {
+            manifest_id,
+            manifest_digest_hex: encode(digest.as_bytes()),
+            storage_class: manifest.pin_policy.storage_class,
+            retention_epoch: manifest.pin_policy.retention_epoch,
+            payload_bytes: manifest.content_length,
+            car_bytes: manifest.car_size,
+        });
+    }
+    Ok(entries)
+}
+
+fn retention_deadline(retention_epoch: u64, grace_secs: u64) -> Option<u64> {
+    if retention_epoch == 0 {
+        return None;
+    }
+    Some(retention_epoch.saturating_add(grace_secs))
+}
+
+const fn manifest_storage_class_label(class: ManifestStorageClass) -> &'static str {
+    match class {
+        ManifestStorageClass::Hot => "hot",
+        ManifestStorageClass::Warm => "warm",
+        ManifestStorageClass::Cold => "cold",
     }
 }
 
@@ -2160,6 +2753,8 @@ impl Run for Command {
             Command::GuardDirectory(cmd) => cmd.run(context),
             Command::Reserve(cmd) => cmd.run(context),
             Command::Gar(cmd) => cmd.run(context),
+            Command::Repair(cmd) => cmd.run(context),
+            Command::Gc(cmd) => cmd.run(context),
             Command::Fetch(args) => args.run(context),
         }
     }
@@ -5522,6 +6117,43 @@ impl ServiceDashboardRow {
 
 fn parse_account_id_str(value: &str, flag: &str) -> Result<AccountId> {
     AccountId::from_str(value).map_err(|err| eyre!("{flag} must be a valid AccountId: {err}"))
+}
+
+fn parse_repair_ticket_id(value: &str, flag: &str) -> Result<RepairTicketId> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(eyre!("{flag} must not be empty"));
+    }
+    let ticket_id = RepairTicketId(trimmed.to_string());
+    ticket_id
+        .validate()
+        .map_err(|err| eyre!("{flag} is invalid: {err}"))?;
+    Ok(ticket_id)
+}
+
+fn build_repair_worker_signature(
+    config: &Config,
+    ticket_id: &RepairTicketId,
+    manifest_digest: [u8; 32],
+    provider_id: [u8; 32],
+    idempotency_key: &str,
+    action: RepairWorkerActionV1,
+) -> Result<(String, SignatureOf<RepairWorkerSignaturePayloadV1>)> {
+    let worker_id = config.account.to_string();
+    let payload = RepairWorkerSignaturePayloadV1 {
+        version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+        ticket_id: ticket_id.clone(),
+        manifest_digest,
+        provider_id,
+        worker_id: worker_id.clone(),
+        idempotency_key: idempotency_key.to_string(),
+        action,
+    };
+    payload.validate().map_err(|err| {
+        eyre!("invalid repair worker signature payload: {err}")
+    })?;
+    let signature = SignatureOf::new(config.key_pair.private_key(), &payload);
+    Ok((worker_id, signature))
 }
 
 fn parse_numeric_str(value: &str, flag: &str) -> Result<Numeric> {
@@ -11782,6 +12414,45 @@ mod tests {
         file
     }
 
+    fn write_gc_manifest(
+        root: &Path,
+        manifest_id: &str,
+        retention_epoch: u64,
+        storage_class: ManifestStorageClass,
+        payload_bytes: u64,
+        car_bytes: u64,
+    ) {
+        let manifest = ManifestBuilder::new()
+            .root_cid(vec![0x01, 0x02, 0x03])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_profile(ChunkingProfileV1 {
+                profile_id: ProfileId(7),
+                namespace: "sorafs".into(),
+                name: "sf1".into(),
+                semver: "1.0.0".into(),
+                min_size: 4096,
+                target_size: 262_144,
+                max_size: 524_288,
+                break_mask: 0,
+                multihash_code: BLAKE3_256_MULTIHASH_CODE,
+                aliases: vec!["sf1".into()],
+            })
+            .content_length(payload_bytes)
+            .car_digest([0xAB; 32])
+            .car_size(car_bytes)
+            .pin_policy(PinPolicy {
+                min_replicas: 1,
+                storage_class,
+                retention_epoch,
+            })
+            .build()
+            .expect("build manifest");
+        let bytes = to_bytes(&manifest).expect("encode manifest");
+        let manifest_dir = root.join(SORAFS_MANIFEST_DIR).join(manifest_id);
+        fs::create_dir_all(&manifest_dir).expect("create manifest dir");
+        fs::write(manifest_dir.join(SORAFS_MANIFEST_FILE), bytes).expect("write manifest file");
+    }
+
     fn read_state(path: &Path) -> IncentivesState {
         let bytes = fs::read(path).expect("read incentives state");
         norito::json::from_slice(&bytes).expect("decode incentives state")
@@ -12275,6 +12946,411 @@ mod tests {
 
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"orders\""));
+    }
+
+    #[test]
+    fn repair_ticket_id_rejects_lowercase() {
+        let result = parse_repair_ticket_id("rep-1", "--ticket-id");
+        assert!(result.is_err(), "lowercase ticket id should fail");
+    }
+
+    #[test]
+    fn repair_list_scopes_manifest_and_filters() {
+        let args = RepairListArgs {
+            manifest_digest: Some(format!("0x{}", "AB".repeat(32))),
+            status: Some("queued".to_string()),
+            provider_id: Some("FF".repeat(32)),
+        };
+        let mut ctx = TestContext::new();
+        let expected_provider = "ff".repeat(32);
+
+        args.run_with(
+            &mut ctx,
+            |_client, _| unreachable!("list_all should not be called"),
+            |_client, digest, filter| {
+                assert_eq!(digest, &"ab".repeat(32));
+                assert_eq!(filter.status, Some("queued"));
+                assert_eq!(filter.provider_id, Some(expected_provider.as_str()));
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(norito::json::to_vec(&norito::json!({
+                        "tasks": [ { "ticket_id": "REP-1" } ]
+                    }))?)
+                    .unwrap())
+            },
+        )
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"tasks\""));
+    }
+
+    #[test]
+    fn repair_claim_builds_signed_request() {
+        let manifest_digest = [0x11_u8; 32];
+        let provider_id = [0x22_u8; 32];
+        let args = RepairClaimArgs {
+            ticket_id: "REP-501".to_string(),
+            manifest_digest: encode(manifest_digest),
+            provider_id: encode(provider_id),
+            claimed_at: Some("@1700000501".to_string()),
+            idempotency_key: Some("claim-501".to_string()),
+        };
+        let mut ctx = TestContext::new();
+        let expected_worker_id = ctx.config().account.to_string();
+        let public_key = ctx.config().key_pair.public_key().clone();
+
+        args.run_with(&mut ctx, |_client, request| {
+            assert_eq!(request.ticket_id.0, "REP-501");
+            assert_eq!(request.manifest_digest_hex, encode(manifest_digest));
+            assert_eq!(request.worker_id, expected_worker_id);
+            assert_eq!(request.idempotency_key, "claim-501");
+            assert_eq!(request.claimed_at_unix, 1_700_000_501);
+            let payload = RepairWorkerSignaturePayloadV1 {
+                version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+                ticket_id: request.ticket_id.clone(),
+                manifest_digest,
+                provider_id,
+                worker_id: request.worker_id.clone(),
+                idempotency_key: request.idempotency_key.clone(),
+                action: RepairWorkerActionV1::Claim {
+                    claimed_at_unix: request.claimed_at_unix,
+                },
+            };
+            request
+                .signature
+                .verify(&public_key, &payload)
+                .expect("signature should verify");
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({ "ok": true }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+    }
+
+    #[test]
+    fn repair_complete_builds_signed_request() {
+        let manifest_digest = [0x33_u8; 32];
+        let provider_id = [0x44_u8; 32];
+        let args = RepairCompleteArgs {
+            ticket_id: "REP-502".to_string(),
+            manifest_digest: encode(manifest_digest),
+            provider_id: encode(provider_id),
+            completed_at: Some("@1700000502".to_string()),
+            resolution_notes: Some("patched".to_string()),
+            idempotency_key: Some("complete-502".to_string()),
+        };
+        let mut ctx = TestContext::new();
+        let expected_worker_id = ctx.config().account.to_string();
+        let public_key = ctx.config().key_pair.public_key().clone();
+
+        args.run_with(&mut ctx, |_client, request| {
+            assert_eq!(request.ticket_id.0, "REP-502");
+            assert_eq!(request.manifest_digest_hex, encode(manifest_digest));
+            assert_eq!(request.worker_id, expected_worker_id);
+            assert_eq!(request.idempotency_key, "complete-502");
+            assert_eq!(request.completed_at_unix, 1_700_000_502);
+            let payload = RepairWorkerSignaturePayloadV1 {
+                version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+                ticket_id: request.ticket_id.clone(),
+                manifest_digest,
+                provider_id,
+                worker_id: request.worker_id.clone(),
+                idempotency_key: request.idempotency_key.clone(),
+                action: RepairWorkerActionV1::Complete {
+                    completed_at_unix: request.completed_at_unix,
+                    resolution_notes: request.resolution_notes.clone(),
+                },
+            };
+            request
+                .signature
+                .verify(&public_key, &payload)
+                .expect("signature should verify");
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({ "ok": true }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+    }
+
+    #[test]
+    fn repair_fail_builds_signed_request() {
+        let manifest_digest = [0x55_u8; 32];
+        let provider_id = [0x66_u8; 32];
+        let args = RepairFailArgs {
+            ticket_id: "REP-503".to_string(),
+            manifest_digest: encode(manifest_digest),
+            provider_id: encode(provider_id),
+            failed_at: Some("@1700000503".to_string()),
+            reason: "checksum_mismatch".to_string(),
+            idempotency_key: Some("fail-503".to_string()),
+        };
+        let mut ctx = TestContext::new();
+        let expected_worker_id = ctx.config().account.to_string();
+        let public_key = ctx.config().key_pair.public_key().clone();
+
+        args.run_with(&mut ctx, |_client, request| {
+            assert_eq!(request.ticket_id.0, "REP-503");
+            assert_eq!(request.manifest_digest_hex, encode(manifest_digest));
+            assert_eq!(request.worker_id, expected_worker_id);
+            assert_eq!(request.idempotency_key, "fail-503");
+            assert_eq!(request.failed_at_unix, 1_700_000_503);
+            let payload = RepairWorkerSignaturePayloadV1 {
+                version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+                ticket_id: request.ticket_id.clone(),
+                manifest_digest,
+                provider_id,
+                worker_id: request.worker_id.clone(),
+                idempotency_key: request.idempotency_key.clone(),
+                action: RepairWorkerActionV1::Fail {
+                    failed_at_unix: request.failed_at_unix,
+                    reason: request.reason.clone(),
+                },
+            };
+            request
+                .signature
+                .verify(&public_key, &payload)
+                .expect("signature should verify");
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({ "ok": true }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+    }
+
+    #[test]
+    fn repair_escalate_builds_slash_proposal() {
+        let manifest_digest = [0x77_u8; 32];
+        let provider_id = [0x88_u8; 32];
+        let args = RepairEscalateArgs {
+            ticket_id: "REP-504".to_string(),
+            manifest_digest: encode(manifest_digest),
+            provider_id: encode(provider_id),
+            penalty_nano: 900,
+            rationale: "sla_missed".to_string(),
+            auditor: None,
+            submitted_at: Some("@1700000504".to_string()),
+        };
+        let mut ctx = TestContext::new();
+        let expected_auditor = ctx.config().account.to_string();
+
+        args.run_with(&mut ctx, |_client, proposal| {
+            assert_eq!(proposal.ticket_id.0, "REP-504");
+            assert_eq!(proposal.provider_id, provider_id);
+            assert_eq!(proposal.manifest_digest, manifest_digest);
+            assert_eq!(proposal.auditor_account, expected_auditor);
+            assert_eq!(proposal.proposed_penalty_nano, 900);
+            assert_eq!(proposal.submitted_at_unix, 1_700_000_504);
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({ "ok": true }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+    }
+
+    #[test]
+    fn gc_inspect_reports_expiry_state() {
+        let dir = TempDir::new().expect("temp dir");
+        write_gc_manifest(
+            dir.path(),
+            "alpha",
+            1_000,
+            ManifestStorageClass::Hot,
+            100,
+            10,
+        );
+        write_gc_manifest(
+            dir.path(),
+            "beta",
+            2_000,
+            ManifestStorageClass::Warm,
+            200,
+            20,
+        );
+        write_gc_manifest(
+            dir.path(),
+            "gamma",
+            0,
+            ManifestStorageClass::Cold,
+            300,
+            30,
+        );
+
+        let report = build_gc_report(
+            "inspect",
+            Some(dir.path()),
+            Some("@1500"),
+            Some(100),
+            false,
+        )
+        .expect("report");
+
+        assert_eq!(report.mode, "inspect");
+        assert_eq!(report.total_manifests, 3);
+        assert_eq!(report.total_payload_bytes, 600);
+        assert_eq!(report.total_car_bytes, 60);
+        assert_eq!(report.expired_count, 1);
+        assert_eq!(report.expired_payload_bytes, 100);
+        assert_eq!(report.expired_car_bytes, 10);
+        assert_eq!(report.entries.len(), 3);
+        assert_eq!(report.now_unix, 1_500);
+        assert_eq!(report.grace_secs, 100);
+
+        let first = &report.entries[0];
+        assert_eq!(first.manifest_id, "alpha");
+        assert_eq!(first.storage_class, "hot");
+        assert_eq!(first.expires_at_unix, Some(1_100));
+        assert!(first.expired);
+        assert_eq!(first.payload_bytes, 100);
+        assert_eq!(first.car_bytes, 10);
+        assert_eq!(first.manifest_digest_hex.len(), 64);
+
+        let last = &report.entries[2];
+        assert_eq!(last.manifest_id, "gamma");
+        assert_eq!(last.storage_class, "cold");
+        assert_eq!(last.expires_at_unix, None);
+        assert!(!last.expired);
+    }
+
+    #[test]
+    fn gc_dry_run_filters_expired() {
+        let dir = TempDir::new().expect("temp dir");
+        write_gc_manifest(
+            dir.path(),
+            "alpha",
+            1_000,
+            ManifestStorageClass::Hot,
+            100,
+            10,
+        );
+        write_gc_manifest(
+            dir.path(),
+            "beta",
+            2_000,
+            ManifestStorageClass::Warm,
+            200,
+            20,
+        );
+
+        let report = build_gc_report(
+            "dry_run",
+            Some(dir.path()),
+            Some("@1500"),
+            Some(100),
+            true,
+        )
+        .expect("report");
+
+        assert_eq!(report.mode, "dry_run");
+        assert_eq!(report.total_manifests, 2);
+        assert_eq!(report.expired_count, 1);
+        assert_eq!(report.entries.len(), 1);
+        assert_eq!(report.entries[0].manifest_id, "alpha");
+        assert!(report.entries[0].expired);
+    }
+
+    #[test]
+    fn gc_inspect_command_prints_json_report() {
+        let dir = TempDir::new().expect("temp dir");
+        write_gc_manifest(
+            dir.path(),
+            "alpha",
+            0,
+            ManifestStorageClass::Hot,
+            50,
+            5,
+        );
+        let args = GcInspectArgs {
+            data_dir: Some(dir.path().to_path_buf()),
+            now: Some("@1500".to_string()),
+            grace_secs: Some(100),
+        };
+        let mut ctx = TestContext::new();
+
+        GcCommand::Inspect(args)
+            .run(&mut ctx)
+            .expect("inspect run");
+
+        let output = ctx.outputs().last().expect("output");
+        let json: Value = norito::json::from_str(output).expect("json");
+        assert_eq!(json["mode"], Value::from("inspect"));
+        assert_eq!(json["total_manifests"], Value::from(1u64));
+        assert_eq!(json["entries"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn gc_dry_run_command_filters_json_entries() {
+        let dir = TempDir::new().expect("temp dir");
+        write_gc_manifest(
+            dir.path(),
+            "alpha",
+            1_000,
+            ManifestStorageClass::Warm,
+            10,
+            1,
+        );
+        write_gc_manifest(
+            dir.path(),
+            "beta",
+            2_000,
+            ManifestStorageClass::Cold,
+            20,
+            2,
+        );
+        let args = GcDryRunArgs {
+            data_dir: Some(dir.path().to_path_buf()),
+            now: Some("@1500".to_string()),
+            grace_secs: Some(100),
+        };
+        let mut ctx = TestContext::new();
+
+        GcCommand::DryRun(args).run(&mut ctx).expect("dry run");
+
+        let output = ctx.outputs().last().expect("output");
+        let json: Value = norito::json::from_str(output).expect("json");
+        assert_eq!(json["mode"], Value::from("dry_run"));
+        assert_eq!(json["total_manifests"], Value::from(2u64));
+        assert_eq!(json["entries"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn gc_manifest_entries_require_manifest_dir() {
+        let dir = TempDir::new().expect("temp dir");
+        let err = load_gc_manifest_entries(dir.path()).expect_err("missing manifests");
+        assert!(
+            err.to_string().contains("SoraFS manifests directory"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn gc_retention_deadline_respects_zero_epoch() {
+        assert_eq!(retention_deadline(0, 5), None);
+        assert_eq!(retention_deadline(10, 5), Some(15));
+    }
+
+    #[test]
+    fn gc_storage_class_labels_match_expected_values() {
+        assert_eq!(manifest_storage_class_label(ManifestStorageClass::Hot), "hot");
+        assert_eq!(manifest_storage_class_label(ManifestStorageClass::Warm), "warm");
+        assert_eq!(manifest_storage_class_label(ManifestStorageClass::Cold), "cold");
     }
 
     #[test]

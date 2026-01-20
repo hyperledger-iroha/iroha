@@ -1400,10 +1400,10 @@ mod domain {
         /// Domain name
         #[arg(short, long)]
         pub id: DomainId,
-        /// Source account, in the format "multihash@domain"
+        /// Source account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         pub from: AccountId,
-        /// Destination account, in the format "multihash@domain"
+        /// Destination account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         pub to: AccountId,
     }
@@ -1649,14 +1649,14 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Account in the format "multihash@domain"
+        /// Account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         id: AccountId,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct RoleList {
-        /// Account in the format "multihash@domain"
+        /// Account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         id: AccountId,
         /// Maximum number of items to return (server-side limit)
@@ -1672,7 +1672,7 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct PermissionList {
-        /// Account in the format "multihash@domain"
+        /// Account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         id: AccountId,
         /// Maximum number of items to return (server-side limit)
@@ -1688,7 +1688,7 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct IdRole {
-        /// Account in the format "multihash@domain"
+        /// Account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         pub id: AccountId,
         /// Role name
@@ -2040,10 +2040,10 @@ mod asset {
             /// Asset definition in the format "asset#domain"
             #[arg(short, long)]
             pub id: AssetDefinitionId,
-            /// Source account, in the format "multihash@domain"
+            /// Source account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
             #[arg(short, long)]
             pub from: AccountId,
-            /// Destination account, in the format "multihash@domain"
+            /// Destination account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
             #[arg(short, long)]
             pub to: AccountId,
         }
@@ -2221,10 +2221,10 @@ mod asset {
 
     #[derive(clap::Args, Debug)]
     pub struct Transfer {
-        /// Asset in the format `asset##account@domain` or `asset#another_domain#account@domain`
+        /// Asset in the format `asset#domain#account` or `asset##account`
         #[arg(short, long)]
         pub id: AssetId,
-        /// Destination account, in the format "multihash@domain"
+        /// Destination account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         pub to: AccountId,
         /// Transfer amount (integer or decimal)
@@ -2237,14 +2237,14 @@ mod asset {
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Asset in the format `asset##account@domain` or `asset#another_domain#account@domain`
+        /// Asset in the format `asset#domain#account` or `asset##account`
         #[arg(short, long)]
         pub id: AssetId,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct IdQuantity {
-        /// Asset in the format `asset##account@domain` or `asset#another_domain#account@domain`
+        /// Asset in the format `asset#domain#account` or `asset##account`
         #[arg(short, long)]
         pub id: AssetId,
         /// Amount of change (integer or decimal)
@@ -2508,10 +2508,10 @@ mod nft {
         /// NFT in the format "name$domain"
         #[arg(short, long)]
         pub id: NftId,
-        /// Source account, in the format "multihash@domain"
+        /// Source account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         pub from: AccountId,
-        /// Destination account, in the format "multihash@domain"
+        /// Destination account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         pub to: AccountId,
     }

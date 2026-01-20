@@ -1068,6 +1068,8 @@ mod tests {
             require_sm_openssl_preview_match:
                 iroha_config::parameters::defaults::network::REQUIRE_SM_OPENSSL_PREVIEW_MATCH,
             idle_timeout: iroha_config::parameters::defaults::network::IDLE_TIMEOUT,
+            connect_startup_delay:
+                iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,

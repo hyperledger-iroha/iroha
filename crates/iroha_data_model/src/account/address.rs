@@ -26,6 +26,7 @@ use iroha_schema::{Ident, IntoSchema, MetaMap, Metadata, TypeId, VecMeta};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
+    codec::{Decode, Encode},
     core::{self as ncore, Archived},
 };
 use thiserror::Error;
@@ -285,6 +286,63 @@ impl AddressDomainKind {
     }
 }
 
+/// Stable selector key embedded into account addresses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", rename_all = "snake_case")
+)]
+pub enum AccountDomainSelector {
+    /// Selector referencing the configured default domain.
+    Default,
+    /// Selector carrying the 12-byte local digest derived from a domain label.
+    LocalDigest12([u8; 12]),
+    /// Selector pointing at a global registry entry.
+    GlobalRegistry(u32),
+}
+
+impl AccountDomainSelector {
+    /// Derive the selector key for a canonical domain identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountAddressError`] when the domain label cannot be normalized.
+    pub fn from_domain(domain: &DomainId) -> Result<Self, AccountAddressError> {
+        DomainSelector::from_domain(domain).map(Self::from_selector)
+    }
+
+    /// Classify the selector into its coarse-grained kind.
+    #[must_use]
+    pub const fn kind(self) -> AddressDomainKind {
+        match self {
+            Self::Default => AddressDomainKind::Default,
+            Self::LocalDigest12(_) => AddressDomainKind::LocalDigest12,
+            Self::GlobalRegistry(_) => AddressDomainKind::GlobalRegistry,
+        }
+    }
+
+    /// Borrow the local digest when present.
+    #[must_use]
+    pub const fn local12(self) -> Option<[u8; 12]> {
+        match self {
+            Self::LocalDigest12(bytes) => Some(bytes),
+            _ => None,
+        }
+    }
+
+    fn from_selector(selector: DomainSelector) -> Self {
+        match selector {
+            DomainSelector::Default => Self::Default,
+            DomainSelector::Local12(bytes) => Self::LocalDigest12(bytes),
+            DomainSelector::Global { registry_id } => Self::GlobalRegistry(registry_id),
+        }
+    }
+}
+
 impl AccountAddress {
     /// Construct from an [`AccountId`] assuming a single-key controller.
     ///
@@ -372,6 +430,12 @@ impl AccountAddress {
             DomainSelector::Local12(_) => AddressDomainKind::LocalDigest12,
             DomainSelector::Global { .. } => AddressDomainKind::GlobalRegistry,
         }
+    }
+
+    /// Return the canonical selector key embedded in this address.
+    #[must_use]
+    pub fn domain_selector(&self) -> AccountDomainSelector {
+        AccountDomainSelector::from_selector(self.domain.clone())
     }
 
     /// Return the raw Local-12 selector digest when the address targets a non-default domain.
@@ -533,6 +597,21 @@ impl AccountAddress {
     pub fn canonical_hex(&self) -> Result<String, AccountAddressError> {
         let canonical = self.canonical_bytes()?;
         Ok(format!("0x{}", hex::encode(canonical)))
+    }
+
+    /// Convert this address into an [`AccountId`] using the resolved domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountAddressError`] when the provided domain does not match the selector
+    /// embedded in the address or when the controller payload cannot be decoded.
+    pub fn to_account_id(&self, domain: &DomainId) -> Result<AccountId, AccountAddressError> {
+        self.ensure_domain_matches(domain)?;
+        let controller = self.to_account_controller()?;
+        Ok(AccountId {
+            domain: domain.clone(),
+            controller,
+        })
     }
 
     pub(crate) fn ensure_domain_matches(
@@ -2059,6 +2138,19 @@ mod tests {
             .to_account_controller()
             .expect("decode secp256k1 controller");
         assert_eq!(controller.single_signatory(), Some(&public_key));
+    }
+
+    #[test]
+    fn account_address_to_account_id_roundtrip() {
+        let account = AccountId::new(domain("wonderland"), ed25519_pk());
+        let address = AccountAddress::from_account_id(&account).expect("encode account id");
+        let roundtrip = address
+            .to_account_id(account.domain())
+            .expect("domain matches selector");
+        assert_eq!(roundtrip, account);
+
+        let other_domain = domain("garden");
+        assert!(address.to_account_id(&other_domain).is_err());
     }
 
     #[test]

@@ -936,6 +936,8 @@ impl Root {
         let (
             sorafs_storage,
             sorafs_discovery,
+            sorafs_repair,
+            sorafs_gc,
             sorafs_quota,
             sorafs_alias_cache,
             sorafs_gateway,
@@ -984,6 +986,8 @@ impl Root {
         };
         torii.sorafs_storage = sorafs_storage;
         torii.sorafs_discovery = sorafs_discovery;
+        torii.sorafs_repair = sorafs_repair;
+        torii.sorafs_gc = sorafs_gc;
         torii.sorafs_quota = sorafs_quota;
         torii.sorafs_alias_cache = sorafs_alias_cache;
         torii.sorafs_gateway = sorafs_gateway;
@@ -11873,12 +11877,6 @@ pub struct Torii {
     /// SoraNet privacy ingestion guard rails (auth/rate/namespace).
     #[config(nested)]
     pub soranet_privacy_ingest: crate::parameters::user::ToriiSoranetPrivacyIngest,
-    /// Require canonical IH58/compressed account literals at the Torii boundary.
-    #[config(
-        env = "TORII_STRICT_ADDRESSES",
-        default = "defaults::torii::STRICT_ADDRESSES"
-    )]
-    pub strict_addresses: bool,
     /// Emit filter-match debug traces (developer diagnostics only).
     #[config(default = "defaults::torii::DEBUG_MATCH_FILTERS")]
     pub debug_match_filters: bool,
@@ -12008,7 +12006,7 @@ pub struct Torii {
     /// Data-availability ingest configuration.
     #[config(nested)]
     pub da_ingest: DaIngest,
-    /// SoraFS configuration (discovery + storage).
+    /// SoraFS configuration (discovery + storage + repair/GC).
     #[config(nested)]
     pub sorafs: Sorafs,
     /// Transport-specific configuration (Norito-RPC rollout, streaming knobs).
@@ -12279,6 +12277,8 @@ impl Torii {
         let (
             sorafs_storage,
             sorafs_discovery,
+            sorafs_repair,
+            sorafs_gc,
             sorafs_quota,
             sorafs_alias_cache,
             sorafs_gateway,
@@ -12351,7 +12351,6 @@ impl Torii {
             peer_telemetry_urls: self.peer_telemetry_urls,
             peer_geo: self.peer_geo.parse(),
             soranet_privacy_ingest: self.soranet_privacy_ingest.parse(),
-            strict_addresses: self.strict_addresses,
             debug_match_filters: self.debug_match_filters,
             operator_auth: self.operator_auth.parse(),
             preauth_max_connections: self
@@ -12412,6 +12411,8 @@ impl Torii {
             da_ingest: self.da_ingest.parse(),
             sorafs_discovery,
             sorafs_storage,
+            sorafs_repair,
+            sorafs_gc,
             sorafs_quota,
             sorafs_alias_cache,
             sorafs_gateway,
@@ -13409,7 +13410,7 @@ impl json::JsonDeserialize for DaTaikaiAnchor {
     }
 }
 
-/// User-level configuration container for SoraFS discovery and storage subsystems.
+/// User-level configuration container for SoraFS discovery, storage, repair, and GC subsystems.
 #[derive(Debug, Default, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct Sorafs {
     /// Configuration for Torii's discovery API/cache.
@@ -13418,6 +13419,12 @@ pub struct Sorafs {
     /// Embedded storage worker configuration.
     #[config(nested)]
     pub storage: SorafsStorage,
+    /// Repair scheduler configuration.
+    #[config(nested)]
+    pub repair: SorafsRepair,
+    /// GC scheduler configuration.
+    #[config(nested)]
+    pub gc: SorafsGc,
     /// Quota configuration for SoraFS control-plane endpoints.
     #[config(nested)]
     pub quota: SorafsQuota,
@@ -13438,6 +13445,8 @@ impl Sorafs {
     ) -> (
         actual::SorafsStorage,
         actual::SorafsDiscovery,
+        actual::SorafsRepair,
+        actual::SorafsGc,
         actual::SorafsQuota,
         actual::SorafsAliasCachePolicy,
         actual::SorafsGateway,
@@ -13446,6 +13455,8 @@ impl Sorafs {
         (
             self.storage.parse(),
             self.discovery.parse(),
+            self.repair.parse(),
+            self.gc.parse(),
             self.quota.parse(),
             self.alias_cache.parse(),
             self.gateway.parse(),
@@ -13602,6 +13613,166 @@ impl SorafsPinRateLimit {
             window: Duration::from_secs(self.window_secs.max(1)),
             ban: self.ban_secs.map(Duration::from_secs),
         }
+    }
+}
+
+/// User-level configuration for the repair scheduler.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsRepair {
+    /// Enable the repair scheduler.
+    #[config(default = "defaults::sorafs::repair::ENABLED")]
+    pub enabled: bool,
+    /// Optional Postgres DSN for durable repair storage.
+    pub db_dsn: Option<String>,
+    /// Maximum number of database connections for repair operations.
+    #[config(default = "defaults::sorafs::repair::DB_POOL_MAX_CONNECTIONS")]
+    pub db_pool_max_connections: u32,
+    /// Claim TTL for repair tickets (seconds).
+    #[config(default = "defaults::sorafs::repair::CLAIM_TTL_SECS")]
+    pub claim_ttl_secs: u64,
+    /// Heartbeat interval/TTL for active claims (seconds).
+    #[config(default = "defaults::sorafs::repair::HEARTBEAT_INTERVAL_SECS")]
+    pub heartbeat_interval_secs: u64,
+    /// Maximum number of attempts before escalation.
+    #[config(default = "defaults::sorafs::repair::MAX_ATTEMPTS")]
+    pub max_attempts: u32,
+    /// Concurrent repair workers per node.
+    #[config(default = "defaults::sorafs::repair::WORKER_CONCURRENCY")]
+    pub worker_concurrency: usize,
+    /// Initial retry backoff for failed repairs (seconds).
+    #[config(default = "defaults::sorafs::repair::BACKOFF_INITIAL_SECS")]
+    pub backoff_initial_secs: u64,
+    /// Maximum retry backoff for failed repairs (seconds).
+    #[config(default = "defaults::sorafs::repair::BACKOFF_MAX_SECS")]
+    pub backoff_max_secs: u64,
+}
+
+impl Default for SorafsRepair {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::repair::ENABLED,
+            db_dsn: None,
+            db_pool_max_connections: defaults::sorafs::repair::DB_POOL_MAX_CONNECTIONS,
+            claim_ttl_secs: defaults::sorafs::repair::CLAIM_TTL_SECS,
+            heartbeat_interval_secs: defaults::sorafs::repair::HEARTBEAT_INTERVAL_SECS,
+            max_attempts: defaults::sorafs::repair::MAX_ATTEMPTS,
+            worker_concurrency: defaults::sorafs::repair::WORKER_CONCURRENCY,
+            backoff_initial_secs: defaults::sorafs::repair::BACKOFF_INITIAL_SECS,
+            backoff_max_secs: defaults::sorafs::repair::BACKOFF_MAX_SECS,
+        }
+    }
+}
+
+impl SorafsRepair {
+    fn parse(self) -> actual::SorafsRepair {
+        actual::SorafsRepair {
+            enabled: self.enabled,
+            db_dsn: self.db_dsn,
+            db_pool_max_connections: self.db_pool_max_connections.max(1),
+            claim_ttl_secs: self.claim_ttl_secs.max(1),
+            heartbeat_interval_secs: self.heartbeat_interval_secs.max(1),
+            max_attempts: self.max_attempts.max(1),
+            worker_concurrency: self.worker_concurrency.max(1),
+            backoff_initial_secs: self.backoff_initial_secs.max(1),
+            backoff_max_secs: self.backoff_max_secs.max(self.backoff_initial_secs.max(1)),
+        }
+    }
+}
+
+/// User-level configuration for the GC scheduler.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsGc {
+    /// Enable the GC worker.
+    #[config(default = "defaults::sorafs::gc::ENABLED")]
+    pub enabled: bool,
+    /// Optional Postgres DSN for GC metadata storage.
+    pub db_dsn: Option<String>,
+    /// Maximum number of database connections for GC operations.
+    #[config(default = "defaults::sorafs::gc::DB_POOL_MAX_CONNECTIONS")]
+    pub db_pool_max_connections: u32,
+    /// GC cadence (seconds).
+    #[config(default = "defaults::sorafs::gc::INTERVAL_SECS")]
+    pub interval_secs: u64,
+    /// Maximum deletions per GC run.
+    #[config(default = "defaults::sorafs::gc::MAX_DELETIONS_PER_RUN")]
+    pub max_deletions_per_run: u32,
+    /// Grace window for retention expiry (seconds).
+    #[config(default = "defaults::sorafs::gc::RETENTION_GRACE_SECS")]
+    pub retention_grace_secs: u64,
+    /// Attempt a GC sweep before rejecting new pins when storage is full.
+    #[config(default = "defaults::sorafs::gc::PRE_ADMISSION_SWEEP")]
+    pub pre_admission_sweep: bool,
+}
+
+impl Default for SorafsGc {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::gc::ENABLED,
+            db_dsn: None,
+            db_pool_max_connections: defaults::sorafs::gc::DB_POOL_MAX_CONNECTIONS,
+            interval_secs: defaults::sorafs::gc::INTERVAL_SECS,
+            max_deletions_per_run: defaults::sorafs::gc::MAX_DELETIONS_PER_RUN,
+            retention_grace_secs: defaults::sorafs::gc::RETENTION_GRACE_SECS,
+            pre_admission_sweep: defaults::sorafs::gc::PRE_ADMISSION_SWEEP,
+        }
+    }
+}
+
+impl SorafsGc {
+    fn parse(self) -> actual::SorafsGc {
+        actual::SorafsGc {
+            enabled: self.enabled,
+            db_dsn: self.db_dsn,
+            db_pool_max_connections: self.db_pool_max_connections.max(1),
+            interval_secs: self.interval_secs.max(1),
+            max_deletions_per_run: self.max_deletions_per_run.max(1),
+            retention_grace_secs: self.retention_grace_secs,
+            pre_admission_sweep: self.pre_admission_sweep,
+        }
+    }
+}
+
+#[cfg(test)]
+mod sorafs_repair_gc_tests {
+    use super::*;
+
+    #[test]
+    fn sorafs_repair_and_gc_parse_clamps_values() {
+        let repair = SorafsRepair {
+            enabled: true,
+            db_dsn: Some("postgres://sorafs/repair".into()),
+            db_pool_max_connections: 0,
+            claim_ttl_secs: 0,
+            heartbeat_interval_secs: 0,
+            max_attempts: 0,
+            worker_concurrency: 0,
+            backoff_initial_secs: 0,
+            backoff_max_secs: 0,
+        };
+        let actual = repair.parse();
+        assert_eq!(actual.db_pool_max_connections, 1);
+        assert_eq!(actual.claim_ttl_secs, 1);
+        assert_eq!(actual.heartbeat_interval_secs, 1);
+        assert_eq!(actual.max_attempts, 1);
+        assert_eq!(actual.worker_concurrency, 1);
+        assert_eq!(actual.backoff_initial_secs, 1);
+        assert_eq!(actual.backoff_max_secs, 1);
+
+        let gc = SorafsGc {
+            enabled: true,
+            db_dsn: Some("postgres://sorafs/gc".into()),
+            db_pool_max_connections: 0,
+            interval_secs: 0,
+            max_deletions_per_run: 0,
+            retention_grace_secs: 42,
+            pre_admission_sweep: false,
+        };
+        let actual_gc = gc.parse();
+        assert_eq!(actual_gc.db_pool_max_connections, 1);
+        assert_eq!(actual_gc.interval_secs, 1);
+        assert_eq!(actual_gc.max_deletions_per_run, 1);
+        assert_eq!(actual_gc.retention_grace_secs, 42);
+        assert!(!actual_gc.pre_admission_sweep);
     }
 }
 

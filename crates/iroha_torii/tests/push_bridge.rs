@@ -15,6 +15,7 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::ChainId;
+use iroha_test_samples::ALICE_ID;
 use iroha_torii::{OnlinePeersProvider, Torii};
 use tower::ServiceExt as _; // for Router::oneshot
 
@@ -93,13 +94,14 @@ fn build_torii(push: actual::Push) -> (Torii, axum::Router) {
 }
 
 fn register_device_request() -> Request<axum::body::Body> {
+    let account_id = ALICE_ID.to_string();
     Request::builder()
         .method("POST")
         .uri("/v1/notify/devices")
         .header(axum::http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(
-            r#"{"account_id":"alice@wonderland","platform":"FCM","token":"t0"}"#,
-        ))
+        .body(axum::body::Body::from(format!(
+            r#"{{"account_id":"{account_id}","platform":"FCM","token":"t0"}}"#
+        )))
         .unwrap()
 }
 

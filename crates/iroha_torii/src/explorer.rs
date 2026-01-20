@@ -1482,8 +1482,18 @@ mod tests {
             .definition_holders
             .insert(def_id.clone(), holders);
 
-        let alice_details = Owned::new(AccountDetails::new(Metadata::default(), None, None));
-        let bob_details = Owned::new(AccountDetails::new(Metadata::default(), None, None));
+        let alice_details = Owned::new(AccountDetails::new(
+            Metadata::default(),
+            None,
+            None,
+            Vec::new(),
+        ));
+        let bob_details = Owned::new(AccountDetails::new(
+            Metadata::default(),
+            None,
+            None,
+            Vec::new(),
+        ));
         let alice_id = ALICE_ID.clone();
         let bob_id = BOB_ID.clone();
         let domain_filter = alice_id.domain().clone();

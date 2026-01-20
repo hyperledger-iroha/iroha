@@ -35,7 +35,8 @@ final class OfflineWalletRevocationTests: XCTestCase {
 
     func testRecordRevocationsUpdatesWalletDenyList() throws {
         let verdictHex = String(repeating: "c", count: 64)
-        let list = try makeRevocationList(verdictHex: verdictHex)
+        let issuerId = try sampleIssuerId(seed: 0xAB)
+        let list = try makeRevocationList(verdictHex: verdictHex, issuerId: issuerId)
         let wallet = try makeWallet(client: ToriiClient(baseURL: URL(string: "https://example.invalid")!))
         let inserted = try wallet.recordRevocations(from: list, recordedAt: 999)
         XCTAssertEqual(inserted.count, 1)
@@ -48,6 +49,7 @@ final class OfflineWalletRevocationTests: XCTestCase {
     func testSyncOfflineStatePopulatesRevocations() async throws {
         let verdictHex = String(repeating: "d", count: 64)
         let hashLiteral = try SocialKeyedHash(pepperId: "pepper", digest: verdictHex).digest
+        let issuerId = try sampleIssuerId(seed: 0xCD)
         let statePayload = """
         {
           "allowances": [],
@@ -55,7 +57,7 @@ final class OfflineWalletRevocationTests: XCTestCase {
           "summaries": [],
           "revocations": [{
             "verdict_id_hex": "\(hashLiteral)",
-            "issuer_id": "alice@wonderland",
+            "issuer_id": "\(issuerId)",
             "revoked_at_ms": 321,
             "reason": "compromised"
           }],
@@ -153,17 +155,17 @@ final class OfflineWalletRevocationTests: XCTestCase {
         )
     }
 
-    private func makeRevocationList(verdictHex: String) throws -> ToriiOfflineRevocationList {
+    private func makeRevocationList(verdictHex: String, issuerId: String) throws -> ToriiOfflineRevocationList {
         let hashLiteral = try SocialKeyedHash(pepperId: "pepper", digest: verdictHex).digest
         let record: [String: Any] = [
             "verdict_id_hex": hashLiteral,
-            "issuer_id": "alice@wonderland",
+            "issuer_id": issuerId,
             "revoked_at_ms": NSNumber(value: 777),
             "reason": "compromised"
         ]
         let item: [String: Any] = [
             "verdict_id_hex": verdictHex,
-            "issuer_id": "alice@wonderland",
+            "issuer_id": issuerId,
             "issuer_display": "Alice",
             "revoked_at_ms": NSNumber(value: 777),
             "reason": "compromised",
@@ -175,6 +177,11 @@ final class OfflineWalletRevocationTests: XCTestCase {
         ]
         let data = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
         return try JSONDecoder().decode(ToriiOfflineRevocationList.self, from: data)
+    }
+
+    private func sampleIssuerId(seed: UInt8) throws -> String {
+        let publicKey = Data(repeating: seed, count: 32)
+        return try AccountId.makeIH58(publicKey: publicKey, domain: "wonderland")
     }
 
     private func fixtureURL(_ name: String) -> URL {

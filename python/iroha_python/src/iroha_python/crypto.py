@@ -507,7 +507,7 @@ def build_signed_transaction(
     chain_id:
         Target chain identifier.
     authority:
-        Routing account alias (`alias@domain`).
+        Transaction authority account identifier (IH58, UAID/opaque, or `<alias|public_key>@domain`).
     private_key:
         Ed25519 private key bytes aligned with `authority`.
     instructions:

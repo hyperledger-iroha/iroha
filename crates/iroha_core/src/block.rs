@@ -61,17 +61,22 @@ use std::{
     time::Duration,
 };
 
-use iroha_crypto::{HashOf, KeyPair, MerkleTree};
+use iroha_crypto::{HashOf, KeyPair, MerkleTree, PublicKey};
+use iroha_data_model::account::address;
 #[cfg(feature = "bls")]
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
     ChainId, Identifiable,
-    account::{AccountController, AccountId},
+    account::{
+        AccountAddress, AccountController, AccountDomainSelector, AccountId, AccountLabel,
+        OpaqueAccountId,
+    },
     asset::{AssetDefinitionId, AssetId},
     block::{
         consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         *,
     },
+    common::split_nonempty,
     confidential::ConfidentialFeatureDigest,
     consensus::{ConsensusKeyRole, Qc},
     da::{
@@ -83,7 +88,7 @@ use iroha_data_model::{
     isi::{GrantBox, register::RegisterBox, transfer::TransferBox},
     nexus::{
         AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtRejectReason, DataSpaceId, LaneConfig,
-        LaneId, LaneRelayEnvelope, ProofBlob, proof_matches_manifest,
+        LaneId, LaneRelayEnvelope, ProofBlob, UniversalAccountId, proof_matches_manifest,
     },
     peer::PeerId,
     permission::Permission,
@@ -328,7 +333,10 @@ impl SettlementBufferSnapshot {
     }
 }
 
-fn parse_lane_settlement_buffer_config(lane: &LaneConfig) -> Option<LaneSettlementBufferConfig> {
+fn parse_lane_settlement_buffer_config(
+    world: &impl WorldReadOnly,
+    lane: &LaneConfig,
+) -> Option<LaneSettlementBufferConfig> {
     let account_raw = lane
         .metadata
         .get("settlement.buffer_account")
@@ -341,7 +349,7 @@ fn parse_lane_settlement_buffer_config(lane: &LaneConfig) -> Option<LaneSettleme
         _ => return None,
     };
 
-    let account_id = account_raw.parse::<AccountId>().ok()?;
+    let account_id = parse_account_literal_with_world(world, account_raw)?;
     let asset_definition_id = asset_raw.parse::<AssetDefinitionId>().ok()?;
     let capacity = MicroXor::from(Decimal::from_str(capacity_raw.trim()).ok()?);
 
@@ -357,7 +365,7 @@ fn compute_settlement_buffer_snapshot(
     lane_id: LaneId,
 ) -> Option<SettlementBufferSnapshot> {
     let lane = lane_metadata_by_id(state_block, lane_id)?;
-    let config = parse_lane_settlement_buffer_config(lane)?;
+    let config = parse_lane_settlement_buffer_config(&state_block.world, lane)?;
     let asset_id = AssetId::new(
         config.asset_definition_id.clone(),
         config.account_id.clone(),
@@ -486,7 +494,7 @@ use crate::{
     },
     prelude::*,
     queue::{evaluate_policy_with_catalog, routing_ledger},
-    state::{State, StateBlock, compute_confidential_feature_digest},
+    state::{State, StateBlock, WorldReadOnly, compute_confidential_feature_digest},
     sumeragi::{VotingBlock, network_topology::Topology, status},
     tx::{AcceptTransactionFail, LaneAssignment, enforce_fraud_policy},
 };
@@ -758,12 +766,95 @@ fn conflict_rate_bps(vertices: u64, edges: u64) -> u64 {
     u64::try_from(bps).unwrap_or(u64::MAX)
 }
 
-fn parse_account_from_access_key(key: &str) -> Option<AccountId> {
+pub(crate) fn parse_account_literal_with_world(
+    world: &impl WorldReadOnly,
+    input: &str,
+) -> Option<AccountId> {
+    const ERR_ACCOUNT_LITERAL_FORMAT: &str =
+        "AccountId must be IH58/compressed/0x, uaid:, opaque:, or `<alias|public_key>@<domain>`";
+
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(rest) = strip_prefix_case_insensitive(trimmed, "uaid:") {
+        let uaid = UniversalAccountId::from_str(rest).ok()?;
+        return world.uaid_accounts().get(&uaid).cloned();
+    }
+
+    if let Some(rest) = strip_prefix_case_insensitive(trimmed, "opaque:") {
+        let opaque = OpaqueAccountId::from_str(rest).ok()?;
+        let uaid = world.opaque_uaids().get(&opaque)?.clone();
+        return world.uaid_accounts().get(&uaid).cloned();
+    }
+
+    if let Ok((address_part, domain_part)) = split_nonempty(
+        trimmed,
+        '@',
+        ERR_ACCOUNT_LITERAL_FORMAT,
+        "Empty `identifier` part in `<identifier>@<domain>`",
+        "Empty `domain` part in `<identifier>@<domain>`",
+    ) {
+        let domain: DomainId = domain_part.parse().ok()?;
+
+        if AccountAddress::parse_any(address_part, None).is_ok() {
+            return None;
+        }
+
+        if let Ok(label) = iroha_data_model::name::Name::from_str(address_part) {
+            let key = AccountLabel::new(domain.clone(), label);
+            if let Some(alias_account) = world.account_aliases().get(&key).cloned() {
+                if alias_account.domain() == &domain {
+                    return Some(alias_account);
+                }
+                return None;
+            }
+        }
+
+        let signatory: PublicKey = address_part.parse().ok()?;
+        return Some(AccountId::new(domain, signatory));
+    }
+
+    parse_account_address_literal_with_world(world, trimmed)
+}
+
+fn parse_account_address_literal_with_world(
+    world: &impl WorldReadOnly,
+    input: &str,
+) -> Option<AccountId> {
+    let expected_prefix = address::chain_discriminant();
+    let (address, _format) = AccountAddress::parse_any(input, Some(expected_prefix)).ok()?;
+    let selector = address.domain_selector();
+    let resolved = world
+        .domain_selectors()
+        .get(&selector)
+        .cloned()
+        .or_else(|| {
+            if matches!(selector, AccountDomainSelector::Default) {
+                address::default_domain_name().as_ref().parse().ok()
+            } else {
+                None
+            }
+        })?;
+    address.to_account_id(&resolved).ok()
+}
+
+fn strip_prefix_case_insensitive<'a>(input: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = input.get(..prefix.len())?;
+    if head.eq_ignore_ascii_case(prefix) {
+        Some(&input[prefix.len()..])
+    } else {
+        None
+    }
+}
+
+fn parse_account_from_access_key(world: &impl WorldReadOnly, key: &str) -> Option<AccountId> {
     if let Some(rest) = key.strip_prefix("account:") {
-        AccountId::from_str(rest).ok()
+        parse_account_literal_with_world(world, rest)
     } else if let Some(rest) = key.strip_prefix("account.detail:") {
         let (account_raw, _) = rest.split_once(':')?;
-        AccountId::from_str(account_raw).ok()
+        parse_account_literal_with_world(world, account_raw)
     } else {
         None
     }
@@ -818,10 +909,12 @@ fn prefetch_account_stores(state_block: &StateBlock<'_>, account_id: &AccountId)
 #[cfg(test)]
 mod prefetch_tests {
     use iroha_data_model::{
-        account::{AccountDetails, AccountId, AccountValue},
+        account::{AccountDetails, AccountDomainSelector, AccountId, AccountValue},
+        asset::AssetDefinitionId,
         block::BlockHeader,
         isi::{InstructionBox, Log},
         name::Name,
+        nexus::LaneConfig,
         role::RoleId,
     };
     use iroha_logger::Level;
@@ -839,16 +932,60 @@ mod prefetch_tests {
     #[test]
     fn parse_account_key_variants() {
         let alice: AccountId = (*ALICE_ID).clone();
+        let mut world = World::new();
+        let selector =
+            AccountDomainSelector::from_domain(alice.domain()).expect("selector from domain");
+        world
+            .domain_selectors
+            .insert(selector, alice.domain().clone());
+        let world_view = world.view();
         let detail_key = format!("account.detail:{alice}:quota");
         assert_eq!(
-            parse_account_from_access_key(&format!("account:{alice}")),
+            parse_account_from_access_key(&world_view, &format!("account:{alice}")),
             Some(alice.clone())
         );
         assert_eq!(
-            parse_account_from_access_key(&detail_key),
+            parse_account_from_access_key(&world_view, &detail_key),
             Some(alice.clone())
         );
-        assert!(parse_account_from_access_key("asset:coin#wonderland").is_none());
+        assert!(parse_account_from_access_key(&world_view, "asset:coin#wonderland").is_none());
+    }
+
+    #[test]
+    fn parse_lane_settlement_buffer_config_resolves_account() {
+        let alice: AccountId = (*ALICE_ID).clone();
+        let mut world = World::new();
+        let selector =
+            AccountDomainSelector::from_domain(alice.domain()).expect("selector from domain");
+        world
+            .domain_selectors
+            .insert(selector, alice.domain().clone());
+        let world_view = world.view();
+        let mut lane = LaneConfig::default();
+        lane.metadata
+            .insert("settlement.buffer_account".to_owned(), alice.to_string());
+        lane.metadata.insert(
+            "settlement.buffer_asset".to_owned(),
+            "xor#wonderland".to_owned(),
+        );
+        lane.metadata.insert(
+            "settlement.buffer_capacity_micro".to_owned(),
+            "1000".to_owned(),
+        );
+
+        let parsed =
+            parse_lane_settlement_buffer_config(&world_view, &lane).expect("config parsed");
+        assert_eq!(parsed.account_id, alice);
+        assert_eq!(
+            parsed.asset_definition_id,
+            "xor#wonderland"
+                .parse::<AssetDefinitionId>()
+                .expect("asset definition id")
+        );
+        assert_eq!(
+            parsed.capacity,
+            MicroXor::from(Decimal::from_str("1000").expect("decimal parse"))
+        );
     }
 
     #[test]
@@ -5997,12 +6134,16 @@ pub(crate) mod valid {
                         accounts_to_prefetch.insert(entry.authority.clone());
                         if let Some(access_set) = access.get(entry.idx) {
                             for key in access_set.read_keys.iter() {
-                                if let Some(account) = parse_account_from_access_key(key) {
+                                if let Some(account) =
+                                    parse_account_from_access_key(&state_block.world, key)
+                                {
                                     accounts_to_prefetch.insert(account);
                                 }
                             }
                             for key in access_set.write_keys.iter() {
-                                if let Some(account) = parse_account_from_access_key(key) {
+                                if let Some(account) =
+                                    parse_account_from_access_key(&state_block.world, key)
+                                {
                                     accounts_to_prefetch.insert(account);
                                 }
                             }

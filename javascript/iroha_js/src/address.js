@@ -1858,7 +1858,7 @@ function classifyDetectedFormat(literal, format, networkPrefix) {
  * Inspect an account-id literal (IH58/compressed/canonical) and emit canonical
  * encodings plus domain warnings to aid the Local→Global cutover.
  *
- * @param {string} literal - Account literal or `<address>@<domain>`
+ * @param {string} literal - Account literal (IH58/compressed/0x)
  * @param {{ networkPrefix?: number, expectPrefix?: number }} [options]
  * @returns {{
  *   detectedFormat: { kind: string, networkPrefix?: number },
@@ -1880,27 +1880,14 @@ export function inspectAccountId(literal, options = {}) {
     throw new TypeError("accountId must be a non-empty string");
   }
 
-  const atIndex = trimmed.lastIndexOf("@");
-  let signatory = trimmed;
-  let inputDomain = null;
-  if (atIndex !== -1) {
-    signatory = trimmed.slice(0, atIndex);
-    inputDomain = trimmed.slice(atIndex + 1).trim();
-    if (signatory.length === 0) {
-      throw new TypeError("accountId must contain characters before '@'");
-    }
-    if (inputDomain.length === 0) {
-      throw new TypeError("accountId must include a domain after '@'");
-    }
-  } else if (signatory.length === 0) {
-    throw new TypeError("accountId must contain characters before '@'");
+  if (trimmed.includes("@")) {
+    throw new TypeError("accountId must not include '@domain'");
   }
 
   const normalizedOptions = normalizeInspectAccountOptions(options);
   const { address, format, networkPrefix: detectedPrefix } = AccountAddress.parseAny(
-    signatory,
+    trimmed,
     normalizedOptions.expectPrefix,
-    inputDomain ?? undefined,
   );
   const networkPrefix =
     normalizedOptions.networkPrefix ?? detectedPrefix ?? DEFAULT_IH58_PREFIX;
@@ -1911,13 +1898,13 @@ export function inspectAccountId(literal, options = {}) {
     warnings.push(COMPRESSED_WARNING);
   }
   return Object.freeze({
-    detectedFormat: classifyDetectedFormat(signatory, format, detectedPrefix),
+    detectedFormat: classifyDetectedFormat(trimmed, format, detectedPrefix),
     domain: domainSummary,
     canonicalHex: address.canonicalHex(),
     ih58: { value: address.toIH58(networkPrefix), networkPrefix },
     compressed: address.toCompressedSora(),
     compressedWarning: COMPRESSED_WARNING,
-    inputDomain,
+    inputDomain: null,
     warnings,
   });
 }

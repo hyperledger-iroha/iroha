@@ -65,7 +65,7 @@ use iroha_core::{
         SignatureVerificationFail,
     },
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
 use iroha_data_model::{
     self,
     account::AccountAddressErrorCode,
@@ -356,10 +356,13 @@ use sorafs_manifest::{
         AuditVerdictV1, PorChallengeOutcome, PorChallengeStatusV1, PorChallengeV1, PorProofV1,
         PorReportIsoWeek, PorWeeklyReportV1,
     },
-    repair::{RepairReportV1, RepairSlashProposalV1, RepairTaskRecordV1},
+    repair::{
+        RepairReportV1, RepairSlashProposalV1, RepairTaskRecordV1, RepairTaskStatusV1,
+        RepairTicketId, RepairWorkerSignaturePayloadV1,
+    },
     validate_chunker_handle, validate_pin_policy,
 };
-use sorafs_node::{DealEngineError, DealSettlementOutcome, UsageOutcome};
+use sorafs_node::{DealEngineError, DealSettlementOutcome, RepairTaskFilters, UsageOutcome};
 
 #[cfg(feature = "app_api")]
 use crate::address_format::AddressFormatPreference;
@@ -8317,6 +8320,111 @@ pub struct PorStatusQueryDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+/// Query parameters for listing repair task statuses.
+pub struct RepairStatusQueryDto {
+    pub status: Option<String>,
+    pub provider: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for claiming a repair ticket.
+pub struct RepairWorkerClaimDto {
+    /// Repair ticket identifier.
+    pub ticket_id: RepairTicketId,
+    /// Hex-encoded manifest digest (BLAKE3-256).
+    pub manifest_digest_hex: String,
+    /// Repair worker identifier.
+    pub worker_id: String,
+    /// Unix timestamp (seconds) when the claim was issued.
+    pub claimed_at_unix: u64,
+    /// Idempotency key for the claim.
+    pub idempotency_key: String,
+    /// Signature over `RepairWorkerSignaturePayloadV1`.
+    pub signature: SignatureOf<RepairWorkerSignaturePayloadV1>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for recording a repair heartbeat.
+pub struct RepairWorkerHeartbeatDto {
+    /// Repair ticket identifier.
+    pub ticket_id: RepairTicketId,
+    /// Hex-encoded manifest digest (BLAKE3-256).
+    pub manifest_digest_hex: String,
+    /// Repair worker identifier.
+    pub worker_id: String,
+    /// Unix timestamp (seconds) when the heartbeat was recorded.
+    pub heartbeat_at_unix: u64,
+    /// Idempotency key for the heartbeat.
+    pub idempotency_key: String,
+    /// Signature over `RepairWorkerSignaturePayloadV1`.
+    pub signature: SignatureOf<RepairWorkerSignaturePayloadV1>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for completing a repair ticket.
+pub struct RepairWorkerCompleteDto {
+    /// Repair ticket identifier.
+    pub ticket_id: RepairTicketId,
+    /// Hex-encoded manifest digest (BLAKE3-256).
+    pub manifest_digest_hex: String,
+    /// Repair worker identifier.
+    pub worker_id: String,
+    /// Unix timestamp (seconds) when remediation completed.
+    pub completed_at_unix: u64,
+    /// Optional resolution notes.
+    #[norito(default)]
+    pub resolution_notes: Option<String>,
+    /// Idempotency key for the completion request.
+    pub idempotency_key: String,
+    /// Signature over `RepairWorkerSignaturePayloadV1`.
+    pub signature: SignatureOf<RepairWorkerSignaturePayloadV1>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for failing a repair ticket.
+pub struct RepairWorkerFailDto {
+    /// Repair ticket identifier.
+    pub ticket_id: RepairTicketId,
+    /// Hex-encoded manifest digest (BLAKE3-256).
+    pub manifest_digest_hex: String,
+    /// Repair worker identifier.
+    pub worker_id: String,
+    /// Unix timestamp (seconds) when the failure was recorded.
+    pub failed_at_unix: u64,
+    /// Failure reason.
+    pub reason: String,
+    /// Idempotency key for the failure request.
+    pub idempotency_key: String,
+    /// Signature over `RepairWorkerSignaturePayloadV1`.
+    pub signature: SignatureOf<RepairWorkerSignaturePayloadV1>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
 /// Query parameters for exporting PoR challenge history.
 pub struct PorExportQueryDto {
     pub start_epoch: Option<u64>,
@@ -9508,12 +9616,153 @@ pub async fn handle_post_sorafs_repair_slash(
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
+pub async fn handle_post_sorafs_repair_claim(
+    _telemetry: MaybeTelemetry,
+    sorafs_node: sorafs_node::NodeHandle,
+    NoritoJson(req): NoritoJson<RepairWorkerClaimDto>,
+) -> Result<impl IntoResponse, Error> {
+    let RepairWorkerClaimDto {
+        ticket_id,
+        manifest_digest_hex: _,
+        worker_id,
+        claimed_at_unix,
+        idempotency_key,
+        signature: _,
+    } = req;
+    let record = sorafs_node
+        .claim_repair_ticket(&ticket_id, &worker_id, claimed_at_unix, &idempotency_key)
+        .map_err(repair_scheduler_error)?;
+    let body = repair_task_record_body(&record);
+    let mut resp = Response::new(Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_sorafs_repair_heartbeat(
+    _telemetry: MaybeTelemetry,
+    sorafs_node: sorafs_node::NodeHandle,
+    NoritoJson(req): NoritoJson<RepairWorkerHeartbeatDto>,
+) -> Result<impl IntoResponse, Error> {
+    let RepairWorkerHeartbeatDto {
+        ticket_id,
+        manifest_digest_hex: _,
+        worker_id,
+        heartbeat_at_unix,
+        idempotency_key,
+        signature: _,
+    } = req;
+    let record = sorafs_node
+        .heartbeat_repair_ticket(&ticket_id, &worker_id, heartbeat_at_unix, &idempotency_key)
+        .map_err(repair_scheduler_error)?;
+    let body = repair_task_record_body(&record);
+    let mut resp = Response::new(Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_sorafs_repair_complete(
+    _telemetry: MaybeTelemetry,
+    sorafs_node: sorafs_node::NodeHandle,
+    NoritoJson(req): NoritoJson<RepairWorkerCompleteDto>,
+) -> Result<impl IntoResponse, Error> {
+    let RepairWorkerCompleteDto {
+        ticket_id,
+        manifest_digest_hex: _,
+        worker_id,
+        completed_at_unix,
+        resolution_notes,
+        idempotency_key,
+        signature: _,
+    } = req;
+    let record = sorafs_node
+        .complete_repair_ticket(
+            &ticket_id,
+            &worker_id,
+            completed_at_unix,
+            resolution_notes,
+            &idempotency_key,
+        )
+        .map_err(repair_scheduler_error)?;
+    let body = repair_task_record_body(&record);
+    let mut resp = Response::new(Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_sorafs_repair_fail(
+    _telemetry: MaybeTelemetry,
+    sorafs_node: sorafs_node::NodeHandle,
+    NoritoJson(req): NoritoJson<RepairWorkerFailDto>,
+) -> Result<impl IntoResponse, Error> {
+    let RepairWorkerFailDto {
+        ticket_id,
+        manifest_digest_hex: _,
+        worker_id,
+        failed_at_unix,
+        reason,
+        idempotency_key,
+        signature: _,
+    } = req;
+    let record = sorafs_node
+        .fail_repair_ticket(
+            &ticket_id,
+            &worker_id,
+            failed_at_unix,
+            reason,
+            &idempotency_key,
+        )
+        .map_err(repair_scheduler_error)?;
+    let body = repair_task_record_body(&record);
+    let mut resp = Response::new(Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
 pub async fn handle_get_sorafs_repair_status(
     sorafs_node: sorafs_node::NodeHandle,
     axum::extract::Path(manifest_hex): axum::extract::Path<String>,
+    crate::NoritoQuery(query): crate::NoritoQuery<RepairStatusQueryDto>,
 ) -> Result<impl IntoResponse, Error> {
     let digest = parse_hex_array::<32>(&manifest_hex, "manifest_digest")?;
-    let tasks: Vec<RepairTaskRecordV1> = sorafs_node.repair_tasks_for_manifest(&digest);
+    let filters = repair_filters_from_query(Some(digest), query)?;
+    let tasks: Vec<RepairTaskRecordV1> = sorafs_node.repair_tasks(filters);
+    let body = repair_task_records_body(&tasks);
+    let mut resp = Response::new(Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_get_sorafs_repair_status_all(
+    sorafs_node: sorafs_node::NodeHandle,
+    crate::NoritoQuery(query): crate::NoritoQuery<RepairStatusQueryDto>,
+) -> Result<impl IntoResponse, Error> {
+    let filters = repair_filters_from_query(None, query)?;
+    let tasks: Vec<RepairTaskRecordV1> = sorafs_node.repair_tasks(filters);
     let body = repair_task_records_body(&tasks);
     let mut resp = Response::new(Body::from(body));
     resp.headers_mut().insert(
@@ -9800,6 +10049,406 @@ fn por_coordinator_error(err: PorCoordinatorError) -> Error {
 
 fn repair_scheduler_error(err: sorafs_node::RepairSchedulerError) -> Error {
     conversion_error(format!("repair scheduler error: {err}"))
+}
+
+#[cfg(feature = "app_api")]
+fn repair_filters_from_query(
+    manifest_digest: Option<[u8; 32]>,
+    query: RepairStatusQueryDto,
+) -> Result<RepairTaskFilters, Error> {
+    let status = match query.status.as_deref() {
+        Some(label) => Some(parse_repair_status(label)?),
+        None => None,
+    };
+    let provider_id = match query.provider.as_deref() {
+        Some(value) => Some(parse_hex_array::<32>(value, "provider")?),
+        None => None,
+    };
+    Ok(RepairTaskFilters {
+        manifest_digest,
+        provider_id,
+        status,
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn parse_repair_status(label: &str) -> Result<RepairTaskStatusV1, Error> {
+    let normalized = label.trim().to_ascii_lowercase();
+    let status = match normalized.as_str() {
+        "queued" => RepairTaskStatusV1::Queued,
+        "verifying" => RepairTaskStatusV1::Verifying,
+        "in_progress" | "in-progress" | "inprogress" => RepairTaskStatusV1::InProgress,
+        "completed" => RepairTaskStatusV1::Completed,
+        "failed" => RepairTaskStatusV1::Failed,
+        "escalated" => RepairTaskStatusV1::Escalated,
+        _ => {
+            return Err(conversion_error(format!(
+                "invalid repair status `{label}` (expected queued, verifying, in_progress, completed, failed, escalated)"
+            )));
+        }
+    };
+    Ok(status)
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod repair_query_tests {
+    use super::*;
+    use axum::extract::Path;
+    use axum::response::IntoResponse;
+    use http_body_util::BodyExt;
+    use sorafs_manifest::repair::{
+        REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, RepairCauseV1, RepairEvidenceV1,
+        RepairTicketId,
+    };
+    use sorafs_node::config::StorageConfig;
+    use tokio::runtime::Runtime;
+
+    fn report(
+        ticket: &str,
+        manifest_digest: [u8; 32],
+        provider_id: [u8; 32],
+        submitted_at_unix: u64,
+    ) -> RepairReportV1 {
+        RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: RepairTicketId(ticket.to_string()),
+            auditor_account: "auditor#sora".into(),
+            submitted_at_unix,
+            evidence: RepairEvidenceV1 {
+                version: REPAIR_EVIDENCE_VERSION_V1,
+                manifest_digest,
+                provider_id,
+                por_history_id: None,
+                cause: RepairCauseV1::Manual {
+                    reason: "test".into(),
+                },
+                evidence_json: None,
+                notes: None,
+            },
+            notes: None,
+        }
+    }
+
+    #[test]
+    fn parse_repair_status_accepts_known_values() {
+        assert_eq!(
+            parse_repair_status("queued").unwrap(),
+            RepairTaskStatusV1::Queued
+        );
+        assert_eq!(
+            parse_repair_status("IN_PROGRESS").unwrap(),
+            RepairTaskStatusV1::InProgress
+        );
+        assert_eq!(
+            parse_repair_status("completed").unwrap(),
+            RepairTaskStatusV1::Completed
+        );
+        assert_eq!(
+            parse_repair_status("failed").unwrap(),
+            RepairTaskStatusV1::Failed
+        );
+        assert_eq!(
+            parse_repair_status("escalated").unwrap(),
+            RepairTaskStatusV1::Escalated
+        );
+    }
+
+    #[test]
+    fn repair_filters_parse_provider_and_status() {
+        let provider_id = [0x42; 32];
+        let provider_hex = format!("0x{}", hex::encode(provider_id));
+        let query = RepairStatusQueryDto {
+            status: Some("in_progress".into()),
+            provider: Some(provider_hex),
+        };
+        let filters =
+            repair_filters_from_query(Some([0x11; 32]), query).expect("parse repair filters");
+        assert_eq!(filters.manifest_digest, Some([0x11; 32]));
+        assert_eq!(filters.provider_id, Some(provider_id));
+        assert_eq!(filters.status, Some(RepairTaskStatusV1::InProgress));
+    }
+
+    #[test]
+    fn repair_status_handlers_apply_filters() {
+        Runtime::new().expect("runtime").block_on(async {
+            let node = sorafs_node::NodeHandle::new(StorageConfig::default());
+            let manifest_a = [0x10; 32];
+            let manifest_b = [0x11; 32];
+            let provider_a = [0x22; 32];
+            let provider_b = [0x33; 32];
+
+            node.enqueue_repair_report(&report("REP-400", manifest_a, provider_a, 1_700_000_000))
+                .expect("enqueue report");
+            node.enqueue_repair_report(&report("REP-401", manifest_b, provider_b, 1_700_000_100))
+                .expect("enqueue report");
+
+            let query = RepairStatusQueryDto {
+                status: Some("queued".into()),
+                provider: Some(format!("0x{}", hex::encode(provider_a))),
+            };
+            let resp = handle_get_sorafs_repair_status_all(node.clone(), crate::NoritoQuery(query))
+                .await
+                .expect("global repair status");
+            let body = resp
+                .into_response()
+                .into_body()
+                .collect()
+                .await
+                .expect("body");
+            let value: norito::json::Value =
+                norito::json::from_slice(body.to_bytes().as_ref()).expect("parse json");
+            let entries = value.as_array().expect("array response");
+            assert_eq!(entries.len(), 1);
+
+            let manifest_hex = hex::encode(manifest_a);
+            let manifest_query = RepairStatusQueryDto {
+                status: Some("queued".into()),
+                provider: None,
+            };
+            let resp = handle_get_sorafs_repair_status(
+                node.clone(),
+                Path(manifest_hex),
+                crate::NoritoQuery(manifest_query),
+            )
+            .await
+            .expect("manifest repair status");
+            let body = resp
+                .into_response()
+                .into_body()
+                .collect()
+                .await
+                .expect("body");
+            let value: norito::json::Value =
+                norito::json::from_slice(body.to_bytes().as_ref()).expect("parse json");
+            let entries = value.as_array().expect("array response");
+            assert_eq!(entries.len(), 1);
+        });
+    }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod repair_worker_tests {
+    use super::*;
+    use axum::response::IntoResponse;
+    use iroha_crypto::{KeyPair, SignatureOf};
+    use sorafs_manifest::repair::{
+        REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
+        RepairCauseV1, RepairEvidenceV1, RepairTaskStateV1, RepairTicketId, RepairWorkerActionV1,
+        RepairWorkerSignaturePayloadV1,
+    };
+    use sorafs_node::config::StorageConfig;
+    use tokio::runtime::Runtime;
+
+    fn report(
+        ticket: &str,
+        manifest_digest: [u8; 32],
+        provider_id: [u8; 32],
+        submitted_at_unix: u64,
+    ) -> RepairReportV1 {
+        RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: RepairTicketId(ticket.to_string()),
+            auditor_account: "auditor#sora".into(),
+            submitted_at_unix,
+            evidence: RepairEvidenceV1 {
+                version: REPAIR_EVIDENCE_VERSION_V1,
+                manifest_digest,
+                provider_id,
+                por_history_id: None,
+                cause: RepairCauseV1::Manual {
+                    reason: "test".into(),
+                },
+                evidence_json: None,
+                notes: None,
+            },
+            notes: None,
+        }
+    }
+
+    fn sign_worker_action(
+        keypair: &KeyPair,
+        ticket_id: &RepairTicketId,
+        manifest_digest: [u8; 32],
+        provider_id: [u8; 32],
+        worker_id: &str,
+        idempotency_key: &str,
+        action: RepairWorkerActionV1,
+    ) -> SignatureOf<RepairWorkerSignaturePayloadV1> {
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: ticket_id.clone(),
+            manifest_digest,
+            provider_id,
+            worker_id: worker_id.to_string(),
+            idempotency_key: idempotency_key.to_string(),
+            action,
+        };
+        SignatureOf::new(keypair.private_key(), &payload)
+    }
+
+    #[test]
+    fn repair_worker_handlers_drive_state_transitions() {
+        Runtime::new().expect("runtime").block_on(async {
+            let node = sorafs_node::NodeHandle::new(StorageConfig::default());
+            let signer = KeyPair::random();
+            let report_a = report("REP-460", [0x10; 32], [0x20; 32], 1_700_500_000);
+            let report_b = report("REP-461", [0x11; 32], [0x21; 32], 1_700_500_100);
+
+            node.enqueue_repair_report(&report_a)
+                .expect("enqueue report a");
+            node.enqueue_repair_report(&report_b)
+                .expect("enqueue report b");
+
+            let claim = RepairWorkerClaimDto {
+                ticket_id: report_a.ticket_id.clone(),
+                manifest_digest_hex: hex::encode(report_a.evidence.manifest_digest),
+                worker_id: "worker-a".into(),
+                claimed_at_unix: report_a.submitted_at_unix + 10,
+                idempotency_key: "claim-a".into(),
+                signature: sign_worker_action(
+                    &signer,
+                    &report_a.ticket_id,
+                    report_a.evidence.manifest_digest,
+                    report_a.evidence.provider_id,
+                    "worker-a",
+                    "claim-a",
+                    RepairWorkerActionV1::Claim {
+                        claimed_at_unix: report_a.submitted_at_unix + 10,
+                    },
+                ),
+            };
+            handle_post_sorafs_repair_claim(
+                MaybeTelemetry::disabled(),
+                node.clone(),
+                NoritoJson(claim),
+            )
+            .await
+            .expect("claim handler")
+            .into_response();
+
+            let heartbeat = RepairWorkerHeartbeatDto {
+                ticket_id: report_a.ticket_id.clone(),
+                manifest_digest_hex: hex::encode(report_a.evidence.manifest_digest),
+                worker_id: "worker-a".into(),
+                heartbeat_at_unix: report_a.submitted_at_unix + 20,
+                idempotency_key: "heartbeat-a".into(),
+                signature: sign_worker_action(
+                    &signer,
+                    &report_a.ticket_id,
+                    report_a.evidence.manifest_digest,
+                    report_a.evidence.provider_id,
+                    "worker-a",
+                    "heartbeat-a",
+                    RepairWorkerActionV1::Heartbeat {
+                        heartbeat_at_unix: report_a.submitted_at_unix + 20,
+                    },
+                ),
+            };
+            handle_post_sorafs_repair_heartbeat(
+                MaybeTelemetry::disabled(),
+                node.clone(),
+                NoritoJson(heartbeat),
+            )
+            .await
+            .expect("heartbeat handler")
+            .into_response();
+
+            let complete = RepairWorkerCompleteDto {
+                ticket_id: report_a.ticket_id.clone(),
+                manifest_digest_hex: hex::encode(report_a.evidence.manifest_digest),
+                worker_id: "worker-a".into(),
+                completed_at_unix: report_a.submitted_at_unix + 30,
+                resolution_notes: Some("done".into()),
+                idempotency_key: "complete-a".into(),
+                signature: sign_worker_action(
+                    &signer,
+                    &report_a.ticket_id,
+                    report_a.evidence.manifest_digest,
+                    report_a.evidence.provider_id,
+                    "worker-a",
+                    "complete-a",
+                    RepairWorkerActionV1::Complete {
+                        completed_at_unix: report_a.submitted_at_unix + 30,
+                        resolution_notes: Some("done".into()),
+                    },
+                ),
+            };
+            handle_post_sorafs_repair_complete(
+                MaybeTelemetry::disabled(),
+                node.clone(),
+                NoritoJson(complete),
+            )
+            .await
+            .expect("complete handler")
+            .into_response();
+
+            let claim_b = RepairWorkerClaimDto {
+                ticket_id: report_b.ticket_id.clone(),
+                manifest_digest_hex: hex::encode(report_b.evidence.manifest_digest),
+                worker_id: "worker-b".into(),
+                claimed_at_unix: report_b.submitted_at_unix + 5,
+                idempotency_key: "claim-b".into(),
+                signature: sign_worker_action(
+                    &signer,
+                    &report_b.ticket_id,
+                    report_b.evidence.manifest_digest,
+                    report_b.evidence.provider_id,
+                    "worker-b",
+                    "claim-b",
+                    RepairWorkerActionV1::Claim {
+                        claimed_at_unix: report_b.submitted_at_unix + 5,
+                    },
+                ),
+            };
+            handle_post_sorafs_repair_claim(
+                MaybeTelemetry::disabled(),
+                node.clone(),
+                NoritoJson(claim_b),
+            )
+            .await
+            .expect("claim handler b")
+            .into_response();
+
+            let fail = RepairWorkerFailDto {
+                ticket_id: report_b.ticket_id.clone(),
+                manifest_digest_hex: hex::encode(report_b.evidence.manifest_digest),
+                worker_id: "worker-b".into(),
+                failed_at_unix: report_b.submitted_at_unix + 15,
+                reason: "retry".into(),
+                idempotency_key: "fail-b".into(),
+                signature: sign_worker_action(
+                    &signer,
+                    &report_b.ticket_id,
+                    report_b.evidence.manifest_digest,
+                    report_b.evidence.provider_id,
+                    "worker-b",
+                    "fail-b",
+                    RepairWorkerActionV1::Fail {
+                        failed_at_unix: report_b.submitted_at_unix + 15,
+                        reason: "retry".into(),
+                    },
+                ),
+            };
+            handle_post_sorafs_repair_fail(
+                MaybeTelemetry::disabled(),
+                node.clone(),
+                NoritoJson(fail),
+            )
+            .await
+            .expect("fail handler")
+            .into_response();
+
+            let tasks = node.repair_tasks(RepairTaskFilters::default());
+            assert_eq!(tasks.len(), 2);
+            let mut states = tasks
+                .iter()
+                .map(|task| (task.ticket_id.0.as_str(), &task.state))
+                .collect::<Vec<_>>();
+            states.sort_by(|(left, _), (right, _)| left.cmp(right));
+            assert!(matches!(states[0].1, RepairTaskStateV1::Completed(..)));
+            assert!(matches!(states[1].1, RepairTaskStateV1::Failed(..)));
+        });
+    }
 }
 
 fn manifest_policy_from_dto(dto: &PinPolicyDto) -> ManifestPinPolicy {
@@ -11834,11 +12483,7 @@ fn tx_field_value(
 }
 
 #[cfg(feature = "app_api")]
-fn validate_tx_filter_adapter(
-    expr: &FilterExpr,
-    telemetry: &MaybeTelemetry,
-    strict_addresses: bool,
-) -> Result<()> {
+fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> Result<()> {
     // Strict adapter validation with depth and set-size limits + value parsing
     const MAX_DEPTH: usize = 10;
     const MAX_SET: usize = 256;
@@ -11856,36 +12501,26 @@ fn validate_tx_filter_adapter(
         }
     }
 
-    fn validate_rec(
-        expr: &FilterExpr,
-        depth: usize,
-        telemetry: &MaybeTelemetry,
-        strict_addresses: bool,
-    ) -> Result<()> {
+    fn validate_rec(expr: &FilterExpr, depth: usize, telemetry: &MaybeTelemetry) -> Result<()> {
         if depth > MAX_DEPTH {
             return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
         }
         match expr {
             F::And(list) | F::Or(list) => {
                 for e in list {
-                    validate_rec(e, depth + 1, telemetry, strict_addresses)?;
+                    validate_rec(e, depth + 1, telemetry)?;
                 }
                 Ok(())
             }
-            F::Not(inner) => validate_rec(inner, depth + 1, telemetry, strict_addresses),
+            F::Not(inner) => validate_rec(inner, depth + 1, telemetry),
             F::Eq(f, v) | F::Ne(f, v) => match f.0.as_str() {
                 "authority" => {
                     let s = v
                         .as_str()
                         .ok_or_else(|| Error::Query(dm::ValidationFail::TooComplex))?;
-                    parse_account_literal(
-                        s,
-                        telemetry,
-                        CONTEXT_ACCOUNTS_TRANSACTIONS_QUERY_FILTER,
-                        strict_addresses,
-                    )
-                    .map(|_| ())
-                    .map_err(|_| Error::Query(dm::ValidationFail::TooComplex))
+                    parse_account_literal(s, telemetry, CONTEXT_ACCOUNTS_TRANSACTIONS_QUERY_FILTER)
+                        .map(|_| ())
+                        .map_err(|_| Error::Query(dm::ValidationFail::TooComplex))
                 }
                 "timestamp_ms" => {
                     if !v.is_number() {
@@ -11945,7 +12580,6 @@ fn validate_tx_filter_adapter(
                                 s,
                                 telemetry,
                                 CONTEXT_ACCOUNTS_TRANSACTIONS_QUERY_FILTER,
-                                strict_addresses,
                             )
                             .is_err()
                             {
@@ -12002,7 +12636,7 @@ fn validate_tx_filter_adapter(
             },
         }
     }
-    validate_rec(expr, 0, telemetry, strict_addresses)
+    validate_rec(expr, 0, telemetry)
 }
 
 #[cfg(feature = "app_api")]
@@ -12647,8 +13281,6 @@ fn tx_predicate_from_filter(
 }
 
 #[cfg(feature = "app_api")]
-const STRICT_ADDRESSES_REASON: &str = "ERR_STRICT_ADDRESS_REQUIRED";
-#[cfg(feature = "app_api")]
 const LOCAL12_COLLISION_METRIC_KIND: &str = "local12_digest";
 #[cfg(feature = "app_api")]
 static SUBSCRIPTION_PLAN_KEY: LazyLock<Name> = LazyLock::new(|| {
@@ -12821,11 +13453,10 @@ pub fn parse_account_path_segment(
     literal: &str,
     telemetry: &MaybeTelemetry,
     endpoint: &'static str,
-    strict_addresses: bool,
 ) -> Result<(iroha_data_model::account::AccountId, String), Error> {
     use iroha_data_model::{account::AccountId, query::error::QueryExecutionFail};
 
-    parse_account_literal(literal, telemetry, endpoint, strict_addresses)
+    parse_account_literal(literal, telemetry, endpoint)
         .map(|parsed| {
             let (account_id, canonical, _) = parsed.into_parts();
             (account_id, canonical)
@@ -12858,19 +13489,13 @@ fn canonicalize_account_literal_value(
     value: &mut norito::json::Value,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-    strict_addresses: bool,
 ) -> Result<(), Error> {
     use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
     match value {
         norito::json::Value::String(literal) => {
             let current_literal = literal.clone();
-            match parse_account_literal(
-                current_literal.as_str(),
-                telemetry,
-                context,
-                strict_addresses,
-            ) {
+            match parse_account_literal(current_literal.as_str(), telemetry, context) {
                 Ok(parsed) => {
                     let (_, canonical, _) = parsed.into_parts();
                     *literal = canonical;
@@ -12894,33 +13519,22 @@ fn canonicalize_filter_account_literals(
     field_name: &str,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-    strict_addresses: bool,
 ) -> Result<(), Error> {
     use crate::filter::FilterExpr as F;
 
     match expr {
         F::And(list) | F::Or(list) => {
             for e in list {
-                canonicalize_filter_account_literals(
-                    e,
-                    field_name,
-                    telemetry,
-                    context,
-                    strict_addresses,
-                )?;
+                canonicalize_filter_account_literals(e, field_name, telemetry, context)?;
             }
             Ok(())
         }
-        F::Not(inner) => canonicalize_filter_account_literals(
-            inner,
-            field_name,
-            telemetry,
-            context,
-            strict_addresses,
-        ),
+        F::Not(inner) => {
+            canonicalize_filter_account_literals(inner, field_name, telemetry, context)
+        }
         F::Eq(field, value) | F::Ne(field, value) => {
             if field.0.as_str() == field_name {
-                canonicalize_account_literal_value(value, telemetry, context, strict_addresses)
+                canonicalize_account_literal_value(value, telemetry, context)
             } else {
                 Ok(())
             }
@@ -12928,12 +13542,7 @@ fn canonicalize_filter_account_literals(
         F::In(field, list) | F::Nin(field, list) => {
             if field.0.as_str() == field_name {
                 for value in list {
-                    canonicalize_account_literal_value(
-                        value,
-                        telemetry,
-                        context,
-                        strict_addresses,
-                    )?;
+                    canonicalize_account_literal_value(value, telemetry, context)?;
                 }
             }
             Ok(())
@@ -12949,9 +13558,8 @@ fn canonicalize_accounts_filter_literals(
     expr: &mut FilterExpr,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-    strict_addresses: bool,
 ) -> Result<()> {
-    canonicalize_filter_account_literals(expr, "id", telemetry, context, strict_addresses)
+    canonicalize_filter_account_literals(expr, "id", telemetry, context)
 }
 
 #[cfg(feature = "app_api")]
@@ -12959,10 +13567,9 @@ fn canonicalize_repo_filter_literals(
     expr: &mut FilterExpr,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-    strict_addresses: bool,
 ) -> Result<()> {
     for field in ["initiator", "counterparty", "custodian"] {
-        canonicalize_filter_account_literals(expr, field, telemetry, context, strict_addresses)?;
+        canonicalize_filter_account_literals(expr, field, telemetry, context)?;
     }
     Ok(())
 }
@@ -12972,15 +13579,8 @@ fn canonicalize_offline_allowance_filter_literals(
     expr: &mut FilterExpr,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-    strict_addresses: bool,
 ) -> Result<()> {
-    canonicalize_filter_account_literals(
-        expr,
-        "controller_id",
-        telemetry,
-        context,
-        strict_addresses,
-    )
+    canonicalize_filter_account_literals(expr, "controller_id", telemetry, context)
 }
 
 #[cfg(feature = "app_api")]
@@ -12988,9 +13588,8 @@ fn canonicalize_offline_revocation_filter_literals(
     expr: &mut FilterExpr,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-    strict_addresses: bool,
 ) -> Result<()> {
-    canonicalize_filter_account_literals(expr, "issuer_id", telemetry, context, strict_addresses)
+    canonicalize_filter_account_literals(expr, "issuer_id", telemetry, context)
 }
 
 #[cfg(feature = "app_api")]
@@ -12998,15 +13597,8 @@ fn canonicalize_offline_summary_filter_literals(
     expr: &mut FilterExpr,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-    strict_addresses: bool,
 ) -> Result<()> {
-    canonicalize_filter_account_literals(
-        expr,
-        "controller_id",
-        telemetry,
-        context,
-        strict_addresses,
-    )
+    canonicalize_filter_account_literals(expr, "controller_id", telemetry, context)
 }
 
 #[cfg(feature = "app_api")]
@@ -13014,10 +13606,9 @@ fn canonicalize_offline_transfer_filter_literals(
     expr: &mut FilterExpr,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-    strict_addresses: bool,
 ) -> Result<()> {
     for field in ["controller_id", "receiver_id", "deposit_account_id"] {
-        canonicalize_filter_account_literals(expr, field, telemetry, context, strict_addresses)?;
+        canonicalize_filter_account_literals(expr, field, telemetry, context)?;
     }
     Ok(())
 }
@@ -13027,10 +13618,9 @@ fn canonicalize_offline_receipt_filter_literals(
     expr: &mut FilterExpr,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-    strict_addresses: bool,
 ) -> Result<()> {
     for field in ["controller_id", "receiver_id"] {
-        canonicalize_filter_account_literals(expr, field, telemetry, context, strict_addresses)?;
+        canonicalize_filter_account_literals(expr, field, telemetry, context)?;
     }
     Ok(())
 }
@@ -13041,26 +13631,12 @@ fn canonicalize_query_account_literal(
     literal: Option<&str>,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-    strict_addresses: bool,
 ) -> Result<Option<String>> {
-    use iroha_data_model::{
-        ValidationFail,
-        account::{AccountAddressSource, AccountId},
-        query::error::QueryExecutionFail,
-    };
+    use iroha_data_model::{ValidationFail, account::AccountId, query::error::QueryExecutionFail};
 
     literal
         .map(|raw| match AccountId::parse(raw) {
             Ok(parsed) => {
-                if strict_addresses && !matches!(parsed.source(), AccountAddressSource::Encoded(_))
-                {
-                    record_account_literal_reject(telemetry, context, raw, STRICT_ADDRESSES_REASON);
-                    return Err(Error::Query(ValidationFail::QueryFailed(
-                        QueryExecutionFail::Conversion(format!(
-                            "invalid `{label}` literal `{raw}`: {STRICT_ADDRESSES_REASON}"
-                        )),
-                    )));
-                }
                 record_account_literal_accept(telemetry, context, parsed.account_id());
                 Ok(parsed.canonical().to_string())
             }
@@ -13082,18 +13658,11 @@ pub fn parse_account_literal(
     literal: &str,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-    strict_addresses: bool,
 ) -> Result<iroha_data_model::account::ParsedAccountId, iroha_data_model::error::ParseError> {
-    use iroha_data_model::account::{AccountAddress, AccountAddressSource, AccountId};
+    use iroha_data_model::account::AccountId;
 
     match AccountId::parse(literal) {
         Ok(parsed) => {
-            if strict_addresses && !matches!(parsed.source(), AccountAddressSource::Encoded(_)) {
-                record_account_literal_reject(telemetry, context, literal, STRICT_ADDRESSES_REASON);
-                return Err(iroha_data_model::error::ParseError::new(
-                    STRICT_ADDRESSES_REASON,
-                ));
-            }
             record_account_literal_accept(telemetry, context, parsed.account_id());
             Ok(parsed)
         }
@@ -13147,9 +13716,10 @@ fn local8_domain_label(literal: &str) -> Option<String> {
 #[cfg(feature = "app_api")]
 fn literal_is_local8(literal: &str) -> bool {
     let trimmed = literal.trim_start();
-    let Some((address_part, _)) = trimmed.split_once('@') else {
-        return false;
-    };
+    let address_part = trimmed
+        .split_once('@')
+        .map(|(address, _)| address)
+        .unwrap_or(trimmed);
     address_part
         .to_ascii_lowercase()
         .trim_start_matches("0x")
@@ -13228,7 +13798,7 @@ mod address_metrics_tests {
             .with_label_values(&[TEST_CONTEXT, reason]);
         let before_invalid = invalid_counter.get();
 
-        assert!(parse_account_literal(local8_literal(), &telemetry, TEST_CONTEXT, false).is_err());
+        assert!(parse_account_literal(local8_literal(), &telemetry, TEST_CONTEXT).is_err());
 
         assert_eq!(invalid_counter.get(), before_invalid + 1);
     }
@@ -13247,7 +13817,7 @@ mod address_metrics_tests {
         let before_local8 = local8_counter.get();
         let before_domain = domain_counter.get();
 
-        assert!(parse_account_literal(local8_literal(), &telemetry, TEST_CONTEXT, false).is_err());
+        assert!(parse_account_literal(local8_literal(), &telemetry, TEST_CONTEXT).is_err());
 
         assert_eq!(local8_counter.get(), before_local8 + 1);
         assert_eq!(domain_counter.get(), before_domain + 1);
@@ -13308,41 +13878,49 @@ mod address_metrics_tests {
             FieldPath("authority".to_string()),
             Value::String(local8_literal().into()),
         );
-        assert!(validate_tx_filter_adapter(&expr, &telemetry, false).is_err());
+        assert!(validate_tx_filter_adapter(&expr, &telemetry).is_err());
 
         assert_eq!(invalid_counter.get(), before_invalid + 1);
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn strict_account_filter_rejects_alias_literals() {
+    async fn account_filter_canonicalizes_alias_literals() {
+        use std::sync::Arc;
+
+        use iroha_crypto::Algorithm;
+        use iroha_data_model::{
+            account::{AccountId, clear_account_alias_resolver, set_account_alias_resolver},
+            domain::DomainId,
+        };
+
         let telemetry = MaybeTelemetry::for_tests();
-        let metrics = telemetry.metrics().await;
-        let invalid_counter = metrics
-            .torii_address_invalid_total
-            .with_label_values(&[ENDPOINT_ACCOUNTS_QUERY, STRICT_ADDRESSES_REASON]);
-        let before = invalid_counter.get();
+        let domain: DomainId = "wonderland".parse().expect("domain parses");
+        let key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
+        let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
+        let account_for_resolver = account.clone();
+        set_account_alias_resolver(Arc::new(move |label, alias_domain| {
+            if label == "alice" && alias_domain == &domain {
+                Some(account_for_resolver.clone())
+            } else {
+                None
+            }
+        }));
 
         let mut expr = FilterExpr::Eq(
             FieldPath("id".to_string()),
             Value::String("alice@wonderland".into()),
         );
 
-        let result = canonicalize_accounts_filter_literals(
-            &mut expr,
-            &telemetry,
-            ENDPOINT_ACCOUNTS_QUERY,
-            true,
-        );
+        let result =
+            canonicalize_accounts_filter_literals(&mut expr, &telemetry, ENDPOINT_ACCOUNTS_QUERY);
 
-        assert!(
-            result.is_err(),
-            "strict address mode should reject alias literals during canonicalization"
-        );
-        assert_eq!(
-            invalid_counter.get(),
-            before + 1,
-            "strict rejection should increment invalid counter with strict reason"
-        );
+        clear_account_alias_resolver();
+
+        assert!(result.is_ok(), "alias literals should canonicalize");
+        let FilterExpr::Eq(_, Value::String(canonical)) = expr else {
+            panic!("expected canonicalized string filter")
+        };
+        assert_eq!(canonical, account.to_string());
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -13384,7 +13962,7 @@ mod address_metrics_tests {
             .get();
 
         assert!(
-            parse_account_literal(literal, &telemetry, KAIGI_SSE_CONTEXT, false).is_err(),
+            parse_account_literal(literal, &telemetry, KAIGI_SSE_CONTEXT).is_err(),
             "literal should be rejected"
         );
 
@@ -13447,7 +14025,7 @@ mod address_metrics_tests {
                 .get()
         };
 
-        parse_account_literal(&literal, &telemetry, endpoint, false).expect("literal should parse");
+        parse_account_literal(&literal, &telemetry, endpoint).expect("literal should parse");
 
         let after = {
             let metrics = telemetry.metrics().await;
@@ -13476,7 +14054,7 @@ mod address_metrics_tests {
                 .get()
         };
 
-        parse_account_literal(&literal, &telemetry, endpoint, false).expect("literal should parse");
+        parse_account_literal(&literal, &telemetry, endpoint).expect("literal should parse");
 
         let after = {
             let metrics = telemetry.metrics().await;
@@ -13490,28 +14068,16 @@ mod address_metrics_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn kaigi_sse_strict_mode_counts_public_key_literal() {
+    async fn kaigi_sse_accepts_public_key_literal() {
         let telemetry = MaybeTelemetry::for_tests();
-        let metrics = telemetry.metrics().await;
         let literal = format!(
             "{}@kaigi",
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         );
-        let before = metrics
-            .torii_address_invalid_total
-            .with_label_values(&[KAIGI_SSE_CONTEXT, STRICT_ADDRESSES_REASON])
-            .get();
 
-        assert!(
-            parse_account_literal(&literal, &telemetry, KAIGI_SSE_CONTEXT, true).is_err(),
-            "strict mode should reject public key literal"
-        );
-
-        let after = metrics
-            .torii_address_invalid_total
-            .with_label_values(&[KAIGI_SSE_CONTEXT, STRICT_ADDRESSES_REASON])
-            .get();
-        assert_eq!(after, before + 1);
+        let parsed = parse_account_literal(&literal, &telemetry, KAIGI_SSE_CONTEXT)
+            .expect("public key literal should parse");
+        assert_eq!(parsed.canonical(), parsed.account_id().to_string());
     }
 }
 
@@ -13576,7 +14142,7 @@ mod account_path_metric_tests {
 
         let literal = account_id.to_string();
         assert!(
-            parse_account_literal(&literal, &telemetry, endpoint, false).is_ok(),
+            parse_account_literal(&literal, &telemetry, endpoint).is_ok(),
             "literal should parse"
         );
 
@@ -13621,7 +14187,6 @@ pub async fn handle_v1_account_transactions(
         axum::extract::Path(account_id),
         NoritoJson(envelope),
         telemetry,
-        false,
     )
     .await
 }
@@ -13634,7 +14199,6 @@ pub async fn handle_v1_account_transactions_with_policy(
     axum::extract::Path(account_id): axum::extract::Path<String>,
     NoritoJson(envelope): NoritoJson<QueryEnvelope>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
@@ -13665,7 +14229,6 @@ pub async fn handle_v1_account_transactions_with_policy(
         &account_id,
         &telemetry,
         ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
-        strict_addresses,
     )?;
     let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
     record_address_format_selection(
@@ -13698,7 +14261,7 @@ pub async fn handle_v1_account_transactions_with_policy(
                 }
             }
             // Endpoint-specific validation first (depth, set sizes, value types)
-            validate_tx_filter_adapter(expr, &telemetry, strict_addresses)?;
+            validate_tx_filter_adapter(expr, &telemetry)?;
             // Structural validation (field path form + basic type checks)
             crate::filter::validate_filter(expr)
                 .map_err(|e| map_filter_error(e, ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY))?;
@@ -13949,7 +14512,6 @@ pub async fn handle_v1_account_transactions_get(
         axum::extract::Path(account_id),
         crate::NoritoQuery(params),
         telemetry,
-        false,
     )
     .await
 }
@@ -13962,7 +14524,6 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     axum::extract::Path(account_id): axum::extract::Path<String>,
     crate::NoritoQuery(params): crate::NoritoQuery<AccountTransactionsGetParams>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
@@ -13974,12 +14535,8 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     let start = Instant::now();
     let address_format = AddressFormatPreference::from_param(params.address_format.as_deref())?;
     record_address_format_selection(&telemetry, ENDPOINT_ACCOUNTS_TRANSACTIONS, address_format);
-    let (_, canonical_literal) = parse_account_path_segment(
-        &account_id,
-        &telemetry,
-        ENDPOINT_ACCOUNTS_TRANSACTIONS,
-        strict_addresses,
-    )?;
+    let (_, canonical_literal) =
+        parse_account_path_segment(&account_id, &telemetry, ENDPOINT_ACCOUNTS_TRANSACTIONS)?;
     let canonical_account = Arc::<str>::from(canonical_literal);
     let cap = app_query_page_cap(&state);
     let limits = app_query_limits();
@@ -18090,7 +18647,7 @@ mod app_api_integration_tests {
             }),
         );
 
-        // Preserve the account alias textual representation (`alias@domain`)
+        // Preserve the account literal textual representation (IH58 by default)
         let req = http::Request::builder()
             .method("GET")
             .uri(format!("/v1/accounts/{}/assets?limit=1", alice_id))
@@ -19190,7 +19747,6 @@ pub async fn handle_v1_kaigi_relay_detail(
         axum::extract::Path(relay_id_str),
         crate::NoritoQuery(params),
         crate::utils::ResponseFormat::Json,
-        false,
     )
     .await
 }
@@ -19204,7 +19760,6 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
     axum::extract::Path(relay_id_str): axum::extract::Path<String>,
     crate::NoritoQuery(params): crate::NoritoQuery<KaigiRelayFormatParams>,
     format: crate::utils::ResponseFormat,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     if !telemetry.allows_metrics() {
         return Err(Error::telemetry_profile_forbidden(
@@ -19216,18 +19771,13 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
     let address_format = AddressFormatPreference::from_param(params.address_format.as_deref())?;
     record_address_format_selection(&telemetry, ENDPOINT_KAIGI_RELAY_DETAIL, address_format);
 
-    let relay_id = parse_account_literal(
-        &relay_id_str,
-        &telemetry,
-        CONTEXT_KAIGI_RELAY_DETAIL,
-        strict_addresses,
-    )
-    .map_err(|err| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
-        ))
-    })?
-    .into_account_id();
+    let relay_id = parse_account_literal(&relay_id_str, &telemetry, CONTEXT_KAIGI_RELAY_DETAIL)
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?
+        .into_account_id();
 
     let relays = collect_kaigi_relays(&state)?;
     let Some(snapshot) = relays
@@ -26036,7 +26586,6 @@ pub async fn handle_v1_account_permissions(
         axum::extract::Path(account_id),
         crate::NoritoQuery(p),
         telemetry,
-        false,
     )
     .await
 }
@@ -26049,7 +26598,6 @@ pub async fn handle_v1_account_permissions_with_policy(
     axum::extract::Path(account_id): axum::extract::Path<String>,
     crate::NoritoQuery(p): crate::NoritoQuery<crate::filter::Pagination>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::query::{
@@ -26058,12 +26606,8 @@ pub async fn handle_v1_account_permissions_with_policy(
         permission::prelude::FindPermissionsByAccountId,
     };
 
-    let (account, _) = parse_account_path_segment(
-        &account_id,
-        &telemetry,
-        ENDPOINT_ACCOUNTS_PERMISSIONS,
-        strict_addresses,
-    )?;
+    let (account, _) =
+        parse_account_path_segment(&account_id, &telemetry, ENDPOINT_ACCOUNTS_PERMISSIONS)?;
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_PERMISSIONS)?;
 
@@ -26140,7 +26684,6 @@ pub async fn handle_v1_account_assets(
         axum::extract::Path(account_id),
         crate::NoritoQuery(p),
         telemetry,
-        false,
     )
     .await
 }
@@ -26153,7 +26696,6 @@ pub async fn handle_v1_account_assets_with_policy(
     axum::extract::Path(account_id): axum::extract::Path<String>,
     crate::NoritoQuery(p): crate::NoritoQuery<crate::filter::Pagination>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::query::{asset::prelude::FindAssets, dsl::CompoundPredicate};
@@ -26161,12 +26703,7 @@ pub async fn handle_v1_account_assets_with_policy(
     let state_view = state.view();
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_ASSETS)?;
-    let (acct, _) = parse_account_path_segment(
-        &account_id,
-        &telemetry,
-        ENDPOINT_ACCOUNTS_ASSETS,
-        strict_addresses,
-    )?;
+    let (acct, _) = parse_account_path_segment(&account_id, &telemetry, ENDPOINT_ACCOUNTS_ASSETS)?;
     let limits = app_query_limits();
     let page_limit = pagination.limit.unwrap_or(limits.default_page_limit);
     let fetch_cap = limits
@@ -26233,7 +26770,6 @@ pub async fn handle_v1_repo_agreements(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::query::{dsl::CompoundPredicate, repo::prelude::FindRepoAgreements};
@@ -26250,12 +26786,7 @@ pub async fn handle_v1_repo_agreements(
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
         validate_repo_filter(expr)?;
-        canonicalize_repo_filter_literals(
-            expr,
-            &telemetry,
-            ENDPOINT_REPO_AGREEMENTS_QUERY,
-            strict_addresses,
-        )?;
+        canonicalize_repo_filter_literals(expr, &telemetry, ENDPOINT_REPO_AGREEMENTS_QUERY)?;
     }
     let filter_ref = filter_expr.as_ref();
 
@@ -26306,7 +26837,6 @@ pub async fn handle_v1_repo_agreements_query(
     state: Arc<CoreState>,
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::query::{dsl::CompoundPredicate, repo::prelude::FindRepoAgreements};
@@ -26319,12 +26849,7 @@ pub async fn handle_v1_repo_agreements_query(
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
         validate_repo_filter(expr)?;
-        canonicalize_repo_filter_literals(
-            expr,
-            &telemetry,
-            ENDPOINT_REPO_AGREEMENTS_LIST,
-            strict_addresses,
-        )?;
+        canonicalize_repo_filter_literals(expr, &telemetry, ENDPOINT_REPO_AGREEMENTS_LIST)?;
     }
     let filter_ref = envelope.filter.as_ref();
 
@@ -27951,7 +28476,6 @@ pub async fn handle_v1_accounts(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::query::{account::prelude::FindAccounts, dsl::CompoundPredicate};
@@ -27974,12 +28498,7 @@ pub async fn handle_v1_accounts(
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
         validate_accounts_filter_adapter(expr)?;
-        canonicalize_accounts_filter_literals(
-            expr,
-            &telemetry,
-            ENDPOINT_ACCOUNTS_LIST,
-            strict_addresses,
-        )?;
+        canonicalize_accounts_filter_literals(expr, &telemetry, ENDPOINT_ACCOUNTS_LIST)?;
     }
 
     let filter_ref = filter_expr.as_ref();
@@ -28039,7 +28558,6 @@ pub async fn handle_v1_accounts_query(
     state: Arc<CoreState>,
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::query::{account::prelude::FindAccounts, dsl::CompoundPredicate};
@@ -28060,12 +28578,7 @@ pub async fn handle_v1_accounts_query(
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
         validate_accounts_filter_adapter(expr)?;
-        canonicalize_accounts_filter_literals(
-            expr,
-            &telemetry,
-            ENDPOINT_ACCOUNTS_QUERY,
-            strict_addresses,
-        )?;
+        canonicalize_accounts_filter_literals(expr, &telemetry, ENDPOINT_ACCOUNTS_QUERY)?;
     }
 
     let address_format = AddressFormatPreference::from_param(envelope.address_format.as_deref())?;
@@ -30160,7 +30673,6 @@ impl OfflineAllowanceQueryFilters {
         now_ms: u64,
         telemetry: &MaybeTelemetry,
         context: &'static str,
-        strict_addresses: bool,
     ) -> Result<Self> {
         if params.require_verdict && params.only_missing_verdict {
             return Err(Self::conflicting_flags(
@@ -30179,7 +30691,6 @@ impl OfflineAllowanceQueryFilters {
             params.controller_id.as_deref(),
             telemetry,
             context,
-            strict_addresses,
         )?;
         Self::validate_window(
             params.certificate_expires_after_ms,
@@ -30361,7 +30872,6 @@ impl OfflineTransferQueryFilters {
         params: &OfflineTransferListParams,
         telemetry: &MaybeTelemetry,
         context: &'static str,
-        strict_addresses: bool,
     ) -> Result<Self> {
         if params.require_verdict && params.only_missing_verdict {
             return Err(Self::conflicting_flags(
@@ -30380,21 +30890,18 @@ impl OfflineTransferQueryFilters {
             params.controller_id.as_deref(),
             telemetry,
             context,
-            strict_addresses,
         )?;
         let receiver_id = canonicalize_query_account_literal(
             "receiver_id",
             params.receiver_id.as_deref(),
             telemetry,
             context,
-            strict_addresses,
         )?;
         let deposit_account_id = canonicalize_query_account_literal(
             "deposit_account_id",
             params.deposit_account_id.as_deref(),
             telemetry,
             context,
-            strict_addresses,
         )?;
         Self::validate_window(
             params.certificate_expires_after_ms,
@@ -31674,7 +32181,6 @@ pub async fn handle_v1_offline_allowances(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<OfflineAllowanceListParams>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::query::{
@@ -31693,7 +32199,6 @@ pub async fn handle_v1_offline_allowances(
         now_ms,
         &telemetry,
         ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-        strict_addresses,
     )?;
 
     let mut filter_expr = p
@@ -31708,7 +32213,6 @@ pub async fn handle_v1_offline_allowances(
             expr,
             &telemetry,
             ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-            strict_addresses,
         )?;
     }
 
@@ -31772,7 +32276,6 @@ pub async fn handle_v1_offline_revocations(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::query::{
@@ -31802,7 +32305,6 @@ pub async fn handle_v1_offline_revocations(
             expr,
             &telemetry,
             ENDPOINT_OFFLINE_REVOCATIONS_LIST,
-            strict_addresses,
         )?;
     }
 
@@ -31866,7 +32368,6 @@ pub async fn handle_v1_offline_allowances_query(
     state: Arc<CoreState>,
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::query::{
@@ -31900,7 +32401,6 @@ pub async fn handle_v1_offline_allowances_query(
             expr,
             &telemetry,
             ENDPOINT_OFFLINE_ALLOWANCES_QUERY,
-            strict_addresses,
         )?;
     }
 
@@ -32009,7 +32509,6 @@ pub async fn handle_v1_nexus_public_lane_stake(
     lane_id: LaneId,
     params: PublicLaneStakeQueryParams,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::{ValidationFail, account::AccountId, query::error::QueryExecutionFail};
 
@@ -32018,7 +32517,6 @@ pub async fn handle_v1_nexus_public_lane_stake(
         params.validator.as_deref(),
         &telemetry,
         CONTEXT_NEXUS_PUBLIC_LANE_STAKE,
-        strict_addresses,
     )?;
     let validator_filter = if let Some(canonical) = canonical_validator {
         Some(canonical.parse::<AccountId>().map_err(|err| {
@@ -32066,7 +32564,6 @@ pub async fn handle_v1_nexus_public_lane_rewards(
     lane_id: LaneId,
     params: PublicLaneRewardsQueryParams,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use std::collections::BTreeMap;
 
@@ -32081,7 +32578,6 @@ pub async fn handle_v1_nexus_public_lane_rewards(
         params.account.as_deref(),
         &telemetry,
         CONTEXT_NEXUS_PUBLIC_LANE_REWARDS,
-        strict_addresses,
     )?;
     let account_literal = canonical_account.ok_or_else(|| {
         Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
@@ -32402,7 +32898,6 @@ pub async fn handle_v1_offline_revocations_query(
     state: Arc<CoreState>,
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::query::{
@@ -32439,7 +32934,6 @@ pub async fn handle_v1_offline_revocations_query(
             expr,
             &telemetry,
             ENDPOINT_OFFLINE_REVOCATIONS_QUERY,
-            strict_addresses,
         )?;
     }
 
@@ -32511,7 +33005,6 @@ pub async fn handle_v1_offline_summaries(
     state: Arc<CoreState>,
     AxQuery(p): AxQuery<ListFilterParams>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::query::{
@@ -32541,7 +33034,6 @@ pub async fn handle_v1_offline_summaries(
             expr,
             &telemetry,
             ENDPOINT_OFFLINE_SUMMARIES_LIST,
-            strict_addresses,
         )?;
     }
 
@@ -32601,7 +33093,6 @@ pub async fn handle_v1_offline_summaries_query(
     state: Arc<CoreState>,
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::query::{
@@ -32624,7 +33115,6 @@ pub async fn handle_v1_offline_summaries_query(
             expr,
             &telemetry,
             ENDPOINT_OFFLINE_SUMMARIES_QUERY,
-            strict_addresses,
         )?;
     }
 
@@ -33767,7 +34257,6 @@ pub async fn handle_v1_offline_transfers(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<OfflineTransferListParams>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::query::{
@@ -33784,12 +34273,8 @@ pub async fn handle_v1_offline_transfers(
 
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_offline_transfer_sort_spec(&sort_spec);
-    let extra_filters = OfflineTransferQueryFilters::from_params(
-        &p,
-        &telemetry,
-        ENDPOINT_OFFLINE_TRANSFERS_LIST,
-        strict_addresses,
-    )?;
+    let extra_filters =
+        OfflineTransferQueryFilters::from_params(&p, &telemetry, ENDPOINT_OFFLINE_TRANSFERS_LIST)?;
 
     let mut filter_expr = p
         .filter
@@ -33803,7 +34288,6 @@ pub async fn handle_v1_offline_transfers(
             expr,
             &telemetry,
             ENDPOINT_OFFLINE_TRANSFERS_LIST,
-            strict_addresses,
         )?;
     }
 
@@ -33867,7 +34351,6 @@ pub async fn handle_v1_offline_transfers_query(
     state: Arc<CoreState>,
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse, Error> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::query::{
@@ -33904,7 +34387,6 @@ pub async fn handle_v1_offline_transfers_query(
             expr,
             &telemetry,
             ENDPOINT_OFFLINE_TRANSFERS_QUERY,
-            strict_addresses,
         )?;
     }
 
@@ -33974,7 +34456,6 @@ pub async fn handle_v1_offline_transfer_get(
     bundle_id_hex: String,
     crate::NoritoQuery(p): crate::NoritoQuery<OfflineTransferGetParams>,
     telemetry: MaybeTelemetry,
-    _strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::{
@@ -34016,7 +34497,6 @@ pub async fn handle_v1_offline_receipts(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<OfflineReceiptListParams>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::{
@@ -34048,7 +34528,6 @@ pub async fn handle_v1_offline_receipts(
             expr,
             &telemetry,
             ENDPOINT_OFFLINE_RECEIPTS_LIST,
-            strict_addresses,
         )?;
     }
 
@@ -34063,14 +34542,12 @@ pub async fn handle_v1_offline_receipts(
         p.controller_id.as_deref(),
         &telemetry,
         ENDPOINT_OFFLINE_RECEIPTS_LIST,
-        strict_addresses,
     )?;
     let receiver_filter = canonicalize_query_account_literal(
         "receiver_id",
         p.receiver_id.as_deref(),
         &telemetry,
         ENDPOINT_OFFLINE_RECEIPTS_LIST,
-        strict_addresses,
     )?;
     let bundle_filter = p.bundle_id_hex.as_ref().map(|v| v.to_ascii_lowercase());
     let certificate_filter = p
@@ -34191,7 +34668,6 @@ pub async fn handle_v1_offline_receipts_query(
     state: Arc<CoreState>,
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse, Error> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::{
@@ -34229,7 +34705,6 @@ pub async fn handle_v1_offline_receipts_query(
             expr,
             &telemetry,
             ENDPOINT_OFFLINE_RECEIPTS_QUERY,
-            strict_addresses,
         )?;
     }
 
@@ -34309,7 +34784,6 @@ pub async fn handle_v1_offline_bundle_proof_status(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<OfflineBundleProofStatusParams>,
     telemetry: MaybeTelemetry,
-    _strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::{
@@ -38494,7 +38968,6 @@ pub async fn handle_v1_account_assets_query(
         axum::extract::Path(account_id),
         NoritoJson(envelope),
         telemetry,
-        false,
     )
     .await
 }
@@ -38507,18 +38980,13 @@ pub async fn handle_v1_account_assets_query_with_policy(
     axum::extract::Path(account_id): axum::extract::Path<String>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::query::{asset::prelude::FindAssets, dsl::CompoundPredicate};
 
     let state_view = state.view();
-    let (acct, _) = parse_account_path_segment(
-        &account_id,
-        &telemetry,
-        ENDPOINT_ACCOUNTS_ASSETS_QUERY,
-        strict_addresses,
-    )?;
+    let (acct, _) =
+        parse_account_path_segment(&account_id, &telemetry, ENDPOINT_ACCOUNTS_ASSETS_QUERY)?;
 
     let iter = ValidQuery::execute(FindAssets, CompoundPredicate::PASS, &state_view)
         .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
@@ -38899,7 +39367,6 @@ pub async fn handle_v1_asset_holders_query(
     axum::extract::Path(definition_id): axum::extract::Path<String>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<impl IntoResponse> {
     use std::collections::BTreeMap;
 
@@ -38974,7 +39441,6 @@ pub async fn handle_v1_asset_holders_query(
             "account_id",
             &telemetry,
             ENDPOINT_ASSET_HOLDERS_QUERY,
-            strict_addresses,
         )?;
     }
     let filter_ref = filter.as_ref();

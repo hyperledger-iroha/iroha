@@ -10,6 +10,7 @@ import {
   generateKeyPair,
   verifyEd25519,
 } from "../src/index.js";
+import { AccountAddress } from "../src/address.js";
 
 test("canonical request signing: canonical query sorts pairs", () => {
   const rendered = canonicalQueryString("b=2&a=3&b=1&space=a+b");
@@ -25,17 +26,22 @@ test("canonical request signing: headers include a verifiable signature", () => 
   const { privateKey, publicKey } = generateKeyPair({
     seed: Buffer.alloc(32, 7),
   });
+  const accountId = AccountAddress.fromAccount({
+    domain: "wonderland",
+    publicKey,
+  }).toIH58();
   const body = Buffer.from('{"foo":1}');
+  const path = `/v1/accounts/${accountId}/assets`;
   const message = canonicalRequestMessage({
     method: "get",
-    path: "/v1/accounts/alice@wonderland/assets",
+    path,
     query: "limit=10",
     body,
   });
   const headers = buildCanonicalRequestHeaders({
-    accountId: "alice@wonderland",
+    accountId,
     method: "get",
-    path: "/v1/accounts/alice@wonderland/assets",
+    path,
     query: "limit=10",
     body,
     privateKey,

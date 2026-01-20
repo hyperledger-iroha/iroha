@@ -930,7 +930,7 @@ pub struct ExplorerBlocksQuery {
 /// Explorer account entry returned by `/v1/explorer/accounts`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAccountRecord {
-    /// Canonical `account@domain` identifier.
+    /// Canonical IH58 identifier.
     pub id: String,
     /// IH58-encoded literal for the account.
     pub ih58_address: String,

@@ -372,7 +372,7 @@ public struct Keypair {
     /// - Parameters:
     ///   - domain: Account domain (e.g., "wonderland")
     ///   - networkPrefix: Network prefix for IH58 encoding (defaults to Iroha mainnet)
-    /// - Returns: Account ID in format `<ih58>@<domain>`
+    /// - Returns: Account ID in format `<ih58>`
     /// - Throws: `AccountAddressError` if conversion fails
     @available(macOS 10.15, iOS 13.0, *)
     public func accountId(domain: String, networkPrefix: UInt16 = AccountId.defaultNetworkPrefix) throws -> String {
@@ -384,7 +384,7 @@ public enum AccountId {
     /// Default network prefix for IH58 encoding (Iroha mainnet).
     public static let defaultNetworkPrefix: UInt16 = 0x02F1
 
-    /// Build v2 account id string: ed0120 + UPPER_HEX(pub) + "@" + domain
+    /// Build a raw public-key account literal: `ed0120<HEX>@<domain>` (non-canonical).
     public static func make(publicKey: Data, domain: String) -> String {
         let hex = publicKey.map { String(format: "%02X", $0) }.joined()
         return "ed0120" + hex + "@" + domain
@@ -392,15 +392,15 @@ public enum AccountId {
 
     /// Build IH58 format account ID string required by Torii API.
     ///
-    /// Torii API requires account IDs in IH58 format, not `ed0120<hex>@domain`
-    /// or `alias@domain`. This method converts a public key to the correct format.
+    /// Torii API requires account IDs in IH58 format for canonical output; this method
+    /// converts a public key to the correct format.
     ///
     /// - Parameters:
     ///   - publicKey: Public key bytes (32 bytes for ed25519, 33 for secp256k1)
     ///   - domain: Account domain (e.g., "wonderland")
     ///   - algorithm: Signing algorithm ("ed25519" or "secp256k1"), defaults to "ed25519"
     ///   - networkPrefix: Network prefix for IH58 encoding (defaults to Iroha mainnet)
-    /// - Returns: Account ID in format `<ih58>@<domain>`
+    /// - Returns: Account ID in format `<ih58>`
     /// - Throws: `AccountAddressError` if conversion fails
     public static func makeIH58(
         publicKey: Data,
@@ -410,7 +410,7 @@ public enum AccountId {
     ) throws -> String {
         let address = try AccountAddress.fromAccount(domain: domain, publicKey: publicKey, algorithm: algorithm)
         let ih58 = try address.toIH58(networkPrefix: networkPrefix)
-        return "\(ih58)@\(domain)"
+        return ih58
     }
 }
 

@@ -212,20 +212,18 @@ fn compressed_alice_literal() -> String {
     let account_address = ALICE_ID
         .to_account_address()
         .expect("account address should encode");
-    let compressed = account_address
+    account_address
         .to_compressed_sora()
-        .expect("compressed address encoding");
-    format!("{compressed}@{}", ALICE_ID.domain())
+        .expect("compressed address encoding")
 }
 
 fn compressed_bob_literal() -> String {
     let account_address = BOB_ID
         .to_account_address()
         .expect("account address should encode");
-    let compressed = account_address
+    account_address
         .to_compressed_sora()
-        .expect("compressed address encoding");
-    format!("{compressed}@{}", BOB_ID.domain())
+        .expect("compressed address encoding")
 }
 
 fn local8_literal() -> String {
@@ -238,7 +236,7 @@ fn local8_literal() -> String {
     let mut canonical = hex::decode(&canonical_hex[2..]).expect("canonical hex decoding succeeds");
     let digest_start = 2;
     canonical.drain(digest_start + 8..digest_start + 12);
-    format!("0x{}@{}", hex::encode(canonical), ALICE_ID.domain())
+    format!("0x{}", hex::encode(canonical))
 }
 
 fn public_key_literal() -> String {
@@ -327,9 +325,8 @@ async fn accounts_listing_emits_ih58_identifiers() -> Result<()> {
         "expected IH58 literal {expected} in account listing, got {ids:?}"
     );
     assert!(
-        ids.iter()
-            .all(|id| id.contains('@') && !id.contains("alice@")),
-        "account listing should emit canonical IH58@domain strings"
+        ids.iter().all(|id| !id.contains('@')),
+        "account listing should emit canonical IH58 strings"
     );
 
     Ok(())
@@ -683,10 +680,10 @@ async fn account_path_endpoints_reject_local8_literals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn account_path_endpoints_reject_public_key_literals_when_strict() -> Result<()> {
+async fn account_path_endpoints_accept_public_key_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(account_path_endpoints_reject_public_key_literals_when_strict),
+        stringify!(account_path_endpoints_accept_public_key_literals),
     )
     .await?
     else {
@@ -715,15 +712,10 @@ async fn account_path_endpoints_reject_public_key_literals_when_strict() -> Resu
             .header("Accept", "application/json")
             .send()
             .await?;
-        assert_eq!(
-            resp.status(),
-            reqwest::StatusCode::BAD_REQUEST,
-            "public-key literal should be rejected for {url}"
-        );
-        let body = resp.text().await.unwrap_or_default();
         assert!(
-            body.contains("ERR_STRICT_ADDRESS_REQUIRED"),
-            "response body should mention ERR_STRICT_ADDRESS_REQUIRED, got {body}"
+            resp.status().is_success(),
+            "public-key literal should be accepted for {url}, got {}",
+            resp.status()
         );
     }
 
@@ -840,11 +832,7 @@ async fn account_transactions_get_supports_address_format() -> Result<()> {
     let account_address = SAMPLE_GENESIS_ACCOUNT_ID
         .to_account_address()
         .expect("account address should encode");
-    let compressed_literal = format!(
-        "{}@{}",
-        account_address.to_compressed_sora().expect("compressed"),
-        SAMPLE_GENESIS_ACCOUNT_ID.domain()
-    );
+    let compressed_literal = account_address.to_compressed_sora().expect("compressed");
 
     let base = account_endpoint_url(
         &network.client().torii_url,
@@ -939,11 +927,7 @@ async fn account_transactions_query_supports_address_format() -> Result<()> {
     let account_address = SAMPLE_GENESIS_ACCOUNT_ID
         .to_account_address()
         .expect("account address should encode");
-    let compressed_literal = format!(
-        "{}@{}",
-        account_address.to_compressed_sora().expect("compressed"),
-        SAMPLE_GENESIS_ACCOUNT_ID.domain()
-    );
+    let compressed_literal = account_address.to_compressed_sora().expect("compressed");
 
     let url = account_endpoint_url(
         &network.client().torii_url,
@@ -1027,11 +1011,7 @@ async fn explorer_transactions_respect_address_format_preferences() -> Result<()
     let account_address = SAMPLE_GENESIS_ACCOUNT_ID
         .to_account_address()
         .expect("account address should encode");
-    let compressed_literal = format!(
-        "{}@{}",
-        account_address.to_compressed_sora().expect("compressed"),
-        SAMPLE_GENESIS_ACCOUNT_ID.domain()
-    );
+    let compressed_literal = account_address.to_compressed_sora().expect("compressed");
 
     let base = network
         .client()
@@ -1159,11 +1139,7 @@ async fn explorer_instructions_respect_address_format_preferences() -> Result<()
     let account_address = SAMPLE_GENESIS_ACCOUNT_ID
         .to_account_address()
         .expect("account address should encode");
-    let compressed_literal = format!(
-        "{}@{}",
-        account_address.to_compressed_sora().expect("compressed"),
-        SAMPLE_GENESIS_ACCOUNT_ID.domain()
-    );
+    let compressed_literal = account_address.to_compressed_sora().expect("compressed");
 
     let base = network
         .client()
@@ -1447,10 +1423,10 @@ async fn accounts_query_rejects_local8_filter_literals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn accounts_query_rejects_public_key_filter_literals_when_strict() -> Result<()> {
+async fn accounts_query_accepts_public_key_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_query_rejects_public_key_filter_literals_when_strict),
+        stringify!(accounts_query_accepts_public_key_filter_literals),
     )
     .await?
     else {
@@ -1475,16 +1451,98 @@ async fn accounts_query_rejects_public_key_filter_literals_when_strict() -> Resu
         .body(body)
         .send()
         .await?;
-    assert_eq!(
-        resp.status(),
-        reqwest::StatusCode::BAD_REQUEST,
-        "public-key literal in filter should be rejected when strict addresses are enabled"
-    );
-    let body = resp.text().await.unwrap_or_default();
     assert!(
-        body.contains("ERR_STRICT_ADDRESS_REQUIRED"),
-        "response body should mention ERR_STRICT_ADDRESS_REQUIRED, got {body}"
+        resp.status().is_success(),
+        "public-key literal in filter should be accepted, got {}",
+        resp.status()
     );
+    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
+    let ids = extract_account_ids(&parsed);
+    let expected = ALICE_ID.to_string();
+    assert!(
+        ids.iter().any(|id| id == &expected),
+        "public-key literal should resolve to {expected}, got {ids:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn accounts_query_accepts_alias_and_compressed_filter_literals() -> Result<()> {
+    let Some(network) = start_network_async_or_skip(
+        NetworkBuilder::new().with_min_peers(4),
+        stringify!(accounts_query_accepts_alias_and_compressed_filter_literals),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+    network.ensure_blocks(1).await?;
+
+    let client = network.client();
+    let domain_id: DomainId = "aliases".parse()?;
+    client.submit_blocking(Register::domain(Domain::new(domain_id.clone())))?;
+
+    let label = AccountLabel::new(domain_id.clone(), "primary".parse()?);
+    let keypair = KeyPair::random();
+    let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
+    let account = Account::new(account_id.clone()).with_label(Some(label.clone()));
+    client.submit_blocking(Register::account(account))?;
+
+    let other_keypair = KeyPair::random();
+    let other_id = AccountId::new(domain_id.clone(), other_keypair.public_key().clone());
+    let duplicate = Account::new(other_id).with_label(Some(label.clone()));
+    let dup_err = client
+        .submit_blocking(Register::account(duplicate))
+        .expect_err("duplicate alias label should be rejected");
+    let dup_msg = dup_err.to_string();
+    assert!(
+        dup_msg.contains("Account label already registered"),
+        "expected alias collision error, got {dup_msg}"
+    );
+
+    let alias_literal = format!("{}@{}", label.label, domain_id);
+    let compressed_literal = account_id
+        .to_account_address()
+        .expect("account address should encode")
+        .to_compressed_sora()
+        .expect("compressed address encoding");
+    let expected = account_id.to_string();
+
+    let http = http_client();
+    let url = network
+        .client()
+        .torii_url
+        .join("/v1/accounts/query")
+        .expect("join accounts query url");
+
+    for literal in [alias_literal, compressed_literal] {
+        let body = format!(
+            r#"{{"filter":{{"op":"eq","args":["id","{literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
+        );
+        let resp = http
+            .post(url.clone())
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .body(body)
+            .send()
+            .await?;
+        assert!(
+            resp.status().is_success(),
+            "alias/compressed literal should be accepted, got {}",
+            resp.status()
+        );
+        let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
+        let ids = extract_account_ids(&parsed);
+        assert!(
+            ids.iter().any(|id| id == &expected),
+            "literal {literal} should resolve to {expected}, got {ids:?}"
+        );
+        assert!(
+            ids.iter().all(|id| !id.contains('@')),
+            "response should return canonical IH58 ids, got {ids:?}"
+        );
+    }
 
     Ok(())
 }
@@ -1872,7 +1930,6 @@ async fn offline_allowances_listing_respects_address_format_hint() -> Result<()>
         .to_account_address()
         .map_err(|err| eyre!("failed to encode fixture controller as account address: {err}"))?
         .to_compressed_sora()
-        .map(|compressed| format!("{compressed}@{}", controller.domain()))
         .map_err(|err| eyre!("failed to encode fixture controller as compressed literal: {err}"))?;
     let instruction = RegisterOfflineAllowance { certificate };
 
@@ -1961,7 +2018,6 @@ async fn offline_allowances_query_respects_address_format_hint() -> Result<()> {
         .to_account_address()
         .map_err(|err| eyre!("failed to encode fixture controller as account address: {err}"))?
         .to_compressed_sora()
-        .map(|compressed| format!("{compressed}@{}", controller.domain()))
         .map_err(|err| eyre!("failed to encode fixture controller as compressed literal: {err}"))?;
     let instruction = RegisterOfflineAllowance { certificate };
 

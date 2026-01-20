@@ -497,7 +497,6 @@ pub async fn handle_gov_ballot_zk_v1(
     queue: Arc<iroha_core::queue::Queue>,
     state: Arc<iroha_core::state::State>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
     NoritoJsonWithBytes { value: body, raw }: NoritoJsonWithBytes<ZkBallotV1Dto>,
 ) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
     if let Err(reason) = reject_zk_v1_aliases_from_raw(raw.as_ref()) {
@@ -522,7 +521,6 @@ pub async fn handle_gov_ballot_zk_v1(
         body.authority.as_str(),
         &telemetry,
         CONTEXT_GOV_BALLOT_ZK_V1_AUTHORITY,
-        strict_addresses,
     )?;
     let has_owner = body.owner.is_some();
     let has_amount = body.amount.is_some();
@@ -618,7 +616,6 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
     queue: Arc<iroha_core::queue::Queue>,
     state: Arc<iroha_core::state::State>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
     NoritoJsonWithBytes { value: body, raw }: NoritoJsonWithBytes<ZkBallotV1BallotProofDto>,
 ) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
     if let Err(reason) = reject_zk_v1_ballotproof_aliases_from_raw(raw.as_ref()) {
@@ -637,7 +634,6 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
         body.authority.as_str(),
         &telemetry,
         CONTEXT_GOV_BALLOT_ZK_V1_BALLOT_PROOF_AUTHORITY,
-        strict_addresses,
     )?;
     let has_owner = body.ballot.owner.is_some();
     let has_amount = body.ballot.amount.is_some();
@@ -988,9 +984,8 @@ fn parse_authority_literal(
     raw: &str,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-    strict_addresses: bool,
 ) -> Result<iroha_data_model::account::AccountId, crate::Error> {
-    parse_account_literal(raw, telemetry, context, strict_addresses)
+    parse_account_literal(raw, telemetry, context)
         .map_err(|err| {
             crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
         })
@@ -1065,7 +1060,6 @@ async fn maybe_submit_optional_signer(
     authority: Option<&str>,
     private_key: Option<&str>,
     authority_context: &'static str,
-    strict_addresses: bool,
     instructions: impl IntoIterator<Item = iroha_data_model::isi::InstructionBox>,
     endpoint: &'static str,
 ) -> Result<bool, crate::Error> {
@@ -1075,12 +1069,7 @@ async fn maybe_submit_optional_signer(
             "authority and private_key must be provided together".into(),
         )),
         (Some(authority), Some(private_key)) => {
-            let authority_id = parse_authority_literal(
-                authority,
-                &telemetry,
-                authority_context,
-                strict_addresses,
-            )?;
+            let authority_id = parse_authority_literal(authority, &telemetry, authority_context)?;
             let private_key = parse_private_key_literal(private_key)?;
             submit_signed_instructions(
                 chain_id,
@@ -1405,7 +1394,6 @@ pub async fn handle_gov_finalize(
     queue: Arc<iroha_core::queue::Queue>,
     state: Arc<iroha_core::state::State>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
     NoritoJson(body): NoritoJson<FinalizeDto>,
 ) -> Result<JsonBody<FinalizeResponse>, crate::Error> {
     // Parse proposal id hex
@@ -1441,7 +1429,6 @@ pub async fn handle_gov_finalize(
         body.authority.as_deref(),
         body.private_key.as_deref(),
         CONTEXT_GOV_FINALIZE_AUTHORITY,
-        strict_addresses,
         core::iter::once(iroha_data_model::isi::InstructionBox::from(instr)),
         iroha_torii_shared::uri::GOV_FINALIZE,
     )
@@ -1489,7 +1476,6 @@ pub async fn handle_gov_enact(
     queue: Arc<iroha_core::queue::Queue>,
     state: Arc<iroha_core::state::State>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
     NoritoJson(body): NoritoJson<EnactDto>,
 ) -> Result<JsonBody<EnactResponse>, crate::Error> {
     // Parse proposal id hex
@@ -1554,7 +1540,6 @@ pub async fn handle_gov_enact(
         body.authority.as_deref(),
         body.private_key.as_deref(),
         CONTEXT_GOV_ENACT_AUTHORITY,
-        strict_addresses,
         core::iter::once(iroha_data_model::isi::InstructionBox::from(instr)),
         iroha_torii_shared::uri::GOV_ENACT,
     )
@@ -1817,7 +1802,6 @@ pub async fn handle_gov_propose_deploy(
     queue: Arc<iroha_core::queue::Queue>,
     state: Arc<iroha_core::state::State>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
     NoritoJson(body): NoritoJson<ProposeDeployContractDto>,
 ) -> Result<JsonBody<ProposeDeployContractResponse>, crate::Error> {
     use iroha_data_model::isi::governance as gov;
@@ -1945,7 +1929,6 @@ pub async fn handle_gov_propose_deploy(
         body.authority.as_deref(),
         body.private_key.as_deref(),
         CONTEXT_GOV_PROPOSE_DEPLOY_AUTHORITY,
-        strict_addresses,
         core::iter::once(iroha_data_model::isi::InstructionBox::from(instr.clone())),
         iroha_torii_shared::uri::GOV_PROPOSE_DEPLOY,
     )
@@ -1970,7 +1953,6 @@ pub async fn handle_gov_ballot_zk(
     queue: Arc<iroha_core::queue::Queue>,
     state: Arc<iroha_core::state::State>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
     NoritoJson(body): NoritoJson<ZkBallotDto>,
 ) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
     // Minimal size check for b64
@@ -2000,7 +1982,6 @@ pub async fn handle_gov_ballot_zk(
         authority.as_str(),
         &telemetry,
         CONTEXT_GOV_BALLOT_ZK_AUTHORITY,
-        strict_addresses,
     )?;
     let public_inputs = match public {
         None => norito::json::Value::Object(norito::json::Map::new()),
@@ -2078,20 +2059,18 @@ pub async fn handle_gov_ballot_plain(
         state,
         NoritoJson(body),
         MaybeTelemetry::disabled(),
-        false,
     )
     .await
 }
 
-/// Variant of [`handle_gov_ballot_plain`] that allows callers to inject telemetry/strict-address
-/// policy, enabling roadmap ADDR-5 adoption across Torii and tests.
+/// Variant of [`handle_gov_ballot_plain`] that allows callers to inject telemetry
+/// policy, enabling address parsing coverage across Torii and tests.
 pub async fn handle_gov_ballot_plain_with_policy(
     chain_id: Arc<iroha_data_model::ChainId>,
     queue: Arc<iroha_core::queue::Queue>,
     state: Arc<iroha_core::state::State>,
     NoritoJson(body): NoritoJson<PlainBallotDto>,
     telemetry: MaybeTelemetry,
-    strict_addresses: bool,
 ) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
     ensure_chain_id_matches(chain_id.as_ref(), &body.chain_id)?;
     // Basic shape validations
@@ -2103,7 +2082,6 @@ pub async fn handle_gov_ballot_plain_with_policy(
         body.authority.as_str(),
         &telemetry,
         CONTEXT_GOV_BALLOT_PLAIN_AUTHORITY,
-        strict_addresses,
     )
     .map_err(|err| {
         crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
@@ -2113,7 +2091,6 @@ pub async fn handle_gov_ballot_plain_with_policy(
         body.owner.as_str(),
         &telemetry,
         CONTEXT_GOV_BALLOT_PLAIN_OWNER,
-        strict_addresses,
     )
     .map_err(|err| crate::routing::conversion_error(format!("invalid owner: {}", err.reason())))?
     .into_account_id();
@@ -3189,7 +3166,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ballot_plain_strict_mode_rejects_raw_public_key_literals() {
+    async fn ballot_plain_accepts_raw_public_key_literals() {
         let (state, queue, chain_id) = mk_basic_context();
         let chain_id_str = chain_id.as_str().to_string();
         let body = crate::json_object(vec![
@@ -3203,21 +3180,16 @@ mod tests {
         ]);
         let parsed: PlainBallotDto =
             norito::json::from_str(&norito::json::to_json(&body).unwrap()).unwrap();
-        let err = handle_gov_ballot_plain_with_policy(
+        handle_gov_ballot_plain_with_policy(
             chain_id,
             queue,
             state,
             NoritoJson(parsed),
             MaybeTelemetry::for_tests(),
-            true,
+            false,
         )
         .await
-        .unwrap_err();
-        let s = format!("{err:?}");
-        assert!(
-            s.contains("ERR_STRICT_ADDRESS_REQUIRED"),
-            "strict mode must reject raw literals; got {s}"
-        );
+        .expect("raw public key literals should be accepted");
     }
 
     #[tokio::test]

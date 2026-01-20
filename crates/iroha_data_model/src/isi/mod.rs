@@ -2360,7 +2360,7 @@ mod tests {
 
     #[test]
     fn revoke_encode_as_instruction_box_uses_encode() {
-        // Account aliases use the `alias@domain` form where `alias` is the multihash public key.
+        // Account identifiers accept `<alias|public_key>@domain` input forms.
         let account_id: AccountId =
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland"
                 .parse()

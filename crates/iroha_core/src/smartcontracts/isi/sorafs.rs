@@ -8,6 +8,7 @@ use iroha_data_model::{
     isi::error::{InstructionExecutionError, InvalidParameterError},
     metadata::Metadata,
     name::Name,
+    permission::{Permission, Permissions},
     sorafs::{
         capacity::{
             CapacityAccrual, CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,
@@ -22,6 +23,7 @@ use iroha_data_model::{
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
 };
+use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_primitives::json::Json;
 use mv::storage::{StorageReadOnly, Transaction as StorageTransaction};
 use norito::{
@@ -268,6 +270,7 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterProviderOwner {
             .world
             .provider_owners
             .insert(self.provider_id, self.owner.clone());
+        grant_repair_worker_permission(state_transaction, &self.owner, self.provider_id);
 
         Ok(())
     }
@@ -289,12 +292,13 @@ impl Execute for iroha_data_model::isi::sorafs::UnregisterProviderOwner {
             .world
             .provider_owners
             .remove(self.provider_id);
-        if removed.is_none() {
+        let Some(owner) = removed else {
             return Err(invalid_parameter(format!(
                 "provider {} has no registered owner",
                 hex::encode(self.provider_id.as_bytes())
             )));
-        }
+        };
+        revoke_repair_worker_permission(state_transaction, &owner, self.provider_id);
 
         Ok(())
     }
@@ -516,6 +520,35 @@ fn require_permission(
         Err(invalid_parameter(format!(
             "permission {permission} required for SoraFS operation"
         )))
+    }
+}
+
+fn grant_repair_worker_permission(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    owner: &AccountId,
+    provider_id: ProviderId,
+) {
+    let permission = Permission::from(CanOperateSorafsRepair { provider_id });
+    if let Some(perms) = state_transaction.world.account_permissions.get_mut(owner) {
+        perms.insert(permission);
+    } else {
+        let mut perms = Permissions::new();
+        perms.insert(permission);
+        state_transaction
+            .world
+            .account_permissions
+            .insert(owner.clone(), perms);
+    }
+}
+
+fn revoke_repair_worker_permission(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    owner: &AccountId,
+    provider_id: ProviderId,
+) {
+    let permission = Permission::from(CanOperateSorafsRepair { provider_id });
+    if let Some(perms) = state_transaction.world.account_permissions.get_mut(owner) {
+        perms.remove(&permission);
     }
 }
 
@@ -1198,6 +1231,7 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDeclaration {
             .world
             .provider_owners
             .insert(provider_id, authority.clone());
+        grant_repair_worker_permission(state_transaction, authority, provider_id);
 
         state_transaction
             .world
@@ -2006,6 +2040,7 @@ mod sorafs_tests {
             },
         },
     };
+    use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
     use iroha_primitives::json::Json;
     use nonzero_ext::nonzero;
     use norito::{json, to_bytes};
@@ -2717,6 +2752,18 @@ mod sorafs_tests {
             .get(&provider)
             .expect("owner binding recorded");
         assert_eq!(owner, &alice());
+        let permission = AccountPermission::from(CanOperateSorafsRepair {
+            provider_id: provider,
+        });
+        let perms = stx
+            .world
+            .account_permissions
+            .get(&alice())
+            .expect("permissions should be present");
+        assert!(
+            perms.contains(&permission),
+            "repair worker permission should be granted"
+        );
     }
 
     #[test]
@@ -6025,6 +6072,18 @@ mod sorafs_tests {
             Some(&bob()),
             "binding should be inserted"
         );
+        let permission = AccountPermission::from(CanOperateSorafsRepair {
+            provider_id: provider,
+        });
+        let perms = stx
+            .world
+            .account_permissions
+            .get(&bob())
+            .expect("permissions should be seeded");
+        assert!(
+            perms.contains(&permission),
+            "repair worker permission should be granted"
+        );
     }
 
     #[test]
@@ -6060,7 +6119,12 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let provider = ProviderId::new([0xA3; 32]);
-        stx.world.provider_owners.insert(provider, alice());
+        RegisterProviderOwner {
+            provider_id: provider,
+            owner: alice(),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("register provider owner");
 
         UnregisterProviderOwner {
             provider_id: provider,
@@ -6072,6 +6136,15 @@ mod sorafs_tests {
             stx.world.provider_owners.get(&provider).is_none(),
             "binding should be removed"
         );
+        let permission = AccountPermission::from(CanOperateSorafsRepair {
+            provider_id: provider,
+        });
+        if let Some(perms) = stx.world.account_permissions.get(&alice()) {
+            assert!(
+                !perms.contains(&permission),
+                "repair worker permission should be revoked"
+            );
+        }
     }
 
     #[test]

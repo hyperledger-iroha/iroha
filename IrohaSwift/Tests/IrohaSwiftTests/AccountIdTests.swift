@@ -23,15 +23,11 @@ final class AccountIdTests: XCTestCase {
 
         // IH58 format should NOT start with ed0120
         XCTAssertFalse(accountId.hasPrefix("ed0120"))
-        XCTAssertTrue(accountId.hasSuffix("@wonderland"))
+        XCTAssertFalse(accountId.contains("@"))
 
         // Should be parseable back
-        let parts = accountId.split(separator: "@")
-        XCTAssertEqual(parts.count, 2)
-
-        let ih58Part = String(parts[0])
         // IH58 addresses are base58 encoded, typically 40-50 chars
-        XCTAssertGreaterThan(ih58Part.count, 30)
+        XCTAssertGreaterThan(accountId.count, 30)
     }
 
     func testMakeIH58WithCustomNetworkPrefix() throws {
@@ -45,7 +41,7 @@ final class AccountIdTests: XCTestCase {
         )
 
         XCTAssertFalse(accountId.hasPrefix("ed0120"))
-        XCTAssertTrue(accountId.hasSuffix("@testdomain"))
+        XCTAssertFalse(accountId.contains("@"))
     }
 
     func testMakeIH58ThrowsForInvalidPublicKey() {
@@ -61,7 +57,7 @@ final class AccountIdTests: XCTestCase {
         let accountId = try keypair.accountId(domain: "wonderland")
 
         XCTAssertFalse(accountId.hasPrefix("ed0120"))
-        XCTAssertTrue(accountId.hasSuffix("@wonderland"))
+        XCTAssertFalse(accountId.contains("@"))
 
         // Verify consistency - calling twice should produce same result
         let accountId2 = try keypair.accountId(domain: "wonderland")
@@ -74,7 +70,7 @@ final class AccountIdTests: XCTestCase {
 
         let accountId = try keypair.accountId(domain: "test", networkPrefix: customPrefix)
 
-        XCTAssertTrue(accountId.hasSuffix("@test"))
+        XCTAssertFalse(accountId.contains("@"))
     }
 
     func testMakeAndMakeIH58ProduceDifferentFormats() throws {

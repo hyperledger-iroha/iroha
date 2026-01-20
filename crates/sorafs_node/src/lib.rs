@@ -93,7 +93,7 @@ use capacity::{
     CapacityError, CapacityManager, CapacityUsageSnapshot, DeclarationWindow, ReplicationPlan,
     ReplicationRelease,
 };
-use config::StorageConfig;
+use config::{GcConfig, RepairConfig, StorageConfig};
 use iroha_data_model::{
     da::ingest::DaStripeLayout,
     sorafs::{
@@ -103,7 +103,7 @@ use iroha_data_model::{
 };
 use iroha_telemetry::metrics::global_sorafs_node_otel;
 use norito::codec::Encode;
-pub use repair::{RepairManager, RepairSchedulerError};
+pub use repair::{RepairManager, RepairSchedulerError, RepairTaskFilters};
 use sorafs_car::{CarBuildPlan, PorProof};
 use sorafs_manifest::{
     ManifestV1,
@@ -158,6 +158,8 @@ impl GovernancePublishError {
 #[derive(Debug, Clone)]
 pub struct NodeHandle {
     config: StorageConfig,
+    repair_config: RepairConfig,
+    gc_config: GcConfig,
     capacity: Arc<CapacityManager>,
     meter: CapacityMeter,
     telemetry: Arc<RwLock<Option<TelemetryAccumulator>>>,
@@ -197,6 +199,16 @@ impl NodeHandle {
     /// Construct a new handle for the embedded storage worker.
     #[must_use]
     pub fn new(config: StorageConfig) -> Self {
+        Self::new_with_policies(config, RepairConfig::default(), GcConfig::default())
+    }
+
+    /// Construct a new handle with explicit repair/GC policies.
+    #[must_use]
+    pub fn new_with_policies(
+        config: StorageConfig,
+        repair_config: RepairConfig,
+        gc_config: GcConfig,
+    ) -> Self {
         let scheduler_config = StorageSchedulerConfig::from_storage_config(&config);
         let schedulers = StorageSchedulersRuntime::new(scheduler_config);
         let capacity_limit = config.max_capacity_bytes().0;
@@ -216,8 +228,11 @@ impl NodeHandle {
         let deal_engine = DealEngine::new();
         let governance_dir = config.governance_dir().cloned();
 
+        let repair = RepairManager::new_with_config(repair_config.clone());
         let node = Self {
             config,
+            repair_config,
+            gc_config,
             capacity: Arc::new(CapacityManager::new()),
             meter: CapacityMeter::with_smoothing(smoothing),
             telemetry: Arc::new(RwLock::new(None)),
@@ -227,7 +242,7 @@ impl NodeHandle {
             por_history: Arc::new(RwLock::new(HashMap::new())),
             storage,
             deal_engine,
-            repair: RepairManager::new(),
+            repair,
             governance_publisher: Arc::new(RwLock::new(None)),
         };
 
@@ -263,6 +278,18 @@ impl NodeHandle {
     #[must_use]
     pub fn config(&self) -> &StorageConfig {
         &self.config
+    }
+
+    /// Returns a reference to the repair scheduler configuration.
+    #[must_use]
+    pub fn repair_config(&self) -> &RepairConfig {
+        &self.repair_config
+    }
+
+    /// Returns a reference to the GC scheduler configuration.
+    #[must_use]
+    pub fn gc_config(&self) -> &GcConfig {
+        &self.gc_config
     }
 
     /// Returns a clone of the embedded deal engine handle.
@@ -372,10 +399,22 @@ impl NodeHandle {
         self.repair.enqueue_report(report.clone())
     }
 
+    /// Fetch repair tasks with optional filters applied.
+    #[must_use]
+    pub fn repair_tasks(&self, filters: RepairTaskFilters) -> Vec<RepairTaskRecordV1> {
+        self.repair.list_tasks(filters)
+    }
+
     /// Fetch repair tasks associated with the supplied manifest digest.
     #[must_use]
     pub fn repair_tasks_for_manifest(&self, manifest_digest: &[u8; 32]) -> Vec<RepairTaskRecordV1> {
-        self.repair.tasks_for_manifest(manifest_digest)
+        self.repair_tasks(RepairTaskFilters::for_manifest(*manifest_digest))
+    }
+
+    /// Fetch a repair task record by ticket id.
+    #[must_use]
+    pub fn repair_task_record(&self, ticket_id: &RepairTicketId) -> Option<RepairTaskRecordV1> {
+        self.repair.task_record(ticket_id)
     }
 
     /// Submit a slash proposal tied to an escalated repair ticket.
@@ -416,6 +455,66 @@ impl NodeHandle {
         reason: String,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
         self.repair.mark_failed(ticket_id, failed_at_unix, reason)
+    }
+
+    /// Claim a repair ticket for a worker.
+    pub fn claim_repair_ticket(
+        &self,
+        ticket_id: &RepairTicketId,
+        worker_id: &str,
+        claimed_at_unix: u64,
+        idempotency_key: &str,
+    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        self.repair
+            .claim_ticket(ticket_id, worker_id, claimed_at_unix, idempotency_key)
+    }
+
+    /// Record a heartbeat for an active repair lease.
+    pub fn heartbeat_repair_ticket(
+        &self,
+        ticket_id: &RepairTicketId,
+        worker_id: &str,
+        heartbeat_at_unix: u64,
+        idempotency_key: &str,
+    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        self.repair
+            .heartbeat_ticket(ticket_id, worker_id, heartbeat_at_unix, idempotency_key)
+    }
+
+    /// Mark a claimed repair ticket as completed.
+    pub fn complete_repair_ticket(
+        &self,
+        ticket_id: &RepairTicketId,
+        worker_id: &str,
+        completed_at_unix: u64,
+        resolution_notes: Option<String>,
+        idempotency_key: &str,
+    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        self.repair.complete_ticket(
+            ticket_id,
+            worker_id,
+            completed_at_unix,
+            resolution_notes,
+            idempotency_key,
+        )
+    }
+
+    /// Mark a claimed repair ticket as failed.
+    pub fn fail_repair_ticket(
+        &self,
+        ticket_id: &RepairTicketId,
+        worker_id: &str,
+        failed_at_unix: u64,
+        reason: String,
+        idempotency_key: &str,
+    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        self.repair.fail_ticket(
+            ticket_id,
+            worker_id,
+            failed_at_unix,
+            reason,
+            idempotency_key,
+        )
     }
 
     /// Whether the storage worker is currently enabled.
@@ -1054,10 +1153,11 @@ mod tests {
         },
         deal::{DealSettlementStatusV1, DealSettlementV1},
         repair::{
-            CompletedRepairStateV1, EscalatedRepairStateV1, InProgressRepairStateV1,
-            QueuedRepairStateV1, REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1,
-            REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairCauseV1, RepairEvidenceV1, RepairReportV1,
-            RepairSlashProposalV1, RepairTaskStateV1, RepairTicketId,
+            CompletedRepairStateV1, EscalatedRepairStateV1, FailedRepairStateV1,
+            InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_EVIDENCE_VERSION_V1,
+            REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairCauseV1,
+            RepairEvidenceV1, RepairReportV1, RepairSlashProposalV1, RepairTaskStateV1,
+            RepairTicketId,
         },
     };
     use tempfile::TempDir;
@@ -1693,6 +1793,11 @@ mod tests {
 
         let tasks = handle.repair_tasks_for_manifest(&report.evidence.manifest_digest);
         assert_eq!(tasks.len(), 1);
+        let provider_tasks = handle.repair_tasks(RepairTaskFilters {
+            provider_id: Some(report.evidence.provider_id),
+            ..RepairTaskFilters::default()
+        });
+        assert_eq!(provider_tasks.len(), 1);
 
         let escalated_report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
@@ -1739,6 +1844,114 @@ mod tests {
     }
 
     #[test]
+    fn node_handle_tracks_repair_worker_actions() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+
+        let report = RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: RepairTicketId("REP-451".into()),
+            auditor_account: "auditor#sora".into(),
+            submitted_at_unix: 1_700_300_000,
+            evidence: RepairEvidenceV1 {
+                version: REPAIR_EVIDENCE_VERSION_V1,
+                manifest_digest: [0x10; 32],
+                provider_id: [0x20; 32],
+                por_history_id: None,
+                cause: RepairCauseV1::Manual {
+                    reason: "manual".into(),
+                },
+                evidence_json: None,
+                notes: None,
+            },
+            notes: None,
+        };
+
+        handle
+            .enqueue_repair_report(&report)
+            .expect("queue repair report");
+        let claimed = handle
+            .claim_repair_ticket(
+                &report.ticket_id,
+                "worker-1",
+                report.submitted_at_unix + 10,
+                "claim-1",
+            )
+            .expect("claim repair ticket");
+        assert!(matches!(
+            claimed.state,
+            RepairTaskStateV1::InProgress(InProgressRepairStateV1 { .. })
+        ));
+
+        handle
+            .heartbeat_repair_ticket(
+                &report.ticket_id,
+                "worker-1",
+                report.submitted_at_unix + 20,
+                "hb-1",
+            )
+            .expect("heartbeat repair ticket");
+
+        let completed = handle
+            .complete_repair_ticket(
+                &report.ticket_id,
+                "worker-1",
+                report.submitted_at_unix + 30,
+                Some("repaired".into()),
+                "complete-1",
+            )
+            .expect("complete repair ticket");
+        assert!(matches!(
+            completed.state,
+            RepairTaskStateV1::Completed(CompletedRepairStateV1 { .. })
+        ));
+
+        let failed_report = RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: RepairTicketId("REP-452".into()),
+            auditor_account: "auditor#sora".into(),
+            submitted_at_unix: 1_700_400_000,
+            evidence: RepairEvidenceV1 {
+                version: REPAIR_EVIDENCE_VERSION_V1,
+                manifest_digest: [0x11; 32],
+                provider_id: [0x21; 32],
+                por_history_id: None,
+                cause: RepairCauseV1::Manual {
+                    reason: "manual".into(),
+                },
+                evidence_json: None,
+                notes: None,
+            },
+            notes: None,
+        };
+        handle
+            .enqueue_repair_report(&failed_report)
+            .expect("queue second report");
+        handle
+            .claim_repair_ticket(
+                &failed_report.ticket_id,
+                "worker-2",
+                failed_report.submitted_at_unix + 5,
+                "claim-2",
+            )
+            .expect("claim second ticket");
+
+        let failed = handle
+            .fail_repair_ticket(
+                &failed_report.ticket_id,
+                "worker-2",
+                failed_report.submitted_at_unix + 15,
+                "retry later".into(),
+                "fail-1",
+            )
+            .expect("fail repair ticket");
+        assert!(matches!(
+            failed.state,
+            RepairTaskStateV1::Failed(FailedRepairStateV1 { .. })
+        ));
+    }
+
+    #[test]
     fn node_handle_reflects_config() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg.clone());
@@ -1757,6 +1970,47 @@ mod tests {
         assert_eq!(observed.alias(), cfg.alias());
         assert_eq!(observed.adverts().topics(), cfg.adverts().topics());
         assert!(handle.storage().is_some());
+    }
+
+    #[test]
+    fn node_handle_threads_repair_and_gc_config() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let mut actual_repair = iroha_config::parameters::actual::SorafsRepair::default();
+        actual_repair.enabled = true;
+        actual_repair.claim_ttl_secs = 900;
+        actual_repair.heartbeat_interval_secs = 45;
+        actual_repair.max_attempts = 6;
+        actual_repair.worker_concurrency = 9;
+
+        let mut actual_gc = iroha_config::parameters::actual::SorafsGc::default();
+        actual_gc.enabled = true;
+        actual_gc.interval_secs = 300;
+        actual_gc.max_deletions_per_run = 2_000;
+        actual_gc.retention_grace_secs = 86_400;
+        actual_gc.pre_admission_sweep = false;
+
+        let repair_cfg = RepairConfig::from(&actual_repair);
+        let gc_cfg = GcConfig::from(&actual_gc);
+        let handle = NodeHandle::new_with_policies(cfg, repair_cfg.clone(), gc_cfg.clone());
+
+        assert!(handle.repair_config().enabled());
+        assert_eq!(handle.repair_config().claim_ttl_secs(), 900);
+        assert_eq!(handle.repair_config().heartbeat_interval_secs(), 45);
+        assert_eq!(handle.repair_config().max_attempts(), 6);
+        assert_eq!(handle.repair_config().worker_concurrency(), 9);
+
+        assert!(handle.gc_config().enabled());
+        assert_eq!(handle.gc_config().interval_secs(), 300);
+        assert_eq!(handle.gc_config().max_deletions_per_run(), 2_000);
+        assert_eq!(handle.gc_config().retention_grace_secs(), 86_400);
+        assert!(!handle.gc_config().pre_admission_sweep());
+
+        let manager = handle.repair_manager();
+        assert_eq!(manager.claim_ttl_secs(), repair_cfg.claim_ttl_secs());
+        assert_eq!(
+            manager.heartbeat_interval_secs(),
+            repair_cfg.heartbeat_interval_secs()
+        );
     }
 
     #[test]

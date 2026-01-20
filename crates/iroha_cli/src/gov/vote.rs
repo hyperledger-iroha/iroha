@@ -460,6 +460,7 @@ impl Run for ProposalGetArgs {
 mod tests {
     use super::*;
     use iroha::data_model::prelude::AccountId;
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
     use std::str::FromStr;
 
     #[test]
@@ -570,11 +571,12 @@ mod tests {
     #[test]
     fn annotate_vote_zk_populates_hints() {
         let nullifier = "aa".repeat(32);
+        let owner = BOB_ID.to_string();
         let ballot = CastZkBallot {
             election_id: "ref-zk".to_string(),
             proof_b64: "AAA=".to_string(),
             public_inputs_json: format!(
-                r#"{{"owner":"bob@wonderland","amount":"100","duration_blocks":256,"direction":"Nay","nullifier":"{nullifier}"}}"#
+                r#"{{"owner":"{owner}","amount":"100","duration_blocks":256,"direction":"Nay","nullifier":"{nullifier}"}}"#
             ),
         };
         let instruction: InstructionBox = InstructionBox::from(ballot);
@@ -599,7 +601,7 @@ mod tests {
                 .as_ref()
                 .is_some_and(|s| !s.is_empty())
         );
-        assert_eq!(summary.owner.as_deref(), Some("bob@wonderland"));
+        assert_eq!(summary.owner.as_deref(), Some(owner.as_str()));
         assert_eq!(summary.amount.as_deref(), Some("100"));
         assert_eq!(summary.duration_blocks.as_deref(), Some("256"));
         assert_eq!(summary.direction.as_deref(), Some("Nay"));
@@ -616,7 +618,7 @@ mod tests {
             annotation: Some(&summary),
         });
         assert!(line.contains("fingerprint="));
-        assert!(line.contains("owner=bob@wonderland"));
+        assert!(line.contains(&format!("owner={owner}")));
         assert!(line.contains("nullifier="));
 
         let instr = value
@@ -628,7 +630,7 @@ mod tests {
         assert!(instr.contains_key("payload_fingerprint_hex"));
         assert_eq!(
             instr.get("owner").and_then(json::Value::as_str),
-            Some("bob@wonderland")
+            Some(owner.as_str())
         );
         assert_eq!(
             instr.get("nullifier").and_then(json::Value::as_str),
@@ -639,9 +641,10 @@ mod tests {
     #[test]
     fn lock_hints_require_complete_triplet() {
         let mut map = json::Map::new();
+        let owner = ALICE_ID.to_string();
         map.insert(
             "owner".to_string(),
-            json::Value::String("alice@wonderland".to_string()),
+            json::Value::String(owner),
         );
         assert!(ensure_lock_hints_complete(&map).is_err());
         map.insert(

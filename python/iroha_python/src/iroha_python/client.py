@@ -61,7 +61,7 @@ from iroha_torii_client.client import (
     ToriiClient as _BaseToriiClient,
 )
 
-from .address import AccountAddress, AccountAddressError, AccountAddressFormat, DomainSelector
+from .address import AccountAddress, AccountAddressError, AccountAddressFormat
 from .connect import ConnectSessionInfo
 from .event_filter import DataEventFilter, ensure_event_filter
 from .query import (
@@ -735,31 +735,23 @@ def _ensure_governance_owner_canonical(owner: Any, *, context: str) -> None:
     if owner is None:
         return
     if not isinstance(owner, str):
-        raise ValueError(f"{context}.owner must be in canonical account id form")
+        raise ValueError(f"{context}.owner must be a canonical IH58 account id")
     trimmed = owner.strip()
     if not trimmed or trimmed != owner:
-        raise ValueError(f"{context}.owner must be in canonical account id form")
+        raise ValueError(f"{context}.owner must be a canonical IH58 account id")
     if any(ch.isspace() for ch in trimmed):
-        raise ValueError(f"{context}.owner must be in canonical account id form")
-    parts = trimmed.split("@")
-    if len(parts) != 2 or not parts[0] or not parts[1]:
-        raise ValueError(f"{context}.owner must be in canonical account id form")
-    address_part, domain_part = parts
-    if domain_part.isascii() and domain_part.lower() != domain_part:
-        raise ValueError(f"{context}.owner must be in canonical account id form")
+        raise ValueError(f"{context}.owner must be a canonical IH58 account id")
+    if "@" in trimmed:
+        raise ValueError(f"{context}.owner must be a canonical IH58 account id")
     try:
-        address, fmt = AccountAddress.parse_any(
-            address_part, expected_prefix=DEFAULT_IH58_PREFIX
-        )
+        address, fmt = AccountAddress.parse_any(trimmed, expected_prefix=DEFAULT_IH58_PREFIX)
     except AccountAddressError as exc:
-        raise ValueError(f"{context}.owner must be in canonical account id form") from exc
+        raise ValueError(f"{context}.owner must be a canonical IH58 account id") from exc
     if fmt is not AccountAddressFormat.IH58:
-        raise ValueError(f"{context}.owner must be in canonical account id form")
-    if address.domain != DomainSelector.from_domain(domain_part):
-        raise ValueError(f"{context}.owner must be a canonical account id")
-    canonical = f"{address.to_ih58(DEFAULT_IH58_PREFIX)}@{domain_part}"
+        raise ValueError(f"{context}.owner must be a canonical IH58 account id")
+    canonical = address.to_ih58(DEFAULT_IH58_PREFIX)
     if canonical != owner:
-        raise ValueError(f"{context}.owner must use canonical account id form")
+        raise ValueError(f"{context}.owner must be a canonical IH58 account id")
 
 
 def _normalize_governance_zk_public_inputs(value: Any, *, context: str) -> Dict[str, Any]:

@@ -15,9 +15,8 @@ use iroha_core::iso_bridge::reference_data::{
 use iroha_crypto::PrivateKey;
 use iroha_data_model::{
     ValidationFail,
-    account::{
-        AccountAddressSource,
-        address::{AccountAddress, AccountAddressError, AccountAddressFormat, AddressDomainKind},
+    account::address::{
+        AccountAddress, AccountAddressError, AccountAddressFormat, AddressDomainKind,
     },
     alias::AliasIndex,
     prelude::{
@@ -173,10 +172,9 @@ fn parse_account_address_literal(input: &str) -> (Option<String>, AddressParseOb
 fn parse_iso_account_hint(
     literal: &str,
     telemetry: &MaybeTelemetry,
-    strict_addresses: bool,
     context: &'static str,
 ) -> Result<(AccountId, String), MsgError> {
-    let parsed = routing::parse_account_literal(literal, telemetry, context, strict_addresses)
+    let parsed = routing::parse_account_literal(literal, telemetry, context)
         .map_err(|_| MsgError::ValidationFailed)?;
     let canonical = parsed.canonical().to_owned();
     Ok((parsed.into_account_id(), canonical))
@@ -428,17 +426,11 @@ impl IsoMessageRecord {
 
 const ISO_PACS008_CONTEXT: &str = "/v1/iso20022/pacs008";
 const ISO_PACS009_CONTEXT: &str = "/v1/iso20022/pacs009";
-const STRICT_ADDRESSES_REASON: &str = "ERR_STRICT_ADDRESS_REQUIRED";
 
 fn parse_config_account_id(literal: &str, field: &str) -> eyre::Result<AccountId> {
-    let parsed = AccountId::parse(literal)
-        .wrap_err_with(|| format!("{field} must parse as an account identifier"))?;
-    if !matches!(parsed.source(), AccountAddressSource::Encoded(_)) {
-        return Err(eyre::eyre!(format!(
-            "{STRICT_ADDRESSES_REASON}: {field} must use an IH58 or compressed account literal (got `{literal}`)"
-        )));
-    }
-    Ok(parsed.into_account_id())
+    AccountId::parse(literal)
+        .map(|parsed| parsed.into_account_id())
+        .wrap_err_with(|| format!("{field} must parse as an account identifier"))
 }
 
 impl Iso20022BridgeRuntime {
@@ -860,7 +852,6 @@ impl Iso20022BridgeRuntime {
         parsed: &ParsedMessage,
         chain_id: &ChainId,
         telemetry: &MaybeTelemetry,
-        strict_addresses: bool,
     ) -> Result<
         (
             iroha_data_model::transaction::SignedTransaction,
@@ -915,7 +906,7 @@ impl Iso20022BridgeRuntime {
 
         let debtor = if let Some(hint) = parsed.field_text("SplmtryData/SourceAccountId") {
             let (account, canonical) =
-                parse_iso_account_hint(hint, telemetry, strict_addresses, ISO_PACS008_CONTEXT)?;
+                parse_iso_account_hint(hint, telemetry, ISO_PACS008_CONTEXT)?;
             context.source_account_id = Some(canonical);
             account
         } else {
@@ -941,7 +932,7 @@ impl Iso20022BridgeRuntime {
 
         let creditor = if let Some(hint) = parsed.field_text("SplmtryData/TargetAccountId") {
             let (account, canonical) =
-                parse_iso_account_hint(hint, telemetry, strict_addresses, ISO_PACS008_CONTEXT)?;
+                parse_iso_account_hint(hint, telemetry, ISO_PACS008_CONTEXT)?;
             context.target_account_id = Some(canonical);
             account
         } else {
@@ -1033,7 +1024,6 @@ impl Iso20022BridgeRuntime {
         parsed: &ParsedMessage,
         chain_id: &ChainId,
         telemetry: &MaybeTelemetry,
-        strict_addresses: bool,
     ) -> Result<
         (
             iroha_data_model::transaction::SignedTransaction,
@@ -1097,7 +1087,7 @@ impl Iso20022BridgeRuntime {
 
         let debtor = if let Some(hint) = parsed.field_text("SplmtryData/SourceAccountId") {
             let (account, canonical) =
-                parse_iso_account_hint(hint, telemetry, strict_addresses, ISO_PACS009_CONTEXT)?;
+                parse_iso_account_hint(hint, telemetry, ISO_PACS009_CONTEXT)?;
             context.source_account_id = Some(canonical);
             account
         } else {
@@ -1123,7 +1113,7 @@ impl Iso20022BridgeRuntime {
 
         let creditor = if let Some(hint) = parsed.field_text("SplmtryData/TargetAccountId") {
             let (account, canonical) =
-                parse_iso_account_hint(hint, telemetry, strict_addresses, ISO_PACS009_CONTEXT)?;
+                parse_iso_account_hint(hint, telemetry, ISO_PACS009_CONTEXT)?;
             context.target_account_id = Some(canonical);
             account
         } else {
@@ -1445,37 +1435,23 @@ mod tests {
     }
 
     #[test]
-    fn runtime_rejects_raw_signer_account_literal() {
+    fn runtime_accepts_raw_signer_account_literal() {
         let mut config = sample_config();
         if let Some(ref mut signer) = config.signer {
             signer.account_id = RAW_PUBLIC_KEY_LITERAL.to_string();
         }
-        let err = Iso20022BridgeRuntime::from_config(&config)
-            .err()
-            .expect("raw public key signer should be rejected");
-        let message = err.to_string();
-        assert!(
-            message.contains(STRICT_ADDRESSES_REASON),
-            "error should mention strict address requirement: {message}"
-        );
+        Iso20022BridgeRuntime::from_config(&config)
+            .expect("raw public key signer should be accepted")
+            .expect("runtime should be enabled");
     }
 
     #[test]
-    fn runtime_rejects_raw_alias_account_literal() {
+    fn runtime_accepts_raw_alias_account_literal() {
         let mut config = sample_config();
         config.account_aliases[0].account_id = RAW_PUBLIC_KEY_LITERAL.to_string();
-        let err = Iso20022BridgeRuntime::from_config(&config)
-            .err()
-            .expect("raw public key alias should be rejected");
-        let message = err.to_string();
-        assert!(
-            message.contains(STRICT_ADDRESSES_REASON),
-            "error should mention strict address requirement: {message}"
-        );
-        assert!(
-            message.contains("account alias"),
-            "error should call out alias field: {message}"
-        );
+        Iso20022BridgeRuntime::from_config(&config)
+            .expect("raw public key alias should be accepted")
+            .expect("runtime should be enabled");
     }
 
     #[test]

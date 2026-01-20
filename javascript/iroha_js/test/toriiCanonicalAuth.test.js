@@ -7,6 +7,7 @@ import {
   generateKeyPair,
   verifyEd25519,
 } from "../src/index.js";
+import { AccountAddress } from "../src/address.js";
 
 test("ToriiClient attaches canonical signing headers for app endpoints", async () => {
   const captured = [];
@@ -20,15 +21,19 @@ test("ToriiClient attaches canonical signing headers for app endpoints", async (
     },
   });
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 9) });
+  const accountId = AccountAddress.fromAccount({
+    domain: "wonderland",
+    publicKey,
+  }).toIH58();
 
-  await client.listAccountAssets("alice@wonderland", {
-    canonicalAuth: { accountId: "alice@wonderland", privateKey },
+  await client.listAccountAssets(accountId, {
+    canonicalAuth: { accountId, privateKey },
     limit: 1,
   });
 
   assert.equal(captured.length, 1);
   const { url, init } = captured[0];
-  assert.equal(init.headers["X-Iroha-Account"], "alice@wonderland");
+  assert.equal(init.headers["X-Iroha-Account"], accountId);
   const signatureB64 = init.headers["X-Iroha-Signature"];
   assert.ok(typeof signatureB64 === "string" && signatureB64.length > 0);
 
@@ -55,9 +60,13 @@ test("ToriiClient canonical auth accepts byte-array private keys", async () => {
     },
   });
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 3) });
+  const accountId = AccountAddress.fromAccount({
+    domain: "wonderland",
+    publicKey,
+  }).toIH58();
 
-  await client.listAccountAssets("alice@wonderland", {
-    canonicalAuth: { accountId: "alice@wonderland", privateKey: Array.from(privateKey) },
+  await client.listAccountAssets(accountId, {
+    canonicalAuth: { accountId, privateKey: Array.from(privateKey) },
     limit: 1,
   });
 
@@ -82,11 +91,16 @@ test("ToriiClient canonical auth rejects non-byte private key arrays", async () 
         headers: { "content-type": "application/json" },
       }),
   });
+  const { publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 7) });
+  const accountId = AccountAddress.fromAccount({
+    domain: "wonderland",
+    publicKey,
+  }).toIH58();
 
   await assert.rejects(
     () =>
-      client.listAccountAssets("alice@wonderland", {
-        canonicalAuth: { accountId: "alice@wonderland", privateKey: [256] },
+      client.listAccountAssets(accountId, {
+        canonicalAuth: { accountId, privateKey: [256] },
         limit: 1,
       }),
     (error) => error?.name === "ValidationError" && /privateKey\[0\]/i.test(error.message),

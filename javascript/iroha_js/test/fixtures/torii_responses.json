@@ -2,7 +2,9 @@
   "iterable": {
     "accountListPage": {
       "items": [
-        { "id": "alice@wonderland" }
+        {
+          "id": "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"
+        }
       ],
       "total": 1
     }
@@ -11,7 +13,7 @@
     "proposalDeployContract": {
       "found": true,
       "proposal": {
-        "proposer": "alice@test",
+        "proposer": "34mSYmhpgCPNxWQs5cVbkLKGozajDgsRT6UneZ6ZUUsDauwCPqJMJz5zmsCPzxpLNUvnWzMkx",
         "created_height": 42,
         "status": "Approved",
         "kind": {
@@ -33,8 +35,8 @@
       "found": true,
       "referendum_id": "ref-1",
       "locks": {
-        "alice@test": {
-          "owner": "alice@test",
+        "34mSYmhpgCPNxWQs5cVbkLKGozajDgsRT6UneZ6ZUUsDauwCPqJMJz5zmsCPzxpLNUvnWzMkx": {
+          "owner": "34mSYmhpgCPNxWQs5cVbkLKGozajDgsRT6UneZ6ZUUsDauwCPqJMJz5zmsCPzxpLNUvnWzMkx",
           "amount": 10,
           "expiry_height": 55,
           "direction": 1,
@@ -58,15 +60,22 @@
       "ok": true,
       "proposal_id": "CDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCD",
       "tx_instructions": [
-        { "wire_id": "FinalizeReferendum", "payload_hex": "0XAAAAAAAA" },
-        { "wire_id": "PersistCouncilForEpoch" }
+        {
+          "wire_id": "FinalizeReferendum",
+          "payload_hex": "0XAAAAAAAA"
+        },
+        {
+          "wire_id": "PersistCouncilForEpoch"
+        }
       ]
     },
     "deployContractDraft": {
       "ok": true,
       "proposal_id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
       "tx_instructions": [
-        { "wire_id": "ProposeDeployContract" }
+        {
+          "wire_id": "ProposeDeployContract"
+        }
       ]
     },
     "plainBallotResponse": {
@@ -74,7 +83,9 @@
       "accepted": true,
       "reason": null,
       "tx_instructions": [
-        { "wire_id": "CastPlainBallot" }
+        {
+          "wire_id": "CastPlainBallot"
+        }
       ]
     },
     "zkBallotAccepted": {
@@ -82,7 +93,9 @@
       "accepted": true,
       "reason": null,
       "tx_instructions": [
-        { "wire_id": "CastZkBallot" }
+        {
+          "wire_id": "CastZkBallot"
+        }
       ]
     },
     "zkBallotDeferred": {
@@ -90,7 +103,9 @@
       "accepted": false,
       "reason": "build transaction skeleton",
       "tx_instructions": [
-        { "wire_id": "CastZkBallot" }
+        {
+          "wire_id": "CastZkBallot"
+        }
       ]
     },
     "protectedNamespacesApply": {
@@ -99,15 +114,26 @@
     },
     "protectedNamespacesGet": {
       "found": true,
-      "namespaces": ["apps", "system"]
+      "namespaces": [
+        "apps",
+        "system"
+      ]
     },
     "councilCurrent": {
       "epoch": 77,
       "members": [
-        { "account_id": "alice@wonderland" },
-        { "account_id": "bob@wonderland" }
+        {
+          "account_id": "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx"
+        },
+        {
+          "account_id": "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i"
+        }
       ],
-      "alternates": [{ "account_id": "carol@wonderland" }],
+      "alternates": [
+        {
+          "account_id": "34mSYnDgbaJM58rbLoif4Tkp7G7YZ5g3PsY6LcceZ1Kf1tcQGqPbGs7g4fy6LPy8AjNxDXGrg"
+        }
+      ],
       "candidate_count": 3,
       "verified": 2,
       "derived_by": "Vrf"
@@ -115,7 +141,9 @@
     "councilDerive": {
       "epoch": 9,
       "members": [
-        { "account_id": "validator@test" }
+        {
+          "account_id": "34mSYmhpgCPNxWQs5cVbkLKGozfqYki1YUf9FpBYFrfTVR5tkj1NBgaQmvpV1bgPyxUWuyiar"
+        }
       ],
       "alternates": [],
       "total_candidates": 1,
@@ -147,8 +175,8 @@
       "items": [
         {
           "id": "alpha_repo",
-          "initiator": "alice@wonderland",
-          "counterparty": "bob@wonderland",
+          "initiator": "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
+          "counterparty": "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
           "custodian": null,
           "cash_leg": {
             "asset_definition_id": "usd#wonderland",
@@ -158,7 +186,9 @@
           "collateral_leg": {
             "asset_definition_id": "bond#wonderland",
             "quantity": "1100",
-            "metadata": { "isin": "US0000000001" }
+            "metadata": {
+              "isin": "US0000000001"
+            }
           },
           "rate_bps": 150,
           "maturity_timestamp_ms": 1728000000,
@@ -186,11 +216,11 @@
           "dataspace_alias": "universal",
           "accounts": [
             {
-              "account_id": "holder1@portfolio",
+              "account_id": "34mSYn6NQ7iBn9WuFdt8iwCjCutwZEr6WMRz92XBxAp7yWwsND6KjsETDFaJKR3qfzzwUA3CT",
               "label": null,
               "assets": [
                 {
-                  "asset_id": "cash#portfolio::holder1@portfolio",
+                  "asset_id": "cash#portfolio::34mSYn6NQ7iBn9WuFdt8iwCjCutwZEr6WMRz92XBxAp7yWwsND6KjsETDFaJKR3qfzzwUA3CT",
                   "asset_definition_id": "cash#portfolio",
                   "quantity": "500"
                 }
@@ -203,16 +233,16 @@
           "dataspace_alias": "cbdc",
           "accounts": [
             {
-              "account_id": "holder2@portfolio",
+              "account_id": "34mSYn6NQ7iBn9WuFdt8iwCjCuqiFHCGGo3SYWifYFWaTvryjW6MR26uMcyy14xZazVHC3sYA",
               "label": "primary-cbdc",
               "assets": [
                 {
-                  "asset_id": "wholesale#cbdc::holder2@portfolio",
+                  "asset_id": "wholesale#cbdc::34mSYn6NQ7iBn9WuFdt8iwCjCuqiFHCGGo3SYWifYFWaTvryjW6MR26uMcyy14xZazVHC3sYA",
                   "asset_definition_id": "wholesale#cbdc",
                   "quantity": "250"
                 },
                 {
-                  "asset_id": "fx#cbdc::holder2@portfolio",
+                  "asset_id": "fx#cbdc::34mSYn6NQ7iBn9WuFdt8iwCjCuqiFHCGGo3SYWifYFWaTvryjW6MR26uMcyy14xZazVHC3sYA",
                   "asset_definition_id": "fx#cbdc",
                   "quantity": "25"
                 }
@@ -228,12 +258,16 @@
         {
           "dataspace_id": 0,
           "dataspace_alias": "universal",
-          "accounts": ["holder1@portfolio"]
+          "accounts": [
+            "34mSYn6NQ7iBn9WuFdt8iwCjCutwZEr6WMRz92XBxAp7yWwsND6KjsETDFaJKR3qfzzwUA3CT"
+          ]
         },
         {
           "dataspace_id": 11,
           "dataspace_alias": "cbdc",
-          "accounts": ["holder2@portfolio"]
+          "accounts": [
+            "34mSYn6NQ7iBn9WuFdt8iwCjCuqiFHCGGo3SYWifYFWaTvryjW6MR26uMcyy14xZazVHC3sYA"
+          ]
         }
       ]
     },
@@ -250,7 +284,9 @@
             "expired_epoch": null,
             "revocation": null
           },
-          "accounts": ["wholesale@cbdc"],
+          "accounts": [
+            "34mSYn4TZhVv7sagGwMiLB3yZqpLGr1uT5EUMKSZ41dTTNjceDhLG89u5Rr13AoSbs59rbLyA"
+          ],
           "manifest": {
             "version": "V1",
             "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
@@ -260,7 +296,9 @@
             "expiry_epoch": 4600,
             "entries": [
               {
-                "scope": { "program": "cbdc.transfer" },
+                "scope": {
+                  "program": "cbdc.transfer"
+                },
                 "effect": {
                   "Allow": {
                     "max_amount": "500000000",
@@ -270,8 +308,14 @@
                 "notes": "Allow CBDC transfers"
               },
               {
-                "scope": { "program": "cbdc.transfer" },
-                "effect": { "Deny": { "reason": "maintenance" } },
+                "scope": {
+                  "program": "cbdc.transfer"
+                },
+                "effect": {
+                  "Deny": {
+                    "reason": "maintenance"
+                  }
+                },
                 "notes": null
               }
             ]
