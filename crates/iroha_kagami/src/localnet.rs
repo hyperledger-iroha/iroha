@@ -678,13 +678,11 @@ fn localnet_gas_account_id(genesis_public_key: &iroha_crypto::PublicKey) -> Resu
 }
 
 fn account_id_raw_string(account_id: &AccountId) -> String {
-    let address = account_id.to_canonical_hex().unwrap_or_else(|_| {
-        let signatory = account_id
-            .try_signatory()
-            .expect("localnet gas account must be single-signatory");
-        signatory.to_string()
-    });
-    format!("{address}@{}", account_id.domain())
+    if let Some(signatory) = account_id.try_signatory() {
+        return format!("{signatory}@{}", account_id.domain());
+    }
+    // Use the encoded address when the controller is not single-signatory.
+    account_id.to_string()
 }
 
 #[allow(clippy::too_many_lines)]
@@ -3969,6 +3967,17 @@ mod tests {
                 .and_then(toml::Value::as_str),
             Some(gas_account_id.as_str())
         );
+    }
+
+    #[test]
+    fn account_id_raw_string_parses_as_account_id() {
+        let seed_bytes = Some("localnet-gas-parse".as_bytes());
+        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
+        let gas_account_id =
+            localnet_gas_account_id(&genesis_public_key).expect("gas account id");
+        let encoded = account_id_raw_string(&gas_account_id);
+        let parsed: AccountId = encoded.parse().expect("account id parse");
+        assert_eq!(parsed, gas_account_id);
     }
 
     #[test]

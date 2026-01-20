@@ -2304,8 +2304,8 @@ mod tests {
         let payload = &compressed[COMPRESSED_SENTINEL.len()..];
         let sentinel = ascii_str_to_fullwidth(COMPRESSED_SENTINEL).expect("sentinel converts");
         let fullwidth = format!("{sentinel}{payload}");
-        let decoded = AccountAddress::from_compressed_sora(&fullwidth)
-            .expect("full-width sentinel accepted");
+        let decoded =
+            AccountAddress::from_compressed_sora(&fullwidth).expect("full-width sentinel accepted");
         assert_eq!(
             decoded.canonical_bytes().unwrap(),
             address.canonical_bytes().unwrap()

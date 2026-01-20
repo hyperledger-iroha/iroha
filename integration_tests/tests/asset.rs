@@ -247,10 +247,7 @@ fn quiet_network_builder() -> NetworkBuilder {
     sumeragi.insert("rbc_pending_ttl_ms".into(), TomlValue::Integer(120_000));
     sumeragi.insert("rbc_session_ttl_secs".into(), TomlValue::Integer(240));
     // Increase DA quorum/availability timeouts to tolerate slower CI and local hosts.
-    sumeragi.insert(
-        "da_quorum_timeout_multiplier".into(),
-        TomlValue::Integer(6),
-    );
+    sumeragi.insert("da_quorum_timeout_multiplier".into(), TomlValue::Integer(6));
     sumeragi.insert(
         "da_availability_timeout_multiplier".into(),
         TomlValue::Integer(3),
@@ -677,12 +674,15 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         let (buyer_id, buyer_keypair) = gen_account_in("company");
         let exchange_domain: DomainId = "exchange".parse().expect("domain should be valid");
         let crypto_domain: DomainId = "crypto".parse().expect("domain should be valid");
-        let rate_def: AssetDefinitionId =
-            "btc/eth#exchange".parse().expect("asset definition should be valid");
-        let btc_def: AssetDefinitionId =
-            "btc#crypto".parse().expect("asset definition should be valid");
-        let eth_def: AssetDefinitionId =
-            "eth#crypto".parse().expect("asset definition should be valid");
+        let rate_def: AssetDefinitionId = "btc/eth#exchange"
+            .parse()
+            .expect("asset definition should be valid");
+        let btc_def: AssetDefinitionId = "btc#crypto"
+            .parse()
+            .expect("asset definition should be valid");
+        let eth_def: AssetDefinitionId = "eth#crypto"
+            .parse()
+            .expect("asset definition should be valid");
         let rate = AssetId::new(rate_def.clone(), dex_id.clone());
         let seller_btc = AssetId::new(btc_def.clone(), seller_id.clone());
         let buyer_eth = AssetId::new(eth_def.clone(), buyer_id.clone());

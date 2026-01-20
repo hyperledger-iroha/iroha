@@ -87,7 +87,10 @@ trait RepairStore: std::fmt::Debug + Send + Sync {
         &self,
         por_history_id: u64,
     ) -> Result<Option<PorHistoryEntry>, RepairStoreError>;
-    fn insert_task(&self, task: RepairTaskInternal) -> Result<RepairStoreInsertResult, RepairStoreError>;
+    fn insert_task(
+        &self,
+        task: RepairTaskInternal,
+    ) -> Result<RepairStoreInsertResult, RepairStoreError>;
     fn task(
         &self,
         ticket_id: &RepairTicketId,
@@ -143,7 +146,10 @@ impl RepairStore for InMemoryRepairStore {
         Ok(guard.get(&por_history_id).cloned())
     }
 
-    fn insert_task(&self, task: RepairTaskInternal) -> Result<RepairStoreInsertResult, RepairStoreError> {
+    fn insert_task(
+        &self,
+        task: RepairTaskInternal,
+    ) -> Result<RepairStoreInsertResult, RepairStoreError> {
         let mut guard = self.tasks.write().expect("repair tasks lock poisoned");
         let key = task.report.ticket_id.0.clone();
         if let Some(existing) = guard.get(&key) {
@@ -168,12 +174,11 @@ impl RepairStore for InMemoryRepairStore {
         task: RepairTaskInternal,
     ) -> Result<(), RepairStoreError> {
         let mut guard = self.tasks.write().expect("repair tasks lock poisoned");
-        let existing =
-            guard
-                .get(&ticket_id.0)
-                .ok_or_else(|| RepairStoreError::NotFound {
-                    ticket_id: ticket_id.to_string(),
-                })?;
+        let existing = guard
+            .get(&ticket_id.0)
+            .ok_or_else(|| RepairStoreError::NotFound {
+                ticket_id: ticket_id.to_string(),
+            })?;
         if existing.revision != expected_revision {
             return Err(RepairStoreError::Conflict {
                 ticket_id: ticket_id.to_string(),
@@ -522,13 +527,19 @@ impl RepairTaskFilters {
     }
 
     fn matches(&self, record: &RepairTaskRecordV1) -> bool {
-        if let Some(digest) = self.manifest_digest && record.manifest_digest != digest {
+        if let Some(digest) = self.manifest_digest
+            && record.manifest_digest != digest
+        {
             return false;
         }
-        if let Some(provider_id) = self.provider_id && record.provider_id != provider_id {
+        if let Some(provider_id) = self.provider_id
+            && record.provider_id != provider_id
+        {
             return false;
         }
-        if let Some(status) = self.status && repair_task_status(&record.state) != status {
+        if let Some(status) = self.status
+            && repair_task_status(&record.state) != status
+        {
             return false;
         }
         true
@@ -646,9 +657,7 @@ impl RepairManager {
             RepairStoreInsertResult::Inserted(inserted) => inserted.to_record(),
             RepairStoreInsertResult::Existing(existing) => {
                 if existing.report.evidence != report_evidence {
-                    return Err(RepairSchedulerError::DuplicateTicket {
-                        ticket_id,
-                    });
+                    return Err(RepairSchedulerError::DuplicateTicket { ticket_id });
                 }
                 return Ok(existing.to_record());
             }
@@ -811,11 +820,19 @@ impl RepairManager {
                 .then_with(|| Reverse(left_severity.1).cmp(&Reverse(right_severity.1)))
                 .then_with(|| Reverse(left_impact).cmp(&Reverse(right_impact)))
                 .then_with(|| queued_at_unix(&left.state).cmp(&queued_at_unix(&right.state)))
-                .then_with(|| left.report.evidence.manifest_digest.cmp(&right.report.evidence.manifest_digest))
+                .then_with(|| {
+                    left.report
+                        .evidence
+                        .manifest_digest
+                        .cmp(&right.report.evidence.manifest_digest)
+                })
                 .then_with(|| left.report.ticket_id.0.cmp(&right.report.ticket_id.0))
         });
 
-        candidates.into_iter().map(|task| task.to_record()).collect()
+        candidates
+            .into_iter()
+            .map(|task| task.to_record())
+            .collect()
     }
 
     /// Run the repair watchdog to requeue expired leases and escalate SLA breaches.
@@ -840,7 +857,9 @@ impl RepairManager {
                 continue;
             }
 
-            if let Some(deadline) = task.sla_deadline_unix && now_unix >= deadline {
+            if let Some(deadline) = task.sla_deadline_unix
+                && now_unix >= deadline
+            {
                 let mut drafted = None;
                 let mut escalated = false;
                 let rationale = format!("SLA deadline {deadline} breached at {now_unix}");
@@ -1052,17 +1071,17 @@ impl RepairManager {
             }
             match &task.state {
                 RepairTaskStateV1::Queued(..) => {
-            task.state = RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
-                queued_at_unix: queued_at,
-                started_at_unix,
-                repair_agent: repair_agent.clone(),
-            });
-            task.lease = None;
-            task.next_attempt_after_unix = None;
-            task.push_event(
-                RepairTaskStatusV1::InProgress,
-                started_at_unix,
-                repair_agent.clone(),
+                    task.state = RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
+                        queued_at_unix: queued_at,
+                        started_at_unix,
+                        repair_agent: repair_agent.clone(),
+                    });
+                    task.lease = None;
+                    task.next_attempt_after_unix = None;
+                    task.push_event(
+                        RepairTaskStatusV1::InProgress,
+                        started_at_unix,
+                        repair_agent.clone(),
                         None,
                         self.event_history_limit,
                     );
@@ -1170,12 +1189,8 @@ impl RepairManager {
                 escalated = true;
                 return Ok(());
             }
-            let retry_after = next_attempt_after_unix(
-                failed_at_unix,
-                task.attempts,
-                &self.config,
-                ticket_id,
-            )?;
+            let retry_after =
+                next_attempt_after_unix(failed_at_unix, task.attempts, &self.config, ticket_id)?;
             task.state = RepairTaskStateV1::Failed(FailedRepairStateV1 {
                 queued_at_unix: queued_at,
                 failed_at_unix,
@@ -1249,7 +1264,9 @@ impl RepairManager {
                 }
             }
 
-            if let Some(lease) = &task.lease && !lease.is_expired_at(claimed_at_unix) {
+            if let Some(lease) = &task.lease
+                && !lease.is_expired_at(claimed_at_unix)
+            {
                 return Err(RepairSchedulerError::LeaseHeld {
                     ticket_id: ticket_id.to_string(),
                     worker_id: lease.worker_id.clone(),
@@ -1305,7 +1322,10 @@ impl RepairManager {
 
             let expected_revision = task.revision;
             task.revision = task.revision.saturating_add(1);
-            match self.store.compare_and_set_task(ticket_id, expected_revision, task) {
+            match self
+                .store
+                .compare_and_set_task(ticket_id, expected_revision, task)
+            {
                 Ok(()) => {
                     global_sorafs_repair_otel().record_task_transition("in_progress");
                     global_or_default().inc_sorafs_repair_tasks("in_progress");
@@ -1397,7 +1417,10 @@ impl RepairManager {
 
             let expected_revision = task.revision;
             task.revision = task.revision.saturating_add(1);
-            match self.store.compare_and_set_task(ticket_id, expected_revision, task) {
+            match self
+                .store
+                .compare_and_set_task(ticket_id, expected_revision, task)
+            {
                 Ok(()) => return Ok(record),
                 Err(RepairStoreError::Conflict { .. }) => continue,
                 Err(err) => return Err(err.into()),
@@ -1506,7 +1529,10 @@ impl RepairManager {
 
             let expected_revision = task.revision;
             task.revision = task.revision.saturating_add(1);
-            match self.store.compare_and_set_task(ticket_id, expected_revision, task) {
+            match self
+                .store
+                .compare_and_set_task(ticket_id, expected_revision, task)
+            {
                 Ok(()) => {
                     global_sorafs_repair_otel().record_task_transition("completed");
                     global_or_default().inc_sorafs_repair_tasks("completed");
@@ -1546,11 +1572,12 @@ impl RepairManager {
                 failed_at_unix,
                 reason: reason.clone(),
             };
-            if let Some(record) =
-                task.idempotency
-                    .fail
-                    .check_existing(idempotency_key, &signature, "fail", ticket_id)?
-            {
+            if let Some(record) = task.idempotency.fail.check_existing(
+                idempotency_key,
+                &signature,
+                "fail",
+                ticket_id,
+            )? {
                 return Ok(record);
             }
 
@@ -1631,7 +1658,10 @@ impl RepairManager {
 
             let expected_revision = task.revision;
             task.revision = task.revision.saturating_add(1);
-            match self.store.compare_and_set_task(ticket_id, expected_revision, task) {
+            match self
+                .store
+                .compare_and_set_task(ticket_id, expected_revision, task)
+            {
                 Ok(()) => {
                     if matches!(record.state, RepairTaskStateV1::Escalated(..)) {
                         global_sorafs_repair_otel().record_task_transition("escalated");
@@ -2029,7 +2059,11 @@ fn sort_repair_task_snapshots(snapshots: &mut [RepairTaskSnapshot]) {
             .then_with(|| {
                 queued_at_unix(&left.record.state).cmp(&queued_at_unix(&right.record.state))
             })
-            .then_with(|| left.record.manifest_digest.cmp(&right.record.manifest_digest))
+            .then_with(|| {
+                left.record
+                    .manifest_digest
+                    .cmp(&right.record.manifest_digest)
+            })
             .then_with(|| left.record.ticket_id.0.cmp(&right.record.ticket_id.0))
     });
 }
@@ -2218,7 +2252,9 @@ impl<S: PartialEq> IdempotencyCache<S> {
         if self.entries.contains_key(key) {
             return;
         }
-        if self.entries.len() >= self.capacity && let Some(evicted) = self.order.pop_front() {
+        if self.entries.len() >= self.capacity
+            && let Some(evicted) = self.order.pop_front()
+        {
             self.entries.remove(&evicted);
         }
         self.order.push_back(key.to_string());
@@ -2580,9 +2616,7 @@ mod tests {
             .expect("fail ticket");
         assert!(matches!(record.state, RepairTaskStateV1::Escalated(..)));
 
-        let snapshot = manager
-            .task_snapshot(&report.ticket_id)
-            .expect("snapshot");
+        let snapshot = manager.task_snapshot(&report.ticket_id).expect("snapshot");
         let statuses: Vec<_> = snapshot.events.iter().map(|event| event.status).collect();
         assert_eq!(
             statuses,
@@ -2615,9 +2649,7 @@ mod tests {
             actual.default_slash_penalty_nano
         );
 
-        let record = manager
-            .task_record(&report.ticket_id)
-            .expect("record");
+        let record = manager.task_record(&report.ticket_id).expect("record");
         assert!(matches!(record.state, RepairTaskStateV1::Escalated(..)));
     }
 
@@ -2644,17 +2676,11 @@ mod tests {
             .expect("claim ticket");
 
         let watchdog_at = report.submitted_at_unix + 10 + actual.claim_ttl_secs + 1;
-        let outcome = manager
-            .run_watchdog(watchdog_at)
-            .expect("run watchdog");
+        let outcome = manager.run_watchdog(watchdog_at).expect("run watchdog");
         assert_eq!(outcome.requeued, vec![report.ticket_id.clone()]);
 
-        let backoff_claim = manager.claim_ticket(
-            &report.ticket_id,
-            "worker-f",
-            watchdog_at,
-            "claim-7",
-        );
+        let backoff_claim =
+            manager.claim_ticket(&report.ticket_id, "worker-f", watchdog_at, "claim-7");
         assert!(matches!(
             backoff_claim,
             Err(RepairSchedulerError::BackoffActive { .. })
@@ -2668,10 +2694,7 @@ mod tests {
                 "claim-8",
             )
             .expect("claim after backoff");
-        assert!(matches!(
-            record.state,
-            RepairTaskStateV1::InProgress(..)
-        ));
+        assert!(matches!(record.state, RepairTaskStateV1::InProgress(..)));
     }
 
     #[test]
@@ -2706,19 +2729,13 @@ mod tests {
 
         let before_backoff = report.submitted_at_unix + 12 + actual.backoff_initial_secs - 1;
         let _ = manager.run_watchdog(before_backoff).expect("watchdog");
-        let failed = manager
-            .task_record(&report.ticket_id)
-            .expect("record");
+        let failed = manager.task_record(&report.ticket_id).expect("record");
         assert!(matches!(failed.state, RepairTaskStateV1::Failed(..)));
 
         let after_backoff = report.submitted_at_unix + 12 + actual.backoff_initial_secs + 1;
-        let outcome = manager
-            .run_watchdog(after_backoff)
-            .expect("watchdog");
+        let outcome = manager.run_watchdog(after_backoff).expect("watchdog");
         assert_eq!(outcome.requeued, vec![report.ticket_id.clone()]);
-        let queued = manager
-            .task_record(&report.ticket_id)
-            .expect("record");
+        let queued = manager.task_record(&report.ticket_id).expect("record");
         assert!(matches!(queued.state, RepairTaskStateV1::Queued(..)));
     }
 
@@ -2745,7 +2762,10 @@ mod tests {
         manager.enqueue_report(later_b).expect("enqueue later b");
 
         let ordered = manager.claimable_tasks(2_500);
-        let ids: Vec<_> = ordered.iter().map(|task| task.ticket_id.0.as_str()).collect();
+        let ids: Vec<_> = ordered
+            .iter()
+            .map(|task| task.ticket_id.0.as_str())
+            .collect();
         assert_eq!(ids, vec!["REP-500", "REP-501", "REP-502", "REP-503"]);
     }
 
@@ -2774,9 +2794,7 @@ mod tests {
             )
             .expect("complete ticket");
 
-        let snapshot = manager
-            .task_snapshot(&report.ticket_id)
-            .expect("snapshot");
+        let snapshot = manager.task_snapshot(&report.ticket_id).expect("snapshot");
         let statuses: Vec<_> = snapshot.events.iter().map(|event| event.status).collect();
         assert_eq!(
             statuses,
@@ -2795,13 +2813,7 @@ mod tests {
     fn event_log_trims_oldest_entries() {
         let report = report("REP-700", [0x30; 32], [0x40; 32], 1_700_000_000);
         let mut task = task_internal(report);
-        task.push_event(
-            RepairTaskStatusV1::Queued,
-            1,
-            None,
-            Some("one".into()),
-            2,
-        );
+        task.push_event(RepairTaskStatusV1::Queued, 1, None, Some("one".into()), 2);
         task.push_event(
             RepairTaskStatusV1::InProgress,
             2,

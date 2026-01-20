@@ -3926,6 +3926,48 @@ async fn rbc_roster_for_session_uses_active_topology_in_npos_bootstrap() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rbc_roster_for_session_uses_active_topology_when_payload_known_same_epoch() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.epoch_length_blocks = 100;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let height = committed_height.saturating_add(2).max(2);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    assert_eq!(
+        actor.epoch_for_height(height),
+        actor.epoch_for_height(committed_height),
+        "test requires height to remain in the committed epoch"
+    );
+    let expected = actor.effective_commit_topology();
+    assert!(
+        !expected.is_empty(),
+        "test requires a non-empty active topology"
+    );
+    let roster = actor.rbc_roster_for_session((block_hash, height, view));
+    assert_eq!(
+        roster, expected,
+        "RBC roster should fall back to active topology when payload is known in-epoch"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_defers_signature_mismatch_when_parent_missing() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -6789,6 +6831,30 @@ async fn quorum_reschedule_rebroadcasts_block_created_without_roster() {
         block_created, expected_targets,
         "quorum reschedule should rebroadcast the block payload to topology peers"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn touch_pending_progress_updates_pending_age() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let block = sample_block(2, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::prehashed([0x11; Hash::LENGTH]);
+    let pending = PendingBlock::new(block, payload_hash, 2, 0);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    std::thread::sleep(Duration::from_millis(1));
+    let now = Instant::now();
+    actor.touch_pending_progress(block_hash, 2, 0, now);
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block retained");
+    assert_eq!(pending.progress_age(now), Duration::ZERO);
 
     harness.shutdown.send();
 }
@@ -13128,6 +13194,103 @@ async fn defer_qc_if_block_missing_uses_rebroadcast_cooldown() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn defer_qc_if_block_missing_defers_view_change_on_payload_backlog() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    let mut harness = test_actor_harness_with_config(2, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x95; Hash::LENGTH]));
+    if actor.block_known_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x96; Hash::LENGTH]));
+    }
+    let height = 2u64;
+    let view = 0u64;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers = BTreeSet::new();
+
+    assert!(
+        actor.defer_qc_if_block_missing(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            &signers,
+            &topology,
+        ),
+        "missing payload should defer QC aggregation"
+    );
+
+    let window = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .and_then(|stats| stats.view_change_window)
+        .expect("view-change window should be configured");
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get_mut(&block_hash)
+        .expect("missing-block request recorded");
+    stats.first_seen = Instant::now()
+        .checked_sub(window + Duration::from_millis(1))
+        .unwrap_or_else(Instant::now);
+
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
+    assert!(
+        actor.defer_qc_if_block_missing(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            &signers,
+            &topology,
+        ),
+        "missing payload should remain deferred"
+    );
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("missing-block request recorded");
+    assert!(
+        stats.view_change_triggered_view.is_none(),
+        "view change should be deferred while payload backlog is active"
+    );
+
+    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::BlockPayload, 1);
+    assert!(
+        actor.defer_qc_if_block_missing(
+            Phase::Commit,
+            block_hash,
+            height,
+            view,
+            &signers,
+            &topology,
+        ),
+        "missing payload should remain deferred until QC aggregation succeeds"
+    );
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("missing-block request recorded");
+    assert_eq!(
+        stats.view_change_triggered_view,
+        Some(view),
+        "view change should arm once backlog clears and dwell exceeds window"
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rbc_chunk_commit_pipeline_runs_on_completion() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -13883,6 +14046,70 @@ async fn maybe_emit_rbc_deliver_allows_init_roster_when_derived_missing_permissi
         .count();
     assert!(deliver_posts > 0, "DELIVER should be broadcast to peers");
 
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_ready_defers_commit_pipeline_when_queue_backlogged() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1).max(1);
+    let key: SessionKey = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE4; Hash::LENGTH])),
+        height,
+        0,
+    );
+    let epoch = actor.epoch_for_height(height);
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
+    let chunk_root = session.expected_chunk_root.expect("chunk root");
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "test requires commit roster");
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+
+    let signer_peer = roster.first().expect("roster entry").public_key().clone();
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == &signer_peer)
+        .expect("signer keypair");
+    let roster_hash = super::rbc::rbc_roster_hash(&roster);
+    let mut ready = crate::sumeragi::consensus::RbcReady {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch,
+        roster_hash,
+        chunk_root,
+        sender: 0,
+        signature: Vec::new(),
+    };
+    let (_, mode_tag, _) = actor.consensus_context_for_height(height);
+    let preimage = super::rbc_ready_preimage(&actor.chain_id, mode_tag, &ready);
+    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    ready.signature = signature.payload().to_vec();
+
+    let last_run = Instant::now() - Duration::from_secs(10);
+    actor.pending.last_commit_pipeline_run = last_run;
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
+
+    actor.handle_rbc_ready(ready).expect("ready handled");
+
+    assert_eq!(
+        actor.pending.last_commit_pipeline_run, last_run,
+        "commit pipeline should defer when consensus queues are backlogged"
+    );
+
+    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Votes, 1);
+    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 
@@ -18797,6 +19024,33 @@ async fn block_known_locally_ignores_aborted_pending() {
     assert!(
         actor.block_payload_available_locally(block_hash),
         "aborted pending block should still count as payload available"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_payload_available_for_progress_accepts_aborted_pending() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let view_snapshot = actor.state.view();
+    let height = u64::try_from(view_snapshot.height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let parent = view_snapshot.latest_block_hash();
+    drop(view_snapshot);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, 0);
+    pending.mark_aborted();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    assert!(
+        actor.block_payload_available_for_progress(block_hash),
+        "aborted payloads should still count as locally available for progress"
     );
 
     harness.shutdown.send();
@@ -26454,6 +26708,39 @@ async fn apply_commit_outcome_updates_view_change_install() {
     actor.subsystems.commit.inflight = Some(inflight);
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     actor.subsystems.commit.result_rx = Some(result_rx);
+    let now = Instant::now();
+    let stale_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
+    let future_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xB4; Hash::LENGTH]));
+    actor.pending.missing_block_requests.insert(
+        stale_hash,
+        MissingBlockRequest {
+            height: 1,
+            view: 0,
+            phase: Phase::Commit,
+            priority: MissingBlockPriority::Consensus,
+            retry_window: Duration::from_secs(1),
+            view_change_window: Some(Duration::from_secs(1)),
+            first_seen: now,
+            last_requested: now,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+    actor.pending.missing_block_requests.insert(
+        future_hash,
+        MissingBlockRequest {
+            height: 2,
+            view: 0,
+            phase: Phase::Commit,
+            priority: MissingBlockPriority::Consensus,
+            retry_window: Duration::from_secs(1),
+            view_change_window: Some(Duration::from_secs(1)),
+            first_seen: now,
+            last_requested: now,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
     result_tx
         .send(commit::CommitResult {
             id: 1,
@@ -26468,6 +26755,20 @@ async fn apply_commit_outcome_updates_view_change_install() {
     assert!(
         actor.poll_commit_results(),
         "commit outcome should be applied"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&stale_hash),
+        "stale missing block requests should be cleared after commit"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&future_hash),
+        "future missing block requests should be retained after commit"
     );
 
     let snapshot = super::status::snapshot();
@@ -26649,6 +26950,26 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
     actor
         .phase_tracker
         .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
 
     assert!(
         actor.force_view_change_if_idle(now),
@@ -26710,6 +27031,11 @@ async fn force_view_change_if_idle_ignores_aborted_pending() {
     actor
         .phase_tracker
         .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
 
     let pending_block = sample_block(height, 0, None);
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&pending_block));
@@ -26767,6 +27093,11 @@ async fn force_view_change_if_idle_skips_when_commit_inflight() {
     actor
         .phase_tracker
         .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
 
     let parent = actor.state.view().latest_block_hash();
     let block = sample_block(height, current_view, parent);
@@ -26846,6 +27177,70 @@ async fn force_view_change_if_idle_skips_when_no_work() {
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.missing_qc_total, 0);
     assert!(snapshot.last_cause.is_none());
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_defers_after_queue_activity() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    let highest_qc = sample_qc_ref(committed_height, 0);
+    actor.highest_qc = Some(highest_qc);
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let start = now
+        .checked_sub(timeout + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "idle view change should not trigger immediately after queue becomes non-empty"
+    );
+    assert_eq!(actor.phase_tracker.current_view(height), Some(current_view));
+    assert!(actor.queue_ready_since.is_some());
+
+    let later = now
+        .checked_add(timeout + Duration::from_millis(1))
+        .unwrap_or(now);
+    assert!(
+        actor.force_view_change_if_idle(later),
+        "idle view change should trigger after timeout from queue activity"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1))
+    );
 
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
@@ -26985,6 +27380,70 @@ async fn force_view_change_if_idle_skips_when_consensus_queue_backpressure() {
     assert!(
         !actor.force_view_change_if_idle(now),
         "idle view change should not trigger while consensus queues are saturated"
+    );
+    assert_eq!(actor.phase_tracker.current_view(height), Some(current_view));
+
+    let snapshot = super::status::snapshot().view_change_causes;
+    assert_eq!(snapshot.missing_qc_total, 0);
+    assert!(snapshot.last_cause.is_none());
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_skips_when_consensus_queue_backlog() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    let highest_qc = sample_qc_ref(committed_height, 0);
+    actor.highest_qc = Some(highest_qc);
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let start = now
+        .checked_sub(timeout + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
+
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "idle view change should not trigger while consensus queue backlog is present"
     );
     assert_eq!(actor.phase_tracker.current_view(height), Some(current_view));
 
@@ -30181,6 +30640,45 @@ async fn new_view_highest_qc_fetch_uses_commit_qc_history_fallback_when_roster_e
     );
 
     super::status::reset_commit_certs_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn new_view_highest_qc_skips_missing_fetch_for_aborted_payload() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let view_snapshot = actor.state.view();
+    let height = u64::try_from(view_snapshot.height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let parent = view_snapshot.latest_block_hash();
+    drop(view_snapshot);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, 0);
+    pending.mark_aborted();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let highest_qc = QcHeaderRef {
+        height,
+        view: 0,
+        epoch: actor.epoch_for_height(height),
+        subject_block_hash: block_hash,
+        phase: Phase::Commit,
+    };
+    actor.observe_new_view_highest_qc(highest_qc);
+
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "aborted pending payload should not trigger missing-block fetch"
+    );
+
     harness.shutdown.send();
 }
 
@@ -41539,6 +42037,73 @@ async fn rbc_deliver_deferral_throttles_until_cooldown_or_progress() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rbc_ready_deferral_throttles_until_cooldown_or_progress() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let key = session_key();
+    let now = Instant::now();
+    let cooldown = Duration::from_secs(5);
+    let reason = super::RbcReadyDeferralReason::CommitRosterMissing;
+
+    assert!(actor.should_emit_rbc_ready_deferral(key, now, reason, 0, 0, 0, 1, cooldown));
+    assert!(
+        !actor.should_emit_rbc_ready_deferral(
+            key,
+            now + Duration::from_secs(1),
+            reason,
+            0,
+            0,
+            0,
+            1,
+            cooldown
+        ),
+        "ready deferral should throttle until cooldown expires"
+    );
+    assert!(
+        actor.should_emit_rbc_ready_deferral(
+            key,
+            now + Duration::from_secs(1),
+            reason,
+            1,
+            0,
+            0,
+            1,
+            cooldown
+        ),
+        "ready deferral should emit after READY progress"
+    );
+    assert!(
+        actor.should_emit_rbc_ready_deferral(
+            key,
+            now + Duration::from_secs(2),
+            super::RbcReadyDeferralReason::CommitRosterUnverified,
+            1,
+            0,
+            0,
+            1,
+            cooldown
+        ),
+        "ready deferral should emit after reason changes"
+    );
+    assert!(
+        actor.should_emit_rbc_ready_deferral(
+            key,
+            now + Duration::from_secs(2) + cooldown + Duration::from_millis(1),
+            super::RbcReadyDeferralReason::CommitRosterUnverified,
+            1,
+            0,
+            0,
+            1,
+            cooldown
+        ),
+        "ready deferral should emit after cooldown"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn maybe_emit_rbc_deliver_throttles_repeated_deferral() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -41853,6 +42418,49 @@ async fn precommit_vote_broadcast_uses_background_queue() {
             })
         ),
         "precommit votes should be queued for background posting"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_broadcast_bypasses_background_queue() {
+    let mut harness = test_actor_harness(4).await;
+
+    let _ = harness.background_rx.try_iter().collect::<Vec<_>>();
+
+    let parent = sample_block(1, 0, None).hash();
+    let proposal = sample_proposal(parent, 2, 0);
+    let msg = BlockMessage::Proposal(proposal);
+    harness
+        .actor
+        .schedule_background(BackgroundRequest::Broadcast { msg });
+
+    let queued = harness.background_rx.try_iter().next();
+    assert!(
+        queued.is_none(),
+        "proposal broadcasts should bypass the background queue"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_created_broadcast_bypasses_background_queue() {
+    let mut harness = test_actor_harness(4).await;
+
+    let _ = harness.background_rx.try_iter().collect::<Vec<_>>();
+
+    let block = sample_block(1, 0, None);
+    let msg = BlockMessage::BlockCreated(super::message::BlockCreated { block });
+    harness
+        .actor
+        .schedule_background(BackgroundRequest::Broadcast { msg });
+
+    let queued = harness.background_rx.try_iter().next();
+    assert!(
+        queued.is_none(),
+        "BlockCreated broadcasts should bypass the background queue"
     );
 
     harness.shutdown.send();
@@ -43421,6 +44029,62 @@ async fn reschedule_defers_quorum_timeout_while_rbc_incomplete() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn reschedule_defers_quorum_timeout_while_vote_queue_backlogged() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    super::status::reset_worker_loop_snapshot_for_tests();
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let view_idx = block.header().view_change_index();
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
+
+    assert!(
+        !actor.reschedule_stale_pending_blocks(),
+        "vote backlog should defer quorum reschedule"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_none(),
+        "pending should not be quorum-rescheduled while vote queue is backlogged"
+    );
+
+    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Votes, 1);
+
+    assert!(
+        actor.reschedule_stale_pending_blocks(),
+        "clearing vote backlog should allow quorum reschedule"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_some(),
+        "pending should be quorum-rescheduled once vote backlog clears"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn reschedule_stale_pending_blocks_skips_empty_roster() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
@@ -43969,6 +44633,100 @@ async fn commit_pipeline_defers_reschedule_until_availability_timeout() {
     assert!(
         pending_after.last_quorum_reschedule.is_some(),
         "commit pipeline should reschedule after availability timeout"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_defers_reschedule_while_vote_queue_backlogged() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    super::status::reset_worker_loop_snapshot_for_tests();
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let view_idx = block.header().view_change_index();
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view_idx),
+    );
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    {
+        let pending = actor
+            .pending
+            .pending_blocks
+            .get_mut(&block_hash)
+            .expect("pending block");
+        pending.validation_status = ValidationStatus::Valid;
+        pending.parent_state_root = Some(zero_state_root());
+        pending.post_state_root = Some(zero_state_root());
+        pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    }
+
+    actor.pending.last_commit_pipeline_run = Instant::now() - Duration::from_secs(10);
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick);
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_none(),
+        "commit pipeline should defer reschedule while vote queue is backlogged"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_skips_event_when_queue_backlogged() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    super::status::reset_worker_loop_snapshot_for_tests();
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let view_idx = block.header().view_change_index();
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view_idx),
+    );
+    {
+        let pending = actor
+            .pending
+            .pending_blocks
+            .get_mut(&block_hash)
+            .expect("pending block");
+        pending.validation_status = ValidationStatus::Valid;
+        pending.parent_state_root = Some(zero_state_root());
+        pending.post_state_root = Some(zero_state_root());
+    }
+
+    actor.pending.last_commit_pipeline_run = Instant::now() - Duration::from_secs(10);
+    let last_run = actor.pending.last_commit_pipeline_run;
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event);
+
+    assert_eq!(
+        actor.pending.last_commit_pipeline_run, last_run,
+        "event-driven commit pipeline should skip when queues are backlogged"
     );
 
     harness.shutdown.send();

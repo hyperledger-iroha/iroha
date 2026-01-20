@@ -9745,8 +9745,7 @@ pub async fn handle_get_sorafs_repair_status(
 ) -> Result<impl IntoResponse, Error> {
     let digest = parse_hex_array::<32>(&manifest_hex, "manifest_digest")?;
     let filters = repair_filters_from_query(Some(digest), query)?;
-    let tasks: Vec<sorafs_node::RepairTaskSnapshot> =
-        sorafs_node.repair_task_snapshots(filters);
+    let tasks: Vec<sorafs_node::RepairTaskSnapshot> = sorafs_node.repair_task_snapshots(filters);
     let body = repair_task_snapshots_body(&tasks);
     let mut resp = Response::new(Body::from(body));
     resp.headers_mut().insert(
@@ -9763,8 +9762,7 @@ pub async fn handle_get_sorafs_repair_status_all(
     crate::NoritoQuery(query): crate::NoritoQuery<RepairStatusQueryDto>,
 ) -> Result<impl IntoResponse, Error> {
     let filters = repair_filters_from_query(None, query)?;
-    let tasks: Vec<sorafs_node::RepairTaskSnapshot> =
-        sorafs_node.repair_task_snapshots(filters);
+    let tasks: Vec<sorafs_node::RepairTaskSnapshot> = sorafs_node.repair_task_snapshots(filters);
     let body = repair_task_snapshots_body(&tasks);
     let mut resp = Response::new(Body::from(body));
     resp.headers_mut().insert(
@@ -27978,12 +27976,8 @@ mod pagination_enforcement_tests {
             address_format: None,
         };
 
-        let err = handle_v1_accounts_query(
-            state,
-            NoritoJson(envelope),
-            MaybeTelemetry::disabled(),
-        )
-        .await;
+        let err =
+            handle_v1_accounts_query(state, NoritoJson(envelope), MaybeTelemetry::disabled()).await;
 
         match err {
             Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
@@ -28324,12 +28318,7 @@ pub struct AccountOnboardingRequestDto {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
 pub struct AccountResolveRequestDto {
     pub literal: String,
 }
@@ -28431,11 +28420,13 @@ pub async fn handle_v1_accounts_resolve(
 ) -> Result<impl IntoResponse> {
     let trimmed = req.literal.trim();
     if trimmed.is_empty() {
-        return Err(conversion_error("account literal must not be empty".to_string()));
+        return Err(conversion_error(
+            "account literal must not be empty".to_string(),
+        ));
     }
 
-    let parsed = parse_account_literal(trimmed, &telemetry, ENDPOINT_ACCOUNTS_RESOLVE)
-        .map_err(|err| {
+    let parsed =
+        parse_account_literal(trimmed, &telemetry, ENDPOINT_ACCOUNTS_RESOLVE).map_err(|err| {
             conversion_error(format!(
                 "invalid account literal `{trimmed}`: {}",
                 err.reason()

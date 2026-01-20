@@ -2041,7 +2041,8 @@ impl Actor {
                     let locked_hash = self.locked_qc.map(|qc| qc.subject_block_hash);
                     let locked_missing =
                         locked_hash.is_some_and(|hash| !self.block_known_for_lock(hash));
-                    let highest_missing = !self.block_known_for_lock(highest_qc.subject_block_hash);
+                    let highest_missing =
+                        !self.block_payload_available_for_progress(highest_qc.subject_block_hash);
                     if locked_missing {
                         iroha_logger::warn!(
                             ?reason,

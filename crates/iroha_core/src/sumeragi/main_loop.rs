@@ -3398,6 +3398,29 @@ impl Actor {
         self.rbc_rebroadcast_active_with_tip(key, tip_height, tip_hash)
     }
 
+    fn touch_pending_progress(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) {
+        if let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash) {
+            if !pending.aborted && pending.height == height && pending.view == view {
+                pending.touch_progress(now);
+            }
+        }
+        if let Some(inflight) = self.subsystems.commit.inflight.as_mut() {
+            if inflight.block_hash == block_hash
+                && !inflight.pending.aborted
+                && inflight.pending.height == height
+                && inflight.pending.view == view
+            {
+                inflight.pending.touch_progress(now);
+            }
+        }
+    }
+
     fn has_unresolved_rbc_backlog(&self) -> bool {
         if !self.runtime_da_enabled() {
             return false;
@@ -3661,6 +3684,8 @@ pub(super) struct Actor {
     background_post_tx: Option<mpsc::SyncSender<BackgroundPost>>,
     wake_tx: Option<mpsc::SyncSender<()>>,
     phase_tracker: PhaseTracker,
+    /// Tracks when queued work first appeared for the current height/view.
+    queue_ready_since: Option<QueueReadySince>,
     phase_ema: PhaseEma,
     evidence_store: EvidenceStore,
     invalid_sig_log: InvalidSigThrottle,
@@ -4030,6 +4055,7 @@ struct RbcState {
     status_handle: rbc_status::Handle,
     payload_rebroadcast_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
     ready_rebroadcast_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
+    ready_deferral: BTreeMap<super::rbc_store::SessionKey, RbcReadyDeferral>,
     deliver_deferral: BTreeMap<super::rbc_store::SessionKey, RbcDeliverDeferral>,
     outbound_chunks: BTreeMap<super::rbc_store::SessionKey, RbcOutboundChunks>,
     outbound_cursor: Option<super::rbc_store::SessionKey>,
@@ -4051,6 +4077,24 @@ struct RbcOutboundChunks {
 struct RbcDeliverDeferral {
     last_attempt: Instant,
     ready_count: usize,
+    received_chunks: u32,
+    total_chunks: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RbcReadyDeferralReason {
+    CommitRosterMissing,
+    CommitRosterUnverified,
+    MissingChunksOrReadyQuorum,
+    ChunkRootMissing,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RbcReadyDeferral {
+    last_attempt: Instant,
+    reason: RbcReadyDeferralReason,
+    ready_count: usize,
+    required_ready: usize,
     received_chunks: u32,
     total_chunks: u32,
 }
@@ -5588,7 +5632,12 @@ impl Actor {
         let mut roster = self.roster_for_vote_with_mode(key.0, key.1, key.2, consensus_mode);
         if roster.is_empty() {
             let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
-            if key.1 <= committed_height.saturating_add(1) {
+            let committed_epoch = self.epoch_for_height(committed_height);
+            let session_epoch = self.epoch_for_height(key.1);
+            let payload_known = self.block_known_locally(key.0);
+            let allow_fallback = key.1 <= committed_height.saturating_add(1)
+                || (payload_known && session_epoch == committed_epoch);
+            if allow_fallback {
                 let view = self.state.view();
                 let fallback = derive_active_topology_for_mode(
                     &view,
@@ -5598,6 +5647,14 @@ impl Actor {
                 );
                 drop(view);
                 if !fallback.is_empty() {
+                    if payload_known && key.1 > committed_height.saturating_add(1) {
+                        debug!(
+                            height = key.1,
+                            committed_height,
+                            committed_epoch,
+                            "using active topology for RBC roster beyond committed height within epoch"
+                        );
+                    }
                     roster = fallback;
                 }
             }
@@ -6359,6 +6416,29 @@ impl Actor {
             || self.kura.get_block_height_by_hash(hash).is_some()
     }
 
+    fn block_payload_available_for_progress(&self, hash: HashOf<BlockHeader>) -> bool {
+        if let Some(pending) = self.pending.pending_blocks.get(&hash) {
+            return !matches!(pending.validation_status, ValidationStatus::Invalid);
+        }
+        if let Some(inflight) = self.subsystems.commit.inflight.as_ref()
+            && inflight.block_hash == hash
+        {
+            return !matches!(
+                inflight.pending.validation_status,
+                ValidationStatus::Invalid
+            );
+        }
+        if self
+            .pending
+            .pending_processing
+            .get()
+            .is_some_and(|pending| pending == hash)
+        {
+            return true;
+        }
+        self.kura.get_block_height_by_hash(hash).is_some()
+    }
+
     fn block_known_locally(&self, hash: HashOf<BlockHeader>) -> bool {
         self.pending
             .pending_blocks
@@ -7058,6 +7138,7 @@ impl Actor {
             status_handle: rbc_status_handle,
             payload_rebroadcast_last_sent: BTreeMap::new(),
             ready_rebroadcast_last_sent: BTreeMap::new(),
+            ready_deferral: BTreeMap::new(),
             deliver_deferral: BTreeMap::new(),
             outbound_chunks: BTreeMap::new(),
             outbound_cursor: None,
@@ -7144,6 +7225,7 @@ impl Actor {
             background_post_tx,
             wake_tx,
             phase_tracker: PhaseTracker::new(now),
+            queue_ready_since: None,
             phase_ema: PhaseEma::new(&pacemaker_timeouts),
             evidence_store: EvidenceStore::new(),
             invalid_sig_log: InvalidSigThrottle::default(),
@@ -7874,6 +7956,46 @@ impl Actor {
         }
 
         next_due
+    }
+
+    pub(super) fn refresh_worker_loop_config(&mut self, cfg: &mut super::WorkerLoopConfig) {
+        let view = self.state.view();
+        let mode = super::effective_consensus_mode(&view, self.consensus_mode);
+        let params = view.world.parameters().sumeragi();
+        let block_time = self.block_time_for_mode(&view, mode);
+        let commit_time = self.commit_timeout_for_mode(&view, mode);
+        let da_enabled = params.da_enabled();
+        drop(view);
+
+        let time_budget = super::worker_time_budget(
+            block_time,
+            commit_time,
+            da_enabled,
+            self.da_quorum_timeout_multiplier(),
+        );
+        let vote_rx_drain_budget = super::vote_rx_drain_budget(
+            block_time,
+            commit_time,
+            da_enabled,
+            self.da_quorum_timeout_multiplier(),
+            Duration::from_secs(8),
+        )
+        .max(time_budget);
+        let non_vote_drain_budget = super::cap_drain_budget(block_time / 2, time_budget);
+        let rbc_chunk_drain_budget = super::cap_rbc_drain_budget(block_time / 2, time_budget);
+        let block_rx_drain_budget = super::cap_drain_budget(block_time / 4, time_budget);
+        let starve_max = block_time.max(commit_time).max(time_budget);
+        let tick_min_gap = super::idle_tick_gap(block_time, commit_time, time_budget);
+
+        cfg.time_budget = time_budget;
+        cfg.vote_rx_drain_budget = vote_rx_drain_budget;
+        cfg.block_payload_rx_drain_budget = non_vote_drain_budget;
+        cfg.block_rx_drain_budget = block_rx_drain_budget;
+        cfg.rbc_chunk_rx_drain_budget = rbc_chunk_drain_budget;
+        cfg.tick_min_gap = tick_min_gap;
+        cfg.tick_max_gap = time_budget;
+        cfg.block_rx_starve_max = starve_max;
+        cfg.non_vote_starve_max = starve_max;
     }
 
     pub(super) fn next_tick_deadline(&self, now: Instant) -> Option<Instant> {
@@ -8876,6 +8998,26 @@ impl Actor {
             }
             other => other,
         };
+        let bypass_queue = matches!(
+            &request,
+            BackgroundRequest::Post {
+                msg: BlockMessage::Proposal(_),
+                ..
+            } | BackgroundRequest::Post {
+                msg: BlockMessage::BlockCreated(_),
+                ..
+            } | BackgroundRequest::Broadcast {
+                msg: BlockMessage::Proposal(_),
+            } | BackgroundRequest::Broadcast {
+                msg: BlockMessage::BlockCreated(_),
+            }
+        );
+        if bypass_queue {
+            if !self.config.debug_disable_background_worker {
+                self.dispatch_background_fallback(request);
+            }
+            return;
+        }
         let dispatched = {
             #[cfg(feature = "telemetry")]
             {
@@ -9377,10 +9519,12 @@ impl Actor {
             return Ok(());
         };
         if session.is_invalid() {
+            self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
 
+        let now = Instant::now();
         let mut invalidated = false;
         let result = (|| -> Result<Option<RbcReady>> {
             if session.sent_ready {
@@ -9389,42 +9533,99 @@ impl Actor {
 
             let commit_topology = self.ensure_rbc_session_roster(key);
             if commit_topology.is_empty() {
-                debug!(
-                    height = key.1,
-                    view = key.2,
-                    "deferring RBC READY until commit roster is available"
-                );
+                let received_chunks = session.received_chunks();
+                let total_chunks = session.total_chunks();
+                let ready_count = session.ready_signatures.len();
+                if self.should_emit_rbc_ready_deferral(
+                    key,
+                    now,
+                    RbcReadyDeferralReason::CommitRosterMissing,
+                    ready_count,
+                    0,
+                    received_chunks,
+                    total_chunks,
+                    self.rebroadcast_cooldown(),
+                ) {
+                    info!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        local_peer = %self.common_config.peer.id(),
+                        ready = ready_count,
+                        received = received_chunks,
+                        total = total_chunks,
+                        "deferring local RBC READY: commit roster unavailable"
+                    );
+                }
                 return Ok(None);
             }
+            let roster_len = commit_topology.len();
             let roster_source = self
                 .rbc_session_roster_source(key)
                 .unwrap_or(RbcRosterSource::Init);
             let allow_unverified = self.allow_unverified_rbc_roster(key);
             if !roster_source.is_authoritative() && !allow_unverified {
-                debug!(
-                    height = key.1,
-                    view = key.2,
-                    "deferring RBC READY until commit roster is verified"
-                );
+                let received_chunks = session.received_chunks();
+                let total_chunks = session.total_chunks();
+                let ready_count = session.ready_signatures.len();
+                if self.should_emit_rbc_ready_deferral(
+                    key,
+                    now,
+                    RbcReadyDeferralReason::CommitRosterUnverified,
+                    ready_count,
+                    0,
+                    received_chunks,
+                    total_chunks,
+                    self.rebroadcast_cooldown(),
+                ) {
+                    info!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        local_peer = %self.common_config.peer.id(),
+                        roster_source = ?roster_source,
+                        allow_unverified,
+                        roster_len,
+                        ready = ready_count,
+                        received = received_chunks,
+                        total = total_chunks,
+                        "deferring local RBC READY: commit roster unverified"
+                    );
+                }
                 return Ok(None);
             }
 
             let total = session.total_chunks();
-            if total != 0 && session.received_chunks() < total {
+            let received_chunks = session.received_chunks();
+            if total != 0 && received_chunks < total {
                 let topology = super::network_topology::Topology::new(commit_topology);
                 // Allow READY after f+1 READYs to unblock quorum even if chunks lag.
                 let ready_threshold = topology.min_votes_for_view_change();
                 let ready_count = session.ready_signatures.len();
                 if ready_count < ready_threshold {
-                    debug!(
-                        height = key.1,
-                        view = key.2,
-                        received = session.received_chunks(),
+                    if self.should_emit_rbc_ready_deferral(
+                        key,
+                        now,
+                        RbcReadyDeferralReason::MissingChunksOrReadyQuorum,
+                        ready_count,
+                        ready_threshold,
+                        received_chunks,
                         total,
-                        ready = ready_count,
-                        required = ready_threshold,
-                        "deferring local RBC READY until enough chunks or READY quorum"
-                    );
+                        self.payload_rebroadcast_cooldown(),
+                    ) {
+                        info!(
+                            height = key.1,
+                            view = key.2,
+                            block = %key.0,
+                            local_peer = %self.common_config.peer.id(),
+                            roster_len,
+                            ready = ready_count,
+                            required = ready_threshold,
+                            received = received_chunks,
+                            total,
+                            "deferring local RBC READY: awaiting chunks or READY quorum"
+                        );
+                    }
                     return Ok(None);
                 }
             }
@@ -9449,11 +9650,29 @@ impl Actor {
                     session.expected_chunk_root = Some(computed_root);
                 }
                 (None, None) => {
-                    debug!(
-                        height = key.1,
-                        view = key.2,
-                        "deferring RBC READY until chunk root is available"
-                    );
+                    let ready_count = session.ready_signatures.len();
+                    if self.should_emit_rbc_ready_deferral(
+                        key,
+                        now,
+                        RbcReadyDeferralReason::ChunkRootMissing,
+                        ready_count,
+                        0,
+                        received_chunks,
+                        total,
+                        self.payload_rebroadcast_cooldown(),
+                    ) {
+                        info!(
+                            height = key.1,
+                            view = key.2,
+                            block = %key.0,
+                            local_peer = %self.common_config.peer.id(),
+                            roster_len,
+                            ready = ready_count,
+                            received = received_chunks,
+                            total,
+                            "deferring local RBC READY: chunk root unavailable"
+                        );
+                    }
                     return Ok(None);
                 }
                 (Some(_), None) => {}
@@ -9464,9 +9683,12 @@ impl Actor {
                 session.sent_ready = true;
                 Ok(Some(ready))
             } else {
-                debug!(
+                info!(
                     height = key.1,
                     view = key.2,
+                    block = %key.0,
+                    local_peer = %self.common_config.peer.id(),
+                    roster_len,
                     "local peer not in commit topology; skipping RBC READY"
                 );
                 session.sent_ready = true;
@@ -9476,6 +9698,7 @@ impl Actor {
 
         let ready_to_send = result?;
         let mismatch_detected = session.invalid && !session.sent_ready;
+        let sent_ready = session.sent_ready;
         self.subsystems.da_rbc.rbc.sessions.insert(key, session);
         if let Some(updated) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &updated, false);
@@ -9483,6 +9706,9 @@ impl Actor {
         }
         if invalidated {
             self.clear_pending_rbc(&key);
+        }
+        if sent_ready || mismatch_detected {
+            self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
         }
         self.publish_rbc_backlog_snapshot();
 
@@ -9496,6 +9722,7 @@ impl Actor {
                 height = key.1,
                 view = key.2,
                 block = %key.0,
+                local_peer = %self.common_config.peer.id(),
                 sender = ready.sender,
                 "sending local RBC READY to commit topology"
             );
@@ -10211,40 +10438,127 @@ impl Actor {
         }
     }
 
+    fn should_emit_rbc_ready_deferral(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        now: Instant,
+        reason: RbcReadyDeferralReason,
+        ready_count: usize,
+        required_ready: usize,
+        received_chunks: u32,
+        total_chunks: u32,
+        cooldown: Duration,
+    ) -> bool {
+        let entry = self.subsystems.da_rbc.rbc.ready_deferral.entry(key);
+        match entry {
+            Entry::Vacant(slot) => {
+                slot.insert(RbcReadyDeferral {
+                    last_attempt: now,
+                    reason,
+                    ready_count,
+                    required_ready,
+                    received_chunks,
+                    total_chunks,
+                });
+                true
+            }
+            Entry::Occupied(mut slot) => {
+                let last = *slot.get();
+                let progressed = reason != last.reason
+                    || ready_count > last.ready_count
+                    || required_ready != last.required_ready
+                    || received_chunks > last.received_chunks
+                    || total_chunks != last.total_chunks;
+                let elapsed = now.saturating_duration_since(last.last_attempt);
+                if progressed || elapsed >= cooldown {
+                    slot.insert(RbcReadyDeferral {
+                        last_attempt: now,
+                        reason,
+                        ready_count,
+                        required_ready,
+                        received_chunks,
+                        total_chunks,
+                    });
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     fn maybe_emit_rbc_deliver(&mut self, key: super::rbc_store::SessionKey) -> Result<()> {
         let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
             return Ok(());
         };
         if session.delivered || session.is_invalid() {
+            self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
 
+        let ready_count = session.ready_signatures.len();
+        let received_chunks = session.received_chunks();
+        let total_chunks = session.total_chunks();
         let commit_topology = self.ensure_rbc_session_roster(key);
         if commit_topology.is_empty() {
+            if self.should_emit_rbc_deliver_deferral(
+                key,
+                Instant::now(),
+                ready_count,
+                received_chunks,
+                total_chunks,
+                self.rebroadcast_cooldown(),
+            ) {
+                info!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    local_peer = %self.common_config.peer.id(),
+                    ready = ready_count,
+                    received = received_chunks,
+                    total = total_chunks,
+                    "deferring RBC DELIVER: commit roster unavailable"
+                );
+            }
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
+        let roster_len = commit_topology.len();
         let roster_source = self
             .rbc_session_roster_source(key)
             .unwrap_or(RbcRosterSource::Init);
         let allow_unverified = self.allow_unverified_rbc_roster(key);
         if !roster_source.is_authoritative() && !allow_unverified {
-            debug!(
-                height = key.1,
-                view = key.2,
-                "deferring RBC DELIVER until commit roster is verified"
-            );
+            if self.should_emit_rbc_deliver_deferral(
+                key,
+                Instant::now(),
+                ready_count,
+                received_chunks,
+                total_chunks,
+                self.rebroadcast_cooldown(),
+            ) {
+                info!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    local_peer = %self.common_config.peer.id(),
+                    roster_source = ?roster_source,
+                    allow_unverified,
+                    roster_len,
+                    ready = ready_count,
+                    received = received_chunks,
+                    total = total_chunks,
+                    "deferring RBC DELIVER: commit roster unverified"
+                );
+            }
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
             return Ok(());
         }
         let topology = super::network_topology::Topology::new(commit_topology.clone());
         let required = self.rbc_deliver_quorum(&topology);
-        let ready_count = session.ready_signatures.len();
-        let received_chunks = session.received_chunks();
-        let total_chunks = session.total_chunks();
         let missing_chunks = total_chunks != 0 && received_chunks < total_chunks;
         if ready_count < required {
             let cooldown = if missing_chunks {
@@ -10267,6 +10581,9 @@ impl Actor {
                 height = key.1,
                 view = key.2,
                 block = %key.0,
+                local_peer = %self.common_config.peer.id(),
+                roster_source = ?roster_source,
+                roster_len,
                 ready = ready_count,
                 required,
                 senders = ?session
@@ -10295,10 +10612,12 @@ impl Actor {
                 self.subsystems.da_rbc.rbc.sessions.insert(key, session);
                 return Ok(());
             }
-            debug!(
+            info!(
                 height = key.1,
                 view = key.2,
                 block = %key.0,
+                local_peer = %self.common_config.peer.id(),
+                roster_len,
                 received = received_chunks,
                 total = total_chunks,
                 "deferring RBC DELIVER: payload chunks not yet complete"
@@ -10384,6 +10703,7 @@ impl Actor {
             height = key.1,
             view = key.2,
             block = %key.0,
+            local_peer = %self.common_config.peer.id(),
             ready = ready_count,
             required,
             deliver_sender,
@@ -10507,6 +10827,7 @@ impl Actor {
         }
         if self.queue.active_len() == 0 {
             // Skip idle view-change churn when no work is queued.
+            self.queue_ready_since = None;
             return false;
         }
         let rbc_backlog = self.has_unresolved_rbc_backlog();
@@ -10518,6 +10839,10 @@ impl Actor {
             u64::try_from(self.config.msg_channel_cap_rbc_chunks.max(1)).unwrap_or(u64::MAX);
         let consensus_queue_backpressure = queue_depths.block_payload_rx >= block_payload_cap
             || queue_depths.rbc_chunk_rx >= rbc_chunk_cap;
+        let consensus_queue_backlog = queue_depths.vote_rx > 0
+            || queue_depths.block_payload_rx > 0
+            || queue_depths.rbc_chunk_rx > 0
+            || queue_depths.block_rx > 0;
 
         let committed_qc = self.latest_committed_qc();
         let committed_height = committed_qc.as_ref().map_or_else(
@@ -10531,7 +10856,7 @@ impl Actor {
 
         let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
 
-        let age = if let Some(age) = self.phase_tracker.view_age(height, now) {
+        let view_age = if let Some(age) = self.phase_tracker.view_age(height, now) {
             age
         } else {
             // Seed view tracking if we never observed a view-change for this height yet.
@@ -10547,19 +10872,55 @@ impl Actor {
             .propose
             .proposals_seen
             .contains(&(height, current_view));
+        let queue_since = match self.queue_ready_since {
+            Some(entry) if entry.height == height && entry.view == current_view => {
+                Some(entry.since)
+            }
+            _ => {
+                self.queue_ready_since = Some(QueueReadySince {
+                    height,
+                    view: current_view,
+                    since: now,
+                });
+                None
+            }
+        };
+        let queue_since = match queue_since {
+            Some(since) => Some(since),
+            None => {
+                if !proposal_seen {
+                    return false;
+                }
+                Some(now)
+            }
+        };
         let timeout = idle_view_timeout(
             proposal_seen,
             self.commit_quorum_timeout(),
             self.subsystems.propose.pacemaker.propose_interval,
             self.runtime_da_enabled(),
         );
+        let age = if proposal_seen {
+            view_age
+        } else {
+            now.saturating_duration_since(queue_since.unwrap_or(now))
+        };
         let timed_out = idle_round_timed_out(true, age, timeout);
-        if rbc_backlog || relay_backpressure || consensus_queue_backpressure {
+        if rbc_backlog
+            || relay_backpressure
+            || consensus_queue_backpressure
+            || consensus_queue_backlog
+        {
             if timed_out {
                 debug!(
                     rbc_backlog,
                     relay_backpressure,
                     consensus_queue_backpressure,
+                    consensus_queue_backlog,
+                    vote_rx_depth = queue_depths.vote_rx,
+                    block_payload_rx_depth = queue_depths.block_payload_rx,
+                    rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                    block_rx_depth = queue_depths.block_rx,
                     "skipping idle view-change despite timeout due to unresolved backpressure"
                 );
             } else {
@@ -10571,6 +10932,9 @@ impl Actor {
                 }
                 if consensus_queue_backpressure {
                     trace!("skipping idle view-change due to consensus queue backpressure");
+                }
+                if consensus_queue_backlog {
+                    trace!("skipping idle view-change due to consensus queue backlog");
                 }
             }
             return false;
@@ -10590,6 +10954,11 @@ impl Actor {
             rbc_backlog,
             relay_backpressure,
             consensus_queue_backpressure,
+            consensus_queue_backlog,
+            vote_rx_depth = queue_depths.vote_rx,
+            block_payload_rx_depth = queue_depths.block_payload_rx,
+            rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+            block_rx_depth = queue_depths.block_rx,
             "no proposal observed before cutoff; rotating leader via view change"
         );
         self.trigger_view_change_with_cause(height, current_view, ViewChangeCause::MissingQc);
@@ -10696,6 +11065,7 @@ impl Actor {
             .rbc
             .ready_rebroadcast_last_sent
             .remove(&key);
+        self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
         self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
         self.subsystems.da_rbc.rbc.outbound_chunks.remove(&key);
         if self.subsystems.da_rbc.rbc.outbound_cursor == Some(key) {
@@ -10777,6 +11147,45 @@ impl Actor {
                 return;
             }
         }
+        let queue_depths = super::status::worker_queue_depth_snapshot();
+        let active_queue_len = self.queue.active_len();
+        let pending_blocks = self.pending.pending_blocks.len();
+        let missing_blocks = self.pending.missing_block_requests.len();
+        let rbc_sessions = self.subsystems.da_rbc.rbc.sessions.len();
+        let commit_inflight = self
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .map(|inflight| (inflight.pending.height, inflight.pending.view));
+        let highest_qc = self
+            .highest_qc
+            .as_ref()
+            .map(|qc| (qc.height, qc.view, qc.phase));
+        let locked_qc = self
+            .locked_qc
+            .as_ref()
+            .map(|qc| (qc.height, qc.view, qc.phase));
+        info!(
+            height,
+            view,
+            cause = cause.as_str(),
+            active_queue_len,
+            pending_blocks,
+            missing_blocks,
+            rbc_sessions,
+            commit_inflight = ?commit_inflight,
+            highest_qc = ?highest_qc,
+            locked_qc = ?locked_qc,
+            vote_rx_depth = queue_depths.vote_rx,
+            block_payload_rx_depth = queue_depths.block_payload_rx,
+            rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+            block_rx_depth = queue_depths.block_rx,
+            consensus_rx_depth = queue_depths.consensus_rx,
+            lane_relay_rx_depth = queue_depths.lane_relay_rx,
+            background_rx_depth = queue_depths.background_rx,
+            "view change triggered"
+        );
         let now = Instant::now();
         let prev_view = self.phase_tracker.current_view(height);
         let base_view = self
@@ -11464,6 +11873,13 @@ pub(super) struct PhaseTracker {
     round_start: Instant,
     last_marker: Instant,
     recorded: PhaseRecordFlags,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct QueueReadySince {
+    height: u64,
+    view: u64,
+    since: Instant,
 }
 
 impl PhaseTracker {
