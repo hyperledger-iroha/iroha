@@ -72,7 +72,6 @@ Se o incidente for especificamente sobre colisoes Local-8/Local-12, siga os play
 |---------|-------|
 | Deriva de fixture | Regenere `fixtures/account/address_vectors.json`, rode novamente `cargo xtask address-vectors --verify`, atualize bundles de SDK, e anexe snapshots de `address_fixture.prom` ao ticket. |
 | Regressao de SDK/cliente | Abra issues referenciando o fixture canonico + saida de `iroha address inspect`, e bloqueie releases com a CI de paridade SDK (por exemplo `ci/check_address_normalize.sh`). |
-| Corrupcao de manifest | Reconstrua o manifest seguindo `address_manifest_ops.md`, rode novamente `cargo xtask address-manifest verify`, e mantenha `torii.strict_addresses=true` ate que a telemetria se limpe. |
 | Envios maliciosos | Aplique rate-limit ou bloqueie principals ofensores, escale para Governance se for necessario tombstone de seletores. |
 
 Depois que as mitigacoes forem aplicadas, rode novamente a consulta PromQL acima para confirmar que `ERR_CHECKSUM_MISMATCH` permanece em zero (excluindo `/tests/*`) por pelo menos 30 minutos antes de baixar o incidente.

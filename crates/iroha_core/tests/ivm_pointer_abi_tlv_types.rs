@@ -41,14 +41,14 @@ fn wrong_type_for_asset_def_rejected() {
     let program = program_scall(ivm_sys::SYSCALL_TRANSFER_ASSET);
     let mut vm = IVM::new(u64::MAX);
     let authority: AccountId =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonder"
+        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
             .parse()
             .unwrap();
     vm.set_host(CoreHost::new(authority.clone()));
 
     let from = authority.encode();
     let to: AccountId =
-        "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonder"
+        "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"
             .parse()
             .unwrap();
     let to = to.encode();
@@ -87,7 +87,7 @@ fn wrong_type_for_set_account_detail_value_rejected() {
     let program = program_scall(ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL);
     let mut vm = IVM::new(u64::MAX);
     let authority: AccountId =
-        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonder"
+        "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
             .parse()
             .unwrap();
     vm.set_host(CoreHost::new(authority.clone()));

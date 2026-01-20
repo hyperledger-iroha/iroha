@@ -560,35 +560,35 @@ the change so the audit trail is reconstructable offline.
    Local-12 collisions stay at zero before proposing a tombstone. The
    per-domain counters let owners prove that only dev/test domains emit Local‑8
    traffic (and that Local‑12 collisions map to known staging domains) while
-   `torii.strict_addresses` remains enabled on production. The dashboard now
    includes the **Domain Kind Mix (5m)** panel so SREs can graph how much
    `domain_kind="local12"` traffic remains, and the `AddressLocal12Traffic`
    alert fires whenever production still sees Local-12 selectors despite the
    retirement gate.
 2. **Derive canonical digests.** Run
-   `iroha address convert <address-or-account_id> --format json --expect-prefix 753`
+   `iroha address convert <address> --format json --expect-prefix 753`
    (or consume `fixtures/account/address_vectors.json` via
    `scripts/account_fixture_helper.py`) to capture the exact `digest_hex`.
-   The CLI now accepts inputs such as `snx1...@wonderland`; the JSON summary
-   surfaces that domain via the `input_domain` field and `--append-domain`
-   replays the converted encoding as `<ih58>@wonderland` for manifest updates.
+   The CLI accepts IH58, `snx1…`, and canonical `0x…` literals; append
+   `@<domain>` only when you need to preserve a label for manifests.
+   The JSON summary surfaces that domain via the `input_domain` field, and
+   `--append-domain` replays the converted encoding as `<address>@<domain>` for
+   manifest diffs (this suffix is metadata, not a canonical account id).
    For newline-oriented exports use
-  to mass-convert Local selectors into canonical IH58 (or compressed/hex/JSON) forms while skipping non-local rows. When auditors
-  need spreadsheet-friendly evidence, run
-  to emit a CSV summary (`input,status,format,domain_kind,…`) that highlights Local selectors, canonical encodings, and parse
-  failures in the same file.
+   `iroha address normalize --input <file> --only-local` to mass-convert Local
+   selectors into canonical IH58 (or compressed/hex/JSON) forms while skipping
+   non-local rows. When auditors need spreadsheet-friendly evidence, run
+   `iroha address audit --input <file> --format csv` to emit a CSV summary
+   (`input,status,format,domain_kind,…`) that highlights Local selectors,
+   canonical encodings, and parse failures in the same file.
 3. **Append manifest entries.** Draft the `tombstone` record (and the follow-up
    `global_domain` record when migrating to the global registry) and validate
    the manifest with `cargo xtask address-vectors` before requesting signatures.
 4. **Verify & publish.** Follow the runbook checklist (hashes, Sigstore,
    sequence monotonicity) before mirroring the bundle to SoraFS. Torii now
-   defaults to `torii.strict_addresses = true`, so production clusters enforce
-   canonical IH58/compressed literals immediately after the bundle lands.
+   canonicalizes IH58/compressed literals immediately after the bundle lands.
 5. **Monitor & rollback.** Keep the Local‑8 and Local‑12 collision panels at
    zero for 30 days; if regressions appear, republish the previous manifest
-   bundle and temporarily override the flag with `torii.strict_addresses=false`
-   only on the affected
-   non-production environment until telemetry stabilises.
+   only in the affected non-production environment until telemetry stabilises.
 
 All of the steps above are mandatory evidence for ADDR‑7c: manifests without
 the `cosign` signature bundle or without matching `previous_digest` values must
@@ -601,12 +601,11 @@ their change tickets.
   plus the resolved domain as a label fetched from the registry. Domains are
   clearly marked as descriptive metadata that may change, while IH58 is the
   stable address.
-- **Strict mode:** Torii, SDKs, and wallets expose a configuration flag to
-  require IH58 input end to end so custodians can rehearse compliance
-  policies. The flag now defaults to `torii.strict_addresses = true`; only
-  override it to `false` on dev/test clusters when diagnosing regressions.
-  raw public-key literal (e.g., `ed0120…@domain`) is rejected with
-  `ERR_STRICT_ADDRESS_REQUIRED`.
+- **Input canonicalization:** Torii and SDKs accept IH58/compressed/0x
+  addresses plus `alias@domain`, `public_key@domain`, `uaid:…`, and
+  `opaque:…` forms, then canonicalize to IH58 for output. There is no
+  strict-mode toggle; raw phone/email identifiers must be kept off-ledger
+  via UAID/opaque mappings.
 - **Error prevention:** Wallets parse IH58 and CAIP-10 prefixes.
   Chain mismatches trigger hard failures with actionable diagnostics.
 - **Codec libraries:** Official Rust, TypeScript/JavaScript, Python, and Kotlin
@@ -639,18 +638,20 @@ their change tickets.
 - **Textual helpers:** Ship IH58 ↔ CAIP-10 ↔ compressed (`snx1…`) codecs in Rust,
   TypeScript/JavaScript, Python, and Kotlin with shared test vectors.
 - **CLI tooling:** Provide a deterministic operator workflow via `iroha address convert`
-  (see `crates/iroha_cli/src/address.rs`), which accepts either raw addresses or fully
-  qualified `ih58@domain` literals, defaults to IH58 output using the Sora Nexus prefix (`753`),
+  (see `crates/iroha_cli/src/address.rs`), which accepts IH58/`snx1…`/`0x…` literals and
+  optional `<address>@<domain>` labels, defaults to IH58 output using the Sora Nexus prefix (`753`),
   and only emits the Sora-only compressed alphabet when operators explicitly request it with
   `--format compressed` or the JSON summary mode. The command enforces prefix expectations on
   parse, records the provided domain (`input_domain` in JSON), and the `--append-domain` flag
-  replays the converted encoding as `<ih58>@<domain>` so manifest diffs remain ergonomic.
+  replays the converted encoding as `<address>@<domain>` so manifest diffs remain ergonomic.
 - **Wallet/explorer UX:** Follow the [address display guidelines](source/sns/address_display_guidelines.md)
   shipped with ADDR-6—offer dual copy buttons, keep IH58 as the QR payload, and warn
   users that the compressed `snx1…` form is Sora-only and susceptible to IME rewrites.
 - **Torii integration:** Cache Nexus manifests respecting TTL, emit
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministically, and
-  expose the `strict_addresses` toggle (default `true`) plus telemetry counters.
+  expose `POST /v1/accounts/resolve` to canonicalize `alias@domain`,
+  `public_key@domain`, `uaid:`/`opaque:` literals, or encoded addresses into
+  IH58 while returning the resolved domain and source.
 
 ### Torii response formats
 
@@ -658,8 +659,7 @@ their change tickets.
   `POST /v1/accounts/query` accepts the same field inside the JSON envelope.
   Supported values are:
   - `ih58` (default) — responses emit canonical IH58 Base58 payloads (e.g.,
-    `RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS` optionally paired
-    with `@domain` metadata).
+    `RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS`).
   - `compressed` — responses emit the Sora-only `snx1…` compressed view while
     keeping filters/path parameters canonical.
 - Invalid values return `400` (`QueryExecutionFail::Conversion`). This allows

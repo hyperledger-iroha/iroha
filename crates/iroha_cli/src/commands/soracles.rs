@@ -845,7 +845,7 @@ mod tests {
                 outcome: FeedEventOutcome::Success(FeedSuccess {
                     value: ObservationValue::new(1_000, 2),
                     entries: vec![ReportEntry {
-                        oracle_id: "34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA@validators"
+                        oracle_id: "34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA"
                             .parse()
                             .expect("oracle id"),
                         observation_hash,

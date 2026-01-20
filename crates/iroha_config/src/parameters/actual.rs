@@ -4834,6 +4834,8 @@ pub struct SorafsRepair {
     pub backoff_initial_secs: u64,
     /// Maximum retry backoff for failed repairs (seconds).
     pub backoff_max_secs: u64,
+    /// Default penalty used for scheduler-generated repair slash proposals (nano-XOR).
+    pub default_slash_penalty_nano: u128,
 }
 
 impl Default for SorafsRepair {
@@ -4848,6 +4850,7 @@ impl Default for SorafsRepair {
             worker_concurrency: defaults::sorafs::repair::WORKER_CONCURRENCY,
             backoff_initial_secs: defaults::sorafs::repair::BACKOFF_INITIAL_SECS,
             backoff_max_secs: defaults::sorafs::repair::BACKOFF_MAX_SECS,
+            default_slash_penalty_nano: defaults::sorafs::repair::DEFAULT_SLASH_PENALTY_NANO,
         }
     }
 }

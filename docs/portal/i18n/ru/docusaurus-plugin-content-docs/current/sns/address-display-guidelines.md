@@ -223,7 +223,6 @@ mainnet, а затем Local-12, когда глобальные домены п
 registry. Считайте вывод CLI операторским уведомлением об этом замораживании -
 та же строка предупреждения используется в SDK tooltips и автоматизации, чтобы
 сохранять паритет с критериями выхода дорожной карты. Torii теперь по умолчанию
-`torii.strict_addresses=true`; переопределяйте на `false` только на dev/test
 кластерах при диагностике регрессий. Продолжайте зеркалировать
 `torii_address_domain_total{domain_kind}` в Grafana
 (`dashboards/grafana/address_ingest.json`), чтобы пакет доказательств ADDR-7
@@ -233,7 +232,6 @@ guardrails:
 
 - `AddressLocal8Resurgence` пейджит, когда контекст сообщает о свежем инкременте
   Local-8. Остановите rollouts strict-mode, найдите проблемный SDK в дашборде и,
-  при необходимости, временно установите `torii.strict_addresses=false` до
   возврата сигнала к нулю - затем восстановите дефолт (`true`).
 - `AddressLocal12Collision` срабатывает, когда два Local-12 лейбла хэшируются в
   один digest. Приостановите promotions manifests, запустите Local -> Global

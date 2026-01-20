@@ -103,7 +103,7 @@ use iroha_data_model::{
 };
 use iroha_telemetry::metrics::global_sorafs_node_otel;
 use norito::codec::Encode;
-pub use repair::{RepairManager, RepairSchedulerError, RepairTaskFilters};
+pub use repair::{RepairManager, RepairSchedulerError, RepairTaskFilters, RepairTaskSnapshot};
 use sorafs_car::{CarBuildPlan, PorProof};
 use sorafs_manifest::{
     ManifestV1,
@@ -405,16 +405,37 @@ impl NodeHandle {
         self.repair.list_tasks(filters)
     }
 
+    /// Fetch repair task snapshots with optional filters applied.
+    #[must_use]
+    pub fn repair_task_snapshots(&self, filters: RepairTaskFilters) -> Vec<RepairTaskSnapshot> {
+        self.repair.list_task_snapshots(filters)
+    }
+
     /// Fetch repair tasks associated with the supplied manifest digest.
     #[must_use]
     pub fn repair_tasks_for_manifest(&self, manifest_digest: &[u8; 32]) -> Vec<RepairTaskRecordV1> {
         self.repair_tasks(RepairTaskFilters::for_manifest(*manifest_digest))
     }
 
+    /// Fetch repair task snapshots associated with the supplied manifest digest.
+    #[must_use]
+    pub fn repair_task_snapshots_for_manifest(
+        &self,
+        manifest_digest: &[u8; 32],
+    ) -> Vec<RepairTaskSnapshot> {
+        self.repair_task_snapshots(RepairTaskFilters::for_manifest(*manifest_digest))
+    }
+
     /// Fetch a repair task record by ticket id.
     #[must_use]
     pub fn repair_task_record(&self, ticket_id: &RepairTicketId) -> Option<RepairTaskRecordV1> {
         self.repair.task_record(ticket_id)
+    }
+
+    /// Fetch a repair task snapshot by ticket id.
+    #[must_use]
+    pub fn repair_task_snapshot(&self, ticket_id: &RepairTicketId) -> Option<RepairTaskSnapshot> {
+        self.repair.task_snapshot(ticket_id)
     }
 
     /// Submit a slash proposal tied to an escalated repair ticket.
@@ -1981,6 +2002,7 @@ mod tests {
         actual_repair.heartbeat_interval_secs = 45;
         actual_repair.max_attempts = 6;
         actual_repair.worker_concurrency = 9;
+        actual_repair.default_slash_penalty_nano = 42_000;
 
         let mut actual_gc = iroha_config::parameters::actual::SorafsGc::default();
         actual_gc.enabled = true;
@@ -1998,6 +2020,7 @@ mod tests {
         assert_eq!(handle.repair_config().heartbeat_interval_secs(), 45);
         assert_eq!(handle.repair_config().max_attempts(), 6);
         assert_eq!(handle.repair_config().worker_concurrency(), 9);
+        assert_eq!(handle.repair_config().default_slash_penalty_nano(), 42_000);
 
         assert!(handle.gc_config().enabled());
         assert_eq!(handle.gc_config().interval_secs(), 300);

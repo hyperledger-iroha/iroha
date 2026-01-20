@@ -2687,6 +2687,34 @@ async fn handler_accounts_query(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_accounts_resolve(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    crate::utils::extractors::NoritoJson(request): crate::utils::extractors::NoritoJson<
+        crate::routing::AccountResolveRequestDto,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_v1_accounts_resolve(
+            crate::utils::extractors::NoritoJson(request),
+            app.telemetry.clone(),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(&app, &headers, None, "v1/accounts/resolve", enforce).await?;
+
+    routing::handle_v1_accounts_resolve(
+        crate::utils::extractors::NoritoJson(request),
+        app.telemetry.clone(),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_accounts_onboard(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -12755,6 +12783,7 @@ impl Torii {
                 // Accounts listing
                 .route("/v1/accounts", get(handler_accounts_list))
                 .route("/v1/accounts/query", post(handler_accounts_query))
+                .route("/v1/accounts/resolve", post(handler_accounts_resolve))
                 .route("/v1/accounts/onboard", post(handler_accounts_onboard))
                 .route(
                     "/v1/accounts/{uaid}/portfolio",
@@ -15564,7 +15593,7 @@ pub(crate) mod tests_runtime_handlers {
         collections::HashSet,
         net::SocketAddr,
         num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-        sync::Arc,
+        sync::{Arc, LazyLock, Mutex, MutexGuard},
         time::{Duration, Instant},
     };
 
@@ -15594,16 +15623,18 @@ pub(crate) mod tests_runtime_handlers {
         },
         tx::AcceptedTransaction,
     };
-    use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         ChainId, ValidationFail,
-        account::AccountId,
+        account::{Account, AccountId, AccountLabel, OpaqueAccountId},
         block::{BlockSignature, SignedBlock},
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
+        domain::{Domain, DomainId},
         events::pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
         isi::Log,
         level::Level,
-        nexus::{AxtPolicySnapshot, AxtRejectReason, DataSpaceId, LaneId},
+        name::Name,
+        nexus::{AxtPolicySnapshot, AxtRejectReason, DataSpaceId, LaneId, UniversalAccountId},
         peer::{Peer, PeerId},
         soranet::privacy_metrics::{
             SoranetPrivacyEventHandshakeSuccessV1, SoranetPrivacyEventKindV1,
@@ -15634,14 +15665,39 @@ pub(crate) mod tests_runtime_handlers {
         })
     }
 
+    #[cfg(feature = "app_api")]
+    struct AccountResolverGuard {
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    #[cfg(feature = "app_api")]
+    impl Drop for AccountResolverGuard {
+        fn drop(&mut self) {
+            iroha_data_model::account::clear_account_alias_resolver();
+            iroha_data_model::account::clear_account_domain_selector_resolver();
+            iroha_data_model::account::clear_account_opaque_resolver();
+            iroha_data_model::account::clear_account_uaid_resolver();
+        }
+    }
+
+    #[cfg(feature = "app_api")]
+    fn guard_account_resolvers(app: &SharedAppState) -> AccountResolverGuard {
+        static RESOLVER_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+        let lock = RESOLVER_GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        install_account_resolvers(&app.state);
+        AccountResolverGuard { _lock: lock }
+    }
+
     pub fn mk_app_state_for_tests() -> SharedAppState {
-        mk_app_state_for_tests_with_options(None, None, None, None)
+        mk_app_state_for_tests_with_world_and_options(World::default(), None, None, None, None)
     }
 
     pub fn mk_app_state_for_tests_with_iso_bridge(
         iso: Option<iroha_config::parameters::actual::IsoBridge>,
     ) -> SharedAppState {
-        mk_app_state_for_tests_with_options(iso, None, None, None)
+        mk_app_state_for_tests_with_world_and_options(World::default(), iso, None, None, None)
     }
 
     pub fn mk_app_state_for_tests_with_options(
@@ -15650,10 +15706,29 @@ pub(crate) mod tests_runtime_handlers {
         norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
         push: Option<iroha_config::parameters::actual::Push>,
     ) -> SharedAppState {
+        mk_app_state_for_tests_with_world_and_options(
+            World::default(),
+            iso,
+            deploy_limit,
+            norito_rpc,
+            push,
+        )
+    }
+
+    pub fn mk_app_state_for_tests_with_world(world: World) -> SharedAppState {
+        mk_app_state_for_tests_with_world_and_options(world, None, None, None, None)
+    }
+
+    fn mk_app_state_for_tests_with_world_and_options(
+        world: World,
+        iso: Option<iroha_config::parameters::actual::IsoBridge>,
+        deploy_limit: Option<(u32, u32)>,
+        norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
+        push: Option<iroha_config::parameters::actual::Push>,
+    ) -> SharedAppState {
         // Minimal core state
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let world = iroha_core::state::World::default();
         let state_inner =
             iroha_core::state::State::new_for_testing(world, kura.clone(), query_handle.clone());
         {
@@ -19198,6 +19273,66 @@ mod tests {
         .into_response();
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn accounts_resolve_accepts_alias_uaid_and_opaque() {
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let key_pair = KeyPair::random();
+        let account_id = AccountId::new(domain.clone(), key_pair.public_key().clone());
+        let label = AccountLabel::new(
+            domain.clone(),
+            Name::from_str("alice").expect("label"),
+        );
+        let uaid = UniversalAccountId::from_hash(
+            Hash::from_str("00112233445566778899aabbccddeeff00112233445566778899aabbccddeef1")
+                .expect("uaid hash"),
+        );
+        let opaque = OpaqueAccountId::from_hash(
+            Hash::from_str("ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100")
+                .expect("opaque hash"),
+        );
+
+        let account = Account::new(account_id.clone())
+            .with_label(Some(label))
+            .with_uaid(Some(uaid))
+            .with_opaque_ids(vec![opaque])
+            .build(&account_id);
+        let domain_entry = Domain::new(domain.clone()).build(&account_id);
+        let world = World::with_assets([domain_entry], [account], [], [], []);
+        let app = mk_app_state_for_tests_with_world(world);
+        let _guard = guard_account_resolvers(&app);
+
+        let raw_public_literal = format!("{}@{}", key_pair.public_key(), domain);
+        let cases = [
+            (format!("alice@{domain}"), "alias", None),
+            (raw_public_literal, "public_key", None),
+            (uaid.to_string(), "uaid", None),
+            (opaque.to_string(), "opaque", None),
+            (account_id.to_string(), "encoded", Some("ih58")),
+        ];
+
+        for (literal, source, format) in cases {
+            let response = routing::handle_v1_accounts_resolve(
+                NoritoJson(routing::AccountResolveRequestDto { literal }),
+                app.telemetry.clone(),
+            )
+            .await
+            .expect("handler should succeed")
+            .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = http_body_util::BodyExt::collect(response.into_body())
+                .await
+                .unwrap()
+                .to_bytes();
+            let dto: routing::AccountResolveResponseDto =
+                norito::json::from_slice(&body).expect("json decode");
+            assert_eq!(dto.account_id, account_id.to_string());
+            assert_eq!(dto.domain, domain.to_string());
+            assert_eq!(dto.source, source);
+            assert_eq!(dto.format.as_deref(), format);
+        }
     }
 
     #[tokio::test]

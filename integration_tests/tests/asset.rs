@@ -22,9 +22,13 @@ use iroha::{
     query::QueryError,
 };
 use iroha_data_model::query::error::{FindError, QueryExecutionFail};
-use iroha_executor_data_model::permission::asset::CanTransferAsset;
+use iroha_executor_data_model::permission::{
+    asset::CanTransferAsset, asset_definition::CanRegisterAssetDefinition,
+};
 use iroha_test_network::*;
-use iroha_test_samples::{ALICE_ID, gen_account_in};
+use iroha_test_samples::{
+    ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
+};
 use toml::Value as TomlValue;
 
 static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();
@@ -673,15 +677,17 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         let (dex_id, _dex_keypair) = gen_account_in("exchange");
         let (seller_id, seller_keypair) = gen_account_in("company");
         let (buyer_id, buyer_keypair) = gen_account_in("company");
-        let rate: AssetId = format!("btc/eth##{}", &dex_id)
-            .parse()
-            .expect("should be valid");
-        let seller_btc: AssetId = format!("btc#crypto#{}", &seller_id)
-            .parse()
-            .expect("should be valid");
-        let buyer_eth: AssetId = format!("eth#crypto#{}", &buyer_id)
-            .parse()
-            .expect("should be valid");
+        let exchange_domain: DomainId = "exchange".parse().expect("domain should be valid");
+        let crypto_domain: DomainId = "crypto".parse().expect("domain should be valid");
+        let rate_def: AssetDefinitionId =
+            "btc/eth#exchange".parse().expect("asset definition should be valid");
+        let btc_def: AssetDefinitionId =
+            "btc#crypto".parse().expect("asset definition should be valid");
+        let eth_def: AssetDefinitionId =
+            "eth#crypto".parse().expect("asset definition should be valid");
+        let rate = AssetId::new(rate_def.clone(), dex_id.clone());
+        let seller_btc = AssetId::new(btc_def.clone(), seller_id.clone());
+        let buyer_eth = AssetId::new(eth_def.clone(), buyer_id.clone());
 
         let mut builder = quiet_network_builder();
         builder = builder
@@ -691,9 +697,18 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             .with_genesis_instruction(register::account(dex_id.clone()))
             .with_genesis_instruction(register::account(seller_id.clone()))
             .with_genesis_instruction(register::account(buyer_id.clone()))
-            .with_genesis_instruction(register::asset_definition_numeric("btc/eth#exchange"))
-            .with_genesis_instruction(register::asset_definition_numeric("btc#crypto"))
-            .with_genesis_instruction(register::asset_definition_numeric("eth#crypto"));
+            .with_genesis_instruction(Grant::account_permission(
+                CanRegisterAssetDefinition {
+                    domain: exchange_domain.clone(),
+                },
+                ALICE_ID.clone(),
+            ))
+            .with_genesis_instruction(Grant::account_permission(
+                CanRegisterAssetDefinition {
+                    domain: crypto_domain.clone(),
+                },
+                ALICE_ID.clone(),
+            ));
 
         let Some((network, rt)) = start_test_network_with_builder(builder) else {
             return Ok(());
@@ -707,6 +722,32 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             None => return Ok(()),
         };
         let mut last_non_empty_height = status.blocks_non_empty;
+
+        let register_instructions: [InstructionBox; 3] = [
+            Register::asset_definition(AssetDefinition::numeric(rate_def.clone())).into(),
+            Register::asset_definition(AssetDefinition::numeric(btc_def.clone())).into(),
+            Register::asset_definition(AssetDefinition::numeric(eth_def.clone())).into(),
+        ];
+        let register_tx = clients
+            .current()
+            .build_transaction(register_instructions, Metadata::default());
+        if submit_tx_or_skip(&mut clients, &register_tx, "register exchange assets")?.is_none() {
+            return Ok(());
+        }
+        status = match status_or_skip(
+            sync_after_submission(
+                &network,
+                &rt,
+                clients.next(),
+                last_non_empty_height,
+                "register exchange assets",
+            ),
+            "register exchange assets",
+        )? {
+            Some(status) => status,
+            None => return Ok(()),
+        };
+        last_non_empty_height = status.blocks_non_empty;
 
         let seed_instructions: [InstructionBox; 3] = [
             Mint::asset_numeric(20_u32, rate.clone()).into(),
@@ -826,12 +867,8 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             return Ok(());
         }
 
-        let seller_eth: AssetId = format!("eth#crypto#{}", &seller_id)
-            .parse()
-            .expect("should be valid");
-        let buyer_btc: AssetId = format!("btc#crypto#{}", &buyer_id)
-            .parse()
-            .expect("should be valid");
+        let seller_eth = AssetId::new(eth_def, seller_id.clone());
+        let buyer_btc = AssetId::new(btc_def, buyer_id.clone());
         // after: seller has $ETH200 and buyer has $BTC10
         wait_for_asset_absent(&mut clients, &seller_btc, "seller BTC purge")?;
         wait_for_asset_absent(&mut clients, &buyer_eth, "buyer ETH purge")?;

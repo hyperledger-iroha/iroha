@@ -13645,6 +13645,9 @@ pub struct SorafsRepair {
     /// Maximum retry backoff for failed repairs (seconds).
     #[config(default = "defaults::sorafs::repair::BACKOFF_MAX_SECS")]
     pub backoff_max_secs: u64,
+    /// Default penalty used for scheduler-generated repair slash proposals (nano-XOR).
+    #[config(default = "defaults::sorafs::repair::DEFAULT_SLASH_PENALTY_NANO")]
+    pub default_slash_penalty_nano: u128,
 }
 
 impl Default for SorafsRepair {
@@ -13659,6 +13662,7 @@ impl Default for SorafsRepair {
             worker_concurrency: defaults::sorafs::repair::WORKER_CONCURRENCY,
             backoff_initial_secs: defaults::sorafs::repair::BACKOFF_INITIAL_SECS,
             backoff_max_secs: defaults::sorafs::repair::BACKOFF_MAX_SECS,
+            default_slash_penalty_nano: defaults::sorafs::repair::DEFAULT_SLASH_PENALTY_NANO,
         }
     }
 }
@@ -13675,6 +13679,7 @@ impl SorafsRepair {
             worker_concurrency: self.worker_concurrency.max(1),
             backoff_initial_secs: self.backoff_initial_secs.max(1),
             backoff_max_secs: self.backoff_max_secs.max(self.backoff_initial_secs.max(1)),
+            default_slash_penalty_nano: self.default_slash_penalty_nano.max(1),
         }
     }
 }
@@ -13748,6 +13753,7 @@ mod sorafs_repair_gc_tests {
             worker_concurrency: 0,
             backoff_initial_secs: 0,
             backoff_max_secs: 0,
+            default_slash_penalty_nano: 0,
         };
         let actual = repair.parse();
         assert_eq!(actual.db_pool_max_connections, 1);
@@ -13757,6 +13763,7 @@ mod sorafs_repair_gc_tests {
         assert_eq!(actual.worker_concurrency, 1);
         assert_eq!(actual.backoff_initial_secs, 1);
         assert_eq!(actual.backoff_max_secs, 1);
+        assert_eq!(actual.default_slash_penalty_nano, 1);
 
         let gc = SorafsGc {
             enabled: true,

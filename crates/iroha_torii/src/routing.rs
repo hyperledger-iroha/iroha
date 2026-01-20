@@ -9745,8 +9745,9 @@ pub async fn handle_get_sorafs_repair_status(
 ) -> Result<impl IntoResponse, Error> {
     let digest = parse_hex_array::<32>(&manifest_hex, "manifest_digest")?;
     let filters = repair_filters_from_query(Some(digest), query)?;
-    let tasks: Vec<RepairTaskRecordV1> = sorafs_node.repair_tasks(filters);
-    let body = repair_task_records_body(&tasks);
+    let tasks: Vec<sorafs_node::RepairTaskSnapshot> =
+        sorafs_node.repair_task_snapshots(filters);
+    let body = repair_task_snapshots_body(&tasks);
     let mut resp = Response::new(Body::from(body));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -9762,8 +9763,9 @@ pub async fn handle_get_sorafs_repair_status_all(
     crate::NoritoQuery(query): crate::NoritoQuery<RepairStatusQueryDto>,
 ) -> Result<impl IntoResponse, Error> {
     let filters = repair_filters_from_query(None, query)?;
-    let tasks: Vec<RepairTaskRecordV1> = sorafs_node.repair_tasks(filters);
-    let body = repair_task_records_body(&tasks);
+    let tasks: Vec<sorafs_node::RepairTaskSnapshot> =
+        sorafs_node.repair_task_snapshots(filters);
+    let body = repair_task_snapshots_body(&tasks);
     let mut resp = Response::new(Body::from(body));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -9788,6 +9790,32 @@ fn repair_task_records_body(records: &[RepairTaskRecordV1]) -> String {
             let bytes = norito::to_bytes(record).unwrap_or_default();
             let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
             json_object(vec![("norito_base64", json_value(&encoded))])
+        })
+        .collect();
+    norito::json::to_json_pretty(&json::Value::Array(entries)).unwrap_or_else(|_| "[]".into())
+}
+
+#[cfg(feature = "app_api")]
+fn repair_task_snapshots_body(snapshots: &[sorafs_node::RepairTaskSnapshot]) -> String {
+    let entries: Vec<_> = snapshots
+        .iter()
+        .map(|snapshot| {
+            let record_bytes = norito::to_bytes(&snapshot.record).unwrap_or_default();
+            let record_encoded = base64::engine::general_purpose::STANDARD.encode(record_bytes);
+            let events: Vec<_> = snapshot
+                .events
+                .iter()
+                .map(|event| {
+                    let event_bytes = norito::to_bytes(event).unwrap_or_default();
+                    let event_encoded =
+                        base64::engine::general_purpose::STANDARD.encode(event_bytes);
+                    json_object(vec![("norito_base64", json_value(&event_encoded))])
+                })
+                .collect();
+            json_object(vec![
+                ("norito_base64", json_value(&record_encoded)),
+                ("events", json::Value::Array(events)),
+            ])
         })
         .collect();
     norito::json::to_json_pretty(&json::Value::Array(entries)).unwrap_or_else(|_| "[]".into())
@@ -13308,6 +13336,8 @@ const ENDPOINT_ACCOUNTS_LIST: &str = "/v1/accounts";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_QUERY: &str = "/v1/accounts/query";
 #[cfg(feature = "app_api")]
+const ENDPOINT_ACCOUNTS_RESOLVE: &str = "/v1/accounts/resolve";
+#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ONBOARD: &str = "/v1/accounts/onboard";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
@@ -13783,7 +13813,7 @@ mod address_metrics_tests {
     static DEFAULT_DOMAIN_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn local8_literal() -> &'static str {
-        "sn12zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz@default"
+        "sn12zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -14072,7 +14102,7 @@ mod address_metrics_tests {
         let telemetry = MaybeTelemetry::for_tests();
         let literal = format!(
             "{}@kaigi",
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
         );
 
         let parsed = parse_account_literal(&literal, &telemetry, KAIGI_SSE_CONTEXT)
@@ -28319,6 +28349,34 @@ pub struct AccountOnboardingRequestDto {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub struct AccountResolveRequestDto {
+    pub literal: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub struct AccountResolveResponseDto {
+    pub account_id: String,
+    pub domain: String,
+    pub source: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct AccountOnboardingResponseDto {
     pub account_id: String,
@@ -28365,6 +28423,59 @@ fn derive_onboarding_uaid(
     let canonical = norito::json::to_string(&Value::Object(seed))
         .expect("UAID seed serialization should succeed");
     UniversalAccountId::from_hash(Hash::new(canonical.as_bytes()))
+}
+
+#[cfg(feature = "app_api")]
+fn account_resolve_source_label(
+    source: iroha_data_model::account::AccountAddressSource,
+) -> (&'static str, Option<&'static str>) {
+    use iroha_data_model::account::{AccountAddressFormat, AccountAddressSource};
+
+    match source {
+        AccountAddressSource::Encoded(format) => {
+            let format_label = match format {
+                AccountAddressFormat::IH58 { .. } => "ih58",
+                AccountAddressFormat::Compressed => "compressed",
+                AccountAddressFormat::CanonicalHex => "canonical_hex",
+            };
+            ("encoded", Some(format_label))
+        }
+        AccountAddressSource::Alias => ("alias", None),
+        AccountAddressSource::RawPublicKey => ("public_key", None),
+        AccountAddressSource::Uaid => ("uaid", None),
+        AccountAddressSource::Opaque => ("opaque", None),
+    }
+}
+
+/// POST /v1/accounts/resolve — normalize account literals into canonical IH58.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_accounts_resolve(
+    crate::NoritoJson(req): crate::NoritoJson<AccountResolveRequestDto>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    let trimmed = req.literal.trim();
+    if trimmed.is_empty() {
+        return Err(conversion_error("account literal must not be empty".to_string()));
+    }
+
+    let parsed = parse_account_literal(trimmed, &telemetry, ENDPOINT_ACCOUNTS_RESOLVE)
+        .map_err(|err| {
+            conversion_error(format!(
+                "invalid account literal `{trimmed}`: {}",
+                err.reason()
+            ))
+        })?;
+    let (account_id, canonical, source) = parsed.into_parts();
+    let domain = account_id.domain().to_string();
+    let (source_label, format_label) = account_resolve_source_label(source);
+    let response = AccountResolveResponseDto {
+        account_id: canonical,
+        domain,
+        source: source_label.to_string(),
+        format: format_label.map(|value| value.to_string()),
+    };
+    Ok(JsonBody(response).into_response())
 }
 
 #[iroha_futures::telemetry_future]

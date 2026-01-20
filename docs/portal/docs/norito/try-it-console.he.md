@@ -91,7 +91,6 @@ TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 | `npm run tryit-proxy` מסתיים עם “digest mismatch”. | חבילת OpenAPI של Torii השתנתה במעלה הזרם. | הריצו `npm run sync-openapi -- --latest` (או `--version=<tag>`) ונסו שוב. |
 | הווידג'טים מחזירים `401` או `403`. | טוקן חסר, פג תוקף או בעל הרשאות לא מספיקות. | השתמשו בזרימת OAuth במצב מכשיר או הדביקו bearer token תקין ב-sandbox. עבור טוקנים סטטיים יש לייצא `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1`. |
 | `429 Too Many Requests` מהפרוקסי. | חרגתם ממגבלת הקצב לכל IP. | העלו את `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` עבור סביבות אמון או האטו את סקריפטי הבדיקה. כל דחייה בגלל מגבלת קצב מעלה את `tryit_proxy_rate_limited_total`. |
-| שגיאות `502/504` עם `ERR_STRICT_ADDRESS_REQUIRED` בלוגים של Torii. | הבקשות הועברו ללא תמיכה בניתוח Norito IH58/דחוס. | ודאו שבילד Torii היעד כולל את שינויי ADDR-5 (ראו `crates/iroha_torii/tests/address_parsing.rs`) ושהיעד מצביע על הסביבה הנכונה. |
 
 ## תצפיתיות
 

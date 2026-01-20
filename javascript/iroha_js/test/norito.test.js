@@ -53,7 +53,7 @@ const REGISTER_ASSET = {
 };
 
 function ACCOUNT_ID() {
-  return "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland";
+  return "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs";
 }
 
 const ACCOUNT_ID_LOWER = ACCOUNT_ID_RAW.toLowerCase();

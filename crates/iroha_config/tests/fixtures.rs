@@ -777,6 +777,7 @@ fn minimal_config_snapshot() {
                     worker_concurrency: 4,
                     backoff_initial_secs: 5,
                     backoff_max_secs: 60,
+                    default_slash_penalty_nano: 1_000_000_000,
                 },
                 sorafs_gc: SorafsGc {
                     enabled: false,
@@ -1696,10 +1697,10 @@ fn minimal_config_snapshot() {
                 voting_asset_id: xor#sora,
                 citizenship_asset_id: xor#sora,
                 citizenship_bond_amount: 150,
-                citizenship_escrow_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland,
+                citizenship_escrow_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs,
                 min_bond_amount: 150,
-                bond_escrow_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland,
-                slash_receiver_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland,
+                bond_escrow_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs,
+                slash_receiver_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs,
                 slash_double_vote_bps: 2500,
                 slash_invalid_proof_bps: 5000,
                 slash_ineligible_proof_bps: 1500,
@@ -1726,8 +1727,8 @@ fn minimal_config_snapshot() {
                     role_bond_multipliers: {},
                 },
                 viral_incentives: ViralIncentives {
-                    incentive_pool_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland,
-                    escrow_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs@wonderland,
+                    incentive_pool_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs,
+                    escrow_account: 34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs,
                     reward_asset_definition_id: xor#sora,
                     follow_reward_amount: Numeric {
                         mantissa: 1,
@@ -1824,7 +1825,7 @@ fn minimal_config_snapshot() {
                     max_window_gap: 21600s,
                     reject_zero_capacity: true,
                     submitters: [
-                        34mSYn6ySFTASoiVzNGuyBkedDcPUhgmtD5UQyEPKXz7u1A1NpZLuc7sms8sFTrvTXHfgsaLr@sora,
+                        34mSYn6ySFTASoiVzNGuyBkedDcPUhgmtD5UQyEPKXz7u1A1NpZLuc7sms8sFTrvTXHfgsaLr,
                     ],
                     per_provider_submitters: {},
                 },

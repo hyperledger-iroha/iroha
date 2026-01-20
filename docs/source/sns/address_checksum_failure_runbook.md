@@ -97,7 +97,8 @@ follow the steps below.
   latest manifest bundle following the
   [`address_manifest_ops.md`](../runbooks/address_manifest_ops.md) runbook.
 - Use `scripts/address_local_toolkit.sh audit --input <file>` (doc:
-  manifests reintroduced truncated digests.
+  `docs/source/sns/local_to_global_toolkit.md`) to confirm no Local-8 entries or
+  truncated digests were reintroduced.
 
 ### 4.4 Malicious or malformed traffic
 
@@ -112,7 +113,6 @@ follow the steps below.
 |----------|---------|
 | Fixture drift | Regenerate `fixtures/account/address_vectors.json`, land the update with `cargo xtask address-vectors --verify`, run `ci/account_fixture_metrics.sh`, and coordinate SDK releases so each language vendor consumes the refreshed bundle. Record the change in `status.md` and the governance tracker. |
 | SDK/client regression | File bugs against the offending SDK, link to the canonical fixtures, and provide the `iroha address inspect` output. Gate releases via `ci/check_address_normalize.sh` or the SDK’s existing parity jobs until the fix lands. |
-| Manifest corruption | Follow the manifest runbook, rebuild the bundle, and re-run `cargo xtask address-manifest verify` before publishing. Keep `torii.strict_addresses=true` in production until new manifests pass validation and telemetry returns to baseline. |
 | Malicious submissions | Apply Torii-level filters (e.g., block offending JWT/app IDs), throttle via the gateway, and log the abusive addresses in the governance incident tracker so any corresponding Local selectors can be tombstoned if necessary. |
 
 After remediation, rerun the PromQL query for `ERR_CHECKSUM_MISMATCH` to confirm

@@ -240,7 +240,6 @@ fois que les domaines globaux ont des entrees de registre correspondantes.
 Considerez la sortie CLI comme l'avis operateur pour ce gel - la meme chaine
  d'avertissement est utilisee dans les tooltips SDK et l'automatisation pour
 maintenir la parite avec les criteres de sortie du roadmap. Torii utilise
-maintenant par defaut `torii.strict_addresses=true`; ne le remplacez par `false`
 que sur des clusters dev/test lors du diagnostic de regressions. Continuez a
 miroiter `torii_address_domain_total{domain_kind}` dans Grafana
 (`dashboards/grafana/address_ingest.json`) pour que le pack de preuve ADDR-7
@@ -251,7 +250,6 @@ barrieres:
 - `AddressLocal8Resurgence` page chaque fois qu'un contexte signale une nouvelle
   incrementation Local-8. Stoppez les rollouts en mode strict, localisez la
   surface SDK fautive dans le dashboard et, si besoin, definissez temporairement
-  `torii.strict_addresses=false` jusqu'au retour a zero - puis restaurez le
   defaut (`true`).
 - `AddressLocal12Collision` se declenche lorsque deux labels Local-12 hashent
   vers le meme digest. Mettez en pause les promotions de manifest, executez le

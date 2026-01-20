@@ -156,7 +156,6 @@ Campos de encabezado de `manifest.json`:
 4. **Validar el paquete.** Reejecute los pasos de verificación anteriores contra
    el manifiesto en borrador antes de solicitar firmas.
 5. **Publicar y monitorear.** Tras la firma de gobernanza, siga §3 y mantenga la
-   bandera `strict_addresses` de Torii (`torii.strict_addresses` en config) en su
    valor por defecto `true` en clústeres de producción una vez que las métricas
    confirmen uso Local‑8 en cero. Solo cambie la bandera a `false` en clústeres
    dev/test cuando necesite tiempo adicional de soak.
@@ -178,23 +177,20 @@ Campos de encabezado de `manifest.json`:
 - Alertas (vea `dashboards/alerts/address_ingest_rules.yml`):
   - `AddressLocal8Resurgence` — pagina cuando cualquier contexto reporta un nuevo
     incremento de Local‑8. Trátelo como bloqueador de release, detenga despliegues
-    de modo estricto y establezca temporalmente `torii.strict_addresses=false`
-    (sobrepasando el valor por defecto) hasta remediar el cliente que originó el
-    incremento. Restaure la bandera a `true` cuando la telemetría esté limpia.
+    hasta remediar el cliente que originó el incremento y limpiar la telemetría.
   - `AddressLocal12Collision` — se dispara en el momento en que dos etiquetas
     Local‑12 hashean al mismo digest. Pause promociones del manifiesto, ejecute
     `scripts/address_local_toolkit.sh` para confirmar el mapeo de digest y
     coordine con la gobernanza de Nexus antes de reemitir la entrada afectada del
     registro.
   - `AddressInvalidRatioSlo` — advierte cuando los envíos IH58/comprimidos inválidos
-    (excluyendo rechazos Local‑8/strict-mode) exceden el SLO global de 0,1 % durante
-    diez minutos. Investigue `torii_address_invalid_total` por contexto/razón y
-    coordine con el equipo SDK propietario antes de reactivar modo estricto.
+    exceden el SLO global de 0,1 % durante diez minutos. Investigue
+    `torii_address_invalid_total` por contexto/razón y coordine con el equipo
+    SDK propietario antes de declarar el incidente resuelto.
 - Logs: conserve las líneas de log `manifest_refresh` de Torii y el número de ticket
   de gobernanza en `notes.md`.
 - Rollback: republique el paquete anterior (mismos archivos, ticket incrementado
-  indicando el rollback) y establezca temporalmente `torii.strict_addresses = false`
-  solo en el entorno afectado hasta resolver el problema; luego devuélvalo a `true`.
+  solo en el entorno afectado hasta resolver el problema.
 
 ## 6. Referencias
 

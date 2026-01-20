@@ -43,7 +43,6 @@ Local-8 detections and zero Local-12 collisions for ≥30 days.
 
 1. Run the script in a dedicated job and upload its outputs.
 2. Block merges when `audit.json` reports Local selectors (`domain.kind = local12`).
-3. Once dashboards show zero legitimate usage, leave `torii.strict_addresses`
    at its default `true` value (only override to `false` on dev/test clusters when
    diagnosing regressions) and add
    `iroha address normalize --fail-on-warning --only-local` to CI so regression

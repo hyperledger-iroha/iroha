@@ -147,11 +147,6 @@ address-manifest-<REVISION>/
 4. **Validate bundle.** Re-run the verification steps above against the draft
    manifest before requesting signatures.
 5. **Publish + monitor.** After governance signs the bundle, follow §3 and keep
-   the Torii `strict_addresses` flag (`torii.strict_addresses` in config) set to
-   its default `true` value on production clusters once metrics confirm zero
-   Local-8 usage. Only override the flag to `false` on dev/test clusters when
-   you need additional soak time.
-
 ## 5. Monitoring & Rollback
 
 - Dashboards: `dashboards/grafana/address_ingest.json` (panels for
@@ -168,25 +163,21 @@ address-manifest-<REVISION>/
   coverage window and confirm counters stayed flat.
 - Alerts (see `dashboards/alerts/address_ingest_rules.yml`):
   - `AddressLocal8Resurgence` — pages whenever any context reports a fresh
-    Local-8 increment. Treat as a release blocker, halt strict-mode rollouts,
-    and temporarily set `torii.strict_addresses=false` (overriding the default)
-    until the offending client is remediated. Restore the flag to `true` once
-    telemetry is clean.
+    Local-8 increment. Treat as a release blocker until the offending client
+    is remediated and telemetry is clean.
   - `AddressLocal12Collision` — fires the moment two Local-12 labels hash to
     the same digest. Pause manifest promotions, run
     `scripts/address_local_toolkit.sh` to confirm the digest mapping, and
     coordinate with Nexus governance before reissuing the affected registry
     entry.
   - `AddressInvalidRatioSlo` — warns when invalid IH58/compressed submissions
-    (excluding Local-8/strict-mode rejections) exceed the 0.1 % fleet-wide SLO
-    for ten minutes. Investigate `torii_address_invalid_total` by
-    context/reason and coordinate with the owning SDK team before re-enabling
-    strict mode.
+    exceed the 0.1 % fleet-wide SLO for ten minutes. Investigate
+    `torii_address_invalid_total` by context/reason and coordinate with the
+    owning SDK team before declaring the incident resolved.
 - Logs: retain Torii `manifest_refresh` log lines and the governance ticket
   number in `notes.md`.
 - Rollback: republish the previous bundle (same files, bumped ticket noting the
-  rollback) and temporarily set `torii.strict_addresses = false` only on the
-  affected environment until the issue is resolved, then return it to `true`.
+  affected environment) until the issue is resolved.
 
 ## 6. References
 

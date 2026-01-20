@@ -37,7 +37,6 @@ authorize a rollback (e.g., Storage TL, Governance duty officer).
 - Backups / snapshots captured? (list paths, hashes)
 - Telemetry dashboards bookmarked? (link dashboards/alerts)
 - Communication plan drafted? (email template, status page copy)
-- Manual overrides or feature flags tested? (`torii.strict_addresses`,
   `soranet-strict`, `da.ingestion.enabled`, etc.)
 
 ## 4. Step-by-Step Rollback

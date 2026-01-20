@@ -165,12 +165,12 @@ struct SignedAuditorRequestV1 {
    - Workers close tickets with `/v1/sorafs/audit/repair/complete` or `/v1/sorafs/audit/repair/fail`, and Torii rejects stale/out-of-order updates based on lease TTL + heartbeat cadence.
 
 5. **Failure & Escalation**  
-   - Retries use exponential backoff capped at 5 attempts.  
-   - After final failure, tasks move to `escalated` and a `SlashProposalV1` stub is generated for auditor review.  
+   - Retries use exponential backoff derived from `sorafs.repair.backoff_initial_secs` and `sorafs.repair.backoff_max_secs`, with `sorafs.repair.max_attempts` enforcing the cap.  
+   - After the final failure (or SLA breach), tasks move to `escalated` and a `RepairSlashProposalV1` draft is generated using `sorafs.repair.default_slash_penalty_nano` for auditor review.  
    - Escalations automatically notify governance via `sorafs_governance_event`.
 
 6. **Queue Hygiene**  
-   - Ghost tasks (stuck `in_progress` beyond 2× SLA) are reclaimed and re-queued.  
+   - The watchdog reclaims expired leases, re-queues the ticket with backoff, and escalates if the attempt cap is exceeded.  
    - Metrics track queue depth and latency buckets; Alertmanager fires if `queued` tasks older than SLA exceed thresholds.
 
 ## Auditor API Surface
@@ -191,7 +191,7 @@ struct SignedAuditorRequestV1 {
 
 ### Repair Lease & Idempotency
 - Claims expire after `sorafs.repair.claim_ttl_secs`; heartbeats extend leases by `sorafs.repair.heartbeat_interval_secs`.
-- Torii rejects stale/out-of-order timestamps, lease mismatches, and idempotency key reuse with different payloads.
+- Torii rejects stale/out-of-order timestamps, lease mismatches, retry claims before backoff expiry, and idempotency key reuse with different payloads.
 
 ### Authentication
 - Auditor endpoints (`/report`, `/slash`) require Norito signatures; Torii validates envelopes against the auditor registry stored under `governance/sorafs/auditors.toml` (raw payloads are accepted until `SignedAuditorRequestV1` is wired).
@@ -277,6 +277,7 @@ CREATE TABLE sorafs_slash_proposal (
 - `iroha sorafs gc inspect`: reports retained manifests and retention deadlines (read-only).
 - `iroha sorafs gc dry-run`: reports only expired manifests that GC would evict (read-only).
 - CLI commands return JSON payloads from Torii (Norito-encoded values rendered as JSON).
+- Repair status listings include ordered `RepairTaskEventV1` logs for auditability, capped to the most recent transitions to bound payload size.
 - Torii exposes WebSocket stream `wss://.../sorafs/repair/events` broadcasting `RepairTaskEventV1` for dashboards and integrations.
 
 ## Governance & Escalation

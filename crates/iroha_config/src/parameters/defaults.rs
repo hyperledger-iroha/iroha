@@ -1042,6 +1042,8 @@ pub mod sorafs {
         pub const BACKOFF_INITIAL_SECS: u64 = 5;
         /// Maximum retry backoff for repair workers (seconds).
         pub const BACKOFF_MAX_SECS: u64 = 60;
+        /// Default slash penalty for scheduler-generated repair proposals (nano-XOR).
+        pub const DEFAULT_SLASH_PENALTY_NANO: u128 = 1_000_000_000;
     }
 
     /// Defaults for the SoraFS GC scheduler configuration.
@@ -2771,7 +2773,7 @@ pub mod governance {
         /// Default authorised submitter accounts (development only).
         pub fn submitters() -> Vec<String> {
             vec![String::from(
-                "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@sora",
+                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@sora",
             )]
         }
     }

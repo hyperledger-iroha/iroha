@@ -21,8 +21,9 @@ use tokio::{task::spawn_blocking, time::timeout};
 /// 3b. If proofs are invalid or tampered with, the client rejects the data.
 #[tokio::test]
 async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()> {
-    let alice_rose: AssetId = format!("rose##{}", *ALICE_ID).parse().unwrap();
-    let bob_rose: AssetId = format!("rose##{}", *BOB_ID).parse().unwrap();
+    let rose_def: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition");
+    let alice_rose = AssetId::new(rose_def.clone(), ALICE_ID.clone());
+    let bob_rose = AssetId::new(rose_def, BOB_ID.clone());
     let user_instruction = Transfer::asset_numeric(alice_rose.clone(), 5u32, BOB_ID.clone());
     let data_trigger_instruction =
         Transfer::asset_numeric(bob_rose.clone(), 3u32, ALICE_ID.clone());

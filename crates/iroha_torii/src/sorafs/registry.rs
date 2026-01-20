@@ -2054,7 +2054,7 @@ mod tests {
         };
 
         let submitter = AccountId::from_str(
-            "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@sora",
+            "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C",
         )
         .expect("parse account id");
         let mut record = PinManifestRecord::new(
@@ -2110,7 +2110,7 @@ mod tests {
         };
         let canonical = norito::to_bytes(&order_payload).expect("encode order");
         let issuer = AccountId::from_str(
-            "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@sora",
+            "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C",
         )
         .expect("parse account id");
         let record = ReplicationOrderRecord {

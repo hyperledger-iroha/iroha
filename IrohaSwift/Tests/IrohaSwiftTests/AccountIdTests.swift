@@ -14,7 +14,10 @@ final class AccountIdTests: XCTestCase {
 
         XCTAssertTrue(accountId.hasPrefix("ed0120"))
         XCTAssertTrue(accountId.hasSuffix("@wonderland"))
-        XCTAssertEqual(accountId, "ed0120ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB@wonderland")
+        XCTAssertEqual(
+            accountId,
+            "ed0120ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB@wonderland"
+        )
     }
 
     func testMakeIH58ProducesValidFormat() throws {

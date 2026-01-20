@@ -1475,7 +1475,7 @@ fn semantic_type_enforcement_for_typed_syscalls() {
         parse("fn f() { mint_asset(name(\"x\"), asset_definition(\"rose#wonderland\"), 1); }")
             .unwrap();
     assert!(analyze(&bad).is_err());
-    let bad2 = parse("fn f() { set_account_detail(account_id(\"ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonder\"), json(\"1\"), name(\"k\")); }").unwrap();
+    let bad2 = parse("fn f() { set_account_detail(account_id(\"ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland\"), json(\"1\"), name(\"k\")); }").unwrap();
     assert!(analyze(&bad2).is_err());
 }
 
@@ -2078,8 +2078,8 @@ fn namespaced_host_calls_and_std_map_new_parse_and_type() {
     let src = r#"
         fn f() {
             host::transfer_asset(
-              account_id("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonder"),
-              account_id("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonder"),
+              account_id("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
+              account_id("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"),
               asset_definition("coin#wonder"),
               1
             );
@@ -2099,8 +2099,8 @@ fn indirect_sensitive_calls_require_permission() {
     let src = r#"
         fn helper() {
             transfer_asset(
-              account_id("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonder"),
-              account_id("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonder"),
+              account_id("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
+              account_id("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"),
               asset_definition("coin#wonder"),
               1
             );
