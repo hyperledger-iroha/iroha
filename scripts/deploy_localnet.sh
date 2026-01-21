@@ -346,6 +346,28 @@ echo "Network is ready:"
 curl -sf --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
   "http://$PUBLIC_HOST_URL:$BASE_API_PORT/status" || true
 
+echo "Waiting for consensus mode tag..."
+MODE_TAG=""
+MODE_READY=false
+for ((i = 1; i <= TIMEOUT_SECS; i++)); do
+  MODE_TAG="$(
+    { curl -s --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
+        "http://$PUBLIC_HOST_URL:$BASE_API_PORT/v1/sumeragi/status" 2>/dev/null || true; } \
+      | sed -n 's/.*"mode_tag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+      | head -n1
+  )"
+  if [[ -n "$MODE_TAG" ]]; then
+    MODE_READY=true
+    break
+  fi
+  sleep 1
+done
+if [[ "$MODE_READY" == true ]]; then
+  echo "Consensus mode tag: $MODE_TAG"
+else
+  echo "Warning: consensus mode tag not reported yet; /status may show a default mode briefly." >&2
+fi
+
 CFG="$OUT_DIR/client.toml"
 if [[ "$SKIP_ASSET_REGISTER" != true ]]; then
   echo ""
