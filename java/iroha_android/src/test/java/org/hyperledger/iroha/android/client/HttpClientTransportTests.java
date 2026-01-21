@@ -112,7 +112,7 @@ public final class HttpClientTransportTests {
     assert acceptHeaders != null
         && acceptHeaders.contains("application/x-norito, application/json")
         : "Accept header must include Norito";
-    assert request.uri().toString().equals("http://127.0.0.1:8080/v1/pipeline/transactions")
+    assert request.uri().toString().equals("http://127.0.0.1:8080/transaction")
         : "Submit endpoint must target Torii pipeline route";
     final List<String> authHeaders = request.headers().get("Authorization");
     assert authHeaders != null && authHeaders.contains("Bearer token")
@@ -448,7 +448,7 @@ public final class HttpClientTransportTests {
             .orElseThrow(() -> new IllegalStateException("Hash must be present"));
     assert expectedHash.equals(fields.get("authority_hash"))
         : "Retry signal should carry hashed authority";
-    assert "/v1/pipeline/transactions".equals(fields.get("route"))
+    assert "/transaction".equals(fields.get("route"))
         : "Route must describe the Torii submit endpoint";
     assert Integer.valueOf(1).equals(fields.get("retry_count"))
         : "First retry should report attempt #1";

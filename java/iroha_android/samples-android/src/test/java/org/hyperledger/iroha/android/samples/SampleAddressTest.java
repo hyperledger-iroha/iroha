@@ -8,11 +8,13 @@ import org.junit.Test;
 
 public class SampleAddressTest {
   @Test
-  public void buildsAddressFromAarSurface() {
+  public void buildsAddressFromAarSurface() throws AccountAddress.AccountAddressException {
     byte[] key = new byte[32];
     AccountAddress address = AccountAddress.fromAccount("wonderland", key, "ed25519");
 
-    assertTrue(address.canonicalHex().contains("wonderland"));
-    assertEquals(address.canonicalHex(), address.displayFormats().ih58);
+    assertTrue(address.canonicalHex().startsWith("0x"));
+    AccountAddress.DisplayFormats formats = address.displayFormats();
+    assertEquals(address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX), formats.ih58);
+    assertTrue(formats.compressed.startsWith("snx1"));
   }
 }

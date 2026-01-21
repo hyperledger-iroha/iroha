@@ -7,7 +7,12 @@ import java.security.Signature;
 import java.util.Arrays;
 import org.hyperledger.iroha.android.SigningException;
 
-/** Ed25519 signer that relies on the JCA provider available on the runtime. */
+/**
+ * Ed25519 signer that relies on the JCA provider available on the runtime.
+ *
+ * <p>This signer expects raw bytes. Iroha-specific prehashing is applied by higher-level
+ * transaction helpers before calling {@link #sign(byte[])}.
+ */
 public final class Ed25519Signer implements Signer {
 
   private final PrivateKey privateKey;

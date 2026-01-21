@@ -7,6 +7,10 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.model.Executable;
+import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.NoritoException;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.junit.Test;
 
@@ -31,11 +35,24 @@ public final class HttpClientRejectCodeTests {
             .build();
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId("00000001")
+            .setAuthority("alice@wonderland")
+            .setCreationTimeMs(1L)
+            .setExecutable(Executable.ivm(new byte[] {0x01}))
+            .build();
+    final byte[] encodedPayload;
+    try {
+      encodedPayload = new NoritoJavaCodecAdapter().encodeTransaction(payload);
+    } catch (final NoritoException ex) {
+      throw new IllegalStateException("Failed to encode payload fixture", ex);
+    }
     final SignedTransaction tx =
         new SignedTransaction(
-            new byte[] {0x01},
-            new byte[] {0x02},
-            new byte[] {0x03},
+            encodedPayload,
+            new byte[64],
+            new byte[32],
             "iroha.android.transaction.Payload.v1");
 
     final ClientResponse response = transport.submitTransaction(tx).join();

@@ -11,7 +11,7 @@ import org.hyperledger.iroha.android.tx.SignedTransaction;
 
 /** Builds Torii HTTP requests for submitting signed transactions. */
 final class ToriiRequestBuilder {
-  private static final String SUBMIT_PATH = "/v1/pipeline/transactions";
+  private static final String SUBMIT_PATH = "/transaction";
   private static final String STATUS_PATH = "/v1/pipeline/transactions/status";
 
   private ToriiRequestBuilder() {}

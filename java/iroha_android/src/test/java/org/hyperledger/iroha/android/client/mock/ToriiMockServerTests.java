@@ -41,7 +41,7 @@ public final class ToriiMockServerTests {
       return;
     }
     try (ToriiMockServer server = maybeServer.get()) {
-      final URI submitUri = server.baseUri().resolve("/v1/pipeline/transactions");
+      final URI submitUri = server.baseUri().resolve("/transaction");
       server.enqueueSubmitResponse(
           ToriiMockServer.MockResponse.bytes(
               202,
@@ -61,7 +61,7 @@ public final class ToriiMockServerTests {
       final var submissions = server.submittedTransactions();
       assert submissions.size() == 1 : "Submission should be recorded";
       final var submission = submissions.get(0);
-      assert "/v1/pipeline/transactions".equals(submission.path())
+      assert "/transaction".equals(submission.path())
           : "Submission path should match Torii endpoint";
       assert Arrays.equals(submission.body(), new byte[] {0x01, 0x02, 0x03})
           : "Submission body should be captured";

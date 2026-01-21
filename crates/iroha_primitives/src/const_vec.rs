@@ -990,9 +990,15 @@ where
     if !type_name.contains("InstructionBox") {
         return None;
     }
-    norito::codec::decode_adaptive::<Vec<T>>(bytes)
-        .ok()
-        .map(ConstVec::from)
+    // Use streaming decode with current flags context instead of decode_adaptive
+    // which expects NRT0 header. The bytes here are raw ConstVec content, not
+    // NRT0-framed data.
+    let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
+    let guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+    let mut cursor = std::io::Cursor::new(bytes);
+    let result = <Vec<T> as norito::codec::Decode>::decode(&mut cursor).ok();
+    drop(guard);
+    result.map(ConstVec::from)
 }
 
 fn reencode_and_verify<T>(vec: &[T], decode_bytes: &[u8]) -> Result<usize, ncore::Error>

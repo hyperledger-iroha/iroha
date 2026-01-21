@@ -18,6 +18,7 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.crypto.Blake2b;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.TransactionPayload;
@@ -29,6 +30,7 @@ import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
+import org.hyperledger.iroha.norito.Varint;
 import org.junit.Test;
 
 import static org.junit.Assert.assertArrayEquals;
@@ -223,6 +225,16 @@ public final class TransactionFixtureManifestTests {
       return Base64.getDecoder().decode(value);
     } catch (final IllegalArgumentException ex) {
       throw new IllegalStateException(fieldName + " is not valid base64", ex);
+    }
+  }
+
+  private static final class PublicKeyPayload {
+    private final int curveId;
+    private final byte[] keyBytes;
+
+    private PublicKeyPayload(final int curveId, final byte[] keyBytes) {
+      this.curveId = curveId;
+      this.keyBytes = keyBytes;
     }
   }
 
@@ -521,8 +533,7 @@ public final class TransactionFixtureManifestTests {
       throw new IllegalStateException(name + ": payload has trailing bytes");
     }
     final String chainId = decodeFieldPayload(chainField, CHAIN_ID_ADAPTER, name + ".payload.chain_id");
-    final String authority =
-        decodeFieldPayload(authorityField, STRING_ADAPTER, name + ".payload.authority");
+    final String authority = decodeAuthorityField(authorityField, name + ".payload.authority");
     final long creationTimeMs =
         decodeFieldPayload(creationField, UINT64_ADAPTER, name + ".payload.creation_time_ms");
     final ExecutableEnvelope executable =
@@ -560,6 +571,151 @@ public final class TransactionFixtureManifestTests {
       return ExecutableEnvelope.forInstructions(instructions);
     }
     throw new IllegalStateException(name + ": unknown executable tag " + tag);
+  }
+
+  private static String decodeAuthorityField(final byte[] payload, final String field) {
+    try {
+      return decodeAccountIdStruct(payload, field);
+    } catch (final IllegalArgumentException ex) {
+      return decodeFieldPayload(payload, STRING_ADAPTER, field);
+    }
+  }
+
+  private static String decodeAccountIdStruct(final byte[] payload, final String field) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+    final String domain = STRING_ADAPTER.decode(decoder);
+    final long controllerTag = UINT32_ADAPTER.decode(decoder);
+    if (controllerTag != 0L) {
+      throw new IllegalArgumentException(field + ": unsupported AccountController tag " + controllerTag);
+    }
+    final String publicKeyLiteral = STRING_ADAPTER.decode(decoder);
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException(field + ": trailing bytes after AccountId payload");
+    }
+    final PublicKeyPayload payloadData = decodePublicKeyLiteral(publicKeyLiteral);
+    if (payloadData != null) {
+      final String ih58 = toIh58(domain, payloadData);
+      if (ih58 != null) {
+        return ih58 + "@" + domain;
+      }
+    }
+    return publicKeyLiteral + "@" + domain;
+  }
+
+  private static PublicKeyPayload decodePublicKeyLiteral(final String literal) {
+    if (literal == null || literal.isBlank()) {
+      return null;
+    }
+    String trimmed = literal.trim();
+    final int colonIndex = trimmed.indexOf(':');
+    if (colonIndex > 0) {
+      trimmed = trimmed.substring(colonIndex + 1);
+    }
+    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+      return null;
+    }
+    if ((trimmed.length() & 1) == 1) {
+      return null;
+    }
+    if (!trimmed.matches("(?i)[0-9a-f]+")) {
+      return null;
+    }
+    final byte[] bytes = hexToBytes(trimmed);
+    final Varint.DecodeResult code = Varint.decode(bytes, 0);
+    final Varint.DecodeResult len = Varint.decode(bytes, code.nextOffset());
+    if (len.value() > Integer.MAX_VALUE) {
+      return null;
+    }
+    final int payloadOffset = len.nextOffset();
+    final int payloadLength = (int) len.value();
+    if (payloadOffset + payloadLength != bytes.length) {
+      return null;
+    }
+    final int curveId = curveIdForMultihashCode(code.value());
+    if (curveId < 0) {
+      return null;
+    }
+    final byte[] keyBytes =
+        Arrays.copyOfRange(bytes, payloadOffset, payloadOffset + payloadLength);
+    return new PublicKeyPayload(curveId, keyBytes);
+  }
+
+  private static int curveIdForMultihashCode(final long code) {
+    if (code == 0xedL) {
+      return 0x01;
+    }
+    if (code == 0xeeL) {
+      return 0x02;
+    }
+    if (code == 0x1200L) {
+      return 0x0A;
+    }
+    if (code == 0x1201L) {
+      return 0x0B;
+    }
+    if (code == 0x1202L) {
+      return 0x0C;
+    }
+    if (code == 0x1203L) {
+      return 0x0D;
+    }
+    if (code == 0x1204L) {
+      return 0x0E;
+    }
+    if (code == 0x1306L) {
+      return 0x0F;
+    }
+    return -1;
+  }
+
+  private static String toIh58(final String domain, final PublicKeyPayload payload) {
+    final String algorithm = algorithmForCurveId(payload.curveId);
+    if (algorithm == null) {
+      return null;
+    }
+    try {
+      final AccountAddress address = AccountAddress.fromAccount(domain, payload.keyBytes, algorithm);
+      return address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      return null;
+    }
+  }
+
+  private static String algorithmForCurveId(final int curveId) {
+    switch (curveId) {
+      case 0x01:
+        return "ed25519";
+      case 0x02:
+        return "ml-dsa";
+      case 0x0A:
+        return "gost256a";
+      case 0x0B:
+        return "gost256b";
+      case 0x0C:
+        return "gost256c";
+      case 0x0D:
+        return "gost512a";
+      case 0x0E:
+        return "gost512b";
+      case 0x0F:
+        return "sm2";
+      default:
+        return null;
+    }
+  }
+
+  private static byte[] hexToBytes(final String hex) {
+    final int len = hex.length();
+    final byte[] out = new byte[len / 2];
+    for (int i = 0; i < len; i += 2) {
+      final int high = Character.digit(hex.charAt(i), 16);
+      final int low = Character.digit(hex.charAt(i + 1), 16);
+      if (high < 0 || low < 0) {
+        throw new IllegalArgumentException("Invalid hex literal");
+      }
+      out[i / 2] = (byte) ((high << 4) + low);
+    }
+    return out;
   }
 
   private static List<InstructionEnvelope> decodeInstructionEnvelopes(

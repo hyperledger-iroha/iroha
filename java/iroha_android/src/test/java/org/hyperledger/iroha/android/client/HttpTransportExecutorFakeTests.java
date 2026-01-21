@@ -23,11 +23,11 @@ public final class HttpTransportExecutorFakeTests {
     final FakeHttpTransportExecutor executor = new FakeHttpTransportExecutor();
     final TransportResponse pathResponse =
         new TransportResponse(202, "ok".getBytes(StandardCharsets.UTF_8), "", Map.of());
-    executor.enqueueResponse("/v1/pipeline/transactions", pathResponse);
+    executor.enqueueResponse("/transaction", pathResponse);
 
     final TransportRequest request =
         TransportRequest.builder()
-            .setUri(URI.create("https://example.test/v1/pipeline/transactions"))
+            .setUri(URI.create("https://example.test/transaction"))
             .setMethod("POST")
             .build();
 

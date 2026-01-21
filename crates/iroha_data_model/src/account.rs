@@ -565,8 +565,7 @@ impl Default for AccountDetails {
 /// In other places use [`Account`] directly.
 pub type AccountValue = Owned<AccountDetails>;
 
-const ERR_ACCOUNT_LITERAL_FORMAT: &str =
-    "AccountId must be IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or `<alias|public_key>@<domain>`";
+const ERR_ACCOUNT_LITERAL_FORMAT: &str = "AccountId must be IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or `<alias|public_key|address>@<domain>`";
 const ERR_DOMAIN_SELECTOR_UNRESOLVED: &str = "ERR_DOMAIN_SELECTOR_UNRESOLVED";
 const ERR_UAID_UNRESOLVED: &str = "ERR_UAID_UNRESOLVED";
 const ERR_OPAQUE_ID_UNRESOLVED: &str = "ERR_OPAQUE_ID_UNRESOLVED";
@@ -766,9 +765,22 @@ impl AccountId {
                 let domain = domain_part.parse().map_err(|_| ParseError {
                     reason: "Failed to parse `domain` part in `<identifier>@<domain>`",
                 })?;
-
-                if AccountAddress::parse_any(address_part, None).is_ok() {
-                    return Err(ParseError::new(ERR_ACCOUNT_LITERAL_FORMAT));
+                let expected_prefix = address::chain_discriminant();
+                match AccountAddress::parse_any(address_part, Some(expected_prefix)) {
+                    Ok((address, format)) => {
+                        address
+                            .ensure_domain_matches(&domain)
+                            .map_err(|err| ParseError::new(err.code_str()))?;
+                        let controller = address
+                            .to_account_controller()
+                            .map_err(|err| ParseError::new(err.code_str()))?;
+                        return Ok((
+                            Self { domain, controller },
+                            AccountAddressSource::Encoded(format),
+                        ));
+                    }
+                    Err(AccountAddressError::UnsupportedAddressFormat) => {}
+                    Err(err) => return Err(ParseError::new(err.code_str())),
                 }
 
                 if let Some(alias_account) = resolve_account_alias(address_part, &domain) {
@@ -988,6 +1000,8 @@ mod account_id_parsing_tests {
     use super::*;
     use crate::domain::DomainId;
 
+    static DOMAIN_SELECTOR_RESOLVER_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
     fn guard_alias_resolver() -> MutexGuard<'static, ()> {
         static ALIAS_RESOLVER_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
         ALIAS_RESOLVER_GUARD
@@ -1008,12 +1022,18 @@ mod account_id_parsing_tests {
     fn guard_domain_selector_resolver(
         resolver: Arc<AccountDomainSelectorResolver>,
     ) -> DomainSelectorResolverGuard {
-        static DOMAIN_SELECTOR_RESOLVER_GUARD: LazyLock<Mutex<()>> =
-            LazyLock::new(|| Mutex::new(()));
         let lock = DOMAIN_SELECTOR_RESOLVER_GUARD
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         set_account_domain_selector_resolver(resolver);
+        DomainSelectorResolverGuard { _lock: lock }
+    }
+
+    fn guard_domain_selector_resolver_clear() -> DomainSelectorResolverGuard {
+        let lock = DOMAIN_SELECTOR_RESOLVER_GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clear_account_domain_selector_resolver();
         DomainSelectorResolverGuard { _lock: lock }
     }
 
@@ -1070,6 +1090,32 @@ mod account_id_parsing_tests {
             .parse()
             .expect("0x-prefixed account id must parse");
         assert_eq!(parsed, account);
+    }
+
+    #[test]
+    fn encoded_literals_with_domain_parse_without_resolver() {
+        let _guard = guard_domain_selector_resolver_clear();
+        let domain: DomainId = "fallback-domain".parse().expect("valid domain");
+        let key_pair = KeyPair::from_seed(vec![0x5A; 32], Algorithm::Ed25519);
+        let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
+        let address = AccountAddress::from_account_id(&account).expect("address encodes");
+        let ih58 = address
+            .to_ih58(address::chain_discriminant())
+            .expect("IH58 encode");
+        let compressed = address.to_compressed_sora().expect("compressed encode");
+        let canonical_hex = address.canonical_hex().expect("canonical hex encode");
+        let domain_suffix = domain.to_string();
+
+        for literal in [
+            format!("{ih58}@{domain_suffix}"),
+            format!("{compressed}@{domain_suffix}"),
+            format!("{canonical_hex}@{domain_suffix}"),
+        ] {
+            let parsed = AccountId::parse(&literal)
+                .expect("encoded literal should parse with explicit domain")
+                .into_account_id();
+            assert_eq!(parsed, account);
+        }
     }
 
     #[test]

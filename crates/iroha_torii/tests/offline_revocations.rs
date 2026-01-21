@@ -406,10 +406,7 @@ fn compressed_literal(account_id: &AccountId) -> String {
     account_id
         .to_account_address()
         .and_then(|address| address.to_compressed_sora())
-        .map_or_else(
-            |_| account_id.to_string(),
-            |compressed| format!("{compressed}@{}", account_id.domain()),
-        )
+        .map_or_else(|_| account_id.to_string(), |compressed| compressed)
 }
 
 fn exists_filter(field: &str) -> Value {

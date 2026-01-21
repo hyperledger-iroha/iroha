@@ -47,7 +47,7 @@ public final class HttpClientRejectCodeOkHttpTests {
 
       final RecordedRequest recorded = server.takeRequest(1, TimeUnit.SECONDS);
       assertNotNull("mock server must observe submission", recorded);
-      assertEquals("/v1/pipeline/transactions", recorded.getPath());
+      assertEquals("/transaction", recorded.getPath());
     }
   }
 

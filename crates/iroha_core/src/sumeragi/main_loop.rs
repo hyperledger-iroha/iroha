@@ -8069,8 +8069,7 @@ impl Actor {
 
     pub(super) fn next_tick_deadline(&self, now: Instant) -> Option<Instant> {
         let queue_len = self.queue.active_len();
-        let has_active_pending = self.has_active_pending_blocks();
-        if queue_len > 0 && !has_active_pending {
+        if queue_len > 0 {
             return Some(now);
         }
         let mut next_due = Self::merge_deadline(None, self.pending_block_next_due(now));

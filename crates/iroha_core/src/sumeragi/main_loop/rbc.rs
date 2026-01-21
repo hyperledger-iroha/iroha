@@ -3596,11 +3596,10 @@ impl Actor {
                     block_payload_rx_depth = queue_depths.block_payload_rx,
                     rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                     block_rx_depth = queue_depths.block_rx,
-                    "deferring commit pipeline after RBC READY due to consensus queue backlog"
+                    "consensus queue backlog detected while handling RBC READY"
                 );
-            } else {
-                self.process_commit_candidates();
             }
+            self.process_commit_candidates();
         }
         Ok(())
     }
