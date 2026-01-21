@@ -38,6 +38,9 @@ impl GcSweeperRuntime {
                 "GC sweep reported errors"
             );
         }
+        if let Err(err) = self.node.run_reconciliation_once(now_secs) {
+            iroha_logger::warn!(%err, "reconciliation snapshot failed");
+        }
     }
 
     /// Spawn the GC runtime loop until the supplied shutdown signal is received.

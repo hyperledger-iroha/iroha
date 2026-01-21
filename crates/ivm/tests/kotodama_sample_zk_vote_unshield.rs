@@ -7,7 +7,7 @@ use ivm::{encoding, instruction::wide, syscalls};
 #[test]
 fn sample_compiles_to_zk_and_vendor_syscalls() {
     // Embed the sample source and compile it
-    let src = include_str!("../src/kotodama/samples/zk_vote_and_unshield.ko");
+    let src = include_str!("../../kotodama_lang/src/samples/zk_vote_and_unshield.ko");
     let code = ivm::kotodama::compiler::Compiler::new()
         .compile_source(src)
         .expect("compile sample");

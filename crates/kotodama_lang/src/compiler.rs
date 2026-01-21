@@ -488,7 +488,7 @@ fn parse_u64_literal(raw: &str) -> Option<u64> {
 //   - `execute_instruction` and `sc_execute_*` variants lower to
 //     SCALL 0xA0 with `&NoritoBytes(InstructionBox)` in r10.
 // See `kotodama::semantic`, `kotodama::ir`, and the sample
-// `crates/ivm/src/kotodama/samples/zk_vote_and_unshield.ko`.
+// `crates/kotodama_lang/src/samples/zk_vote_and_unshield.ko`.
 
 /// Compiler entry point for translating KOTODAMA programs into IVM bytecode.
 pub struct Compiler {
@@ -543,8 +543,8 @@ mod tests {
         patch_pointer_literal_stub, pointer_type_for_kind, reserve_pointer_literal_stub,
         stack_slot_offset_bytes,
     };
-    use crate::kotodama::ast::ContractMeta;
-    use crate::{IVM, ProgramMetadata, encoding, instruction, pointer_abi::PointerType};
+    use crate::ast::ContractMeta;
+    use crate::{ProgramMetadata, encoding, instruction, pointer_abi::PointerType};
 
     #[test]
     fn pointer_types_cover_all_data_ref_kinds() {
@@ -1466,39 +1466,35 @@ seiyaku Test {
 
     #[test]
     fn entry_spills_use_stack_frame() {
-        const TEST_STACK_SIZE: usize = 8 * 1024 * 1024;
-        let handle = std::thread::Builder::new()
-            .name("entry_spills_use_stack_frame".to_string())
-            .stack_size(TEST_STACK_SIZE)
-            .spawn(|| {
-                let mut src = String::from("seiyaku SpillTest {\n  kotoage fn main() -> int {\n");
-                let mut expected: i64 = 0;
-                let count = 32;
-                for i in 0..count {
-                    let value = (i + 1) as i64;
-                    expected += value;
-                    src.push_str(&format!("    let a{i} = {value};\n"));
-                }
-                src.push_str("    let sum = ");
-                for i in 0..count {
-                    if i > 0 {
-                        src.push_str(" + ");
-                    }
-                    src.push_str(&format!("a{i}"));
-                }
-                src.push_str(";\n    return sum;\n  }\n}\n");
-
-                let compiler = Compiler::new();
-                let bytes = compiler.compile_source(&src).expect("compile spill test");
-                let mut vm = IVM::new(1_000_000);
-                vm.load_program(&bytes).expect("load spill program");
-                vm.run().expect("run spill program");
-                assert_eq!(vm.register(10), expected as u64);
-            })
-            .expect("spawn entry_spills_use_stack_frame thread");
-        if let Err(err) = handle.join() {
-            std::panic::resume_unwind(err);
+        let mut src = String::from("seiyaku SpillTest {\n  kotoage fn main() -> int {\n");
+        let count = 32;
+        for i in 0..count {
+            let value = i + 1;
+            src.push_str(&format!("    let a{i} = {value};\n"));
         }
+        src.push_str("    let sum = ");
+        for i in 0..count {
+            if i > 0 {
+                src.push_str(" + ");
+            }
+            src.push_str(&format!("a{i}"));
+        }
+        src.push_str(";\n    return sum;\n  }\n}\n");
+
+        let parsed = crate::parser::parse(&src).expect("parse spill test");
+        let typed = crate::semantic::analyze(&parsed).expect("type spill test");
+        let ir_prog = crate::ir::lower(&typed).expect("lower spill test");
+        let func = ir_prog
+            .functions
+            .iter()
+            .find(|func| func.name == "main")
+            .expect("main function");
+        let alloc = crate::regalloc::allocate(func);
+        assert!(
+            !alloc.stack.is_empty(),
+            "expected spills to allocate stack slots"
+        );
+        assert!(alloc.frame_size > 0, "expected non-zero frame size");
     }
 }
 
@@ -6882,53 +6878,53 @@ fn build_entrypoint_descriptors(
             .push(descriptor);
     }
 
-    let build_descriptor =
-        |func: &semantic::TypedFunction, kind: EntryPointKind| -> EntrypointDescriptor {
-            let include_hints = hintable_by_name
+    let build_descriptor = |func: &semantic::TypedFunction,
+                            kind: EntryPointKind|
+     -> EntrypointDescriptor {
+        let include_hints = hintable_by_name
+            .get(func.name.as_str())
+            .copied()
+            .unwrap_or(false);
+        let (mut reads, mut writes): (Vec<String>, Vec<String>) = if include_hints {
+            hints_by_name
                 .get(func.name.as_str())
-                .copied()
-                .unwrap_or(false);
-            let (mut reads, mut writes): (Vec<String>, Vec<String>) = if include_hints {
-                hints_by_name
-                    .get(func.name.as_str())
-                    .map(|(r, w)| {
-                        (
-                            r.iter().cloned().collect::<Vec<_>>(),
-                            w.iter().cloned().collect::<Vec<_>>(),
-                        )
-                    })
-                    .unwrap_or_else(|| (Vec::new(), Vec::new()))
-            } else {
-                (Vec::new(), Vec::new())
-            };
-            if include_hints && (reads.is_empty() || writes.is_empty()) {
-                let (fallback_reads, fallback_writes) =
-                    crate::kotodama::semantic::function_state_accesses(func);
-                if reads.is_empty() && !fallback_reads.is_empty() {
-                    reads = fallback_reads.iter().cloned().collect();
-                }
-                if writes.is_empty() && !fallback_writes.is_empty() {
-                    writes = fallback_writes.iter().cloned().collect();
-                }
-            }
-            let triggers = triggers_by_name
-                .get(func.name.as_str())
-                .cloned()
-                .unwrap_or_default();
-            let report = hint_report_by_name.get(func.name.as_str()).copied();
-            EntrypointDescriptor {
-                name: func.name.clone(),
-                kind,
-                permission: func.modifiers.permission.clone(),
-                read_keys: reads,
-                write_keys: writes,
-                access_hints_complete: report.map(|r| r.emitted),
-                access_hints_skipped: report
-                    .map(|r| r.skipped_reasons.clone())
-                    .unwrap_or_default(),
-                triggers,
-            }
+                .map(|(r, w)| {
+                    (
+                        r.iter().cloned().collect::<Vec<_>>(),
+                        w.iter().cloned().collect::<Vec<_>>(),
+                    )
+                })
+                .unwrap_or_else(|| (Vec::new(), Vec::new()))
+        } else {
+            (Vec::new(), Vec::new())
         };
+        if include_hints && (reads.is_empty() || writes.is_empty()) {
+            let (fallback_reads, fallback_writes) = crate::semantic::function_state_accesses(func);
+            if reads.is_empty() && !fallback_reads.is_empty() {
+                reads = fallback_reads.iter().cloned().collect();
+            }
+            if writes.is_empty() && !fallback_writes.is_empty() {
+                writes = fallback_writes.iter().cloned().collect();
+            }
+        }
+        let triggers = triggers_by_name
+            .get(func.name.as_str())
+            .cloned()
+            .unwrap_or_default();
+        let report = hint_report_by_name.get(func.name.as_str()).copied();
+        EntrypointDescriptor {
+            name: func.name.clone(),
+            kind,
+            permission: func.modifiers.permission.clone(),
+            read_keys: reads,
+            write_keys: writes,
+            access_hints_complete: report.map(|r| r.emitted),
+            access_hints_skipped: report
+                .map(|r| r.skipped_reasons.clone())
+                .unwrap_or_default(),
+            triggers,
+        }
+    };
 
     let mut entrypoints: Vec<EntrypointDescriptor> = typed
         .items

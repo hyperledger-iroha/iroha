@@ -206,3 +206,71 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS retention expiry backlog is not clearing"
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_repair_queue_depth{provider="provider-a"}'
+        values: '60 60 60 60 60 60 60 60 60 60 60 60 60 60 60'
+      - series: 'torii_sorafs_repair_backlog_oldest_age_seconds'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - alertname: SoraFSRepairBacklogHigh
+        eval_time: 9m
+        exp_alerts: []
+      - alertname: SoraFSRepairBacklogHigh
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS repair backlog above SLA thresholds"
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_repair_queue_depth{provider="provider-b"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'torii_sorafs_repair_backlog_oldest_age_seconds'
+        values: '15000 15000 15000 15000 15000 15000 15000 15000 15000 15000 15000 15000 15000 15000 15000'
+    alert_rule_test:
+      - alertname: SoraFSRepairBacklogHigh
+        eval_time: 9m
+        exp_alerts: []
+      - alertname: SoraFSRepairBacklogHigh
+        eval_time: 12m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS repair backlog above SLA thresholds"
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_repair_tasks_total{status="escalated"}'
+        values: '0 0 1 2 3 4 4 4 4 4 4 4 4 4 4'
+      - series: 'torii_sorafs_repair_lease_expired_total{outcome="requeued"}'
+        values: '0 1 2 3 4 5 6 6 6 6 6 6 6 6 6'
+    alert_rule_test:
+      - alertname: SoraFSRepairEscalations
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS repair escalations elevated"
+      - alertname: SoraFSRepairLeaseExpirySpike
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS repair lease expiries spiking"
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_gc_blocked_total{reason="repair_active"}'
+        values: '0 0 0 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - alertname: SoraFSRetentionBlockedEvictions
+        eval_time: 4m
+        exp_alerts:
+          - exp_labels:
+              reason: repair_active
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS retention evictions blocked by active repairs"

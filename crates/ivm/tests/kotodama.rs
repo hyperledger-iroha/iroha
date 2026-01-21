@@ -127,7 +127,7 @@ fn string_equality_compiles() {
 
 #[test]
 fn irohaswap_sample_compiles() {
-    let src = include_str!("../src/kotodama/samples/irohaswap.ko");
+    let src = include_str!("../../kotodama_lang/src/samples/irohaswap.ko");
     let code = Compiler::new()
         .compile_source(src)
         .expect("irohaswap sample should compile");
@@ -2792,15 +2792,16 @@ fn parse_mfc_example() {
 fn compile_kotodama_samples_supported() {
     use std::path::Path;
     let compiler = Compiler::new();
+    let samples_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../kotodama_lang/src/samples");
     // Compile a curated subset of samples supported by the current compiler
     let files = [
-        "src/kotodama/samples/asset_ops.ko",
-        "src/kotodama/samples/mint_rose_trigger.ko",
-        "src/kotodama/samples/query_assets_and_save_cursor.ko",
-        "src/kotodama/samples/smart_contract_can_filter_queries.ko",
+        "asset_ops.ko",
+        "mint_rose_trigger.ko",
+        "query_assets_and_save_cursor.ko",
+        "smart_contract_can_filter_queries.ko",
     ];
     for file in files {
-        let src = std::fs::read_to_string(Path::new(file)).expect("read failed");
+        let src = std::fs::read_to_string(samples_dir.join(file)).expect("read failed");
         compiler
             .compile_source(&src)
             .unwrap_or_else(|e| panic!("compile failed for {file}: {e}"));

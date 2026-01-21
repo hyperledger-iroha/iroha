@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use super::{AnalysisCategory, AnalysisFinding};
-use crate::kotodama::{
+use crate::{
     ast::{Block, Expr, Item, Program, Statement},
     semantic::{
         self, ExprKind, TypedBlock, TypedExpr, TypedFunction, TypedProgram, TypedStatement,
@@ -42,7 +42,7 @@ fn detect_literal_overflow(typed: &TypedProgram, findings: &mut Vec<AnalysisFind
                 let lhs = literal_i64(left);
                 let rhs = literal_i64(right);
                 match op {
-                    crate::kotodama::ast::BinaryOp::Add => {
+                    crate::ast::BinaryOp::Add => {
                         if let (Some(a), Some(b)) = (lhs, rhs) {
                             let sum = (a as i128) + (b as i128);
                             if sum < i64::MIN as i128 || sum > i64::MAX as i128 {
@@ -56,7 +56,7 @@ fn detect_literal_overflow(typed: &TypedProgram, findings: &mut Vec<AnalysisFind
                             }
                         }
                     }
-                    crate::kotodama::ast::BinaryOp::Sub => {
+                    crate::ast::BinaryOp::Sub => {
                         if let (Some(a), Some(b)) = (lhs, rhs) {
                             let diff = (a as i128) - (b as i128);
                             if diff < i64::MIN as i128 || diff > i64::MAX as i128 {
@@ -70,7 +70,7 @@ fn detect_literal_overflow(typed: &TypedProgram, findings: &mut Vec<AnalysisFind
                             }
                         }
                     }
-                    crate::kotodama::ast::BinaryOp::Mul => {
+                    crate::ast::BinaryOp::Mul => {
                         if let (Some(a), Some(b)) = (lhs, rhs) {
                             let prod = (a as i128) * (b as i128);
                             if prod < i64::MIN as i128 || prod > i64::MAX as i128 {
@@ -99,10 +99,7 @@ fn detect_division_by_zero(typed: &TypedProgram, findings: &mut Vec<AnalysisFind
                 return;
             }
             if let ExprKind::Binary { op, right, .. } = &expr.expr
-                && matches!(
-                    op,
-                    crate::kotodama::ast::BinaryOp::Div | crate::kotodama::ast::BinaryOp::Mod
-                )
+                && matches!(op, crate::ast::BinaryOp::Div | crate::ast::BinaryOp::Mod)
                 && literal_i64(right) == Some(0)
             {
                 findings.push(AnalysisFinding::warning(
@@ -120,7 +117,7 @@ fn literal_i64(expr: &TypedExpr) -> Option<i64> {
         ExprKind::Number(n) => Some(*n),
         ExprKind::NumericCast { expr } => literal_i64(expr),
         ExprKind::Unary {
-            op: crate::kotodama::ast::UnaryOp::Neg,
+            op: crate::ast::UnaryOp::Neg,
             expr,
         } => literal_i64(expr).and_then(|v| v.checked_neg()),
         _ => None,
@@ -588,7 +585,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kotodama::parser::parse;
+    use crate::parser::parse;
 
     fn analyze_static(source: &str) -> Vec<AnalysisFinding> {
         let program = parse(source).expect("parse");

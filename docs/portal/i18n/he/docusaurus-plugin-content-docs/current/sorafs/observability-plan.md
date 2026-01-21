@@ -85,6 +85,25 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | נתוני הצלחת capacity/uptime של ספק המוצגים בדשבורד capacity. |
 | `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | עומק backlog בתוספת מוני כשל מצטברים שמיוצאים בכל polling של `/v1/sorafs/por/ingestion/{manifest}`, מזינים את פאנל/התראת "PoR Stalls". |
 
+### תיקון ו‑SLA
+
+| מדד | סוג | Labels | הערות |
+|-----|-----|--------|-------|
+| `sorafs_repair_tasks_total` | Counter | `status` | מונה OTEL למעברי משימות תיקון. |
+| `sorafs_repair_latency_minutes` | Histogram | `outcome` | היסטוגרמת OTEL לזמן השהייה במחזור חיי התיקון. |
+| `sorafs_repair_queue_depth` | Histogram | `provider` | היסטוגרמת OTEL של משימות בתור לכל ספק (סגנון snapshot). |
+| `sorafs_repair_backlog_oldest_age_seconds` | Histogram | — | היסטוגרמת OTEL לגיל המשימה הוותיקה ביותר בתור (שניות). |
+| `sorafs_repair_lease_expired_total` | Counter | `outcome` | מונה OTEL לפקיעות חכירה (`requeued`/`escalated`). |
+| `sorafs_repair_slash_proposals_total` | Counter | `outcome` | מונה OTEL למעברי הצעות slash. |
+| `torii_sorafs_repair_tasks_total` | Counter | `status` | מונה Prometheus למעברי משימות. |
+| `torii_sorafs_repair_latency_minutes_bucket` | Histogram | `outcome` | היסטוגרמת Prometheus לזמן השהייה במחזור חיי התיקון. |
+| `torii_sorafs_repair_queue_depth` | Gauge | `provider` | מדד Prometheus למשימות בתור לכל ספק. |
+| `torii_sorafs_repair_backlog_oldest_age_seconds` | Gauge | — | מדד Prometheus לגיל המשימה הוותיקה ביותר בתור (שניות). |
+| `torii_sorafs_repair_lease_expired_total` | Counter | `outcome` | מונה Prometheus לפקיעות חכירה. |
+| `torii_sorafs_slash_proposals_total` | Counter | `outcome` | מונה Prometheus למעברי הצעות slash. |
+
+מטא־נתוני JSON של ביקורת הממשל משקפים את תוויות הטלמטריה של התיקון (`status`, `ticket_id`, `manifest`, `provider` באירועי תיקון; `outcome` בהצעות slash) כדי לאפשר קורלציה דטרמיניסטית בין מדדים לארטיפקטי ביקורת.
+
 ### Proof of Timely Retrieval (PoTR) ו-SLA של chunks
 
 | מדד | סוג | Labels | מפיק | הערות |

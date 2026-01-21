@@ -122,7 +122,10 @@ Common errors raised to operators/SDKs:
   hard-expired proofs return `412`.
 - `iroha sorafs repair list` mirrors repair queue filters, while
   `repair claim|complete|fail|escalate` submit signed worker actions or slash
-  proposals to Torii.
+  proposals to Torii. Slash proposals may include a governance approval summary
+  (approve/reject/abstain vote counts plus approved_at/finalized_at
+  timestamps); when present it must satisfy quorum and dispute/appeal windows,
+  otherwise the proposal stays in dispute until votes resolve at the deadline.
 - Repair listings and worker queue selection are ordered by SLA deadline, failure severity, and provider backlog with deterministic tie-breakers (queued time, manifest digest, ticket id).
 - Repair status responses include an `events` array containing base64 Norito
   `RepairTaskEventV1` entries ordered by occurrence for audit trails; the list

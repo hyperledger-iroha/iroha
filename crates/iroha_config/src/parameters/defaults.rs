@@ -2767,6 +2767,21 @@ pub mod governance {
         pub const MAX_POTR_BREACHES: u32 = 0;
     }
 
+    /// Default SoraFS repair escalation governance policy.
+    pub mod sorafs_repair_escalation {
+        /// Minimum approval ratio required for escalation/slash decisions (basis points).
+        pub const QUORUM_BPS: u16 = 6_667;
+        /// Minimum number of distinct voters required to resolve a decision.
+        pub const MINIMUM_VOTERS: u32 = 3;
+        /// Dispute window in seconds after escalation before governance finalizes.
+        pub const DISPUTE_WINDOW_SECS: u64 = 24 * 60 * 60;
+        /// Appeal window in seconds after approval before a decision is final.
+        pub const APPEAL_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
+        /// Maximum slash penalty allowed for repair escalation proposals (nano-XOR).
+        pub const MAX_PENALTY_NANO: u128 =
+            crate::parameters::defaults::sorafs::repair::DEFAULT_SLASH_PENALTY_NANO;
+    }
+
     /// Default authentication and validation policy for SoraFS telemetry.
     pub mod sorafs_telemetry {
         /// Require telemetry submissions to originate from an authorised submitter list.

@@ -30,6 +30,7 @@ import org.hyperledger.iroha.norito.Varint;
 final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload> {
 
   private static final TypeAdapter<String> STRING_ADAPTER = NoritoAdapters.stringAdapter();
+  private static final TypeAdapter<String> DOMAIN_ID_ADAPTER = new DomainIdAdapter();
   private static final TypeAdapter<String> ACCOUNT_ID_ADAPTER = new AccountIdAdapter();
   private static final TypeAdapter<String> CHAIN_ID_ADAPTER = new ChainIdAdapter();
   private static final JsonStringAdapter JSON_STRING_ADAPTER = new JsonStringAdapter();
@@ -153,6 +154,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final class AccountIdAdapter implements TypeAdapter<String> {
     private static final long SINGLE_CONTROLLER_TAG = 0L;
     private static final long MULTISIG_CONTROLLER_TAG = 1L;
+    private static final TypeAdapter<String> CONTROLLER_ADAPTER = new AccountControllerAdapter();
 
     @Override
     public void encode(final NoritoEncoder encoder, final String value) {
@@ -161,9 +163,8 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
         STRING_ADAPTER.encode(encoder, value);
         return;
       }
-      STRING_ADAPTER.encode(encoder, single.domain);
-      ENUM_TAG_ADAPTER.encode(encoder, SINGLE_CONTROLLER_TAG);
-      STRING_ADAPTER.encode(encoder, single.publicKey);
+      encodeSizedField(encoder, DOMAIN_ID_ADAPTER, single.domain);
+      encodeSizedField(encoder, CONTROLLER_ADAPTER, single.publicKey);
     }
 
     @Override
@@ -187,6 +188,33 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     }
 
     private static String decodeAccountIdStruct(
+        final byte[] payload, final int flags, final int flagsHint) {
+      try {
+        return decodeAccountIdSized(payload, flags, flagsHint);
+      } catch (final IllegalArgumentException ex) {
+        return decodeAccountIdLegacy(payload, flags, flagsHint);
+      }
+    }
+
+    private static String decodeAccountIdSized(
+        final byte[] payload, final int flags, final int flagsHint) {
+      final NoritoDecoder decoder = new NoritoDecoder(payload, flags, flagsHint);
+      final String domain = decodeSizedField(decoder, DOMAIN_ID_ADAPTER);
+      final String publicKeyLiteral = decodeSizedField(decoder, CONTROLLER_ADAPTER);
+      if (decoder.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after AccountId payload");
+      }
+      final PublicKeyPayload payloadData = decodePublicKeyLiteral(publicKeyLiteral);
+      if (payloadData != null) {
+        final String ih58 = toIh58(domain, payloadData);
+        if (ih58 != null) {
+          return ih58 + "@" + domain;
+        }
+      }
+      return publicKeyLiteral + "@" + domain;
+    }
+
+    private static String decodeAccountIdLegacy(
         final byte[] payload, final int flags, final int flagsHint) {
       final NoritoDecoder decoder = new NoritoDecoder(payload, flags, flagsHint);
       final String domain = STRING_ADAPTER.decode(decoder);
@@ -247,6 +275,27 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
         return null;
       }
       return encodePublicKeyMultihash(payload.curveId, payload.keyBytes);
+    }
+
+    private static final class AccountControllerAdapter implements TypeAdapter<String> {
+      @Override
+      public void encode(final NoritoEncoder encoder, final String value) {
+        ENUM_TAG_ADAPTER.encode(encoder, SINGLE_CONTROLLER_TAG);
+        encodeSizedField(encoder, STRING_ADAPTER, value);
+      }
+
+      @Override
+      public String decode(final NoritoDecoder decoder) {
+        final long controllerTag = ENUM_TAG_ADAPTER.decode(decoder);
+        if (controllerTag != SINGLE_CONTROLLER_TAG) {
+          throw new IllegalArgumentException("Unsupported AccountController tag: " + controllerTag);
+        }
+        final String publicKeyLiteral = decodeSizedField(decoder, STRING_ADAPTER);
+        if (decoder.remaining() != 0) {
+          throw new IllegalArgumentException("Trailing bytes after AccountController payload");
+        }
+        return publicKeyLiteral;
+      }
     }
 
     private static String toIh58(final String domain, final PublicKeyPayload payload) {
@@ -424,6 +473,38 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     }
   }
 
+  private static final class DomainIdAdapter implements TypeAdapter<String> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final String value) {
+      encodeSizedField(encoder, STRING_ADAPTER, value);
+    }
+
+    @Override
+    public String decode(final NoritoDecoder decoder) {
+      final byte[] payload = decoder.readBytes(decoder.remaining());
+      return decodeDomainPayload(payload, decoder.flags(), decoder.flagsHint());
+    }
+
+    private static String decodeDomainPayload(
+        final byte[] payload, final int flags, final int flagsHint) {
+      try {
+        final NoritoDecoder child = new NoritoDecoder(payload, flags, flagsHint);
+        final String domain = decodeSizedField(child, STRING_ADAPTER);
+        if (child.remaining() != 0) {
+          throw new IllegalArgumentException("Trailing bytes after DomainId payload");
+        }
+        return domain;
+      } catch (final IllegalArgumentException ex) {
+        final NoritoDecoder child = new NoritoDecoder(payload, flags, flagsHint);
+        final String domain = STRING_ADAPTER.decode(child);
+        if (child.remaining() != 0) {
+          throw new IllegalArgumentException("Trailing bytes after DomainId payload");
+        }
+        return domain;
+      }
+    }
+  }
+
   private static final class PublicKeyPayload {
     private final int curveId;
     private final byte[] keyBytes;
@@ -520,24 +601,64 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final class ChainIdAdapter implements TypeAdapter<String> {
     @Override
     public void encode(final NoritoEncoder encoder, final String value) {
-      encodeSizedField(encoder, STRING_ADAPTER, value);
+      STRING_ADAPTER.encode(encoder, value);
     }
 
     @Override
     public String decode(final NoritoDecoder decoder) {
-      return decodeSizedField(decoder, STRING_ADAPTER);
+      final byte[] payload = decoder.readBytes(decoder.remaining());
+      return decodePayload(payload, decoder.flags(), decoder.flagsHint());
+    }
+
+    private static String decodePayload(
+        final byte[] payload, final int flags, final int flagsHint) {
+      try {
+        final NoritoDecoder direct = new NoritoDecoder(payload, flags, flagsHint);
+        final String value = STRING_ADAPTER.decode(direct);
+        if (direct.remaining() != 0) {
+          throw new IllegalArgumentException("Trailing bytes after ChainId payload");
+        }
+        return value;
+      } catch (final IllegalArgumentException ex) {
+        final NoritoDecoder legacy = new NoritoDecoder(payload, flags, flagsHint);
+        final String value = decodeSizedField(legacy, STRING_ADAPTER);
+        if (legacy.remaining() != 0) {
+          throw new IllegalArgumentException("Trailing bytes after ChainId legacy payload");
+        }
+        return value;
+      }
     }
   }
 
   private static final class IvmBytecodeAdapter implements TypeAdapter<byte[]> {
     @Override
     public void encode(final NoritoEncoder encoder, final byte[] value) {
-      encodeSizedField(encoder, BYTE_VECTOR_ADAPTER, value);
+      BYTE_VECTOR_ADAPTER.encode(encoder, value);
     }
 
     @Override
     public byte[] decode(final NoritoDecoder decoder) {
-      return decodeSizedField(decoder, BYTE_VECTOR_ADAPTER);
+      final byte[] payload = decoder.readBytes(decoder.remaining());
+      return decodePayload(payload, decoder.flags(), decoder.flagsHint());
+    }
+
+    private static byte[] decodePayload(
+        final byte[] payload, final int flags, final int flagsHint) {
+      try {
+        final NoritoDecoder direct = new NoritoDecoder(payload, flags, flagsHint);
+        final byte[] value = BYTE_VECTOR_ADAPTER.decode(direct);
+        if (direct.remaining() != 0) {
+          throw new IllegalArgumentException("Trailing bytes after IVM payload");
+        }
+        return value;
+      } catch (final IllegalArgumentException ex) {
+        final NoritoDecoder legacy = new NoritoDecoder(payload, flags, flagsHint);
+        final byte[] value = decodeSizedField(legacy, BYTE_VECTOR_ADAPTER);
+        if (legacy.remaining() != 0) {
+          throw new IllegalArgumentException("Trailing bytes after IVM legacy payload");
+        }
+        return value;
+      }
     }
   }
 

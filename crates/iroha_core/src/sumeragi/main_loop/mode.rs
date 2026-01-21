@@ -222,6 +222,7 @@ impl Actor {
             &mut self.phase_tracker,
             &mut self.subsystems.propose.propose_attempt_monitor,
             &mut self.subsystems.propose.pacemaker_backpressure,
+            &mut self.subsystems.propose.pacemaker_backpressure_tracker,
             &mut self.subsystems.propose.forced_view_after_timeout,
             &mut self.subsystems.propose.last_pacemaker_attempt,
             &mut self.subsystems.propose.last_successful_proposal,

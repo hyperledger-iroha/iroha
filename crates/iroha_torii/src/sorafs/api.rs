@@ -6858,6 +6858,10 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
             StatusCode::BAD_REQUEST,
             format!("chunk_roles length {actual} does not match chunk count {expected}"),
         ),
+        StorageBackendError::RetentionMetadata(err) => json_error(
+            StatusCode::BAD_REQUEST,
+            format!("retention metadata invalid: {err}"),
+        ),
         StorageBackendError::Io(err) => {
             error!(?err, "SoraFS storage backend I/O error");
             json_error(
@@ -6879,6 +6883,21 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
                 "storage backend PoR error",
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod storage_backend_error_tests {
+    use super::{StorageBackendError, storage_backend_error};
+    use sorafs_manifest::retention::RetentionMetadataError;
+
+    #[test]
+    fn retention_metadata_maps_to_bad_request() {
+        let err = StorageBackendError::RetentionMetadata(RetentionMetadataError::DuplicateKey {
+            key: "sorafs.retention.deal_end_epoch".to_string(),
+        });
+        let response = storage_backend_error(err);
+        assert_eq!(response.status(), super::StatusCode::BAD_REQUEST);
     }
 }
 

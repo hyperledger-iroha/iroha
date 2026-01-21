@@ -376,6 +376,8 @@ mod tests {
             stripe_layout: None,
             stored_at_unix_secs: 0,
             retention_epoch: 0,
+            retention_source: None,
+            last_access: 0,
             chunk_files: Vec::new(),
             por_tree: StoredPorTree::from(&PorMerkleTree::empty()),
             manifest_path: PathBuf::from("/tmp/manifest"),

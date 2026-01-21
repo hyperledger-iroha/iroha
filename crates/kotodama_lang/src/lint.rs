@@ -16,7 +16,7 @@ use iroha_data_model::{
 };
 
 use super::ast::{Block, Expr, Item, Pattern, Program, Statement};
-use crate::kotodama::i18n::{self, Language, Message as I18nMessage, StateShadowContext};
+use crate::i18n::{self, Language, Message as I18nMessage, StateShadowContext};
 use crate::pointer_abi::{self, PointerType};
 
 /// A lint warning produced by [`lint_program`].
@@ -1482,12 +1482,12 @@ fn warn_if_unused_pointer_call(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kotodama::{i18n::Language, parser::parse};
+    use crate::{i18n::Language, parser::parse};
 
     #[test]
     fn record_expr_idents_collects_only_states() {
         let expr = Expr::Binary {
-            op: crate::kotodama::ast::BinaryOp::Add,
+            op: crate::ast::BinaryOp::Add,
             left: Box::new(Expr::Ident("counter".into())),
             right: Box::new(Expr::Ident("temp".into())),
         };

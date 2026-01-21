@@ -50,6 +50,7 @@ pub mod iso20022;
 mod ivm;
 pub mod ivm_cache;
 pub mod kotodama;
+pub mod kotodama_std;
 mod memory;
 pub mod merkle_utils;
 mod metadata;
@@ -140,15 +141,9 @@ pub use crate::{
     zk_poseidon::{pair_hash_bytes, pair_hash_u64},
 };
 
-/// Syscall policy determined by `ProgramMetadata.abi_version`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SyscallPolicy {
-    /// ABI surface for version 1 programs.
-    AbiV1,
-    /// Explicit ABI experiments keyed by header-version.
-    Experimental(u8),
-}
 pub use iroha_crypto::{MerkleProof, MerkleTree};
+/// Syscall policy determined by `ProgramMetadata.abi_version`.
+pub use ivm_abi::SyscallPolicy;
 
 pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
 #[cfg(target_os = "macos")]

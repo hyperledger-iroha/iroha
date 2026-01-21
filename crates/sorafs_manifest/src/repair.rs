@@ -12,7 +12,7 @@ use std::fmt;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
-use crate::provider_advert::SignatureAlgorithm;
+use crate::{deal::BASIS_POINTS_PER_UNIT, provider_advert::SignatureAlgorithm};
 
 /// Schema version for [`RepairEvidenceV1`].
 pub const REPAIR_EVIDENCE_VERSION_V1: u8 = 1;
@@ -22,6 +22,10 @@ pub const REPAIR_REPORT_VERSION_V1: u8 = 1;
 pub const REPAIR_TASK_VERSION_V1: u8 = 1;
 /// Schema version for [`RepairSlashProposalV1`].
 pub const REPAIR_SLASH_PROPOSAL_VERSION_V1: u8 = 1;
+/// Schema version for [`RepairEscalationPolicyV1`].
+pub const REPAIR_ESCALATION_POLICY_VERSION_V1: u8 = 1;
+/// Schema version for [`RepairEscalationApprovalV1`].
+pub const REPAIR_ESCALATION_APPROVAL_VERSION_V1: u8 = 1;
 /// Schema version for [`RepairTaskEventV1`].
 pub const REPAIR_TASK_EVENT_VERSION_V1: u8 = 1;
 /// Schema version for [`RepairAuditEventV1`].
@@ -786,6 +790,9 @@ pub struct GcAuditPayloadV1 {
     pub freed_bytes: u64,
     /// Reason label for the eviction.
     pub reason: String,
+    /// Optional block reason when eviction could not proceed.
+    #[norito(default)]
+    pub blocked_reason: Option<String>,
 }
 
 /// Canonical audit event emitted for GC/retention actions.
@@ -799,6 +806,94 @@ pub struct GcAuditEventV1 {
     pub header: SorafsAuditHeaderV1,
     /// GC eviction payload.
     pub payload: GcAuditPayloadV1,
+}
+
+/// Governance policy applied to repair escalations and slash proposals.
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+pub struct RepairEscalationPolicyV1 {
+    /// Schema version (`REPAIR_ESCALATION_POLICY_VERSION_V1`).
+    pub version: u8,
+    /// Approval quorum (basis points) required for escalation/slash decisions.
+    pub quorum_bps: u16,
+    /// Minimum number of distinct voters required.
+    pub minimum_voters: u32,
+    /// Dispute window in seconds after escalation before governance finalizes.
+    pub dispute_window_secs: u64,
+    /// Appeal window in seconds after approval before a decision is final.
+    pub appeal_window_secs: u64,
+    /// Maximum slash penalty allowed for repair escalations (nano-XOR).
+    pub max_penalty_nano: u128,
+}
+
+impl RepairEscalationPolicyV1 {
+    /// Validate the governance policy payload.
+    pub fn validate(&self) -> Result<(), RepairValidationError> {
+        if self.version != REPAIR_ESCALATION_POLICY_VERSION_V1 {
+            return Err(RepairValidationError::UnsupportedVersion {
+                field: "RepairEscalationPolicyV1",
+                version: self.version,
+            });
+        }
+        if self.quorum_bps > BASIS_POINTS_PER_UNIT {
+            return Err(RepairValidationError::InvalidQuorumBps {
+                quorum_bps: self.quorum_bps,
+            });
+        }
+        if self.minimum_voters == 0 {
+            return Err(RepairValidationError::InvalidMinimumVoters);
+        }
+        Ok(())
+    }
+}
+
+/// Governance approval summary attached to an escalation proposal.
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+pub struct RepairEscalationApprovalV1 {
+    /// Schema version (`REPAIR_ESCALATION_APPROVAL_VERSION_V1`).
+    pub version: u8,
+    /// Votes approving the escalation decision.
+    pub approve_votes: u32,
+    /// Votes rejecting the escalation decision.
+    pub reject_votes: u32,
+    /// Votes abstaining from the escalation decision.
+    pub abstain_votes: u32,
+    /// Unix timestamp (seconds) when approval was recorded.
+    pub approved_at_unix: u64,
+    /// Unix timestamp (seconds) when the decision became final after appeals.
+    pub finalized_at_unix: u64,
+}
+
+impl RepairEscalationApprovalV1 {
+    /// Validate the approval summary payload.
+    pub fn validate(&self) -> Result<(), RepairValidationError> {
+        if self.version != REPAIR_ESCALATION_APPROVAL_VERSION_V1 {
+            return Err(RepairValidationError::UnsupportedVersion {
+                field: "RepairEscalationApprovalV1",
+                version: self.version,
+            });
+        }
+        let total_votes = u64::from(self.approve_votes)
+            + u64::from(self.reject_votes)
+            + u64::from(self.abstain_votes);
+        if total_votes == 0 {
+            return Err(RepairValidationError::InvalidVoteCount);
+        }
+        ensure_timestamp(self.approved_at_unix, "approved_at_unix")?;
+        ensure_timestamp(self.finalized_at_unix, "finalized_at_unix")?;
+        if self.finalized_at_unix < self.approved_at_unix {
+            return Err(RepairValidationError::InvalidTimestampOrder {
+                earlier_field: "approved_at_unix",
+                earlier: self.approved_at_unix,
+                later_field: "finalized_at_unix",
+                later: self.finalized_at_unix,
+            });
+        }
+        Ok(())
+    }
 }
 
 /// Slash proposal generated after a repair escalation.
@@ -822,6 +917,9 @@ pub struct RepairSlashProposalV1 {
     pub submitted_at_unix: u64,
     /// Human-readable rationale for governance review.
     pub rationale: String,
+    /// Optional governance approval summary attached to the proposal.
+    #[norito(default)]
+    pub approval: Option<RepairEscalationApprovalV1>,
 }
 
 impl RepairSlashProposalV1 {
@@ -855,6 +953,9 @@ impl RepairSlashProposalV1 {
                 length: self.rationale.len(),
                 max: MAX_STRING_BYTES,
             });
+        }
+        if let Some(approval) = &self.approval {
+            approval.validate()?;
         }
         Ok(())
     }
@@ -1031,6 +1132,18 @@ pub enum RepairValidationError {
     /// Proposed penalty must be positive.
     #[error("proposed penalty must be greater than zero")]
     InvalidPenalty,
+    /// Approval quorum exceeds basis point bounds.
+    #[error("quorum_bps must be within 0..=10_000 (got {quorum_bps})")]
+    InvalidQuorumBps {
+        /// Quorum basis points provided.
+        quorum_bps: u16,
+    },
+    /// Minimum voters must be greater than zero.
+    #[error("minimum_voters must be greater than zero")]
+    InvalidMinimumVoters,
+    /// Approval vote counts invalid.
+    #[error("approval vote counts must be non-zero")]
+    InvalidVoteCount,
     /// Auditor signature public key missing.
     #[error("auditor signature public key must not be empty")]
     InvalidPublicKey,
@@ -1202,8 +1315,51 @@ mod tests {
             proposed_penalty_nano: 1_000_000_000,
             submitted_at_unix: 1_704_361_600,
             rationale: "Repeated PoR failures beyond SLA".into(),
+            approval: None,
         };
         assert!(proposal.validate().is_ok());
+    }
+
+    #[test]
+    fn escalation_approval_validation_succeeds() {
+        let approval = RepairEscalationApprovalV1 {
+            version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
+            approve_votes: 2,
+            reject_votes: 1,
+            abstain_votes: 0,
+            approved_at_unix: 1_704_361_700,
+            finalized_at_unix: 1_704_361_900,
+        };
+        assert!(approval.validate().is_ok());
+    }
+
+    #[test]
+    fn escalation_policy_validation_succeeds() {
+        let policy = RepairEscalationPolicyV1 {
+            version: REPAIR_ESCALATION_POLICY_VERSION_V1,
+            quorum_bps: 6_667,
+            minimum_voters: 3,
+            dispute_window_secs: 86_400,
+            appeal_window_secs: 604_800,
+            max_penalty_nano: 1_000,
+        };
+        assert!(policy.validate().is_ok());
+    }
+
+    #[test]
+    fn escalation_approval_validation_rejects_empty_votes() {
+        let approval = RepairEscalationApprovalV1 {
+            version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
+            approve_votes: 0,
+            reject_votes: 0,
+            abstain_votes: 0,
+            approved_at_unix: 1_704_361_700,
+            finalized_at_unix: 1_704_361_900,
+        };
+        assert!(matches!(
+            approval.validate(),
+            Err(RepairValidationError::InvalidVoteCount)
+        ));
     }
 
     fn sample_signature() -> AuditorSignatureV1 {
@@ -1426,6 +1582,7 @@ mod tests {
             evicted_at_unix: 1_704_400_100,
             freed_bytes: 4_096,
             reason: "retention_expired".into(),
+            blocked_reason: None,
         };
         let digest = iroha_crypto::Hash::new(payload.encode());
         let header = SorafsAuditHeaderV1 {

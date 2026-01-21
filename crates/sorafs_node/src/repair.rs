@@ -23,21 +23,24 @@ use sorafs_manifest::{
     por::AuditVerdictV1,
     repair::{
         CompletedRepairStateV1, EscalatedRepairStateV1, FailedRepairStateV1,
-        InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_TASK_EVENT_VERSION_V1,
-        REPAIR_TASK_VERSION_V1, RepairCauseV1, RepairEvidenceV1, RepairReportV1,
-        RepairSlashProposalV1, RepairTaskEventV1, RepairTaskRecordV1, RepairTaskStateV1,
-        RepairTaskStatusV1, RepairTicketId, RepairValidationError,
+        InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_ESCALATION_APPROVAL_VERSION_V1,
+        REPAIR_TASK_EVENT_VERSION_V1, REPAIR_TASK_VERSION_V1, RepairCauseV1,
+        RepairEscalationApprovalV1, RepairEvidenceV1, RepairReportV1, RepairSlashProposalV1,
+        RepairTaskEventV1, RepairTaskRecordV1, RepairTaskStateV1, RepairTaskStatusV1,
+        RepairTicketId, RepairValidationError,
     },
 };
 use thiserror::Error;
 
-use crate::config::RepairConfig;
+use crate::config::{RepairConfig, RepairEscalationPolicy};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 
 const DEFAULT_REPAIR_SLA_SECS: u64 = 4 * 60 * 60;
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
 const MAX_WORKER_ID_BYTES: usize = 256;
 const MAX_REPAIR_NOTES_BYTES: usize = 256;
+const MAX_GOVERNANCE_ACTOR_BYTES: usize = 256;
+const MAX_GOVERNANCE_REASON_BYTES: usize = 256;
 const DEFAULT_IDEMPOTENCY_CACHE_SIZE: usize = 64;
 const MAX_REPAIR_STORE_RETRIES: usize = 3;
 const DEFAULT_REPAIR_EVENT_HISTORY_LIMIT: usize = 64;
@@ -165,6 +168,8 @@ struct StoredRepairTask {
     scheduler_notes: Option<String>,
     slash_proposal_digest: Option<[u8; 32]>,
     slash_proposal_bytes: Option<Vec<u8>>,
+    #[norito(default)]
+    governance: RepairGovernanceState,
     lease: Option<StoredRepairTaskLease>,
     attempts: u32,
     next_attempt_after_unix: Option<u64>,
@@ -181,6 +186,7 @@ impl StoredRepairTask {
             scheduler_notes: task.scheduler_notes,
             slash_proposal_digest: task.slash_proposal_digest,
             slash_proposal_bytes: task.slash_proposal_bytes,
+            governance: task.governance,
             lease: task.lease.map(StoredRepairTaskLease::from_lease),
             attempts: task.attempts,
             next_attempt_after_unix: task.next_attempt_after_unix,
@@ -197,6 +203,7 @@ impl StoredRepairTask {
             scheduler_notes: self.scheduler_notes,
             slash_proposal_digest: self.slash_proposal_digest,
             slash_proposal_bytes: self.slash_proposal_bytes,
+            governance: self.governance,
             lease: self.lease.map(StoredRepairTaskLease::into_lease),
             idempotency: RepairTaskIdempotency::new(DEFAULT_IDEMPOTENCY_CACHE_SIZE),
             attempts: self.attempts,
@@ -417,6 +424,7 @@ pub struct RepairManager {
     default_sla_secs: u64,
     event_history_limit: usize,
     config: RepairConfig,
+    escalation_policy: RepairEscalationPolicy,
 }
 
 /// Filters for listing repair tasks.
@@ -521,6 +529,62 @@ struct EscalationOutcome {
     event: Option<RepairTaskEventV1>,
 }
 
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct RepairGovernanceVote {
+    voter_id: String,
+    voted_at_unix: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RepairGovernanceVoteKind {
+    Approve,
+    Reject,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[norito(tag = "reason", content = "details", rename_all = "snake_case")]
+enum RepairGovernanceRejectReason {
+    InsufficientQuorum,
+    Tie,
+    QuorumNotMet,
+    RejectMajority,
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+#[norito(tag = "decision", content = "details", rename_all = "snake_case")]
+enum RepairGovernanceDecision {
+    Approved {
+        decided_at_unix: u64,
+        approvals: u32,
+        rejections: u32,
+    },
+    Rejected {
+        decided_at_unix: u64,
+        approvals: u32,
+        rejections: u32,
+        reason: RepairGovernanceRejectReason,
+    },
+    Appealed {
+        approved_at_unix: u64,
+        appealed_at_unix: u64,
+        approvals: u32,
+        rejections: u32,
+        appellant: String,
+        #[norito(default)]
+        reason: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Default, NoritoSerialize, NoritoDeserialize)]
+struct RepairGovernanceState {
+    #[norito(default)]
+    approvals: Vec<RepairGovernanceVote>,
+    #[norito(default)]
+    rejections: Vec<RepairGovernanceVote>,
+    #[norito(default)]
+    decision: Option<RepairGovernanceDecision>,
+}
+
 impl RepairTaskFilters {
     /// Filter tasks by manifest digest.
     #[must_use]
@@ -610,12 +674,24 @@ impl RepairManager {
     #[must_use]
     pub fn new_with_config(config: RepairConfig) -> Self {
         let store = build_repair_store(&config);
+        let escalation_policy = *config.escalation_policy();
         Self {
             store,
             default_sla_secs: DEFAULT_REPAIR_SLA_SECS,
             event_history_limit: DEFAULT_REPAIR_EVENT_HISTORY_LIMIT,
             config,
+            escalation_policy,
         }
+    }
+
+    /// Construct a new repair manager with an explicit governance escalation policy.
+    #[must_use]
+    pub fn new_with_config_and_policy(
+        config: RepairConfig,
+        policy: RepairEscalationPolicy,
+    ) -> Self {
+        let config = config.with_escalation_policy(policy);
+        Self::new_with_config(config)
     }
 
     /// Reserve the next audit sequence number for governance events.
@@ -692,6 +768,7 @@ impl RepairManager {
             scheduler_notes: None,
             slash_proposal_digest: None,
             slash_proposal_bytes: None,
+            governance: RepairGovernanceState::default(),
             lease: None,
             idempotency: RepairTaskIdempotency::new(DEFAULT_IDEMPOTENCY_CACHE_SIZE),
             attempts: 0,
@@ -752,6 +829,13 @@ impl RepairManager {
         proposal
             .validate()
             .map_err(RepairSchedulerError::InvalidSlashProposal)?;
+        let approval = proposal.approval.as_ref();
+        if proposal.proposed_penalty_nano > self.escalation_policy.max_penalty_nano() {
+            return Err(policy_violation(
+                &proposal.ticket_id,
+                "proposed penalty exceeds policy cap",
+            ));
+        }
         let mut event = None;
         let task = self.update_task_with_retry(&proposal.ticket_id, |task| {
             event = None;
@@ -766,11 +850,40 @@ impl RepairManager {
                 });
             }
 
+            if task.governance.decision.is_some() {
+                return Err(policy_violation(
+                    &proposal.ticket_id,
+                    "governance decision already finalized",
+                ));
+            }
             let queued_at = queued_at_unix(&task.state);
             ensure_transition_allowed(&task.state, "escalated", &proposal.ticket_id)?;
             if proposal.submitted_at_unix <= queued_at {
                 return Err(RepairSchedulerError::InvalidTimestamp {
                     ticket_id: proposal.ticket_id.to_string(),
+                });
+            }
+            let was_escalated = matches!(task.state, RepairTaskStateV1::Escalated(..));
+            let (escalated_at_unix, existing_reason) = match &task.state {
+                RepairTaskStateV1::Escalated(state) => {
+                    (state.escalated_at_unix, Some(state.reason.clone()))
+                }
+                _ => (proposal.submitted_at_unix, None),
+            };
+            if was_escalated && proposal.submitted_at_unix < escalated_at_unix {
+                return Err(RepairSchedulerError::InvalidTimestamp {
+                    ticket_id: proposal.ticket_id.to_string(),
+                });
+            }
+            if !was_escalated {
+                task.governance = RepairGovernanceState::default();
+            }
+            if let Some(approval) = approval {
+                self.ensure_escalation_policy(&proposal.ticket_id, approval, escalated_at_unix)?;
+                task.governance.decision = Some(RepairGovernanceDecision::Approved {
+                    decided_at_unix: approval.approved_at_unix,
+                    approvals: approval.approve_votes,
+                    rejections: approval.reject_votes,
                 });
             }
 
@@ -779,22 +892,33 @@ impl RepairManager {
             norito::core::NoritoSerialize::serialize(&proposal, &mut buf)
                 .expect("serialize slash proposal");
             digest.copy_from_slice(hash(&buf).as_bytes());
+            if let Some(existing_digest) = task.slash_proposal_digest {
+                if existing_digest != digest {
+                    return Err(policy_violation(
+                        &proposal.ticket_id,
+                        "conflicting slash proposal already recorded",
+                    ));
+                }
+            }
 
+            let reason = existing_reason.unwrap_or_else(|| proposal.rationale.clone());
             task.state = RepairTaskStateV1::Escalated(EscalatedRepairStateV1 {
                 queued_at_unix: queued_at,
-                escalated_at_unix: proposal.submitted_at_unix,
-                reason: proposal.rationale.clone(),
+                escalated_at_unix,
+                reason,
             });
             task.slash_proposal_digest = Some(digest);
             task.slash_proposal_bytes = Some(buf);
             task.next_attempt_after_unix = None;
-            event = task.push_event(
-                RepairTaskStatusV1::Escalated,
-                proposal.submitted_at_unix,
-                Some(proposal.auditor_account.clone()),
-                Some(proposal.rationale.clone()),
-                self.event_history_limit,
-            );
+            if !was_escalated {
+                event = task.push_event(
+                    RepairTaskStatusV1::Escalated,
+                    escalated_at_unix,
+                    Some(proposal.auditor_account.clone()),
+                    Some(proposal.rationale.clone()),
+                    self.event_history_limit,
+                );
+            }
             Ok(())
         })?;
 
@@ -802,15 +926,258 @@ impl RepairManager {
             let queued_at = queued_at_unix(&task.state);
             global_sorafs_repair_otel().record_task_transition("escalated");
             self.observe_latency(queued_at, proposal.submitted_at_unix, "escalated");
-            global_sorafs_repair_otel().record_slash_proposal("submitted");
             global_or_default().inc_sorafs_repair_tasks("escalated");
-            global_or_default().inc_sorafs_slash_proposals("submitted");
         }
+        global_sorafs_repair_otel().record_slash_proposal("submitted");
+        global_or_default().inc_sorafs_slash_proposals("submitted");
         Ok(RepairTaskUpdate {
             record: task.to_record(),
             event,
             slash_proposal: Some(proposal),
         })
+    }
+
+    /// Record a governance approval vote for an escalated repair.
+    pub fn submit_slash_approval(
+        &self,
+        ticket_id: &RepairTicketId,
+        voter_id: &str,
+        voted_at_unix: u64,
+    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        Ok(self
+            .submit_slash_vote(
+                ticket_id,
+                voter_id,
+                voted_at_unix,
+                RepairGovernanceVoteKind::Approve,
+            )?
+            .to_record())
+    }
+
+    /// Record a governance rejection vote for an escalated repair.
+    pub fn submit_slash_rejection(
+        &self,
+        ticket_id: &RepairTicketId,
+        voter_id: &str,
+        voted_at_unix: u64,
+    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        Ok(self
+            .submit_slash_vote(
+                ticket_id,
+                voter_id,
+                voted_at_unix,
+                RepairGovernanceVoteKind::Reject,
+            )?
+            .to_record())
+    }
+
+    /// Record a governance appeal for an approved escalation decision.
+    pub fn submit_slash_appeal(
+        &self,
+        ticket_id: &RepairTicketId,
+        appellant: &str,
+        appealed_at_unix: u64,
+        reason: Option<String>,
+    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        ensure_worker_field(
+            appellant,
+            "appellant",
+            MAX_GOVERNANCE_ACTOR_BYTES,
+            ticket_id,
+        )?;
+        ensure_optional_field(
+            reason.as_deref(),
+            "appeal_reason",
+            MAX_GOVERNANCE_REASON_BYTES,
+            ticket_id,
+        )?;
+        if appealed_at_unix == 0 {
+            return Err(RepairSchedulerError::InvalidTimestamp {
+                ticket_id: ticket_id.to_string(),
+            });
+        }
+        let reason_clone = reason.clone();
+        let task = self.update_task_with_retry(ticket_id, |task| {
+            let decision = match &task.governance.decision {
+                Some(decision) => decision,
+                None => {
+                    return Err(policy_violation(
+                        ticket_id,
+                        "governance decision not yet finalized",
+                    ));
+                }
+            };
+            let (approved_at_unix, approvals, rejections) = match decision {
+                RepairGovernanceDecision::Approved {
+                    decided_at_unix,
+                    approvals,
+                    rejections,
+                } => (*decided_at_unix, *approvals, *rejections),
+                RepairGovernanceDecision::Appealed { .. } => {
+                    return Err(policy_violation(
+                        ticket_id,
+                        "appeal already recorded for this decision",
+                    ));
+                }
+                RepairGovernanceDecision::Rejected { .. } => {
+                    return Err(policy_violation(
+                        ticket_id,
+                        "cannot appeal a rejected escalation",
+                    ));
+                }
+            };
+            if appealed_at_unix <= approved_at_unix {
+                return Err(RepairSchedulerError::InvalidTimestamp {
+                    ticket_id: ticket_id.to_string(),
+                });
+            }
+            let appeal_deadline =
+                appeal_deadline_unix(approved_at_unix, &self.escalation_policy, ticket_id)?;
+            if appealed_at_unix > appeal_deadline {
+                return Err(policy_violation(ticket_id, "appeal window closed"));
+            }
+            task.governance.decision = Some(RepairGovernanceDecision::Appealed {
+                approved_at_unix,
+                appealed_at_unix,
+                approvals,
+                rejections,
+                appellant: appellant.to_string(),
+                reason: reason_clone.clone(),
+            });
+            Ok(())
+        })?;
+        Ok(task.to_record())
+    }
+
+    fn submit_slash_vote(
+        &self,
+        ticket_id: &RepairTicketId,
+        voter_id: &str,
+        voted_at_unix: u64,
+        kind: RepairGovernanceVoteKind,
+    ) -> Result<RepairTaskInternal, RepairSchedulerError> {
+        ensure_worker_field(voter_id, "voter_id", MAX_GOVERNANCE_ACTOR_BYTES, ticket_id)?;
+        if voted_at_unix == 0 {
+            return Err(RepairSchedulerError::InvalidTimestamp {
+                ticket_id: ticket_id.to_string(),
+            });
+        }
+        self.update_task_with_retry(ticket_id, |task| {
+            let escalated_at_unix = match &task.state {
+                RepairTaskStateV1::Escalated(state) => state.escalated_at_unix,
+                other => {
+                    return Err(RepairSchedulerError::InvalidState {
+                        ticket_id: ticket_id.to_string(),
+                        state: format!("{other:?}"),
+                    });
+                }
+            };
+            if task.governance.decision.is_some() {
+                return Err(policy_violation(
+                    ticket_id,
+                    "governance decision already finalized",
+                ));
+            }
+            if voted_at_unix <= escalated_at_unix {
+                return Err(RepairSchedulerError::InvalidTimestamp {
+                    ticket_id: ticket_id.to_string(),
+                });
+            }
+            let dispute_deadline =
+                dispute_deadline_unix(escalated_at_unix, &self.escalation_policy, ticket_id)?;
+            if voted_at_unix > dispute_deadline {
+                return Err(policy_violation(ticket_id, "dispute window closed"));
+            }
+            match kind {
+                RepairGovernanceVoteKind::Approve => {
+                    if vote_exists(&task.governance.rejections, voter_id) {
+                        return Err(policy_violation(
+                            ticket_id,
+                            "voter already cast a rejecting vote",
+                        ));
+                    }
+                    insert_vote(
+                        &mut task.governance.approvals,
+                        voter_id,
+                        voted_at_unix,
+                        ticket_id,
+                    )?;
+                }
+                RepairGovernanceVoteKind::Reject => {
+                    if vote_exists(&task.governance.approvals, voter_id) {
+                        return Err(policy_violation(
+                            ticket_id,
+                            "voter already cast an approving vote",
+                        ));
+                    }
+                    insert_vote(
+                        &mut task.governance.rejections,
+                        voter_id,
+                        voted_at_unix,
+                        ticket_id,
+                    )?;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn ensure_escalation_policy(
+        &self,
+        ticket_id: &RepairTicketId,
+        approval: &RepairEscalationApprovalV1,
+        escalated_at_unix: u64,
+    ) -> Result<(), RepairSchedulerError> {
+        let policy = self.escalation_policy;
+        let total_votes = u64::from(approval.approve_votes)
+            + u64::from(approval.reject_votes)
+            + u64::from(approval.abstain_votes);
+        if total_votes < u64::from(policy.minimum_voters()) {
+            return Err(policy_violation(
+                ticket_id,
+                "approval vote count below minimum voters",
+            ));
+        }
+        let counted_votes = u64::from(approval.approve_votes) + u64::from(approval.reject_votes);
+        if counted_votes == 0 {
+            return Err(policy_violation(
+                ticket_id,
+                "approval must include at least one approve/reject vote",
+            ));
+        }
+        let approval_ratio_bps = div_ceil_u128(
+            u128::from(approval.approve_votes).saturating_mul(10_000),
+            u128::from(counted_votes),
+        );
+        if approval_ratio_bps < u128::from(policy.quorum_bps()) {
+            return Err(policy_violation(
+                ticket_id,
+                "approval ratio below quorum threshold",
+            ));
+        }
+        if approval.approve_votes <= approval.reject_votes {
+            return Err(policy_violation(
+                ticket_id,
+                "approval votes must exceed reject votes",
+            ));
+        }
+        let dispute_deadline = escalated_at_unix.saturating_add(policy.dispute_window_secs());
+        if approval.approved_at_unix < dispute_deadline {
+            return Err(policy_violation(
+                ticket_id,
+                "approval recorded before dispute window elapsed",
+            ));
+        }
+        let appeal_deadline = approval
+            .approved_at_unix
+            .saturating_add(policy.appeal_window_secs());
+        if approval.finalized_at_unix < appeal_deadline {
+            return Err(policy_violation(
+                ticket_id,
+                "approval finalized before appeal window elapsed",
+            ));
+        }
+        Ok(())
     }
 
     /// Fetch all repair tasks associated with `manifest_digest`.
@@ -953,10 +1320,14 @@ impl RepairManager {
         for task in tasks {
             let ticket_id = task.report.ticket_id.clone();
             let status = repair_task_status(&task.state);
-            if matches!(
-                status,
-                RepairTaskStatusV1::Completed | RepairTaskStatusV1::Escalated
-            ) {
+            if matches!(status, RepairTaskStatusV1::Completed) {
+                continue;
+            }
+            if matches!(status, RepairTaskStatusV1::Escalated) {
+                self.update_task_with_retry(&ticket_id, |task| {
+                    let _ = self.resolve_governance_decision(task, now_unix)?;
+                    Ok(())
+                })?;
                 continue;
             }
 
@@ -1161,6 +1532,74 @@ impl RepairManager {
         }
 
         Ok(report)
+    }
+
+    fn resolve_governance_decision(
+        &self,
+        task: &mut RepairTaskInternal,
+        now_unix: u64,
+    ) -> Result<Option<RepairGovernanceDecision>, RepairSchedulerError> {
+        if now_unix == 0 || task.governance.decision.is_some() {
+            return Ok(None);
+        }
+        let escalated = match &task.state {
+            RepairTaskStateV1::Escalated(state) => state,
+            _ => return Ok(None),
+        };
+        let dispute_deadline = dispute_deadline_unix(
+            escalated.escalated_at_unix,
+            &self.escalation_policy,
+            &task.report.ticket_id,
+        )?;
+        if now_unix < dispute_deadline {
+            return Ok(None);
+        }
+        let approvals = u32::try_from(task.governance.approvals.len()).unwrap_or(u32::MAX);
+        let rejections = u32::try_from(task.governance.rejections.len()).unwrap_or(u32::MAX);
+        let total = approvals.saturating_add(rejections);
+        let decision = if total < self.escalation_policy.minimum_voters() {
+            RepairGovernanceDecision::Rejected {
+                decided_at_unix: dispute_deadline,
+                approvals,
+                rejections,
+                reason: RepairGovernanceRejectReason::InsufficientQuorum,
+            }
+        } else if approvals == rejections {
+            RepairGovernanceDecision::Rejected {
+                decided_at_unix: dispute_deadline,
+                approvals,
+                rejections,
+                reason: RepairGovernanceRejectReason::Tie,
+            }
+        } else {
+            let ratio_bps = div_ceil_u128(
+                u128::from(approvals).saturating_mul(10_000),
+                u128::from(total),
+            );
+            if ratio_bps < u128::from(self.escalation_policy.quorum_bps()) {
+                RepairGovernanceDecision::Rejected {
+                    decided_at_unix: dispute_deadline,
+                    approvals,
+                    rejections,
+                    reason: RepairGovernanceRejectReason::QuorumNotMet,
+                }
+            } else if approvals < rejections {
+                RepairGovernanceDecision::Rejected {
+                    decided_at_unix: dispute_deadline,
+                    approvals,
+                    rejections,
+                    reason: RepairGovernanceRejectReason::RejectMajority,
+                }
+            } else {
+                RepairGovernanceDecision::Approved {
+                    decided_at_unix: dispute_deadline,
+                    approvals,
+                    rejections,
+                }
+            }
+        };
+        task.governance.decision = Some(decision.clone());
+        Ok(Some(decision))
     }
 
     /// Retrieve a repair task record by ticket id.
@@ -2052,15 +2491,19 @@ impl RepairManager {
             });
         }
 
+        let penalty_nano = self
+            .escalation_policy
+            .cap_penalty(self.config.default_slash_penalty_nano());
         let proposal = RepairSlashProposalV1 {
             version: sorafs_manifest::repair::REPAIR_SLASH_PROPOSAL_VERSION_V1,
             ticket_id: task.report.ticket_id.clone(),
             provider_id: task.report.evidence.provider_id,
             manifest_digest: task.report.evidence.manifest_digest,
             auditor_account: task.report.auditor_account.clone(),
-            proposed_penalty_nano: self.config.default_slash_penalty_nano(),
+            proposed_penalty_nano: penalty_nano,
             submitted_at_unix: escalated_at_unix,
             rationale: rationale.clone(),
+            approval: None,
         };
         proposal
             .validate()
@@ -2082,6 +2525,7 @@ impl RepairManager {
         task.slash_proposal_bytes = Some(bytes);
         task.lease = None;
         task.next_attempt_after_unix = None;
+        task.governance = RepairGovernanceState::default();
         let event = task.push_event(
             RepairTaskStatusV1::Escalated,
             escalated_at_unix,
@@ -2196,6 +2640,7 @@ struct RepairTaskInternal {
     slash_proposal_digest: Option<[u8; 32]>,
     /// Norito-encoded bytes for the slash proposal when present.
     slash_proposal_bytes: Option<Vec<u8>>,
+    governance: RepairGovernanceState,
     lease: Option<RepairTaskLease>,
     idempotency: RepairTaskIdempotency,
     attempts: u32,
@@ -2374,8 +2819,11 @@ fn compute_backlog_stats(tasks: &[RepairTaskInternal], now_unix: u64) -> RepairB
                 .entry(task.report.evidence.provider_id)
                 .or_insert(0);
             *entry = entry.saturating_add(1);
-            let queued_at = state.queued_at_unix;
-            oldest_queued_at = Some(oldest_queued_at.map_or(queued_at, |prev| prev.min(queued_at)));
+            let queued_at: u64 = state.queued_at_unix;
+            oldest_queued_at = Some(match oldest_queued_at {
+                Some(prev) => prev.min(queued_at),
+                None => queued_at,
+            });
         }
     }
 
@@ -2395,11 +2843,70 @@ fn ensure_transition_allowed(
         (RepairTaskStateV1::Queued(..), "escalated") => Ok(()),
         (RepairTaskStateV1::InProgress(..), "escalated") => Ok(()),
         (RepairTaskStateV1::Failed(..), "escalated") => Ok(()),
+        (RepairTaskStateV1::Escalated(..), "escalated") => Ok(()),
         _ => Err(RepairSchedulerError::InvalidState {
             ticket_id: ticket_id.to_string(),
             state: format!("{state:?}"),
         }),
     }
+}
+
+fn policy_violation(ticket_id: &RepairTicketId, reason: impl Into<String>) -> RepairSchedulerError {
+    RepairSchedulerError::PolicyViolation {
+        ticket_id: ticket_id.to_string(),
+        reason: reason.into(),
+    }
+}
+
+fn div_ceil_u128(numerator: u128, denominator: u128) -> u128 {
+    if denominator == 0 {
+        return 0;
+    }
+    let adjusted = numerator.saturating_add(denominator.saturating_sub(1));
+    adjusted / denominator
+}
+
+fn dispute_deadline_unix(
+    escalated_at_unix: u64,
+    policy: &RepairEscalationPolicy,
+    ticket_id: &RepairTicketId,
+) -> Result<u64, RepairSchedulerError> {
+    checked_add_secs(escalated_at_unix, policy.dispute_window_secs(), ticket_id)
+}
+
+fn appeal_deadline_unix(
+    approved_at_unix: u64,
+    policy: &RepairEscalationPolicy,
+    ticket_id: &RepairTicketId,
+) -> Result<u64, RepairSchedulerError> {
+    checked_add_secs(approved_at_unix, policy.appeal_window_secs(), ticket_id)
+}
+
+fn vote_exists(votes: &[RepairGovernanceVote], voter_id: &str) -> bool {
+    votes.iter().any(|vote| vote.voter_id == voter_id)
+}
+
+fn insert_vote(
+    votes: &mut Vec<RepairGovernanceVote>,
+    voter_id: &str,
+    voted_at_unix: u64,
+    ticket_id: &RepairTicketId,
+) -> Result<(), RepairSchedulerError> {
+    if let Some(existing) = votes.iter().find(|vote| vote.voter_id == voter_id) {
+        if existing.voted_at_unix == voted_at_unix {
+            return Ok(());
+        }
+        return Err(policy_violation(
+            ticket_id,
+            "duplicate vote recorded with mismatched timestamp",
+        ));
+    }
+    votes.push(RepairGovernanceVote {
+        voter_id: voter_id.to_string(),
+        voted_at_unix,
+    });
+    votes.sort_by(|left, right| left.voter_id.cmp(&right.voter_id));
+    Ok(())
 }
 
 impl RepairManager {
@@ -2431,6 +2938,14 @@ pub enum RepairSchedulerError {
     /// Slash proposal failed validation.
     #[error("slash proposal invalid: {0}")]
     InvalidSlashProposal(#[source] RepairValidationError),
+    /// Escalation policy check failed.
+    #[error("repair escalation policy violation for ticket `{ticket_id}`: {reason}")]
+    PolicyViolation {
+        /// Ticket identifier.
+        ticket_id: String,
+        /// Validation failure reason.
+        reason: String,
+    },
     /// Ticket already exists with conflicting evidence.
     #[error("repair ticket `{ticket_id}` already exists with conflicting evidence")]
     DuplicateTicket {
@@ -2686,11 +3201,32 @@ mod tests {
             scheduler_notes: None,
             slash_proposal_digest: None,
             slash_proposal_bytes: None,
+            governance: RepairGovernanceState::default(),
             lease: None,
             idempotency: RepairTaskIdempotency::new(DEFAULT_IDEMPOTENCY_CACHE_SIZE),
             attempts: 0,
             next_attempt_after_unix: None,
             events: Vec::new(),
+        }
+    }
+
+    fn approval_for_policy(
+        policy: &RepairEscalationPolicy,
+        escalated_at_unix: u64,
+    ) -> RepairEscalationApprovalV1 {
+        let approved_at_unix = escalated_at_unix
+            .saturating_add(policy.dispute_window_secs())
+            .saturating_add(1);
+        let finalized_at_unix = approved_at_unix
+            .saturating_add(policy.appeal_window_secs())
+            .saturating_add(1);
+        RepairEscalationApprovalV1 {
+            version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
+            approve_votes: 2,
+            reject_votes: 1,
+            abstain_votes: 0,
+            approved_at_unix,
+            finalized_at_unix,
         }
     }
 
@@ -2922,6 +3458,36 @@ mod tests {
         ));
         let proposal = update.slash_proposal.expect("slash proposal");
         assert_eq!(proposal.ticket_id, report.ticket_id);
+        assert!(proposal.approval.is_none());
+    }
+
+    #[test]
+    fn apply_escalation_caps_slash_penalty() {
+        let policy = actual::RepairEscalationPolicyV1 {
+            max_penalty_nano: 500,
+            ..Default::default()
+        };
+        let actual = actual::SorafsRepair {
+            max_attempts: 1,
+            default_slash_penalty_nano: 12_000,
+            ..Default::default()
+        };
+        let config = RepairConfig::from_repair_and_policy(&actual, &policy);
+        let (manager, _temp_dir) = manager_with_config(config);
+        let report = report("REP-323B", [0x15; 32], [0x37; 32], 1_700_100_310);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+
+        let update = manager
+            .mark_failed_with_event(
+                &report.ticket_id,
+                report.submitted_at_unix + 20,
+                "loss".into(),
+            )
+            .expect("mark failed");
+        let proposal = update.slash_proposal.expect("slash proposal");
+        assert_eq!(proposal.proposed_penalty_nano, 500);
     }
 
     #[test]
@@ -2931,6 +3497,11 @@ mod tests {
         manager
             .enqueue_report(report.clone())
             .expect("enqueue report");
+        let policy = *RepairConfig::default().escalation_policy();
+        let approval = approval_for_policy(&policy, report.submitted_at_unix + 10);
+        let expected_approved_at = approval.approved_at_unix;
+        let expected_approvals = approval.approve_votes;
+        let expected_rejections = approval.reject_votes;
 
         let proposal = RepairSlashProposalV1 {
             version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
@@ -2941,12 +3512,418 @@ mod tests {
             proposed_penalty_nano: 1_000,
             submitted_at_unix: report.submitted_at_unix + 10,
             rationale: "manifest mismatch".into(),
+            approval: Some(approval),
         };
 
         let err = manager
             .submit_slash_proposal_with_event(proposal)
             .expect_err("mismatched manifest should error");
         assert!(matches!(err, RepairSchedulerError::ManifestMismatch { .. }));
+    }
+
+    #[test]
+    fn submit_slash_proposal_accepts_missing_approval() {
+        let (manager, _temp_dir) = manager_with_temp_dir();
+        let report = report("REP-325", [0x21; 32], [0x31; 32], 1_700_100_360);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            provider_id: report.evidence.provider_id,
+            manifest_digest: report.evidence.manifest_digest,
+            auditor_account: report.auditor_account.clone(),
+            proposed_penalty_nano: 1_000,
+            submitted_at_unix: report.submitted_at_unix + 10,
+            rationale: "missing approval".into(),
+            approval: None,
+        };
+
+        let update = manager
+            .submit_slash_proposal_with_event(proposal)
+            .expect("missing approval should be accepted");
+        assert!(matches!(
+            update.record.state,
+            RepairTaskStateV1::Escalated(..)
+        ));
+        let task = manager
+            .load_task(&report.ticket_id)
+            .expect("load repair task");
+        assert!(task.governance.decision.is_none());
+    }
+
+    #[test]
+    fn submit_slash_proposal_accepts_valid_approval() {
+        let (manager, _temp_dir) = manager_with_temp_dir();
+        let report = report("REP-326", [0x21; 32], [0x31; 32], 1_700_100_370);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+        let policy = *RepairConfig::default().escalation_policy();
+        let approval = approval_for_policy(&policy, report.submitted_at_unix + 10);
+
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            provider_id: report.evidence.provider_id,
+            manifest_digest: report.evidence.manifest_digest,
+            auditor_account: report.auditor_account.clone(),
+            proposed_penalty_nano: 1_000,
+            submitted_at_unix: report.submitted_at_unix + 10,
+            rationale: "valid approval".into(),
+            approval: Some(approval),
+        };
+
+        let update = manager
+            .submit_slash_proposal_with_event(proposal)
+            .expect("valid approval should be accepted");
+        assert!(matches!(
+            update.record.state,
+            RepairTaskStateV1::Escalated(..)
+        ));
+        let task = manager
+            .load_task(&report.ticket_id)
+            .expect("load repair task");
+        match task.governance.decision {
+            Some(RepairGovernanceDecision::Approved {
+                decided_at_unix,
+                approvals,
+                rejections,
+            }) => {
+                assert_eq!(decided_at_unix, expected_approved_at);
+                assert_eq!(approvals, expected_approvals);
+                assert_eq!(rejections, expected_rejections);
+            }
+            other => panic!("expected approval decision, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn submit_slash_proposal_rejects_conflicting_proposal() {
+        let (manager, _temp_dir) = manager_with_temp_dir();
+        let report = report("REP-327", [0x21; 32], [0x31; 32], 1_700_100_380);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            provider_id: report.evidence.provider_id,
+            manifest_digest: report.evidence.manifest_digest,
+            auditor_account: report.auditor_account.clone(),
+            proposed_penalty_nano: 1_000,
+            submitted_at_unix: report.submitted_at_unix + 10,
+            rationale: "first proposal".into(),
+            approval: None,
+        };
+        manager
+            .submit_slash_proposal_with_event(proposal)
+            .expect("initial proposal should be accepted");
+
+        let conflicting = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            provider_id: report.evidence.provider_id,
+            manifest_digest: report.evidence.manifest_digest,
+            auditor_account: report.auditor_account.clone(),
+            proposed_penalty_nano: 2_000,
+            submitted_at_unix: report.submitted_at_unix + 20,
+            rationale: "conflicting proposal".into(),
+            approval: None,
+        };
+        let err = manager
+            .submit_slash_proposal_with_event(conflicting)
+            .expect_err("conflicting proposal should be rejected");
+        assert!(matches!(err, RepairSchedulerError::PolicyViolation { .. }));
+    }
+
+    #[test]
+    fn governance_votes_finalize_after_dispute_window() {
+        let policy = actual::RepairEscalationPolicyV1 {
+            quorum_bps: 6_000,
+            minimum_voters: 3,
+            dispute_window_secs: 10,
+            appeal_window_secs: 120,
+            max_penalty_nano: 1_000_000_000,
+        };
+        let actual = actual::SorafsRepair {
+            max_attempts: 1,
+            default_slash_penalty_nano: 5_000,
+            ..Default::default()
+        };
+        let config = RepairConfig::from_repair_and_policy(&actual, &policy);
+        let (manager, _temp_dir) = manager_with_config(config);
+        let report = report("REP-328", [0x22; 32], [0x32; 32], 1_700_100_390);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+
+        let update = manager
+            .mark_failed_with_event(
+                &report.ticket_id,
+                report.submitted_at_unix + 20,
+                "loss".into(),
+            )
+            .expect("mark failed");
+        let escalated_at_unix = match update.record.state {
+            RepairTaskStateV1::Escalated(state) => state.escalated_at_unix,
+            other => panic!("expected escalated state, got {other:?}"),
+        };
+
+        manager
+            .submit_slash_approval(&report.ticket_id, "voter-a", escalated_at_unix + 1)
+            .expect("approval vote");
+        manager
+            .submit_slash_approval(&report.ticket_id, "voter-b", escalated_at_unix + 2)
+            .expect("approval vote");
+        manager
+            .submit_slash_rejection(&report.ticket_id, "voter-c", escalated_at_unix + 3)
+            .expect("rejection vote");
+
+        let now_unix = escalated_at_unix + policy.dispute_window_secs + 1;
+        manager.run_watchdog(now_unix).expect("watchdog");
+        let task = manager
+            .load_task(&report.ticket_id)
+            .expect("load repair task");
+        match task.governance.decision {
+            Some(RepairGovernanceDecision::Approved {
+                decided_at_unix,
+                approvals,
+                rejections,
+            }) => {
+                assert_eq!(
+                    decided_at_unix,
+                    escalated_at_unix + policy.dispute_window_secs
+                );
+                assert_eq!(approvals, 2);
+                assert_eq!(rejections, 1);
+            }
+            other => panic!("expected approval decision, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn governance_rejects_insufficient_quorum() {
+        let policy = actual::RepairEscalationPolicyV1 {
+            quorum_bps: 6_000,
+            minimum_voters: 2,
+            dispute_window_secs: 5,
+            appeal_window_secs: 60,
+            max_penalty_nano: 1_000_000_000,
+        };
+        let actual = actual::SorafsRepair {
+            max_attempts: 1,
+            default_slash_penalty_nano: 5_000,
+            ..Default::default()
+        };
+        let config = RepairConfig::from_repair_and_policy(&actual, &policy);
+        let (manager, _temp_dir) = manager_with_config(config);
+        let report = report("REP-329", [0x23; 32], [0x33; 32], 1_700_100_400);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+
+        let update = manager
+            .mark_failed_with_event(
+                &report.ticket_id,
+                report.submitted_at_unix + 20,
+                "loss".into(),
+            )
+            .expect("mark failed");
+        let escalated_at_unix = match update.record.state {
+            RepairTaskStateV1::Escalated(state) => state.escalated_at_unix,
+            other => panic!("expected escalated state, got {other:?}"),
+        };
+
+        manager
+            .submit_slash_approval(&report.ticket_id, "voter-a", escalated_at_unix + 1)
+            .expect("approval vote");
+
+        let now_unix = escalated_at_unix + policy.dispute_window_secs + 1;
+        manager.run_watchdog(now_unix).expect("watchdog");
+        let task = manager
+            .load_task(&report.ticket_id)
+            .expect("load repair task");
+        match task.governance.decision {
+            Some(RepairGovernanceDecision::Rejected { reason, .. }) => {
+                assert_eq!(reason, RepairGovernanceRejectReason::InsufficientQuorum);
+            }
+            other => panic!("expected rejection decision, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn submit_slash_appeal_records_appeal() {
+        let policy = actual::RepairEscalationPolicyV1 {
+            quorum_bps: 6_000,
+            minimum_voters: 2,
+            dispute_window_secs: 5,
+            appeal_window_secs: 30,
+            max_penalty_nano: 1_000_000_000,
+        };
+        let actual = actual::SorafsRepair {
+            max_attempts: 1,
+            default_slash_penalty_nano: 5_000,
+            ..Default::default()
+        };
+        let config = RepairConfig::from_repair_and_policy(&actual, &policy);
+        let (manager, _temp_dir) = manager_with_config(config);
+        let report = report("REP-330", [0x24; 32], [0x34; 32], 1_700_100_410);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+
+        let update = manager
+            .mark_failed_with_event(
+                &report.ticket_id,
+                report.submitted_at_unix + 20,
+                "loss".into(),
+            )
+            .expect("mark failed");
+        let escalated_at_unix = match update.record.state {
+            RepairTaskStateV1::Escalated(state) => state.escalated_at_unix,
+            other => panic!("expected escalated state, got {other:?}"),
+        };
+
+        manager
+            .submit_slash_approval(&report.ticket_id, "voter-a", escalated_at_unix + 1)
+            .expect("approval vote");
+        manager
+            .submit_slash_approval(&report.ticket_id, "voter-b", escalated_at_unix + 2)
+            .expect("approval vote");
+
+        let expected_approved_at = escalated_at_unix + policy.dispute_window_secs;
+        let now_unix = expected_approved_at + 1;
+        manager.run_watchdog(now_unix).expect("watchdog");
+
+        let appeal_at = expected_approved_at + 10;
+        manager
+            .submit_slash_appeal(
+                &report.ticket_id,
+                "provider#sora",
+                appeal_at,
+                Some("appeal".into()),
+            )
+            .expect("appeal should be accepted");
+        let task = manager
+            .load_task(&report.ticket_id)
+            .expect("load repair task");
+        match task.governance.decision {
+            Some(RepairGovernanceDecision::Appealed {
+                approved_at_unix,
+                appealed_at_unix,
+                appellant,
+                ..
+            }) => {
+                assert_eq!(approved_at_unix, expected_approved_at);
+                assert_eq!(appealed_at_unix, appeal_at);
+                assert_eq!(appellant, "provider#sora");
+            }
+            other => panic!("expected appeal decision, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn submit_slash_proposal_rejects_insufficient_quorum() {
+        let (manager, _temp_dir) = manager_with_temp_dir();
+        let report = report("REP-327", [0x21; 32], [0x31; 32], 1_700_100_380);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+        let policy = *RepairConfig::default().escalation_policy();
+        let mut approval = approval_for_policy(&policy, report.submitted_at_unix + 10);
+        approval.approve_votes = 1;
+        approval.reject_votes = 2;
+        approval.abstain_votes = 0;
+
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            provider_id: report.evidence.provider_id,
+            manifest_digest: report.evidence.manifest_digest,
+            auditor_account: report.auditor_account.clone(),
+            proposed_penalty_nano: 1_000,
+            submitted_at_unix: report.submitted_at_unix + 10,
+            rationale: "low quorum".into(),
+            approval: Some(approval),
+        };
+
+        let err = manager
+            .submit_slash_proposal_with_event(proposal)
+            .expect_err("quorum should be enforced");
+        assert!(matches!(err, RepairSchedulerError::PolicyViolation { .. }));
+    }
+
+    #[test]
+    fn submit_slash_proposal_rejects_tied_votes() {
+        let policy = actual::RepairEscalationPolicyV1 {
+            quorum_bps: 5_000,
+            minimum_voters: 2,
+            ..Default::default()
+        };
+        let repair_cfg = actual::SorafsRepair {
+            ..Default::default()
+        };
+        let config = RepairConfig::from_repair_and_policy(&repair_cfg, &policy);
+        let (manager, _temp_dir) = manager_with_config(config.clone());
+        let report = report("REP-328", [0x21; 32], [0x31; 32], 1_700_100_390);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+        let policy = *config.escalation_policy();
+        let mut approval = approval_for_policy(&policy, report.submitted_at_unix + 10);
+        approval.approve_votes = 1;
+        approval.reject_votes = 1;
+        approval.abstain_votes = 0;
+
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            provider_id: report.evidence.provider_id,
+            manifest_digest: report.evidence.manifest_digest,
+            auditor_account: report.auditor_account.clone(),
+            proposed_penalty_nano: 1_000,
+            submitted_at_unix: report.submitted_at_unix + 10,
+            rationale: "tie votes".into(),
+            approval: Some(approval),
+        };
+
+        let err = manager
+            .submit_slash_proposal_with_event(proposal)
+            .expect_err("tie votes should be rejected");
+        assert!(matches!(err, RepairSchedulerError::PolicyViolation { .. }));
+    }
+
+    #[test]
+    fn submit_slash_proposal_rejects_appeal_window() {
+        let (manager, _temp_dir) = manager_with_temp_dir();
+        let report = report("REP-329", [0x21; 32], [0x31; 32], 1_700_100_400);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+        let policy = *RepairConfig::default().escalation_policy();
+        let mut approval = approval_for_policy(&policy, report.submitted_at_unix + 10);
+        approval.finalized_at_unix = approval.approved_at_unix;
+
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            provider_id: report.evidence.provider_id,
+            manifest_digest: report.evidence.manifest_digest,
+            auditor_account: report.auditor_account.clone(),
+            proposed_penalty_nano: 1_000,
+            submitted_at_unix: report.submitted_at_unix + 10,
+            rationale: "appeal window".into(),
+            approval: Some(approval),
+        };
+
+        let err = manager
+            .submit_slash_proposal_with_event(proposal)
+            .expect_err("appeal window should be enforced");
+        assert!(matches!(err, RepairSchedulerError::PolicyViolation { .. }));
     }
 
     #[test]

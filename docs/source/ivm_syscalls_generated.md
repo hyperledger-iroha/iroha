@@ -1,6 +1,6 @@
 # Generated IVM Syscall Table
 
-This file is generated from `crates/ivm/src/syscalls.rs`. Edit the source to change syscall numbers; then re-run this script.
+This file is generated from `crates/ivm_abi/src/syscalls.rs`. Edit the source to change syscall numbers; then re-run this script.
 
 | Name | Value (hex) | Note |
 |------|-------------|------|

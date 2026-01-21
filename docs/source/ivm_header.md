@@ -24,7 +24,7 @@ Fields (meaning)
 - `max_cycles`: execution padding bound used in ZK mode and admission.
 
 Notes
-- Endianness and layout are defined by the implementation and bound to `version`. The on‑wire layout above reflects the current implementation in `crates/ivm/src/metadata.rs`.
+- Endianness and layout are defined by the implementation and bound to `version`. The on‑wire layout above reflects the current implementation in `crates/ivm_abi/src/metadata.rs`.
 - A minimal reader can rely on this layout for current artifacts and should handle future changes via `version` gating.
 - Hardware acceleration (SIMD/Metal/CUDA) is opt-in per host. The runtime reads `AccelerationConfig` values from `iroha_config`: `enable_simd` forces scalar fallbacks when false, while `enable_metal` and `enable_cuda` gate their respective backends even when compiled in. These toggles are applied through `ivm::set_acceleration_config` before VM creation.
 - Mobile SDKs (Android/Swift) surface the same knobs; `IrohaSwift.AccelerationSettings`

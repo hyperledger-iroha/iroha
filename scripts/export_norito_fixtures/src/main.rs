@@ -345,8 +345,9 @@ impl RawFixture {
 
         let (payload, signed_tx) = {
             let mut cursor = encoded_input.as_slice();
-            let payload =
-                TransactionPayload::decode(&mut cursor).context("failed to decode payload")?;
+            let payload = TransactionPayload::decode(&mut cursor).with_context(|| {
+                format!("failed to decode payload for fixture '{}'", self.name)
+            })?;
             if !cursor.is_empty() {
                 bail!("fixture '{}' payload has trailing bytes", self.name);
             }

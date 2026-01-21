@@ -8,7 +8,7 @@ use ivm::{
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1) Compile the Kotodama sample to IVM bytecode
-    let src = include_str!("../src/kotodama/samples/lending_simple.ko");
+    let src = include_str!("../../kotodama_lang/src/samples/lending_simple.ko");
     let compiler = KotodamaCompiler::new();
     let bytecode = compiler
         .compile_source(src)

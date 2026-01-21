@@ -41,6 +41,20 @@ where
     Ok(())
 }
 
+async fn submit_instruction_and_wait(
+    network: &sandbox::SerializedNetwork,
+    client: iroha::client::Client,
+    instruction: impl Into<InstructionBox>,
+    context: &str,
+) -> Result<()> {
+    let mut client = client;
+    client.transaction_status_timeout = network.sync_timeout();
+    let instruction = instruction.into();
+    let context = context.to_string();
+    spawn_blocking(move || client.submit_blocking(instruction).wrap_err(context)).await??;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn call_execute_trigger() -> Result<()> {
     let Some(network) = start_network(stringify!(call_execute_trigger)).await? else {
@@ -66,21 +80,23 @@ async fn call_execute_trigger() -> Result<()> {
             asset_id.account(),
             vec![Instruction::into_instruction_box(Box::new(instruction))],
         );
-        spawn_blocking({
-            let client = test_client.clone();
-            move || client.submit_blocking(register_trigger)
-        })
-        .await??;
+        submit_instruction_and_wait(
+            &network,
+            test_client.clone(),
+            register_trigger,
+            stringify!(call_execute_trigger),
+        )
+        .await?;
 
         let trigger_id = TRIGGER_NAME.parse()?;
         let call_trigger = ExecuteTrigger::new(trigger_id);
-        spawn_blocking({
-            let client = test_client.clone();
-            move || {
-                client.submit_blocking(Instruction::into_instruction_box(Box::new(call_trigger)))
-            }
-        })
-        .await??;
+        submit_instruction_and_wait(
+            &network,
+            test_client.clone(),
+            Instruction::into_instruction_box(Box::new(call_trigger)),
+            stringify!(call_execute_trigger),
+        )
+        .await?;
 
         let new_value = spawn_blocking({
             let client = test_client.clone();
@@ -115,11 +131,13 @@ async fn execute_trigger_should_produce_event() -> Result<()> {
                 asset_id.account(),
                 vec![Instruction::into_instruction_box(Box::new(instruction))],
             );
-            spawn_blocking({
-                let client = test_client.clone();
-                move || client.submit_blocking(register_trigger)
-            })
-            .await??;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                register_trigger,
+                stringify!(execute_trigger_should_produce_event),
+            )
+            .await?;
 
             let trigger_id = TRIGGER_NAME.parse::<TriggerId>()?;
             let call_trigger = ExecuteTrigger::new(trigger_id.clone());
@@ -134,14 +152,13 @@ async fn execute_trigger_should_produce_event() -> Result<()> {
             .await
             .wrap_err("Timed out opening ExecuteTrigger event stream")??;
 
-            spawn_blocking({
-                let client = test_client.clone();
-                move || {
-                    client
-                        .submit_blocking(Instruction::into_instruction_box(Box::new(call_trigger)))
-                }
-            })
-            .await??;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                Instruction::into_instruction_box(Box::new(call_trigger)),
+                stringify!(execute_trigger_should_produce_event),
+            )
+            .await?;
 
             let result = async {
                 let next_event = timeout(network.sync_timeout(), events.next())
@@ -194,11 +211,13 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
                         .under_authority(account_id.clone()),
                 ),
             ));
-            spawn_blocking({
-                let client = test_client.clone();
-                move || client.submit_blocking(register_bad_trigger)
-            })
-            .await??;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                register_bad_trigger,
+                stringify!(trigger_failure_should_not_cancel_other_triggers_execution),
+            )
+            .await?;
 
             let trigger_id = TRIGGER_NAME.parse()?;
             let register_trigger = Register::trigger(Trigger::new(
@@ -210,11 +229,13 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
                     TimeEventFilter::new(ExecutionTime::PreCommit),
                 ),
             ));
-            spawn_blocking({
-                let client = test_client.clone();
-                move || client.submit_blocking(register_trigger)
-            })
-            .await??;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                register_trigger,
+                stringify!(trigger_failure_should_not_cancel_other_triggers_execution),
+            )
+            .await?;
 
             let prev_asset_value = spawn_blocking({
                 let client = test_client.clone();
@@ -240,11 +261,13 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
                 return Err(err);
             };
 
-            spawn_blocking({
-                let client = test_client.clone();
-                move || client.submit_blocking(Log::new(Level::INFO, "trigger probe".to_string()))
-            })
-            .await??;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                Log::new(Level::INFO, "trigger probe".to_string()),
+                stringify!(trigger_failure_should_not_cancel_other_triggers_execution),
+            )
+            .await?;
 
             let new_asset_value = spawn_blocking({
                 let client = test_client.clone();
@@ -295,11 +318,13 @@ async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> 
                         .under_authority(account_id),
                 ),
             ));
-            spawn_blocking({
-                let client = test_client.clone();
-                move || client.submit_blocking(register_trigger)
-            })
-            .await??;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                register_trigger,
+                stringify!(trigger_should_not_be_executed_with_zero_repeats_count),
+            )
+            .await?;
 
             // Saving current asset value
             let prev_asset_value = spawn_blocking({
@@ -312,15 +337,13 @@ async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> 
             // Executing trigger first time
             let execute_trigger = ExecuteTrigger::new(trigger_id.clone());
             let execute_trigger_first = execute_trigger.clone();
-            spawn_blocking({
-                let client = test_client.clone();
-                move || {
-                    client.submit_blocking(Instruction::into_instruction_box(Box::new(
-                        execute_trigger_first,
-                    )))
-                }
-            })
-            .await??;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                Instruction::into_instruction_box(Box::new(execute_trigger_first)),
+                stringify!(trigger_should_not_be_executed_with_zero_repeats_count),
+            )
+            .await?;
 
             // Executing trigger second time
             let error = spawn_blocking({
@@ -390,31 +413,13 @@ async fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> 
             };
 
             // Ensure the caller explicitly has permission to register the trigger on their own behalf.
-            let target_height = spawn_blocking({
-                let client = test_client.clone();
-                move || {
-                    client
-                        .get_status()
-                        .map(|status| status.blocks.saturating_add(1))
-                }
-            })
-            .await??;
-            spawn_blocking({
-                let client = test_client.clone();
-                let permission_on_registration = permission_on_registration.clone();
-                let account_id = account_id.clone();
-                move || {
-                    client.submit_blocking(Grant::account_permission(
-                        permission_on_registration,
-                        account_id,
-                    ))
-                }
-            })
-            .await??;
-
-            network
-                .ensure_blocks_with(|h| h.total >= target_height)
-                .await?;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                Grant::account_permission(permission_on_registration, account_id.clone()),
+                stringify!(trigger_should_be_able_to_modify_its_own_repeats_count),
+            )
+            .await?;
 
             let trigger_instructions: Vec<InstructionBox> = vec![
                 Mint::trigger_repetitions(1_u32, trigger_id.clone()).into(),
@@ -431,11 +436,13 @@ async fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> 
                         .under_authority(account_id),
                 ),
             ));
-            spawn_blocking({
-                let client = test_client.clone();
-                move || client.submit_blocking(register_trigger)
-            })
-            .await??;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                register_trigger,
+                stringify!(trigger_should_be_able_to_modify_its_own_repeats_count),
+            )
+            .await?;
 
             // Saving current asset value
             let prev_asset_value = spawn_blocking({
@@ -448,26 +455,22 @@ async fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> 
             // Executing trigger first time
             let execute_trigger = ExecuteTrigger::new(trigger_id);
             let execute_trigger_first = execute_trigger.clone();
-            spawn_blocking({
-                let client = test_client.clone();
-                move || {
-                    client.submit_blocking(Instruction::into_instruction_box(Box::new(
-                        execute_trigger_first,
-                    )))
-                }
-            })
-            .await??;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                Instruction::into_instruction_box(Box::new(execute_trigger_first)),
+                stringify!(trigger_should_be_able_to_modify_its_own_repeats_count),
+            )
+            .await?;
 
             // Executing trigger second time
-            spawn_blocking({
-                let client = test_client.clone();
-                move || {
-                    client.submit_blocking(Instruction::into_instruction_box(Box::new(
-                        execute_trigger,
-                    )))
-                }
-            })
-            .await??;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                Instruction::into_instruction_box(Box::new(execute_trigger)),
+                stringify!(trigger_should_be_able_to_modify_its_own_repeats_count),
+            )
+            .await?;
 
             // Checking results
             let new_asset_value = spawn_blocking({
@@ -534,11 +537,13 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
                 ),
             );
 
-            spawn_blocking({
-                let client = test_client.clone();
-                move || client.submit_blocking(Register::account(rabbit_account))
-            })
-            .await??;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                Register::account(rabbit_account),
+                stringify!(only_account_with_permission_can_register_trigger),
+            )
+            .await?;
 
             spawn_blocking({
                 let client = test_client.clone();
@@ -577,38 +582,23 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
             println!("Rabbit couldn't register the trigger");
 
             // Give permissions to the rabbit
-            let target_height = spawn_blocking({
-                let client = test_client.clone();
-                move || {
-                    client
-                        .get_status()
-                        .map(|status| status.blocks.saturating_add(1))
-                }
-            })
-            .await??;
-            spawn_blocking({
-                let client = test_client.clone();
-                let permission_on_registration = permission_on_registration.clone();
-                let rabbit_account_id = rabbit_account_id.clone();
-                move || {
-                    client.submit_blocking(Grant::account_permission(
-                        permission_on_registration,
-                        rabbit_account_id,
-                    ))
-                }
-            })
-            .await??;
-            network
-                .ensure_blocks_with(|h| h.total >= target_height)
-                .await?;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                Grant::account_permission(permission_on_registration, rabbit_account_id.clone()),
+                stringify!(only_account_with_permission_can_register_trigger),
+            )
+            .await?;
             println!("Rabbit has got the permission");
 
             // Trying register the trigger with permissions
-            spawn_blocking({
-                let client = rabbit_client.clone();
-                move || client.submit_blocking(Register::trigger(trigger))
-            })
-            .await??;
+            submit_instruction_and_wait(
+                &network,
+                rabbit_client.clone(),
+                Register::trigger(trigger),
+                stringify!(only_account_with_permission_can_register_trigger),
+            )
+            .await?;
 
             let found_trigger = spawn_blocking({
                 let client = test_client.clone();
@@ -657,11 +647,13 @@ async fn unregister_trigger() -> Result<()> {
             ),
         );
         let register_trigger = Register::trigger(trigger.clone());
-        spawn_blocking({
-            let client = test_client.clone();
-            move || client.submit_blocking(register_trigger)
-        })
-        .await??;
+        submit_instruction_and_wait(
+            &network,
+            test_client.clone(),
+            register_trigger,
+            stringify!(unregister_trigger),
+        )
+        .await?;
 
         // Finding trigger
         let found_trigger = spawn_blocking({
@@ -695,11 +687,13 @@ async fn unregister_trigger() -> Result<()> {
 
         // Unregistering trigger
         let unregister_trigger = Unregister::trigger(trigger_id.clone());
-        spawn_blocking({
-            let client = test_client.clone();
-            move || client.submit_blocking(unregister_trigger)
-        })
-        .await??;
+        submit_instruction_and_wait(
+            &network,
+            test_client.clone(),
+            unregister_trigger,
+            stringify!(unregister_trigger),
+        )
+        .await?;
 
         // Checking result
         let still_present = spawn_blocking({
@@ -762,20 +756,21 @@ async fn trigger_in_genesis() -> Result<()> {
         .await??;
 
         // Executing trigger
-        spawn_blocking({
-            let client = test_client.clone();
-            let trigger_id = trigger_id.clone();
-            move || client.submit_blocking(SetKeyValue::trigger(trigger_id, "VAL".parse()?, 1_u32))
-        })
-        .await??;
+        submit_instruction_and_wait(
+            &network,
+            test_client.clone(),
+            SetKeyValue::trigger(trigger_id.clone(), "VAL".parse()?, 1_u32),
+            stringify!(trigger_in_genesis),
+        )
+        .await?;
         let call_trigger = ExecuteTrigger::new(trigger_id).with_args(MintRoseArgs { val: 1 });
-        spawn_blocking({
-            let client = test_client.clone();
-            move || {
-                client.submit_blocking(Instruction::into_instruction_box(Box::new(call_trigger)))
-            }
-        })
-        .await??;
+        submit_instruction_and_wait(
+            &network,
+            test_client.clone(),
+            Instruction::into_instruction_box(Box::new(call_trigger)),
+            stringify!(trigger_in_genesis),
+        )
+        .await?;
 
         // Checking result
         let new_value = spawn_blocking({
@@ -826,11 +821,13 @@ async fn trigger_should_be_able_to_modify_other_trigger() -> Result<()> {
                         .under_authority(account_id.clone()),
                 ),
             ));
-            spawn_blocking({
-                let client = test_client.clone();
-                move || client.submit_blocking(register_trigger)
-            })
-            .await??;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                register_trigger,
+                stringify!(trigger_should_be_able_to_modify_other_trigger),
+            )
+            .await?;
 
             let trigger_should_be_unregistered_instructions =
                 vec![Mint::asset_numeric(1u32, asset_id.clone())];
@@ -845,11 +842,13 @@ async fn trigger_should_be_able_to_modify_other_trigger() -> Result<()> {
                         .under_authority(account_id),
                 ),
             ));
-            spawn_blocking({
-                let client = test_client.clone();
-                move || client.submit_blocking(register_trigger)
-            })
-            .await??;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                register_trigger,
+                stringify!(trigger_should_be_able_to_modify_other_trigger),
+            )
+            .await?;
 
             // Saving current asset value
             let prev_asset_value = spawn_blocking({
@@ -925,18 +924,18 @@ async fn trigger_burn_repetitions() -> Result<()> {
 
     run_or_skip(stringify!(trigger_burn_repetitions), || async {
         // Explicitly allow Alice to register by-call triggers.
-        spawn_blocking({
-            let client = test_client.clone();
-            move || {
-                client.submit_blocking(Grant::account_permission(
-                    CanRegisterTrigger {
-                        authority: ALICE_ID.clone(),
-                    },
-                    ALICE_ID.clone(),
-                ))
-            }
-        })
-        .await??;
+        submit_instruction_and_wait(
+            &network,
+            test_client.clone(),
+            Grant::account_permission(
+                CanRegisterTrigger {
+                    authority: ALICE_ID.clone(),
+                },
+                ALICE_ID.clone(),
+            ),
+            stringify!(trigger_burn_repetitions),
+        )
+        .await?;
 
         let asset_definition_id = "rose#wonderland".parse()?;
         let account_id = ALICE_ID.clone();
@@ -955,18 +954,21 @@ async fn trigger_burn_repetitions() -> Result<()> {
                     .under_authority(account_id),
             ),
         ));
-        spawn_blocking({
-            let client = test_client.clone();
-            move || client.submit_blocking(register_trigger)
-        })
-        .await??;
+        submit_instruction_and_wait(
+            &network,
+            test_client.clone(),
+            register_trigger,
+            stringify!(trigger_burn_repetitions),
+        )
+        .await?;
 
-        spawn_blocking({
-            let client = test_client.clone();
-            let trigger_id = trigger_id.clone();
-            move || client.submit_blocking(Burn::trigger_repetitions(1_u32, trigger_id))
-        })
-        .await??;
+        submit_instruction_and_wait(
+            &network,
+            test_client.clone(),
+            Burn::trigger_repetitions(1_u32, trigger_id.clone()),
+            stringify!(trigger_burn_repetitions),
+        )
+        .await?;
 
         // Executing trigger
         let execute_trigger = ExecuteTrigger::new(trigger_id);
@@ -1020,23 +1022,28 @@ async fn unregistering_one_of_two_triggers_with_identical_contract_should_not_ca
             let second_trigger = build_trigger(second_trigger_id.clone());
             let second_trigger_for_register = second_trigger.clone();
 
-            spawn_blocking({
-                let client = test_client.clone();
-                move || {
-                    client.submit_all_blocking([
-                        Register::trigger(first_trigger),
-                        Register::trigger(second_trigger_for_register),
-                    ])
-                }
-            })
-            .await??;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                Register::trigger(first_trigger),
+                stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss),
+            )
+            .await?;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                Register::trigger(second_trigger_for_register),
+                stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss),
+            )
+            .await?;
 
-            spawn_blocking({
-                let client = test_client.clone();
-                let first_trigger_id = first_trigger_id.clone();
-                move || client.submit_blocking(Unregister::trigger(first_trigger_id))
-            })
-            .await??;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                Unregister::trigger(first_trigger_id.clone()),
+                stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss),
+            )
+            .await?;
             let got_second_trigger = spawn_blocking({
                 let client = test_client.clone();
                 let second_trigger_id = second_trigger_id.clone();
@@ -1111,21 +1118,23 @@ async fn call_execute_trigger_with_args() -> Result<()> {
             ),
         );
 
-        spawn_blocking({
-            let client = test_client.clone();
-            move || client.submit_blocking(Register::trigger(trigger))
-        })
-        .await??;
+        submit_instruction_and_wait(
+            &network,
+            test_client.clone(),
+            Register::trigger(trigger),
+            stringify!(call_execute_trigger_with_args),
+        )
+        .await?;
 
         let args = MintRoseArgs { val: 42 };
         let call_trigger = ExecuteTrigger::new(trigger_id).with_args(args);
-        spawn_blocking({
-            let client = test_client.clone();
-            move || {
-                client.submit_blocking(Instruction::into_instruction_box(Box::new(call_trigger)))
-            }
-        })
-        .await??;
+        submit_instruction_and_wait(
+            &network,
+            test_client.clone(),
+            Instruction::into_instruction_box(Box::new(call_trigger)),
+            stringify!(call_execute_trigger_with_args),
+        )
+        .await?;
 
         let new_value = spawn_blocking({
             let client = test_client.clone();

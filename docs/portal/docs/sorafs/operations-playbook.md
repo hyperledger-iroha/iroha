@@ -115,6 +115,34 @@ This page mirrors the runbook maintained under `docs/source/sorafs_ops_playbook.
 - Schedule a capacity drill focusing on provider saturation failure.
 - Update replication SLA documentation in `docs/source/sorafs_node_client_protocol.md`.
 
+## Repair Backlog & SLA Breaches
+
+**Detection**
+
+- Alerts:
+  - `SoraFSRepairBacklogHigh` (queue depth > 50 or oldest queued age > 4h for 10m).
+  - `SoraFSRepairEscalations` (> 3 escalations/hour).
+  - `SoraFSRepairLeaseExpirySpike` (> 5 lease expiries/hour).
+  - `SoraFSRetentionBlockedEvictions` (retention blocked by active repairs in last 15m).
+- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
+
+**Immediate actions**
+
+1. Identify affected providers (queue depth spikes) and pause new pins/replication orders for them.
+2. Verify repair worker liveness and increase worker concurrency if safe.
+
+**Triage**
+
+- Compare `torii_sorafs_repair_backlog_oldest_age_seconds` against the 4h SLA window.
+- Inspect `torii_sorafs_repair_lease_expired_total{outcome=...}` for crash/clock-skew patterns.
+- Review escalated tickets for repeated manifest/provider pairs and verify evidence bundles.
+
+**Remediation options**
+
+- Reassign or restart stalled repair workers; clear orphaned leases via the normal claim flow.
+- Throttle new pins while repairs drain to prevent additional SLA pressure.
+- Escalate to governance if escalations persist and attach the repair audit artefacts.
+
 ## Retention / GC Inspection (Read-only)
 
 **Detection**
@@ -137,8 +165,14 @@ This page mirrors the runbook maintained under `docs/source/sorafs_ops_playbook.
 **Triage**
 
 - Confirm which manifests report `retention_epoch=0` (no expiry) vs. those with deadlines.
+- Use `retention_sources` in the GC JSON output to see which constraint set the effective
+  retention (`deal_end`, `governance_cap`, `pin_policy`, or `unbounded`). Deal and governance caps
+  are supplied via manifest metadata keys `sorafs.retention.deal_end_epoch` and
+  `sorafs.retention.governance_cap_epoch`.
 - If `dry-run` reports expired manifests but capacity remains pinned, verify no
   active repairs or retention policy overrides block eviction.
+  Capacity-triggered sweeps evict expired manifests by least-recently-used order with
+  `manifest_id` tie-breakers.
 
 **Remediation options**
 
