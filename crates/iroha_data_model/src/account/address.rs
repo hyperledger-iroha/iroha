@@ -619,10 +619,12 @@ impl AccountAddress {
         })
     }
 
-    pub(crate) fn ensure_domain_matches(
-        &self,
-        domain: &DomainId,
-    ) -> Result<(), AccountAddressError> {
+    /// Check that the provided domain matches the selector embedded in this address.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountAddressError::DomainMismatch`] when domains do not match.
+    pub fn ensure_domain_matches(&self, domain: &DomainId) -> Result<(), AccountAddressError> {
         if self.domain.matches_domain(domain) {
             Ok(())
         } else {

@@ -181,7 +181,7 @@ if [[ -n "$SLO_QUEUE_SAT_FRAC" ]]; then
   ENV_VARS+=("IROHA_THROUGHPUT_SLO_QUEUE_SAT_FRAC=$SLO_QUEUE_SAT_FRAC")
 fi
 
-for extra in "${EXTRA_ENV[@]}"; do
+for extra in ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}; do
   ENV_VARS+=("$extra")
 done
 

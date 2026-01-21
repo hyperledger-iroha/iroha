@@ -398,6 +398,8 @@ const LOCALNET_CLIENT_TTL_MS: u64 = 600_000;
 const LOCALNET_CLIENT_STATUS_TIMEOUT_MS: u64 = 300_000;
 /// Default Kura fsync mode for localnet (performance-oriented).
 const LOCALNET_KURA_FSYNC_MODE: &str = "off";
+/// Logger filter for perf-profile localnets to avoid per-transaction log floods.
+const LOCALNET_PERF_LOGGER_FILTER: &str = "info,iroha_torii::routing=warn";
 const STREAM_ID_PUBLIC: &str =
     "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
 const STREAM_ID_PRIVATE: &str =
@@ -724,6 +726,7 @@ fn generate_localnet_with_line<T: Write>(
     let da_rbc_enabled = build_line.is_iroha3();
     let npos_bootstrap = localnet_uses_npos(opts.consensus_mode, opts.next_consensus_mode);
     let perf_spec = opts.perf_profile.map(LocalnetPerfProfile::spec);
+    let logger_filter = perf_spec.map(|_| LOCALNET_PERF_LOGGER_FILTER);
     // Nexus stays enabled for Sora profiles and whenever NPoS bootstrap is requested.
     let nexus_enabled = localnet_should_enable_nexus(opts.sora_profile, npos_bootstrap);
     let dataspace_fault_tolerance =
@@ -853,6 +856,7 @@ fn generate_localnet_with_line<T: Write>(
             redundant_send_r,
             collectors_k,
             commit_inflight_timeout_ms,
+            logger_filter,
         );
         let path = out_dir.join(format!("peer{idx}.toml"));
         fs::write(&path, rendered)
@@ -1036,6 +1040,7 @@ fn render_peer_config(
     redundant_send_r: Option<u8>,
     collectors_k: Option<u16>,
     commit_inflight_timeout_ms: u64,
+    logger_filter: Option<&str>,
 ) -> String {
     use toml::{Table, Value};
 
@@ -1339,6 +1344,9 @@ fn render_peer_config(
     let mut logger = Table::new();
     logger.insert("format".into(), Value::String("compact".into()));
     logger.insert("level".into(), Value::String("info".into()));
+    if let Some(filter) = logger_filter {
+        logger.insert("filter".into(), Value::String(filter.to_owned()));
+    }
     root.insert("logger".into(), Value::Table(logger));
 
     let mut network = Table::new();
@@ -2011,7 +2019,9 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_config::{base::toml::TomlSource, kura::FsyncMode, parameters::actual};
+    use iroha_config::{
+        base::toml::TomlSource, kura::FsyncMode, logger::Directives, parameters::actual,
+    };
     use iroha_data_model::{
         block::{consensus::PROTO_VERSION, decode_framed_signed_block},
         isi::SetParameter,
@@ -2680,6 +2690,10 @@ mod tests {
         let parsed = actual::Root::from_toml_source(source).expect("config should parse");
         assert_eq!(parsed.sumeragi.collectors_k, 3);
         assert_eq!(parsed.sumeragi.collectors_redundant_send_r, 2);
+        let expected_filter: Directives = LOCALNET_PERF_LOGGER_FILTER
+            .parse()
+            .expect("perf logger filter should parse");
+        assert_eq!(parsed.logger.filter, Some(expected_filter));
 
         let genesis_path = temp.path().join("genesis.json");
         let manifest = genesis_json_from_path(&genesis_path);
@@ -2719,6 +2733,13 @@ mod tests {
         };
 
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+
+        let source = TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
+        let parsed = actual::Root::from_toml_source(source).expect("config should parse");
+        let expected_filter: Directives = LOCALNET_PERF_LOGGER_FILTER
+            .parse()
+            .expect("perf logger filter should parse");
+        assert_eq!(parsed.logger.filter, Some(expected_filter));
 
         let genesis_path = temp.path().join("genesis.json");
         let manifest = genesis_json_from_path(&genesis_path);

@@ -16202,10 +16202,9 @@ mod tx_query_integration_smoke {
             let address = account
                 .to_account_address()
                 .expect("account address constructs");
-            let compressed = address
+            address
                 .to_compressed_sora()
-                .expect("compressed encoding succeeds");
-            format!("{compressed}@{}", account.domain())
+                .expect("compressed encoding succeeds")
         };
 
         let env = crate::filter::QueryEnvelope {
@@ -19131,7 +19130,7 @@ mod app_api_integration_tests {
             .to_account_address()
             .and_then(|address| address.to_compressed_sora())
             .expect("compressed encoding should succeed");
-        format!("{compressed}@{}", account_id.domain())
+        compressed
     }
 }
 
@@ -26396,7 +26395,7 @@ mod tx_projection_display_tests {
             .to_account_address()
             .and_then(|addr| addr.to_compressed_sora())
             .expect("compressed literal");
-        let expected = format!("{compressed}@{}", account.domain());
+        let expected = compressed;
         let projection = TxProjection {
             authority: Some(account.to_string()),
             timestamp_ms: Some(123),
@@ -28531,8 +28530,7 @@ pub async fn handle_v1_accounts_onboard(
             .with_uaid(Some(uaid)),
     );
 
-    let mut instructions =
-        Vec::with_capacity(if should_publish_manifest { 2 } else { 1 });
+    let mut instructions = Vec::with_capacity(if should_publish_manifest { 2 } else { 1 });
     instructions.push(InstructionBox::from(register));
     if should_publish_manifest {
         let activation_epoch = app.state.view().height().saturating_sub(1) as u64;

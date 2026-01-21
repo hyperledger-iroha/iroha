@@ -1077,7 +1077,10 @@ impl SorafsRepairOtel {
         {
             self.queue_depth.record(
                 depth as f64,
-                &[opentelemetry::KeyValue::new("provider", provider.to_owned())],
+                &[opentelemetry::KeyValue::new(
+                    "provider",
+                    provider.to_owned(),
+                )],
             );
         }
         let _ = (depth, provider);
@@ -15135,8 +15138,7 @@ impl Metrics {
 
     /// Record the expired manifest snapshot observed by GC.
     pub fn set_sorafs_gc_expired_snapshot(&self, expired_count: u64, oldest_age_secs: u64) {
-        self.torii_sorafs_gc_expired_manifests
-            .set(expired_count);
+        self.torii_sorafs_gc_expired_manifests.set(expired_count);
         self.torii_sorafs_gc_oldest_expired_age_seconds
             .set(oldest_age_secs);
     }
@@ -16831,10 +16833,7 @@ mod test {
                 .get(),
             1
         );
-        assert_eq!(
-            metrics.torii_sorafs_gc_expired_manifests.get() as u64,
-            3
-        );
+        assert_eq!(metrics.torii_sorafs_gc_expired_manifests.get() as u64, 3);
         assert_eq!(
             metrics.torii_sorafs_gc_oldest_expired_age_seconds.get() as u64,
             120
@@ -16876,9 +16875,7 @@ mod test {
             1
         );
         assert_eq!(
-            metrics
-                .torii_sorafs_repair_backlog_oldest_age_seconds
-                .get() as u64,
+            metrics.torii_sorafs_repair_backlog_oldest_age_seconds.get() as u64,
             300
         );
         assert_eq!(

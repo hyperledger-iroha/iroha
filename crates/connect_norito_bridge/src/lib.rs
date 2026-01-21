@@ -66,8 +66,7 @@ use iroha_data_model::{
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
     smart_contract::manifest::ContractManifest,
     transaction::{
-        Executable, SignedTransaction, TransactionSubmissionReceipt,
-        signed::TransactionBuilder,
+        Executable, SignedTransaction, TransactionSubmissionReceipt, signed::TransactionBuilder,
     },
 };
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
@@ -8923,11 +8922,10 @@ pub unsafe extern "C" fn connect_norito_decode_transaction_receipt_json(
             return -1;
         }
         let bytes = slice::from_raw_parts(receipt_ptr, receipt_len as usize);
-        let receipt: TransactionSubmissionReceipt =
-            match norito::decode_from_bytes(bytes) {
-                Ok(v) => v,
-                Err(_) => return -2,
-            };
+        let receipt: TransactionSubmissionReceipt = match norito::decode_from_bytes(bytes) {
+            Ok(v) => v,
+            Err(_) => return -2,
+        };
         let json_bytes = match norito::json::to_vec(&receipt) {
             Ok(vec) => vec,
             Err(_) => return -3,

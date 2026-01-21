@@ -142,10 +142,9 @@ fn compressed_literal(account: &AccountId) -> String {
     let address = account
         .to_account_address()
         .expect("account address encoding");
-    let compressed = address
+    address
         .to_compressed_sora()
-        .expect("compressed literal encoding");
-    format!("{compressed}@{}", account.domain())
+        .expect("compressed literal encoding")
 }
 
 #[tokio::test]

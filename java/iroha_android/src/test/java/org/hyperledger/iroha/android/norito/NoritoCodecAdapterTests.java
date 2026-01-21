@@ -2,9 +2,11 @@ package org.hyperledger.iroha.android.norito;
 
 import java.util.Arrays;
 import java.util.Base64;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.model.Executable;
@@ -71,8 +73,6 @@ import org.junit.Test;
 
 public final class NoritoCodecAdapterTests {
 
-  private NoritoCodecAdapterTests() {}
-
   @Test
   public void runCodecScenarios() throws NoritoException {
     runAll();
@@ -84,6 +84,7 @@ public final class NoritoCodecAdapterTests {
 
   private static void runAll() throws NoritoException {
     javaCodecRoundTripsPayload();
+    javaCodecEncodesAccountIdAuthority();
     javaCodecSupportsInstructionsVariant();
     javaCodecSupportsWireInstructionPayloads();
     javaCodecEncodesIvmBytecodeLayout();
@@ -137,6 +138,39 @@ public final class NoritoCodecAdapterTests {
     assert decoded.nonce().orElseThrow() == 42 : "Nonce must round-trip";
     assert "unit-test".equals(decoded.metadata().get("purpose")) : "Metadata must round-trip";
     assertBarePayload(encoded);
+  }
+
+  private static void javaCodecEncodesAccountIdAuthority() throws NoritoException {
+    final byte[] publicKey = new byte[32];
+    Arrays.fill(publicKey, (byte) 0x3A);
+    final String ih58;
+    try {
+      ih58 =
+          AccountAddress.fromAccount("wonderland", publicKey, "ed25519")
+              .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalStateException("Failed to build authority address", ex);
+    }
+    final String authority = ih58 + "@wonderland";
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId("00000002")
+            .setAuthority(authority)
+            .setCreationTimeMs(1_735_000_000_456L)
+            .setExecutable(Executable.ivm(new byte[] {0x01, 0x02, 0x03}))
+            .build();
+
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final byte[] encoded = adapter.encodeTransaction(payload);
+    final TransactionPayload decoded = adapter.decodeTransaction(encoded);
+
+    assert authority.equals(decoded.authority()) : "AccountId authority must round-trip with domain";
+    final NoritoDecoder decoder = new NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION);
+    readField(decoder, "payload.chain_id");
+    final byte[] authorityField = readField(decoder, "payload.authority");
+    final int expectedStringPayloadLen = 8 + authority.getBytes(StandardCharsets.UTF_8).length;
+    assert authorityField.length != expectedStringPayloadLen
+        : "AccountId authority should encode as struct, not legacy string";
   }
 
   private static void javaCodecSupportsInstructionsVariant() throws NoritoException {

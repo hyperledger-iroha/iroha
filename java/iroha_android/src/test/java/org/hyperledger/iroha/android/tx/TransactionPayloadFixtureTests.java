@@ -10,8 +10,6 @@ import org.junit.Test;
 
 public final class TransactionPayloadFixtureTests {
 
-  private TransactionPayloadFixtureTests() {}
-
   @Test
   public void validatePayloadFixtures() throws Exception {
     runFixtures();

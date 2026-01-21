@@ -82,7 +82,7 @@ public final class HttpClientTransportOkHttpTests {
 
       final RecordedRequest recorded = server.takeRequest(1, TimeUnit.SECONDS);
       assertNotNull(recorded);
-      assertEquals("/v1/pipeline/transactions", recorded.getPath());
+      assertEquals("/transaction", recorded.getPath());
       assertEquals("POST", recorded.getMethod());
       assertEquals("application/x-norito", recorded.getHeader("Content-Type"));
       assertEquals("application/x-norito, application/json", recorded.getHeader("Accept"));

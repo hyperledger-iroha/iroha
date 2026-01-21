@@ -1,0 +1,13 @@
+diff --git a/java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java b/java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java
+index 0e9b7f963..77cdb01b5 100644
+--- a/java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java
++++ b/java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java
+@@ -11,7 +11,7 @@ import org.hyperledger.iroha.android.tx.SignedTransaction;
+ 
+ /** Builds Torii HTTP requests for submitting signed transactions. */
+ final class ToriiRequestBuilder {
+-  private static final String SUBMIT_PATH = "/v1/pipeline/transactions";
++  private static final String SUBMIT_PATH = "/transaction";
+   private static final String STATUS_PATH = "/v1/pipeline/transactions/status";
+ 
+   private ToriiRequestBuilder() {}

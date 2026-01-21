@@ -24,6 +24,7 @@ public final class AccountAddressTests {
     compressedRequiresSentinel();
     curveSupportDefaults();
     curveSupportConfigurationToggle();
+    singleKeyPayloadExtraction();
     System.out.println("[IrohaAndroid] Account address tests passed.");
   }
 
@@ -196,6 +197,19 @@ public final class AccountAddressTests {
       threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX;
     }
     assert threw : "expected prefix mismatch to throw";
+  }
+
+  private static void singleKeyPayloadExtraction() throws Exception {
+    final byte[] key = new byte[32];
+    for (int i = 0; i < key.length; i++) {
+      key[i] = (byte) i;
+    }
+    final AccountAddress address = AccountAddress.fromAccount("default", key, "ed25519");
+    final java.util.Optional<AccountAddress.SingleKeyPayload> payload = address.singleKeyPayload();
+    assert payload.isPresent() : "expected single-key payload";
+    final AccountAddress.SingleKeyPayload info = payload.get();
+    assert info.curveId() == 0x01 : "curve id mismatch";
+    assert Arrays.equals(info.publicKey(), key) : "public key mismatch";
   }
 
   private static void compressedRequiresSentinel() {

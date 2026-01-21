@@ -1,0 +1,105 @@
+diff --git a/crates/iroha_data_model/src/account/address.rs b/crates/iroha_data_model/src/account/address.rs
+index d16c53db7..51e81fd0b 100644
+--- a/crates/iroha_data_model/src/account/address.rs
++++ b/crates/iroha_data_model/src/account/address.rs
+@@ -619,7 +619,12 @@ impl AccountAddress {
+         })
+     }
+ 
+-    pub(crate) fn ensure_domain_matches(
++    /// Check that the provided domain matches the selector embedded in this address.
++    ///
++    /// # Errors
++    ///
++    /// Returns [`AccountAddressError::DomainMismatch`] when domains do not match.
++    pub fn ensure_domain_matches(
+         &self,
+         domain: &DomainId,
+     ) -> Result<(), AccountAddressError> {
+diff --git a/crates/iroha_primitives/src/const_vec.rs b/crates/iroha_primitives/src/const_vec.rs
+index 2ae3070c0..e93013e4d 100644
+--- a/crates/iroha_primitives/src/const_vec.rs
++++ b/crates/iroha_primitives/src/const_vec.rs
+@@ -990,9 +990,15 @@ where
+     if !type_name.contains("InstructionBox") {
+         return None;
+     }
+-    norito::codec::decode_adaptive::<Vec<T>>(bytes)
+-        .ok()
+-        .map(ConstVec::from)
++    // Use streaming decode with current flags context instead of decode_adaptive
++    // which expects NRT0 header. The bytes here are raw ConstVec content, not
++    // NRT0-framed data.
++    let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
++    let guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
++    let mut cursor = std::io::Cursor::new(bytes);
++    let result = <Vec<T> as norito::codec::Decode>::decode(&mut cursor).ok();
++    drop(guard);
++    result.map(ConstVec::from)
+ }
+ 
+ fn reencode_and_verify<T>(vec: &[T], decode_bytes: &[u8]) -> Result<usize, ncore::Error>
+diff --git a/java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java b/java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java
+index 0e9b7f963..77cdb01b5 100644
+--- a/java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java
++++ b/java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java
+@@ -11,7 +11,7 @@ import org.hyperledger.iroha.android.tx.SignedTransaction;
+ 
+ /** Builds Torii HTTP requests for submitting signed transactions. */
+ final class ToriiRequestBuilder {
+-  private static final String SUBMIT_PATH = "/v1/pipeline/transactions";
++  private static final String SUBMIT_PATH = "/transaction";
+   private static final String STATUS_PATH = "/v1/pipeline/transactions/status";
+ 
+   private ToriiRequestBuilder() {}
+diff --git a/java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/Ed25519Signer.java b/java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/Ed25519Signer.java
+index 96c16d8ca..1cda099fa 100644
+--- a/java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/Ed25519Signer.java
++++ b/java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/Ed25519Signer.java
+@@ -5,9 +5,15 @@ import java.security.PrivateKey;
+ import java.security.PublicKey;
+ import java.security.Signature;
+ import java.util.Arrays;
++import org.bouncycastle.crypto.digests.Blake2bDigest;
+ import org.hyperledger.iroha.android.SigningException;
+ 
+-/** Ed25519 signer that relies on the JCA provider available on the runtime. */
++/**
++ * Ed25519 signer that relies on the JCA provider available on the runtime.
++ *
++ * <p>Implements Iroha's signing convention: the payload is hashed with Blake2b-256
++ * and the least significant bit is set to 1 before signing.
++ */
+ public final class Ed25519Signer implements Signer {
+ 
+   private final PrivateKey privateKey;
+@@ -30,15 +36,28 @@ public final class Ed25519Signer implements Signer {
+       throw new SigningException("message must not be null");
+     }
+     try {
++      // Rust Iroha signs the Blake2b-256 hash of the payload, not the raw payload.
++      // Additionally, Rust sets LSB of the hash to 1 (see Hash::prehashed in iroha_crypto).
++      final byte[] hash = blake2bHashWithLsb(message);
+       final Signature signature = Signature.getInstance("Ed25519");
+       signature.initSign(privateKey);
+-      signature.update(message);
++      signature.update(hash);
+       return signature.sign();
+     } catch (final GeneralSecurityException ex) {
+       throw new SigningException("Ed25519 signing failed", ex);
+     }
+   }
+ 
++  private static byte[] blake2bHashWithLsb(final byte[] data) {
++    final Blake2bDigest digest = new Blake2bDigest(256); // 256 bits = 32 bytes
++    digest.update(data, 0, data.length);
++    final byte[] hash = new byte[digest.getDigestSize()];
++    digest.doFinal(hash, 0);
++    // Rust sets the least significant bit of the hash to 1
++    hash[hash.length - 1] = (byte) (hash[hash.length - 1] | 1);
++    return hash;
++  }
++
+   @Override
+   public byte[] publicKey() {
+     final byte[] encoded = publicKey.getEncoded();

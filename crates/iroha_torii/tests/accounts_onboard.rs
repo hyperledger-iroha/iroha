@@ -14,14 +14,16 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
+    Registrable,
     account::AccountId,
     domain::DomainId,
+    nexus::DataSpaceId,
     permission::Permission,
     prelude::{Account, Domain, ExposedPrivateKey},
-    nexus::DataSpaceId,
 };
 use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest;
 use iroha_torii::{Torii, json_entry, json_object};
+use mv::storage::StorageReadOnly;
 use tower::ServiceExt as _;
 
 #[path = "fixtures.rs"]
@@ -30,6 +32,7 @@ mod fixtures;
 #[tokio::test]
 async fn accounts_onboard_publishes_global_manifest_and_binding() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let lane_config = cfg.nexus.lane_config.clone();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -39,13 +42,22 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     let authority_id = AccountId::new(domain_id.clone(), authority_kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let authority_account = Account::new(authority_id.clone()).build(&authority_id);
-    let mut world = World::with([domain], [authority_account], []);
-    world.add_account_permission(
-        &authority_id,
-        Permission::from(CanPublishSpaceDirectoryManifest {
-            dataspace: DataSpaceId::GLOBAL,
-        }),
-    );
+    let world = World::with([domain], [authority_account], []);
+    {
+        let mut world_block = world.block();
+        #[cfg(feature = "telemetry")]
+        let mut world_tx = world_block.trasaction(None, lane_config.clone(), 0);
+        #[cfg(not(feature = "telemetry"))]
+        let mut world_tx = world_block.trasaction(lane_config.clone(), 0);
+        world_tx.add_account_permission(
+            &authority_id,
+            Permission::from(CanPublishSpaceDirectoryManifest {
+                dataspace: DataSpaceId::GLOBAL,
+            }),
+        );
+        world_tx.apply();
+        world_block.commit();
+    }
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
 
     cfg.torii.onboarding = Some(iroha_config::parameters::actual::ToriiOnboarding {
@@ -136,8 +148,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         .expect("onboarding response");
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
 
-    let applied =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+    let applied = iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert!(applied > 0);
 
     let view = state.view();
