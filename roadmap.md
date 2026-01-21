@@ -79,6 +79,11 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Logger: avoid `TestWriter` panics on broken pipes by using a lossy stdout writer in `iroha_logger` (unit coverage added) so spawned peers don't abort during shutdown.
  - [x] Limit integration-test network concurrency in the sandbox harness (CPU-scaled default + `IROHA_TEST_NETWORK_PARALLELISM`) so `--test-threads=1` is no longer required.
  - [x] Add a restart regression that simulates a crash after persisting a finalized VRF epoch record but before writing the seed-only next-epoch snapshot.
+
+4. **NPOS-LOCALNET-1HZ — Restore 1 Hz localnet block cadence** (Consensus/Localnet, Line: Iroha 3, Owner: Consensus WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
+ - [ ] Identify pacemaker backpressure sources holding proposal cadence (~7.5s/block) under 1 Hz ping load; capture per-stage timings.
+ - [ ] Tune NPoS timeouts and commit pipeline thresholds for localnet to reach 1 block/sec without triggering view changes.
+ - [ ] Re-run the 1 Hz / 100-block soak and confirm view changes remain zero and RBC queues stay under cap.
  - [ ] Re-run `cargo test -p integration_tests -- --nocapture` after the targeted suite completes cleanly (ran 60m; timed out while running `integration_tests/tests/mod.rs` with network guard stuck at 4/4 permits and unstable-network relay connection-refused warnings).
  - [x] Re-run `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` to confirm localnet tx-status fallbacks no longer emit WARN noise.
 - [x] Capture a localnet stall run with the new `sumeragi_localnet_smoke` status snapshots to pinpoint any remaining consensus races (saw repeated `dropping vote: empty commit topology` and RBC READY quorum stalls).

@@ -3259,6 +3259,119 @@ mod tests {
     }
 
     #[test]
+    fn try_incoming_block_message_waits_when_rbc_init_queue_full() {
+        const CAP: usize = 1;
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let rbc_chunk_tx_fill = rbc_chunk_tx.clone();
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let filler_chunk = BlockMessage::RbcChunk(RbcChunk {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9u8; 32])),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            idx: 0,
+            bytes: vec![0x10],
+        });
+        rbc_chunk_tx_fill
+            .send(inbound(filler_chunk))
+            .expect("fill rbc chunk channel");
+
+        let height = 2;
+        let view = 0;
+        let block_header = BlockHeader::new(
+            NonZeroU64::new(height).expect("block height must be non-zero"),
+            None,
+            None,
+            None,
+            0,
+            view,
+        );
+        let leader_key = KeyPair::random();
+        let (_, leader_private) = leader_key.into_parts();
+        let leader_signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(&leader_private, block_header.hash()),
+        );
+        let init = BlockMessage::RbcInit(crate::sumeragi::consensus::RbcInit {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([3u8; 32])),
+            height,
+            view,
+            epoch: 0,
+            roster: vec![PeerId::new(KeyPair::random().public_key().clone())],
+            roster_hash: Hash::prehashed([0x14; 32]),
+            total_chunks: 1,
+            chunk_digests: vec![[5u8; 32]],
+            payload_hash: Hash::prehashed([4u8; 32]),
+            chunk_root: Hash::prehashed([5u8; 32]),
+            block_header,
+            leader_signature,
+        });
+
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle_clone = handle.clone();
+        let join = std::thread::spawn(move || {
+            let accepted = handle_clone.try_incoming_block_message(init);
+            let _ = done_tx.send(accepted);
+        });
+
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "RbcInit should wait for RBC chunk queue capacity"
+        );
+        let _ = rbc_chunk_rx
+            .recv()
+            .expect("drain rbc chunk queue to unblock sender");
+        let accepted = done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("RbcInit should be enqueued after space is available");
+        assert!(
+            accepted,
+            "RbcInit should be accepted after space is available"
+        );
+        join.join().expect("join RbcInit sender");
+
+        let received = rbc_chunk_rx
+            .try_recv()
+            .expect("RbcInit should be enqueued after space is freed");
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::RbcInit(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
     fn try_incoming_block_message_waits_when_rbc_deliver_queue_full() {
         const CAP: usize = 1;
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
@@ -3455,7 +3568,7 @@ mod tests {
     }
 
     #[test]
-    fn incoming_block_message_waits_when_rbc_chunk_queue_full() {
+    fn incoming_block_message_drops_when_rbc_chunk_queue_full() {
         const CAP: usize = 1;
         let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
         let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
@@ -3502,6 +3615,7 @@ mod tests {
             idx: 1,
             bytes: vec![4, 5, 6],
         };
+        let chunk_two_again = chunk_two.clone();
 
         rbc_chunk_tx_fill
             .send(inbound(BlockMessage::RbcChunk(chunk_one)))
@@ -3513,21 +3627,12 @@ mod tests {
             let _ = done_tx.send(());
         });
 
-        assert!(
-            done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
-            "RBC chunk should wait for RBC queue capacity"
-        );
-        let _ = rbc_chunk_rx
-            .recv()
-            .expect("drain RBC chunk queue to unblock sender");
         done_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("RBC chunk should be enqueued after space is available");
+            .recv_timeout(Duration::from_millis(50))
+            .expect("RBC chunk enqueue should not block on full queue");
         join.join().expect("join RBC chunk sender");
 
-        let received = rbc_chunk_rx
-            .try_recv()
-            .expect("RBC chunk should be enqueued after space is freed");
+        let received = rbc_chunk_rx.recv().expect("drain RBC chunk queue");
         assert!(matches!(
             received,
             InboundBlockMessage {
@@ -3538,6 +3643,18 @@ mod tests {
         assert!(matches!(
             rbc_chunk_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
+        ));
+
+        handle.incoming_block_message(BlockMessage::RbcChunk(chunk_two_again));
+        let received = rbc_chunk_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("RBC chunk should enqueue after dedup release");
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::RbcChunk(_),
+                ..
+            }
         ));
     }
 
@@ -6278,6 +6395,7 @@ impl SumeragiHandle {
                 | BlockMessage::Proposal(_)
                 | BlockMessage::QcVote(_)
                 | BlockMessage::Qc(_)
+                | BlockMessage::RbcInit(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_)
         );
@@ -6299,6 +6417,7 @@ impl SumeragiHandle {
                 | BlockMessage::Proposal(_)
                 | BlockMessage::QcVote(_)
                 | BlockMessage::Qc(_)
+                | BlockMessage::RbcInit(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_)
         );
@@ -6345,6 +6464,28 @@ impl SumeragiHandle {
                         "dropping RBC init message"
                     );
                 }
+                BlockMessage::RbcReady(ready) => {
+                    iroha_logger::warn!(
+                        height = ready.height,
+                        view = ready.view,
+                        sender = ready.sender,
+                        block = %ready.block_hash,
+                        queue = ?queue,
+                        reason,
+                        "dropping RBC READY message"
+                    );
+                }
+                BlockMessage::RbcDeliver(deliver) => {
+                    iroha_logger::warn!(
+                        height = deliver.height,
+                        view = deliver.view,
+                        sender = deliver.sender,
+                        block = %deliver.block_hash,
+                        queue = ?queue,
+                        reason,
+                        "dropping RBC DELIVER message"
+                    );
+                }
                 BlockMessage::BlockCreated(created) => {
                     let header = created.block.header();
                     iroha_logger::warn!(
@@ -6388,45 +6529,45 @@ impl SumeragiHandle {
             }
         };
         let wake = || self.wake();
-        let enqueue_blocking =
-            |tx: &mpsc::SyncSender<InboundBlockMessage>,
-             msg: InboundBlockMessage,
-             kind: &'static str,
-             queue: status::WorkerQueueKind| match mode {
-                IngressMode::Blocking => {
-                    wake();
-                    let start = Instant::now();
-                    match tx.send(msg) {
-                        Ok(()) => {
-                            status::record_worker_queue_enqueue(queue);
-                            status::record_worker_queue_blocked(queue, start.elapsed());
-                            true
-                        }
-                        Err(err) => {
-                            status::record_worker_queue_drop(queue);
-                            iroha_logger::warn!(?err, kind, "Sumeragi actor dropped block message");
-                            false
-                        }
-                    }
-                }
-                IngressMode::NonBlocking => match tx.try_send(msg) {
+        let enqueue_with_mode = |tx: &mpsc::SyncSender<InboundBlockMessage>,
+                                 msg: InboundBlockMessage,
+                                 kind: &'static str,
+                                 queue: status::WorkerQueueKind,
+                                 mode: IngressMode| match mode {
+            IngressMode::Blocking => {
+                wake();
+                let start = Instant::now();
+                match tx.send(msg) {
                     Ok(()) => {
                         status::record_worker_queue_enqueue(queue);
-                        wake();
+                        status::record_worker_queue_blocked(queue, start.elapsed());
                         true
                     }
-                    Err(mpsc::TrySendError::Full(msg)) => {
+                    Err(err) => {
                         status::record_worker_queue_drop(queue);
-                        log_drop(kind, queue, &msg, "channel_full");
+                        iroha_logger::warn!(?err, kind, "Sumeragi actor dropped block message");
                         false
                     }
-                    Err(mpsc::TrySendError::Disconnected(msg)) => {
-                        status::record_worker_queue_drop(queue);
-                        log_drop(kind, queue, &msg, "channel_disconnected");
-                        false
-                    }
-                },
-            };
+                }
+            }
+            IngressMode::NonBlocking => match tx.try_send(msg) {
+                Ok(()) => {
+                    status::record_worker_queue_enqueue(queue);
+                    wake();
+                    true
+                }
+                Err(mpsc::TrySendError::Full(msg)) => {
+                    status::record_worker_queue_drop(queue);
+                    log_drop(kind, queue, &msg, "channel_full");
+                    false
+                }
+                Err(mpsc::TrySendError::Disconnected(msg)) => {
+                    status::record_worker_queue_drop(queue);
+                    log_drop(kind, queue, &msg, "channel_disconnected");
+                    false
+                }
+            },
+        };
         let InboundBlockMessage {
             message: msg,
             sender,
@@ -6462,24 +6603,27 @@ impl SumeragiHandle {
                     block_hash = %vote.block_hash,
                     "enqueueing commit vote from network"
                 );
-                enqueue_blocking(
+                enqueue_with_mode(
                     &self.votes,
                     InboundBlockMessage::new(BlockMessage::QcVote(vote), sender),
                     "QcVote",
                     status::WorkerQueueKind::Votes,
+                    mode,
                 )
             }
-            BlockMessage::Qc(cert) => enqueue_blocking(
+            BlockMessage::Qc(cert) => enqueue_with_mode(
                 &self.votes,
                 InboundBlockMessage::new(BlockMessage::Qc(cert), sender),
                 "Qc",
                 status::WorkerQueueKind::Votes,
+                mode,
             ),
-            BlockMessage::ProposalHint(hint) => enqueue_blocking(
+            BlockMessage::ProposalHint(hint) => enqueue_with_mode(
                 &self.votes,
                 InboundBlockMessage::new(BlockMessage::ProposalHint(hint), sender),
                 "ProposalHint",
                 status::WorkerQueueKind::Votes,
+                mode,
             ),
             BlockMessage::RbcReady(message) => {
                 let height = message.height;
@@ -6487,13 +6631,14 @@ impl SumeragiHandle {
                 let block_hash = message.block_hash;
                 let validator_idx = message.sender;
                 let signature_hash = CryptoHash::new(&message.signature);
-                let duplicate = !self.dedup_block_payload(BlockPayloadDedupKey::RbcReady {
+                let dedup_key = BlockPayloadDedupKey::RbcReady {
                     height,
                     view,
                     block_hash,
                     sender: validator_idx,
                     signature_hash,
-                });
+                };
+                let duplicate = !self.dedup_block_payload(dedup_key);
                 if duplicate {
                     iroha_logger::debug!(
                         height,
@@ -6504,12 +6649,17 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
-                enqueue_blocking(
+                let accepted = enqueue_with_mode(
                     &self.votes,
                     InboundBlockMessage::new(BlockMessage::RbcReady(message), sender),
                     "RbcReady",
                     status::WorkerQueueKind::Votes,
-                )
+                    mode,
+                );
+                if !accepted {
+                    self.release_block_payload_dedup(&dedup_key);
+                }
+                accepted
             }
             BlockMessage::RbcDeliver(message) => {
                 let height = message.height;
@@ -6517,13 +6667,14 @@ impl SumeragiHandle {
                 let block_hash = message.block_hash;
                 let validator_idx = message.sender;
                 let signature_hash = CryptoHash::new(&message.signature);
-                let duplicate = !self.dedup_block_payload(BlockPayloadDedupKey::RbcDeliver {
+                let dedup_key = BlockPayloadDedupKey::RbcDeliver {
                     height,
                     view,
                     block_hash,
                     sender: validator_idx,
                     signature_hash,
-                });
+                };
+                let duplicate = !self.dedup_block_payload(dedup_key);
                 if duplicate {
                     iroha_logger::debug!(
                         height,
@@ -6534,12 +6685,17 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
-                enqueue_blocking(
+                let accepted = enqueue_with_mode(
                     &self.votes,
                     InboundBlockMessage::new(BlockMessage::RbcDeliver(message), sender),
                     "RbcDeliver",
                     status::WorkerQueueKind::Votes,
-                )
+                    mode,
+                );
+                if !accepted {
+                    self.release_block_payload_dedup(&dedup_key);
+                }
+                accepted
             }
             BlockMessage::BlockCreated(created) => {
                 let header = created.block.header();
@@ -6560,11 +6716,12 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
-                enqueue_blocking(
+                enqueue_with_mode(
                     &self.block_payload,
                     InboundBlockMessage::new(BlockMessage::BlockCreated(created), sender),
                     "BlockPayload",
                     status::WorkerQueueKind::BlockPayload,
+                    mode,
                 )
             }
             BlockMessage::Proposal(proposal) => {
@@ -6585,11 +6742,12 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
-                enqueue_blocking(
+                enqueue_with_mode(
                     &self.block_payload,
                     InboundBlockMessage::new(BlockMessage::Proposal(proposal), sender),
                     "BlockPayload",
                     status::WorkerQueueKind::BlockPayload,
+                    mode,
                 )
             }
             BlockMessage::BlockSyncUpdate(update) => {
@@ -6614,18 +6772,20 @@ impl SumeragiHandle {
                     return false;
                 }
                 // Block sync updates carry commit/QC evidence; prioritize with payload traffic.
-                enqueue_blocking(
+                enqueue_with_mode(
                     &self.block_payload,
                     InboundBlockMessage::new(BlockMessage::BlockSyncUpdate(update), sender),
                     "BlockSyncUpdate",
                     status::WorkerQueueKind::BlockPayload,
+                    mode,
                 )
             }
-            BlockMessage::RbcInit(init) => enqueue_blocking(
+            BlockMessage::RbcInit(init) => enqueue_with_mode(
                 &self.rbc_chunks,
                 InboundBlockMessage::new(BlockMessage::RbcInit(init), sender),
                 "RbcChunk",
                 status::WorkerQueueKind::RbcChunks,
+                mode,
             ),
             BlockMessage::RbcChunk(chunk) => {
                 let height = chunk.height;
@@ -6655,11 +6815,13 @@ impl SumeragiHandle {
                     );
                     return false;
                 }
-                let accepted = enqueue_blocking(
+                // Avoid blocking consensus ingress on bulk RBC chunks; rely on rebroadcasts.
+                let accepted = enqueue_with_mode(
                     &self.rbc_chunks,
                     InboundBlockMessage::new(BlockMessage::RbcChunk(chunk), sender),
                     "RbcChunk",
                     status::WorkerQueueKind::RbcChunks,
+                    IngressMode::NonBlocking,
                 );
                 if !accepted {
                     // Allow rebroadcasts to be enqueued if the queue was full.
@@ -6667,17 +6829,19 @@ impl SumeragiHandle {
                 }
                 accepted
             }
-            BlockMessage::FetchPendingBlock(request) => enqueue_blocking(
+            BlockMessage::FetchPendingBlock(request) => enqueue_with_mode(
                 &self.block_payload,
                 InboundBlockMessage::new(BlockMessage::FetchPendingBlock(request), sender),
                 "FetchPendingBlock",
                 status::WorkerQueueKind::BlockPayload,
+                mode,
             ),
-            other => enqueue_blocking(
+            other => enqueue_with_mode(
                 &self.block,
                 InboundBlockMessage::new(other, sender),
                 "BlockMessage",
                 status::WorkerQueueKind::Blocks,
+                mode,
             ),
         }
     }

@@ -206,9 +206,15 @@ impl Actor {
     ) -> bool {
         let da_enabled = self.runtime_da_enabled();
         let retry_window = self.rebroadcast_cooldown();
+        let defer_view_change =
+            self.should_defer_missing_block_view_change(&block_hash, height, view);
         // Retry missing payload fetches on the rebroadcast cadence while keeping
         // view-change gating tied to the quorum timeout to avoid premature churn under DA.
-        let view_change_window = Some(self.quorum_timeout(da_enabled));
+        let view_change_window = if defer_view_change {
+            None
+        } else {
+            Some(self.quorum_timeout(da_enabled))
+        };
         let peer_id = self.common_config.peer.id.clone();
         let network = self.network.clone();
         let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
@@ -231,6 +237,9 @@ impl Actor {
             move |targets| send_missing_block_request(&network, &peer_id, block_hash, targets),
         );
         self.pending.missing_block_requests = requests;
+        if defer_view_change {
+            self.clear_missing_block_view_change(&block_hash);
+        }
         if deferred {
             let view_change_state =
                 self.pending
@@ -466,18 +475,33 @@ impl Actor {
                 .filter(|roster| !roster.is_empty())
                 .map(super::network_topology::Topology::new);
 
+            let defer_view_change = self.should_defer_missing_block_view_change(
+                &block_hash,
+                stats_snapshot.height,
+                stats_snapshot.view,
+            );
             let retry_window = self
                 .pending
                 .missing_block_requests
                 .get(&block_hash)
                 .map_or(stats_snapshot.retry_window, |stats| stats.retry_window);
-            let view_change_window = self
+            let mut view_change_window = self
                 .pending
                 .missing_block_requests
                 .get(&block_hash)
                 .map_or(stats_snapshot.view_change_window, |stats| {
                     stats.view_change_window
                 });
+            if defer_view_change {
+                view_change_window = None;
+            } else if view_change_window.is_none()
+                && matches!(
+                    stats_snapshot.priority,
+                    super::MissingBlockPriority::Consensus
+                )
+            {
+                view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
+            }
             let decision = if let Some(ref topology) = topology {
                 super::plan_missing_block_fetch(
                     &mut self.pending.missing_block_requests,
@@ -511,6 +535,9 @@ impl Actor {
                     MissingBlockFetchDecision::Backoff
                 }
             };
+            if defer_view_change {
+                self.clear_missing_block_view_change(&block_hash);
+            }
 
             let (dwell, since_last_request, attempts) =
                 self.pending.missing_block_requests.get(&block_hash).map_or(
@@ -640,7 +667,7 @@ impl Actor {
         progress
     }
 
-    fn should_defer_missing_block_view_change(
+    pub(super) fn should_defer_missing_block_view_change(
         &mut self,
         block_hash: &HashOf<BlockHeader>,
         height: u64,
@@ -648,6 +675,9 @@ impl Actor {
     ) -> bool {
         let now = Instant::now();
         if self.queue_drop_backpressure_active(now, self.payload_rebroadcast_cooldown()) {
+            return true;
+        }
+        if self.queue_block_backpressure_active(now, self.payload_rebroadcast_cooldown()) {
             return true;
         }
         let queue_depths = super::status::worker_queue_depth_snapshot();
@@ -662,15 +692,67 @@ impl Actor {
         }
         let lower = height.saturating_sub(1);
         let upper = height.saturating_add(1);
-        let rbc_backlog_near_height = self
+        let pending_block_near_height =
+            self.pending.pending_blocks.values().any(|pending| {
+                !pending.aborted && pending.height >= lower && pending.height <= upper
+            });
+        if pending_block_near_height {
+            return true;
+        }
+        let inflight_pending_near_height =
+            self.subsystems
+                .commit
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| {
+                    !inflight.pending.aborted
+                        && inflight.pending.height >= lower
+                        && inflight.pending.height <= upper
+                });
+        if inflight_pending_near_height {
+            return true;
+        }
+        let ready_deferral_near_height = self
             .subsystems
             .da_rbc
             .rbc
-            .sessions
-            .iter()
-            .any(|(key, session)| {
-                key.1 >= lower && key.1 <= upper && !session.is_invalid() && !session.delivered
-            });
+            .ready_deferral
+            .keys()
+            .any(|key| key.1 >= lower && key.1 <= upper);
+        if ready_deferral_near_height {
+            return true;
+        }
+        let deliver_deferral_near_height = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .deliver_deferral
+            .keys()
+            .any(|key| key.1 >= lower && key.1 <= upper);
+        if deliver_deferral_near_height {
+            return true;
+        }
+        let outbound_backlog_near_height =
+            self.subsystems
+                .da_rbc
+                .rbc
+                .outbound_chunks
+                .iter()
+                .any(|(key, outbound)| {
+                    key.1 >= lower && key.1 <= upper && outbound.cursor < outbound.chunks.len()
+                });
+        if outbound_backlog_near_height {
+            return true;
+        }
+        let rbc_backlog_near_height =
+            self.subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .iter()
+                .any(|(key, session)| {
+                    key.1 >= lower && key.1 <= upper && !session.is_invalid() && !session.delivered
+                });
         if rbc_backlog_near_height {
             return true;
         }
@@ -691,6 +773,15 @@ impl Actor {
             }
         }
         self.subsystems.da_rbc.rbc.pending.contains_key(&key)
+    }
+
+    pub(super) fn clear_missing_block_view_change(&mut self, block_hash: &HashOf<BlockHeader>) {
+        if let Some(stats) = self.pending.missing_block_requests.get_mut(block_hash) {
+            if stats.view_change_window.is_some() || stats.view_change_triggered_view.is_some() {
+                stats.view_change_window = None;
+                stats.view_change_triggered_view = None;
+            }
+        }
     }
 
     pub(super) fn clear_missing_block_request(

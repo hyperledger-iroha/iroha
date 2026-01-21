@@ -4,6 +4,15 @@ Last update: 2026-01-21
 
 - Torii onboarding now publishes a default Space Directory manifest for the global dataspace when missing, binding UAIDs immediately; added onboarding integration coverage and updated UAID docs/OpenAPI descriptions.
 - Tests: not run (onboarding binding change + docs/OpenAPI updates).
+- Sumeragi commit pipeline now runs finalize/precommit work every tick/event and throttles only QC rebuilds; tests updated (not run).
+- Localnet (permissioned, 4 peers, 10 tx/s): `/tmp/iroha-localnet-4peer-perm-10tps` (32180/34337); asset register failed (`rose#wonderland` exists) but peers ran; height ~15 after ~322s (did not reach 100).
+- Localnet (NPoS requested, 4 peers, 10 tx/s): `/tmp/iroha-localnet-4peer-npos-10tps` (32280/34437, `--skip-asset-register`); height ~12 after ~324s (did not reach 100); `/status` still reported permissioned `mode_tag`.
+- Kagami localnet help now calls out that the default build line is `iroha3`, so leaving `--consensus-mode` unset yields `npos`.
+- DA/RBC: missing-payload view-change deferral now respects backlog/backpressure so `qc_missing_block_defer` will not force view changes while RBC/block-payload queues are congested; READY/DELIVER handlers log missing READY senders and local deferral reasons to pinpoint stalled sessions.
+- DA/RBC: RbcInit/RbcChunk posts now bypass the background post queue so chunk dissemination cannot be starved by background work; tests updated (not run).
+- Localnet: NPoS 1 Hz / 100-block stall check with `/v1/sumeragi/status` polling completed on `/tmp/iroha-localnet-1hz-fix2` (ports 32200/35500). 100 blocks in 744.9s (~0.134 blocks/s), no view changes, `missing_payload_total=0`, RBC queues stayed under cap.
+- Tests: `cargo test -p iroha_core fetch_pending_block_npos_falls_back_without_roster_hints -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core clear_missing_block_view_change_resets_window_and_trigger -- --nocapture` (ok).
 - SDKs (Swift): aligned offline receipt Poseidon sample account to the canonical ed25519 seed `[0x01; 32]`, refreshed receiver hash expectations, and synced Swift offline_poseidon vectors to the artifacts snapshot.
 - Tests: not run (Swift SDK fixture/value updates only).
 - SoraFS repair telemetry: added backlog age/queue depth/lease expiry metrics to Prometheus + OTEL, extended repair audit events and governance metadata with manifest/provider IDs, and refreshed repair observability docs.

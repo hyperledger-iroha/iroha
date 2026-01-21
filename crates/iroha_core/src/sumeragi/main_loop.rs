@@ -3375,12 +3375,17 @@ impl Actor {
         if block_header.hash() != key.0 || block_header.view_change_index() != key.2 {
             return false;
         }
-        pending_extends_tip(
-            block_header.height().get(),
+        let block_height = block_header.height().get();
+        let tip_height_u64 = u64::try_from(tip_height).unwrap_or(u64::MAX);
+        let extends_tip = pending_extends_tip(
+            block_height,
             block_header.prev_block_hash(),
             tip_height,
             tip_hash,
-        )
+        );
+        let matches_tip =
+            tip_hash.is_some_and(|hash| hash == key.0) && block_height == tip_height_u64;
+        extends_tip || matches_tip
     }
 
     fn rbc_rebroadcast_active_with_tip(
@@ -3727,6 +3732,7 @@ pub(super) struct Actor {
     last_qc_rebuild: Instant,
     relay_backpressure: RelayBackpressure,
     queue_drop_backpressure: QueueDropBackpressure,
+    queue_block_backpressure: QueueBlockBackpressure,
     new_view_rebroadcast_log: NewViewRebroadcastThrottle,
     proposal_rebroadcast_log: PayloadRebroadcastThrottle,
     payload_rebroadcast_log: PayloadRebroadcastThrottle,
@@ -4091,6 +4097,7 @@ enum RbcReadyDeferralReason {
     CommitRosterUnverified,
     MissingChunksOrReadyQuorum,
     ChunkRootMissing,
+    LocalNotInCommitTopology,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -5835,12 +5842,66 @@ impl Actor {
                     }
                     self.publish_rbc_backlog_snapshot();
                 } else if source.is_authoritative() && existing_source.is_authoritative() {
-                    warn!(
-                        block = %key.0,
-                        height = key.1,
-                        view = key.2,
-                        "conflicting authoritative RBC roster snapshot; keeping the first"
-                    );
+                    let local_peer = self.common_config.peer.id();
+                    let local_missing = !existing_roster.iter().any(|peer| peer == local_peer);
+                    let local_present = roster.iter().any(|peer| peer == local_peer);
+                    let roster_superset = roster.len() > existing_roster.len()
+                        && existing_roster
+                            .iter()
+                            .all(|peer| roster.iter().any(|candidate| candidate == peer));
+                    if (local_missing && local_present) || roster_superset {
+                        info!(
+                            block = %key.0,
+                            height = key.1,
+                            view = key.2,
+                            local_peer = %local_peer,
+                            "refreshing authoritative RBC roster to include newly observed peers"
+                        );
+                        entry.insert(roster);
+                        self.subsystems
+                            .da_rbc
+                            .rbc
+                            .session_roster_sources
+                            .insert(key, source);
+                        self.subsystems
+                            .da_rbc
+                            .rbc
+                            .persisted_full_sessions
+                            .remove(&key);
+                        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
+                            session.ready_signatures.clear();
+                            session.sent_ready = false;
+                            session.delivered = false;
+                            session.deliver_sender = None;
+                            session.deliver_signature = None;
+                        }
+                        self.clear_pending_rbc(&key);
+                        self.subsystems
+                            .da_rbc
+                            .rbc
+                            .payload_rebroadcast_last_sent
+                            .remove(&key);
+                        self.subsystems
+                            .da_rbc
+                            .rbc
+                            .ready_rebroadcast_last_sent
+                            .remove(&key);
+                        self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+                        if let Some(session) =
+                            self.subsystems.da_rbc.rbc.sessions.get(&key).cloned()
+                        {
+                            self.update_rbc_status_entry(key, &session, false);
+                            self.persist_rbc_session(key, &session);
+                        }
+                        self.publish_rbc_backlog_snapshot();
+                    } else {
+                        warn!(
+                            block = %key.0,
+                            height = key.1,
+                            view = key.2,
+                            "conflicting authoritative RBC roster snapshot; keeping the first"
+                        );
+                    }
                 } else if !source.is_authoritative() && !existing_source.is_authoritative() {
                     debug!(
                         block = %key.0,
@@ -7263,6 +7324,7 @@ impl Actor {
             last_qc_rebuild: initial_qc_rebuild,
             relay_backpressure: RelayBackpressure::default(),
             queue_drop_backpressure: QueueDropBackpressure::default(),
+            queue_block_backpressure: QueueBlockBackpressure::default(),
             new_view_rebroadcast_log: NewViewRebroadcastThrottle::default(),
             proposal_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             payload_rebroadcast_log: PayloadRebroadcastThrottle::default(),
@@ -9013,10 +9075,20 @@ impl Actor {
             } | BackgroundRequest::Post {
                 msg: BlockMessage::BlockCreated(_),
                 ..
+            } | BackgroundRequest::Post {
+                msg: BlockMessage::RbcInit(_),
+                ..
+            } | BackgroundRequest::Post {
+                msg: BlockMessage::RbcChunk(_),
+                ..
             } | BackgroundRequest::Broadcast {
                 msg: BlockMessage::Proposal(_),
             } | BackgroundRequest::Broadcast {
                 msg: BlockMessage::BlockCreated(_),
+            } | BackgroundRequest::Broadcast {
+                msg: BlockMessage::RbcInit(_),
+            } | BackgroundRequest::Broadcast {
+                msg: BlockMessage::RbcChunk(_),
             }
         );
         if bypass_queue {
@@ -9537,12 +9609,16 @@ impl Actor {
             if session.sent_ready {
                 return Ok(None);
             }
+            let total_chunks = session.total_chunks();
+            let received_chunks = session.received_chunks();
+            let ready_count = session.ready_signatures.len();
 
+            let roster_source = self
+                .rbc_session_roster_source(key)
+                .unwrap_or(RbcRosterSource::Init);
+            let allow_unverified = self.allow_unverified_rbc_roster(key);
             let commit_topology = self.ensure_rbc_session_roster(key);
             if commit_topology.is_empty() {
-                let received_chunks = session.received_chunks();
-                let total_chunks = session.total_chunks();
-                let ready_count = session.ready_signatures.len();
                 if self.should_emit_rbc_ready_deferral(
                     key,
                     now,
@@ -9558,6 +9634,8 @@ impl Actor {
                         view = key.2,
                         block = %key.0,
                         local_peer = %self.common_config.peer.id(),
+                        roster_source = ?roster_source,
+                        allow_unverified,
                         ready = ready_count,
                         received = received_chunks,
                         total = total_chunks,
@@ -9567,14 +9645,9 @@ impl Actor {
                 return Ok(None);
             }
             let roster_len = commit_topology.len();
-            let roster_source = self
-                .rbc_session_roster_source(key)
-                .unwrap_or(RbcRosterSource::Init);
-            let allow_unverified = self.allow_unverified_rbc_roster(key);
+            let local_peer_id = self.common_config.peer.id();
+            let local_in_roster = commit_topology.iter().any(|peer| peer == local_peer_id);
             if !roster_source.is_authoritative() && !allow_unverified {
-                let received_chunks = session.received_chunks();
-                let total_chunks = session.total_chunks();
-                let ready_count = session.ready_signatures.len();
                 if self.should_emit_rbc_ready_deferral(
                     key,
                     now,
@@ -9593,6 +9666,7 @@ impl Actor {
                         roster_source = ?roster_source,
                         allow_unverified,
                         roster_len,
+                        local_in_roster,
                         ready = ready_count,
                         received = received_chunks,
                         total = total_chunks,
@@ -9602,13 +9676,10 @@ impl Actor {
                 return Ok(None);
             }
 
-            let total = session.total_chunks();
-            let received_chunks = session.received_chunks();
-            if total != 0 && received_chunks < total {
+            if total_chunks != 0 && received_chunks < total_chunks {
                 let topology = super::network_topology::Topology::new(commit_topology);
                 // Allow READY after f+1 READYs to unblock quorum even if chunks lag.
                 let ready_threshold = topology.min_votes_for_view_change();
-                let ready_count = session.ready_signatures.len();
                 if ready_count < ready_threshold {
                     if self.should_emit_rbc_ready_deferral(
                         key,
@@ -9617,18 +9688,27 @@ impl Actor {
                         ready_count,
                         ready_threshold,
                         received_chunks,
-                        total,
+                        total_chunks,
                         self.payload_rebroadcast_cooldown(),
                     ) {
                         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
                         let signature_topology =
                             topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
-                        let (missing_ready_total, missing_ready, missing_ready_peers) = {
+                        let local_ready_sender =
+                            self.local_validator_index_for_topology(&signature_topology);
+                        let (
+                            ready_senders,
+                            missing_ready_total,
+                            missing_ready,
+                            missing_ready_peers,
+                        ) = {
                             let ready_senders: BTreeSet<_> = session
                                 .ready_signatures
                                 .iter()
                                 .map(|entry| entry.sender)
                                 .collect();
+                            let ready_senders_vec =
+                                ready_senders.iter().copied().collect::<Vec<_>>();
                             let mut missing_ready_total = 0usize;
                             let mut missing_ready = Vec::new();
                             let mut missing_ready_peers = Vec::new();
@@ -9646,21 +9726,31 @@ impl Actor {
                                     missing_ready_peers.push(peer.clone());
                                 }
                             }
-                            (missing_ready_total, missing_ready, missing_ready_peers)
+                            (
+                                ready_senders_vec,
+                                missing_ready_total,
+                                missing_ready,
+                                missing_ready_peers,
+                            )
                         };
                         info!(
                             height = key.1,
                             view = key.2,
                             block = %key.0,
                             local_peer = %self.common_config.peer.id(),
+                            roster_source = ?roster_source,
+                            allow_unverified,
+                            local_in_roster,
+                            local_ready_sender = ?local_ready_sender,
                             roster_len,
                             ready = ready_count,
                             required = ready_threshold,
+                            ready_senders = ?ready_senders,
                             missing_ready_total,
                             missing_ready = ?missing_ready,
                             missing_ready_peers = ?missing_ready_peers,
                             received = received_chunks,
-                            total,
+                            total_chunks,
                             "deferring local RBC READY: awaiting chunks or READY quorum"
                         );
                     }
@@ -9688,7 +9778,6 @@ impl Actor {
                     session.expected_chunk_root = Some(computed_root);
                 }
                 (None, None) => {
-                    let ready_count = session.ready_signatures.len();
                     if self.should_emit_rbc_ready_deferral(
                         key,
                         now,
@@ -9696,7 +9785,7 @@ impl Actor {
                         ready_count,
                         0,
                         received_chunks,
-                        total,
+                        total_chunks,
                         self.payload_rebroadcast_cooldown(),
                     ) {
                         info!(
@@ -9707,7 +9796,7 @@ impl Actor {
                             roster_len,
                             ready = ready_count,
                             received = received_chunks,
-                            total,
+                            total_chunks,
                             "deferring local RBC READY: chunk root unavailable"
                         );
                     }
@@ -9720,16 +9809,50 @@ impl Actor {
                 let _ = session.record_ready(ready.sender, ready.signature.clone());
                 session.sent_ready = true;
                 Ok(Some(ready))
-            } else {
+            } else if self.is_observer() {
                 info!(
                     height = key.1,
                     view = key.2,
                     block = %key.0,
                     local_peer = %self.common_config.peer.id(),
                     roster_len,
-                    "local peer not in commit topology; skipping RBC READY"
+                    "observer node skipping RBC READY"
                 );
                 session.sent_ready = true;
+                Ok(None)
+            } else if !local_in_roster {
+                if self.should_emit_rbc_ready_deferral(
+                    key,
+                    now,
+                    RbcReadyDeferralReason::LocalNotInCommitTopology,
+                    ready_count,
+                    0,
+                    received_chunks,
+                    total_chunks,
+                    self.rebroadcast_cooldown(),
+                ) {
+                    info!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        local_peer = %self.common_config.peer.id(),
+                        roster_len,
+                        ready = ready_count,
+                        received = received_chunks,
+                        total = total_chunks,
+                        "deferring local RBC READY: local peer missing from commit topology"
+                    );
+                }
+                Ok(None)
+            } else {
+                warn!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    local_peer = %self.common_config.peer.id(),
+                    roster_len,
+                    "unable to build RBC READY despite local peer in commit topology"
+                );
                 Ok(None)
             }
         })();
@@ -9981,15 +10104,34 @@ impl Actor {
         if roster.is_empty() {
             return false;
         }
+        let leader_override = self.local_is_rbc_payload_leader(roster, key);
         let seed = rbc::shuffle_seed(&key.0, key.1, key.2);
         // Limit payload rebroadcasts to a deterministic f+1 subset to avoid message storms.
         let rebroadcaster =
             rbc::is_payload_rebroadcaster(roster, self.common_config.peer.id(), seed);
-        if !rebroadcaster {
+        let should_rebroadcast = rebroadcaster || leader_override;
+        if !should_rebroadcast {
             #[cfg(feature = "telemetry")]
             self.telemetry.inc_rbc_rebroadcast_skipped("payload");
         }
-        rebroadcaster
+        should_rebroadcast
+    }
+
+    fn local_is_rbc_payload_leader(
+        &self,
+        roster: &[PeerId],
+        key: super::rbc_store::SessionKey,
+    ) -> bool {
+        if roster.is_empty() {
+            return false;
+        }
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
+        let topology = super::network_topology::Topology::new(roster.to_vec());
+        let rotated = topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+        rotated
+            .as_ref()
+            .first()
+            .is_some_and(|peer| peer == self.common_config.peer.id())
     }
 
     fn should_rebroadcast_rbc_ready(
@@ -10105,6 +10247,24 @@ impl Actor {
         if !self.rbc_rebroadcast_active(key) {
             return;
         }
+        let now = Instant::now();
+        let cooldown = self.payload_rebroadcast_cooldown();
+        let queue_drop = self.queue_drop_backpressure_active(now, cooldown);
+        let queue_block = self.queue_block_backpressure_active(now, cooldown);
+        if queue_drop || queue_block {
+            let queue_depths = super::status::worker_queue_depth_snapshot();
+            trace!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                queue_drop,
+                queue_block,
+                "skipping RBC payload rebroadcast due to consensus queue backpressure"
+            );
+            return;
+        }
         let roster = self.rbc_session_roster(key);
         if roster.is_empty() {
             debug!(
@@ -10193,6 +10353,19 @@ impl Actor {
         if self.relay_backpressure_active(now, payload_cooldown) {
             trace!("skipping RBC payload rebroadcast due to relay backpressure");
             return false;
+        }
+        let queue_drop = self.queue_drop_backpressure_active(now, payload_cooldown);
+        let queue_block = self.queue_block_backpressure_active(now, payload_cooldown);
+        let payload_backpressure = queue_drop || queue_block;
+        if payload_backpressure {
+            let queue_depths = super::status::worker_queue_depth_snapshot();
+            trace!(
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                queue_drop,
+                queue_block,
+                "suspending RBC payload rebroadcast due to consensus queue backpressure"
+            );
         }
         let ready_cooldown = self.rebroadcast_cooldown();
         let view = self.state.view();
@@ -10314,6 +10487,7 @@ impl Actor {
             }
             let should_rebroadcast_payload = missing_chunks || !ready_quorum;
             let payload_bundle = if should_rebroadcast_payload
+                && !payload_backpressure
                 && self.should_rebroadcast_rbc_payload(&roster, key)
                 && self.rbc_payload_rebroadcast_due(&key, now, payload_cooldown)
             {
@@ -10359,6 +10533,19 @@ impl Actor {
         let cooldown = self.payload_rebroadcast_cooldown();
         if self.relay_backpressure_active(now, cooldown) {
             trace!("skipping RBC outbound chunk flush due to relay backpressure");
+            return false;
+        }
+        let queue_drop = self.queue_drop_backpressure_active(now, cooldown);
+        let queue_block = self.queue_block_backpressure_active(now, cooldown);
+        if queue_drop || queue_block {
+            let queue_depths = super::status::worker_queue_depth_snapshot();
+            trace!(
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                queue_drop,
+                queue_block,
+                "skipping RBC outbound chunk flush due to consensus queue backpressure"
+            );
             return false;
         }
 
@@ -10642,6 +10829,29 @@ impl Actor {
                 }
                 (missing_ready_total, missing_ready, missing_ready_peers)
             };
+            let (pending_ready_total, pending_ready, pending_ready_peers) = self
+                .subsystems
+                .da_rbc
+                .rbc
+                .pending
+                .get(&key)
+                .map(|pending| {
+                    let senders: BTreeSet<_> =
+                        pending.ready.iter().map(|ready| ready.sender).collect();
+                    let pending_ready_total = senders.len();
+                    let mut pending_ready = Vec::new();
+                    let mut pending_ready_peers = Vec::new();
+                    for sender in senders.iter().take(READY_MISSING_LOG_LIMIT).copied() {
+                        pending_ready.push(sender);
+                        if let Ok(idx) = usize::try_from(sender) {
+                            if let Some(peer) = signature_topology.as_ref().get(idx) {
+                                pending_ready_peers.push(peer.clone());
+                            }
+                        }
+                    }
+                    (pending_ready_total, pending_ready, pending_ready_peers)
+                })
+                .unwrap_or_else(|| (0, Vec::new(), Vec::new()));
             iroha_logger::info!(
                 height = key.1,
                 view = key.2,
@@ -10654,6 +10864,9 @@ impl Actor {
                 missing_ready_total,
                 missing_ready = ?missing_ready,
                 missing_ready_peers = ?missing_ready_peers,
+                pending_ready_total,
+                pending_ready = ?pending_ready,
+                pending_ready_peers = ?pending_ready_peers,
                 senders = ?session
                     .ready_signatures
                     .iter()
@@ -10789,6 +11002,7 @@ impl Actor {
             });
         }
 
+        self.recover_block_from_rbc_session(key);
         self.process_commit_candidates();
 
         Ok(())
@@ -10830,6 +11044,10 @@ impl Actor {
 
     fn queue_drop_backpressure_active(&mut self, now: Instant, cooldown: Duration) -> bool {
         self.queue_drop_backpressure.active(now, cooldown)
+    }
+
+    fn queue_block_backpressure_active(&mut self, now: Instant, cooldown: Duration) -> bool {
+        self.queue_block_backpressure.active(now, cooldown)
     }
 
     fn quorum_timeout(&self, da_enabled: bool) -> Duration {
@@ -11695,6 +11913,33 @@ mod queue_drop_backpressure_tests {
     }
 }
 
+#[cfg(test)]
+mod queue_block_backpressure_tests {
+    use std::time::{Duration, Instant};
+
+    use super::QueueBlockBackpressure;
+    use crate::sumeragi::status;
+    use crate::sumeragi::status::WorkerQueueKind;
+
+    #[test]
+    fn queue_block_backpressure_tracks_recent_blocks() {
+        status::reset_worker_loop_snapshot_for_tests();
+        let mut backpressure = QueueBlockBackpressure::new();
+        let now = Instant::now();
+        assert!(!backpressure.active(now, Duration::from_secs(1)));
+
+        status::record_worker_queue_blocked(
+            WorkerQueueKind::BlockPayload,
+            Duration::from_millis(5),
+        );
+        let after_block = now + Duration::from_millis(1);
+        assert!(backpressure.active(after_block, Duration::from_secs(5)));
+
+        let later = after_block + Duration::from_secs(6);
+        assert!(!backpressure.active(later, Duration::from_secs(5)));
+    }
+}
+
 #[derive(Debug)]
 struct RelayBackpressure {
     last_drop_count: u64,
@@ -11778,6 +12023,53 @@ impl QueueDropBackpressure {
 }
 
 impl Default for QueueDropBackpressure {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug)]
+struct QueueBlockBackpressure {
+    last_blocked_count: u64,
+    last_blocked_at: Option<Instant>,
+}
+
+impl QueueBlockBackpressure {
+    fn new() -> Self {
+        Self {
+            last_blocked_count: Self::blocked_count(),
+            last_blocked_at: None,
+        }
+    }
+
+    fn blocked_count() -> u64 {
+        let blocked = super::status::snapshot()
+            .worker_loop
+            .queue_diagnostics
+            .blocked_total;
+        blocked
+            .block_payload_rx
+            .saturating_add(blocked.rbc_chunk_rx)
+    }
+
+    fn active(&mut self, now: Instant, cooldown: Duration) -> bool {
+        let current = Self::blocked_count();
+        if current > self.last_blocked_count {
+            self.last_blocked_count = current;
+            self.last_blocked_at = Some(now);
+        }
+        self.last_blocked_at
+            .is_some_and(|last| now.saturating_duration_since(last) < cooldown)
+    }
+
+    #[cfg(test)]
+    fn reset_to_current(&mut self) {
+        self.last_blocked_count = Self::blocked_count();
+        self.last_blocked_at = None;
+    }
+}
+
+impl Default for QueueBlockBackpressure {
     fn default() -> Self {
         Self::new()
     }

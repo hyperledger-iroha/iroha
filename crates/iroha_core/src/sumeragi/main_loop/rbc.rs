@@ -1745,7 +1745,12 @@ impl Actor {
         }
         let topology = crate::sumeragi::network_topology::Topology::new(roster);
         let retry_window = self.rebroadcast_cooldown();
-        let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
+        let defer_view_change = self.should_defer_missing_block_view_change(&key.0, key.1, key.2);
+        let view_change_window = if defer_view_change {
+            None
+        } else {
+            Some(self.quorum_timeout(self.runtime_da_enabled()))
+        };
         let now = Instant::now();
         let signers = BTreeSet::new();
         let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
@@ -1764,6 +1769,9 @@ impl Actor {
             self.config.missing_block_signer_fallback_attempts,
         );
         self.pending.missing_block_requests = requests;
+        if defer_view_change {
+            self.clear_missing_block_view_change(&key.0);
+        }
         let dwell = self
             .pending
             .missing_block_requests
@@ -1878,7 +1886,12 @@ impl Actor {
         }
         let topology = crate::sumeragi::network_topology::Topology::new(roster);
         let retry_window = self.rebroadcast_cooldown();
-        let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
+        let defer_view_change = self.should_defer_missing_block_view_change(&key.0, key.1, key.2);
+        let view_change_window = if defer_view_change {
+            None
+        } else {
+            Some(self.quorum_timeout(self.runtime_da_enabled()))
+        };
         let now = Instant::now();
         let signers = BTreeSet::new();
         let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
@@ -1897,6 +1910,9 @@ impl Actor {
             self.config.missing_block_signer_fallback_attempts,
         );
         self.pending.missing_block_requests = requests;
+        if defer_view_change {
+            self.clear_missing_block_view_change(&key.0);
+        }
         let dwell = self
             .pending
             .missing_block_requests
@@ -3025,6 +3041,7 @@ impl Actor {
                         ?key,
                         pending_chunks,
                         pending_bytes,
+                        local_peer = %self.common_config.peer.id(),
                         ready_sender,
                         ready_view,
                         "stashed RBC READY until INIT arrives"
@@ -3066,6 +3083,26 @@ impl Actor {
         let mut roster_source = self
             .rbc_session_roster_source(key)
             .unwrap_or(RbcRosterSource::Init);
+        let prior_roster_source = roster_source;
+        if !roster_source.is_authoritative() {
+            if let Some((refreshed, _updated)) = self.refresh_derived_rbc_session_roster(key) {
+                if !refreshed.is_empty() {
+                    topology_peers = refreshed;
+                }
+                roster_source = self
+                    .rbc_session_roster_source(key)
+                    .unwrap_or(RbcRosterSource::Init);
+            }
+        }
+        if prior_roster_source != roster_source && roster_source.is_authoritative() {
+            debug!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                sender = ready_sender,
+                "refreshed RBC roster to derived snapshot"
+            );
+        }
         fn stash_ready(
             actor: &mut Actor,
             key: SessionKey,
@@ -3129,6 +3166,7 @@ impl Actor {
                     ?key,
                     pending_chunks,
                     pending_bytes,
+                    local_peer = %actor.common_config.peer.id(),
                     ready_sender,
                     ready_view,
                     reason,
@@ -3165,14 +3203,6 @@ impl Actor {
             actor.publish_rbc_backlog_snapshot();
             Ok(())
         }
-        if topology_peers.is_empty() && !roster_source.is_authoritative() {
-            if let Some((refreshed, _updated)) = self.refresh_derived_rbc_session_roster(key) {
-                topology_peers = refreshed;
-                roster_source = self
-                    .rbc_session_roster_source(key)
-                    .unwrap_or(RbcRosterSource::Init);
-            }
-        }
         if topology_peers.is_empty() {
             let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
             let committed_epoch = self.epoch_for_height(committed_height);
@@ -3182,6 +3212,8 @@ impl Actor {
                 height = key.1,
                 view = key.2,
                 block = %key.0,
+                local_peer = %self.common_config.peer.id(),
+                sender = ready_sender,
                 roster_source = ?roster_source,
                 committed_height,
                 committed_epoch,
@@ -3203,6 +3235,9 @@ impl Actor {
             if let Some((refreshed, _updated)) = self.refresh_derived_rbc_session_roster(key) {
                 topology_peers = refreshed;
                 roster_hash = rbc_roster_hash(&topology_peers);
+                roster_source = self
+                    .rbc_session_roster_source(key)
+                    .unwrap_or(RbcRosterSource::Init);
             }
         }
         if roster_hash != ready.roster_hash {
@@ -3225,6 +3260,7 @@ impl Actor {
             debug!(
                 height = ready.height,
                 view = ready.view,
+                local_peer = %self.common_config.peer.id(),
                 sender = ready.sender,
                 roster_source = ?roster_source,
                 expected = ?roster_hash,
@@ -3242,12 +3278,15 @@ impl Actor {
         }
         let allow_unverified = self.allow_unverified_rbc_roster(key);
         if !roster_source.is_authoritative() && !allow_unverified {
+            let derived_len = self.rbc_roster_for_session(key).len();
             debug!(
                 height = ready.height,
                 view = ready.view,
+                local_peer = %self.common_config.peer.id(),
                 sender = ready.sender,
                 roster_source = ?roster_source,
                 roster_len = topology_peers.len(),
+                derived_len,
                 allow_unverified,
                 "deferring RBC READY: roster not authoritative"
             );
@@ -3847,6 +3886,27 @@ impl Actor {
             .rbc_session_roster_source(key)
             .unwrap_or(RbcRosterSource::Init);
         let mut roster_updated = false;
+        let prior_roster_source = roster_source;
+        if !roster_source.is_authoritative() {
+            if let Some((refreshed, updated)) = self.refresh_derived_rbc_session_roster(key) {
+                if !refreshed.is_empty() {
+                    topology_peers = refreshed;
+                }
+                roster_source = self
+                    .rbc_session_roster_source(key)
+                    .unwrap_or(RbcRosterSource::Init);
+                roster_updated |= updated;
+            }
+        }
+        if prior_roster_source != roster_source && roster_source.is_authoritative() {
+            debug!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                sender = deliver.sender,
+                "refreshed RBC roster to derived snapshot"
+            );
+        }
         fn stash_deliver(
             actor: &mut Actor,
             key: SessionKey,
@@ -3958,16 +4018,23 @@ impl Actor {
             actor.publish_rbc_backlog_snapshot();
             Ok(())
         }
-        if topology_peers.is_empty() && !roster_source.is_authoritative() {
-            if let Some((refreshed, updated)) = self.refresh_derived_rbc_session_roster(key) {
-                topology_peers = refreshed;
-                roster_updated |= updated;
-                roster_source = self
-                    .rbc_session_roster_source(key)
-                    .unwrap_or(RbcRosterSource::Init);
-            }
-        }
         if topology_peers.is_empty() {
+            let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+            let committed_epoch = self.epoch_for_height(committed_height);
+            let session_epoch = self.epoch_for_height(key.1);
+            let payload_known = self.block_known_locally(key.0);
+            debug!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                sender = deliver.sender,
+                roster_source = ?roster_source,
+                committed_height,
+                committed_epoch,
+                session_epoch,
+                payload_known,
+                "deferring RBC DELIVER: commit roster unavailable"
+            );
             stash_deliver(
                 self,
                 key,
@@ -3983,6 +4050,9 @@ impl Actor {
                 topology_peers = refreshed;
                 roster_updated |= updated;
                 roster_hash = rbc_roster_hash(&topology_peers);
+                roster_source = self
+                    .rbc_session_roster_source(key)
+                    .unwrap_or(RbcRosterSource::Init);
             }
         }
         if roster_hash != deliver.roster_hash {
@@ -4013,6 +4083,16 @@ impl Actor {
         }
         let allow_unverified = self.allow_unverified_rbc_roster(key);
         if !roster_source.is_authoritative() && !allow_unverified {
+            let derived_len = self.rbc_roster_for_session(key).len();
+            debug!(
+                height = deliver.height,
+                view = deliver.view,
+                sender = deliver.sender,
+                roster_source = ?roster_source,
+                roster_len = topology_peers.len(),
+                derived_len,
+                "deferring RBC DELIVER: roster not authoritative"
+            );
             stash_deliver(
                 self,
                 key,
@@ -4279,6 +4359,7 @@ impl Actor {
                 "dropping RBC READY entries from penalized senders"
             );
         }
+        self.maybe_emit_rbc_ready(key)?;
         if let Some(reason) = defer_reason {
             if let Some(defer_kind) = defer_kind {
                 self.record_consensus_message_handling(
@@ -4314,18 +4395,74 @@ impl Actor {
                             missing_ready_peers.push(peer.clone());
                         }
                     }
+                    let (pending_ready_total, pending_ready, pending_ready_peers) = self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .pending
+                        .get(&key)
+                        .map(|pending| {
+                            let senders: BTreeSet<_> =
+                                pending.ready.iter().map(|ready| ready.sender).collect();
+                            let pending_ready_total = senders.len();
+                            let mut pending_ready = Vec::new();
+                            let mut pending_ready_peers = Vec::new();
+                            for sender in
+                                senders.iter().take(super::READY_MISSING_LOG_LIMIT).copied()
+                            {
+                                pending_ready.push(sender);
+                                if let Ok(idx) = usize::try_from(sender) {
+                                    if let Some(peer) = signature_topology.as_ref().get(idx) {
+                                        pending_ready_peers.push(peer.clone());
+                                    }
+                                }
+                            }
+                            (pending_ready_total, pending_ready, pending_ready_peers)
+                        })
+                        .unwrap_or_else(|| (0, Vec::new(), Vec::new()));
+                    let local_ready_sender =
+                        self.local_validator_index_for_topology(&signature_topology);
+                    let local_ready_sent =
+                        local_ready_sender.is_some_and(|idx| ready_senders.contains(&idx));
+                    let local_ready_deferral =
+                        self.subsystems.da_rbc.rbc.ready_deferral.get(&key).map(
+                            |entry| match entry.reason {
+                                super::RbcReadyDeferralReason::CommitRosterMissing => {
+                                    "commit_roster_missing"
+                                }
+                                super::RbcReadyDeferralReason::CommitRosterUnverified => {
+                                    "commit_roster_unverified"
+                                }
+                                super::RbcReadyDeferralReason::MissingChunksOrReadyQuorum => {
+                                    "missing_chunks_or_ready_quorum"
+                                }
+                                super::RbcReadyDeferralReason::ChunkRootMissing => {
+                                    "chunk_root_missing"
+                                }
+                                super::RbcReadyDeferralReason::LocalNotInCommitTopology => {
+                                    "local_not_in_commit_topology"
+                                }
+                            },
+                        );
                     iroha_logger::info!(
                         height = key.1,
                         view = key.2,
                         block = %key.0,
+                        local_peer = %self.common_config.peer.id(),
                         sender = deliver.sender,
                         peer = ?deliver_peer,
                         roster_source = ?roster_source,
+                        local_ready_sender = ?local_ready_sender,
+                        local_ready_sent,
+                        local_ready_deferral = ?local_ready_deferral,
                         ready = ready_senders.len(),
                         required = deliver_quorum,
                         missing_ready_total,
                         missing_ready = ?missing_ready,
                         missing_ready_peers = ?missing_ready_peers,
+                        pending_ready_total,
+                        pending_ready = ?pending_ready,
+                        pending_ready_peers = ?pending_ready_peers,
                         senders = ?ready_senders.iter().copied().collect::<Vec<_>>(),
                         "deferring RBC DELIVER: READY quorum not yet satisfied"
                     );
