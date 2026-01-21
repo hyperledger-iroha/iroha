@@ -162,6 +162,9 @@ GatewayFetchSummary summary =
   `PipelineStatusExtractor` so callers receive the structured Torii payload. A
   `404` response means Torii has no cached status yet (for example after a
   restart), so the client keeps polling until a terminal state arrives.
+- Torii returns a Norito-encoded submission receipt in the response body. Use
+  `ClientResponse.body()` to access the raw receipt bytes or rely on
+  `ClientResponse.hashHex()` for deterministic status polling.
 - `newSorafsGatewayClient()` reuses the same executor, timeout, headers, and
 observers while targeting the `sorafsGatewayUri`. See
 `docs/source/sorafs/developer/sdk/index.md` for gateway request details.

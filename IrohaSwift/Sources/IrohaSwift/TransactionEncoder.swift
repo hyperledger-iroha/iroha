@@ -34,7 +34,7 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case .emptyAssetId:
             return "Asset id must not be empty."
         case let .malformedAssetId(value):
-            return "Asset id must follow 'asset#domain#account' with no whitespace or reserved characters (@, #, $) in the asset name/domain components (received '\(value)')."
+            return "Asset id must follow 'asset#domain#account' or 'asset##account' with no whitespace or reserved characters (@, #, $) in the asset name/domain components (received '\(value)')."
         case let .invalidZkBallotPublicInputs(reason):
             return "Governance ZK public inputs are invalid: \(reason)"
         }
@@ -222,7 +222,7 @@ struct TransactionInputValidator {
             throw TransactionInputError.malformedAssetId(trimmed)
         }
         let assetName = parts[0]
-        let definitionDomain = parts[1]
+        let definitionDomain = String(parts[1])
         let ownerAccount = String(parts[2])
         guard !assetName.isEmpty else {
             throw TransactionInputError.malformedAssetId(trimmed)
@@ -230,12 +230,53 @@ struct TransactionInputValidator {
         if containsReservedIdCharacters(String(assetName)) {
             throw TransactionInputError.malformedAssetId(trimmed)
         }
-        guard !definitionDomain.isEmpty else {
-            throw TransactionInputError.malformedAssetId(trimmed)
-        }
-        let canonicalDomain = try sanitizeDomainId(String(definitionDomain), field: "assetId")
         let canonicalAccount = try sanitizeAccountId(ownerAccount, field: "assetId")
+        let canonicalDomain: String
+        if definitionDomain.isEmpty {
+            if let derived = try domainFromAccountLiteral(ownerAccount) {
+                canonicalDomain = derived
+            } else if let derived = domainFromCanonicalAccount(canonicalAccount) {
+                canonicalDomain = derived
+            } else {
+                throw TransactionInputError.malformedAssetId(trimmed)
+            }
+        } else {
+            canonicalDomain = try sanitizeDomainId(definitionDomain, field: "assetId")
+        }
         return "\(assetName)#\(canonicalDomain)#\(canonicalAccount)"
+    }
+
+    private static func domainFromAccountLiteral(_ value: String) throws -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.contains("@") {
+            let parts = trimmed.split(separator: "@", omittingEmptySubsequences: false)
+            guard parts.count == 2,
+                  !parts[0].isEmpty,
+                  !parts[1].isEmpty else {
+                return nil
+            }
+            let domainPart = String(parts[1])
+            do {
+                return try AccountAddress.canonicalizeDomainLabel(domainPart)
+            } catch {
+                throw TransactionInputError.malformedDomainId(field: "assetId", value: domainPart)
+            }
+        }
+        return nil
+    }
+
+    private static func domainFromCanonicalAccount(_ value: String) -> String? {
+        let lowered = value.lowercased()
+        if lowered.hasPrefix("uaid:") || lowered.hasPrefix("opaque:") {
+            return nil
+        }
+        if let parsed = try? AccountAddress.parseAny(value,
+                                                     expectedPrefix: AccountId.defaultNetworkPrefix),
+           parsed.0.matchesDomainLabel(AccountAddress.defaultDomainName) {
+            return AccountAddress.defaultDomainName
+        }
+        return nil
     }
 
     static func sanitizeMetadataTarget(_ target: MetadataTarget) throws -> MetadataTarget {

@@ -62,7 +62,9 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
             return XCTFail("failed to decode signed transaction JSON for \(name)")
         }
         let decodedAuthority = payload["authority"] as? String
-        XCTAssertEqual(decodedAuthority, expectedAuthority, "authority mismatch in decode for \(name)")
+        assertAuthorityMatches(decodedAuthority,
+                               expected: expectedAuthority,
+                               name: name)
         let decodedChain = payload["chain"] as? String
         XCTAssertEqual(decodedChain, fixture.entry.chain, "chain mismatch in decode for \(name)")
         if let creation = payload["creation_time_ms"] as? NSNumber {
@@ -168,22 +170,32 @@ private enum FixtureConstants {
 }
 
 private func expectedAuthorityLiteral(from label: String) throws -> String {
-    let parts = label.split(separator: "@", maxSplits: 1)
+    if !label.contains("@") {
+        guard let parsed = try? AccountAddress.parseAny(label,
+                                                        expectedPrefix: FixtureConstants.networkPrefix) else {
+            throw FixtureError.invalidAuthority(label)
+        }
+        return try parsed.0.toIH58(networkPrefix: FixtureConstants.networkPrefix)
+    }
+    let parts = label.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
     guard parts.count == 2 else {
         throw FixtureError.invalidAuthority(label)
     }
     let signatory = String(parts[0])
     let domain = String(parts[1])
-    if (try? AccountAddress.fromIH58(signatory, expectedPrefix: FixtureConstants.networkPrefix)) != nil {
-        return "\(signatory)@\(domain)"
+    if let parsed = try? AccountAddress.parseAny(signatory,
+                                                 expectedPrefix: FixtureConstants.networkPrefix) {
+        guard parsed.0.matchesDomainLabel(domain) else {
+            throw FixtureError.invalidAuthority(label)
+        }
+        return try parsed.0.toIH58(networkPrefix: FixtureConstants.networkPrefix)
     }
     let seed = deriveFixtureSeed(signatory: signatory, domain: domain)
     guard let keypair = NoritoNativeBridge.shared.keypairFromSeed(algorithm: .ed25519, seed: seed) else {
         throw FixtureError.bridgeKeypairUnavailable
     }
     let address = try AccountAddress.fromAccount(domain: domain, publicKey: keypair.publicKey)
-    let ih58 = try address.toIH58(networkPrefix: FixtureConstants.networkPrefix)
-    return "\(ih58)@\(domain)"
+    return try address.toIH58(networkPrefix: FixtureConstants.networkPrefix)
 }
 
 private func deriveFixtureSeed(signatory: String, domain: String) -> Data {
@@ -222,6 +234,27 @@ private func assertOptionalNumberEquals(
         return
     }
     XCTFail("\(field) should be null in decode for \(name)")
+}
+
+private func assertAuthorityMatches(_ decoded: String?,
+                                    expected: String,
+                                    name: String) {
+    guard let decoded else {
+        return XCTFail("authority missing in decode for \(name)")
+    }
+    if expected.contains("@") {
+        XCTAssertEqual(decoded, expected, "authority mismatch in decode for \(name)")
+        return
+    }
+    if decoded == expected {
+        return
+    }
+    if let atIndex = decoded.firstIndex(of: "@") {
+        let prefix = String(decoded[..<atIndex])
+        XCTAssertEqual(prefix, expected, "authority mismatch in decode for \(name)")
+        return
+    }
+    XCTAssertEqual(decoded, expected, "authority mismatch in decode for \(name)")
 }
 
 private enum FixtureError: Error {

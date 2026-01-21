@@ -984,7 +984,7 @@ impl NodeHandle {
 
         let mut expired = Vec::new();
         let mut expired_count = 0u64;
-        let mut oldest_expired_age = None;
+        let mut oldest_expired_age: Option<u64> = None;
 
         for manifest in storage.manifests() {
             let retention_epoch = manifest.retention_epoch();
@@ -1313,6 +1313,7 @@ impl NodeHandle {
         chunk_roles: Option<Vec<ChunkRoleMetadata>>,
     ) -> Result<String, NodeStorageError> {
         let storage = self.storage_backend()?;
+        let chunk_roles_retry = chunk_roles.clone();
         let result = self.schedulers.with_pin(|| {
             storage.ingest_manifest_with_layout(manifest, plan, reader, stripe_layout, chunk_roles)
         });
@@ -1340,7 +1341,7 @@ impl NodeHandle {
                         plan,
                         reader,
                         stripe_layout,
-                        chunk_roles,
+                        chunk_roles_retry,
                     )
                 });
                 match retry {

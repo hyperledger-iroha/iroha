@@ -431,6 +431,10 @@ test("listAccountAssets rejects Local-8 segments", async () => {
   await assert.rejects(
     () => client.listAccountAssets(forms.local8),
     (error) => {
+      if (error instanceof ValidationError) {
+        assert.equal(error.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
+        return true;
+      }
       const isAccountAddressError = error instanceof AccountAddressError;
       const cause = error?.cause;
       const code = isAccountAddressError
@@ -2242,7 +2246,7 @@ test("getUaidBindings enforces UAID formats, address_format, and normalizes entr
   const parsed = new URL(capturedUrl);
   assert.equal(parsed.origin + parsed.pathname, `${BASE_URL}/v1/space-directory/uaids/${encodeURIComponent(fixture.uaid)}`);
   assert.equal(parsed.searchParams.get("address_format"), "compressed");
-  assert.equal(result.dataspaces[0].accounts[0], "holder1@portfolio");
+  assert.equal(result.dataspaces[0].accounts[0], fixture.dataspaces[0].accounts[0]);
   await assert.rejects(() => client.getUaidBindings("uaid:xyz"), /64 hex characters/);
   await assert.rejects(
     () => client.getUaidBindings(`uaid:${"10".repeat(32)}`),
@@ -8240,7 +8244,7 @@ test("getGovernanceLocksTyped parses lock records and synthesizes not-found resu
   const result = await client.getGovernanceLocksTyped("ref-1");
   assert.equal(result.found, true);
   assert.equal(Object.keys(result.locks).length, 1);
-  assert.equal(result.locks["alice@test"].duration_blocks, 5);
+  assert.equal(result.locks[FIXTURE_ALICE_TEST_ID].duration_blocks, 5);
 
   const missingClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 404 }),
@@ -9053,7 +9057,7 @@ test("governanceDeriveCouncilVrf encodes candidate payload", async () => {
   assert.equal(captured.candidates[0].variant, "Small");
   assert.match(captured.candidates[0].pk_b64, /^[A-Za-z0-9+/]+=*$/);
   assert.match(captured.candidates[0].proof_b64, /^[A-Za-z0-9+/]+=*$/);
-  assert.equal(payload.members[0].account_id, "validator@test");
+  assert.equal(payload.members[0].account_id, FIXTURE_VALIDATOR_TEST_ID);
   assert.equal(payload.total_candidates, 1);
   assert.equal(payload.verified, 1);
   assert.equal(payload.derived_by, "Vrf");

@@ -2,8 +2,11 @@ import XCTest
 @testable import IrohaSwift
 
 final class OfflineNoritoEncodingTests: XCTestCase {
-    func testAssetIdParseRejectsShorthandDefinition() {
-        assertInvalidAssetId("xor##alice@wonderland")
+    func testAssetIdParseAcceptsShorthandDefinition() throws {
+        let parts = try OfflineAssetIdParts.parse("xor##alice@wonderland")
+        XCTAssertEqual(parts, OfflineAssetIdParts(accountId: "alice@wonderland",
+                                                  definitionName: "xor",
+                                                  definitionDomain: "wonderland"))
     }
 
     func testAssetIdParseAcceptsExplicitDefinition() throws {
@@ -23,11 +26,15 @@ final class OfflineNoritoEncodingTests: XCTestCase {
                                                   definitionDomain: "wonderland"))
     }
 
-    func testAssetIdParseRejectsShorthandWithIh58Account() throws {
+    func testAssetIdParseAcceptsShorthandWithDefaultDomainIh58Account() throws {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 2, count: 32))
-        let address = try AccountAddress.fromAccount(domain: "wonderland", publicKey: keypair.publicKey)
+        let address = try AccountAddress.fromAccount(domain: AccountAddress.defaultDomainName,
+                                                     publicKey: keypair.publicKey)
         let ih58 = try address.toIH58(networkPrefix: 0x02F1)
-        assertInvalidAssetId("xor##\(ih58)")
+        let parts = try OfflineAssetIdParts.parse("xor##\(ih58)")
+        XCTAssertEqual(parts, OfflineAssetIdParts(accountId: ih58,
+                                                  definitionName: "xor",
+                                                  definitionDomain: AccountAddress.defaultDomainName))
     }
 
     func testAssetIdParseRejectsEmptyAccountName() {

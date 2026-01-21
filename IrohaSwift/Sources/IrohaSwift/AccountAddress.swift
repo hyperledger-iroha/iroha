@@ -115,6 +115,11 @@ public struct AccountAddress {
     private let domain: DomainSelector
     private let controller: ControllerPayload
 
+    struct ControllerInfo {
+        let algorithm: SigningAlgorithm
+        let publicKey: Data
+    }
+
     public struct MultisigPolicyInfo {
         public struct Member {
             public let algorithm: String
@@ -332,6 +337,16 @@ public struct AccountAddress {
         )
     }
 
+    func singleControllerInfo() -> ControllerInfo? {
+        switch controller {
+        case .singleKey(let curve, let publicKey):
+            guard let algorithm = curve.signingAlgorithm else { return nil }
+            return ControllerInfo(algorithm: algorithm, publicKey: publicKey)
+        case .multiSig:
+            return nil
+        }
+    }
+
     static let multisigPersonalisation = Data("iroha-ms-policy".utf8)
     private static let compressedWarningMessage =
         "Compressed Sora addresses rely on half-width kana and are only interoperable inside Sora-aware apps. " +
@@ -403,6 +418,29 @@ private extension CurveId {
         #if IROHASWIFT_ENABLE_SM
         case .sm2:
             return "sm2"
+        #endif
+        }
+    }
+
+    var signingAlgorithm: SigningAlgorithm? {
+        switch self {
+        case .ed25519:
+            return .ed25519
+        #if IROHASWIFT_ENABLE_SECP256K1
+        case .secp256k1:
+            return .secp256k1
+        #endif
+        #if IROHASWIFT_ENABLE_MLDSA
+        case .mldsa:
+            return .mlDsa
+        #endif
+        #if IROHASWIFT_ENABLE_GOST
+        case .gost256A, .gost256B, .gost256C, .gost512A, .gost512B:
+            return nil
+        #endif
+        #if IROHASWIFT_ENABLE_SM
+        case .sm2:
+            return .sm2
         #endif
         }
     }

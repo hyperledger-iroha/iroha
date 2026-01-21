@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 
 import {
   AccountAddress,
+  AccountAddressError,
+  AccountAddressErrorCode,
   DEFAULT_DOMAIN_NAME,
   inspectAccountId,
 } from "../src/address.js";
@@ -98,6 +100,7 @@ test("inspectAccountId normalizes prefix options and enforces validation", () =>
   assert.equal(summary.ih58.networkPrefix, 7);
   assert.equal(summary.ih58.value, address.toIH58(7));
 
+  const literal = address.toIH58();
   assert.throws(
     () => inspectAccountId(literal, { expectPrefix: "7" }),
     (error) =>

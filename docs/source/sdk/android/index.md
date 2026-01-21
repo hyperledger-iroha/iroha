@@ -83,7 +83,9 @@ transport.submitTransaction(tx).join();
 - `HttpClientTransport.submitTransaction` returns a `CompletableFuture`; use
   `waitForTransactionStatus` to poll `/v1/pipeline/transactions/status` for the
   resulting hash, or configure a `PendingTransactionQueue` so failed submissions
-  replay deterministically.
+  replay deterministically. Torii returns a Norito-encoded submission receipt in
+  the response body; `ClientResponse.body()` exposes the raw bytes and
+  `ClientResponse.hashHex()` provides the canonical hash for polling.
   A `404` response indicates Torii has no cached status yet (for example after a
   restart), so the client keeps polling until a terminal state arrives.
 

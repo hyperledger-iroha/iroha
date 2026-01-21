@@ -846,8 +846,8 @@ For higher-level walkthroughs, see:
   "-created_at"])` to render standard `sort` clauses—the helpers take care of encoding and
   offset bookkeeping.
 - **Contracts:** register/deploy/fetch manifest/code bytes.
-- **Pipeline:** `submitTransaction` (Norito envelopes), `getTransactionStatus`, and
-  recovery snapshots via `getPipelineRecovery(height:)`.
+- **Pipeline:** `submitTransaction` (Norito envelopes, returns the submission receipt payload),
+  `getTransactionStatus`, and recovery snapshots via `getPipelineRecovery(height:)`.
 - **Network time:** `getTimeNow` for `/v1/time/now` snapshots.
 - **Zero-knowledge:** prover reports/attachments list/count/delete operations and verifying key registry helpers (`getVerifyingKey`, `listVerifyingKeys`, register/update/deprecate`).
 - **Confidential assets:** derive the wallet key hierarchy through `deriveConfidentialKeyset`
