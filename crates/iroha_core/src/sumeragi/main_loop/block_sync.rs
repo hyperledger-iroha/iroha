@@ -72,7 +72,48 @@ impl Actor {
             return;
         };
         // Send RBC INIT alongside missing-block responses so peers can process READY/DELIVER.
+        let peer_clone = peer.clone();
         self.send_fetch_pending_block_response(peer, BlockMessage::RbcInit(init));
+        self.send_fetch_pending_block_rbc_chunks(peer_clone, block);
+    }
+
+    fn send_fetch_pending_block_rbc_chunks(&mut self, peer: PeerId, block: &SignedBlock) {
+        if !self.runtime_da_enabled() {
+            return;
+        }
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let epoch = self.epoch_for_height(height);
+        let payload_bytes = super::proposals::block_payload_bytes(block);
+        let chunk_bytes = rbc::chunk_payload_bytes(&payload_bytes, self.config.rbc_chunk_max_bytes);
+        let chunk_count = chunk_bytes.len();
+        if chunk_count == 0 {
+            return;
+        }
+        info!(
+            height,
+            view,
+            block = %block_hash,
+            peer = %peer,
+            chunk_count,
+            "sending RBC chunks to missing-block requester"
+        );
+        for (idx, bytes) in chunk_bytes.into_iter().enumerate() {
+            let idx = match u32::try_from(idx) {
+                Ok(idx) => idx,
+                Err(_) => break,
+            };
+            let chunk = crate::sumeragi::consensus::RbcChunk {
+                block_hash,
+                height,
+                view,
+                epoch,
+                idx,
+                bytes,
+            };
+            self.send_fetch_pending_block_response(peer.clone(), BlockMessage::RbcChunk(chunk));
+        }
     }
 
     pub(super) fn should_drop_future_block_sync_update(
@@ -1304,7 +1345,11 @@ impl Actor {
                 let (consensus_mode, _, _) = self.consensus_context_for_height(block_height);
                 let has_roster = super::block_sync_update_has_roster(&update, consensus_mode);
                 let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
-                let msg = if !has_roster && !has_cached_qc {
+                let send_block_sync = match consensus_mode {
+                    ConsensusMode::Permissioned => has_roster || has_cached_qc,
+                    ConsensusMode::Npos => has_roster,
+                };
+                let msg = if !send_block_sync {
                     BlockMessage::BlockCreated(super::message::BlockCreated::from(&block))
                 } else {
                     BlockMessage::BlockSyncUpdate(update)
@@ -1357,7 +1402,11 @@ impl Actor {
                 let (consensus_mode, _, _) = self.consensus_context_for_height(block_height);
                 let has_roster = super::block_sync_update_has_roster(&update, consensus_mode);
                 let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
-                let msg = if !has_roster && !has_cached_qc {
+                let send_block_sync = match consensus_mode {
+                    ConsensusMode::Permissioned => has_roster || has_cached_qc,
+                    ConsensusMode::Npos => has_roster,
+                };
+                let msg = if !send_block_sync {
                     BlockMessage::BlockCreated(super::message::BlockCreated::from(&block))
                 } else {
                     BlockMessage::BlockSyncUpdate(update)
@@ -1404,7 +1453,11 @@ impl Actor {
                 let (consensus_mode, _, _) = self.consensus_context_for_height(block_height);
                 let has_roster = super::block_sync_update_has_roster(&update, consensus_mode);
                 let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
-                let msg = if !has_roster && !has_cached_qc {
+                let send_block_sync = match consensus_mode {
+                    ConsensusMode::Permissioned => has_roster || has_cached_qc,
+                    ConsensusMode::Npos => has_roster,
+                };
+                let msg = if !send_block_sync {
                     BlockMessage::BlockCreated(super::message::BlockCreated::from(block))
                 } else {
                     BlockMessage::BlockSyncUpdate(update)
