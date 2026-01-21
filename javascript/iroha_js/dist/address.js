@@ -22,7 +22,7 @@ const IH58_CHECKSUM_BYTES = 2;
 const COMPRESSED_WARNING =
   "Compressed Sora addresses rely on half-width kana and are only interoperable inside Sora-aware apps. Prefer IH58 when sharing with explorers, wallets, or QR codes.";
 const LOCAL_SELECTOR_WARNING =
-  "local-domain selector detected: register the domain with the Nexus registry and refresh IH58/compressed copies before Local selectors are blocked. Refer to docs/source/sns/address_display_guidelines.md for the cutover schedule.";
+  "local-domain selector detected: register the domain with the Nexus registry and refresh IH58 (preferred)/snx1 (second-best) copies before Local selectors are blocked. Refer to docs/source/sns/address_display_guidelines.md for the cutover schedule.";
 const IH58_ALPHABET = [
   "1",
   "2",
@@ -1553,7 +1553,7 @@ export class AccountAddress {
   }
 
   /**
-   * Convenience helper that returns both IH58 and compressed variants alongside
+   * Convenience helper that returns both IH58 (preferred) and compressed (`snx1`, second-best) variants alongside
    * the network prefix. Follow the UX checklist in
    * `docs/source/sns/address_display_guidelines.md` when presenting these values.
    *
@@ -1855,10 +1855,10 @@ function classifyDetectedFormat(literal, format, networkPrefix) {
 }
 
 /**
- * Inspect an account-id literal (IH58/compressed/canonical) and emit canonical
+ * Inspect an account-id literal (IH58 (preferred)/snx1 (second-best)/canonical) and emit canonical
  * encodings plus domain warnings to aid the Local→Global cutover.
  *
- * @param {string} literal - Account literal or `<address>@<domain>`
+ * @param {string} literal - Account literal (IH58 (preferred)/snx1 (second-best)/0x)
  * @param {{ networkPrefix?: number, expectPrefix?: number }} [options]
  * @returns {{
  *   detectedFormat: { kind: string, networkPrefix?: number },
@@ -1880,27 +1880,14 @@ export function inspectAccountId(literal, options = {}) {
     throw new TypeError("accountId must be a non-empty string");
   }
 
-  const atIndex = trimmed.lastIndexOf("@");
-  let signatory = trimmed;
-  let inputDomain = null;
-  if (atIndex !== -1) {
-    signatory = trimmed.slice(0, atIndex);
-    inputDomain = trimmed.slice(atIndex + 1).trim();
-    if (signatory.length === 0) {
-      throw new TypeError("accountId must contain characters before '@'");
-    }
-    if (inputDomain.length === 0) {
-      throw new TypeError("accountId must include a domain after '@'");
-    }
-  } else if (signatory.length === 0) {
-    throw new TypeError("accountId must contain characters before '@'");
+  if (trimmed.includes("@")) {
+    throw new TypeError("accountId must not include '@domain'");
   }
 
   const normalizedOptions = normalizeInspectAccountOptions(options);
   const { address, format, networkPrefix: detectedPrefix } = AccountAddress.parseAny(
-    signatory,
+    trimmed,
     normalizedOptions.expectPrefix,
-    inputDomain ?? undefined,
   );
   const networkPrefix =
     normalizedOptions.networkPrefix ?? detectedPrefix ?? DEFAULT_IH58_PREFIX;
@@ -1911,13 +1898,13 @@ export function inspectAccountId(literal, options = {}) {
     warnings.push(COMPRESSED_WARNING);
   }
   return Object.freeze({
-    detectedFormat: classifyDetectedFormat(signatory, format, detectedPrefix),
+    detectedFormat: classifyDetectedFormat(trimmed, format, detectedPrefix),
     domain: domainSummary,
     canonicalHex: address.canonicalHex(),
     ih58: { value: address.toIH58(networkPrefix), networkPrefix },
     compressed: address.toCompressedSora(),
     compressedWarning: COMPRESSED_WARNING,
-    inputDomain,
+    inputDomain: null,
     warnings,
   });
 }

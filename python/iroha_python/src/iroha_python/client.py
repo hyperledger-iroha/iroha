@@ -6961,9 +6961,15 @@ class ToriiClient(_BaseToriiClient):
             "POST",
             "/v1/pipeline/transactions",
             data=payload,
-            headers={"Content-Type": "application/x-norito"},
+            headers={
+                "Content-Type": "application/x-norito",
+                "Accept": "application/x-norito, application/json",
+            },
         )
         self._expect_status(response, {200, 201, 202, 204})
+        receipt = type(self)._maybe_transaction_receipt(response)
+        if receipt is not None:
+            return receipt
         return type(self)._maybe_json(response)
 
     def submit_transaction_envelope(
@@ -10976,6 +10982,28 @@ class ToriiClient(_BaseToriiClient):
             return response.json()
         except ValueError:
             return response.text or None
+
+    @staticmethod
+    def _maybe_transaction_receipt(response: requests.Response) -> Optional[Any]:
+        content_type = response.headers.get("Content-Type", "")
+        if "application/x-norito" not in content_type.lower():
+            return None
+        if not response.content:
+            return None
+        try:
+            crypto = _require_crypto()
+        except RuntimeError:
+            return None
+        if not hasattr(crypto, "decode_transaction_receipt_json"):
+            return None
+        try:
+            receipt_json = crypto.decode_transaction_receipt_json(response.content)
+        except Exception:
+            return None
+        try:
+            return json.loads(receipt_json)
+        except json.JSONDecodeError:
+            return None
 
     @staticmethod
     def _parse_sse_event(

@@ -4,7 +4,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Base64;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit;
 import org.hyperledger.iroha.android.client.mock.ToriiMockServer;
 import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
 import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.telemetry.TelemetryOptions;
 import org.hyperledger.iroha.android.telemetry.TelemetrySink;
@@ -60,20 +61,17 @@ public final class HttpClientTransportPendingQueueTests {
 
         final List<ToriiMockServer.SubmitRequest> submissions = server.submittedTransactions();
         assert submissions.size() == 3 : "expected queued transactions to flush before live submit";
-        assert submissions
-            .get(0)
-            .bodyUtf8()
-            .contains("\"payload\":\"" + base64Payload(queuedOne) + "\"")
-            : "first submission should flush the first queued payload";
-        assert submissions
-            .get(1)
-            .bodyUtf8()
-            .contains("\"payload\":\"" + base64Payload(queuedTwo) + "\"")
-            : "second submission should flush the second queued payload";
-        assert submissions
-            .get(2)
-            .bodyUtf8()
-            .contains("\"payload\":\"" + base64Payload(live) + "\"")
+        assert Arrays.equals(
+            submissions.get(0).body(),
+            SignedTransactionEncoder.encodeVersioned(queuedOne))
+            : "first submission should flush the first queued transaction";
+        assert Arrays.equals(
+            submissions.get(1).body(),
+            SignedTransactionEncoder.encodeVersioned(queuedTwo))
+            : "second submission should flush the second queued transaction";
+        assert Arrays.equals(
+            submissions.get(2).body(),
+            SignedTransactionEncoder.encodeVersioned(live))
             : "final submission should be the live transaction";
         assert queue.size() == 0 : "pending queue should be empty after successful flush";
       } finally {
@@ -142,10 +140,6 @@ public final class HttpClientTransportPendingQueueTests {
     final byte[] signature = ("sig-" + marker).getBytes(StandardCharsets.UTF_8);
     final byte[] publicKey = ("pk-" + marker).getBytes(StandardCharsets.UTF_8);
     return new SignedTransaction(encoded, signature, publicKey, codec.schemaName());
-  }
-
-  private static String base64Payload(final SignedTransaction transaction) {
-    return Base64.getEncoder().encodeToString(transaction.encodedPayload());
   }
 
   private static void deleteRecursively(final Path root) throws Exception {

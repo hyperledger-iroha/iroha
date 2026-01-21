@@ -11562,7 +11562,7 @@ fn print_usage() {
     );
     eprintln!("  cargo xtask address-vectors [--out <path>] [--stdout] [--verify]");
     eprintln!(
-        "    Emit or verify the ADDR-2 IH58/compressed/multisig fixture. Defaults to fixtures/account/address_vectors.json"
+        "    Emit or verify the ADDR-2 IH58 (preferred)/snx1 (second-best)/multisig fixture. Defaults to fixtures/account/address_vectors.json"
     );
     eprintln!(
         "  cargo xtask address-local8-gate --input <prom-range.json> [--window-days 30] [--json-out <path|->] [--skip-collisions]"

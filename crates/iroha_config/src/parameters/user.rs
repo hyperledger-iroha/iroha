@@ -13622,11 +13622,8 @@ pub struct SorafsRepair {
     /// Enable the repair scheduler.
     #[config(default = "defaults::sorafs::repair::ENABLED")]
     pub enabled: bool,
-    /// Optional Postgres DSN for durable repair storage.
-    pub db_dsn: Option<String>,
-    /// Maximum number of database connections for repair operations.
-    #[config(default = "defaults::sorafs::repair::DB_POOL_MAX_CONNECTIONS")]
-    pub db_pool_max_connections: u32,
+    /// Optional directory for durable repair state.
+    pub state_dir: Option<PathBuf>,
     /// Claim TTL for repair tickets (seconds).
     #[config(default = "defaults::sorafs::repair::CLAIM_TTL_SECS")]
     pub claim_ttl_secs: u64,
@@ -13654,8 +13651,7 @@ impl Default for SorafsRepair {
     fn default() -> Self {
         Self {
             enabled: defaults::sorafs::repair::ENABLED,
-            db_dsn: None,
-            db_pool_max_connections: defaults::sorafs::repair::DB_POOL_MAX_CONNECTIONS,
+            state_dir: defaults::sorafs::repair::state_dir(),
             claim_ttl_secs: defaults::sorafs::repair::CLAIM_TTL_SECS,
             heartbeat_interval_secs: defaults::sorafs::repair::HEARTBEAT_INTERVAL_SECS,
             max_attempts: defaults::sorafs::repair::MAX_ATTEMPTS,
@@ -13671,8 +13667,7 @@ impl SorafsRepair {
     fn parse(self) -> actual::SorafsRepair {
         actual::SorafsRepair {
             enabled: self.enabled,
-            db_dsn: self.db_dsn,
-            db_pool_max_connections: self.db_pool_max_connections.max(1),
+            state_dir: self.state_dir,
             claim_ttl_secs: self.claim_ttl_secs.max(1),
             heartbeat_interval_secs: self.heartbeat_interval_secs.max(1),
             max_attempts: self.max_attempts.max(1),
@@ -13690,11 +13685,8 @@ pub struct SorafsGc {
     /// Enable the GC worker.
     #[config(default = "defaults::sorafs::gc::ENABLED")]
     pub enabled: bool,
-    /// Optional Postgres DSN for GC metadata storage.
-    pub db_dsn: Option<String>,
-    /// Maximum number of database connections for GC operations.
-    #[config(default = "defaults::sorafs::gc::DB_POOL_MAX_CONNECTIONS")]
-    pub db_pool_max_connections: u32,
+    /// Optional directory for durable GC state.
+    pub state_dir: Option<PathBuf>,
     /// GC cadence (seconds).
     #[config(default = "defaults::sorafs::gc::INTERVAL_SECS")]
     pub interval_secs: u64,
@@ -13713,8 +13705,7 @@ impl Default for SorafsGc {
     fn default() -> Self {
         Self {
             enabled: defaults::sorafs::gc::ENABLED,
-            db_dsn: None,
-            db_pool_max_connections: defaults::sorafs::gc::DB_POOL_MAX_CONNECTIONS,
+            state_dir: defaults::sorafs::gc::state_dir(),
             interval_secs: defaults::sorafs::gc::INTERVAL_SECS,
             max_deletions_per_run: defaults::sorafs::gc::MAX_DELETIONS_PER_RUN,
             retention_grace_secs: defaults::sorafs::gc::RETENTION_GRACE_SECS,
@@ -13727,8 +13718,7 @@ impl SorafsGc {
     fn parse(self) -> actual::SorafsGc {
         actual::SorafsGc {
             enabled: self.enabled,
-            db_dsn: self.db_dsn,
-            db_pool_max_connections: self.db_pool_max_connections.max(1),
+            state_dir: self.state_dir,
             interval_secs: self.interval_secs.max(1),
             max_deletions_per_run: self.max_deletions_per_run.max(1),
             retention_grace_secs: self.retention_grace_secs,
@@ -13745,8 +13735,7 @@ mod sorafs_repair_gc_tests {
     fn sorafs_repair_and_gc_parse_clamps_values() {
         let repair = SorafsRepair {
             enabled: true,
-            db_dsn: Some("postgres://sorafs/repair".into()),
-            db_pool_max_connections: 0,
+            state_dir: None,
             claim_ttl_secs: 0,
             heartbeat_interval_secs: 0,
             max_attempts: 0,
@@ -13756,7 +13745,6 @@ mod sorafs_repair_gc_tests {
             default_slash_penalty_nano: 0,
         };
         let actual = repair.parse();
-        assert_eq!(actual.db_pool_max_connections, 1);
         assert_eq!(actual.claim_ttl_secs, 1);
         assert_eq!(actual.heartbeat_interval_secs, 1);
         assert_eq!(actual.max_attempts, 1);
@@ -13767,15 +13755,13 @@ mod sorafs_repair_gc_tests {
 
         let gc = SorafsGc {
             enabled: true,
-            db_dsn: Some("postgres://sorafs/gc".into()),
-            db_pool_max_connections: 0,
+            state_dir: None,
             interval_secs: 0,
             max_deletions_per_run: 0,
             retention_grace_secs: 42,
             pre_admission_sweep: false,
         };
         let actual_gc = gc.parse();
-        assert_eq!(actual_gc.db_pool_max_connections, 1);
         assert_eq!(actual_gc.interval_secs, 1);
         assert_eq!(actual_gc.max_deletions_per_run, 1);
         assert_eq!(actual_gc.retention_grace_secs, 42);

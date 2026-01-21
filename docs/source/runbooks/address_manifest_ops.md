@@ -170,7 +170,7 @@ address-manifest-<REVISION>/
     `scripts/address_local_toolkit.sh` to confirm the digest mapping, and
     coordinate with Nexus governance before reissuing the affected registry
     entry.
-  - `AddressInvalidRatioSlo` — warns when invalid IH58/compressed submissions
+  - `AddressInvalidRatioSlo` — warns when invalid IH58 (preferred)/snx1 (second-best) submissions
     exceed the 0.1 % fleet-wide SLO for ten minutes. Investigate
     `torii_address_invalid_total` by context/reason and coordinate with the
     owning SDK team before declaring the incident resolved.

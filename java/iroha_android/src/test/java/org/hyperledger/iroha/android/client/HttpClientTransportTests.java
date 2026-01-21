@@ -6,7 +6,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -19,6 +18,7 @@ import org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueue;
 import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.nexus.AddressFormatOption;
 import org.hyperledger.iroha.android.nexus.UaidBindingsQuery;
 import org.hyperledger.iroha.android.nexus.UaidBindingsResponse;
@@ -106,27 +106,22 @@ public final class HttpClientTransportTests {
     assert request.timeout() != null && request.timeout().equals(config.requestTimeout())
         : "Request timeout must match config";
     final List<String> contentTypes = request.headers().get("Content-Type");
-    assert contentTypes != null && contentTypes.contains("application/json")
-        : "Content-Type header must be JSON";
+    assert contentTypes != null && contentTypes.contains("application/x-norito")
+        : "Content-Type header must be Norito";
+    final List<String> acceptHeaders = request.headers().get("Accept");
+    assert acceptHeaders != null
+        && acceptHeaders.contains("application/x-norito, application/json")
+        : "Accept header must include Norito";
     assert request.uri().toString().equals("http://127.0.0.1:8080/v1/pipeline/transactions")
         : "Submit endpoint must target Torii pipeline route";
     final List<String> authHeaders = request.headers().get("Authorization");
     assert authHeaders != null && authHeaders.contains("Bearer token")
         : "Custom headers from config must be applied";
 
-    final String body = readBody(request);
-    final Base64.Encoder encoder = Base64.getEncoder();
-    final String expectedPayload = encoder.encodeToString(transaction.encodedPayload());
-    final String expectedSignature = encoder.encodeToString(transaction.signature());
-    final String expectedPublicKey = encoder.encodeToString(transaction.publicKey());
-    assert body.contains("\"payload\":\"" + expectedPayload + "\"")
-        : "Body must embed base64 payload";
-    assert body.contains("\"signature\":\"" + expectedSignature + "\"")
-        : "Body must embed base64 signature";
-    assert body.contains("\"public_key\":\"" + expectedPublicKey + "\"")
-        : "Body must embed base64 public key";
-    assert body.contains("\"schema\":\"" + transaction.schemaName() + "\"")
-        : "Body must embed schema name";
+    final byte[] body = request.body();
+    final byte[] expected = SignedTransactionEncoder.encodeVersioned(transaction);
+    assert java.util.Arrays.equals(body, expected)
+        : "Body must include Norito-encoded signed transaction";
 
     assert observer.requestCount.get() == 1 : "Observer must see request";
     assert observer.responseCount.get() == 1 : "Observer must see response";
@@ -285,11 +280,17 @@ public final class HttpClientTransportTests {
     final SignedTransaction live = transactionWithPayload((byte) 0x23);
     transport.submitTransaction(live).join();
     assert queue.size() == 0 : "Pending queue must be empty after replay";
-    final List<String> payloadOrder = executor.payloads;
+    final List<byte[]> payloadOrder = executor.payloads;
     assert payloadOrder.size() == 3 : "Executor should receive queued transactions plus live submission";
-    assert payloadOrder.get(0).equals(base64Payload(first)) : "First queued transaction must be sent first";
-    assert payloadOrder.get(1).equals(base64Payload(second)) : "Second queued transaction must be sent second";
-    assert payloadOrder.get(2).equals(base64Payload(live)) : "Live transaction must be sent last";
+    assert java.util.Arrays.equals(
+            payloadOrder.get(0), SignedTransactionEncoder.encodeVersioned(first))
+        : "First queued transaction must be sent first";
+    assert java.util.Arrays.equals(
+            payloadOrder.get(1), SignedTransactionEncoder.encodeVersioned(second))
+        : "Second queued transaction must be sent second";
+    assert java.util.Arrays.equals(
+            payloadOrder.get(2), SignedTransactionEncoder.encodeVersioned(live))
+        : "Live transaction must be sent last";
   }
 
   private static void submitEmitsPendingQueueGauge() throws Exception {
@@ -993,12 +994,12 @@ public final class HttpClientTransportTests {
   }
 
   private static final class RecordingExecutor implements HttpTransportExecutor {
-    private final List<String> payloads = new ArrayList<>();
+    private final List<byte[]> payloads = new ArrayList<>();
 
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
       try {
-        payloads.add(extractPayloadBase64(readBody(request)));
+        payloads.add(request.body());
       } catch (final Exception ex) {
         final CompletableFuture<TransportResponse> failed = new CompletableFuture<>();
         failed.completeExceptionally(ex);
@@ -1169,21 +1170,4 @@ public final class HttpClientTransportTests {
         && expected.exportedKeyBundle().equals(actual.exportedKeyBundle());
   }
 
-  private static String base64Payload(final SignedTransaction transaction) {
-    return Base64.getEncoder().encodeToString(transaction.encodedPayload());
-  }
-
-  private static String extractPayloadBase64(final String body) {
-    final String marker = "\"payload\":\"";
-    final int start = body.indexOf(marker);
-    if (start < 0) {
-      throw new IllegalStateException("Payload field missing in body: " + body);
-    }
-    final int valueStart = start + marker.length();
-    final int end = body.indexOf('"', valueStart);
-    if (end < 0) {
-      throw new IllegalStateException("Unterminated payload field in body: " + body);
-    }
-    return body.substring(valueStart, end);
-  }
 }

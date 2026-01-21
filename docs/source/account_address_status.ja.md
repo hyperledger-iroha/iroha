@@ -17,7 +17,7 @@ translation_last_reviewed: 2026-01-01
 
 ### 1. 概要
 
-- フィクスチャ: `fixtures/account/address_vectors.json` (IH58 + compressed + multisig の正常/異常ケース)。
+- フィクスチャ: `fixtures/account/address_vectors.json` (IH58 (preferred) + compressed (`snx1`, second-best) + multisig の正常/異常ケース)。
 - スコープ: implicit-default、Local-12、Global registry、multisig controllers を含む決定論的 V1 payloads と、
   完全なエラー分類。
 - 配布: Rust data-model、Torii、JS/TS、Swift、Android SDK で共有され、いずれかが逸脱すると CI は失敗。
@@ -45,10 +45,10 @@ cargo xtask address-vectors --verify
 
 | 対象 | 施行 | 備考 |
 |---------|-------------|-------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | JSON を解析し、canonical payloads を再構築し、IH58/compressed/canonical 変換 + 構造化エラーを検証する。 |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | サーバー側 codec を検証し、Torii が不正な IH58/compressed payloads を決定論的に拒否するようにする。 |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | V1 fixtures (IH58/compressed/fullwidth) をミラーし、全ての負ケースで Norito 風のエラーコードを検証する。 |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | IH58/compressed のデコード、multisig payloads、Apple プラットフォームでのエラー露出を確認する。 |
+| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | JSON を解析し、canonical payloads を再構築し、IH58（推奨）/compressed（`snx1`、次善）/canonical 変換 + 構造化エラーを検証する。 |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | サーバー側 codec を検証し、Torii が不正な IH58（推奨）/compressed（`snx1`、次善） payloads を決定論的に拒否するようにする。 |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | V1 fixtures (IH58 推奨/compressed（`snx1`）次善/fullwidth) をミラーし、全ての負ケースで Norito 風のエラーコードを検証する。 |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | IH58（推奨）/compressed（`snx1`、次善）のデコード、multisig payloads、Apple プラットフォームでのエラー露出を確認する。 |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | Kotlin/Java バインディングが canonical fixture と一致し続けることを確認する。 |
 
 ### 4. 監視と残タスク

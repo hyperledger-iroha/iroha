@@ -7,10 +7,12 @@
 #![allow(clippy::too_many_lines)]
 
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     process::Command,
     str::FromStr,
+    sync::Arc,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -107,6 +109,15 @@ fn account_id(name: &str) -> AccountId {
         DomainId::new(Name::from_str("sora").expect("domain label canonicalises")),
         key_pair.public_key().clone(),
     )
+}
+
+fn account_literal(account: &AccountId) -> String {
+    format!("{}@{}", account.signatory(), account.domain())
+}
+
+fn account_literal_for(name: &str) -> String {
+    let account = account_id(name);
+    account_literal(&account)
 }
 
 fn account_id_for_domain(label: &str, seed: u8) -> AccountId {
@@ -321,6 +332,46 @@ fn read_state(path: &std::path::Path) -> Value {
     norito::json::from_slice(&bytes).expect("decode incentives state")
 }
 
+struct DomainSelectorResolverGuard {
+    active: bool,
+}
+
+impl Drop for DomainSelectorResolverGuard {
+    fn drop(&mut self) {
+        if self.active {
+            iroha_data_model::account::clear_account_domain_selector_resolver();
+        }
+    }
+}
+
+fn install_domain_selector_resolver(state_json: &Value) -> DomainSelectorResolverGuard {
+    use iroha_data_model::account::address::AccountDomainSelector;
+
+    let Some(entries) = state_json.get("domain_hints").and_then(Value::as_array) else {
+        return DomainSelectorResolverGuard { active: false };
+    };
+
+    let mut map = HashMap::new();
+    for entry in entries {
+        let literal = entry
+            .as_str()
+            .expect("domain_hints entries must be strings");
+        let domain: DomainId = literal.parse().expect("domain_hints entry");
+        if let Ok(selector) = AccountDomainSelector::from_domain(&domain) {
+            map.insert(selector, domain);
+        }
+    }
+    if map.is_empty() {
+        return DomainSelectorResolverGuard { active: false };
+    }
+
+    let map = Arc::new(map);
+    iroha_data_model::account::set_account_domain_selector_resolver(Arc::new(
+        move |selector| map.get(selector).cloned(),
+    ));
+    DomainSelectorResolverGuard { active: true }
+}
+
 fn settlement_instruction(instruction: &InstructionBox) -> &SettlementInstructionBox {
     instruction
         .as_any()
@@ -503,7 +554,7 @@ fn sorafs_reserve_ledger_emits_instructions() {
     assert!(quote_status.success(), "reserve quote command failed");
 
     let reserve_account = account_id("reserve-sorafs");
-    let reserve_account_label = reserve_account.to_string();
+    let reserve_account_label = account_literal(&reserve_account);
 
     let provider_account: AccountId = ALICE_ACCOUNT.parse().expect("alice account");
     let treasury_account: AccountId = BOB_ACCOUNT.parse().expect("bob account");
@@ -1940,6 +1991,7 @@ fn sorafs_incentives_service_cli_roundtrip() {
     let state_str = state_path.to_str().expect("utf-8 state path");
     let config_str = config_path.to_str().expect("utf-8 config path");
     let treasury = account_id("treasury");
+    let treasury_literal = account_literal(&treasury);
 
     let output = command()
         .args([
@@ -1952,7 +2004,7 @@ fn sorafs_incentives_service_cli_roundtrip() {
             "--config",
             config_str,
             "--treasury-account",
-            &treasury.to_string(),
+            treasury_literal.as_str(),
         ])
         .output()
         .expect("execute incentives service init");
@@ -1976,6 +2028,7 @@ fn sorafs_incentives_service_cli_roundtrip() {
     let bond = sample_bond_entry();
     let bond_path = write_bond_file(&temp_dir, &bond);
     let instruction_out = temp_dir.path().join("instruction.to");
+    let beneficiary_literal = account_literal_for("beneficiary");
 
     let output = command()
         .args([
@@ -1990,7 +2043,7 @@ fn sorafs_incentives_service_cli_roundtrip() {
             "--bond",
             bond_path.to_str().unwrap(),
             "--beneficiary",
-            &account_id("beneficiary").to_string(),
+            beneficiary_literal.as_str(),
             "--instruction-out",
             instruction_out.to_str().unwrap(),
             "--pretty",
@@ -2016,6 +2069,7 @@ fn sorafs_incentives_service_cli_roundtrip() {
     assert_eq!(payouts.len(), 1);
 
     let relay_hex = hex::encode(metrics.relay_id);
+    let operator_literal = account_literal_for("operator");
     let output = command()
         .args([
             "sorafs",
@@ -2030,7 +2084,7 @@ fn sorafs_incentives_service_cli_roundtrip() {
             "--epoch",
             &metrics.epoch.to_string(),
             "--submitted-by",
-            &account_id("operator").to_string(),
+            operator_literal.as_str(),
             "--requested-amount",
             "120",
             "--reason",
@@ -2145,6 +2199,7 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
     let state_str = state_path.to_str().expect("utf-8 state path");
     let config_str = config_path.to_str().expect("utf-8 config path");
     let treasury = account_id("treasury");
+    let treasury_literal = account_literal(&treasury);
 
     let output = command()
         .args([
@@ -2157,7 +2212,7 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
             "--config",
             config_str,
             "--treasury-account",
-            &treasury.to_string(),
+            treasury_literal.as_str(),
         ])
         .output()
         .expect("execute incentives service init");
@@ -2175,6 +2230,8 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
     let metrics_a_path = write_metrics_file(&temp_dir, &metrics_a);
     let metrics_b_path = write_metrics_file(&temp_dir, &metrics_b);
     let bond_path = write_bond_file(&temp_dir, &sample_bond_entry());
+    let beneficiary_a_literal = account_literal_for("beneficiary-a");
+    let beneficiary_b_literal = account_literal_for("beneficiary-b");
 
     let output = command()
         .args([
@@ -2191,9 +2248,9 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
             "--bond",
             bond_path.to_str().unwrap(),
             "--beneficiary",
-            &account_id("beneficiary-a").to_string(),
+            beneficiary_a_literal.as_str(),
             "--beneficiary",
-            &account_id("beneficiary-b").to_string(),
+            beneficiary_b_literal.as_str(),
             "--pretty",
         ])
         .output()
@@ -2217,12 +2274,17 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
         2
     );
 
-    let treasury_account = AccountId::from_str(
+    let _domain_guard = install_domain_selector_resolver(&state_json);
+    let treasury_account = treasury.clone();
+    let expected_treasury = treasury_account
+        .canonical_ih58()
+        .expect("treasury ih58");
+    assert_eq!(
         state_json["treasury_account"]
             .as_str()
             .expect("treasury account string"),
-    )
-    .expect("treasury account id");
+        expected_treasury
+    );
     let payout_values = state_json["payouts"].as_array().expect("payouts array");
     let mut expected_transfers = Vec::new();
     for payout in payout_values {
@@ -3471,12 +3533,12 @@ fn da_rent_ledger_emits_transfer_plan() {
     let pdp_account = account_id("pdp-da-ledger");
     let potr_account = account_id("potr-da-ledger");
 
-    let payer_arg = payer_account.to_string();
-    let treasury_arg = treasury_account.to_string();
-    let protocol_arg = protocol_account.to_string();
-    let provider_arg = provider_account.to_string();
-    let pdp_arg = pdp_account.to_string();
-    let potr_arg = potr_account.to_string();
+    let payer_arg = account_literal(&payer_account);
+    let treasury_arg = account_literal(&treasury_account);
+    let protocol_arg = account_literal(&protocol_account);
+    let provider_arg = account_literal(&provider_account);
+    let pdp_arg = account_literal(&pdp_account);
+    let potr_arg = account_literal(&potr_account);
 
     let ledger_output = command()
         .args([
@@ -3947,7 +4009,7 @@ fn incentives_daemon_processes_metrics_spool() {
     let bond_bytes = to_bytes(&bond_entry).expect("encode bond entry");
     fs::write(&bond_path, bond_bytes).expect("write bond entry");
     let relay_hex = hex::encode(bond_entry.relay_id);
-    let beneficiary_account = account_id("relay1").to_string();
+    let beneficiary_account = account_literal_for("relay1");
     let config_path = write_daemon_config(&temp_dir, &relay_hex, &beneficiary_account, &bond_path);
 
     let init_output = command()

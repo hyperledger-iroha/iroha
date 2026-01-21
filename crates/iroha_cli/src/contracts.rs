@@ -85,7 +85,7 @@ impl Run for CodeBytesGetArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct DeployArgs {
-    /// Authority account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
+    /// Authority account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
     #[arg(long)]
     pub authority: String,
     /// Hex-encoded private key for signing
@@ -124,7 +124,7 @@ impl Run for DeployArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct DeployActivateArgs {
-    /// Authority account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
+    /// Authority account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
     #[arg(long)]
     pub authority: String,
     /// Hex-encoded private key for signing and manifest provenance
@@ -472,7 +472,7 @@ mod tests {
 
 #[derive(clap::Args, Debug)]
 pub struct SimulateArgs {
-    /// Authority account identifier (IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain)
+    /// Authority account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
     #[arg(long)]
     pub authority: String,
     /// Hex-encoded private key used to sign the simulated transaction

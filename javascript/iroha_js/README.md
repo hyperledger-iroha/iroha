@@ -100,7 +100,7 @@ console.log(formats.domainSummary.selector.registryId); // registry id when Glob
 > ℹ️ When showing addresses in wallets, explorers, or SDK samples, follow the
 > dual-format UX checklist captured in
 > [`docs/source/sns/address_display_guidelines.md`](../../docs/source/sns/address_display_guidelines.md):
-> IH58 remains the default copy/share target, compressed strings need an inline
+> IH58 remains the default copy/share target, compressed (`snx1`, second-best) strings need an inline
 > warning, and QR codes should always encode the IH58 value.
 
 ## Subscriptions
@@ -307,8 +307,9 @@ const registerAccountInstruction = buildRegisterAccountInstruction({
 });
 console.log(noritoDecodeInstruction(registerAccountInstruction).Register.Account.id);
 
-await torii.submitTransaction(encoded);
-const sampleHashHex = "ab".repeat(32); // 32-byte transaction hash as lowercase hex
+const receipt = await torii.submitTransaction(encoded);
+const sampleHashHex =
+  receipt?.payload?.tx_hash ?? "ab".repeat(32); // 32-byte transaction hash as lowercase hex
 const status = await torii.getTransactionStatus(sampleHashHex);
 console.log(status?.content.status.kind); // e.g. "Committed"
 
@@ -3082,7 +3083,7 @@ for await (const trigger of torii.iterateTriggersQuery({
 //     NFT_DEFINITION_ID=art#wonderland
 ```
 
-> **Roadmap ADDR-5a:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and their query/iterator variants) now accept canonical, IH58, or compressed literals and automatically percent-encode them when constructing `/v1/accounts/{account_id}/…` routes, so SDK callers can forward whatever selector they surface in wallets without hand-escaping.
+> **Roadmap ADDR-5a:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and their query/iterator variants) now accept canonical, IH58 (preferred), or compressed (`snx1`, second-best) literals and automatically percent-encode them when constructing `/v1/accounts/{account_id}/…` routes, so SDK callers can forward whatever selector they surface in wallets without hand-escaping.
 
 Use the SNS helpers to manage Sora Name Service records without hand-crafting JSON:
 

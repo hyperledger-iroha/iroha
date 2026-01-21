@@ -21,8 +21,8 @@ Carteiras, exploradores e exemplos de SDK devem tratar enderecos de conta como
 payloads imutaveis. O exemplo da carteira retail Android em
 `examples/android/retail-wallet` agora demonstra o padrao de UX exigido:
 
-- **Dois alvos de copia.** Envie dois botoes de copia explicitos: IH58 (padrao)
-  e a forma comprimida somente Sora (`snx1...`). IH58 e sempre seguro para
+- **Dois alvos de copia.** Envie dois botoes de copia explicitos: IH58
+  (preferido) e a forma comprimida somente Sora (`snx1...`, segunda melhor opcao). IH58 e sempre seguro para
   compartilhar externamente e alimenta o payload do QR. A variante comprimida
   deve incluir um aviso inline porque so funciona dentro de apps compatveis com
   Sora. O exemplo de carteira retail Android liga ambos os botoes Material e seus

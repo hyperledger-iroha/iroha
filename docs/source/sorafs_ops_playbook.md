@@ -146,8 +146,8 @@ incident retrospectives.
 
 **Detection**
 
-- Alerts: `SoraFSCapacityPressure` or sustained `torii_sorafs_storage_bytes_used` > 90%.
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
+- Alerts: `SoraFSCapacityPressure`, `SoraFSGCStalled`, `SoraFSGCBlocked`, or `SoraFSGCErrorRuns`.
+- Dashboard: `dashboards/grafana/sorafs_capacity_health.json` (GC runs/evictions/bytes freed panels).
 
 **Immediate actions**
 
@@ -166,12 +166,17 @@ incident retrospectives.
 - Confirm which manifests report `retention_epoch=0` (no expiry) vs. those with deadlines.
 - If `dry-run` reports expired manifests but capacity remains pinned, verify no
   active repairs or retention policy overrides block eviction.
+- Check `torii_sorafs_gc_expired_manifests`, `torii_sorafs_gc_oldest_expired_age_seconds`,
+  `torii_sorafs_gc_evictions_total`, and `torii_sorafs_gc_blocked_total` to confirm GC is running
+  and to identify block reasons (for example, `repair_active`).
 
 **Remediation options**
 
 - The GC CLI is read-only. Do not delete manifests or chunks manually in production.
 - Escalate to governance for retention policy adjustments or capacity expansion
   when expired data accumulates without automated eviction.
+- If GC is blocked by repairs, address outstanding repair tickets first (see the
+  repair worker runbook section) to unblock retention cleanup.
 
 ## Chaos Drill Cadence
 

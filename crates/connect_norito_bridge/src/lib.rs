@@ -65,7 +65,10 @@ use iroha_data_model::{
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
     smart_contract::manifest::ContractManifest,
-    transaction::{Executable, SignedTransaction, signed::TransactionBuilder},
+    transaction::{
+        Executable, SignedTransaction, TransactionSubmissionReceipt,
+        signed::TransactionBuilder,
+    },
 };
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
 use iroha_primitives::{json::Json, numeric::Numeric};
@@ -8894,6 +8897,38 @@ pub unsafe extern "C" fn connect_norito_decode_signed_transaction_json(
             Err(_) => return -2,
         };
         let json_bytes = match norito::json::to_vec(&tx) {
+            Ok(vec) => vec,
+            Err(_) => return -3,
+        };
+        if let Err(code) = write_bytes(out_json_ptr, out_json_len, &json_bytes) {
+            return code;
+        }
+        0
+    }
+}
+
+/// Decode a Norito-encoded `TransactionSubmissionReceipt` into JSON.
+///
+/// # Safety
+/// All pointer arguments must be valid and non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_decode_transaction_receipt_json(
+    receipt_ptr: *const c_uchar,
+    receipt_len: c_ulong,
+    out_json_ptr: *mut *mut c_uchar,
+    out_json_len: *mut c_ulong,
+) -> c_int {
+    unsafe {
+        if receipt_ptr.is_null() || out_json_ptr.is_null() || out_json_len.is_null() {
+            return -1;
+        }
+        let bytes = slice::from_raw_parts(receipt_ptr, receipt_len as usize);
+        let receipt: TransactionSubmissionReceipt =
+            match norito::decode_from_bytes(bytes) {
+                Ok(v) => v,
+                Err(_) => return -2,
+            };
+        let json_bytes = match norito::json::to_vec(&receipt) {
             Ok(vec) => vec,
             Err(_) => return -3,
         };

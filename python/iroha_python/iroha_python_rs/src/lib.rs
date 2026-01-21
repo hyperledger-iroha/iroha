@@ -61,6 +61,7 @@ use iroha_data_model::{
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     transaction::{
         Executable, IvmBytecode, SignedTransaction, TransactionBuilder as ModelTransactionBuilder,
+        TransactionSubmissionReceipt,
     },
     trigger::{
         Trigger, TriggerId,
@@ -3363,6 +3364,17 @@ fn sorafs_decode_replication_order_py(py: Python<'_>, norito_bytes: &[u8]) -> Py
 }
 
 #[pyfunction]
+#[pyo3(name = "decode_transaction_receipt_json")]
+fn decode_transaction_receipt_json_py(receipt_bytes: &[u8]) -> PyResult<String> {
+    let receipt: TransactionSubmissionReceipt =
+        decode_from_bytes(receipt_bytes).map_err(|err| {
+            PyValueError::new_err(format!("failed to decode transaction receipt: {err}"))
+        })?;
+    json::to_json(&receipt)
+        .map_err(|err| PyValueError::new_err(format!("failed to serialize receipt: {err}")))
+}
+
+#[pyfunction]
 #[pyo3(name = "generate_connect_keypair")]
 /// Generate an X25519 keypair for Connect.
 fn generate_connect_keypair_py(py: Python<'_>) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
@@ -3541,6 +3553,22 @@ mod tests {
             let derived_public = private.public_key().to_sec1_bytes(false);
             assert_eq!(derived_public.as_slice(), public_bytes);
         });
+    }
+
+    #[test]
+    fn decode_transaction_receipt_json_roundtrip() {
+        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let payload = iroha_data_model::transaction::TransactionSubmissionReceiptPayload {
+            tx_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
+            submitted_at_ms: 42,
+            submitted_at_height: 7,
+            signer: key_pair.public_key().clone(),
+        };
+        let receipt = TransactionSubmissionReceipt::sign(payload, &key_pair);
+        let bytes = to_bytes(&receipt).expect("encode receipt");
+        let decoded = decode_transaction_receipt_json_py(&bytes).expect("decode receipt json");
+        let expected = json::to_json(&receipt).expect("serialize receipt");
+        assert_eq!(decoded, expected);
     }
 
     #[test]
@@ -6801,6 +6829,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(sorafs_gateway_fetch_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         sorafs_decode_replication_order_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        decode_transaction_receipt_json_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(cuda_available_py, module)?)?;

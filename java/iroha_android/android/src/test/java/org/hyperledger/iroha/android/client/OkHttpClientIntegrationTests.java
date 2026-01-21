@@ -25,6 +25,7 @@ import org.hyperledger.iroha.android.offline.attestation.SafetyDetectOptions;
 import org.hyperledger.iroha.android.offline.attestation.SafetyDetectRequest;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchOptions;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchSummary;
@@ -43,7 +44,11 @@ public final class OkHttpClientIntegrationTests {
   @Test
   public void okhttpExecutorSupportsRestAndRpcClients() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
-      server.enqueue(new MockResponse().setResponseCode(202).setBody("accepted"));
+      server.enqueue(
+          new MockResponse()
+              .setResponseCode(202)
+              .addHeader("Content-Type", "application/x-norito")
+              .setBody("accepted"));
       server.enqueue(new MockResponse().setResponseCode(200).setBody("rpc-ok"));
       server.enqueue(
           new MockResponse()
@@ -75,9 +80,10 @@ public final class OkHttpClientIntegrationTests {
       final RecordedRequest submit = server.takeRequest();
       assertEquals("/v1/pipeline/transactions", submit.getPath());
       assertEquals("POST", submit.getMethod());
-      assertEquals("application/json", submit.getHeader("Content-Type"));
-      final String submitBody = submit.getBody().readUtf8();
-      assertTrue(submitBody.contains(Base64.getEncoder().encodeToString(transaction.encodedPayload())));
+      assertEquals("application/x-norito", submit.getHeader("Content-Type"));
+      assertEquals("application/x-norito, application/json", submit.getHeader("Accept"));
+      final byte[] submitBody = submit.getBody().readByteArray();
+      assertArrayEquals(SignedTransactionEncoder.encodeVersioned(transaction), submitBody);
 
       final NoritoRpcClient rpcClient =
           NoritoRpcClient.builder()

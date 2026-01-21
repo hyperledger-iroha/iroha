@@ -19,7 +19,7 @@ de compte comme des payloads immuables. L'exemple de portefeuille retail Android
 dans `examples/android/retail-wallet` montre maintenant le pattern UX requis:
 
 - **Deux cibles de copie.** Fournissez deux boutons de copie explicites: IH58
-  (par defaut) et la forme compressee Sora-only (`snx1...`). IH58 est toujours
+  (prefere) et la forme compressee Sora-only (`snx1...`, second choix). IH58 est toujours
   sure a partager en externe et alimente le payload du QR. La variante compressee
   doit inclure un avertissement inline parce qu'elle ne fonctionne que dans des
   apps prises en charge par Sora. L'exemple Android branche les deux boutons Material et

@@ -225,7 +225,7 @@ Torii מאמת הוכחות על ידי בדיקה:
 
 1. הלקוח שואל `/v1/sns/policies/{suffix_id}` כדי לקבל מחירים, grace ו-tiers זמינים.
 2. הלקוח בונה `RegisterNameRequestV1`:
-   - `selector` נגזר מתווית IH58/דחוסה.
+   - `selector` נגזר מתווית IH58 (מועדף) או דחוסה (אפשרות שנייה).
    - `term_years` בתוך גבולות המדיניות.
    - `payment` שמפנה להעברת splitter של אוצרות/steward.
 3. Torii מאמת:

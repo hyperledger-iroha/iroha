@@ -153,8 +153,8 @@ def main() -> None:
             )
             print("Transaction final status:", status)
         else:
-            status = client.submit_transaction_envelope(envelope)
-            print("Transaction submission status:", status)
+            receipt = client.submit_transaction_envelope(envelope)
+            print("Transaction submission receipt:", receipt)
     else:
         print("Draft contains", len(list(draft.instructions)), "instructions. Use --submit to relay.")
 

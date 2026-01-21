@@ -102,7 +102,7 @@ public enum AccountAddressFormat: Equatable, Sendable {
     case canonicalHex
 }
 
-/// Structured representation of IH58/compressed outputs used by wallet/explorer UX.
+/// Structured representation of IH58 (preferred)/snx1 (second-best) outputs used by wallet/explorer UX.
 public struct AccountAddressDisplayFormats: Equatable {
     public let ih58: String
     public let compressed: String
@@ -114,6 +114,11 @@ public struct AccountAddress {
     private let header: AddressHeader
     private let domain: DomainSelector
     private let controller: ControllerPayload
+
+    struct ControllerInfo {
+        let algorithm: SigningAlgorithm
+        let publicKey: Data
+    }
 
     public struct MultisigPolicyInfo {
         public struct Member {
@@ -283,7 +288,7 @@ public struct AccountAddress {
         return try encodeCompressedString(canonical: canonical, fullWidth: true)
     }
 
-    /// Returns both IH58 and compressed representations plus the UX warning required by
+    /// Returns both IH58 (preferred) and compressed (`snx1`, second-best) representations plus the UX warning required by
     /// `docs/source/sns/address_display_guidelines.md`.
     public func displayFormats(networkPrefix: UInt16 = 753) throws -> AccountAddressDisplayFormats {
         let canonical = try canonicalBytes()
@@ -330,6 +335,16 @@ public struct AccountAddress {
             ctap2CborHex: "0x\(ctap2.hexUppercased())",
             digestBlake2b256Hex: "0x\(digest.hexUppercased())"
         )
+    }
+
+    func singleControllerInfo() -> ControllerInfo? {
+        switch controller {
+        case .singleKey(let curve, let publicKey):
+            guard let algorithm = curve.signingAlgorithm else { return nil }
+            return ControllerInfo(algorithm: algorithm, publicKey: publicKey)
+        case .multiSig:
+            return nil
+        }
     }
 
     static let multisigPersonalisation = Data("iroha-ms-policy".utf8)
@@ -403,6 +418,29 @@ private extension CurveId {
         #if IROHASWIFT_ENABLE_SM
         case .sm2:
             return "sm2"
+        #endif
+        }
+    }
+
+    var signingAlgorithm: SigningAlgorithm? {
+        switch self {
+        case .ed25519:
+            return .ed25519
+        #if IROHASWIFT_ENABLE_SECP256K1
+        case .secp256k1:
+            return .secp256k1
+        #endif
+        #if IROHASWIFT_ENABLE_MLDSA
+        case .mldsa:
+            return .mlDsa
+        #endif
+        #if IROHASWIFT_ENABLE_GOST
+        case .gost256A, .gost256B, .gost256C, .gost512A, .gost512B:
+            return nil
+        #endif
+        #if IROHASWIFT_ENABLE_SM
+        case .sm2:
+            return .sm2
         #endif
         }
     }

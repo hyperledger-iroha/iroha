@@ -137,7 +137,7 @@ meme verifications de permission et signe les transactions au nom de l autorite 
 
 - `GET /v1/space-directory/uaids/{uaid}` - resoudre les liaisons de dataspace courantes
   pour un UAID (adresses normalisees, ids de dataspace, liaisons de programme). Ajouter
-  `address_format=compressed` pour la sortie Sora Name Service.
+  `address_format=compressed` pour la sortie Sora Name Service (IH58 prefere; compressed (`snx1`) est le second choix Sora-only).
 - `GET /v1/space-directory/uaids/{uaid}/portfolio` -
   agregateur adosse a Norito qui reflete `ToriiClient.getUaidPortfolio` pour que les wallets
   rendent les holdings universels sans scruter l etat par dataspace.

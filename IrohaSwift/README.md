@@ -199,7 +199,7 @@ headers.forEach { key, value in
 }
 ```
 
-> **Roadmap ADDR-5a:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and the matching `IrohaSDK` shortcuts) now accept canonical, IH58, or compressed literals and percent-encode the `/v1/accounts/{account_id}/…` segments automatically, so wallets can forward whatever selector they surface without manually escaping `@` or trimming input.
+> **Roadmap ADDR-5a:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and the matching `IrohaSDK` shortcuts) now accept canonical, IH58 (preferred), or compressed (`snx1`, second-best) literals and percent-encode the `/v1/accounts/{account_id}/…` segments automatically, so wallets can forward whatever selector they surface without manually escaping `@` or trimming input.
 
 ### Account addresses
 
@@ -256,9 +256,10 @@ if #available(iOS 15.0, macOS 12.0, *) {
 }
 ```
 
-If you need to inspect the immediate submission acknowledgement without waiting for a
-terminal state, call `torii.submitTransaction(data: envelope.norito)` directly and poll
-with `torii.getTransactionStatus(hashHex:)`.
+If you need the immediate submission receipt without waiting for a terminal state,
+call `torii.submitTransaction(data: envelope.norito)` directly. The returned
+`ToriiSubmitTransactionResponse` includes the receipt payload and signature; use
+`receipt.hash` (or `receipt.payload.txHash`) to poll with `torii.getTransactionStatus(hashHex:)`.
 
 `ToriiClient.getMetrics()` automatically decodes JSON payloads even when Torii forgets to
 set `Content-Type: application/json`, falling back to the Prometheus/text response only

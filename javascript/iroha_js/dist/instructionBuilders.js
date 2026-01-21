@@ -362,10 +362,13 @@ function normalizeMultisigSpecPayload(spec, path) {
 }
 
 function ensureSameDomain(controllerId, specPayload, path) {
-  const [, controllerDomain] = controllerId.split("@");
+  const controllerDomain = extractDomainSuffix(controllerId);
+  if (!controllerDomain) {
+    return;
+  }
   for (const signatory of Object.keys(specPayload.signatories)) {
-    const [, signatoryDomain] = signatory.split("@");
-    if (signatoryDomain !== controllerDomain) {
+    const signatoryDomain = extractDomainSuffix(signatory);
+    if (signatoryDomain && signatoryDomain !== controllerDomain) {
       fail(
         ValidationErrorCode.INVALID_STRING,
         `${path} must belong to domain ${controllerDomain}; found signatory ${signatory}`,
@@ -373,6 +376,15 @@ function ensureSameDomain(controllerId, specPayload, path) {
       );
     }
   }
+}
+
+function extractDomainSuffix(value) {
+  const at = value.lastIndexOf("@");
+  if (at === -1) {
+    return null;
+  }
+  const domain = value.slice(at + 1).trim();
+  return domain.length === 0 ? null : domain;
 }
 
 function asNonNegativeInteger(value, name) {

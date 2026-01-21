@@ -375,6 +375,7 @@ mod tests {
             chunk_profile_handle: "sorafs.test@1.0.0".to_string(),
             stripe_layout: None,
             stored_at_unix_secs: 0,
+            retention_epoch: 0,
             chunk_files: Vec::new(),
             por_tree: StoredPorTree::from(&PorMerkleTree::empty()),
             manifest_path: PathBuf::from("/tmp/manifest"),

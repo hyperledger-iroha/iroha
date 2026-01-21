@@ -105,6 +105,7 @@ use tokio::runtime::Runtime;
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
+    domain::DomainId,
     isi::{InstructionBox, Transfer},
     metadata::Metadata,
     name::Name,
@@ -5134,6 +5135,26 @@ struct IncentivesState {
     norito::json::JsonDeserialize,
 )]
 #[norito(decode_from_slice)]
+struct IncentivesStateSnapshot {
+    version: u16,
+    reward_config: RewardConfigState,
+    treasury_account: AccountId,
+    payouts: Vec<RelayRewardInstructionV1>,
+    disputes: Vec<StoredDisputeRecord>,
+    #[norito(default)]
+    // Helps resolve IH58 domain selectors when reloading JSON snapshots.
+    domain_hints: Vec<DomainId>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::json::JsonSerialize,
+    norito::json::JsonDeserialize,
+)]
+#[norito(decode_from_slice)]
 struct LedgerExportFile {
     version: u16,
     transfers: Vec<LedgerTransferRecord>,
@@ -5176,6 +5197,41 @@ impl IncentivesState {
             ));
         }
         Ok(())
+    }
+}
+
+fn incentives_domain_hints(state: &IncentivesState) -> Vec<DomainId> {
+    let mut domains = BTreeSet::new();
+    domains.insert(state.treasury_account.domain().clone());
+    for payout in &state.payouts {
+        domains.insert(payout.beneficiary.domain().clone());
+    }
+    for dispute in &state.disputes {
+        domains.insert(dispute.submitted_by.domain().clone());
+    }
+    domains.into_iter().collect()
+}
+
+impl IncentivesStateSnapshot {
+    fn from_state(state: &IncentivesState) -> Self {
+        Self {
+            version: IncentivesState::VERSION,
+            reward_config: state.reward_config.clone(),
+            treasury_account: state.treasury_account.clone(),
+            payouts: state.payouts.clone(),
+            disputes: state.disputes.clone(),
+            domain_hints: incentives_domain_hints(state),
+        }
+    }
+
+    fn into_state(self) -> IncentivesState {
+        IncentivesState {
+            version: self.version,
+            reward_config: self.reward_config,
+            treasury_account: self.treasury_account,
+            payouts: self.payouts,
+            disputes: self.disputes,
+        }
     }
 }
 
@@ -5442,18 +5498,76 @@ fn stored_resolution_to_resolution(
     })
 }
 
+struct DomainSelectorResolverGuard {
+    active: bool,
+}
+
+impl Drop for DomainSelectorResolverGuard {
+    fn drop(&mut self) {
+        if self.active {
+            iroha_data_model::account::clear_account_domain_selector_resolver();
+        }
+    }
+}
+
+fn install_domain_selector_resolver(domains: &[DomainId]) -> DomainSelectorResolverGuard {
+    use iroha_data_model::account::address::AccountDomainSelector;
+
+    if domains.is_empty() {
+        return DomainSelectorResolverGuard { active: false };
+    }
+
+    let mut map = HashMap::new();
+    for domain in domains {
+        if let Ok(selector) = AccountDomainSelector::from_domain(domain) {
+            map.insert(selector, domain.clone());
+        }
+    }
+    if map.is_empty() {
+        return DomainSelectorResolverGuard { active: false };
+    }
+
+    let map = std::sync::Arc::new(map);
+    iroha_data_model::account::set_account_domain_selector_resolver(std::sync::Arc::new(
+        move |selector| map.get(selector).cloned(),
+    ));
+    DomainSelectorResolverGuard { active: true }
+}
+
+fn parse_domain_hints(value: &Value) -> Result<Vec<DomainId>> {
+    let Some(entries) = value.get("domain_hints").and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let mut hints = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let literal = entry
+            .as_str()
+            .ok_or_else(|| eyre!("domain_hints entry must be a string"))?;
+        let domain: DomainId = literal.parse().wrap_err("invalid domain_hints entry")?;
+        hints.push(domain);
+    }
+    Ok(hints)
+}
+
+fn parse_incentives_state_snapshot(bytes: &[u8]) -> Result<IncentivesStateSnapshot> {
+    let value: Value = norito::json::from_slice(bytes)
+        .wrap_err("failed to parse incentives state JSON")?;
+    let domain_hints = parse_domain_hints(&value)?;
+    let _guard = install_domain_selector_resolver(&domain_hints);
+    norito::json::from_value(value).wrap_err("failed to parse incentives state JSON")
+}
+
 fn load_incentives_state(path: &Path) -> Result<IncentivesState> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read incentives state from `{}`", path.display()))?;
-    let state: IncentivesState =
-        norito::json::from_slice(&bytes).wrap_err("failed to parse incentives state JSON")?;
+    let snapshot = parse_incentives_state_snapshot(&bytes)?;
+    let state = snapshot.into_state();
     state.ensure_current()?;
     Ok(state)
 }
 
 fn save_incentives_state(path: &Path, state: &IncentivesState) -> Result<()> {
-    let mut snapshot = state.clone();
-    snapshot.version = IncentivesState::VERSION;
+    let snapshot = IncentivesStateSnapshot::from_state(state);
     let bytes = norito::json::to_vec_pretty(&snapshot)
         .wrap_err("failed to render incentives state JSON")?;
     fs::write(path, bytes)
@@ -7568,7 +7682,6 @@ impl Run for GatewayMerkleSnapshotArgs {
 
         write_gateway_merkle_snapshot(&summary, &self.json_out, self.norito_out.as_deref())?;
 
-        drop(resolve);
         context.println(format!(
             "denylist Merkle root: {} (leaves={})",
             summary.root_hex, summary.leaf_count
@@ -7652,8 +7765,6 @@ impl Run for GatewayMerkleProofArgs {
             entry: entry.clone(),
             proof: proof_nodes,
         };
-        drop(resolve);
-
         if let Some(parent) = self.json_out.parent() {
             fs::create_dir_all(parent).wrap_err_with(|| {
                 format!(
@@ -8824,7 +8935,6 @@ impl Run for GatewayUpdateDenylistArgs {
             })?;
         }
 
-        drop(resolve);
         context.println(format_args!(
             "updated denylist wrote {} entries (added {added}, replaced {replaced}, removed {removed}) to {}",
             updated.len(),
@@ -9907,7 +10017,6 @@ impl Run for GatewayEvidenceArgs {
                 self.output_path.display()
             )
         })?;
-        drop(resolve);
         context.println(format_args!(
             "wrote denylist evidence for {} entries to {} (digest {})",
             report.source.entry_count,
@@ -12494,8 +12603,7 @@ mod tests {
     }
 
     fn read_state(path: &Path) -> IncentivesState {
-        let bytes = fs::read(path).expect("read incentives state");
-        norito::json::from_slice(&bytes).expect("decode incentives state")
+        load_incentives_state(path).expect("decode incentives state")
     }
 
     #[test]
