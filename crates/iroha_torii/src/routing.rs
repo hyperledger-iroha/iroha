@@ -28507,11 +28507,12 @@ pub async fn handle_v1_accounts_onboard(
     let dataspace = DataSpaceId::GLOBAL;
     let should_publish_manifest = {
         let view = app.state.view();
-        view.world()
-            .space_directory_manifests()
+        let bound = view
+            .world()
+            .uaid_dataspaces()
             .get(&uaid)
-            .and_then(|set| set.get(&dataspace))
-            .is_none()
+            .is_some_and(|bindings| bindings.is_bound_to(dataspace, &account_id));
+        !bound
     };
 
     let mut metadata = Metadata::default();

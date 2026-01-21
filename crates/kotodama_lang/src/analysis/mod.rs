@@ -1,7 +1,7 @@
 //! Analysis helpers for Kotodama contracts.
 //!
 //! This module exposes higher-level analysis passes that extend the basic
-//! syntactic linting performed by `kotodama::lint`. Static checks operate on
+//! syntactic linting performed by `crate::lint`. Static checks operate on
 //! the parsed AST and typed program, whereas bytecode checks inspect compiled
 //! `.to` artifacts. Fuzz harnesses execute simplified interpreters or VM runs
 //! to exercise contracts and surface potential runtime failures.

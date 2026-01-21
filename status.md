@@ -2,8 +2,44 @@
 
 Last update: 2026-01-21
 
-- Torii onboarding now publishes a default Space Directory manifest for the global dataspace when missing, binding UAIDs immediately; added onboarding integration coverage and updated UAID docs/OpenAPI descriptions.
-- Tests: not run (onboarding binding change + docs/OpenAPI updates).
+- NPoS localnet: added pacemaker backpressure telemetry split by reason (queue saturation, active pending, RBC backlog, relay backpressure, consensus queue backpressure) plus pacemaker eval/propose timing histograms; docs updated.
+- Localnet tuning: tightened NPoS timeouts (propose 300ms, prevote 400ms, precommit 500ms, commit 650ms, DA 600ms, agg 100ms), set DA timeout multipliers to 1/1, and tuned commit inflight timeout to 4–10s (6x multiplier).
+- Localnet: `scripts/deploy_localnet.sh --consensus-mode npos --peers 4 --out-dir /tmp/iroha-localnet-npos-1hz` failed to bind loopback (`Operation not permitted`), so the 1 Hz / 100-block soak did not run; logs in `/tmp/iroha-localnet-npos-1hz/peer0.log`.
+- Tests: `cargo test -p iroha_core pacemaker_backpressure -- --nocapture` failed during compilation (missing `sorafs_repair_escalation` in `crates/iroha_core/src/kiso.rs` initializer).
+- Triggers: `submit_instruction_and_wait` now uses `submit_blocking` with the network sync timeout to avoid racing trigger registration/execution.
+- Tests: `IROHA_TEST_NETWORK_PARALLELISM=1 CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target cargo test -p integration_tests --test mod call_execute_trigger -- --nocapture` (ok).
+- Tests: `IROHA_TEST_NETWORK_PARALLELISM=1 CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target cargo test -p integration_tests --test mod -- --nocapture --test-threads=1` (timed out after 2h; last observed running `triggers::time_trigger::time_trigger_scenarios`).
+- Pointer-ABI: `current_policy` is now publicly accessible for VM-side enforcement, with guard install/restore unit tests.
+- Torii SoraFS API: map retention metadata validation failures to 400 responses; added unit test coverage.
+- SoraFS storage: explicitly type chunk refcount map during index rebuild to avoid saturating-add inference errors.
+- Governance defaults: include `sorafs_repair_escalation` in core default builders + Torii test config defaults.
+- Tests: `API_ADDRESS=0.0.0.0:1 PUBLIC_KEY=not-a-key IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target cargo test -p integration_tests --test mod extra_functional::connected_peers::register_new_peer -- --nocapture` (ok).
+- Tests: `API_ADDRESS=0.0.0.0:1 PUBLIC_KEY=not-a-key IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target cargo test -p integration_tests --test mod triggers::by_call_trigger::call_execute_trigger_with_args -- --nocapture` (ok).
+- Tests: `API_ADDRESS=0.0.0.0:1 PUBLIC_KEY=not-a-key IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target cargo test -p integration_tests --test mod -- --nocapture` (timed out after 1h; long-running by-call trigger and Sumeragi DA tests observed, no explicit failures before timeout).
+- Tests: `API_ADDRESS=0.0.0.0:1 PUBLIC_KEY=not-a-key IROHA_TEST_NETWORK_PARALLELISM=2 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target cargo test -p integration_tests --test mod -- --nocapture --test-threads=2` (timed out after 1h; last observed running `sumeragi_rbc_recovers_after_restart_with_roster_change`).
+- SoraFS repair governance now tracks approval/rejection votes, finalizes decisions deterministically at the dispute deadline, and records appeals; slash proposals (including CLI repair escalate) accept optional approval summaries while enforcing penalty caps; governance state persists in repair snapshots and docs now include the policy/lifecycle (portal mirror included).
+- Tests: not run (SoraFS repair governance updates).
+- SoraFS reconciliation: periodic reconciliation snapshots now hash repair tickets, retention index entries, and GC counters/refcounts; reports are published to the governance DAG, telemetry exposes run/divergence counts, and observability docs include the new metrics.
+- Tests: not run (SoraFS reconciliation updates).
+- SoraFS reconciliation: added a multi-peer integration test that compares per-peer reconciliation reports to detect divergence (`integration_tests/tests/sorafs_reconciliation.rs`).
+- Tests: not run (SoraFS reconciliation integration test).
+- SoraFS repair governance policy now enforces approval quorum/minimum voters, dispute/appeal windows, tie-break rules, and penalty caps; added approval/policy Norito payloads, capped scheduler draft penalties, updated CLI slash proposals to require approval summaries, and refreshed repair plan + node client protocol docs (portal mirror included).
+- Tests: not run (repair escalation policy + docs updates only).
+- SoraFS retention precedence now resolves effective retention as the minimum of pin policy, deal end, and governance cap metadata, persists `RetentionSourceV1` + access counters in storage metadata/index, and GC capacity sweeps evict expired manifests by LRU; CLI GC output adds `retention_sources`, docs updated (ops playbook, node client protocol, architecture RFC + portal mirror).
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Tests: `cargo test --workspace` (failed: missing `crates/ivm_abi/src/syscalls_doc_gen.rs`).
+- Tests: `cargo test -p sorafs_manifest retention_precedence` (ok).
+- Tests: `cargo test -p sorafs_node retention_epoch_persists_in_metadata` (ok; warnings about unexpected `cfg` values from Norito derives and an unused assignment in `crates/sorafs_node/src/repair.rs`).
+- Tests: `cargo test -p sorafs_node last_access_persists_after_reads` (ok; same warnings).
+- Tests: `cargo test -p sorafs_node node_handle_gc_capacity_prefers_least_recently_used_expired` (ok; same warnings).
+- Kotodama: extracted the compiler + front-end into `crates/kotodama_lang`, moved shared ABI definitions into `crates/ivm_abi` with `ivm` re-export stubs, and relocated runtime helpers to `crates/ivm/src/kotodama_std.rs`.
+- Kotodama bytecode analysis now performs static decoding only; runtime fuzz reports a disabled-runtime finding in the standalone compiler crate (no IVM dependency).
+- Docs/tests: updated Kotodama sample paths + documentation references to `crates/kotodama_lang/src/samples`.
+- Tests: not run (Kotodama/ABI refactor only).
+- Observability: added repair SLA/backlog/lease-expiry and retention-blocked eviction alerts + promtool fixtures, extended the SoraFS capacity dashboard with repair panels, and updated ops/observability docs (portal mirrors included).
+- Tests: not run (alert rule fixtures + dashboard/doc updates only).
+- Torii onboarding now publishes a default Space Directory manifest when the UAID is not bound to the global dataspace, ensuring UAID bindings for Sora global onboarding; updated onboarding integration coverage and OpenAPI descriptions.
+- Tests: `cargo test -p iroha_torii accounts_onboard_publishes_global_manifest_and_binding -- --nocapture` (ok; warnings about unexpected `cfg` values from Norito derive macros).
 - Sumeragi commit pipeline now runs finalize/precommit work every tick/event and throttles only QC rebuilds; tests updated (not run).
 - SoraFS repair backlog stats: fixed `compute_backlog_stats` type inference by annotating `oldest_queued_at`, added `compute_backlog_stats_tracks_oldest_queued` unit test.
 - Localnet readiness: `scripts/deploy_localnet.sh` now waits for `/v1/sumeragi/status` to report a non-empty `mode_tag` to avoid early-mode confusion.
@@ -42,7 +78,7 @@ Last update: 2026-01-21
 - Sumeragi quorum timeout now uses pending-block progress age (touched by RBC chunk/READY/DELIVER + votes) so healthy consensus activity does not trigger view changes; pending blocks track progress timestamps and tests/docs updated.
 - Tests: `cargo test -p iroha_core pending_block_progress_age_resets_on_touch -- --nocapture` (ok).
 - Tests: `cargo test -p iroha_core touch_pending_progress_updates_pending_age -- --nocapture` (ok).
-- Localnet: re-run NPoS 1 Hz / 100-block stall check with status polling after the progress-age change (pending).
+- Localnet: re-run NPoS 1 Hz / 100-block stall check with status polling after the progress-age change failed in the sandbox (loopback bind `Operation not permitted`); rerun needed outside the sandbox.
 - SoraFS repair API: added Torii contract tests for worker endpoints (report/claim/heartbeat/complete/fail) and status snapshots.
 - SoraFS CLI: added help smoke coverage for `iroha sorafs repair` and `iroha sorafs gc`.
 - SoraFS incentives state: embed domain hints so IH58 account IDs roundtrip, and install a domain-selector resolver while parsing JSON snapshots and CLI tests.

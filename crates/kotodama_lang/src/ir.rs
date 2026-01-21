@@ -3334,13 +3334,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         let idx = if let Ok(i) = field.parse::<usize>() {
                             Some(i)
                         } else {
-                            match crate::kotodama::semantic::resolve_struct_type(&object.ty) {
-                                crate::kotodama::semantic::Type::Struct { fields, .. } => {
+                            match crate::semantic::resolve_struct_type(&object.ty) {
+                                crate::semantic::Type::Struct { fields, .. } => {
                                     fields.iter().position(|(fname, _)| fname == field)
                                 }
-                                crate::kotodama::semantic::Type::Tuple(_) => {
-                                    field.parse::<usize>().ok()
-                                }
+                                crate::semantic::Type::Tuple(_) => field.parse::<usize>().ok(),
                                 _ => None,
                             }
                         }?;
@@ -3389,8 +3387,8 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 return out;
             }
             // Named struct fields: map to tuple index using type info.
-            if let crate::kotodama::semantic::Type::Struct { fields, .. } =
-                crate::kotodama::semantic::resolve_struct_type(&object.ty)
+            if let crate::semantic::Type::Struct { fields, .. } =
+                crate::semantic::resolve_struct_type(&object.ty)
                 && let Some((idx, _)) = fields
                     .iter()
                     .enumerate()
@@ -3724,7 +3722,7 @@ fn decode_value_from_norito(ctx: &mut LowerCtx, blob: Temp, codec: &ValueCodec) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kotodama::{parser::parse, semantic::analyze};
+    use crate::{parser::parse, semantic::analyze};
 
     #[test]
     fn lower_simple_function() {

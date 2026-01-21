@@ -10,6 +10,7 @@ mod governance;
 pub mod metering;
 pub mod por;
 pub mod potr;
+mod reconciliation;
 pub mod repair;
 pub mod scheduler;
 pub mod store;
@@ -120,6 +121,12 @@ pub struct GcSweepReport {
     /// Number of errors encountered during the sweep.
     pub errors: u32,
 }
+
+#[derive(Debug, Clone, Copy)]
+enum GcEvictionPolicy {
+    RetentionEpoch,
+    LruExpired,
+}
 use std::{
     collections::HashMap,
     io::Read,
@@ -140,7 +147,10 @@ use iroha_data_model::{
         deal::{ClientId, DealId, DealProposal, DealRecord, DealUsageReport},
     },
 };
-use iroha_telemetry::metrics::{global_or_default, global_sorafs_gc_otel, global_sorafs_node_otel};
+use iroha_telemetry::metrics::{
+    global_or_default, global_sorafs_gc_otel, global_sorafs_node_otel,
+    global_sorafs_reconciliation_otel,
+};
 use norito::codec::Encode;
 pub use repair::{
     RepairManager, RepairSchedulerError, RepairTaskFilters, RepairTaskSnapshot,
@@ -148,7 +158,8 @@ pub use repair::{
 };
 use sorafs_car::{CarBuildPlan, PorProof};
 use sorafs_manifest::{
-    ManifestV1,
+    ManifestV1, ReconciliationValidationError, SORAFS_RECONCILIATION_REPORT_VERSION_V1,
+    SorafsReconciliationReportV1,
     capacity::{CapacityTelemetryV1, ReplicationOrderV1},
     deal::DealSettlementV1,
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
@@ -215,6 +226,43 @@ fn repair_task_terminal(task: &RepairTaskRecordV1) -> bool {
     )
 }
 
+fn reconciliation_divergence_count(storage: &StorageBackend, manifests: &[StoredManifest]) -> u32 {
+    let mut divergence_count = 0_u32;
+    let manifest_count = storage.manifest_count();
+    let index_count = storage.index_manifest_count();
+    if manifest_count != index_count {
+        divergence_count = divergence_count.saturating_add(1);
+        iroha_logger::warn!(
+            manifest_count,
+            index_count,
+            "reconciliation mismatch: manifest count diverges from index"
+        );
+    }
+
+    for manifest in manifests {
+        if let Some(source) = manifest.retention_source() {
+            if source.effective_epoch() != manifest.retention_epoch() {
+                divergence_count = divergence_count.saturating_add(1);
+                iroha_logger::warn!(
+                    manifest_id = %manifest.manifest_id(),
+                    retention_epoch = manifest.retention_epoch(),
+                    source_epoch = source.effective_epoch(),
+                    "reconciliation mismatch: retention epoch differs from source"
+                );
+            }
+        } else if manifest.retention_epoch() != 0 {
+            divergence_count = divergence_count.saturating_add(1);
+            iroha_logger::warn!(
+                manifest_id = %manifest.manifest_id(),
+                retention_epoch = manifest.retention_epoch(),
+                "reconciliation mismatch: missing retention source for retained manifest"
+            );
+        }
+    }
+
+    divergence_count
+}
+
 /// Interface for emitting settlement artefacts to the governance DAG.
 pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
     /// Persist the supplied settlement NORITO payload to the governance pipeline.
@@ -240,6 +288,12 @@ pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
     fn publish_gc_audit_event(
         &self,
         event: &sorafs_manifest::repair::GcAuditEventV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError>;
+    /// Persist a reconciliation report to the governance pipeline.
+    fn publish_reconciliation_report(
+        &self,
+        report: &SorafsReconciliationReportV1,
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError>;
 }
@@ -304,6 +358,23 @@ pub enum NodeStorageError {
     Storage(#[from] StorageError),
 }
 
+/// Errors raised while computing reconciliation summaries.
+#[derive(Debug, Error)]
+pub enum ReconciliationError {
+    /// Timestamp must be non-zero.
+    #[error("reconciliation timestamp must be non-zero")]
+    InvalidTimestamp,
+    /// Storage backend is required for reconciliation.
+    #[error("SoraFS storage backend is disabled")]
+    StorageDisabled,
+    /// Failed to encode reconciliation snapshot data.
+    #[error(transparent)]
+    Norito(#[from] norito::Error),
+    /// Reconciliation report failed validation.
+    #[error(transparent)]
+    Validation(#[from] ReconciliationValidationError),
+}
+
 impl NodeHandle {
     /// Construct a new handle for the embedded storage worker.
     #[must_use]
@@ -339,7 +410,10 @@ impl NodeHandle {
         let deal_engine = DealEngine::new();
         let governance_dir = config.governance_dir().cloned();
 
-        let repair = RepairManager::new_with_config(repair_config.clone());
+        let repair = RepairManager::new_with_config_and_policy(
+            repair_config.clone(),
+            *repair_config.escalation_policy(),
+        );
         let node = Self {
             config,
             repair_config,
@@ -546,6 +620,25 @@ impl NodeHandle {
             iroha_logger::error!(
                 %err,
                 "failed to publish GC audit event to governance DAG"
+            );
+        }
+    }
+
+    fn publish_reconciliation_report(&self, report: &SorafsReconciliationReportV1) {
+        let Some(publisher) = self.governance_publisher() else {
+            return;
+        };
+        let encoded = match norito::to_bytes(report) {
+            Ok(encoded) => encoded,
+            Err(err) => {
+                iroha_logger::error!(%err, "failed to encode reconciliation report");
+                return;
+            }
+        };
+        if let Err(err) = publisher.publish_reconciliation_report(report, &encoded) {
+            iroha_logger::error!(
+                %err,
+                "failed to publish reconciliation report to governance DAG"
             );
         }
     }
@@ -947,9 +1040,20 @@ impl NodeHandle {
 
     /// Run a GC sweep against expired manifests.
     pub fn run_gc_once(&self, now_unix: u64) -> GcSweepReport {
+        self.run_gc_with_policy(now_unix, GcEvictionPolicy::RetentionEpoch)
+    }
+
+    /// Run a GC sweep using LRU ordering for capacity pressure.
+    pub fn run_gc_for_capacity(&self, now_unix: u64, _required_bytes: u64) -> GcSweepReport {
+        self.run_gc_with_policy(now_unix, GcEvictionPolicy::LruExpired)
+    }
+
+    fn run_gc_with_policy(&self, now_unix: u64, policy: GcEvictionPolicy) -> GcSweepReport {
         const REASON_RETENTION_EXPIRED: &str = "retention_expired";
         const REASON_RETENTION_EXPIRED_NO_PROVIDER: &str = "retention_expired_provider_missing";
         const REASON_REPAIR_ACTIVE: &str = "repair_active";
+        const REASON_DEAL_ACTIVE: &str = "deal_active";
+        const REASON_SHARED_CHUNKS: &str = "shared_chunks";
         const REASON_LIMIT_REACHED: &str = "limit_reached";
         const RESULT_SUCCESS: &str = "success";
         const RESULT_ERROR: &str = "error";
@@ -998,11 +1102,22 @@ impl NodeHandle {
             expired.push(manifest);
         }
 
-        expired.sort_by(|left, right| {
-            left.retention_epoch()
-                .cmp(&right.retention_epoch())
-                .then(left.manifest_id().cmp(right.manifest_id()))
-        });
+        match policy {
+            GcEvictionPolicy::RetentionEpoch => {
+                expired.sort_by(|left, right| {
+                    left.retention_epoch()
+                        .cmp(&right.retention_epoch())
+                        .then(left.manifest_id().cmp(right.manifest_id()))
+                });
+            }
+            GcEvictionPolicy::LruExpired => {
+                expired.sort_by(|left, right| {
+                    left.last_access()
+                        .cmp(&right.last_access())
+                        .then(left.manifest_id().cmp(right.manifest_id()))
+                });
+            }
+        }
 
         let mut evicted_count = 0usize;
 
@@ -1022,9 +1137,99 @@ impl NodeHandle {
                     manifest_id: manifest.manifest_id().to_owned(),
                     reason: REASON_REPAIR_ACTIVE.to_string(),
                 });
+                iroha_logger::warn!(
+                    manifest_id = %manifest.manifest_id(),
+                    "GC retention blocked by active repair tasks"
+                );
                 global_or_default().inc_sorafs_gc_blocked(REASON_REPAIR_ACTIVE);
                 global_sorafs_gc_otel().record_blocked(REASON_REPAIR_ACTIVE);
+                let payload = GcAuditPayloadV1 {
+                    version: GC_AUDIT_PAYLOAD_VERSION_V1,
+                    manifest_digest: digest,
+                    provider_id,
+                    evicted_at_unix: now_unix,
+                    freed_bytes: 0,
+                    reason: if provider_known {
+                        REASON_RETENTION_EXPIRED.to_string()
+                    } else {
+                        REASON_RETENTION_EXPIRED_NO_PROVIDER.to_string()
+                    },
+                    blocked_reason: Some(REASON_REPAIR_ACTIVE.to_string()),
+                };
+                self.publish_gc_audit_event(payload);
                 continue;
+            }
+
+            if manifest
+                .retention_source()
+                .and_then(|source| source.deal_end_epoch)
+                .is_some_and(|deal_end| deal_end > now_unix)
+            {
+                report.skipped.push(GcSkip {
+                    manifest_id: manifest.manifest_id().to_owned(),
+                    reason: REASON_DEAL_ACTIVE.to_string(),
+                });
+                iroha_logger::warn!(
+                    manifest_id = %manifest.manifest_id(),
+                    "GC retention blocked by active deal window"
+                );
+                global_or_default().inc_sorafs_gc_blocked(REASON_DEAL_ACTIVE);
+                global_sorafs_gc_otel().record_blocked(REASON_DEAL_ACTIVE);
+                let payload = GcAuditPayloadV1 {
+                    version: GC_AUDIT_PAYLOAD_VERSION_V1,
+                    manifest_digest: digest,
+                    provider_id,
+                    evicted_at_unix: now_unix,
+                    freed_bytes: 0,
+                    reason: if provider_known {
+                        REASON_RETENTION_EXPIRED.to_string()
+                    } else {
+                        REASON_RETENTION_EXPIRED_NO_PROVIDER.to_string()
+                    },
+                    blocked_reason: Some(REASON_DEAL_ACTIVE.to_string()),
+                };
+                self.publish_gc_audit_event(payload);
+                continue;
+            }
+
+            match storage.manifest_has_shared_chunks(manifest.manifest_id()) {
+                Ok(true) => {
+                    report.skipped.push(GcSkip {
+                        manifest_id: manifest.manifest_id().to_owned(),
+                        reason: REASON_SHARED_CHUNKS.to_string(),
+                    });
+                    iroha_logger::warn!(
+                        manifest_id = %manifest.manifest_id(),
+                        "GC retention blocked by shared chunks"
+                    );
+                    global_or_default().inc_sorafs_gc_blocked(REASON_SHARED_CHUNKS);
+                    global_sorafs_gc_otel().record_blocked(REASON_SHARED_CHUNKS);
+                    let payload = GcAuditPayloadV1 {
+                        version: GC_AUDIT_PAYLOAD_VERSION_V1,
+                        manifest_digest: digest,
+                        provider_id,
+                        evicted_at_unix: now_unix,
+                        freed_bytes: 0,
+                        reason: if provider_known {
+                            REASON_RETENTION_EXPIRED.to_string()
+                        } else {
+                            REASON_RETENTION_EXPIRED_NO_PROVIDER.to_string()
+                        },
+                        blocked_reason: Some(REASON_SHARED_CHUNKS.to_string()),
+                    };
+                    self.publish_gc_audit_event(payload);
+                    continue;
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    report.errors = report.errors.saturating_add(1);
+                    iroha_logger::warn!(
+                        %err,
+                        manifest_id = %manifest.manifest_id(),
+                        "GC eviction skipped: failed to inspect shared chunks"
+                    );
+                    continue;
+                }
             }
 
             let freed_bytes = match storage.evict_manifest(manifest.manifest_id()) {
@@ -1062,6 +1267,7 @@ impl NodeHandle {
                 evicted_at_unix: now_unix,
                 freed_bytes,
                 reason: reason.to_string(),
+                blocked_reason: None,
             };
             self.publish_gc_audit_event(payload);
             global_or_default().inc_sorafs_gc_evictions(reason);
@@ -1083,6 +1289,116 @@ impl NodeHandle {
             .update_storage_bytes(storage.total_bytes(), self.config.max_capacity_bytes().0);
 
         report
+    }
+
+    /// Run a reconciliation snapshot across repair and GC state.
+    pub fn run_reconciliation_once(
+        &self,
+        now_unix: u64,
+    ) -> Result<SorafsReconciliationReportV1, ReconciliationError> {
+        let result = self.compute_reconciliation_report(now_unix);
+        match &result {
+            Ok(report) => {
+                self.publish_reconciliation_report(report);
+                global_or_default().inc_sorafs_reconciliation_runs("success");
+                global_or_default()
+                    .set_sorafs_reconciliation_divergence_count(u64::from(report.divergence_count));
+                global_sorafs_reconciliation_otel().record_run("success");
+                global_sorafs_reconciliation_otel()
+                    .record_divergence(u64::from(report.divergence_count));
+            }
+            Err(_) => {
+                global_or_default().inc_sorafs_reconciliation_runs("error");
+                global_sorafs_reconciliation_otel().record_run("error");
+            }
+        }
+        result
+    }
+
+    fn compute_reconciliation_report(
+        &self,
+        now_unix: u64,
+    ) -> Result<SorafsReconciliationReportV1, ReconciliationError> {
+        if now_unix == 0 {
+            return Err(ReconciliationError::InvalidTimestamp);
+        }
+        let Some(storage) = self.storage.as_ref() else {
+            return Err(ReconciliationError::StorageDisabled);
+        };
+
+        let provider_id = match self.capacity_usage().provider_id {
+            Some(provider_id) => provider_id,
+            None => {
+                iroha_logger::warn!("reconciliation report provider_id missing; using zeros");
+                [0_u8; 32]
+            }
+        };
+
+        let repair_records = self.repair.list_tasks(RepairTaskFilters::default());
+        let repair_entries = repair_records
+            .iter()
+            .map(|record| reconciliation::RepairReconciliationEntry {
+                ticket_id: record.ticket_id.0.clone(),
+                manifest_digest: record.manifest_digest,
+                provider_id: record.provider_id,
+                state: record.state.clone(),
+            })
+            .collect::<Vec<_>>();
+        let repair_snapshot = reconciliation::RepairReconciliationSnapshot {
+            version: reconciliation::RECONCILIATION_SNAPSHOT_VERSION_V1,
+            tasks: repair_entries,
+        };
+        let repair_snapshot_hash = reconciliation::hash_snapshot(&repair_snapshot)?;
+
+        let manifests = storage.manifests();
+        let mut retention_entries = manifests
+            .iter()
+            .map(|manifest| reconciliation::RetentionReconciliationEntry {
+                manifest_id: manifest.manifest_id().to_string(),
+                manifest_digest: *manifest.manifest_digest(),
+                retention_epoch: manifest.retention_epoch(),
+                retention_source: manifest.retention_source().cloned(),
+            })
+            .collect::<Vec<_>>();
+        retention_entries.sort_by(|left, right| {
+            left.manifest_id
+                .cmp(&right.manifest_id)
+                .then(left.manifest_digest.cmp(&right.manifest_digest))
+        });
+        let retention_snapshot = reconciliation::RetentionReconciliationSnapshot {
+            version: reconciliation::RECONCILIATION_SNAPSHOT_VERSION_V1,
+            manifests: retention_entries,
+        };
+        let retention_snapshot_hash = reconciliation::hash_snapshot(&retention_snapshot)?;
+
+        let (gc_freed_bytes_total, gc_evictions_total) = storage.gc_counters();
+        let mut chunk_refcounts = storage.chunk_refcount_snapshot();
+        chunk_refcounts.sort_by(|left, right| left.digest.cmp(&right.digest));
+        let gc_snapshot = reconciliation::GcReconciliationSnapshot {
+            version: reconciliation::RECONCILIATION_SNAPSHOT_VERSION_V1,
+            gc_freed_bytes_total,
+            gc_evictions_total,
+            chunk_refcounts,
+        };
+        let gc_snapshot_hash = reconciliation::hash_snapshot(&gc_snapshot)?;
+
+        let divergence_count = reconciliation_divergence_count(storage, &manifests);
+
+        let report = SorafsReconciliationReportV1 {
+            version: SORAFS_RECONCILIATION_REPORT_VERSION_V1,
+            provider_id,
+            generated_at_unix: now_unix,
+            repair_snapshot_hash,
+            retention_snapshot_hash,
+            gc_snapshot_hash,
+            repair_task_count: u32::try_from(repair_records.len()).unwrap_or(u32::MAX),
+            retention_manifest_count: u32::try_from(manifests.len()).unwrap_or(u32::MAX),
+            gc_evictions_total,
+            gc_freed_bytes_total,
+            divergence_count,
+        };
+        report.validate()?;
+        Ok(report)
     }
 
     /// Whether the storage worker is currently enabled.
@@ -1321,7 +1637,7 @@ impl NodeHandle {
             Err(StorageError::CapacityExceeded { .. })
                 if self.gc_config.enabled() && self.gc_config.pre_admission_sweep() =>
             {
-                let gc_report = self.run_gc_once(unix_now_secs());
+                let gc_report = self.run_gc_for_capacity(unix_now_secs(), plan.content_length);
                 if gc_report.errors > 0 {
                     iroha_logger::warn!(
                         errors = gc_report.errors,
@@ -1750,10 +2066,12 @@ mod tests {
             pin_registry::StorageClass,
         },
     };
+    use iroha_telemetry::metrics::global_or_default;
     use norito::{codec::Decode, to_bytes};
     use sorafs_car::CarBuildPlan;
     use sorafs_manifest::{
-        DagCodecId, ManifestBuilder, PinPolicy,
+        DagCodecId, ManifestBuilder, PinPolicy, SORAFS_RECONCILIATION_REPORT_VERSION_V1,
+        SorafsReconciliationReportV1,
         capacity::{
             CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, CapacityMetadataEntry,
             ChunkerCommitmentV1, LaneCommitmentV1, REPLICATION_ORDER_VERSION_V1,
@@ -1763,10 +2081,11 @@ mod tests {
         repair::{
             CompletedRepairStateV1, EscalatedRepairStateV1, FailedRepairStateV1,
             GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GcAuditEventV1,
-            InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_EVIDENCE_VERSION_V1,
-            REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairAuditEventV1,
-            RepairCauseV1, RepairEvidenceV1, RepairReportV1, RepairSlashProposalV1,
-            RepairTaskStateV1, RepairTaskStatusV1, RepairTicketId,
+            InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_ESCALATION_APPROVAL_VERSION_V1,
+            REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            RepairAuditEventV1, RepairCauseV1, RepairEscalationApprovalV1, RepairEvidenceV1,
+            RepairReportV1, RepairSlashProposalV1, RepairTaskStateV1, RepairTaskStatusV1,
+            RepairTicketId,
         },
     };
     use tempfile::TempDir;
@@ -1784,6 +2103,24 @@ mod tests {
             .data_dir(temp_dir.path().join("storage"))
             .build();
         (cfg, temp_dir)
+    }
+
+    fn approval_for_default_policy(escalated_at_unix: u64) -> RepairEscalationApprovalV1 {
+        let policy = *crate::config::RepairConfig::default().escalation_policy();
+        let approved_at_unix = escalated_at_unix
+            .saturating_add(policy.dispute_window_secs())
+            .saturating_add(1);
+        let finalized_at_unix = approved_at_unix
+            .saturating_add(policy.appeal_window_secs())
+            .saturating_add(1);
+        RepairEscalationApprovalV1 {
+            version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
+            approve_votes: 2,
+            reject_votes: 1,
+            abstain_votes: 0,
+            approved_at_unix,
+            finalized_at_unix,
+        }
     }
 
     #[test]
@@ -2438,9 +2775,12 @@ mod tests {
             provider_id: escalated_report.evidence.provider_id,
             manifest_digest: escalated_report.evidence.manifest_digest,
             auditor_account: "auditor#sora".into(),
-            proposed_penalty_nano: 5_000_000_000,
+            proposed_penalty_nano: 500_000_000,
             submitted_at_unix: escalated_report.submitted_at_unix + 1_200,
             rationale: "Repeated PoR failures without acknowledgement".into(),
+            approval: Some(approval_for_default_policy(
+                escalated_report.submitted_at_unix + 1_200,
+            )),
         };
 
         let escalated = handle
@@ -2866,6 +3206,141 @@ mod tests {
         assert_eq!(event.payload.manifest_digest, manifest_digest);
         assert_eq!(event.payload.provider_id, declaration.provider_id);
         assert_eq!(event.payload.freed_bytes, plan.content_length);
+        assert!(event.payload.blocked_reason.is_none());
+    }
+
+    #[test]
+    fn node_handle_reconciliation_emits_report() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new(cfg);
+
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+
+        let declaration = CapacityDeclarationV1 {
+            version: CAPACITY_DECLARATION_VERSION_V1,
+            provider_id: [0x11; 32],
+            stake: sorafs_manifest::provider_advert::StakePointer {
+                pool_id: [0x22; 32],
+                stake_amount: 1,
+            },
+            committed_capacity_gib: 100,
+            chunker_commitments: vec![ChunkerCommitmentV1 {
+                profile_id: "sorafs.sf1@1.0.0".into(),
+                profile_aliases: None,
+                committed_gib: 100,
+                capability_refs: Vec::new(),
+            }],
+            lane_commitments: vec![LaneCommitmentV1 {
+                lane_id: "default".into(),
+                max_gib: 100,
+            }],
+            pricing: None,
+            valid_from: 1,
+            valid_until: 2,
+            metadata: vec![],
+        };
+        let payload = to_bytes(&declaration).expect("encode declaration");
+        let record = CapacityDeclarationRecord::new(
+            ProviderId::new(declaration.provider_id),
+            payload,
+            declaration.committed_capacity_gib,
+            1,
+            1,
+            2,
+            Metadata::default(),
+        );
+        handle
+            .record_capacity_declaration(&record)
+            .expect("record declaration");
+
+        let payload = b"reconciliation-payload";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let mut policy = PinPolicy::default();
+        policy.retention_epoch = 1_700_000_000;
+        let manifest = ManifestBuilder::new()
+            .root_cid(vec![0x33; 8])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(plan.content_length)
+            .pin_policy(policy)
+            .build()
+            .expect("manifest");
+        let manifest_digest: [u8; 32] = manifest.digest().expect("digest").into();
+        let mut reader = payload.as_slice();
+        handle
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest manifest");
+
+        let report = RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: RepairTicketId("REP-601".into()),
+            auditor_account: "auditor#sora".into(),
+            submitted_at_unix: 1_700_000_100,
+            evidence: RepairEvidenceV1 {
+                version: REPAIR_EVIDENCE_VERSION_V1,
+                manifest_digest,
+                provider_id: declaration.provider_id,
+                por_history_id: None,
+                cause: RepairCauseV1::Manual {
+                    reason: "reconciliation".into(),
+                },
+                evidence_json: None,
+                notes: None,
+            },
+            notes: None,
+        };
+        handle
+            .enqueue_repair_report(&report)
+            .expect("queue repair report");
+        publisher.take();
+
+        let now_unix = 1_700_000_200;
+        let reconciliation = handle
+            .run_reconciliation_once(now_unix)
+            .expect("reconciliation report");
+        assert_eq!(
+            reconciliation.version,
+            SORAFS_RECONCILIATION_REPORT_VERSION_V1
+        );
+        assert_eq!(reconciliation.provider_id, declaration.provider_id);
+        assert_eq!(reconciliation.generated_at_unix, now_unix);
+        assert_eq!(reconciliation.repair_task_count, 1);
+        assert_eq!(reconciliation.retention_manifest_count, 1);
+        assert_eq!(reconciliation.gc_evictions_total, 0);
+        assert_eq!(reconciliation.gc_freed_bytes_total, 0);
+        assert_eq!(reconciliation.divergence_count, 0);
+
+        let payloads = publisher.take();
+        let decoded = payloads
+            .iter()
+            .find_map(|payload| {
+                norito::decode_from_bytes::<SorafsReconciliationReportV1>(payload).ok()
+            })
+            .expect("reconciliation payload");
+        assert_eq!(decoded, reconciliation);
+
+        let reconciliation_again = handle
+            .run_reconciliation_once(now_unix)
+            .expect("reconciliation report");
+        assert_eq!(
+            reconciliation_again.repair_snapshot_hash,
+            reconciliation.repair_snapshot_hash
+        );
+        assert_eq!(
+            reconciliation_again.retention_snapshot_hash,
+            reconciliation.retention_snapshot_hash
+        );
+        assert_eq!(
+            reconciliation_again.gc_snapshot_hash,
+            reconciliation.gc_snapshot_hash
+        );
     }
 
     #[test]
@@ -2944,6 +3419,155 @@ mod tests {
                 .any(|skip| skip.reason == "repair_active")
         );
         assert!(handle.manifest_metadata(&manifest_id).is_ok());
+    }
+
+    #[test]
+    fn node_handle_gc_blocks_shared_chunks_and_records_metrics() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let gc_actual = iroha_config::parameters::actual::SorafsGc {
+            enabled: true,
+            retention_grace_secs: 0,
+            max_deletions_per_run: 10,
+            ..Default::default()
+        };
+        let handle =
+            NodeHandle::new_with_policies(cfg, RepairConfig::default(), GcConfig::from(&gc_actual));
+
+        let payload = b"shared-chunk-payload";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let retention_epoch = 1_700_000_000;
+        let now_unix = retention_epoch + 10;
+        let mut policy = PinPolicy::default();
+        policy.retention_epoch = retention_epoch;
+
+        let manifest_a = ManifestBuilder::new()
+            .root_cid(vec![0x33; 8])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(plan.content_length)
+            .pin_policy(policy.clone())
+            .build()
+            .expect("manifest a");
+        let manifest_b = ManifestBuilder::new()
+            .root_cid(vec![0x44; 8])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(plan.content_length)
+            .pin_policy(policy)
+            .build()
+            .expect("manifest b");
+
+        let mut reader = payload.as_slice();
+        handle
+            .ingest_manifest(&manifest_a, &plan, &mut reader)
+            .expect("ingest manifest a");
+        let mut reader = payload.as_slice();
+        handle
+            .ingest_manifest(&manifest_b, &plan, &mut reader)
+            .expect("ingest manifest b");
+
+        let metrics = global_or_default();
+        let before = metrics
+            .torii_sorafs_gc_blocked_total
+            .with_label_values(&["shared_chunks"])
+            .get();
+
+        let report = handle.run_gc_once(now_unix);
+        assert!(report.evictions.is_empty());
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|skip| skip.reason == "shared_chunks")
+        );
+
+        let after = metrics
+            .torii_sorafs_gc_blocked_total
+            .with_label_values(&["shared_chunks"])
+            .get();
+        assert!(after >= before.saturating_add(1));
+    }
+
+    #[test]
+    fn node_handle_gc_capacity_prefers_least_recently_used_expired() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let gc_actual = iroha_config::parameters::actual::SorafsGc {
+            enabled: true,
+            retention_grace_secs: 0,
+            max_deletions_per_run: 1,
+            ..Default::default()
+        };
+        let handle =
+            NodeHandle::new_with_policies(cfg, RepairConfig::default(), GcConfig::from(&gc_actual));
+
+        let retention_epoch = 1_700_000_000;
+        let now_unix = retention_epoch + 10;
+
+        let payload_a = b"lru-expired-a";
+        let plan_a = CarBuildPlan::single_file(payload_a).expect("plan");
+        let mut policy_a = PinPolicy::default();
+        policy_a.retention_epoch = retention_epoch;
+        let manifest_a = ManifestBuilder::new()
+            .root_cid(vec![0x01; 8])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan_a.content_length)
+            .car_digest(blake3::hash(payload_a).into())
+            .car_size(plan_a.content_length)
+            .pin_policy(policy_a)
+            .build()
+            .expect("manifest");
+
+        let mut reader_a = payload_a.as_slice();
+        let manifest_id_a = handle
+            .ingest_manifest(&manifest_a, &plan_a, &mut reader_a)
+            .expect("ingest a");
+
+        let payload_b = b"lru-expired-b";
+        let plan_b = CarBuildPlan::single_file(payload_b).expect("plan");
+        let mut policy_b = PinPolicy::default();
+        policy_b.retention_epoch = retention_epoch;
+        let manifest_b = ManifestBuilder::new()
+            .root_cid(vec![0x02; 8])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan_b.content_length)
+            .car_digest(blake3::hash(payload_b).into())
+            .car_size(plan_b.content_length)
+            .pin_policy(policy_b)
+            .build()
+            .expect("manifest");
+
+        let mut reader_b = payload_b.as_slice();
+        let manifest_id_b = handle
+            .ingest_manifest(&manifest_b, &plan_b, &mut reader_b)
+            .expect("ingest b");
+
+        let _ = handle
+            .read_payload_range(&manifest_id_a, 0, 4)
+            .expect("read a");
+
+        let report = handle.run_gc_for_capacity(now_unix, plan_a.content_length);
+        assert_eq!(report.evictions.len(), 1);
+        assert_eq!(report.evictions[0].manifest_id, manifest_id_b);
+        assert!(handle.manifest_metadata(&manifest_id_a).is_ok());
+        assert!(handle.manifest_metadata(&manifest_id_b).is_err());
     }
 
     #[test]
@@ -3698,6 +4322,16 @@ mod tests {
             guard.push(encoded.to_vec());
             Ok(())
         }
+
+        fn publish_reconciliation_report(
+            &self,
+            _report: &SorafsReconciliationReportV1,
+            encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
+            guard.push(encoded.to_vec());
+            Ok(())
+        }
     }
 
     #[derive(Debug, Default)]
@@ -3746,6 +4380,16 @@ mod tests {
         fn publish_gc_audit_event(
             &self,
             _event: &GcAuditEventV1,
+            _encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
+            *guard += 1;
+            Err(GovernancePublishError::other("simulated publish failure"))
+        }
+
+        fn publish_reconciliation_report(
+            &self,
+            _report: &SorafsReconciliationReportV1,
             _encoded: &[u8],
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.attempts.lock().expect("publisher lock poisoned");

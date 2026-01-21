@@ -1200,6 +1200,69 @@ impl SorafsGcOtel {
     }
 }
 
+/// OpenTelemetry instrumentation for reconciliation snapshots.
+#[cfg_attr(not(feature = "otel-exporter"), derive(Copy))]
+#[derive(Clone)]
+pub struct SorafsReconciliationOtel {
+    #[cfg(feature = "otel-exporter")]
+    runs_total: Counter<u64>,
+    #[cfg(feature = "otel-exporter")]
+    divergence_total: Counter<u64>,
+}
+
+impl Default for SorafsReconciliationOtel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[allow(clippy::unused_self, clippy::trivially_copy_pass_by_ref)]
+impl SorafsReconciliationOtel {
+    /// Create a new OTEL instrumentation bundle for reconciliation snapshots.
+    #[must_use]
+    pub fn new() -> Self {
+        #[cfg(feature = "otel-exporter")]
+        {
+            let meter = opentelemetry::global::meter("sorafs.reconciliation");
+            let runs_total = meter
+                .u64_counter("sorafs.reconciliation.runs_total")
+                .with_description("SoraFS reconciliation runs grouped by result.")
+                .init();
+            let divergence_total = meter
+                .u64_counter("sorafs.reconciliation.divergence_total")
+                .with_description("SoraFS reconciliation divergence count per run.")
+                .init();
+            Self {
+                runs_total,
+                divergence_total,
+            }
+        }
+        #[cfg(not(feature = "otel-exporter"))]
+        {
+            Self {}
+        }
+    }
+
+    /// Record a reconciliation run with the supplied result label.
+    pub fn record_run(&self, result: &'static str) {
+        #[cfg(feature = "otel-exporter")]
+        {
+            self.runs_total
+                .add(1, &[KeyValue::new("result", result.to_owned())]);
+        }
+        let _ = result;
+    }
+
+    /// Record the divergence count observed in a reconciliation run.
+    pub fn record_divergence(&self, count: u64) {
+        #[cfg(feature = "otel-exporter")]
+        {
+            self.divergence_total.add(count, &[]);
+        }
+        let _ = count;
+    }
+}
+
 /// OpenTelemetry instrumentation for Torii SoraFS gateway metrics.
 #[cfg_attr(not(feature = "otel-exporter"), derive(Copy))]
 #[derive(Clone)]
@@ -2364,6 +2427,7 @@ struct TaikaiAliasRotationSnapshotArgs<'a> {
 static GLOBAL_FASTPQ_OTEL: OnceLock<Arc<FastpqOtel>> = OnceLock::new();
 static GLOBAL_SORAFS_FETCH_OTEL: OnceLock<Arc<SorafsFetchOtel>> = OnceLock::new();
 static GLOBAL_SORAFS_REPAIR_OTEL: OnceLock<Arc<SorafsRepairOtel>> = OnceLock::new();
+static GLOBAL_SORAFS_RECONCILIATION_OTEL: OnceLock<Arc<SorafsReconciliationOtel>> = OnceLock::new();
 static GLOBAL_SORAFS_GC_OTEL: OnceLock<Arc<SorafsGcOtel>> = OnceLock::new();
 static GLOBAL_SORAFS_GATEWAY_OTEL: OnceLock<Arc<SorafsGatewayOtel>> = OnceLock::new();
 static GLOBAL_SORAFS_NODE_OTEL: OnceLock<Arc<SorafsNodeOtel>> = OnceLock::new();
@@ -2384,6 +2448,14 @@ pub fn global_sorafs_fetch_otel() -> Arc<SorafsFetchOtel> {
 #[must_use]
 pub fn global_sorafs_repair_otel() -> Arc<SorafsRepairOtel> {
     Arc::clone(GLOBAL_SORAFS_REPAIR_OTEL.get_or_init(|| Arc::new(SorafsRepairOtel::new())))
+}
+
+/// Retrieve the global OTEL metrics handle used by reconciliation snapshots.
+#[must_use]
+pub fn global_sorafs_reconciliation_otel() -> Arc<SorafsReconciliationOtel> {
+    Arc::clone(
+        GLOBAL_SORAFS_RECONCILIATION_OTEL.get_or_init(|| Arc::new(SorafsReconciliationOtel::new())),
+    )
 }
 
 /// Retrieve the global OTEL metrics handle used by GC automation.
@@ -2547,6 +2619,14 @@ mod tests {
                 duplicate: 0,
             },
         );
+    }
+
+    #[cfg(not(feature = "otel-exporter"))]
+    #[test]
+    fn sorafs_reconciliation_otel_new_and_record_do_not_panic_without_exporter() {
+        let otel = SorafsReconciliationOtel::new();
+        otel.record_run("success");
+        otel.record_divergence(2);
     }
 
     #[test]
@@ -6581,6 +6661,18 @@ pub struct Metrics {
     pub sumeragi_kura_store_last_retry_backoff_ms: GenericGauge<AtomicU64>,
     /// Sumeragi pacemaker: proposals deferred due to transaction-queue back-pressure (cumulative)
     pub sumeragi_pacemaker_backpressure_deferrals_total: IntCounter,
+    /// Sumeragi pacemaker: backpressure deferrals grouped by reason (cumulative)
+    pub sumeragi_pacemaker_backpressure_deferrals_by_reason_total: IntCounterVec,
+    /// Sumeragi pacemaker: backpressure deferral durations (ms) grouped by reason
+    pub sumeragi_pacemaker_backpressure_deferral_duration_ms: HistogramVec,
+    /// Sumeragi pacemaker: backpressure deferral active state (0/1) grouped by reason
+    pub sumeragi_pacemaker_backpressure_deferral_active: GenericGaugeVec<AtomicU64>,
+    /// Sumeragi pacemaker: backpressure deferral age (ms) grouped by reason
+    pub sumeragi_pacemaker_backpressure_deferral_age_ms: GenericGaugeVec<AtomicU64>,
+    /// Sumeragi pacemaker: evaluation duration in the tick loop (ms)
+    pub sumeragi_pacemaker_eval_ms: Histogram,
+    /// Sumeragi pacemaker: proposal attempt duration in the tick loop (ms)
+    pub sumeragi_pacemaker_propose_ms: Histogram,
     /// Sumeragi pacemaker: commit pipeline executions triggered by timer tick (cumulative, labeled by mode/outcome)
     pub sumeragi_commit_pipeline_tick_total: IntCounterVec,
     /// Sumeragi pacemaker: prevote-quorum timeouts (cumulative, labeled by mode)
@@ -7025,6 +7117,10 @@ pub struct Metrics {
     pub torii_sorafs_repair_lease_expired_total: IntCounterVec,
     /// Torii SoraFS slash proposals submitted grouped by outcome.
     pub torii_sorafs_slash_proposals_total: IntCounterVec,
+    /// Torii SoraFS reconciliation runs grouped by result.
+    pub torii_sorafs_reconciliation_runs_total: IntCounterVec,
+    /// Torii SoraFS reconciliation divergence count from the latest snapshot.
+    pub torii_sorafs_reconciliation_divergence_count: GenericGauge<AtomicU64>,
     /// Torii SoraFS GC runs grouped by result.
     pub torii_sorafs_gc_runs_total: IntCounterVec,
     /// Torii SoraFS GC evictions grouped by reason.
@@ -9754,6 +9850,62 @@ impl Default for Metrics {
             "Sumeragi pacemaker proposal deferrals due to transaction-queue back-pressure",
         )
         .expect("Infallible");
+        let sumeragi_pacemaker_backpressure_deferrals_by_reason_total = IntCounterVec::new(
+            Opts::new(
+                "sumeragi_pacemaker_backpressure_deferrals_by_reason_total",
+                "Sumeragi pacemaker backpressure deferrals grouped by reason",
+            ),
+            &["reason"],
+        )
+        .expect("Infallible");
+        let sumeragi_pacemaker_backpressure_deferral_duration_ms = HistogramVec::new(
+            HistogramOpts::new(
+                "sumeragi_pacemaker_backpressure_deferral_duration_ms",
+                "Sumeragi pacemaker backpressure deferral duration histogram (ms) grouped by reason",
+            )
+            .buckets(vec![
+                5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0,
+                20000.0,
+            ]),
+            &["reason"],
+        )
+        .expect("Infallible");
+        let sumeragi_pacemaker_backpressure_deferral_active = GenericGaugeVec::new(
+            Opts::new(
+                "sumeragi_pacemaker_backpressure_deferral_active",
+                "Sumeragi pacemaker backpressure deferral active state (0/1) grouped by reason",
+            ),
+            &["reason"],
+        )
+        .expect("Infallible");
+        let sumeragi_pacemaker_backpressure_deferral_age_ms = GenericGaugeVec::new(
+            Opts::new(
+                "sumeragi_pacemaker_backpressure_deferral_age_ms",
+                "Sumeragi pacemaker backpressure deferral age in milliseconds grouped by reason",
+            ),
+            &["reason"],
+        )
+        .expect("Infallible");
+        let sumeragi_pacemaker_eval_ms = Histogram::with_opts(
+            HistogramOpts::new(
+                "sumeragi_pacemaker_eval_ms",
+                "Sumeragi pacemaker evaluation duration histogram (ms)",
+            )
+            .buckets(vec![
+                1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0,
+            ]),
+        )
+        .expect("Infallible");
+        let sumeragi_pacemaker_propose_ms = Histogram::with_opts(
+            HistogramOpts::new(
+                "sumeragi_pacemaker_propose_ms",
+                "Sumeragi pacemaker proposal attempt duration histogram (ms)",
+            )
+            .buckets(vec![
+                1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0,
+            ]),
+        )
+        .expect("Infallible");
         let sumeragi_commit_pipeline_tick_total = IntCounterVec::new(
             Opts::new(
                 "sumeragi_commit_pipeline_tick_total",
@@ -11312,6 +11464,21 @@ impl Default for Metrics {
         )
         .expect("Infallible");
         register_guarded(&registry, &torii_sorafs_slash_proposals_total);
+        let torii_sorafs_reconciliation_runs_total = IntCounterVec::new(
+            Opts::new(
+                "torii_sorafs_reconciliation_runs_total",
+                "SoraFS reconciliation runs grouped by result",
+            ),
+            &["result"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_reconciliation_divergence_count = GenericGauge::new(
+            "torii_sorafs_reconciliation_divergence_count",
+            "SoraFS reconciliation divergence count for the latest snapshot",
+        )
+        .expect("Infallible");
+        register_guarded(&registry, &torii_sorafs_reconciliation_runs_total);
+        register_guarded(&registry, &torii_sorafs_reconciliation_divergence_count);
         let torii_sorafs_gc_runs_total = IntCounterVec::new(
             Opts::new(
                 "torii_sorafs_gc_runs_total",
@@ -13202,6 +13369,12 @@ impl Default for Metrics {
             sumeragi_kura_store_last_retry_attempt,
             sumeragi_kura_store_last_retry_backoff_ms,
             sumeragi_pacemaker_backpressure_deferrals_total,
+            sumeragi_pacemaker_backpressure_deferrals_by_reason_total,
+            sumeragi_pacemaker_backpressure_deferral_duration_ms,
+            sumeragi_pacemaker_backpressure_deferral_active,
+            sumeragi_pacemaker_backpressure_deferral_age_ms,
+            sumeragi_pacemaker_eval_ms,
+            sumeragi_pacemaker_propose_ms,
             sumeragi_commit_pipeline_tick_total,
             sumeragi_prevote_timeout_total,
             sumeragi_rbc_backlog_chunks_total,
@@ -13659,6 +13832,12 @@ impl Default for Metrics {
             sumeragi_kura_store_last_retry_attempt,
             sumeragi_kura_store_last_retry_backoff_ms,
             sumeragi_pacemaker_backpressure_deferrals_total,
+            sumeragi_pacemaker_backpressure_deferrals_by_reason_total,
+            sumeragi_pacemaker_backpressure_deferral_duration_ms,
+            sumeragi_pacemaker_backpressure_deferral_active,
+            sumeragi_pacemaker_backpressure_deferral_age_ms,
+            sumeragi_pacemaker_eval_ms,
+            sumeragi_pacemaker_propose_ms,
             sumeragi_commit_pipeline_tick_total,
             sumeragi_prevote_timeout_total,
             sumeragi_rbc_backlog_chunks_total,
@@ -13837,6 +14016,8 @@ impl Default for Metrics {
             torii_sorafs_repair_backlog_oldest_age_seconds,
             torii_sorafs_repair_lease_expired_total,
             torii_sorafs_slash_proposals_total,
+            torii_sorafs_reconciliation_runs_total,
+            torii_sorafs_reconciliation_divergence_count,
             torii_sorafs_gc_runs_total,
             torii_sorafs_gc_evictions_total,
             torii_sorafs_gc_bytes_freed_total,
@@ -15106,6 +15287,18 @@ impl Metrics {
         self.torii_sorafs_slash_proposals_total
             .with_label_values(&[outcome])
             .inc();
+    }
+
+    /// Increment the reconciliation run counter for the provided result label.
+    pub fn inc_sorafs_reconciliation_runs(&self, result: &str) {
+        self.torii_sorafs_reconciliation_runs_total
+            .with_label_values(&[result])
+            .inc();
+    }
+
+    /// Record the reconciliation divergence count for the latest snapshot.
+    pub fn set_sorafs_reconciliation_divergence_count(&self, count: u64) {
+        self.torii_sorafs_reconciliation_divergence_count.set(count);
     }
 
     /// Increment the GC run counter for the provided result label.
@@ -16837,6 +17030,25 @@ mod test {
         assert_eq!(
             metrics.torii_sorafs_gc_oldest_expired_age_seconds.get() as u64,
             120
+        );
+    }
+
+    #[test]
+    fn records_sorafs_reconciliation_metrics() {
+        let metrics = Metrics::default();
+        metrics.inc_sorafs_reconciliation_runs("success");
+        metrics.set_sorafs_reconciliation_divergence_count(7);
+
+        assert_eq!(
+            metrics
+                .torii_sorafs_reconciliation_runs_total
+                .with_label_values(&["success"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics.torii_sorafs_reconciliation_divergence_count.get() as u64,
+            7
         );
     }
 

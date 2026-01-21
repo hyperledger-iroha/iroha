@@ -10417,9 +10417,9 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, gen_account_in};
     use sorafs_car::multi_fetch::{ChunkReceipt, FetchOutcome, FetchProvider, ProviderReport};
     use sorafs_manifest::repair::{
-        REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
-        RepairSlashProposalV1, RepairTicketId, RepairWorkerActionV1,
-        RepairWorkerSignaturePayloadV1,
+        REPAIR_ESCALATION_APPROVAL_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
+        REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairEscalationApprovalV1, RepairSlashProposalV1,
+        RepairTicketId, RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
     };
     use sorafs_orchestrator::{PolicyReport, PolicyStatus, prelude::ChunkStore};
     use tempfile::tempdir;
@@ -13679,6 +13679,14 @@ mod tests {
             proposed_penalty_nano: 500,
             submitted_at_unix: 1_700_000_004,
             rationale: "sla_missed".to_string(),
+            approval: Some(RepairEscalationApprovalV1 {
+                version: REPAIR_ESCALATION_APPROVAL_VERSION_V1,
+                approve_votes: 2,
+                reject_votes: 1,
+                abstain_votes: 0,
+                approved_at_unix: 1_700_000_104,
+                finalized_at_unix: 1_700_000_204,
+            }),
         };
 
         with_mock_http(respond_with(&store, response), || {

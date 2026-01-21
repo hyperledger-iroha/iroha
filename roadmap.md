@@ -48,7 +48,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Decode literal `execute_instruction` NoritoBytes payloads (InstructionBox) for access hints.
  - [x] Decode literal `execute_query` NoritoBytes payloads (QueryRequest, `FindAssetById`) for access hints.
  - [x] Expand access hints for opaque host-driven reads (define safe fallback keys and coverage rules).
- - [ ] Extract the Kotodama compiler into `crates/kotodama_lang` once dependencies are untangled.
+ - [x] Extract the Kotodama compiler into `crates/kotodama_lang` once dependencies are untangled.
 
 1. **NEXUS-LANE-RELAY-RECOVERY — Emergency validator restore for dataspaces** (Consensus/Governance, Line: Iroha 3, Owner: Nexus Core WG, Priority: Medium, Status: 🈴 Completed, target TBD)
  - [x] Define the emergency admin multisig message to add validators when a dataspace pool falls below `3f+1`.
@@ -81,9 +81,9 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Add a restart regression that simulates a crash after persisting a finalized VRF epoch record but before writing the seed-only next-epoch snapshot.
 
 4. **NPOS-LOCALNET-1HZ — Restore 1 Hz localnet block cadence** (Consensus/Localnet, Line: Iroha 3, Owner: Consensus WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
- - [ ] Identify pacemaker backpressure sources holding proposal cadence (~7.5s/block) under 1 Hz ping load; capture per-stage timings.
- - [ ] Tune NPoS timeouts and commit pipeline thresholds for localnet to reach 1 block/sec without triggering view changes.
- - [ ] Re-run the 1 Hz / 100-block soak and confirm view changes remain zero and RBC queues stay under cap.
+ - [x] Identify pacemaker backpressure sources holding proposal cadence (~7.5s/block) under 1 Hz ping load; capture per-stage timings (added per-reason deferral counters/ages/durations plus pacemaker eval/propose timing histograms; docs updated).
+ - [x] Tune NPoS timeouts and commit pipeline thresholds for localnet to reach 1 block/sec without triggering view changes (propose/prevote/precommit/commit/DA/agg = 300/400/500/650/600/100 ms; DA timeout multipliers 1/1; commit inflight 4–10s with 6x multiplier).
+ - [ ] Re-run the 1 Hz / 100-block soak and confirm view changes remain zero and RBC queues stay under cap (attempted 2026-01-21; localnet failed to bind loopback in the sandbox: `Operation not permitted`; rerun outside sandbox).
  - [ ] Re-run `cargo test -p integration_tests -- --nocapture` after the targeted suite completes cleanly (ran 60m; timed out while running `integration_tests/tests/mod.rs` with network guard stuck at 4/4 permits and unstable-network relay connection-refused warnings).
  - [x] Re-run `cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` to confirm localnet tx-status fallbacks no longer emit WARN noise.
 - [x] Capture a localnet stall run with the new `sumeragi_localnet_smoke` status snapshots to pinpoint any remaining consensus races (saw repeated `dropping vote: empty commit topology` and RBC READY quorum stalls).
@@ -97,10 +97,10 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 - [x] Re-run `cargo test -p integration_tests --test mod multiple_blocks_created -- --nocapture` (and unregister/soft-fork cases) after the merge QC view wiring (lane-tip view) and commit-certificate/roster sidecar persistence fix to confirm block-sync roster validation no longer drops updates (multiple_blocks_created, network_stable_after_add_and_after_remove_peer, soft_fork passed).
  - [x] Re-run `cargo test -p integration_tests --test sumeragi_kagami_localnet -- --nocapture` after the BlockSyncUpdate backpressure, missing-parent fetch, RBC chunk background drop, periodic RBC payload rebroadcast, and proposal/RBC broadcast-order fixes; ran outside the sandbox with `IROHA_KAGAMI_LOCALNET_KEEP=1` (passed).
  - [x] Re-run `cargo test -p integration_tests --test mod network_stable_after_add_and_after_remove_peer -- --nocapture` after the RBC roster fallback (pass).
- - [ ] Re-run `cargo test -p integration_tests --test mod -- --nocapture` with `API_ADDRESS`/`PUBLIC_KEY` env overrides set to confirm test-network peers ignore host env config overrides.
- - [ ] Re-run `cargo test -p integration_tests --test mod` after the payload-hash stabilization fix (strip results/extra signatures from DA/RBC payload bytes) and the block-sync seen-block filtering; attempt 2025-12-31 timed out after 5m with pipeline event failures, peers waiting for block 1, and status endpoint connection refused—confirm the gating condition is resolved.
- - [ ] Re-run `cargo test -p integration_tests --test mod` after stabilizing NPoS PRF seed handling (seed fixed within epoch + next-epoch record persisted at rollover + replay PRF rotation) to confirm event/connected-peers suites no longer hang.
- - [ ] Re-run `cargo test -p integration_tests --test mod` after clearing consensus caches on commit-topology changes to confirm peer membership tests no longer stall consensus.
+- [ ] Re-run `cargo test -p integration_tests --test mod -- --nocapture` with `API_ADDRESS`/`PUBLIC_KEY` env overrides set to confirm test-network peers ignore host env config overrides (attempted 2026-01-21 with `IROHA_TEST_NETWORK_PARALLELISM=1` and `=2`/`--test-threads=2`; both ran ~1h and timed out, no explicit failures before timeout).
+- [ ] Re-run `cargo test -p integration_tests --test mod` after the payload-hash stabilization fix (strip results/extra signatures from DA/RBC payload bytes) and the block-sync seen-block filtering; attempt 2025-12-31 timed out after 5m with pipeline event failures, peers waiting for block 1, and status endpoint connection refused—confirm the gating condition is resolved (2026-01-21 reruns reached trigger/DA suites and timed out after ~1h; 2026-01-21 rerun with `IROHA_TEST_NETWORK_PARALLELISM=1` + `--test-threads=1` timed out after 2h, last observed running `triggers::time_trigger::time_trigger_scenarios`).
+- [ ] Re-run `cargo test -p integration_tests --test mod` after stabilizing NPoS PRF seed handling (seed fixed within epoch + next-epoch record persisted at rollover + replay PRF rotation) to confirm event/connected-peers suites no longer hang (2026-01-21 rerun timed out after ~1h; `register_new_peer` passes when run alone; 2026-01-21 rerun with `IROHA_TEST_NETWORK_PARALLELISM=1` + `--test-threads=1` timed out after 2h, last observed running `triggers::time_trigger::time_trigger_scenarios`).
+- [ ] Re-run `cargo test -p integration_tests --test mod` after clearing consensus caches on commit-topology changes to confirm peer membership tests no longer stall consensus (2026-01-21 rerun timed out after ~1h; `by_call_trigger::call_execute_trigger_with_args` passes when run alone; 2026-01-21 rerun with `IROHA_TEST_NETWORK_PARALLELISM=1` + `--test-threads=1` timed out after 2h, last observed running `triggers::time_trigger::time_trigger_scenarios`).
 - [ ] Re-run `cargo test --workspace` after the Sumeragi gap fixes; latest attempt (`cargo test -p iroha_core --lib sumeragi::main_loop::tests`) timed out after 600s; active-topology world-peer ordering and locked-QC status flake were fixed afterward.
 - [x] Resolve build-directory lock timeouts so full-workspace test runs complete reliably (standardize `CARGO_TARGET_DIR` or serialize builds).
 
@@ -313,11 +313,11 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 - [x] OpenAPI/docs: publish the new repair/GC endpoints and CLI surfaces in the Torii OpenAPI output and SoraFS docs, including the no-admin invariants.
  - [x] Active repair worker: implement an in-process agent that claims queued tickets, executes repair actions (fetch/verify/rebuild), updates task state (`InProgress`, `Completed`, `Failed`, `Escalated`), and emits telemetry with lease/claim safeguards across restarts.
  - [x] Governance flow: define how escalations and slash proposals are submitted/approved without admin keys, and wire the submission path to the governance pipeline.
- - [ ] Governance policy: codify quorum/thresholds for repair escalations + slashes, include dispute/appeal windows, and enforce deterministic outcomes in governance execution.
-   - [ ] Define `RepairEscalationPolicyV1` (quorum, minimum voters, dispute window, appeal window, penalty caps) and persist in governance config; document defaults.
-   - [ ] Wire policy checks into governance execution so escalations/slashes reject when quorum or window rules fail (deterministic errors).
-   - [ ] Add ledger tests for approval, rejection (insufficient quorum), and appeal path; include deterministic tie-break rules.
-   - [ ] Document policy table + governance lifecycle in `docs/source/sorafs_repair_plan.md` + portal mirror.
+ - [x] Governance policy: codify quorum/thresholds for repair escalations + slashes, include dispute/appeal windows, and enforce deterministic outcomes in governance execution.
+   - [x] Define `RepairEscalationPolicyV1` (quorum, minimum voters, dispute window, appeal window, penalty caps) and persist in governance config; document defaults.
+   - [x] Wire policy checks into governance execution so escalations/slashes reject when quorum or window rules fail (deterministic errors).
+   - [x] Add ledger tests for approval, rejection (insufficient quorum), and appeal path; include deterministic tie-break rules.
+   - [x] Document policy table + governance lifecycle in `docs/source/sorafs_repair_plan.md` + portal mirror.
  - [x] Audit trail: publish repair/GC events (ticket state transitions, evictions, bytes freed) to the governance DAG with canonical Norito payloads for decentralized auditability.
  - [x] Signed evidence: require repair worker submissions to include signed evidence bundles (manifest digest, provider id, action summary, timestamps) so governance can verify provenance.
  - [x] Audit payload schema: define canonical Norito payloads for repair/GC audit events (include signer, digest, and deterministic ordering) and lock with roundtrip tests.
@@ -326,29 +326,20 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Worker scheduling: integrate repair execution with the existing storage scheduler (pin/fetch/PoR budgets) so repair traffic respects operator limits and does not starve normal pin traffic.
 - [x] Repair prioritisation: sort by SLA deadline, failure severity, and provider impact; keep ordering deterministic to avoid oscillations under load.
  - [x] Determinism: document and enforce deterministic ordering for repair queue selection and GC eviction (tie-breakers by ticket id/manifest id) to keep peer outputs identical.
- - [ ] Reconciliation: add cross-node consistency checks for repair/GC state (ticket status, retention indexes, freed bytes) with periodic comparison reports and divergence telemetry.
-   - [ ] Add a periodic reconciliation task that hashes repair/GC snapshots (ticket state, retention index, freed bytes counters) and emits a deterministic summary.
-   - [ ] Define a Norito `SorafsReconciliationReportV1` payload and publish to governance DAG for auditability.
-   - [ ] Add Prometheus/OTel metrics for reconciliation success/failure and divergence counts.
-   - [ ] Add a unit test for stable snapshot hashing and a multi-peer integration test that detects divergence.
+ - [x] Reconciliation: add cross-node consistency checks for repair/GC state (ticket status, retention indexes, freed bytes) with periodic comparison reports and divergence telemetry.
+   - [x] Add a periodic reconciliation task that hashes repair/GC snapshots (ticket state, retention index, freed bytes counters) and emits a deterministic summary.
+   - [x] Define a Norito `SorafsReconciliationReportV1` payload and publish to governance DAG for auditability.
+   - [x] Add Prometheus/OTel metrics for reconciliation success/failure and divergence counts.
+   - [x] Add a unit test for stable snapshot hashing and a multi-peer integration test that detects divergence.
  - [x] GC/retention: add a deal/manifest expiry index plus a TTL sweeper that evicts expired manifests/chunks, frees capacity, and keeps PoR/repair references coherent; include grace windows, max deletions per tick, and a governance/auditable trigger path (no admin override).【crates/sorafs_node/src/store.rs】
- - [ ] Retention precedence: codify how deal end epochs, pin-policy `retention_epoch`, and governance caps resolve into a single expiry timestamp; persist that source in storage metadata.
-   - [ ] Define an explicit precedence rule (e.g., min of deal end, pin policy, governance cap) and record `RetentionSourceV1`.
-   - [ ] Persist `retention_source` alongside `retention_epoch` in manifest metadata/index.
-   - [ ] Update ingest paths + tests to assert source and epoch are deterministic.
-   - [ ] Document precedence rules and examples in ops playbook + node client protocol.
  - [x] Retention metadata: persist `retention_epoch` (deal end or pin policy) with stored manifests and build an index for expiry scans; update ingest paths to record retention metadata.
  - [x] GC scheduling: add a background sweeper with configurable cadence/limits and a pre-admission GC attempt when capacity is exhausted before rejecting new pins (automatic on every node; no central admin trigger).
- - [ ] GC safety: implement manifest/chunk reference counting to avoid deleting shared chunks; emit warnings when retention is blocked by active deals or open repairs.
-   - [ ] Add chunk reference counts in store index; update on ingest/evict and validate counts on startup.
-   - [ ] Skip chunk deletion when refcount > 1 and record a `blocked_reason` in GC audit events.
-   - [ ] Emit warnings/metrics for retention blocked by active deals or open repairs.
-   - [ ] Add unit tests for shared chunk retention safety and blocked eviction metrics.
+ - [x] GC safety: implement manifest/chunk reference counting to avoid deleting shared chunks; emit warnings when retention is blocked by active deals or open repairs.
+   - [x] Add chunk reference counts in store index; update on ingest/evict and validate counts on startup.
+   - [x] Skip chunk deletion when refcount > 1 and record a `blocked_reason` in GC audit events.
+   - [x] Emit warnings/metrics for retention blocked by active deals or open repairs.
+   - [x] Add unit tests for shared chunk retention safety and blocked eviction metrics.
  - [x] PoR/repair gating: stop scheduling PoR challenges for expired manifests and ensure GC skips manifests with open repair tickets or pending PoR evidence.
- - [ ] Capacity fallback: add a “least-recently-used expired” eviction fallback when storage is full and multiple expired manifests compete for space, with deterministic tie-breakers.
-   - [ ] Track last-access time for expired manifests in a deterministic index (monotonic access counter).
-   - [ ] When multiple expired candidates exist, evict in LRU order with tie-breakers by manifest id.
-   - [ ] Add tests to prove deterministic ordering and capacity recovery behavior.
  - [x] Telemetry (GC): add gauges/counters for GC runs, bytes freed, and eviction reasons; surface in Prometheus + OpenTelemetry.
  - [x] Telemetry (repair): add gauges/counters for repair backlog age and lease expiries; surface in Prometheus + OpenTelemetry.
    - [x] Add Prometheus gauges for repair queue depth per provider + oldest backlog age; add counters for lease expiries.
@@ -359,15 +350,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
    - [x] Document correlation fields in observability plan + repair plan docs.
    - [x] Add tests that assert repair/slash metadata fields are present in audit artefacts.
  - [x] Alerts (GC): define GC stall/blocked thresholds in docs/runbooks and emit corresponding telemetry labels.
- - [ ] Alerts (repair/retention): define SLA breach, repair backlog, and retention-blocked eviction alert thresholds in docs/runbooks and emit corresponding telemetry labels.
-   - [ ] Add alert rules for SLA breach rate, backlog age, lease expiry spikes, and retention-blocked evictions.
-   - [ ] Add alert tests in `dashboards/alerts/tests/` for each new rule.
-   - [ ] Update ops playbook with thresholds + triage steps.
  - [x] Dashboards (GC): add operator panels for GC frees per hour, evictions, blocked runs, and oldest expired age.
- - [ ] Dashboards (repair/retention): add operator panels for repair SLA misses, repair queue depth by provider, and retention-blocked evictions.
-   - [ ] Extend SoraFS capacity dashboard with repair SLA/backlog panels and retention-blocked eviction panels.
-   - [ ] Add per-provider repair queue depth panel with deterministic label cardinality guidance.
-   - [ ] Mirror dashboard updates in portal docs and observability plan.
  - [x] Tests: unit + integration coverage for persistence reload, worker claim/lease, repair completion/failure requeue, and GC expiry/retention invariants (include restart recovery and SLA deadline checks).
  - [x] Tests: add Torii API contract tests for worker endpoints and CLI regression tests for repair/GC commands.
  - [x] Tests: add governance flow tests for escalation→slash proposal acceptance/rejection and signed-evidence verification.

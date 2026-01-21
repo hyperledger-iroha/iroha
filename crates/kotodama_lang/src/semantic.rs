@@ -4782,7 +4782,7 @@ fn expr_contains_sensitive_syscall(expr: &TypedExpr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kotodama::parser::parse;
+    use crate::parser::parse;
 
     fn count_calls_expr(expr: &TypedExpr, name: &str) -> usize {
         match &expr.expr {

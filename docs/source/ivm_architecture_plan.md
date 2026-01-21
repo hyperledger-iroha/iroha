@@ -50,7 +50,7 @@ forget to call `is_syscall_allowed`, and it allows future caching of pointer
 validations for repeated syscalls.
 
 ### Phase 3 – Kotodama extraction
-- Split `crates/ivm/src/kotodama` into a new crate (e.g., `crates/kotodama_lang`).
+- Kotodama compiler extracted to `crates/kotodama_lang` (from `crates/ivm/src/kotodama`).
 - Provide a minimal bytecode API that the VM consumes (`compile_to_ivm_bytecode`).
 
 **Security / performance impact**: Decoupling lowers the attack surface of the VM

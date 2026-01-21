@@ -586,7 +586,8 @@ Alert snippets
 - Hint mismatch burst: `increase(block_created_hint_mismatch_total[5m]) > 0`
 - Proposal mismatch burst: `increase(block_created_proposal_mismatch_total[5m]) > 0`
 - Locked QC gate drop spike: `increase(block_created_dropped_by_lock_total[5m]) > 0`
-- Pacemaker deferrals under sustained load: `increase(pacemaker_backpressure_deferrals_total[5m]) > 0`
+- Pacemaker deferrals under sustained load: `increase(sumeragi_pacemaker_backpressure_deferrals_total[5m]) > 0`
+- Pacemaker deferrals by reason: `increase(sumeragi_pacemaker_backpressure_deferrals_by_reason_total[5m]) > 0`
 
 Sumeragi pacemaker (example)
 - Endpoint: `GET /v1/sumeragi/pacemaker`
@@ -791,7 +792,7 @@ Additional gauges track backlog pressure: `sumeragi_rbc_backlog_chunks_total`, `
 1. **Capture live snapshots.** Start with `iroha_cli sumeragi telemetry --summary` (or `GET /v1/sumeragi/telemetry`) to inspect `rbc_backlog` and vote ingestion, then fetch `/v1/sumeragi/rbc` and `/v1/sumeragi/rbc/sessions` to list active payloads, chunk counts, and recovery flags.
 2. **Inspect backlog counters.** Watch `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`, and `sumeragi_rbc_backlog_sessions_pending`. Sustained non-zero values over five minutes (e.g., `max_over_time(sumeragi_rbc_backlog_chunks_max[5m]) > 0`) imply slow chunk delivery; correlate with `ready_count` vs `delivered` in the session snapshot.
 3. **Check DA availability warnings.** Alert on spikes in `sumeragi_da_gate_block_total{reason="missing_local_data"}`; `sumeragi_rbc_da_reschedule_total` is legacy and should remain zero now that DA is advisory.
-4. **Evaluate pacemaker deferrals and proposal backpressure.** Use `increase(pacemaker_backpressure_deferrals_total[5m])`, `max_over_time(sumeragi_tx_queue_saturated[5m])`, `sumeragi_rbc_backlog_*`, and relay drop/backpressure counters to confirm whether the pacemaker halted due to queue saturation, relay/RBC backlog, or blocking pending blocks. Combine with `increase(gossip_fallback_total[5m])` and `increase(block_created_proposal_mismatch_total[5m])` to surface collectors retrying without progress.
+4. **Evaluate pacemaker deferrals and proposal backpressure.** Use `increase(sumeragi_pacemaker_backpressure_deferrals_total[5m])`, `increase(sumeragi_pacemaker_backpressure_deferrals_by_reason_total{reason="..."}[5m])`, `max_over_time(sumeragi_pacemaker_backpressure_deferral_age_ms{reason="..."}[5m])`, `max_over_time(sumeragi_tx_queue_saturated[5m])`, `sumeragi_rbc_backlog_*`, and relay drop/backpressure counters to confirm whether the pacemaker halted due to queue saturation, relay/RBC backlog, or blocking pending blocks. Combine with `increase(gossip_fallback_total[5m])` and `increase(block_created_proposal_mismatch_total[5m])` to surface collectors retrying without progress.
 5. **Review logs and network health.** Filter consensus logs for `rbc` and `pacemaker_backpressure_deferral` to spot repeated retries, DA restarts, or queue pressure. Cross-check P2P metrics (`p2p_queue_depth{priority=...}`, `p2p_dropped_posts`, `p2p_dropped_broadcasts`, `p2p_subscriber_queue_full_total`, `p2p_subscriber_queue_full_by_topic_total{topic=...}`, `p2p_subscriber_unrouted_total`, `p2p_subscriber_unrouted_by_topic_total{topic=...}`) and payload ingress drops (`consensus_ingress_drop_total{topic="ConsensusPayload|ConsensusChunk|BlockSync",reason="rate|bytes|rbc_session_limit|penalty"}`) to identify network bottlenecks; adjust collector fan-out, queue capacity, or baseline load accordingly.
 6. **Correlate logs automatically.** Run `python3 scripts/sumeragi_backpressure_log_scraper.py <logfile>`
    to list each pacemaker deferral together with nearby missing-availability entries. Adjust

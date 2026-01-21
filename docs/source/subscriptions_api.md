@@ -182,8 +182,8 @@ Implementation note: the shared contract is a thin wrapper around IVM helpers
 Norito-encoded subscription metadata to perform deterministic billing, retries,
 and trigger rescheduling without leaking non-determinism into bytecode.
 Sample Kotodama wrappers live in
-`crates/ivm/src/kotodama/samples/subscription_billing_trigger.ko` and
-`crates/ivm/src/kotodama/samples/subscription_usage_recorder.ko`.
+`crates/kotodama_lang/src/samples/subscription_billing_trigger.ko` and
+`crates/kotodama_lang/src/samples/subscription_usage_recorder.ko`.
 
 ## Usage Recording (Simple and Permissioned)
 Usage is recorded by a by-call trigger or a small IVM contract:

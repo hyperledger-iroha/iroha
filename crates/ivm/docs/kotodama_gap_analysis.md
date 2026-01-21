@@ -1,15 +1,15 @@
 # Kotodama Gap Analysis
 
-This document compares the current Kotodama syntax/grammar documentation with the implementation in `crates/ivm/src/kotodama` and outlines where the implementation should go to meet the design goals of clarity, safety, and ease of use.
+This document compares the current Kotodama syntax/grammar documentation with the implementation in `crates/kotodama_lang/src` and outlines where the implementation should go to meet the design goals of clarity, safety, and ease of use.
 
 Paths for reference:
-- Lexer: `crates/ivm/src/kotodama/lexer.rs`
-- AST: `crates/ivm/src/kotodama/ast.rs`
-- Parser: `crates/ivm/src/kotodama/parser.rs`
-- Semantic/type check: `crates/ivm/src/kotodama/semantic.rs`
-- IR + lowering: `crates/ivm/src/kotodama/ir.rs`
-- Codegen: `crates/ivm/src/kotodama/compiler.rs`
-- Samples: `crates/ivm/src/kotodama/samples/*.ko`
+- Lexer: `crates/kotodama_lang/src/lexer.rs`
+- AST: `crates/kotodama_lang/src/ast.rs`
+- Parser: `crates/kotodama_lang/src/parser.rs`
+- Semantic/type check: `crates/kotodama_lang/src/semantic.rs`
+- IR + lowering: `crates/kotodama_lang/src/ir.rs`
+- Codegen: `crates/kotodama_lang/src/compiler.rs`
+- Samples: `crates/kotodama_lang/src/samples/*.ko`
 
 ## Summary
 - The current implementation parses and lowers both free and contract functions (including `seiyaku`, `kotoage`, `hajimari`, and `kaizen` items), performs type checking for ints/bools/strings/pointer-ABI handles/structs/maps, and emits full multi-function IVM bytecode with durable `state` overlays when ABI v1 is selected. ✔

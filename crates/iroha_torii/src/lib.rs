@@ -13780,7 +13780,10 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let sorafs_node = sorafs_node::NodeHandle::new_with_policies(
             sorafs_node::config::StorageConfig::from(&config.sorafs_storage),
-            sorafs_node::config::RepairConfig::from(&config.sorafs_repair),
+            sorafs_node::config::RepairConfig::from_repair_and_policy(
+                &config.sorafs_repair,
+                &state.gov.sorafs_repair_escalation,
+            ),
             sorafs_node::config::GcConfig::from(&config.sorafs_gc),
         );
         #[cfg(feature = "app_api")]
