@@ -1047,6 +1047,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             runtime_upgrade_provenance: A::RuntimeUpgradeProvenancePolicy::default(),
             sorafs_pricing: PricingScheduleRecord::launch_default(),
             sorafs_penalty: A::SorafsPenaltyPolicy::default(),
+            sorafs_repair_escalation: A::RepairEscalationPolicyV1::default(),
             sorafs_telemetry: A::SorafsTelemetryPolicy::default(),
             sorafs_provider_owners: BTreeMap::new(),
             conviction_step_blocks: 10,

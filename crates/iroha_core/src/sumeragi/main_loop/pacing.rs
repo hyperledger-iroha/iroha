@@ -7,7 +7,7 @@ use tokio::sync::watch;
 
 use super::{
     PROPOSE_ATTEMPT_LOG_COOLDOWN, TICK_COST_LOG_THRESHOLD, TICK_LAG_LOG_THRESHOLD,
-    TICK_TIMING_LOG_COOLDOWN,
+    TICK_TIMING_LOG_COOLDOWN, propose::ProposalBackpressure,
 };
 use crate::{queue::BackpressureState, sumeragi::status};
 
@@ -75,6 +75,161 @@ impl PacemakerBackpressure {
                 PacemakerBackpressureAction::None
             }
             (false, false) => PacemakerBackpressureAction::None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PacemakerBackpressureReason {
+    QueueSaturation,
+    ActivePending,
+    RbcBacklog,
+    RelayBackpressure,
+    ConsensusQueueBackpressure,
+}
+
+impl PacemakerBackpressureReason {
+    pub(super) const fn as_label(self) -> &'static str {
+        match self {
+            Self::QueueSaturation => "queue_saturated",
+            Self::ActivePending => "active_pending",
+            Self::RbcBacklog => "rbc_backlog",
+            Self::RelayBackpressure => "relay_backpressure",
+            Self::ConsensusQueueBackpressure => "consensus_queue_backpressure",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PacemakerBackpressureEntry {
+    active: bool,
+    started_at: Option<Instant>,
+}
+
+impl PacemakerBackpressureEntry {
+    fn new() -> Self {
+        Self {
+            active: false,
+            started_at: None,
+        }
+    }
+}
+
+pub(super) struct PacemakerBackpressureTracker {
+    queue_saturated: PacemakerBackpressureEntry,
+    active_pending: PacemakerBackpressureEntry,
+    rbc_backlog: PacemakerBackpressureEntry,
+    relay_backpressure: PacemakerBackpressureEntry,
+    consensus_queue_backpressure: PacemakerBackpressureEntry,
+}
+
+impl PacemakerBackpressureTracker {
+    pub(super) fn new() -> Self {
+        Self {
+            queue_saturated: PacemakerBackpressureEntry::new(),
+            active_pending: PacemakerBackpressureEntry::new(),
+            rbc_backlog: PacemakerBackpressureEntry::new(),
+            relay_backpressure: PacemakerBackpressureEntry::new(),
+            consensus_queue_backpressure: PacemakerBackpressureEntry::new(),
+        }
+    }
+
+    pub(super) fn update(
+        &mut self,
+        backpressure: ProposalBackpressure,
+        deferring: bool,
+        now: Instant,
+        telemetry: Option<crate::telemetry::Telemetry>,
+    ) {
+        let queue_saturated = backpressure.queue_state.is_saturated() && deferring;
+        let active_pending = backpressure.active_pending && deferring;
+        let rbc_backlog = backpressure.rbc_backlog && deferring;
+        let relay_backpressure = backpressure.relay_backpressure && deferring;
+        let consensus_queue_backpressure = backpressure.consensus_queue_backpressure && deferring;
+        let telemetry_ref = telemetry.as_ref();
+
+        Self::update_reason(
+            PacemakerBackpressureReason::QueueSaturation,
+            queue_saturated,
+            &mut self.queue_saturated,
+            now,
+            telemetry_ref,
+        );
+        Self::update_reason(
+            PacemakerBackpressureReason::ActivePending,
+            active_pending,
+            &mut self.active_pending,
+            now,
+            telemetry_ref,
+        );
+        Self::update_reason(
+            PacemakerBackpressureReason::RbcBacklog,
+            rbc_backlog,
+            &mut self.rbc_backlog,
+            now,
+            telemetry_ref,
+        );
+        Self::update_reason(
+            PacemakerBackpressureReason::RelayBackpressure,
+            relay_backpressure,
+            &mut self.relay_backpressure,
+            now,
+            telemetry_ref,
+        );
+        Self::update_reason(
+            PacemakerBackpressureReason::ConsensusQueueBackpressure,
+            consensus_queue_backpressure,
+            &mut self.consensus_queue_backpressure,
+            now,
+            telemetry_ref,
+        );
+    }
+
+    fn update_reason(
+        reason: PacemakerBackpressureReason,
+        active: bool,
+        entry: &mut PacemakerBackpressureEntry,
+        now: Instant,
+        telemetry: Option<&crate::telemetry::Telemetry>,
+    ) {
+        match (entry.active, active) {
+            (false, true) => {
+                entry.active = true;
+                entry.started_at = Some(now);
+                if let Some(telemetry) = telemetry {
+                    telemetry.inc_pacemaker_backpressure_deferral_reason(reason.as_label());
+                    telemetry.set_pacemaker_backpressure_deferral_active(reason.as_label(), true);
+                    telemetry.set_pacemaker_backpressure_deferral_age_ms(reason.as_label(), 0);
+                }
+            }
+            (true, false) => {
+                if let Some(started_at) = entry.started_at.take() {
+                    let elapsed = now.saturating_duration_since(started_at);
+                    if let Some(telemetry) = telemetry {
+                        telemetry.observe_pacemaker_backpressure_deferral_duration(
+                            reason.as_label(),
+                            elapsed,
+                        );
+                        telemetry
+                            .set_pacemaker_backpressure_deferral_active(reason.as_label(), false);
+                        telemetry.set_pacemaker_backpressure_deferral_age_ms(reason.as_label(), 0);
+                    }
+                }
+                entry.active = false;
+            }
+            (true, true) => {
+                if let Some(started_at) = entry.started_at {
+                    if let Some(telemetry) = telemetry {
+                        let elapsed = now.saturating_duration_since(started_at);
+                        let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+                        telemetry.set_pacemaker_backpressure_deferral_age_ms(
+                            reason.as_label(),
+                            elapsed_ms,
+                        );
+                    }
+                }
+            }
+            (false, false) => {}
         }
     }
 }
@@ -317,5 +472,46 @@ impl AdaptiveObservabilityState {
         self.applied = false;
         self.last_trigger = None;
         AdaptiveAction::Reset
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queue::BackpressureState;
+    use std::num::NonZeroUsize;
+    use std::time::Duration;
+
+    fn backpressure(queue_state: BackpressureState) -> ProposalBackpressure {
+        ProposalBackpressure {
+            queue_state,
+            active_pending: false,
+            rbc_backlog: false,
+            relay_backpressure: false,
+            consensus_queue_backpressure: false,
+        }
+    }
+
+    #[test]
+    fn pacemaker_backpressure_tracker_toggles_state() {
+        let mut tracker = PacemakerBackpressureTracker::new();
+        let capacity = NonZeroUsize::new(4).expect("non-zero capacity");
+        let saturated = BackpressureState::Saturated {
+            queued: 4,
+            capacity,
+        };
+        let healthy = BackpressureState::Healthy {
+            queued: 0,
+            capacity,
+        };
+        let now = Instant::now();
+        tracker.update(backpressure(saturated), true, now, None);
+        assert!(tracker.queue_saturated.active);
+        assert!(tracker.queue_saturated.started_at.is_some());
+
+        let later = now + Duration::from_millis(25);
+        tracker.update(backpressure(healthy), false, later, None);
+        assert!(!tracker.queue_saturated.active);
+        assert!(tracker.queue_saturated.started_at.is_none());
     }
 }

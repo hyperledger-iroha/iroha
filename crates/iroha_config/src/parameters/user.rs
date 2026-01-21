@@ -1424,6 +1424,67 @@ impl SorafsPenaltyPolicy {
     }
 }
 
+/// User-level configuration for SoraFS repair escalation governance policy.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+pub struct RepairEscalationPolicyV1 {
+    /// Approval quorum (basis points) required for escalation/slash decisions.
+    #[config(
+        env = "GOV_SORAFS_REPAIR_QUORUM_BPS",
+        default = "crate::parameters::defaults::governance::sorafs_repair_escalation::QUORUM_BPS"
+    )]
+    pub quorum_bps: u16,
+    /// Minimum number of distinct voters required to resolve a decision.
+    #[config(
+        env = "GOV_SORAFS_REPAIR_MINIMUM_VOTERS",
+        default = "crate::parameters::defaults::governance::sorafs_repair_escalation::MINIMUM_VOTERS"
+    )]
+    pub minimum_voters: u32,
+    /// Dispute window in seconds after escalation before governance finalizes.
+    #[config(
+        env = "GOV_SORAFS_REPAIR_DISPUTE_WINDOW_SECS",
+        default = "crate::parameters::defaults::governance::sorafs_repair_escalation::DISPUTE_WINDOW_SECS"
+    )]
+    pub dispute_window_secs: u64,
+    /// Appeal window in seconds after approval before a decision is final.
+    #[config(
+        env = "GOV_SORAFS_REPAIR_APPEAL_WINDOW_SECS",
+        default = "crate::parameters::defaults::governance::sorafs_repair_escalation::APPEAL_WINDOW_SECS"
+    )]
+    pub appeal_window_secs: u64,
+    /// Maximum slash penalty allowed for repair escalations (nano-XOR).
+    #[config(
+        env = "GOV_SORAFS_REPAIR_MAX_PENALTY_NANO",
+        default = "crate::parameters::defaults::governance::sorafs_repair_escalation::MAX_PENALTY_NANO"
+    )]
+    pub max_penalty_nano: u128,
+}
+
+impl Default for RepairEscalationPolicyV1 {
+    fn default() -> Self {
+        Self {
+            quorum_bps:
+                crate::parameters::defaults::governance::sorafs_repair_escalation::QUORUM_BPS,
+            minimum_voters:
+                crate::parameters::defaults::governance::sorafs_repair_escalation::MINIMUM_VOTERS,
+            dispute_window_secs: crate::parameters::defaults::governance::sorafs_repair_escalation::DISPUTE_WINDOW_SECS,
+            appeal_window_secs: crate::parameters::defaults::governance::sorafs_repair_escalation::APPEAL_WINDOW_SECS,
+            max_penalty_nano: crate::parameters::defaults::governance::sorafs_repair_escalation::MAX_PENALTY_NANO,
+        }
+    }
+}
+
+impl RepairEscalationPolicyV1 {
+    fn parse(self) -> actual::RepairEscalationPolicyV1 {
+        actual::RepairEscalationPolicyV1 {
+            quorum_bps: self.quorum_bps.min(10_000),
+            minimum_voters: self.minimum_voters.max(1),
+            dispute_window_secs: self.dispute_window_secs,
+            appeal_window_secs: self.appeal_window_secs,
+            max_penalty_nano: self.max_penalty_nano,
+        }
+    }
+}
+
 /// Telemetry authentication and replay policy for SoraFS capacity windows.
 #[derive(Debug, ReadConfig, Clone)]
 pub struct SorafsTelemetryPolicy {
@@ -1866,6 +1927,9 @@ pub struct Governance {
     /// SoraFS under-delivery penalty policy.
     #[config(nested)]
     pub sorafs_penalty: SorafsPenaltyPolicy,
+    /// SoraFS repair escalation governance policy.
+    #[config(nested)]
+    pub sorafs_repair_escalation: RepairEscalationPolicyV1,
     /// SoraFS telemetry authentication/replay policy.
     #[config(nested)]
     pub sorafs_telemetry: SorafsTelemetryPolicy,
@@ -2028,6 +2092,7 @@ impl Default for Governance {
             viral_halt: false,
             sorafs_pin_policy: SorafsPinPolicyConstraints::default(),
             sorafs_penalty: SorafsPenaltyPolicy::default(),
+            sorafs_repair_escalation: RepairEscalationPolicyV1::default(),
             sorafs_telemetry: SorafsTelemetryPolicy::default(),
             sorafs_provider_owners: BTreeMap::new(),
             conviction_step_blocks: 100,
@@ -2153,6 +2218,7 @@ impl Governance {
             sorafs_pin_policy: self.sorafs_pin_policy.parse(),
             sorafs_pricing: PricingScheduleRecord::launch_default(),
             sorafs_penalty: self.sorafs_penalty.parse(),
+            sorafs_repair_escalation: self.sorafs_repair_escalation.parse(),
             sorafs_telemetry: self.sorafs_telemetry.parse(),
             sorafs_provider_owners: {
                 let mut bindings = BTreeMap::new();

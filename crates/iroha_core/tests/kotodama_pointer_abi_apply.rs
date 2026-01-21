@@ -16,7 +16,7 @@ use mv::storage::StorageReadOnly;
 #[test]
 fn kotodama_pointer_abi_asset_ops_end_to_end() {
     // Compile Kotodama sample
-    let src = include_str!("../../ivm/src/kotodama/samples/asset_ops.ko");
+    let src = include_str!("../../kotodama_lang/src/samples/asset_ops.ko");
     let compiler = KotodamaCompiler::new();
     let program = compiler.compile_source(src).expect("compile kotodama");
 

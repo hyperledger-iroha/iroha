@@ -17,7 +17,7 @@ translator: manual
 ## 範囲と参照元
 - IVM: `crates/ivm/src/{instruction.rs,ivm.rs,syscalls.rs,host.rs,mock_wsv.rs}` と `crates/ivm/docs/*`。
 - ISI／データモデル: `crates/iroha_data_model/src/isi/*`、`crates/iroha_core/src/smartcontracts/isi/*`、および `docs/source/data_model_and_isi_spec.md`。
-- Kotodama: `crates/ivm/src/kotodama/*`、`crates/ivm/docs/*` のドキュメント。
+- Kotodama: `crates/kotodama_lang/src/*`、`crates/ivm/docs/*` のドキュメント。
 - コア統合: `crates/iroha_core/src/{state.rs,executor.rs,smartcontracts/ivm/cache.rs}`。
 
 用語

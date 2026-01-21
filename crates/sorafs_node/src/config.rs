@@ -270,6 +270,71 @@ impl StorageConfigBuilder {
     }
 }
 
+/// Governance policy controlling repair escalation decisions.
+#[derive(Debug, Clone, Copy)]
+pub struct RepairEscalationPolicy {
+    quorum_bps: u16,
+    minimum_voters: u32,
+    dispute_window_secs: u64,
+    appeal_window_secs: u64,
+    max_penalty_nano: u128,
+}
+
+impl RepairEscalationPolicy {
+    /// Construct a policy from the governance configuration.
+    pub fn from_policy(policy: &actual::RepairEscalationPolicyV1) -> Self {
+        Self {
+            quorum_bps: policy.quorum_bps.min(10_000),
+            minimum_voters: policy.minimum_voters.max(1),
+            dispute_window_secs: policy.dispute_window_secs,
+            appeal_window_secs: policy.appeal_window_secs,
+            max_penalty_nano: policy.max_penalty_nano,
+        }
+    }
+
+    /// Approval quorum (basis points) required to approve a decision.
+    #[must_use]
+    pub fn quorum_bps(&self) -> u16 {
+        self.quorum_bps
+    }
+
+    /// Minimum number of distinct voters required to resolve a decision.
+    #[must_use]
+    pub fn minimum_voters(&self) -> u32 {
+        self.minimum_voters
+    }
+
+    /// Dispute window in seconds after escalation before governance finalizes.
+    #[must_use]
+    pub fn dispute_window_secs(&self) -> u64 {
+        self.dispute_window_secs
+    }
+
+    /// Appeal window in seconds after approval before a decision is final.
+    #[must_use]
+    pub fn appeal_window_secs(&self) -> u64 {
+        self.appeal_window_secs
+    }
+
+    /// Maximum slash penalty allowed for repair escalation proposals (nano-XOR).
+    #[must_use]
+    pub fn max_penalty_nano(&self) -> u128 {
+        self.max_penalty_nano
+    }
+
+    /// Clamp a proposed penalty to the configured maximum.
+    #[must_use]
+    pub fn cap_penalty(&self, penalty: u128) -> u128 {
+        penalty.min(self.max_penalty_nano)
+    }
+}
+
+impl Default for RepairEscalationPolicy {
+    fn default() -> Self {
+        Self::from_policy(&actual::RepairEscalationPolicyV1::default())
+    }
+}
+
 /// Repair scheduler configuration resolved from the runtime config.
 #[derive(Debug, Clone)]
 pub struct RepairConfig {
@@ -282,6 +347,7 @@ pub struct RepairConfig {
     backoff_initial_secs: u64,
     backoff_max_secs: u64,
     default_slash_penalty_nano: u128,
+    escalation_policy: RepairEscalationPolicy,
 }
 
 impl RepairConfig {
@@ -339,6 +405,19 @@ impl RepairConfig {
         self.default_slash_penalty_nano
     }
 
+    /// Governance policy for escalation/quorum enforcement.
+    #[must_use]
+    pub fn escalation_policy(&self) -> &RepairEscalationPolicy {
+        &self.escalation_policy
+    }
+
+    /// Override the escalation governance policy.
+    #[must_use]
+    pub fn with_escalation_policy(mut self, policy: RepairEscalationPolicy) -> Self {
+        self.escalation_policy = policy;
+        self
+    }
+
     /// Apply a default state directory when one is not provided.
     #[must_use]
     pub fn with_default_state_dir(mut self, data_dir: &Path) -> Self {
@@ -363,16 +442,28 @@ impl From<actual::SorafsRepair> for RepairConfig {
 
 impl From<&actual::SorafsRepair> for RepairConfig {
     fn from(value: &actual::SorafsRepair) -> Self {
+        Self::from_repair_and_policy(value, &actual::RepairEscalationPolicyV1::default())
+    }
+}
+
+impl RepairConfig {
+    /// Build a repair config from runtime settings and the governance escalation policy.
+    #[must_use]
+    pub fn from_repair_and_policy(
+        repair: &actual::SorafsRepair,
+        policy: &actual::RepairEscalationPolicyV1,
+    ) -> Self {
         Self {
-            enabled: value.enabled,
-            state_dir: value.state_dir.clone(),
-            claim_ttl_secs: value.claim_ttl_secs,
-            heartbeat_interval_secs: value.heartbeat_interval_secs,
-            max_attempts: value.max_attempts,
-            worker_concurrency: value.worker_concurrency,
-            backoff_initial_secs: value.backoff_initial_secs,
-            backoff_max_secs: value.backoff_max_secs,
-            default_slash_penalty_nano: value.default_slash_penalty_nano,
+            enabled: repair.enabled,
+            state_dir: repair.state_dir.clone(),
+            claim_ttl_secs: repair.claim_ttl_secs,
+            heartbeat_interval_secs: repair.heartbeat_interval_secs,
+            max_attempts: repair.max_attempts,
+            worker_concurrency: repair.worker_concurrency,
+            backoff_initial_secs: repair.backoff_initial_secs,
+            backoff_max_secs: repair.backoff_max_secs,
+            default_slash_penalty_nano: repair.default_slash_penalty_nano,
+            escalation_policy: RepairEscalationPolicy::from_policy(policy),
         }
     }
 }
@@ -710,7 +801,14 @@ mod tests {
             default_slash_penalty_nano: 5_000,
         };
 
-        let cfg = RepairConfig::from(&repair);
+        let policy = actual::RepairEscalationPolicyV1 {
+            quorum_bps: 7_000,
+            minimum_voters: 4,
+            dispute_window_secs: 12_000,
+            appeal_window_secs: 24_000,
+            max_penalty_nano: 9_000,
+        };
+        let cfg = RepairConfig::from_repair_and_policy(&repair, &policy);
         assert!(cfg.enabled());
         assert_eq!(cfg.state_dir(), Some(&PathBuf::from("/tmp/repair_state")));
         assert_eq!(cfg.claim_ttl_secs(), 900);
@@ -720,6 +818,11 @@ mod tests {
         assert_eq!(cfg.backoff_initial_secs(), 7);
         assert_eq!(cfg.backoff_max_secs(), 120);
         assert_eq!(cfg.default_slash_penalty_nano(), 5_000);
+        assert_eq!(cfg.escalation_policy().quorum_bps(), 7_000);
+        assert_eq!(cfg.escalation_policy().minimum_voters(), 4);
+        assert_eq!(cfg.escalation_policy().dispute_window_secs(), 12_000);
+        assert_eq!(cfg.escalation_policy().appeal_window_secs(), 24_000);
+        assert_eq!(cfg.escalation_policy().max_penalty_nano(), 9_000);
 
         let gc = actual::SorafsGc {
             enabled: true,

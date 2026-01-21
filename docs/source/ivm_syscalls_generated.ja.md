@@ -10,7 +10,7 @@ translator: manual
 
 # 生成された IVM Syscall テーブル
 
-このファイルは `crates/ivm/src/syscalls.rs` から生成されます。syscall 番号を更新する場合は、元のソースを編集してからスクリプトを再実行してください。
+このファイルは `crates/ivm_abi/src/syscalls.rs` から生成されます。syscall 番号を更新する場合は、元のソースを編集してからスクリプトを再実行してください。
 
 | Name | Value (hex) | Note |
 |------|-------------|------|

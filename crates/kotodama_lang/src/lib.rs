@@ -23,5 +23,9 @@ pub mod parser;
 pub mod policy;
 pub mod regalloc;
 pub mod semantic;
-pub mod std;
 pub mod wide;
+
+pub use ivm_abi::{
+    Perm, SyscallPolicy, VMError, axt, dev_env, encoding, instruction, metadata, pointer_abi,
+    syscalls,
+};

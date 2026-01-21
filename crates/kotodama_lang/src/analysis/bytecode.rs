@@ -3,10 +3,7 @@ use std::{collections::HashSet, error::Error, fmt};
 use norito::json as norito_json_mod;
 
 use super::{AnalysisCategory, AnalysisFinding, SimpleRng};
-use crate::{
-    IVM, VMError, instruction::wide, ivm_cache::IvmCache, kotodama::std as kstd,
-    metadata::ProgramMetadata,
-};
+use crate::{VMError, instruction::wide, metadata::ProgramMetadata};
 
 /// Result of analysing a Kotodama bytecode artifact.
 #[derive(Debug)]
@@ -56,14 +53,18 @@ impl Error for BytecodeAnalysisError {
 pub fn analyze_bytecode(bytes: &[u8]) -> Result<BytecodeAnalysis, BytecodeAnalysisError> {
     let parsed = ProgramMetadata::parse(bytes).map_err(BytecodeAnalysisError::Metadata)?;
     let code = &bytes[parsed.code_offset..];
-    let decoded = IvmCache::decode_stream(code).map_err(BytecodeAnalysisError::Decode)?;
+    if code.len() % 4 != 0 {
+        return Err(BytecodeAnalysisError::Decode(VMError::DecodeError));
+    }
     let mut findings = Vec::new();
 
     let mut arithmetic_seen: HashSet<u8> = HashSet::new();
     let mut last_store_pc: Option<u64> = None;
 
-    for op in decoded.iter() {
-        let opcode = wide::opcode(op.inst);
+    for (idx, chunk) in code.chunks_exact(4).enumerate() {
+        let word = u32::from_le_bytes(chunk.try_into().unwrap());
+        let pc = (idx as u64).saturating_mul(4);
+        let opcode = wide::opcode(word);
         match opcode {
             wide::arithmetic::MUL
             | wide::arithmetic::MULH
@@ -80,24 +81,24 @@ pub fn analyze_bytecode(bytes: &[u8]) -> Result<BytecodeAnalysis, BytecodeAnalys
                         format!(
                             "Instruction `{}` at pc=0x{:x} may overflow; ensure inputs are bounded or checked",
                             opcode_name(opcode),
-                            op.pc
+                            pc
                         ),
                     ));
                 }
             }
             wide::memory::STORE64 | wide::memory::STORE128 => {
-                last_store_pc = Some(op.pc);
+                last_store_pc = Some(pc);
             }
             wide::system::SCALL => {
                 if let Some(store_pc) = last_store_pc
-                    && op.pc.saturating_sub(store_pc) <= 64
+                    && pc.saturating_sub(store_pc) <= 64
                 {
                     findings.push(AnalysisFinding::warning(
                         AnalysisCategory::BytecodeStatic,
                         "bytecode-reentrancy-risk",
                         format!(
                             "Store at pc=0x{store_pc:x} is followed by SCALL at pc=0x{:x}; review ordering for reentrancy safety",
-                            op.pc
+                            pc
                         ),
                     ));
                 }
@@ -105,7 +106,7 @@ pub fn analyze_bytecode(bytes: &[u8]) -> Result<BytecodeAnalysis, BytecodeAnalys
             _ => {}
         }
         if let Some(store_pc) = last_store_pc
-            && op.pc.saturating_sub(store_pc) > 256
+            && pc.saturating_sub(store_pc) > 256
         {
             last_store_pc = None;
         }
@@ -117,44 +118,22 @@ pub fn analyze_bytecode(bytes: &[u8]) -> Result<BytecodeAnalysis, BytecodeAnalys
     })
 }
 
-/// Execute the bytecode within the IVM multiple times to catch obvious runtime
-/// failures. The harness currently runs the program with a clean environment
-/// and does not yet randomise contract inputs.
+/// Execute the bytecode within a runtime harness when available.
+///
+/// The standalone `kotodama_lang` crate does not bundle an IVM runtime, so this
+/// function reports that runtime fuzzing is disabled.
 pub fn run_bytecode_fuzz(
     bytes: &[u8],
     iterations: usize,
 ) -> Result<BytecodeFuzzReport, BytecodeAnalysisError> {
-    let parsed = ProgramMetadata::parse(bytes).map_err(BytecodeAnalysisError::Metadata)?;
-    let meta = parsed.metadata;
+    let _ = iterations;
+    let _ = ProgramMetadata::parse(bytes).map_err(BytecodeAnalysisError::Metadata)?;
     let mut report = BytecodeFuzzReport::default();
-    let iterations = iterations.max(1);
-    let mut rng = SimpleRng::new(hash_bytes(bytes));
-    let gas_limit = if meta.max_cycles == 0 {
-        u64::MAX
-    } else {
-        meta.max_cycles
-    };
-    for iteration in 0..iterations {
-        let mut vm = IVM::new(gas_limit);
-        vm.load_program(bytes).map_err(BytecodeAnalysisError::Vm)?;
-        let payload = build_metadata_payload(&meta, iteration, &mut rng);
-        let ptr = kstd::input_tlv_norito_bytes(&mut vm, &payload);
-        vm.set_register(10, ptr);
-        vm.set_register(11, payload.len() as u64);
-        match vm.run() {
-            Ok(()) => {}
-            Err(error) => {
-                report.failures += 1;
-                report.findings.push(AnalysisFinding::warning(
-                    AnalysisCategory::BytecodeFuzz,
-                    "bytecode-runtime-failure",
-                    format!("bytecode execution trapped: {error:?}"),
-                ));
-                break;
-            }
-        }
-        report.runs += 1;
-    }
+    report.findings.push(AnalysisFinding::info(
+        AnalysisCategory::BytecodeFuzz,
+        "bytecode-fuzz-disabled",
+        "bytecode runtime fuzzing is not available in kotodama_lang builds",
+    ));
     Ok(report)
 }
 
@@ -211,20 +190,10 @@ fn build_metadata_payload(
     norito_json_mod::to_vec(&norito_json_mod::Value::Object(object)).unwrap_or_default()
 }
 
-fn hash_bytes(bytes: &[u8]) -> u64 {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let hash = hasher.finalize();
-    let mut seed = [0u8; 8];
-    seed.copy_from_slice(&hash[..8]);
-    u64::from_le_bytes(seed)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kotodama::compiler::Compiler as KotodamaCompiler;
+    use crate::compiler::Compiler as KotodamaCompiler;
 
     #[test]
     fn analyze_detects_arithmetic_instruction() {
@@ -242,13 +211,20 @@ mod tests {
     }
 
     #[test]
-    fn fuzz_runs_bytecode() {
+    fn fuzz_reports_disabled_runtime() {
         let code = KotodamaCompiler::new()
             .compile_source("fn main() { return; }")
             .expect("compile");
         let report = run_bytecode_fuzz(&code, 2).expect("fuzz");
         assert_eq!(report.failures, 0);
-        assert!(report.runs >= 1);
+        assert_eq!(report.runs, 0);
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.code == "bytecode-fuzz-disabled"),
+            "expected disabled runtime finding"
+        );
     }
 
     #[test]

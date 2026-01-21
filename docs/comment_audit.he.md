@@ -24,7 +24,7 @@ translator: manual
 - `crates/ivm/src/ivm.rs`
 - `crates/ivm/src/vector.rs`
 - `crates/ivm/src/host.rs`
-- `crates/ivm/src/syscalls.rs`
+- `crates/ivm_abi/src/syscalls.rs`
 - `crates/ivm/src/parallel.rs`
 - `crates/ivm/src/mock_wsv.rs`
 - `crates/ivm/src/axt.rs`
@@ -37,7 +37,7 @@ translator: manual
 - `crates/ivm/src/iso20022.rs`
 - `crates/ivm/src/halo2.rs`
 - `crates/ivm/src/signature.rs`
-- `crates/ivm/src/pointer_abi.rs`
+- `crates/ivm_abi/src/pointer_abi.rs`
 - `crates/ivm/src/ivm_cache.rs`
 
 קרייטים נוספים במרחב העבודה יעברו בדיקה נפרדת אם יתעורר צורך לעדכן הערות בעתיד.

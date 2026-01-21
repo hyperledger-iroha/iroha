@@ -143,7 +143,9 @@ Supporting structures:
 - `ChunkingProfileV1` re-states the mask, polynomial, and min/avg/max sizes so
   validators can detect unsupported chunkers.
 - `PinPolicy` includes `min_replicas`, `storage_class` (`Hot`, `Warm`, `Cold`),
-  and `retention_epoch`.
+  and `retention_epoch`. Storage nodes resolve the effective retention epoch as
+  the minimum of `pin_policy.retention_epoch` and optional metadata caps
+  (`sorafs.retention.deal_end_epoch`, `sorafs.retention.governance_cap_epoch`).
 - `GovernanceProofs` is a Norito enum that references on-chain pin registry
   entries. For SF-1 the proof list is populated by council signatures over the
   manifest digest (BLAKE3 of canonical Norito encoding).
@@ -237,7 +239,8 @@ flowchart LR
   updates alias pointers atomically via governance proposals.
 - Gateways keep `N` historical manifests per alias for rollback.
 - The Pin Registry enforces `retention_epoch` to prevent premature garbage
-  collection.
+  collection; storage nodes apply the resolved retention epoch (minimum of pin
+  policy plus metadata caps) when running GC.
 
 ## Governance Controls
 
@@ -265,10 +268,10 @@ map to an active registry entry. Admission proceeds as follows:
    Registry, including an expiry epoch and the chunker handle. Torii, gateways,
    and `sorafs-node` processes drop adverts whenever the envelope hash, handle,
    or expiry does not match the active registry entry.
-5. Providers must renew before the recorded `retention_epoch`. When a record
-   lapses, nodes enter drain mode, stop accepting new pin allocations from that
-   provider, and gossip a `provider_unregistered` event so operators can rotate
-   capacity.
+5. Providers must renew before the resolved retention epoch (minimum of pin
+   policy, deal end, and governance cap). When a record lapses, nodes enter
+   drain mode, stop accepting new pin allocations from that provider, and gossip
+   a `provider_unregistered` event so operators can rotate capacity.
 
 `RegisterPinManifest` now invokes the shared validator from
 `sorafs_manifest`, rejecting submissions whose chunker descriptors or pin
@@ -494,7 +497,9 @@ artifacts or forging timestamps.
 
 - The manifest contains `pin_policy.retention_epoch` and `alias_version`. Torii
   APIs and gateways reject payloads that fall outside the active governance
-  window or present stale alias versions.
+  window or present stale alias versions. Optional metadata caps
+  (`sorafs.retention.deal_end_epoch`, `sorafs.retention.governance_cap_epoch`)
+  bound the effective retention used by storage nodes.
 - Alias proofs include a Merkle path against the on-chain registry. Clients
   verify the proof hash against the current registry root fetched from Torii,
   preventing stale manifests from gaining alias authority.
@@ -520,9 +525,9 @@ revealing sensitive data retroactively.
   ChaCha20-Poly1305) envelopes so that payloads remain confidential under PQ
 - Governance policy documents rotation intervals for hybrid envelopes; new
   manifests require explicit council waivers.
-- Manifests carry classification metadata (`sensitivity`, `retention_epoch`)
-  so CLI and SDK tooling can warn when ciphertext sits beyond its approved
-  cryptoperiod.
+- Manifests carry classification metadata (`sensitivity`) and optional
+  retention caps so CLI and SDK tooling can warn when ciphertext sits beyond
+  its approved cryptoperiod.
 - Clients MAY supply per-request additional-authentication material (AAM) that
   stays off providers, ensuring stored ciphertext cannot be decrypted even if a
   future primitive weakens.

@@ -6751,6 +6751,69 @@ impl Telemetry {
         }
     }
 
+    /// Increment pacemaker backpressure deferral counter for the supplied reason label.
+    pub fn inc_pacemaker_backpressure_deferral_reason(&self, reason: &'static str) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .sumeragi_pacemaker_backpressure_deferrals_by_reason_total
+                .with_label_values(&[reason])
+                .inc();
+        }
+    }
+
+    /// Observe the duration (ms) of a pacemaker backpressure deferral window.
+    pub fn observe_pacemaker_backpressure_deferral_duration(
+        &self,
+        reason: &'static str,
+        duration: Duration,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            let ms = duration.as_secs_f64() * 1_000.0;
+            self.metrics
+                .sumeragi_pacemaker_backpressure_deferral_duration_ms
+                .with_label_values(&[reason])
+                .observe(ms.max(0.0));
+        }
+    }
+
+    /// Set whether a pacemaker backpressure deferral is currently active.
+    pub fn set_pacemaker_backpressure_deferral_active(&self, reason: &'static str, active: bool) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .sumeragi_pacemaker_backpressure_deferral_active
+                .with_label_values(&[reason])
+                .set(u64::from(active));
+        }
+    }
+
+    /// Record the age (ms) of the current pacemaker backpressure deferral window.
+    pub fn set_pacemaker_backpressure_deferral_age_ms(&self, reason: &'static str, age_ms: u64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .sumeragi_pacemaker_backpressure_deferral_age_ms
+                .with_label_values(&[reason])
+                .set(age_ms);
+        }
+    }
+
+    /// Observe pacemaker evaluation duration (ms).
+    pub fn observe_pacemaker_eval_ms(&self, duration: Duration) {
+        if self.enabled.load(Ordering::Relaxed) {
+            let ms = duration.as_secs_f64() * 1_000.0;
+            self.metrics.sumeragi_pacemaker_eval_ms.observe(ms.max(0.0));
+        }
+    }
+
+    /// Observe proposal attempt duration (ms) from the pacemaker tick loop.
+    pub fn observe_pacemaker_propose_ms(&self, duration: Duration) {
+        if self.enabled.load(Ordering::Relaxed) {
+            let ms = duration.as_secs_f64() * 1_000.0;
+            self.metrics
+                .sumeragi_pacemaker_propose_ms
+                .observe(ms.max(0.0));
+        }
+    }
+
     /// Update RBC backlog gauges derived from active sessions.
     pub fn set_rbc_backlog(&self, total_missing: u64, max_missing: u64, pending: u64) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -12056,6 +12119,58 @@ mod tests {
             metrics.sumeragi_pacemaker_view_timeout_remaining_ms.get(),
             33
         );
+    }
+
+    #[test]
+    fn pacemaker_backpressure_reason_metrics_update() {
+        let metrics = Arc::new(Metrics::default());
+        let tel = Telemetry::new(Arc::clone(&metrics), true);
+        tel.inc_pacemaker_backpressure_deferral_reason("queue_saturated");
+        tel.set_pacemaker_backpressure_deferral_active("queue_saturated", true);
+        tel.set_pacemaker_backpressure_deferral_age_ms("queue_saturated", 42);
+        tel.observe_pacemaker_backpressure_deferral_duration(
+            "queue_saturated",
+            Duration::from_millis(15),
+        );
+
+        assert_eq!(
+            metrics
+                .sumeragi_pacemaker_backpressure_deferrals_by_reason_total
+                .with_label_values(&["queue_saturated"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_pacemaker_backpressure_deferral_active
+                .with_label_values(&["queue_saturated"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_pacemaker_backpressure_deferral_age_ms
+                .with_label_values(&["queue_saturated"])
+                .get(),
+            42
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_pacemaker_backpressure_deferral_duration_ms
+                .with_label_values(&["queue_saturated"])
+                .get_sample_count(),
+            1
+        );
+    }
+
+    #[test]
+    fn pacemaker_eval_and_propose_metrics_recorded() {
+        let metrics = Arc::new(Metrics::default());
+        let tel = Telemetry::new(Arc::clone(&metrics), true);
+        tel.observe_pacemaker_eval_ms(Duration::from_millis(3));
+        tel.observe_pacemaker_propose_ms(Duration::from_millis(5));
+        assert_eq!(metrics.sumeragi_pacemaker_eval_ms.get_sample_count(), 1);
+        assert_eq!(metrics.sumeragi_pacemaker_propose_ms.get_sample_count(), 1);
     }
 
     #[test]

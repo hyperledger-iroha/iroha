@@ -4198,6 +4198,7 @@ struct ProposeState {
     new_view_tracker: NewViewTracker,
     proposals_seen: BTreeSet<(u64, u64)>,
     pacemaker_backpressure: PacemakerBackpressure,
+    pacemaker_backpressure_tracker: pacing::PacemakerBackpressureTracker,
     last_pacemaker_attempt: Option<Instant>,
     last_successful_proposal: Option<Instant>,
     propose_attempt_monitor: ProposeAttemptMonitor,
@@ -4245,6 +4246,7 @@ fn reset_runtime_state_for_mode_flip(
     phase_tracker: &mut PhaseTracker,
     propose_attempt_monitor: &mut ProposeAttemptMonitor,
     pacemaker_backpressure: &mut PacemakerBackpressure,
+    pacemaker_backpressure_tracker: &mut pacing::PacemakerBackpressureTracker,
     forced_view_after_timeout: &mut Option<(u64, u64)>,
     last_pacemaker_attempt: &mut Option<Instant>,
     last_successful_proposal: &mut Option<Instant>,
@@ -4262,6 +4264,7 @@ fn reset_runtime_state_for_mode_flip(
     *phase_tracker = PhaseTracker::new(now);
     *propose_attempt_monitor = ProposeAttemptMonitor::new();
     *pacemaker_backpressure = PacemakerBackpressure::new();
+    *pacemaker_backpressure_tracker = pacing::PacemakerBackpressureTracker::new();
     *forced_view_after_timeout = None;
     *last_pacemaker_attempt = None;
     *last_successful_proposal = None;
@@ -7230,6 +7233,7 @@ impl Actor {
             new_view_tracker: NewViewTracker::default(),
             proposals_seen: BTreeSet::new(),
             pacemaker_backpressure: PacemakerBackpressure::new(),
+            pacemaker_backpressure_tracker: pacing::PacemakerBackpressureTracker::new(),
             last_pacemaker_attempt: None,
             last_successful_proposal: None,
             propose_attempt_monitor: ProposeAttemptMonitor::new(),
@@ -8204,6 +8208,12 @@ impl Actor {
                 now,
             );
         let pacemaker_eval_cost = pacemaker_eval_start.elapsed();
+        let deferring = proposal_backpressure.should_defer() && !should_attempt_proposal;
+        let telemetry = self.telemetry_handle().cloned();
+        self.subsystems
+            .propose
+            .pacemaker_backpressure_tracker
+            .update(proposal_backpressure, deferring, now, telemetry);
         if log_initial_deferral || log_fire_deferral {
             self.on_pacemaker_backpressure_deferral(now, state);
         }
@@ -8213,6 +8223,12 @@ impl Actor {
                 progress = true;
             }
             propose_cost = propose_cost.saturating_add(propose_start.elapsed());
+        }
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.observe_pacemaker_eval_ms(pacemaker_eval_cost);
+            if propose_cost != Duration::ZERO {
+                telemetry.observe_pacemaker_propose_ms(propose_cost);
+            }
         }
         let tick_cost = tick_start.elapsed();
         let timing = self.tick_timing.observe(tick_start, tick_cost);

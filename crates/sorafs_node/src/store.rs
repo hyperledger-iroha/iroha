@@ -30,7 +30,10 @@ use sorafs_car::{
     PorChunkTree, PorLeaf, PorMerkleTree, PorProof, PorSegment, TaikaiSegmentHint,
 };
 use sorafs_chunker::ChunkProfile;
-use sorafs_manifest::{MANIFEST_VERSION_V1, ManifestV1};
+use sorafs_manifest::{
+    MANIFEST_VERSION_V1, ManifestV1,
+    retention::{RetentionMetadataError, RetentionSourceV1},
+};
 use thiserror::Error;
 
 use crate::config::StorageConfig;
@@ -131,6 +134,9 @@ pub enum StorageError {
         /// Actual number of entries provided.
         actual: usize,
     },
+    /// Retention metadata payload failed validation.
+    #[error("retention metadata invalid: {0}")]
+    RetentionMetadata(#[from] RetentionMetadataError),
 }
 
 /// Runtime facade over the deterministic, persistent chunk store.
@@ -149,6 +155,8 @@ struct StorageState {
     manifests: BTreeMap<String, StoredManifest>,
     total_bytes: u64,
     reserved_bytes: u64,
+    access_counter: u64,
+    chunk_refcounts: BTreeMap<[u8; 32], u32>,
 }
 
 impl StorageState {
@@ -171,6 +179,8 @@ pub struct StoredManifest {
     stripe_layout: Option<DaStripeLayout>,
     stored_at_unix_secs: u64,
     retention_epoch: u64,
+    retention_source: Option<RetentionSourceV1>,
+    last_access: u64,
     chunk_files: Vec<ChunkFileRecord>,
     por_tree: StoredPorTree,
     manifest_path: PathBuf,
@@ -197,6 +207,10 @@ pub struct StoredManifestParts {
     pub stored_at_unix_secs: u64,
     /// Unix retention epoch for garbage collection (0 if not retained).
     pub retention_epoch: u64,
+    /// Retention source record (optional for legacy manifests).
+    pub retention_source: Option<RetentionSourceV1>,
+    /// Monotonic access counter recorded for LRU eviction ordering.
+    pub last_access: u64,
     /// Records describing each stored chunk file.
     pub chunk_files: Vec<ChunkFileRecord>,
     /// Proof-of-retrievability Merkle tree snapshot.
@@ -223,6 +237,8 @@ impl StoredManifest {
             stripe_layout: parts.stripe_layout,
             stored_at_unix_secs: parts.stored_at_unix_secs,
             retention_epoch: parts.retention_epoch,
+            retention_source: parts.retention_source,
+            last_access: parts.last_access,
             chunk_files: parts.chunk_files,
             por_tree: parts.por_tree,
             manifest_path: parts.manifest_path,
@@ -281,6 +297,18 @@ impl StoredManifest {
     #[must_use]
     pub fn retention_epoch(&self) -> u64 {
         self.retention_epoch
+    }
+
+    /// Retention source metadata when available.
+    #[must_use]
+    pub fn retention_source(&self) -> Option<&RetentionSourceV1> {
+        self.retention_source.as_ref()
+    }
+
+    /// Monotonic access counter recorded for LRU eviction ordering.
+    #[must_use]
+    pub fn last_access(&self) -> u64 {
+        self.last_access
     }
 
     /// Number of chunks stored for the manifest.
@@ -649,6 +677,12 @@ impl From<&PorLeaf> for StoredPorLeaf {
 struct ManifestIndex {
     version: u8,
     total_bytes: u64,
+    #[norito(default)]
+    gc_freed_bytes_total: u64,
+    #[norito(default)]
+    gc_evictions_total: u64,
+    #[norito(default)]
+    chunk_refcounts: Vec<ChunkRefcountEntry>,
     entries: Vec<ManifestIndexEntry>,
 }
 
@@ -657,9 +691,18 @@ impl Default for ManifestIndex {
         Self {
             version: INDEX_VERSION_V1,
             total_bytes: 0,
+            gc_freed_bytes_total: 0,
+            gc_evictions_total: 0,
+            chunk_refcounts: Vec::new(),
             entries: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+pub(crate) struct ChunkRefcountEntry {
+    pub(crate) digest: [u8; 32],
+    pub(crate) count: u32,
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
@@ -674,6 +717,10 @@ struct ManifestIndexEntry {
     stored_at_unix_secs: u64,
     #[norito(default)]
     retention_epoch: u64,
+    #[norito(default)]
+    retention_source: Option<RetentionSourceV1>,
+    #[norito(default)]
+    last_access: u64,
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
@@ -689,6 +736,10 @@ struct StoredManifestRecord {
     stored_at_unix_secs: u64,
     #[norito(default)]
     retention_epoch: u64,
+    #[norito(default)]
+    retention_source: Option<RetentionSourceV1>,
+    #[norito(default)]
+    last_access: u64,
     chunk_files: Vec<StoredChunkRecord>,
     por_tree: StoredPorTree,
 }
@@ -710,6 +761,26 @@ struct StoredChunkRole {
     group_id: u32,
 }
 
+fn chunk_refcount_map(entries: &[ChunkRefcountEntry]) -> BTreeMap<[u8; 32], u32> {
+    let mut map = BTreeMap::new();
+    for entry in entries {
+        if entry.count == 0 {
+            continue;
+        }
+        map.insert(entry.digest, entry.count);
+    }
+    map
+}
+
+fn chunk_refcount_entries(map: &BTreeMap<[u8; 32], u32>) -> Vec<ChunkRefcountEntry> {
+    map.iter()
+        .map(|(digest, count)| ChunkRefcountEntry {
+            digest: *digest,
+            count: *count,
+        })
+        .collect()
+}
+
 impl StorageBackend {
     /// Create a new storage backend rooted at the directory described by `config`.
     pub fn new(config: StorageConfig) -> Result<Self, StorageError> {
@@ -719,7 +790,7 @@ impl StorageBackend {
 
         fs::create_dir_all(&manifests_dir)?;
 
-        let index = if index_path.exists() {
+        let mut index = if index_path.exists() {
             let bytes = fs::read(&index_path)?;
             norito::decode_from_bytes(&bytes)?
         } else {
@@ -728,18 +799,46 @@ impl StorageBackend {
 
         let mut total_bytes = index.total_bytes;
         let mut manifests = BTreeMap::new();
+        let mut chunk_refcounts: BTreeMap<[u8; 32], u32> = BTreeMap::new();
+        let mut access_counter = 0u64;
 
-        for entry in &index.entries {
+        for entry in &mut index.entries {
             let manifest_dir = manifests_dir.join(&entry.manifest_id);
             let metadata_path = manifest_dir.join(METADATA_FILE_NAME);
             let manifest_path = manifest_dir.join(MANIFEST_FILE_NAME);
 
             let metadata_bytes = fs::read(&metadata_path)?;
-            let record: StoredManifestRecord = norito::decode_from_bytes(&metadata_bytes)?;
+            let mut record: StoredManifestRecord = norito::decode_from_bytes(&metadata_bytes)?;
+            if record.retention_source.is_none() {
+                record.retention_source = entry.retention_source.clone();
+            }
+            if entry.retention_source.is_none() {
+                entry.retention_source = record.retention_source.clone();
+            }
+            let last_access = record.last_access.max(entry.last_access);
+            record.last_access = last_access;
+            entry.last_access = last_access;
+            access_counter = access_counter.max(last_access);
 
             let manifest = StoredManifest::from_record(record, manifest_path);
+            for chunk in &manifest.chunk_files {
+                let counter = chunk_refcounts.entry(chunk.digest).or_insert(0);
+                *counter = counter.saturating_add(1);
+            }
 
             manifests.insert(entry.manifest_id.clone(), manifest);
+        }
+
+        let mut index_dirty = false;
+        let stored_refcounts = chunk_refcount_map(&index.chunk_refcounts);
+        if stored_refcounts != chunk_refcounts {
+            iroha_logger::warn!(
+                stored = stored_refcounts.len(),
+                computed = chunk_refcounts.len(),
+                "chunk refcount index mismatch; rebuilding from manifests"
+            );
+            index.chunk_refcounts = chunk_refcount_entries(&chunk_refcounts);
+            index_dirty = true;
         }
 
         if total_bytes == 0 {
@@ -747,6 +846,20 @@ impl StorageBackend {
                 .values()
                 .map(|manifest| manifest.content_length)
                 .sum();
+            index.total_bytes = total_bytes;
+            index_dirty = true;
+        }
+
+        if index_dirty {
+            if let Ok(bytes) = norito::to_bytes(&index) {
+                if let Err(err) = write_atomic(&index_path, &bytes) {
+                    iroha_logger::warn!(
+                        %err,
+                        path = %index_path.display(),
+                        "failed to persist rebuilt storage index"
+                    );
+                }
+            }
         }
 
         let state = StorageState {
@@ -754,6 +867,8 @@ impl StorageBackend {
             manifests,
             total_bytes,
             reserved_bytes: 0,
+            access_counter,
+            chunk_refcounts,
         };
 
         Ok(Self {
@@ -812,6 +927,59 @@ impl StorageBackend {
             .collect()
     }
 
+    /// Returns the count of manifests recorded in the on-disk index.
+    #[must_use]
+    pub(crate) fn index_manifest_count(&self) -> usize {
+        self.state
+            .read()
+            .expect("storage state poisoned")
+            .index
+            .entries
+            .len()
+    }
+
+    /// Snapshot of chunk refcounts keyed by digest (sorted by digest).
+    #[must_use]
+    pub(crate) fn chunk_refcount_snapshot(&self) -> Vec<ChunkRefcountEntry> {
+        let state = self.state.read().expect("storage state poisoned");
+        chunk_refcount_entries(&state.chunk_refcounts)
+    }
+
+    /// Returns the total GC counters tracked in the index.
+    #[must_use]
+    pub(crate) fn gc_counters(&self) -> (u64, u64) {
+        let state = self.state.read().expect("storage state poisoned");
+        (
+            state.index.gc_freed_bytes_total,
+            state.index.gc_evictions_total,
+        )
+    }
+
+    /// Returns true if any chunks in the manifest are referenced by more than one manifest.
+    pub(crate) fn manifest_has_shared_chunks(
+        &self,
+        manifest_id: &str,
+    ) -> Result<bool, StorageError> {
+        let state = self.state.read().expect("storage state poisoned");
+        let manifest =
+            state
+                .manifests
+                .get(manifest_id)
+                .ok_or_else(|| StorageError::ManifestNotFound {
+                    manifest_id: manifest_id.to_owned(),
+                })?;
+        for chunk in &manifest.chunk_files {
+            if state
+                .chunk_refcounts
+                .get(&chunk.digest)
+                .is_some_and(|count| *count > 1)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Evict a stored manifest and reclaim its payload bytes.
     pub fn evict_manifest(&self, manifest_id: &str) -> Result<u64, StorageError> {
         let mut state = self.state.write().expect("storage state poisoned");
@@ -828,10 +996,25 @@ impl StorageBackend {
             .expect("manifest path must have parent")
             .to_path_buf();
         let mut new_index = state.index.clone();
+        let mut refcounts = state.chunk_refcounts.clone();
+        for chunk in &stored.chunk_files {
+            if let Some(count) = refcounts.get_mut(&chunk.digest) {
+                if *count <= 1 {
+                    refcounts.remove(&chunk.digest);
+                } else {
+                    *count = count.saturating_sub(1);
+                }
+            }
+        }
         new_index
             .entries
             .retain(|entry| entry.manifest_id != manifest_id);
         new_index.total_bytes = state.total_bytes.saturating_sub(stored.content_length());
+        new_index.gc_freed_bytes_total = new_index
+            .gc_freed_bytes_total
+            .saturating_add(stored.content_length());
+        new_index.gc_evictions_total = new_index.gc_evictions_total.saturating_add(1);
+        new_index.chunk_refcounts = chunk_refcount_entries(&refcounts);
 
         let index_bytes = norito::to_bytes(&new_index).map_err(StorageError::Norito)?;
         write_atomic(&self.index_path, &index_bytes)?;
@@ -839,6 +1022,7 @@ impl StorageBackend {
         state.index = new_index;
         state.total_bytes = state.total_bytes.saturating_sub(stored.content_length());
         state.manifests.remove(manifest_id);
+        state.chunk_refcounts = refcounts;
         drop(state);
 
         let trash_path = self.gc_trash_path(manifest_id);
@@ -1047,7 +1231,14 @@ impl StorageBackend {
         }
 
         let stored_at_unix_secs = unix_timestamp();
-        let retention_epoch = manifest.pin_policy.retention_epoch;
+        let retention_source = RetentionSourceV1::from_manifest(manifest)?;
+        let retention_epoch = retention_source.effective_epoch();
+        let last_access = {
+            let mut state = self.state.write().expect("storage state poisoned");
+            let next_access = state.access_counter.saturating_add(1);
+            state.access_counter = next_access;
+            next_access
+        };
         let chunk_count = plan.chunks.len() as u32;
 
         let metadata_record = StoredManifestRecord {
@@ -1060,6 +1251,8 @@ impl StorageBackend {
             stripe_layout,
             stored_at_unix_secs,
             retention_epoch,
+            retention_source: Some(retention_source.clone()),
+            last_access,
             chunk_files: chunk_records.clone(),
             por_tree: StoredPorTree::from(&por_tree),
         };
@@ -1077,6 +1270,12 @@ impl StorageBackend {
 
         let mut new_index = state.index.clone();
         new_index.total_bytes = state.total_bytes + required_bytes;
+        let mut refcounts = state.chunk_refcounts.clone();
+        for record in &chunk_records {
+            let counter = refcounts.entry(record.digest).or_insert(0);
+            *counter = counter.saturating_add(1);
+        }
+        new_index.chunk_refcounts = chunk_refcount_entries(&refcounts);
         new_index.entries.push(ManifestIndexEntry {
             manifest_id: manifest_id.clone(),
             manifest_cid: manifest.root_cid.clone(),
@@ -1087,6 +1286,8 @@ impl StorageBackend {
             chunk_count,
             stored_at_unix_secs,
             retention_epoch,
+            retention_source: Some(retention_source.clone()),
+            last_access,
         });
 
         let index_bytes = match norito::to_bytes(&new_index) {
@@ -1109,6 +1310,7 @@ impl StorageBackend {
         state.index = new_index;
         state.total_bytes = state.total_bytes.saturating_add(required_bytes);
         state.manifests.insert(manifest_id.clone(), stored_manifest);
+        state.chunk_refcounts = refcounts;
 
         Ok(manifest_id)
     }
@@ -1136,6 +1338,71 @@ impl StorageBackend {
             .cloned()
     }
 
+    fn manifest_for_access(&self, manifest_id: &str) -> Result<StoredManifest, StorageError> {
+        let (record, metadata_path, index_bytes, manifest) = {
+            let mut state = self.state.write().expect("storage state poisoned");
+            let next_access = state.access_counter.saturating_add(1);
+            state.access_counter = next_access;
+            let (record, metadata_path, manifest, retention_source) = {
+                let manifest = state.manifests.get_mut(manifest_id).ok_or_else(|| {
+                    StorageError::ManifestNotFound {
+                        manifest_id: manifest_id.to_owned(),
+                    }
+                })?;
+                manifest.last_access = next_access;
+                let retention_source = manifest.retention_source.clone();
+                let record = manifest.to_record();
+                let metadata_path = manifest
+                    .manifest_path
+                    .parent()
+                    .expect("manifest path must have parent")
+                    .join(METADATA_FILE_NAME);
+                (record, metadata_path, manifest.clone(), retention_source)
+            };
+
+            if let Some(entry) = state
+                .index
+                .entries
+                .iter_mut()
+                .find(|entry| entry.manifest_id == manifest_id)
+            {
+                entry.last_access = next_access;
+                entry.retention_source = retention_source;
+            }
+            let index_bytes = match norito::to_bytes(&state.index) {
+                Ok(bytes) => Some(bytes),
+                Err(err) => {
+                    iroha_logger::warn!(
+                        %err,
+                        manifest_id = %manifest_id,
+                        "failed to encode storage index while updating access"
+                    );
+                    None
+                }
+            };
+            (record, metadata_path, index_bytes, manifest)
+        };
+
+        if let Err(err) = write_manifest_metadata(&record, &metadata_path) {
+            iroha_logger::warn!(
+                %err,
+                manifest_id = %manifest_id,
+                "failed to persist manifest access metadata"
+            );
+        }
+        if let Some(bytes) = index_bytes {
+            if let Err(err) = write_atomic(&self.index_path, &bytes) {
+                iroha_logger::warn!(
+                    %err,
+                    manifest_id = %manifest_id,
+                    "failed to persist storage index access metadata"
+                );
+            }
+        }
+
+        Ok(manifest)
+    }
+
     /// Read an exact range from the stored payload.
     pub fn read_payload_range(
         &self,
@@ -1147,11 +1414,7 @@ impl StorageBackend {
             return Ok(Vec::new());
         }
 
-        let manifest =
-            self.manifest(manifest_id)
-                .ok_or_else(|| StorageError::ManifestNotFound {
-                    manifest_id: manifest_id.to_owned(),
-                })?;
+        let manifest = self.manifest_for_access(manifest_id)?;
 
         if offset
             .checked_add(len as u64)
@@ -1199,7 +1462,16 @@ impl StorageBackend {
         manifest_id: &str,
         digest: &[u8; 32],
     ) -> Result<Vec<u8>, StorageError> {
-        let record = self.chunk_by_digest(manifest_id, digest)?;
+        let manifest = self.manifest_for_access(manifest_id)?;
+        let record = manifest
+            .chunk_files
+            .iter()
+            .find(|record| record.digest == *digest)
+            .cloned()
+            .ok_or_else(|| StorageError::ChunkNotFound {
+                manifest_id: manifest_id.to_owned(),
+                digest_hex: digest.encode_hex::<String>(),
+            })?;
         let bytes = fs::read(&record.path)?;
         if bytes.len() != record.length as usize {
             return Err(StorageError::PayloadLengthMismatch {
@@ -1221,11 +1493,7 @@ impl StorageBackend {
             return Ok(Vec::new());
         }
 
-        let manifest =
-            self.manifest(manifest_id)
-                .ok_or_else(|| StorageError::ManifestNotFound {
-                    manifest_id: manifest_id.to_owned(),
-                })?;
+        let manifest = self.manifest_for_access(manifest_id)?;
 
         let por_tree = manifest.por_tree();
         let total = por_tree.leaf_count();
@@ -1321,6 +1589,8 @@ impl StoredManifest {
             stripe_layout: record.stripe_layout,
             stored_at_unix_secs: record.stored_at_unix_secs,
             retention_epoch: record.retention_epoch,
+            retention_source: record.retention_source,
+            last_access: record.last_access,
             chunk_files,
             por_tree: record.por_tree,
             manifest_path,
@@ -1358,6 +1628,8 @@ impl StoredManifest {
             stripe_layout: self.stripe_layout,
             stored_at_unix_secs: self.stored_at_unix_secs,
             retention_epoch: self.retention_epoch,
+            retention_source: self.retention_source.clone(),
+            last_access: self.last_access,
             chunk_files,
             por_tree: self.por_tree.clone(),
         }
@@ -1875,7 +2147,7 @@ mod tests {
         let payload = b"retention epoch persistence";
         let plan = single_file_plan(payload).expect("plan");
         let mut policy = PinPolicy::default();
-        policy.retention_epoch = 123_456;
+        policy.retention_epoch = 200;
 
         let manifest = ManifestBuilder::new()
             .root_cid(vec![0xFA, 0xCE])
@@ -1888,6 +2160,14 @@ mod tests {
             .car_digest(blake3::hash(payload).into())
             .car_size(plan.content_length)
             .pin_policy(policy)
+            .add_metadata(
+                sorafs_manifest::retention::RETENTION_DEAL_END_EPOCH_KEY,
+                "150",
+            )
+            .add_metadata(
+                sorafs_manifest::retention::RETENTION_GOVERNANCE_CAP_EPOCH_KEY,
+                "180",
+            )
             .build()
             .expect("manifest");
 
@@ -1897,11 +2177,65 @@ mod tests {
             .expect("ingest");
 
         let stored = backend.manifest(&manifest_id).expect("stored");
-        assert_eq!(stored.retention_epoch(), 123_456);
+        assert_eq!(stored.retention_epoch(), 150);
+        let source = stored.retention_source().expect("retention source");
+        assert_eq!(
+            source.sources,
+            vec![sorafs_manifest::retention::RetentionSourceKindV1::DealEnd]
+        );
 
         let reloaded = StorageBackend::new(temp_config(&temp_dir)).expect("reload");
         let stored_reloaded = reloaded.manifest(&manifest_id).expect("stored manifest");
-        assert_eq!(stored_reloaded.retention_epoch(), 123_456);
+        assert_eq!(stored_reloaded.retention_epoch(), 150);
+        let source_reloaded = stored_reloaded
+            .retention_source()
+            .expect("retention source");
+        assert_eq!(
+            source_reloaded.sources,
+            vec![sorafs_manifest::retention::RetentionSourceKindV1::DealEnd]
+        );
+    }
+
+    #[test]
+    fn last_access_persists_after_reads() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
+
+        let payload = b"last access persistence";
+        let plan = single_file_plan(payload).expect("plan");
+        let manifest = ManifestBuilder::new()
+            .root_cid(vec![0x11, 0x22])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(plan.content_length)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("manifest");
+
+        let mut reader = &payload[..];
+        let manifest_id = backend
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest");
+
+        let stored = backend.manifest(&manifest_id).expect("stored");
+        let initial_access = stored.last_access();
+        assert!(initial_access > 0);
+
+        let _slice = backend
+            .read_payload_range(&manifest_id, 0, 4)
+            .expect("read");
+
+        let updated = backend.manifest(&manifest_id).expect("stored");
+        assert!(updated.last_access() > initial_access);
+
+        let reloaded = StorageBackend::new(temp_config(&temp_dir)).expect("reload");
+        let stored_reloaded = reloaded.manifest(&manifest_id).expect("stored");
+        assert_eq!(stored_reloaded.last_access(), updated.last_access());
     }
 
     #[test]

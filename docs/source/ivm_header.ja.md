@@ -36,7 +36,7 @@ translator: manual
 - `max_cycles`: ZK モードおよびアドミッションで利用される実行パディング上限。
 
 ## 備考
-- エンディアンとレイアウトは実装によって定義され、`version` と結び付いています。上記は `crates/ivm/src/metadata.rs` における現行実装を反映しています。
+- エンディアンとレイアウトは実装によって定義され、`version` と結び付いています。上記は `crates/ivm_abi/src/metadata.rs` における現行実装を反映しています。
 - 最小限のリーダーは現行アーティファクトに対してこのレイアウトに依存できますが、将来の変更に備え `version` によるゲーティングを実装すべきです。
 - ハードウェアアクセラレーション（Metal/CUDA）は各ホストでオプトインです。ランタイムは `iroha_config` の `AccelerationConfig` から `enable_metal` と `enable_cuda` を読み取り、コンパイル済みであっても該当バックエンドを切り替えます。VM 作成前に `ivm::set_acceleration_config` を介して適用されます。
 - オペレーターは診断目的で `IVM_DISABLE_METAL=1` または `IVM_DISABLE_CUDA=1` を設定し、特定バックエンドを強制的に無効化できます。これらの環境変数は設定を上書きし、VM を決定論的な CPU パスに固定します。

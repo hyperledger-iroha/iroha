@@ -9,6 +9,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use hex::ToHex;
 use norito::json::{self, Map as JsonMap, Value as JsonValue};
 use sorafs_manifest::{
+    SorafsReconciliationReportV1,
     deal::{DealSettlementStatusV1, DealSettlementV1},
     repair::{GcAuditEventV1, RepairAuditEventV1, RepairSlashProposalV1, RepairTaskStatusV1},
 };
@@ -50,6 +51,10 @@ impl FilesystemGovernancePublisher {
         self.root.join("gc").join("audit")
     }
 
+    fn reconciliation_root(&self) -> PathBuf {
+        self.root.join("reconciliation")
+    }
+
     fn base_path(&self, settlement: &DealSettlementV1, digest_hex: &str) -> PathBuf {
         let deal_hex = settlement.deal_id.encode_hex::<String>();
         let status = status_label(settlement.status);
@@ -88,6 +93,21 @@ impl FilesystemGovernancePublisher {
         let digest_prefix = &digest_hex[..16];
         let base = format!("{sequence}_{reason}_{manifest_hex}_{digest_prefix}");
         self.gc_audit_root().join(base)
+    }
+
+    fn reconciliation_path(
+        &self,
+        report: &SorafsReconciliationReportV1,
+        digest_hex: &str,
+    ) -> PathBuf {
+        let provider_hex = hex::encode(report.provider_id);
+        let provider_prefix = &provider_hex[..16];
+        let digest_prefix = &digest_hex[..16];
+        let base = format!(
+            "{:020}_{}_{}",
+            report.generated_at_unix, provider_prefix, digest_prefix
+        );
+        self.reconciliation_root().join(base)
     }
 }
 
@@ -383,6 +403,9 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             "reason".into(),
             JsonValue::from(event.payload.reason.clone()),
         );
+        if let Some(blocked) = &event.payload.blocked_reason {
+            metadata.insert("blocked_reason".into(), JsonValue::from(blocked.clone()));
+        }
         metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
         metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
         metadata.insert(
@@ -393,6 +416,71 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
 
         let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
             GovernancePublishError::other(format!("serialize gc audit json: {err}"))
+        })?;
+
+        let json_path = base_path.with_extension("json");
+        write_atomic(&json_path, json_body.as_bytes())?;
+        write_digest_sidecar(&json_path, json_body.as_bytes())?;
+
+        Ok(())
+    }
+
+    fn publish_reconciliation_report(
+        &self,
+        report: &SorafsReconciliationReportV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let digest = blake3::hash(encoded);
+        let digest_hex = digest.to_hex().to_string();
+        let base_path = self.reconciliation_path(report, &digest_hex);
+
+        let encoded_path = base_path.with_extension("to");
+        write_atomic(&encoded_path, encoded)?;
+        write_digest_sidecar(&encoded_path, encoded)?;
+
+        let mut payload = JsonMap::new();
+        payload.insert(
+            "report".into(),
+            json::to_value(report).map_err(|err| {
+                GovernancePublishError::other(format!("serialize reconciliation report: {err}"))
+            })?,
+        );
+
+        let mut metadata = JsonMap::new();
+        metadata.insert(
+            "provider".into(),
+            JsonValue::from(hex::encode(report.provider_id)),
+        );
+        metadata.insert(
+            "generated_at_unix".into(),
+            JsonValue::from(report.generated_at_unix),
+        );
+        metadata.insert(
+            "repair_snapshot_hash".into(),
+            JsonValue::from(hex::encode(report.repair_snapshot_hash)),
+        );
+        metadata.insert(
+            "retention_snapshot_hash".into(),
+            JsonValue::from(hex::encode(report.retention_snapshot_hash)),
+        );
+        metadata.insert(
+            "gc_snapshot_hash".into(),
+            JsonValue::from(hex::encode(report.gc_snapshot_hash)),
+        );
+        metadata.insert(
+            "divergence_count".into(),
+            JsonValue::from(report.divergence_count as u64),
+        );
+        metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
+        metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
+        metadata.insert(
+            "encoded_base64".into(),
+            JsonValue::from(BASE64_STANDARD.encode(encoded)),
+        );
+        payload.insert("metadata".into(), JsonValue::Object(metadata));
+
+        let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|err| {
+            GovernancePublishError::other(format!("serialize reconciliation report json: {err}"))
         })?;
 
         let json_path = base_path.with_extension("json");
@@ -417,6 +505,7 @@ mod tests {
         REPAIR_TASK_EVENT_VERSION_V1, RepairAuditEventV1, RepairTaskEventV1, RepairTaskStatusV1,
         RepairTicketId, SorafsAuditHeaderV1,
     };
+    use sorafs_manifest::{SORAFS_RECONCILIATION_REPORT_VERSION_V1, SorafsReconciliationReportV1};
     use tempfile::tempdir;
 
     use super::*;
@@ -629,6 +718,7 @@ mod tests {
             proposed_penalty_nano: 50_000,
             submitted_at_unix: 1_700_000_222,
             rationale: "missed SLA".into(),
+            approval: None,
         };
         let encoded = Encode::encode(&proposal);
 
@@ -695,6 +785,7 @@ mod tests {
             evicted_at_unix: 1_700_000_333,
             freed_bytes: 4_096,
             reason: "retention_expired".into(),
+            blocked_reason: None,
         };
         let digest = iroha_crypto::Hash::new(payload.encode());
         let header = SorafsAuditHeaderV1 {
@@ -733,5 +824,59 @@ mod tests {
             .and_then(JsonValue::as_str)
             .expect("reason");
         assert_eq!(reason, "retention_expired");
+    }
+
+    #[test]
+    fn filesystem_publisher_writes_reconciliation_report_files() {
+        let temp = tempdir().expect("tempdir");
+        let publisher =
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+
+        let report = SorafsReconciliationReportV1 {
+            version: SORAFS_RECONCILIATION_REPORT_VERSION_V1,
+            provider_id: [0x55; 32],
+            generated_at_unix: 1_700_000_444,
+            repair_snapshot_hash: [0x01; 32],
+            retention_snapshot_hash: [0x02; 32],
+            gc_snapshot_hash: [0x03; 32],
+            repair_task_count: 2,
+            retention_manifest_count: 3,
+            gc_evictions_total: 4,
+            gc_freed_bytes_total: 5,
+            divergence_count: 1,
+        };
+        let encoded = Encode::encode(&report);
+
+        publisher
+            .publish_reconciliation_report(&report, &encoded)
+            .expect("publish reconciliation report");
+
+        let dir = temp.path().join("reconciliation");
+        let entries = fs::read_dir(&dir)
+            .expect("directory exists")
+            .map(|entry| entry.expect("dir entry").path())
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 4, "expected encoded + json + digests");
+
+        let json_path = entries
+            .iter()
+            .find(|path| path.extension().map(|ext| ext == "json").unwrap_or(false))
+            .expect("json artefact present");
+        let json_bytes = fs::read(json_path).expect("read json");
+        let value: JsonValue = norito::json::from_slice(&json_bytes).expect("json should parse");
+        let metadata = value
+            .get("metadata")
+            .and_then(JsonValue::as_object)
+            .expect("metadata");
+        let provider = metadata
+            .get("provider")
+            .and_then(JsonValue::as_str)
+            .expect("provider");
+        let divergence = metadata
+            .get("divergence_count")
+            .and_then(JsonValue::as_u64)
+            .expect("divergence_count");
+        assert_eq!(provider, hex::encode(report.provider_id));
+        assert_eq!(divergence, 1);
     }
 }

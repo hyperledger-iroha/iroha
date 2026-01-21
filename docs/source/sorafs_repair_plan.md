@@ -171,9 +171,28 @@ struct SignedAuditorRequestV1 {
    - After the final failure (or SLA breach), tasks move to `escalated` and a `RepairSlashProposalV1` draft is generated using `sorafs.repair.default_slash_penalty_nano` for auditor review.  
    - Escalations automatically notify governance via `sorafs_governance_event`.
 
-6. **Queue Hygiene**  
+6. **Governance Decision**  
+   - Escalations open a dispute window (`governance.sorafs_repair_escalation.dispute_window_secs`) during which governance voters submit approve/reject votes.  
+   - At the dispute deadline (`escalated_at_unix + dispute_window_secs`) the decision is computed deterministically: require `minimum_voters`, approvals exceed rejections, and the approval ratio (basis points) meets `quorum_bps`. Ties or insufficient quorum reject the slash.  
+   - Approved decisions open an appeal window (`appeal_window_secs`); appeals recorded within the window mark the decision as appealed and halt automatic slashing.
+
+7. **Queue Hygiene**  
    - The watchdog reclaims expired leases, re-queues the ticket with backoff, and escalates if the attempt cap is exceeded.  
    - Metrics track queue depth and latency buckets; Alertmanager fires if `queued` tasks older than SLA exceed thresholds.
+
+## Governance Escalation Policy
+The escalation policy is sourced from `governance.sorafs_repair_escalation` in `iroha_config` and is enforced for every repair slash proposal.
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `quorum_bps` | 6667 | Minimum approval ratio (basis points) among counted votes. |
+| `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
+| `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
+| `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
+| `max_penalty_nano` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
+
+- Scheduler-generated proposals are capped at `max_penalty_nano`; auditor submissions above the cap are rejected.
+- Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.
 
 ## Auditor API Surface
 | Method & Path | Description | Auth | Success Response |
@@ -235,7 +254,7 @@ struct SignedAuditorRequestV1 {
 
 ## Persistence & Retention
 - Repair state is persisted as a Norito snapshot (`repair_state.to`) under `sorafs.repair.state_dir` (defaults to `<sorafs.storage.data_dir>/repair` when unset).
-- Snapshot schema captures `version`, `next_por_history_id`, `next_audit_sequence`, `tasks[]` (report, state, lease, events), and `por_history[]`.
+- Snapshot schema captures `version`, `next_por_history_id`, `next_audit_sequence`, `tasks[]` (report, state, lease, governance votes/decisions, events), and `por_history[]`.
 - Writes are atomic (temp file + rename) to avoid partial state on restart; corrupted snapshots are archived with a `corrupt-*` suffix before reinitialisation.
 - Retention is enforced by capping `RepairTaskEventV1` history per ticket; governance audit events remain append-only in the DAG for immutable history.
 
@@ -244,7 +263,8 @@ struct SignedAuditorRequestV1 {
 - `iroha sorafs repair claim --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a worker claim.
 - `iroha sorafs repair complete --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a completion update.
 - `iroha sorafs repair fail --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a failure update.
-- `iroha sorafs repair escalate --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: submits a slash proposal.
+- `iroha sorafs repair escalate --ticket-id <id> --manifest-digest <hex> --provider-id <hex> --penalty-nano <n> --rationale <text>`: submits a slash proposal for governance review (approval summary optional).
+- `iroha sorafs repair escalate ... --approve-votes <n> --approved-at <ts> --finalized-at <ts> [--reject-votes <n>] [--abstain-votes <n>]`: attaches a governance approval summary when a decision is already recorded.
 - `iroha sorafs gc inspect`: reports retained manifests and retention deadlines (read-only).
 - `iroha sorafs gc dry-run`: reports only expired manifests that GC would evict (read-only).
 - CLI commands return JSON payloads from Torii (Norito-encoded values rendered as JSON).
@@ -258,6 +278,23 @@ struct SignedAuditorRequestV1 {
   - Total repairs, escalations, penalties.
   - Auditor performance (response time, quality).
   - Outstanding proposals older than 7 days (must be decided or escalated).
+
+### Escalation policy (defaults)
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `quorum_bps` | `6,667` (2/3) | Minimum approval ratio over approve/reject votes; ties are rejected. |
+| `minimum_voters` | `3` | Minimum distinct votes (approve + reject + abstain) required to consider a decision. |
+| `dispute_window_secs` | `86,400` (24h) | Minimum delay from escalation to approval. |
+| `appeal_window_secs` | `604,800` (7d) | Minimum delay after approval before a decision is final. |
+| `max_penalty_nano` | `1,000,000,000` | Cap on slash penalties (nano-XOR). |
+
+Approval summaries may be attached to slash proposals via `RepairEscalationApprovalV1`:
+`approve_votes`, `reject_votes`, `abstain_votes`, `approved_at_unix`, and
+`finalized_at_unix`. When a summary is present, Torii rejects proposals that do
+not meet quorum, minimum-voter, dispute-window, or appeal-window requirements,
+and penalties are capped to the policy maximum. Proposals without a summary are
+accepted and remain in dispute until votes resolve at the dispute deadline.
 
 ## Implementation Checklist
 - [x] Define Norito schemas for repair tasks, evidence, proposals, and signed requests.

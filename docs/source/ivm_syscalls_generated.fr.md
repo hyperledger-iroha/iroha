@@ -10,7 +10,7 @@ translator: manual
 
 # Tableau généré des appels système IVM
 
-Ce fichier est généré à partir de `crates/ivm/src/syscalls.rs`. Pour modifier les numéros de syscall, éditez la source puis relancez ce script.
+Ce fichier est généré à partir de `crates/ivm_abi/src/syscalls.rs`. Pour modifier les numéros de syscall, éditez la source puis relancez ce script.
 
 | Name | Value (hex) | Note |
 |------|-------------|------|

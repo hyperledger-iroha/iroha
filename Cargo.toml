@@ -61,6 +61,8 @@ iroha_executor_data_model = { path = "crates/iroha_executor_data_model" }
 iroha_test_network = { path = "crates/iroha_test_network" }
 iroha_test_samples = { path = "crates/iroha_test_samples" }
 ivm = { path = "crates/ivm" }
+ivm_abi = { path = "crates/ivm_abi" }
+kotodama_lang = { path = "crates/kotodama_lang" }
 sorafs_car = { path = "crates/sorafs_car" }
 sorafs_chunker = { path = "crates/sorafs_chunker" }
 sorafs_manifest = { path = "crates/sorafs_manifest" }

@@ -35,7 +35,9 @@ pub mod pricing;
 pub mod proof_stream;
 pub mod provider_admission;
 pub mod provider_advert;
+pub mod reconciliation;
 pub mod repair;
+pub mod retention;
 pub mod token;
 pub mod validation;
 
@@ -122,10 +124,16 @@ pub use provider_advert::{
     SignatureAlgorithm, StakePointer, StreamBudgetError, StreamBudgetV1, TransportHintError,
     TransportHintV1, TransportProtocol,
 };
+pub use reconciliation::{
+    ReconciliationValidationError, SORAFS_RECONCILIATION_REPORT_VERSION_V1,
+    SorafsReconciliationReportV1,
+};
 pub use repair::{
+    REPAIR_ESCALATION_APPROVAL_VERSION_V1, REPAIR_ESCALATION_POLICY_VERSION_V1,
     REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
-    REPAIR_TASK_VERSION_V1, RepairCauseV1, RepairEvidenceV1, RepairReportV1, RepairSlashProposalV1,
-    RepairTaskRecordV1, RepairTaskStateV1, RepairTicketId, RepairValidationError,
+    REPAIR_TASK_VERSION_V1, RepairCauseV1, RepairEscalationApprovalV1, RepairEscalationPolicyV1,
+    RepairEvidenceV1, RepairReportV1, RepairSlashProposalV1, RepairTaskRecordV1, RepairTaskStateV1,
+    RepairTicketId, RepairValidationError,
 };
 pub use token::{StreamTokenBodyV1, StreamTokenError, StreamTokenV1};
 pub use validation::{

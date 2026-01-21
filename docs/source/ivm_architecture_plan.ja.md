@@ -37,7 +37,7 @@ translator: manual
 **セキュリティ／性能への影響**: 中央集権的なゲートにより、`is_syscall_allowed` の呼び出し忘れを防ぎ、繰り返し呼ばれるシステムコールのポインタ検証を将来的にキャッシュできる余地を作る。
 
 ### フェーズ3 – Kotodama の切り出し
-- `crates/ivm/src/kotodama` を新しいクレート（例: `crates/kotodama_lang`）へ分割する。
+- Kotodama コンパイラを `crates/kotodama_lang` に切り出し（`crates/ivm/src/kotodama` から移行）。
 - VM が利用する最小限のバイトコード API (`compile_to_ivm_bytecode` など) を提供する。
 - リポジトリ全体への影響が行き渡る間は `ivm` に互換レイヤーを残す。
 
