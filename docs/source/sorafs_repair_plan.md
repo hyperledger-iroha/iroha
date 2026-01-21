@@ -95,6 +95,8 @@ struct SlashProposalV1 {
 struct RepairTaskEventV1 {
     version: U8,
     ticket_id: RepairTicketId,
+    manifest_digest: Digest32,
+    provider_id: ProviderId,
     status: RepairTaskStatusV1,       // queued | verifying | in_progress | completed | failed | escalated
     occurred_at_unix: Timestamp,
     actor: Option<String>,
@@ -143,7 +145,7 @@ struct SignedAuditorRequestV1 {
 - `SignedAuditorRequestV1` wraps `RepairReportV1` or `RepairSlashProposalV1` payloads and enforces replay protection via the `nonce` field (planned; Torii currently accepts raw `RepairReportV1`/`RepairSlashProposalV1`). Signatures use the same algorithm metadata as provider adverts (`SignatureAlgorithm` enum).
 - `RepairAuditEventV1` and `GcAuditEventV1` wrap payloads with deterministic ordering metadata plus signer/digest fields for governance audit trails.
 
-`RepairTaskStateV1` is a tagged union (`queued`, `in_progress`, `completed`, `failed`, `escalated`) whose payloads are the dedicated state structs above. State transitions are persisted as append-only `RepairTaskEventV1` records, each containing `{ticket_id, status, occurred_at, message}` to simplify replay and auditing.
+`RepairTaskStateV1` is a tagged union (`queued`, `in_progress`, `completed`, `failed`, `escalated`) whose payloads are the dedicated state structs above. State transitions are persisted as append-only `RepairTaskEventV1` records, each containing `{ticket_id, manifest_digest, provider_id, status, occurred_at, message}` to simplify replay and auditing.
 
 ## Scheduler Flow
 1. **Triggers**  
