@@ -11,7 +11,7 @@
 use core::str::FromStr;
 use std::{
     sync::{Arc, LazyLock, RwLock},
-    time::SystemTime,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
@@ -72,10 +72,11 @@ use iroha_data_model::{
     block::{BlockHeader, consensus::EvidenceRecord},
     consensus::{ConsensusKeyRecord, ValidatorSetCheckpoint},
     nexus::{
-        DataSpaceCatalog, DataSpaceId, LaneConfig, LaneId, LaneLifecyclePlan, LaneRelayEnvelope,
-        PublicLaneRewardRecord, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneStakeShare,
-        PublicLaneUnbonding, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
-        UniversalAccountId,
+        Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
+        DataSpaceId, LaneConfig, LaneId, LaneLifecyclePlan, LaneRelayEnvelope, ManifestEffect,
+        ManifestEntry, ManifestVersion, PublicLaneRewardRecord, PublicLaneRewardRole,
+        PublicLaneRewardShare, PublicLaneStakeShare, PublicLaneUnbonding,
+        PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
     },
     offline::{
         AGGREGATE_PROOF_VERSION_V1, AggregateProofEnvelope, AndroidIntegrityPolicy,
@@ -28390,6 +28391,14 @@ fn derive_onboarding_uaid(
 }
 
 #[cfg(feature = "app_api")]
+fn onboarding_manifest_issued_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+#[cfg(feature = "app_api")]
 fn account_resolve_source_label(
     source: iroha_data_model::account::AccountAddressSource,
 ) -> (&'static str, Option<&'static str>) {
@@ -28495,6 +28504,15 @@ pub async fn handle_v1_accounts_onboard(
     } else {
         derive_onboarding_uaid(trimmed_alias, &account_id, identity.as_ref())
     };
+    let dataspace = DataSpaceId::GLOBAL;
+    let should_publish_manifest = {
+        let view = app.state.view();
+        view.world()
+            .space_directory_manifests()
+            .get(&uaid)
+            .and_then(|set| set.get(&dataspace))
+            .is_none()
+    };
 
     let mut metadata = Metadata::default();
     let alias_key = Name::from_str("display_name").expect("static metadata key");
@@ -28513,8 +28531,39 @@ pub async fn handle_v1_accounts_onboard(
             .with_uaid(Some(uaid)),
     );
 
+    let mut instructions =
+        Vec::with_capacity(if should_publish_manifest { 2 } else { 1 });
+    instructions.push(InstructionBox::from(register));
+    if should_publish_manifest {
+        let activation_epoch = app.state.view().height().saturating_sub(1) as u64;
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::V1,
+            uaid,
+            dataspace,
+            issued_ms: onboarding_manifest_issued_ms(),
+            activation_epoch,
+            expiry_epoch: None,
+            entries: vec![ManifestEntry {
+                scope: CapabilityScope {
+                    dataspace: Some(dataspace),
+                    program: None,
+                    method: None,
+                    asset: None,
+                    role: None,
+                },
+                effect: ManifestEffect::Allow(Allowance {
+                    max_amount: None,
+                    window: AllowanceWindow::PerDay,
+                }),
+                notes: None,
+            }],
+        };
+        let publish = dm::isi::space_directory::PublishSpaceDirectoryManifest { manifest };
+        instructions.push(InstructionBox::from(publish));
+    }
+
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
-        .with_instructions(core::iter::once(InstructionBox::from(register)));
+        .with_instructions(instructions);
     builder.set_ttl(Duration::from_secs(60));
     let tx = builder.sign(&signer.private_key.0);
     let tx_hash_hex = hex::encode(tx.hash().as_ref());

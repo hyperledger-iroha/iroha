@@ -2,6 +2,8 @@
 
 Last update: 2026-01-21
 
+- Torii onboarding now publishes a default Space Directory manifest for the global dataspace when missing, binding UAIDs immediately; added onboarding integration coverage and updated UAID docs/OpenAPI descriptions.
+- Tests: not run (onboarding binding change + docs/OpenAPI updates).
 - Sumeragi commit pipeline now runs finalize/precommit work every tick/event and throttles only QC rebuilds; tests updated (not run).
 - SoraFS repair backlog stats: fixed `compute_backlog_stats` type inference by annotating `oldest_queued_at`, added `compute_backlog_stats_tracks_oldest_queued` unit test.
 - Localnet readiness: `scripts/deploy_localnet.sh` now waits for `/v1/sumeragi/status` to report a non-empty `mode_tag` to avoid early-mode confusion.
