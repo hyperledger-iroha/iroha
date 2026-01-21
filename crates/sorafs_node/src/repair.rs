@@ -2709,6 +2709,19 @@ mod tests {
     }
 
     #[test]
+    fn compute_backlog_stats_tracks_oldest_queued() {
+        let report_a = report("REP-001", [0x01; 32], [0xA1; 32], 1_700_000_000);
+        let report_b = report("REP-002", [0x02; 32], [0xB2; 32], 1_700_000_100);
+        let tasks = vec![task_internal(report_b), task_internal(report_a)];
+
+        let stats = compute_backlog_stats(&tasks, 1_700_000_250);
+
+        assert_eq!(stats.oldest_age_secs, 250);
+        assert_eq!(stats.per_provider.get(&[0xA1; 32]).copied(), Some(1));
+        assert_eq!(stats.per_provider.get(&[0xB2; 32]).copied(), Some(1));
+    }
+
+    #[test]
     fn repair_store_persists_state_dir_snapshot() {
         let (manager, temp_dir) = manager_with_temp_dir();
         let report = report("REP-009", [0x21; 32], [0x22; 32], 1_700_000_010);
