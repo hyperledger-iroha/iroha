@@ -828,7 +828,9 @@ impl StorageBackend {
             .expect("manifest path must have parent")
             .to_path_buf();
         let mut new_index = state.index.clone();
-        new_index.entries.retain(|entry| entry.manifest_id != manifest_id);
+        new_index
+            .entries
+            .retain(|entry| entry.manifest_id != manifest_id);
         new_index.total_bytes = state.total_bytes.saturating_sub(stored.content_length());
 
         let index_bytes = norito::to_bytes(&new_index).map_err(StorageError::Norito)?;
@@ -1929,10 +1931,7 @@ mod tests {
             .expect("ingest");
 
         let stored = backend.manifest(&manifest_id).expect("stored");
-        let manifest_dir = stored
-            .manifest_path()
-            .parent()
-            .expect("manifest dir");
+        let manifest_dir = stored.manifest_path().parent().expect("manifest dir");
         assert!(manifest_dir.exists());
 
         let freed = backend

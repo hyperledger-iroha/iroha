@@ -83,6 +83,25 @@ enforcement بڑھنے پر فوری context ملے۔
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | provider capacity/uptime success data جو capacity dashboard میں دکھایا جاتا ہے۔ |
 | `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | backlog depth اور cumulative failure counters جو ہر `/v1/sorafs/por/ingestion/{manifest}` poll پر export ہوتے ہیں، "PoR Stalls" panel/alert کو feed کرتے ہیں۔ |
 
+### Repair & SLA
+
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `sorafs_repair_tasks_total` | Counter | `status` | repair task transitions کے لیے OTEL counter۔ |
+| `sorafs_repair_latency_minutes` | Histogram | `outcome` | repair lifecycle latency کے لیے OTEL histogram۔ |
+| `sorafs_repair_queue_depth` | Histogram | `provider` | provider کے لحاظ سے queued tasks کا OTEL histogram (snapshot-style). |
+| `sorafs_repair_backlog_oldest_age_seconds` | Histogram | — | oldest queued task کی عمر (seconds) کے لیے OTEL histogram۔ |
+| `sorafs_repair_lease_expired_total` | Counter | `outcome` | lease expiries (`requeued`/`escalated`) کے لیے OTEL counter۔ |
+| `sorafs_repair_slash_proposals_total` | Counter | `outcome` | slash proposal transitions کے لیے OTEL counter۔ |
+| `torii_sorafs_repair_tasks_total` | Counter | `status` | task transitions کے لیے Prometheus counter۔ |
+| `torii_sorafs_repair_latency_minutes_bucket` | Histogram | `outcome` | repair lifecycle latency کے لیے Prometheus histogram۔ |
+| `torii_sorafs_repair_queue_depth` | Gauge | `provider` | provider کے لحاظ سے queued tasks کے لیے Prometheus gauge۔ |
+| `torii_sorafs_repair_backlog_oldest_age_seconds` | Gauge | — | oldest queued task age (seconds) کے لیے Prometheus gauge۔ |
+| `torii_sorafs_repair_lease_expired_total` | Counter | `outcome` | lease expiries کے لیے Prometheus counter۔ |
+| `torii_sorafs_slash_proposals_total` | Counter | `outcome` | slash proposal transitions کے لیے Prometheus counter۔ |
+
+Governance audit JSON metadata repair telemetry labels (`status`, `ticket_id`, `manifest`, `provider` repair events پر؛ `outcome` slash proposals پر) کو mirror کرتا ہے تاکہ metrics اور audit artefacts کو deterministic طور پر correlate کیا جا سکے۔
+
 ### Proof of Timely Retrieval (PoTR) اور chunk SLA
 
 | Metric | Type | Labels | Producer | Notes |

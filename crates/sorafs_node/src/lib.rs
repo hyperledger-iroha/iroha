@@ -669,9 +669,9 @@ impl NodeHandle {
         started_at_unix: u64,
         repair_agent: Option<String>,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        let update = self
-            .repair
-            .mark_in_progress_with_event(ticket_id, started_at_unix, repair_agent)?;
+        let update =
+            self.repair
+                .mark_in_progress_with_event(ticket_id, started_at_unix, repair_agent)?;
         self.publish_repair_update(&update, None);
         Ok(update.record)
     }
@@ -683,9 +683,11 @@ impl NodeHandle {
         completed_at_unix: u64,
         resolution_notes: Option<String>,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
-        let update = self
-            .repair
-            .mark_completed_with_event(ticket_id, completed_at_unix, resolution_notes)?;
+        let update = self.repair.mark_completed_with_event(
+            ticket_id,
+            completed_at_unix,
+            resolution_notes,
+        )?;
         self.publish_repair_update(&update, None);
         Ok(update.record)
     }
@@ -813,12 +815,10 @@ impl NodeHandle {
         for task in candidates {
             let ticket_id = task.ticket_id.clone();
             let claim_key = repair_idempotency_key("claim", worker_id, &ticket_id, now_unix);
-            let update = match self.repair.claim_ticket_with_event(
-                &ticket_id,
-                worker_id,
-                now_unix,
-                &claim_key,
-            ) {
+            let update = match self
+                .repair
+                .claim_ticket_with_event(&ticket_id, worker_id, now_unix, &claim_key)
+            {
                 Ok(update) => update,
                 Err(RepairSchedulerError::LeaseHeld { .. })
                 | Err(RepairSchedulerError::BackoffActive { .. })
@@ -889,11 +889,7 @@ impl NodeHandle {
                         let update = self
                             .repair
                             .fail_ticket_with_event(
-                                &ticket_id,
-                                worker_id,
-                                now_unix,
-                                reason,
-                                &fail_key,
+                                &ticket_id, worker_id, now_unix, reason, &fail_key,
                             )
                             .map_err(|err| {
                                 iroha_logger::warn!(
@@ -997,7 +993,8 @@ impl NodeHandle {
             }
             expired_count = expired_count.saturating_add(1);
             let age_secs = now_unix.saturating_sub(expires_at);
-            oldest_expired_age = Some(oldest_expired_age.map_or(age_secs, |prev| prev.max(age_secs)));
+            oldest_expired_age =
+                Some(oldest_expired_age.map_or(age_secs, |prev| prev.max(age_secs)));
             expired.push(manifest);
         }
 
@@ -1072,10 +1069,8 @@ impl NodeHandle {
             global_sorafs_gc_otel().record_eviction(reason, freed_bytes);
         }
 
-        global_or_default().set_sorafs_gc_expired_snapshot(
-            expired_count,
-            oldest_expired_age.unwrap_or(0),
-        );
+        global_or_default()
+            .set_sorafs_gc_expired_snapshot(expired_count, oldest_expired_age.unwrap_or(0));
 
         let result = if report.errors == 0 {
             RESULT_SUCCESS
@@ -1084,10 +1079,8 @@ impl NodeHandle {
         };
         global_or_default().inc_sorafs_gc_runs(result);
         global_sorafs_gc_otel().record_run(result);
-        self.schedulers.update_storage_bytes(
-            storage.total_bytes(),
-            self.config.max_capacity_bytes().0,
-        );
+        self.schedulers
+            .update_storage_bytes(storage.total_bytes(), self.config.max_capacity_bytes().0);
 
         report
     }
@@ -2575,8 +2568,11 @@ mod tests {
             default_slash_penalty_nano: 8_000,
             ..Default::default()
         };
-        let handle =
-            NodeHandle::new_with_policies(cfg, RepairConfig::from(&repair_actual), GcConfig::default());
+        let handle = NodeHandle::new_with_policies(
+            cfg,
+            RepairConfig::from(&repair_actual),
+            GcConfig::default(),
+        );
 
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
@@ -2628,7 +2624,11 @@ mod tests {
             event.payload.ticket_id == report.ticket_id
                 && event.payload.status == RepairTaskStatusV1::Escalated
         }));
-        assert!(slashes.iter().any(|proposal| proposal.ticket_id == report.ticket_id));
+        assert!(
+            slashes
+                .iter()
+                .any(|proposal| proposal.ticket_id == report.ticket_id)
+        );
     }
 
     #[test]
@@ -2640,8 +2640,11 @@ mod tests {
             default_slash_penalty_nano: 9_000,
             ..Default::default()
         };
-        let handle =
-            NodeHandle::new_with_policies(cfg, RepairConfig::from(&repair_actual), GcConfig::default());
+        let handle = NodeHandle::new_with_policies(
+            cfg,
+            RepairConfig::from(&repair_actual),
+            GcConfig::default(),
+        );
 
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
@@ -2758,7 +2761,11 @@ mod tests {
             event.payload.ticket_id == report_missing.ticket_id
                 && event.payload.status == RepairTaskStatusV1::Escalated
         }));
-        assert!(slashes.iter().any(|proposal| proposal.ticket_id == report_missing.ticket_id));
+        assert!(
+            slashes
+                .iter()
+                .any(|proposal| proposal.ticket_id == report_missing.ticket_id)
+        );
     }
 
     #[test]
@@ -2770,11 +2777,8 @@ mod tests {
             max_deletions_per_run: 10,
             ..Default::default()
         };
-        let handle = NodeHandle::new_with_policies(
-            cfg,
-            RepairConfig::default(),
-            GcConfig::from(&gc_actual),
-        );
+        let handle =
+            NodeHandle::new_with_policies(cfg, RepairConfig::default(), GcConfig::from(&gc_actual));
 
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
@@ -2933,7 +2937,12 @@ mod tests {
 
         let report = handle.run_gc_once(now_unix);
         assert!(report.evictions.is_empty());
-        assert!(report.skipped.iter().any(|skip| skip.reason == "repair_active"));
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|skip| skip.reason == "repair_active")
+        );
         assert!(handle.manifest_metadata(&manifest_id).is_ok());
     }
 

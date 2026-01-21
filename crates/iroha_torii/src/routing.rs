@@ -28531,8 +28531,7 @@ pub async fn handle_v1_accounts_onboard(
             .with_uaid(Some(uaid)),
     );
 
-    let mut instructions =
-        Vec::with_capacity(if should_publish_manifest { 2 } else { 1 });
+    let mut instructions = Vec::with_capacity(if should_publish_manifest { 2 } else { 1 });
     instructions.push(InstructionBox::from(register));
     if should_publish_manifest {
         let activation_epoch = app.state.view().height().saturating_sub(1) as u64;

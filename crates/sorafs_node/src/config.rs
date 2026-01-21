@@ -742,8 +742,8 @@ mod tests {
     #[test]
     fn repair_and_gc_default_state_dirs_follow_storage_root() {
         let data_dir = PathBuf::from("/var/lib/sorafs");
-        let repair = RepairConfig::from(&actual::SorafsRepair::default())
-            .with_default_state_dir(&data_dir);
+        let repair =
+            RepairConfig::from(&actual::SorafsRepair::default()).with_default_state_dir(&data_dir);
         let gc = GcConfig::from(&actual::SorafsGc::default()).with_default_state_dir(&data_dir);
 
         assert_eq!(repair.state_dir(), Some(&data_dir.join("repair")));

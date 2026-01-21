@@ -16,9 +16,9 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     domain::DomainId,
+    nexus::DataSpaceId,
     permission::Permission,
     prelude::{Account, Domain, ExposedPrivateKey},
-    nexus::DataSpaceId,
 };
 use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest;
 use iroha_torii::{Torii, json_entry, json_object};
@@ -136,8 +136,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         .expect("onboarding response");
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
 
-    let applied =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+    let applied = iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert!(applied > 0);
 
     let view = state.view();

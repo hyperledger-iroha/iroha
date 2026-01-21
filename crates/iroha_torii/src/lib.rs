@@ -15300,9 +15300,7 @@ fn build_repair_runtime(
         return None;
     }
     if !sorafs_node.is_enabled() {
-        iroha_logger::warn!(
-            "repair runtime disabled: SoraFS storage is not enabled for this node"
-        );
+        iroha_logger::warn!("repair runtime disabled: SoraFS storage is not enabled for this node");
         return None;
     }
 

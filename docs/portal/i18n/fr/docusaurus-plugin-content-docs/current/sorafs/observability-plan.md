@@ -86,6 +86,25 @@ lorsque l'application PoR/PoTR s'intensifie.
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | Données de capacité/uptime réussies du fournisseur exposées dans le dashboard de capacité. |
 | `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | Profondeur du backlog plus compteurs cumulés d'échecs exportés à chaque interrogation de `/v1/sorafs/por/ingestion/{manifest}`, alimentant le panel/alerte "PoR Stalls". |
 
+### Réparation & SLA
+
+| Métrique | Type | Étiquettes | Notes |
+|---------|------|------------|-------|
+| `sorafs_repair_tasks_total` | Counter | `status` | Compteur OTEL des transitions de tâches de réparation. |
+| `sorafs_repair_latency_minutes` | Histogram | `outcome` | Histogramme OTEL de latence du cycle de vie des réparations. |
+| `sorafs_repair_queue_depth` | Histogram | `provider` | Histogramme OTEL des tâches en file par fournisseur (style snapshot). |
+| `sorafs_repair_backlog_oldest_age_seconds` | Histogram | — | Histogramme OTEL de l'âge de la plus ancienne tâche en file (secondes). |
+| `sorafs_repair_lease_expired_total` | Counter | `outcome` | Compteur OTEL des expirations de bail (`requeued`/`escalated`). |
+| `sorafs_repair_slash_proposals_total` | Counter | `outcome` | Compteur OTEL des transitions de propositions de slash. |
+| `torii_sorafs_repair_tasks_total` | Counter | `status` | Compteur Prometheus des transitions de tâches. |
+| `torii_sorafs_repair_latency_minutes_bucket` | Histogram | `outcome` | Histogramme Prometheus de latence du cycle de vie des réparations. |
+| `torii_sorafs_repair_queue_depth` | Gauge | `provider` | Jauge Prometheus des tâches en file par fournisseur. |
+| `torii_sorafs_repair_backlog_oldest_age_seconds` | Gauge | — | Jauge Prometheus de l'âge de la plus ancienne tâche en file (secondes). |
+| `torii_sorafs_repair_lease_expired_total` | Counter | `outcome` | Compteur Prometheus des expirations de bail. |
+| `torii_sorafs_slash_proposals_total` | Counter | `outcome` | Compteur Prometheus des transitions de propositions de slash. |
+
+Les métadonnées JSON d'audit de gouvernance reflètent les labels de télémétrie de réparation (`status`, `ticket_id`, `manifest`, `provider` pour les événements de réparation ; `outcome` pour les propositions de slash) afin de corréler métriques et artefacts d'audit de manière déterministe.
+
 ### Preuve de récupération en temps utile (PoTR) et SLA des chunks
 
 | Métrique | Type | Étiquettes | Producteur | Notes |

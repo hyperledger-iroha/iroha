@@ -86,6 +86,25 @@ SRE が即座に状況を把握できる。
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | ゲージ | `provider` | 容量/uptime 成功データを容量ダッシュボードに反映。 |
 | `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | ゲージ | `provider`, `manifest` | `/v1/sorafs/por/ingestion/{manifest}` のポーリング時にバックログ深度と累積失敗カウンタをエクスポートし、"PoR Stalls" パネル/アラートに供給する。 |
 
+### 修復 & SLA
+
+| メトリクス | 種類 | ラベル | 備考 |
+|-----------|------|--------|------|
+| `sorafs_repair_tasks_total` | Counter | `status` | 修復タスクの状態遷移に関する OTEL カウンタ。 |
+| `sorafs_repair_latency_minutes` | Histogram | `outcome` | 修復ライフサイクルのレイテンシに関する OTEL ヒストグラム。 |
+| `sorafs_repair_queue_depth` | Histogram | `provider` | プロバイダー別のキュー待ちタスク数の OTEL ヒストグラム（スナップショット式）。 |
+| `sorafs_repair_backlog_oldest_age_seconds` | Histogram | — | 最古のキュー待ちタスクの経過時間（秒）を示す OTEL ヒストグラム。 |
+| `sorafs_repair_lease_expired_total` | Counter | `outcome` | リース期限切れ（`requeued`/`escalated`）の OTEL カウンタ。 |
+| `sorafs_repair_slash_proposals_total` | Counter | `outcome` | スラッシュ提案の遷移に関する OTEL カウンタ。 |
+| `torii_sorafs_repair_tasks_total` | Counter | `status` | タスク遷移の Prometheus カウンタ。 |
+| `torii_sorafs_repair_latency_minutes_bucket` | Histogram | `outcome` | 修復ライフサイクルのレイテンシに関する Prometheus ヒストグラム。 |
+| `torii_sorafs_repair_queue_depth` | Gauge | `provider` | プロバイダー別のキュー待ちタスク数の Prometheus ゲージ。 |
+| `torii_sorafs_repair_backlog_oldest_age_seconds` | Gauge | — | 最古のキュー待ちタスクの経過時間（秒）の Prometheus ゲージ。 |
+| `torii_sorafs_repair_lease_expired_total` | Counter | `outcome` | リース期限切れの Prometheus カウンタ。 |
+| `torii_sorafs_slash_proposals_total` | Counter | `outcome` | スラッシュ提案遷移の Prometheus カウンタ。 |
+
+ガバナンス監査 JSON メタデータは修復テレメトリのラベル（修復イベントでは `status`, `ticket_id`, `manifest`, `provider`、スラッシュ提案では `outcome`）を反映し、メトリクスと監査アーティファクトの決定的な相関を維持する。
+
 ### Proof of Timely Retrieval (PoTR) と chunk SLA
 
 | メトリクス | 種類 | ラベル | 生成元 | 備考 |
