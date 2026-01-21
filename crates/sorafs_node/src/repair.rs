@@ -7,8 +7,7 @@
 use std::{
     cmp::Reverse,
     collections::{BTreeMap, HashMap, VecDeque},
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     sync::{
         Arc, RwLock,
@@ -390,13 +389,12 @@ impl RepairStore for FileRepairStore {
         task: RepairTaskInternal,
     ) -> Result<(), RepairStoreError> {
         let mut guard = self.state.write().expect("repair store poisoned");
-        let existing =
-            guard
-                .tasks
-                .get(&ticket_id.0)
-                .ok_or_else(|| RepairStoreError::NotFound {
-                    ticket_id: ticket_id.to_string(),
-                })?;
+        let existing = guard
+            .tasks
+            .get(&ticket_id.0)
+            .ok_or_else(|| RepairStoreError::NotFound {
+                ticket_id: ticket_id.to_string(),
+            })?;
         if existing.revision != expected_revision {
             return Err(RepairStoreError::Conflict {
                 ticket_id: ticket_id.to_string(),
@@ -870,8 +868,7 @@ impl RepairManager {
             provider_depths.push((hex::encode(provider_id), *depth));
         }
         global_or_default().record_sorafs_repair_queue_depths(&provider_depths);
-        global_or_default()
-            .set_sorafs_repair_backlog_oldest_age_seconds(stats.oldest_age_secs);
+        global_or_default().set_sorafs_repair_backlog_oldest_age_seconds(stats.oldest_age_secs);
         let otel = global_sorafs_repair_otel();
         otel.record_backlog_oldest_age_seconds(stats.oldest_age_secs as f64);
         for (provider_hex, depth) in provider_depths {
@@ -2368,7 +2365,7 @@ fn compute_backlog_stats(tasks: &[RepairTaskInternal], now_unix: u64) -> RepairB
         return RepairBacklogStats::default();
     }
     let mut stats = RepairBacklogStats::default();
-    let mut oldest_queued_at = None;
+    let mut oldest_queued_at: Option<u64> = None;
 
     for task in tasks {
         if let RepairTaskStateV1::Queued(state) = &task.state {
@@ -2378,7 +2375,10 @@ fn compute_backlog_stats(tasks: &[RepairTaskInternal], now_unix: u64) -> RepairB
                 .or_insert(0);
             *entry = entry.saturating_add(1);
             let queued_at = state.queued_at_unix;
-            oldest_queued_at = Some(oldest_queued_at.map_or(queued_at, |prev| prev.min(queued_at)));
+            oldest_queued_at = Some(match oldest_queued_at {
+                Some(prev) => prev.min(queued_at),
+                None => queued_at,
+            });
         }
     }
 
@@ -2639,12 +2639,12 @@ fn checked_add_secs(
 mod tests {
     use super::*;
     use iroha_config::parameters::actual;
-    use std::fs;
     use sorafs_manifest::por::{AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1};
     use sorafs_manifest::repair::{
         REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
         RepairCauseV1,
     };
+    use std::fs;
     use tempfile::{TempDir, tempdir};
 
     fn report(
@@ -2730,16 +2730,16 @@ mod tests {
         };
         manager.register_por_verdict(&verdict, 1);
 
-        let store_path = temp_dir
-            .path()
-            .join("repair")
-            .join(REPAIR_STORE_FILE_NAME);
+        let store_path = temp_dir.path().join("repair").join(REPAIR_STORE_FILE_NAME);
         let bytes = fs::read(&store_path).expect("read repair store");
         let snapshot: RepairStoreSnapshot =
             norito::decode_from_bytes(&bytes).expect("decode repair store");
         assert_eq!(snapshot.tasks.len(), 1);
         assert_eq!(snapshot.por_history.len(), 1);
-        assert_eq!(snapshot.por_history[0].manifest_digest, verdict.manifest_digest);
+        assert_eq!(
+            snapshot.por_history[0].manifest_digest,
+            verdict.manifest_digest
+        );
     }
 
     #[test]
@@ -2906,7 +2906,10 @@ mod tests {
                 "loss".into(),
             )
             .expect("mark failed");
-        assert!(matches!(update.record.state, RepairTaskStateV1::Escalated(..)));
+        assert!(matches!(
+            update.record.state,
+            RepairTaskStateV1::Escalated(..)
+        ));
         let proposal = update.slash_proposal.expect("slash proposal");
         assert_eq!(proposal.ticket_id, report.ticket_id);
     }
@@ -3163,7 +3166,10 @@ mod tests {
                 "fail-1",
             )
             .expect("fail ticket");
-        assert!(matches!(update.record.state, RepairTaskStateV1::Escalated(..)));
+        assert!(matches!(
+            update.record.state,
+            RepairTaskStateV1::Escalated(..)
+        ));
         assert!(update.slash_proposal.is_some());
     }
 
@@ -3491,7 +3497,9 @@ mod tests {
             decided_at: report.submitted_at_unix + 60,
             failed_samples: 4,
         };
-        store.record_por_history(entry.clone()).expect("record history");
+        store
+            .record_por_history(entry.clone())
+            .expect("record history");
 
         let sequence = store.next_audit_sequence();
         assert_eq!(sequence, 1);

@@ -16,7 +16,14 @@ Last update: 2026-01-21
 - SDKs (Swift): aligned offline receipt Poseidon sample account to the canonical ed25519 seed `[0x01; 32]`, refreshed receiver hash expectations, and synced Swift offline_poseidon vectors to the artifacts snapshot.
 - Tests: not run (Swift SDK fixture/value updates only).
 - SoraFS repair telemetry: added backlog age/queue depth/lease expiry metrics to Prometheus + OTEL, extended repair audit events and governance metadata with manifest/provider IDs, and refreshed repair observability docs.
-- Tests: not run (SoraFS repair telemetry + governance metadata updates).
+- Docs: synced portal observability plan translations for repair metrics (ar/es/fr/he/ja/pt/ru/ur).
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options).
+- Tests: `cargo test -p sorafs_manifest task_event_` (ok).
+- Tests: `cargo test -p sorafs_node backlog_stats_tracks_oldest_and_per_provider` (ok; warnings about unexpected `cfg` values from Norito derive macros and unused assignment in `crates/sorafs_node/src/repair.rs`).
+- Tests: `cargo test -p sorafs_node filesystem_publisher_writes_repair_audit_files` (ok; same warnings).
+- Tests: `cargo test -p sorafs_node filesystem_publisher_writes_repair_slash_files` (ok; same warnings).
+- Tests: `cargo test -p iroha_telemetry sorafs_repair` (ok).
+- Tests: `cargo test -p iroha_telemetry repair_otel_handles_noop_without_exporter` (ok).
 - Integration tests: reworked `sumeragi_rbc_session_recovers_after_cold_restart` to target a full in-flight RBC session via `/v1/sumeragi/rbc/sessions`, verify the on-disk session file by hash+height prefix before shutdown, and reuse the observed peer for restart checks; removed the unused persisted-session scan helper.
 - Tests: not run (integration-test logic change only).
 - SDKs: Torii pipeline submissions now prefer Norito receipts across JS/Python/Swift, Android submit helpers send Norito payloads, Android pending-queue tests assert Norito bytes, JS dist artifacts refreshed, and SDK docs/examples now reference receipt payload hashes (including Android docs noting receipt bytes).

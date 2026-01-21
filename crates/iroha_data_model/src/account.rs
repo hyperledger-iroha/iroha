@@ -565,8 +565,7 @@ impl Default for AccountDetails {
 /// In other places use [`Account`] directly.
 pub type AccountValue = Owned<AccountDetails>;
 
-const ERR_ACCOUNT_LITERAL_FORMAT: &str =
-    "AccountId must be IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or `<alias|public_key>@<domain>`";
+const ERR_ACCOUNT_LITERAL_FORMAT: &str = "AccountId must be IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or `<alias|public_key>@<domain>`";
 const ERR_DOMAIN_SELECTOR_UNRESOLVED: &str = "ERR_DOMAIN_SELECTOR_UNRESOLVED";
 const ERR_UAID_UNRESOLVED: &str = "ERR_UAID_UNRESOLVED";
 const ERR_OPAQUE_ID_UNRESOLVED: &str = "ERR_OPAQUE_ID_UNRESOLVED";

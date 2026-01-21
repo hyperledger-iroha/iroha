@@ -91,8 +91,7 @@ use iroha_data_model::{
     role::{NewRole, Role, RoleId},
     smart_contract::manifest::ContractManifest,
     transaction::{
-        Executable,
-        TransactionSubmissionReceipt,
+        Executable, TransactionSubmissionReceipt,
         signed::{SignedTransaction, TransactionBuilder},
     },
     trigger::{
@@ -7054,14 +7053,17 @@ mod tests {
         nft::NftId,
         peer::{Peer, PeerId},
         smart_contract::manifest::{AccessSetHints, ContractManifest},
-        transaction::{Executable, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload},
+        transaction::{
+            Executable, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
+        },
         trigger::TriggerId,
     };
     use norito::{
         NoritoDeserialize,
         codec::{Decode as NoritoDecode, Encode as NoritoEncode},
-        from_bytes, to_bytes,
+        from_bytes,
         json::{self, Value},
+        to_bytes,
     };
     use sorafs_car::{
         CarBuildPlan, CarWriter, chunker_registry, fetch_plan::chunk_fetch_specs_to_string,

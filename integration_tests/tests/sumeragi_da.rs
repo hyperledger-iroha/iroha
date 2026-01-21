@@ -1763,7 +1763,7 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             .kura_store_dir()
             .join("rbc_sessions");
 
-        let mut snapshot_before = wait_for_rbc_session_snapshot(
+        let snapshot_before = wait_for_rbc_session_snapshot(
             &http,
             &sessions_url,
             session_height,
@@ -1814,9 +1814,8 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             };
             let mut found = false;
             for entry in entries.flatten() {
-                let Some(name) = entry.file_name().to_str() else {
-                    continue;
-                };
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
                 if name.starts_with(&expected_prefix) && name.ends_with(".norito") {
                     found = true;
                     break;

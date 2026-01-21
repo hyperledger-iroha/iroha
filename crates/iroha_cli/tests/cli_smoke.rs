@@ -366,9 +366,9 @@ fn install_domain_selector_resolver(state_json: &Value) -> DomainSelectorResolve
     }
 
     let map = Arc::new(map);
-    iroha_data_model::account::set_account_domain_selector_resolver(Arc::new(
-        move |selector| map.get(selector).cloned(),
-    ));
+    iroha_data_model::account::set_account_domain_selector_resolver(Arc::new(move |selector| {
+        map.get(selector).cloned()
+    }));
     DomainSelectorResolverGuard { active: true }
 }
 
@@ -2276,9 +2276,7 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
 
     let _domain_guard = install_domain_selector_resolver(&state_json);
     let treasury_account = treasury.clone();
-    let expected_treasury = treasury_account
-        .canonical_ih58()
-        .expect("treasury ih58");
+    let expected_treasury = treasury_account.canonical_ih58().expect("treasury ih58");
     assert_eq!(
         state_json["treasury_account"]
             .as_str()

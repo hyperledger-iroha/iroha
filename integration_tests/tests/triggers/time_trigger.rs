@@ -192,8 +192,11 @@ async fn pre_commit_trigger_should_be_executed_scenario(
             })
             .await??;
             let mut target_height = network
-                .best_effort_block_height()
+                .peers()
+                .iter()
+                .filter_map(|peer| peer.best_effort_block_height())
                 .map(|height| height.total)
+                .max()
                 .unwrap_or(0);
             for _ in 0..CHECKS_COUNT {
                 let sample_isi = SetKeyValue::account(

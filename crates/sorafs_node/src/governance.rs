@@ -260,8 +260,9 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         let mut payload = JsonMap::new();
         payload.insert(
             "event".into(),
-            json::to_value(event)
-                .map_err(|err| GovernancePublishError::other(format!("serialize audit event: {err}")))?,
+            json::to_value(event).map_err(|err| {
+                GovernancePublishError::other(format!("serialize audit event: {err}"))
+            })?,
         );
 
         let mut metadata = JsonMap::new();
@@ -372,12 +373,16 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         let mut payload = JsonMap::new();
         payload.insert(
             "event".into(),
-            json::to_value(event)
-                .map_err(|err| GovernancePublishError::other(format!("serialize gc event: {err}")))?,
+            json::to_value(event).map_err(|err| {
+                GovernancePublishError::other(format!("serialize gc event: {err}"))
+            })?,
         );
 
         let mut metadata = JsonMap::new();
-        metadata.insert("reason".into(), JsonValue::from(event.payload.reason.clone()));
+        metadata.insert(
+            "reason".into(),
+            JsonValue::from(event.payload.reason.clone()),
+        );
         metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
         metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
         metadata.insert(
@@ -407,9 +412,9 @@ mod tests {
         DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
     };
     use sorafs_manifest::repair::{
-        GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, REPAIR_AUDIT_EVENT_VERSION_V1,
-        REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_TASK_EVENT_VERSION_V1, GcAuditEventV1,
-        GcAuditPayloadV1, RepairAuditEventV1, RepairTaskEventV1, RepairTaskStatusV1,
+        GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GcAuditEventV1, GcAuditPayloadV1,
+        REPAIR_AUDIT_EVENT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
+        REPAIR_TASK_EVENT_VERSION_V1, RepairAuditEventV1, RepairTaskEventV1, RepairTaskStatusV1,
         RepairTicketId, SorafsAuditHeaderV1,
     };
     use tempfile::tempdir;

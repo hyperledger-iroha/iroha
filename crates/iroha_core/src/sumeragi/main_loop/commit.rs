@@ -1900,8 +1900,7 @@ impl Actor {
             self.block_time_for_mode(&view, self.consensus_mode)
         };
         let qc_rebuild_cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
-        self.pending.last_commit_pipeline_run =
-            self.pending.last_commit_pipeline_run.max(now);
+        self.pending.last_commit_pipeline_run = self.pending.last_commit_pipeline_run.max(now);
         let should_rebuild_qcs =
             now.saturating_duration_since(self.last_qc_rebuild) >= qc_rebuild_cooldown;
         if enable_qc_pipeline && should_rebuild_qcs {

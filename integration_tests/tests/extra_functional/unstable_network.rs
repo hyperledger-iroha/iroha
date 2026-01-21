@@ -717,11 +717,11 @@ async fn block_after_genesis_is_synced() -> Result<()> {
     // Allow enough time for a full pipeline (propose+commit) after resuming the relay.
     // Using the broader sync timeout keeps the assertion tolerant of slower machines
     // and scenarios where consensus gating adds a little extra latency.
-        timeout(
-            sync_timeout,
-            once_blocks_sync(network.peers().iter(), BlockHeight::predicate_non_empty(2)),
-        )
-        .await??;
+    timeout(
+        sync_timeout,
+        once_blocks_sync(network.peers().iter(), BlockHeight::predicate_non_empty(2)),
+    )
+    .await??;
 
     Ok(())
 }

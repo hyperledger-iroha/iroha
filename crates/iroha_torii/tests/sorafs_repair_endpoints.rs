@@ -164,11 +164,7 @@ fn assert_event_statuses(events: &[RepairTaskEventV1], expected: &[RepairTaskSta
     assert_eq!(statuses, expected);
 }
 
-async fn post_json_with_status(
-    app: &Router,
-    uri: &str,
-    body: Vec<u8>,
-) -> (StatusCode, Vec<u8>) {
+async fn post_json_with_status(app: &Router, uri: &str, body: Vec<u8>) -> (StatusCode, Vec<u8>) {
     let resp = app
         .clone()
         .oneshot(
@@ -182,7 +178,8 @@ async fn post_json_with_status(
         .await
         .expect("post request");
     let status = resp.status();
-    let body = resp.into_body()
+    let body = resp
+        .into_body()
         .collect()
         .await
         .expect("collect response body")
@@ -548,7 +545,6 @@ async fn sorafs_repair_worker_rejects_invalid_signature() {
         json_entry("signature", bad_sig),
     ]);
     let body = json::to_vec(&claim_req).expect("encode request");
-    let (status, _body) =
-        post_json_with_status(&app, "/v1/sorafs/audit/repair/claim", body).await;
+    let (status, _body) = post_json_with_status(&app, "/v1/sorafs/audit/repair/claim", body).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }

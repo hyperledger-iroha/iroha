@@ -7553,9 +7553,7 @@ async fn commit_pipeline_qc_rebuild_cooldown_uses_chain_block_time() {
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     let now = Instant::now();
-    let last_rebuild = now
-        .checked_sub(Duration::from_millis(250))
-        .unwrap_or(now);
+    let last_rebuild = now.checked_sub(Duration::from_millis(250)).unwrap_or(now);
     actor.last_qc_rebuild = last_rebuild;
 
     actor.process_commit_candidates();
