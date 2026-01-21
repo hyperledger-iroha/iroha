@@ -423,6 +423,7 @@ pub struct Args {
     #[arg(long, short)]
     seed: Option<String>,
     /// Select the build line (`iroha2` or `iroha3`) for DA/RBC defaults.
+    /// Defaults to `iroha3`, so leaving `--consensus-mode` unset yields `npos`.
     #[arg(long, value_enum, value_name = "LINE", default_value_t = BuildLineArg::Iroha3)]
     build_line: BuildLineArg,
     /// Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS).
@@ -468,6 +469,8 @@ pub struct Args {
     redundant_send_r: Option<u8>,
     /// Consensus mode to emit in genesis/configs.
     /// Defaults to `npos` on Iroha3 and `permissioned` on Iroha2.
+    /// Localnet defaults to `--build-line iroha3`, so leaving this unset yields `npos`
+    /// unless you set `--build-line iroha2` or `--consensus-mode permissioned`.
     /// Sora profile localnets require `npos` because the global merge ledger is NPoS.
     #[arg(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
