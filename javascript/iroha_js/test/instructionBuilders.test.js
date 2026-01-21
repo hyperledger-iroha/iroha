@@ -146,6 +146,7 @@ function buildLocal8Literal(address) {
   return `0x${truncated.toString("hex")}`;
 }
 
+const DOMAIN_ID = "wonderland";
 const ACCOUNT_SIGNATORY =
   "ED0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const ACCOUNT_PUBLIC_KEY = hexToBytes(ACCOUNT_SIGNATORY.slice(6));
@@ -164,7 +165,6 @@ const ASSET_ID_INPUT = `rose##${ACCOUNT_ID_INPUT}`;
 const ASSET_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAssetIdUsingNorito(ASSET_ID)
   : ASSET_ID;
-const DOMAIN_ID = "wonderland";
 const NFT_ID = "dragon$wonderland";
 const SAMPLE_PUBLIC_KEY = hexToBytes(
   "641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201",
@@ -1035,7 +1035,7 @@ test("buildCastZkBallotInstruction rejects noncanonical owner", () => {
         electionId: "ref-5",
         proof: Buffer.from([0x06]),
         publicInputs: {
-          owner: ACCOUNT_ID,
+          owner: ACCOUNT_ID_INPUT,
           amount: "250",
           duration_blocks: 12,
         },

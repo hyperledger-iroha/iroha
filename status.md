@@ -2,8 +2,16 @@
 
 Last update: 2026-01-20
 
-- SDKs: Torii pipeline submissions now prefer Norito receipts across JS/Python/Swift, Android submit helpers send Norito payloads, and SDK docs/examples now reference receipt payload hashes.
+- SDKs (Swift): aligned offline receipt Poseidon sample account to the canonical ed25519 seed `[0x01; 32]`, refreshed receiver hash expectations, and synced Swift offline_poseidon vectors to the artifacts snapshot.
+- Tests: not run (Swift SDK fixture/value updates only).
+- SoraFS repair telemetry: added backlog age/queue depth/lease expiry metrics to Prometheus + OTEL, extended repair audit events and governance metadata with manifest/provider IDs, and refreshed repair observability docs.
+- Tests: not run (SoraFS repair telemetry + governance metadata updates).
+- Integration tests: reworked `sumeragi_rbc_session_recovers_after_cold_restart` to target a full in-flight RBC session via `/v1/sumeragi/rbc/sessions`, verify the on-disk session file by hash+height prefix before shutdown, and reuse the observed peer for restart checks; removed the unused persisted-session scan helper.
+- Tests: not run (integration-test logic change only).
+- SDKs: Torii pipeline submissions now prefer Norito receipts across JS/Python/Swift, Android submit helpers send Norito payloads, Android pending-queue tests assert Norito bytes, JS dist artifacts refreshed, and SDK docs/examples now reference receipt payload hashes (including Android docs noting receipt bytes).
 - Tests: not run (SDK updates only).
+- Tests: `npm test` (failed; multiple JS test failures including `address_inspect`, `isoBridge`, `toriiClient`, `validationError`, and `transactionFixturesParity` suites).
+- Tests: `swift test` (failed; 45 failures/35 unexpected, first failure `TransactionEncoderValidationTests.testCastZkBallotAcceptsCanonicalHints` with `nativeBridgeError(.authority)`).
 - Docs/UX strings: clarified IH58 as the preferred account format and `snx1` as the second-best option across the Account Structure RFC, data-model specs, SDK/CLI help text, Torii/OpenAPI docs, portal docs/images, and translations.
 - Sumeragi worker loop now refreshes drain budgets and tick gaps each iteration from current on-chain timing to avoid stale startup timeouts; added `run_worker_loop_refreshes_config_each_iteration`.
 - Tests: `cargo test -p iroha_core run_worker_loop_refreshes_config_each_iteration` (ok).

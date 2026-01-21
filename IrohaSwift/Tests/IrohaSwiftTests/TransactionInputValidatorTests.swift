@@ -91,11 +91,9 @@ final class TransactionInputValidatorTests: XCTestCase {
         XCTAssertEqual(domainTarget.objectId, "wonderland")
     }
 
-    func testSanitizeAssetIdRejectsSharedDomainShorthand() {
-        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.asset("xor##alice@wonderland"))) { error in
-            XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAssetId("xor##alice@wonderland"))
-        }
+    func testSanitizeAssetIdAcceptsSharedDomainShorthand() throws {
+        let target = try TransactionInputValidator.sanitizeMetadataTarget(.asset("xor##alice@wonderland"))
+        XCTAssertEqual(target.objectId, "xor#wonderland#alice@wonderland")
     }
 
     func testValidateAcceptsIh58Authority() throws {

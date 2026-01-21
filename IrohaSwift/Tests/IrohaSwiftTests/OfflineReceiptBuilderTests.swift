@@ -820,17 +820,17 @@ final class OfflineReceiptBuilderTests: XCTestCase {
         let receiptA = try makePoseidonSampleReceipt(seed: "a", counter: 5)
         let receiptB = try makePoseidonSampleReceipt(seed: "b", counter: 6)
         XCTAssertEqual(receiptA.to,
-                       "34mSYnDgbaJM58rbLoif4Tkp7G4W3U2rSG53UYJcVJdDp1azVQYq5hvtBqjCfTWooQiJrr13j")
+                       "34mSYnDgbaJM58rbLoif4Tkp7G6HiNtnFxyXXKs7h64Y4tu5ce2JmpnsmfGYB7ZMkKaTZhYQF")
         XCTAssertEqual(receiptB.to,
-                       "34mSYnDgbaJM58rbLoif4Tkp7G4W3U2rSG53UYJcVJdDp1azVQYq5hvtBqjCfTWooQiJrr13j")
+                       "34mSYnDgbaJM58rbLoif4Tkp7G6HiNtnFxyXXKs7h64Y4tu5ce2JmpnsmfGYB7ZMkKaTZhYQF")
         XCTAssertEqual(receiptA.txId.hexUppercased(),
                        "CBC9BA205005B3C4801668402BE63A9CF861473E6619DB0C97BA185A65EB1457")
         XCTAssertEqual(receiptB.txId.hexUppercased(),
                        "9268B995F2034032820A0A8C5DBA0C2BDBD301F5130F1D7F8CBE28305E32088B")
         let fieldsA = try poseidonLeafFields(receiptA)
         let fieldsB = try poseidonLeafFields(receiptB)
-        XCTAssertEqual(fieldsA.receiverHash, "C305E9A5BB13CBBDCF728EAAD3965FFB421576F1DD04F401DCCB1EE94740A761")
-        XCTAssertEqual(fieldsB.receiverHash, "C305E9A5BB13CBBDCF728EAAD3965FFB421576F1DD04F401DCCB1EE94740A761")
+        XCTAssertEqual(fieldsA.receiverHash, "3B3E4FCF62BBEBD4203FE301A90AC8062916DB9F31E6906A4530EB5669C018F3")
+        XCTAssertEqual(fieldsB.receiverHash, "3B3E4FCF62BBEBD4203FE301A90AC8062916DB9F31E6906A4530EB5669C018F3")
         XCTAssertEqual(fieldsA.invoiceHash, "E00BE9DF519D103B25A6D2A1DB7580E50F8373A00F36DDCB0702BC89EE0AD1DD")
         XCTAssertEqual(fieldsB.invoiceHash, "989A58422C86F0BD2FEADF2EEB4648D532402E003DEEC9A7D9C932BB7FD6A779")
         XCTAssertEqual(fieldsA.platformProofHash, "F7B9AC9BC9CDE2A7BE9002A1F36E5FD7CD11BF07FA2D793CAA50554A99A389A3")
@@ -1056,7 +1056,7 @@ final class OfflineReceiptBuilderTests: XCTestCase {
 
     private func sampleAccountId() throws -> String {
         // Matches iroha_crypto::KeyPair::from_seed([0x01; 32], Ed25519).
-        guard let publicKey = Data(hexString: "3B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8") else {
+        guard let publicKey = Data(hexString: "8A88E3DD7409F195FD52DB2D3CBA5D72CA6709BF1D94121BF3748801B40F6F5C") else {
             throw OfflineReceiptBuilderError.invalidAccountId(field: "receiver", value: "sample-key")
         }
         let address = try AccountAddress.fromAccount(domain: "wonderland",

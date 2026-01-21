@@ -76,6 +76,10 @@ enum OfflineNorito {
     private static let maxBigIntBytes = 64
     private static let maxSafeInteger: Double = 9_007_199_254_740_992 // 2^53
     private static let defaultNetworkPrefix: UInt16 = 0x02F1
+    private static let fallbackDomainCandidates = [
+        "sora",
+        "wonderland",
+    ]
 
     static func wrap(typeName: String, payload: Data) -> Data {
         noritoEncode(typeName: typeName, payload: payload, flags: 0)
@@ -89,9 +93,27 @@ enum OfflineNorito {
         return writer.data
     }
 
+    private struct AccountIdParts {
+        let domain: String
+        let publicKey: String
+    }
+
     static func encodeAccountId(_ value: String) throws -> Data {
-        let canonical = try canonicalizeAccountId(value)
-        return encodeString(canonical)
+        let parts = try parseAccountIdParts(value)
+        var writer = OfflineNoritoWriter()
+        let domainPayload = try encodeDomainId(parts.domain)
+        writer.writeField(domainPayload)
+        let controllerPayload = encodeAccountController(publicKey: parts.publicKey)
+        writer.writeField(controllerPayload)
+        return writer.data
+    }
+
+    private static func encodeAccountController(publicKey: String) -> Data {
+        var writer = OfflineNoritoWriter()
+        writer.writeUInt32LE(0)
+        let keyPayload = encodeString(publicKey)
+        writer.writeField(keyPayload)
+        return writer.data
     }
 
     static func encodeBool(_ value: Bool) -> Data {
@@ -268,7 +290,7 @@ enum OfflineNorito {
         return writer.data
     }
 
-    private static func canonicalizeAccountId(_ value: String) throws -> String {
+    private static func parseAccountIdParts(_ value: String) throws -> AccountIdParts {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw OfflineNoritoError.invalidAccountId(value)
@@ -283,11 +305,9 @@ enum OfflineNorito {
             throw OfflineNoritoError.invalidAccountId(trimmed)
         }
         let lowered = trimmed.lowercased()
-        if lowered.hasPrefix("uaid:") {
-            return try canonicalizeUaidLiteral(trimmed)
-        }
-        if lowered.hasPrefix("opaque:") {
-            return try canonicalizeOpaqueLiteral(trimmed)
+        if lowered.hasPrefix("uaid:") || lowered.hasPrefix("opaque:") {
+            // TODO: Support UAID/opaque account resolution once Swift resolvers are available.
+            throw OfflineNoritoError.invalidAccountId(trimmed)
         }
         if trimmed.contains("@") {
             let (addressPart, domainPart) = try parseAccountId(trimmed)
@@ -295,64 +315,36 @@ enum OfflineNorito {
             do {
                 canonicalDomain = try AccountAddress.canonicalizeDomainLabel(domainPart)
             } catch {
-                throw OfflineNoritoError.invalidAccountId(value)
+                throw OfflineNoritoError.invalidAccountId(trimmed)
             }
-            if let canonicalAddress = try canonicalizeEncodedAddress(addressPart,
-                                                                    domain: canonicalDomain,
-                                                                    raw: value) {
-                return canonicalAddress
+            if (try? AccountAddress.parseAny(addressPart,
+                                             expectedPrefix: defaultNetworkPrefix)) != nil {
+                throw OfflineNoritoError.invalidAccountId(trimmed)
             }
-            if let canonicalAddress = try canonicalizeRawPublicKey(addressPart,
-                                                                  domain: canonicalDomain,
-                                                                  raw: value) {
-                return canonicalAddress
+            guard let parsed = try parsePublicKeyMultihash(addressPart, raw: trimmed) else {
+                throw OfflineNoritoError.invalidAccountId(trimmed)
             }
-            return "\(addressPart)@\(canonicalDomain)"
+            let canonicalKey = formatPublicKeyMultihash(functionCode: parsed.functionCode,
+                                                        payload: parsed.publicKey)
+            return AccountIdParts(domain: canonicalDomain, publicKey: canonicalKey)
         }
-        if let canonicalAddress = try canonicalizeEncodedAddress(trimmed,
-                                                                domain: nil,
-                                                                raw: value) {
-            return canonicalAddress
+        let address: AccountAddress
+        do {
+            (address, _) = try AccountAddress.parseAny(trimmed, expectedPrefix: defaultNetworkPrefix)
+        } catch {
+            throw OfflineNoritoError.invalidAccountId(trimmed)
         }
-        throw OfflineNoritoError.invalidAccountId(trimmed)
-    }
-
-    private static func canonicalizeUaidLiteral(_ raw: String) throws -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 5 else {
-            throw OfflineNoritoError.invalidAccountId(raw)
+        guard let domain = resolveDomain(from: address) else {
+            throw OfflineNoritoError.invalidAccountId(trimmed)
         }
-        let rawHex = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard rawHex.count == 64 else {
-            throw OfflineNoritoError.invalidAccountId(raw)
+        guard let info = address.singleControllerInfo() else {
+            // TODO: Support multisig account controllers in offline Norito encoding.
+            throw OfflineNoritoError.invalidAccountId(trimmed)
         }
-        let hexSet = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
-        let allHex = rawHex.unicodeScalars.allSatisfy { hexSet.contains($0) }
-        guard allHex else {
-            throw OfflineNoritoError.invalidAccountId(raw)
-        }
-        let lastChar = rawHex.lowercased().suffix(1)
-        guard ["1", "3", "5", "7", "9", "b", "d", "f"].contains(String(lastChar)) else {
-            throw OfflineNoritoError.invalidAccountId(raw)
-        }
-        return "uaid:\(rawHex.lowercased())"
-    }
-
-    private static func canonicalizeOpaqueLiteral(_ raw: String) throws -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 7 else {
-            throw OfflineNoritoError.invalidAccountId(raw)
-        }
-        let rawHex = String(trimmed.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard rawHex.count == 64 else {
-            throw OfflineNoritoError.invalidAccountId(raw)
-        }
-        let hexSet = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
-        let allHex = rawHex.unicodeScalars.allSatisfy { hexSet.contains($0) }
-        guard allHex else {
-            throw OfflineNoritoError.invalidAccountId(raw)
-        }
-        return "opaque:\(rawHex.lowercased())"
+        let functionCode = multihashFunctionCode(for: info.algorithm)
+        let canonicalKey = formatPublicKeyMultihash(functionCode: functionCode,
+                                                    payload: info.publicKey)
+        return AccountIdParts(domain: domain, publicKey: canonicalKey)
     }
 
     private static func parseAccountId(_ value: String) throws -> (String, String) {
@@ -381,40 +373,16 @@ enum OfflineNorito {
         return (addressPart, domainPart)
     }
 
-    private static func canonicalizeEncodedAddress(_ addressPart: String,
-                                                   domain: String?,
-                                                   raw: String) throws -> String? {
-        do {
-            let (address, _) = try AccountAddress.parseAny(addressPart, expectedPrefix: defaultNetworkPrefix)
-            if let domain {
-                guard address.matchesDomainLabel(domain) else {
-                    throw OfflineNoritoError.invalidAccountId(raw)
-                }
+    private static func resolveDomain(from address: AccountAddress) -> String? {
+        if address.matchesDomainLabel(AccountAddress.defaultDomainName) {
+            return AccountAddress.defaultDomainName
+        }
+        for candidate in fallbackDomainCandidates {
+            if address.matchesDomainLabel(candidate) {
+                return candidate
             }
-            return try address.toIH58(networkPrefix: defaultNetworkPrefix)
-        } catch let error as AccountAddressError {
-            if shouldFallbackFromAddress(error) {
-                return nil
-            }
-            throw OfflineNoritoError.invalidAccountId(raw)
         }
-    }
-
-    private static func canonicalizeRawPublicKey(_ addressPart: String,
-                                                 domain: String,
-                                                 raw: String) throws -> String? {
-        guard let parsed = try parsePublicKeyMultihash(addressPart, raw: raw) else {
-            return nil
-        }
-        let canonicalHex = formatPublicKeyMultihash(functionCode: parsed.functionCode,
-                                                    payload: parsed.publicKey)
-        if let address = try? AccountAddress.fromAccount(domain: domain,
-                                                         publicKey: parsed.publicKey,
-                                                         algorithm: algorithmIdentifier(parsed.algorithm)),
-           let ih58 = try? address.toIH58(networkPrefix: defaultNetworkPrefix) {
-            return ih58
-        }
-        return canonicalHex
+        return nil
     }
 
     private static func parsePublicKeyMultihash(_ value: String,
@@ -519,16 +487,16 @@ enum OfflineNorito {
         }
     }
 
-    private static func algorithmIdentifier(_ algorithm: SigningAlgorithm) -> String {
+    private static func multihashFunctionCode(for algorithm: SigningAlgorithm) -> UInt64 {
         switch algorithm {
         case .ed25519:
-            return "ed25519"
+            return 0xed
         case .secp256k1:
-            return "secp256k1"
+            return 0xe7
         case .mlDsa:
-            return "ml-dsa"
+            return 0xee
         case .sm2:
-            return "sm2"
+            return 0x1306
         }
     }
 
@@ -559,24 +527,6 @@ enum OfflineNorito {
             return try AccountAddress.canonicalizeDomainLabel(value)
         } catch {
             throw OfflineNoritoError.invalidAssetId(value)
-        }
-    }
-
-    private static func shouldFallbackFromAddress(_ error: AccountAddressError) -> Bool {
-        switch error {
-        case .unsupportedAddressFormat,
-             .invalidIh58Encoding,
-             .checksumMismatch,
-             .invalidLength,
-             .missingCompressedSentinel,
-             .compressedTooShort,
-             .invalidCompressedChar,
-             .invalidCompressedBase,
-             .invalidCompressedDigit,
-             .invalidIh58PrefixEncoding:
-            return true
-        default:
-            return false
         }
     }
 
@@ -679,6 +629,12 @@ struct OfflineAssetIdParts: Equatable {
     let definitionName: String
     let definitionDomain: String
 
+    // Allow resolving common domain labels when asset IDs omit the definition domain (`asset##account`).
+    private static let fallbackDomainCandidates = [
+        "sora",
+        "wonderland",
+    ]
+
     private static func containsReservedIdCharacters(_ value: String) -> Bool {
         value.contains("@") || value.contains("#") || value.contains("$")
     }
@@ -701,19 +657,74 @@ struct OfflineAssetIdParts: Equatable {
             || accountId.contains("$") {
             throw OfflineNoritoError.invalidAccountId(accountId)
         }
+        if accountId.contains("@") {
+            let parts = accountId.split(separator: "@", omittingEmptySubsequences: false)
+            guard parts.count == 2,
+                  !parts[0].isEmpty,
+                  !parts[1].isEmpty else {
+                throw OfflineNoritoError.invalidAccountId(accountId)
+            }
+        }
         let parts = definitionCandidate.split(separator: "#", omittingEmptySubsequences: false)
         guard parts.count == 2 else {
             throw OfflineNoritoError.invalidAssetId(raw)
         }
         let name = String(parts[0])
-        let domain = String(parts[1])
+        let domainCandidate = String(parts[1])
         guard !name.isEmpty,
-              !domain.isEmpty,
-              !containsReservedIdCharacters(name),
-              !containsReservedIdCharacters(domain) else {
+              !containsReservedIdCharacters(name) else {
             throw OfflineNoritoError.invalidAssetId(raw)
         }
+        let domain: String
+        if domainCandidate.isEmpty {
+            guard let derived = try deriveDomainFromAccount(accountId) else {
+                throw OfflineNoritoError.invalidAssetId(raw)
+            }
+            domain = derived
+        } else {
+            guard !containsReservedIdCharacters(domainCandidate) else {
+                throw OfflineNoritoError.invalidAssetId(raw)
+            }
+            do {
+                domain = try AccountAddress.canonicalizeDomainLabel(domainCandidate)
+            } catch {
+                throw OfflineNoritoError.invalidAssetId(raw)
+            }
+        }
         return OfflineAssetIdParts(accountId: accountId, definitionName: name, definitionDomain: domain)
+    }
+
+    private static func deriveDomainFromAccount(_ accountId: String) throws -> String? {
+        if accountId.contains("@") {
+            let parts = accountId.split(separator: "@", omittingEmptySubsequences: false)
+            guard parts.count == 2,
+                  !parts[0].isEmpty,
+                  !parts[1].isEmpty else {
+                throw OfflineNoritoError.invalidAccountId(accountId)
+            }
+            let domainPart = String(parts[1])
+            do {
+                return try AccountAddress.canonicalizeDomainLabel(domainPart)
+            } catch {
+                throw OfflineNoritoError.invalidAccountId(accountId)
+            }
+        }
+        let lowered = accountId.lowercased()
+        if lowered.hasPrefix("uaid:") || lowered.hasPrefix("opaque:") {
+            return nil
+        }
+        if let parsed = try? AccountAddress.parseAny(accountId,
+                                                     expectedPrefix: AccountId.defaultNetworkPrefix) {
+            if parsed.0.matchesDomainLabel(AccountAddress.defaultDomainName) {
+                return AccountAddress.defaultDomainName
+            }
+            for candidate in fallbackDomainCandidates {
+                if parsed.0.matchesDomainLabel(candidate) {
+                    return candidate
+                }
+            }
+        }
+        return nil
     }
 }
 

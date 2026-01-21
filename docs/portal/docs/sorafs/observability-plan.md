@@ -80,6 +80,25 @@ whenever PoR/PoTR enforcement escalates.
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | Provider capacity/uptime success data surfaced in the capacity dashboard. |
 | `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | Backlog depth plus the cumulative failure counters exported whenever `/v1/sorafs/por/ingestion/{manifest}` is polled, feeding the “PoR Stalls” panel/alert. |
 
+### Repair & SLA
+
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `sorafs_repair_tasks_total` | Counter | `status` | OTEL counter for repair task transitions. |
+| `sorafs_repair_latency_minutes` | Histogram | `outcome` | OTEL histogram for repair lifecycle latency. |
+| `sorafs_repair_queue_depth` | Histogram | `provider` | OTEL histogram of queued tasks per provider (snapshot-style). |
+| `sorafs_repair_backlog_oldest_age_seconds` | Histogram | — | OTEL histogram of the oldest queued task age (seconds). |
+| `sorafs_repair_lease_expired_total` | Counter | `outcome` | OTEL counter for lease expiries (`requeued`/`escalated`). |
+| `sorafs_repair_slash_proposals_total` | Counter | `outcome` | OTEL counter for slash proposal transitions. |
+| `torii_sorafs_repair_tasks_total` | Counter | `status` | Prometheus counter for task transitions. |
+| `torii_sorafs_repair_latency_minutes_bucket` | Histogram | `outcome` | Prometheus histogram for repair lifecycle latency. |
+| `torii_sorafs_repair_queue_depth` | Gauge | `provider` | Prometheus gauge for queued tasks per provider. |
+| `torii_sorafs_repair_backlog_oldest_age_seconds` | Gauge | — | Prometheus gauge for the oldest queued task age (seconds). |
+| `torii_sorafs_repair_lease_expired_total` | Counter | `outcome` | Prometheus counter for lease expiries. |
+| `torii_sorafs_slash_proposals_total` | Counter | `outcome` | Prometheus counter for slash proposal transitions. |
+
+Governance audit JSON metadata mirrors the repair telemetry labels (`status`, `ticket_id`, `manifest`, `provider` on repair events; `outcome` on slash proposals) so metrics and audit artefacts can be correlated deterministically.
+
 ### Retention & GC
 
 | Metric | Type | Labels | Notes |

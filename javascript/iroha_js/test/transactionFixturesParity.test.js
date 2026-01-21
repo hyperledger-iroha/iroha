@@ -59,16 +59,31 @@ function extractCanonicalAuthority(payloadBase64) {
   if (current.length >= 8) {
     printable.push(current);
   }
-  const authority = printable.find((entry) => entry.includes("@")) ?? null;
-  if (!authority) {
-    return null;
+  const prioritized = [
+    ...printable.filter((entry) => entry.includes("@")),
+    ...printable.filter((entry) => !entry.includes("@")),
+  ];
+  for (const entry of prioritized) {
+    if (entry.includes("@")) {
+      const [signatory, domain] = entry.split("@", 2);
+      if (!signatory || !domain) {
+        continue;
+      }
+      try {
+        const { address } = AccountAddress.parseAny(signatory, undefined, domain);
+        return address.toIH58();
+      } catch {
+        continue;
+      }
+    }
+    try {
+      const { address } = AccountAddress.parseAny(entry);
+      return address.toIH58();
+    } catch {
+      continue;
+    }
   }
-  const [signatory, domain] = authority.split("@", 2);
-  if (!signatory || !domain) {
-    return null;
-  }
-  const { address } = AccountAddress.parseAny(signatory, undefined, domain);
-  return `${address.toIH58()}@${domain}`;
+  return null;
 }
 
 const canonicalAuthority =

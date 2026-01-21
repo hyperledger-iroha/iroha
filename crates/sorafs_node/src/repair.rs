@@ -465,6 +465,12 @@ pub struct RepairWatchdogReport {
     pub lease_expired: u32,
 }
 
+#[derive(Debug, Clone, Default)]
+struct RepairBacklogStats {
+    oldest_age_secs: u64,
+    per_provider: BTreeMap<[u8; 32], u64>,
+}
+
 /// Summary of work performed by an automated repair worker tick.
 #[derive(Debug, Clone, Default)]
 pub struct RepairWorkerReport {
@@ -853,6 +859,26 @@ impl RepairManager {
         snapshots
     }
 
+    fn backlog_stats(&self, now_unix: u64) -> Result<RepairBacklogStats, RepairStoreError> {
+        let tasks = self.store.list_tasks()?;
+        Ok(compute_backlog_stats(&tasks, now_unix))
+    }
+
+    fn record_backlog_metrics(&self, stats: &RepairBacklogStats) {
+        let mut provider_depths = Vec::with_capacity(stats.per_provider.len());
+        for (provider_id, depth) in &stats.per_provider {
+            provider_depths.push((hex::encode(provider_id), *depth));
+        }
+        global_or_default().record_sorafs_repair_queue_depths(&provider_depths);
+        global_or_default()
+            .set_sorafs_repair_backlog_oldest_age_seconds(stats.oldest_age_secs);
+        let otel = global_sorafs_repair_otel();
+        otel.record_backlog_oldest_age_seconds(stats.oldest_age_secs as f64);
+        for (provider_hex, depth) in provider_depths {
+            otel.record_queue_depth(depth, &provider_hex);
+        }
+    }
+
     /// List claimable repair tasks ordered by priority.
     #[must_use]
     pub fn claimable_tasks(&self, now_unix: u64) -> Vec<RepairTaskRecordV1> {
@@ -1043,7 +1069,9 @@ impl RepairManager {
                     }
                     let queued_at = queued_at_unix(&updated.state);
                     global_sorafs_repair_otel().record_task_transition("escalated");
+                    global_sorafs_repair_otel().record_lease_expired("escalated");
                     global_or_default().inc_sorafs_repair_tasks("escalated");
+                    global_or_default().inc_sorafs_repair_lease_expired("escalated");
                     global_sorafs_repair_otel().record_slash_proposal("drafted");
                     global_or_default().inc_sorafs_slash_proposals("drafted");
                     self.observe_latency(queued_at, now_unix, "escalated");
@@ -1054,7 +1082,9 @@ impl RepairManager {
                         report.events.push(event);
                     }
                     global_sorafs_repair_otel().record_task_transition("queued");
+                    global_sorafs_repair_otel().record_lease_expired("requeued");
                     global_or_default().inc_sorafs_repair_tasks("queued");
+                    global_or_default().inc_sorafs_repair_lease_expired("requeued");
                 }
             }
 
@@ -1123,6 +1153,13 @@ impl RepairManager {
                     global_sorafs_repair_otel().record_task_transition("queued");
                     global_or_default().inc_sorafs_repair_tasks("queued");
                 }
+            }
+        }
+
+        match self.backlog_stats(now_unix) {
+            Ok(stats) => self.record_backlog_metrics(&stats),
+            Err(err) => {
+                warn!(?err, "failed to refresh repair backlog metrics");
             }
         }
 
@@ -2207,6 +2244,8 @@ impl RepairTaskInternal {
         let event = RepairTaskEventV1 {
             version: REPAIR_TASK_EVENT_VERSION_V1,
             ticket_id: self.report.ticket_id.clone(),
+            manifest_digest: self.report.evidence.manifest_digest,
+            provider_id: self.report.evidence.provider_id,
             status,
             occurred_at_unix,
             actor,
@@ -2322,6 +2361,32 @@ fn sort_repair_task_snapshots(snapshots: &mut [RepairTaskSnapshot]) {
             })
             .then_with(|| left.record.ticket_id.0.cmp(&right.record.ticket_id.0))
     });
+}
+
+fn compute_backlog_stats(tasks: &[RepairTaskInternal], now_unix: u64) -> RepairBacklogStats {
+    if now_unix == 0 {
+        return RepairBacklogStats::default();
+    }
+    let mut stats = RepairBacklogStats::default();
+    let mut oldest_queued_at = None;
+
+    for task in tasks {
+        if let RepairTaskStateV1::Queued(state) = &task.state {
+            let entry = stats
+                .per_provider
+                .entry(task.report.evidence.provider_id)
+                .or_insert(0);
+            *entry = entry.saturating_add(1);
+            let queued_at = state.queued_at_unix;
+            oldest_queued_at = Some(oldest_queued_at.map_or(queued_at, |prev| prev.min(queued_at)));
+        }
+    }
+
+    if let Some(queued_at) = oldest_queued_at {
+        stats.oldest_age_secs = now_unix.saturating_sub(queued_at);
+    }
+
+    stats
 }
 
 fn ensure_transition_allowed(
@@ -2735,6 +2800,34 @@ mod tests {
         });
         assert_eq!(status_tasks.len(), 1);
         assert_eq!(status_tasks[0].ticket_id, report_a.ticket_id);
+    }
+
+    #[test]
+    fn backlog_stats_tracks_oldest_and_per_provider() {
+        let (manager, _temp_dir) = manager_with_temp_dir();
+        let provider_a = [0x11; 32];
+        let provider_b = [0x22; 32];
+        let report_a = report("REP-310", [0x01; 32], provider_a, 1_000);
+        let report_b = report("REP-311", [0x02; 32], provider_b, 1_100);
+        let report_c = report("REP-312", [0x03; 32], provider_a, 1_200);
+
+        manager
+            .enqueue_report(report_a.clone())
+            .expect("enqueue report a");
+        manager
+            .enqueue_report(report_b.clone())
+            .expect("enqueue report b");
+        manager
+            .enqueue_report(report_c.clone())
+            .expect("enqueue report c");
+        manager
+            .claim_ticket(&report_c.ticket_id, "worker", 1_210, "claim-310")
+            .expect("claim report c");
+
+        let stats = manager.backlog_stats(1_300).expect("backlog stats");
+        assert_eq!(stats.oldest_age_secs, 300);
+        assert_eq!(stats.per_provider.get(&provider_a).copied(), Some(1));
+        assert_eq!(stats.per_provider.get(&provider_b).copied(), Some(1));
     }
 
     #[test]

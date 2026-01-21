@@ -213,15 +213,17 @@ struct SignedAuditorRequestV1 {
 
 ## SLA & Observability
 - Metrics (Prometheus naming):
-  - `sorafs_repair_tasks_total{status}` — Counter.
-  - `sorafs_repair_task_latency_seconds_bucket{proof_kind}` — Histogram measuring time from creation to completion/escalation.
-  - `sorafs_repair_backlog_gauge{proof_kind}` — Gauge for queued tasks.
-  - `sorafs_auditor_requests_total{endpoint,result}` — Counter for API usage.
-  - `sorafs_repair_verifier_failures_total{reason}` — Counter.
+  - `torii_sorafs_repair_tasks_total{status}` — Counter for task transitions.
+  - `torii_sorafs_repair_latency_minutes_bucket{outcome}` — Histogram measuring time from creation to completion/escalation.
+  - `torii_sorafs_repair_queue_depth{provider}` — Gauge for queued tasks per provider.
+  - `torii_sorafs_repair_backlog_oldest_age_seconds` — Age of the oldest queued task.
+  - `torii_sorafs_repair_lease_expired_total{outcome}` — Counter for expired leases (requeued/escalated).
+  - `torii_sorafs_slash_proposals_total{outcome}` — Counter for slash proposal transitions.
+- Governance audit JSON metadata mirrors the telemetry labels (`ticket_id`, `manifest`, `provider`, `status` for repair events; `outcome` for slash proposals) to keep correlation deterministic.
 - Alerts:
-  - `SORAfsRepairBacklogHigh`: queue > 50 tasks or oldest queued > SLA.
-  - `SORAfsRepairEscalations`: escalations per hour > 3.
-  - `SORAfsAuditorAuthFailures`: >10 failed signatures in 5 minutes.
+  - `SoraFsRepairBacklogHigh`: queue > 50 tasks or oldest queued > SLA.
+  - `SoraFsRepairEscalations`: escalations per hour > 3.
+  - `SoraFsRepairLeaseExpirySpike`: lease expiries per hour > 5.
 - Logs:
   - Structured JSON with `task_id`, `status`, `sla_deadline`, `retry_count`.
   - Loki retention 180 days hot, 2 years archived (mirrors pricing policy logs).

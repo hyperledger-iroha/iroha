@@ -973,6 +973,12 @@ pub struct SorafsRepairOtel {
     #[cfg(feature = "otel-exporter")]
     latency_minutes: OtelHistogram<f64>,
     #[cfg(feature = "otel-exporter")]
+    backlog_oldest_age_seconds: OtelHistogram<f64>,
+    #[cfg(feature = "otel-exporter")]
+    queue_depth: OtelHistogram<f64>,
+    #[cfg(feature = "otel-exporter")]
+    lease_expired_total: Counter<u64>,
+    #[cfg(feature = "otel-exporter")]
     slash_proposals_total: Counter<u64>,
 }
 
@@ -999,6 +1005,20 @@ impl SorafsRepairOtel {
                 .with_description("SoraFS repair lifecycle latency in minutes.")
                 .with_unit("min")
                 .init();
+            let backlog_oldest_age_seconds = meter
+                .f64_histogram("sorafs.repair.backlog_oldest_age_seconds")
+                .with_description("Age in seconds of the oldest queued SoraFS repair task.")
+                .with_unit("s")
+                .init();
+            let queue_depth = meter
+                .f64_histogram("sorafs.repair.queue_depth")
+                .with_description("SoraFS repair queue depth per provider.")
+                .with_unit("tasks")
+                .init();
+            let lease_expired_total = meter
+                .u64_counter("sorafs.repair.lease_expired_total")
+                .with_description("SoraFS repair lease expirations grouped by outcome.")
+                .init();
             let slash_proposals_total = meter
                 .u64_counter("sorafs.repair.slash_proposals_total")
                 .with_description("SoraFS repair slash proposals grouped by outcome.")
@@ -1006,6 +1026,9 @@ impl SorafsRepairOtel {
             Self {
                 tasks_total,
                 latency_minutes,
+                backlog_oldest_age_seconds,
+                queue_depth,
+                lease_expired_total,
                 slash_proposals_total,
             }
         }
@@ -1037,6 +1060,39 @@ impl SorafsRepairOtel {
             );
         }
         let _ = (minutes, outcome);
+    }
+
+    /// Record the oldest queued repair task age in seconds.
+    pub fn record_backlog_oldest_age_seconds(&self, age_secs: f64) {
+        #[cfg(feature = "otel-exporter")]
+        {
+            self.backlog_oldest_age_seconds.record(age_secs, &[]);
+        }
+        let _ = age_secs;
+    }
+
+    /// Record the current repair queue depth for the supplied provider.
+    pub fn record_queue_depth(&self, depth: u64, provider: &str) {
+        #[cfg(feature = "otel-exporter")]
+        {
+            self.queue_depth.record(
+                depth as f64,
+                &[opentelemetry::KeyValue::new("provider", provider.to_owned())],
+            );
+        }
+        let _ = (depth, provider);
+    }
+
+    /// Record a lease expiry event for the supplied outcome label.
+    pub fn record_lease_expired(&self, outcome: &'static str) {
+        #[cfg(feature = "otel-exporter")]
+        {
+            self.lease_expired_total.add(
+                1,
+                &[opentelemetry::KeyValue::new("outcome", outcome.to_owned())],
+            );
+        }
+        let _ = outcome;
     }
 
     /// Record a slash proposal transition for the supplied outcome label.
@@ -6958,6 +7014,12 @@ pub struct Metrics {
     pub torii_sorafs_repair_tasks_total: IntCounterVec,
     /// Torii SoraFS repair latency histogram (minutes) grouped by outcome.
     pub torii_sorafs_repair_latency_minutes: HistogramVec,
+    /// Torii SoraFS repair queue depth per provider.
+    pub torii_sorafs_repair_queue_depth: GenericGaugeVec<AtomicU64>,
+    /// Torii SoraFS oldest queued repair age (seconds).
+    pub torii_sorafs_repair_backlog_oldest_age_seconds: GenericGauge<AtomicU64>,
+    /// Torii SoraFS repair lease expirations grouped by outcome.
+    pub torii_sorafs_repair_lease_expired_total: IntCounterVec,
     /// Torii SoraFS slash proposals submitted grouped by outcome.
     pub torii_sorafs_slash_proposals_total: IntCounterVec,
     /// Torii SoraFS GC runs grouped by result.
@@ -11212,6 +11274,32 @@ impl Default for Metrics {
             &["outcome"],
         )
         .expect("Infallible");
+        let torii_sorafs_repair_queue_depth = GenericGaugeVec::new(
+            Opts::new(
+                "torii_sorafs_repair_queue_depth",
+                "SoraFS repair queue depth per provider",
+            ),
+            &["provider"],
+        )
+        .expect("Infallible");
+        let torii_sorafs_repair_backlog_oldest_age_seconds = GenericGauge::new(
+            "torii_sorafs_repair_backlog_oldest_age_seconds",
+            "Age of the oldest queued SoraFS repair task (seconds)",
+        )
+        .expect("Infallible");
+        let torii_sorafs_repair_lease_expired_total = IntCounterVec::new(
+            Opts::new(
+                "torii_sorafs_repair_lease_expired_total",
+                "SoraFS repair lease expirations grouped by outcome",
+            ),
+            &["outcome"],
+        )
+        .expect("Infallible");
+        register_guarded(&registry, &torii_sorafs_repair_tasks_total);
+        register_guarded(&registry, &torii_sorafs_repair_latency_minutes);
+        register_guarded(&registry, &torii_sorafs_repair_queue_depth);
+        register_guarded(&registry, &torii_sorafs_repair_backlog_oldest_age_seconds);
+        register_guarded(&registry, &torii_sorafs_repair_lease_expired_total);
         let torii_sorafs_slash_proposals_total = IntCounterVec::new(
             Opts::new(
                 "torii_sorafs_slash_proposals_total",
@@ -11220,6 +11308,7 @@ impl Default for Metrics {
             &["outcome"],
         )
         .expect("Infallible");
+        register_guarded(&registry, &torii_sorafs_slash_proposals_total);
         let torii_sorafs_gc_runs_total = IntCounterVec::new(
             Opts::new(
                 "torii_sorafs_gc_runs_total",
@@ -13741,6 +13830,9 @@ impl Default for Metrics {
             torii_sorafs_por_ingest_failures_total,
             torii_sorafs_repair_tasks_total,
             torii_sorafs_repair_latency_minutes,
+            torii_sorafs_repair_queue_depth,
+            torii_sorafs_repair_backlog_oldest_age_seconds,
+            torii_sorafs_repair_lease_expired_total,
             torii_sorafs_slash_proposals_total,
             torii_sorafs_gc_runs_total,
             torii_sorafs_gc_evictions_total,
@@ -14981,6 +15073,29 @@ impl Metrics {
         self.torii_sorafs_repair_latency_minutes
             .with_label_values(&[outcome])
             .observe(minutes.max(0.0));
+    }
+
+    /// Record repair queue depth per provider.
+    pub fn record_sorafs_repair_queue_depths(&self, depths: &[(String, u64)]) {
+        self.torii_sorafs_repair_queue_depth.reset();
+        for (provider, depth) in depths {
+            self.torii_sorafs_repair_queue_depth
+                .with_label_values(&[provider])
+                .set(*depth);
+        }
+    }
+
+    /// Record the age (seconds) of the oldest queued repair task.
+    pub fn set_sorafs_repair_backlog_oldest_age_seconds(&self, age_secs: u64) {
+        self.torii_sorafs_repair_backlog_oldest_age_seconds
+            .set(age_secs);
+    }
+
+    /// Increment the repair lease-expired counter for a given outcome label.
+    pub fn inc_sorafs_repair_lease_expired(&self, outcome: &str) {
+        self.torii_sorafs_repair_lease_expired_total
+            .with_label_values(&[outcome])
+            .inc();
     }
 
     /// Increment the slash proposal counter for a given outcome label.
@@ -16724,6 +16839,74 @@ mod test {
             metrics.torii_sorafs_gc_oldest_expired_age_seconds.get() as u64,
             120
         );
+    }
+
+    #[test]
+    fn records_sorafs_repair_metrics() {
+        let metrics = Metrics::default();
+        metrics.inc_sorafs_repair_tasks("queued");
+        metrics.observe_sorafs_repair_latency("completed", 12.5);
+        metrics.record_sorafs_repair_queue_depths(&[
+            ("provider-a".to_string(), 2),
+            ("provider-b".to_string(), 1),
+        ]);
+        metrics.set_sorafs_repair_backlog_oldest_age_seconds(300);
+        metrics.inc_sorafs_repair_lease_expired("requeued");
+        metrics.inc_sorafs_slash_proposals("submitted");
+
+        assert_eq!(
+            metrics
+                .torii_sorafs_repair_tasks_total
+                .with_label_values(&["queued"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_repair_queue_depth
+                .with_label_values(&["provider-a"])
+                .get() as u64,
+            2
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_repair_queue_depth
+                .with_label_values(&["provider-b"])
+                .get() as u64,
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_repair_backlog_oldest_age_seconds
+                .get() as u64,
+            300
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_repair_lease_expired_total
+                .with_label_values(&["requeued"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_slash_proposals_total
+                .with_label_values(&["submitted"])
+                .get(),
+            1
+        );
+    }
+
+    #[test]
+    fn repair_otel_handles_noop_without_exporter() {
+        let otel = SorafsRepairOtel::new();
+        otel.record_task_transition("queued");
+        otel.record_latency(1.0, "completed");
+        otel.record_backlog_oldest_age_seconds(10.0);
+        otel.record_queue_depth(2, "provider-a");
+        otel.record_lease_expired("requeued");
+        otel.record_slash_proposal("submitted");
+        let _ = global_sorafs_repair_otel();
     }
 
     #[test]

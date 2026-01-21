@@ -69,6 +69,7 @@ struct RbcInflightObservation {
     sessions_url: reqwest::Url,
     height: u64,
     total_chunks: u64,
+    received_chunks: u64,
     delivered: bool,
 }
 
@@ -220,8 +221,8 @@ fn parse_pending_rbc_stash_counters(root: &Value) -> PendingRbcStashCounters {
 // Keep the payload light to avoid overwhelming Torii/queue on constrained hosts.
 const LARGE_PAYLOAD_BYTES: usize = 1024; // keep payload light to ensure timely DA/RBC
 // Use a multi-chunk payload to ensure the recovery test observes an in-flight session.
-const RBC_RECOVERY_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
-const RBC_RECOVERY_CHUNK_BYTES: i64 = 64 * 1024;
+const RBC_RECOVERY_PAYLOAD_BYTES: usize = 1024 * 1024;
+const RBC_RECOVERY_CHUNK_BYTES: i64 = 8 * 1024;
 const RBC_DELIVER_BUDGET_MS: u64 = 20_000;
 const RBC_DELIVER_GRACE_MS: u64 = 1_000;
 const COMMIT_BUDGET_MS: u64 = 50_000;
@@ -1628,6 +1629,26 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["logger", "level"], "INFO")
+                .write(["network", "max_frame_bytes"], CONSENSUS_FRAME_BUDGET_BYTES)
+                .write(
+                    ["network", "max_frame_bytes_consensus"],
+                    CONSENSUS_FRAME_BUDGET_BYTES,
+                )
+                .write(
+                    ["network", "max_frame_bytes_control"],
+                    CONSENSUS_FRAME_BUDGET_BYTES,
+                )
+                .write(
+                    ["network", "max_frame_bytes_block_sync"],
+                    CONSENSUS_FRAME_BUDGET_BYTES,
+                )
+                .write(
+                    ["network", "max_frame_bytes_other"],
+                    CONSENSUS_FRAME_BUDGET_BYTES,
+                )
+                .write(["network", "p2p_queue_cap_high"], P2P_QUEUE_CAP_HIGH)
+                .write(["network", "p2p_queue_cap_low"], P2P_QUEUE_CAP_LOW)
+                .write(["network", "p2p_post_queue_cap"], P2P_POST_QUEUE_CAP)
                 .write(
                     ["network", "max_frame_bytes_tx_gossip"],
                     P2P_TX_FRAME_BUDGET_BYTES,
@@ -1636,6 +1657,17 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
                     ["torii", "max_content_len"],
                     torii_max_content_len_for_payload(payload_bytes),
                 )
+                .write(["sumeragi", "rbc_payload_chunks_per_tick"], 1i64)
+                .write(["sumeragi", "rbc_rebroadcast_sessions_per_tick"], 1i64)
+                .write(["sumeragi", "rbc_store_max_sessions"], 2_048i64)
+                .write(["sumeragi", "rbc_store_soft_sessions"], 1_536i64)
+                .write(["sumeragi", "rbc_store_max_bytes"], 536_870_912i64)
+                .write(["sumeragi", "rbc_store_soft_bytes"], 402_653_184i64)
+                .write(["sumeragi", "rbc_pending_max_chunks"], 256i64)
+                .write(["sumeragi", "rbc_pending_max_bytes"], 16_777_216i64)
+                .write(["sumeragi", "rbc_disk_store_max_bytes"], 536_870_912i64)
+                .write(["sumeragi", "rbc_disk_store_ttl_secs"], 600i64)
+                .write(["sumeragi", "rbc_session_ttl_secs"], 600i64)
                 .write(["sumeragi", "rbc_chunk_max_bytes"], rbc_chunk_max_bytes);
         });
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -1647,6 +1679,10 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
         return Ok(());
     };
     let result: Result<()> = async {
+        network
+            .ensure_blocks_with(|height| height.total >= 1)
+            .await?;
+
         let env_dir = network.env_dir().to_path_buf();
         let config_layers: Vec<ConfigLayer> = network
             .config_layers()
@@ -1655,81 +1691,141 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
 
         let client = network.client();
         let torii = client.torii_url.clone();
-        set_sumeragi_parameter(&client, SumeragiParameter::DaEnabled(true))
-            .await
-            .wrap_err_with(|| format!("enable DA; torii={torii}, env_dir={}", env_dir.display()))?;
-        let torii_urls = network.torii_urls();
-        let status_url = client
-            .torii_url
-            .join("status")
-            .wrap_err("compose status URL")?;
 
         let http = reqwest::Client::new();
-        let mut sessions_probes = Vec::with_capacity(torii_urls.len());
-        for torii_url in &torii_urls {
-            let base = reqwest::Url::parse(torii_url)
-                .wrap_err_with(|| format!("parse torii url {torii_url}"))?;
-            let sessions_url = base
+        let status_before = fetch_status(&client).await.wrap_err_with(|| {
+            format!(
+                "fetch status before RBC session; torii={torii}, env_dir={}",
+                env_dir.display()
+            )
+        })?;
+        let expected_height = status_before.blocks + 1;
+
+        let peers = network.peers().clone();
+        let mut probes = Vec::with_capacity(peers.len());
+        for peer in &peers {
+            let sessions_url = peer
+                .client()
+                .torii_url
                 .join("v1/sumeragi/rbc/sessions")
-                .wrap_err_with(|| format!("compose sessions URL for {torii_url}"))?;
-            let baseline_hashes = fetch_rbc_session_hashes(&http, &sessions_url)
-                .await
-                .wrap_err_with(|| format!("fetch RBC session baseline for {torii_url}"))?;
-            sessions_probes.push(RbcSessionsProbe {
+                .wrap_err("compose sessions URL")?;
+            let baseline_hashes = fetch_rbc_session_hashes(&http, &sessions_url).await?;
+            probes.push(RbcSessionsProbe {
                 url: sessions_url,
                 baseline_hashes,
             });
         }
-        let start = Instant::now();
-
-        let inflight_handle = tokio::spawn(wait_for_inflight_rbc(
-            http.clone(),
-            sessions_probes,
-            start,
-        ));
 
         let heavy_message = generate_incompressible_payload(
             "sumeragi_rbc_session_recovers_after_cold_restart",
             payload_bytes,
         );
         let submit_client = client.clone();
-        let submit_handle = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             submit_client.submit(Log::new(Level::INFO, heavy_message))
-        });
+        })
+        .await
+        .wrap_err("submit join")??;
 
-        let inflight = inflight_handle.await.wrap_err("inflight detector join")??;
+        let inflight = wait_for_inflight_rbc(http.clone(), probes, Instant::now())
+            .await
+            .wrap_err("wait for inflight RBC session before shutdown")?;
+        ensure!(
+            inflight.height >= expected_height,
+            "expected RBC session height >= {expected_height}, got {}",
+            inflight.height
+        );
+        let block_hash_hex = inflight.block_hash.clone();
+        let session_height = inflight.height;
+
+        let observed_peer_index = peers
+            .iter()
+            .position(|peer| {
+                peer.client()
+                    .torii_url
+                    .join("v1/sumeragi/rbc/sessions")
+                    .ok()
+                    .as_ref()
+                    == Some(&inflight.sessions_url)
+            })
+            .ok_or_else(|| {
+                eyre!(
+                    "failed to map RBC sessions URL {} to a peer",
+                    inflight.sessions_url
+                )
+            })?;
+        let observed_torii = peers[observed_peer_index].client().torii_url.clone();
+        let status_url = observed_torii
+            .join("status")
+            .wrap_err("compose observed status URL")?;
         let sessions_url = inflight.sessions_url.clone();
-        let expected_height = inflight.height;
-        let expected_total_chunks = inflight.total_chunks;
+        let store_dir = peers[observed_peer_index]
+            .kura_store_dir()
+            .join("rbc_sessions");
 
-        submit_handle.await.wrap_err("submit join")??;
-
-        let Some(snapshot_before) = fetch_rbc_session(
+        let mut snapshot_before = wait_for_rbc_session_snapshot(
             &http,
             &sessions_url,
-            expected_height,
-            &inflight.block_hash,
+            session_height,
+            &block_hash_hex,
+            Instant::now(),
+            da_rbc_inflight_timeout(),
         )
         .await
-        .wrap_err_with(|| {
-            format!(
-                "fetch RBC session before shutdown; torii={torii}, env_dir={}, url={sessions_url}",
-                env_dir.display()
-            )
-        })?
-        else {
-            return Err(eyre!("expected RBC session snapshot before shutdown"));
-        };
+        .wrap_err("wait for inflight RBC session before shutdown")?;
+
+        ensure!(snapshot_before.total_chunks > 0, "expected chunk metadata");
+        ensure!(
+            !snapshot_before.delivered,
+            "session should remain in-flight prior to shutdown (received={}, total={})",
+            snapshot_before.received_chunks,
+            snapshot_before.total_chunks
+        );
 
         ensure!(
-            snapshot_before.total_chunks > 0,
-            "expected chunk metadata before shutdown"
+            snapshot_before.received_chunks == snapshot_before.total_chunks,
+            "expected full RBC payload before shutdown (received={}, total={})",
+            snapshot_before.received_chunks,
+            snapshot_before.total_chunks
         );
-        if !inflight.delivered {
-            ensure!(
-                snapshot_before.received_chunks < snapshot_before.total_chunks,
-                "session should remain incomplete prior to shutdown"
-            );
+        let expected_total_chunks = snapshot_before.total_chunks;
+
+        let persist_start = Instant::now();
+        let expected_prefix = format!("{block_hash_hex}_{session_height}_");
+        loop {
+            if persist_start.elapsed() > da_rbc_persist_timeout() {
+                return Err(eyre!(
+                    "timed out waiting for persisted RBC session file for {block_hash_hex} at height {session_height} in {}",
+                    store_dir.display()
+                ));
+            }
+            let entries = match fs::read_dir(&store_dir) {
+                Ok(entries) => entries,
+                Err(err) if err.kind() == ErrorKind::NotFound => {
+                    sleep(Duration::from_millis(200)).await;
+                    continue;
+                }
+                Err(err) => {
+                    return Err(eyre!(
+                        "failed to read RBC session store dir {}: {err}",
+                        store_dir.display()
+                    ));
+                }
+            };
+            let mut found = false;
+            for entry in entries.flatten() {
+                let Some(name) = entry.file_name().to_str() else {
+                    continue;
+                };
+                if name.starts_with(&expected_prefix) && name.ends_with(".norito") {
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                break;
+            }
+            sleep(Duration::from_millis(200)).await;
         }
 
         network.shutdown().await;
@@ -1743,32 +1839,31 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             return Ok(());
         }
 
+        let restarted_client = peers[observed_peer_index].client();
+        let resumed_torii = observed_torii.clone();
+        let restart_sessions_url = resumed_torii
+            .join("v1/sumeragi/rbc/sessions")
+            .wrap_err("compose restart sessions URL")?;
+        let recovery_start = Instant::now();
         wait_for_recovered_flag(
             http.clone(),
-            sessions_url.clone(),
-            expected_height,
-            &inflight.block_hash,
-            Instant::now(),
-        )
-        .await?;
-
-        let Some(snapshot_after) = fetch_rbc_session(
-            &http,
-            &sessions_url,
-            expected_height,
-            &inflight.block_hash,
+            restart_sessions_url.clone(),
+            session_height,
+            &block_hash_hex,
+            recovery_start,
         )
         .await
-        .wrap_err_with(|| {
-            format!(
-                "fetch RBC session after restart; torii={torii}, env_dir={}, url={sessions_url}",
-                env_dir.display()
-            )
-        })?
-        else {
-            return Err(eyre!("expected RBC session snapshot after restart"));
-        };
-
+        .wrap_err("wait for recovered flag after restart")?;
+        let snapshot_after = wait_for_rbc_session_snapshot(
+            &http,
+            &restart_sessions_url,
+            session_height,
+            &block_hash_hex,
+            Instant::now(),
+            da_rbc_recovery_timeout(),
+        )
+        .await
+        .wrap_err("fetch recovered RBC session snapshot after restart")?;
         ensure!(
             snapshot_after.recovered,
             "session should be flagged recovered after restart"
@@ -1785,16 +1880,6 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             snapshot_after.total_chunks
         );
 
-        let restarted_client = network.client();
-        let resumed_torii = restarted_client.torii_url.clone();
-        set_sumeragi_parameter(&restarted_client, SumeragiParameter::DaEnabled(true))
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "enable DA after restart; torii={resumed_torii}, env_dir={}",
-                    env_dir.display()
-                )
-            })?;
         let resume_height = fetch_status(&restarted_client)
             .await
             .wrap_err_with(|| {
@@ -1807,12 +1892,10 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             + 1;
 
         let resume_start = Instant::now();
-        let rbc_future = tokio::spawn(wait_for_rbc_delivery(
-            http.clone(),
-            sessions_url.clone(),
-            resume_height,
-            resume_start,
-        ));
+        let store_dir_for_rbc = store_dir.clone();
+        let rbc_future = tokio::spawn(async move {
+            wait_for_persisted_rbc_session(&store_dir_for_rbc, resume_height, resume_start).await
+        });
         let commit_future = tokio::spawn(wait_for_height(
             http.clone(),
             status_url,
@@ -2755,8 +2838,9 @@ async fn wait_for_inflight_rbc(
         if start.elapsed() > timeout {
             if let Some(candidate) = last_candidate {
                 return Err(eyre!(
-                    "timed out waiting for in-flight RBC chunks; last_seen={{height={}, total_chunks={}, delivered={}, block_hash={}, url={}}}",
+                    "timed out waiting for in-flight RBC chunks; last_seen={{height={}, received_chunks={}, total_chunks={}, delivered={}, block_hash={}, url={}}}",
                     candidate.height,
+                    candidate.received_chunks,
                     candidate.total_chunks,
                     candidate.delivered,
                     candidate.block_hash,
@@ -2799,6 +2883,10 @@ async fn wait_for_inflight_rbc(
                         obj.get("total_chunks")
                             .ok_or_else(|| eyre!("missing total_chunks"))?,
                     )?;
+                    let received_chunks = extract_u64(
+                        obj.get("received_chunks")
+                            .ok_or_else(|| eyre!("missing received_chunks"))?,
+                    )?;
                     let delivered = extract_bool(
                         obj.get("delivered")
                             .ok_or_else(|| eyre!("missing delivered"))?,
@@ -2808,9 +2896,18 @@ async fn wait_for_inflight_rbc(
                         sessions_url: probe.url.clone(),
                         height,
                         total_chunks,
+                        received_chunks,
                         delivered,
                     };
                     if total_chunks == 0 {
+                        last_candidate = Some(observation);
+                        continue;
+                    }
+                    if delivered {
+                        last_candidate = Some(observation);
+                        continue;
+                    }
+                    if received_chunks < total_chunks {
                         last_candidate = Some(observation);
                         continue;
                     }
@@ -3068,7 +3165,6 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
 struct RbcSessionSnapshot {
     total_chunks: u64,
     received_chunks: u64,
-    #[allow(dead_code)]
     delivered: bool,
     recovered: bool,
 }
@@ -3140,6 +3236,29 @@ async fn fetch_rbc_session(
         }));
     }
     Ok(None)
+}
+
+async fn wait_for_rbc_session_snapshot(
+    http: &reqwest::Client,
+    sessions_url: &reqwest::Url,
+    expected_height: u64,
+    block_hash_hex: &str,
+    start: Instant,
+    timeout: Duration,
+) -> Result<RbcSessionSnapshot> {
+    loop {
+        if start.elapsed() > timeout {
+            return Err(eyre!(
+                "timed out waiting for RBC session snapshot at height {expected_height} ({block_hash_hex})"
+            ));
+        }
+        if let Some(snapshot) =
+            fetch_rbc_session(http, sessions_url, expected_height, block_hash_hex).await?
+        {
+            return Ok(snapshot);
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
 }
 
 async fn restart_all_peers(network: &Network, config_layers: &[ConfigLayer]) -> Result<()> {

@@ -266,6 +266,18 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
 
         let mut metadata = JsonMap::new();
         metadata.insert(
+            "ticket_id".into(),
+            JsonValue::from(event.payload.ticket_id.0.clone()),
+        );
+        metadata.insert(
+            "manifest".into(),
+            JsonValue::from(hex::encode(event.payload.manifest_digest)),
+        );
+        metadata.insert(
+            "provider".into(),
+            JsonValue::from(hex::encode(event.payload.provider_id)),
+        );
+        metadata.insert(
             "status".into(),
             JsonValue::from(repair_status_label(event.payload.status)),
         );
@@ -311,7 +323,20 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
         );
 
         let mut metadata = JsonMap::new();
+        metadata.insert(
+            "ticket_id".into(),
+            JsonValue::from(proposal.ticket_id.0.clone()),
+        );
+        metadata.insert(
+            "manifest".into(),
+            JsonValue::from(hex::encode(proposal.manifest_digest)),
+        );
+        metadata.insert(
+            "provider".into(),
+            JsonValue::from(hex::encode(proposal.provider_id)),
+        );
         metadata.insert("stage".into(), JsonValue::from(stage.as_str()));
+        metadata.insert("outcome".into(), JsonValue::from(stage.as_str()));
         metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
         metadata.insert("encoded_len".into(), JsonValue::from(encoded.len() as u64));
         metadata.insert(
@@ -518,6 +543,8 @@ mod tests {
         let payload = RepairTaskEventV1 {
             version: REPAIR_TASK_EVENT_VERSION_V1,
             ticket_id: RepairTicketId("REP-901".into()),
+            manifest_digest: [0x21; 32],
+            provider_id: [0x22; 32],
             status: RepairTaskStatusV1::Queued,
             occurred_at_unix: 1_700_000_111,
             actor: Some("auditor#sora".into()),
@@ -554,12 +581,32 @@ mod tests {
             .expect("json artefact present");
         let json_bytes = fs::read(json_path).expect("read json");
         let value: JsonValue = norito::json::from_slice(&json_bytes).expect("json should parse");
-        let status = value
+        let manifest_hex = hex::encode(event.payload.manifest_digest);
+        let provider_hex = hex::encode(event.payload.provider_id);
+        let metadata = value
             .get("metadata")
-            .and_then(|meta| meta.get("status"))
+            .and_then(JsonValue::as_object)
+            .expect("metadata");
+        let status = metadata
+            .get("status")
             .and_then(JsonValue::as_str)
             .expect("status");
+        let ticket_id = metadata
+            .get("ticket_id")
+            .and_then(JsonValue::as_str)
+            .expect("ticket_id");
+        let manifest = metadata
+            .get("manifest")
+            .and_then(JsonValue::as_str)
+            .expect("manifest");
+        let provider = metadata
+            .get("provider")
+            .and_then(JsonValue::as_str)
+            .expect("provider");
         assert_eq!(status, "queued");
+        assert_eq!(ticket_id, event.payload.ticket_id.0.as_str());
+        assert_eq!(manifest, manifest_hex.as_str());
+        assert_eq!(provider, provider_hex.as_str());
     }
 
     #[test]
@@ -597,12 +644,37 @@ mod tests {
             .expect("json artefact present");
         let json_bytes = fs::read(json_path).expect("read json");
         let value: JsonValue = norito::json::from_slice(&json_bytes).expect("json should parse");
-        let stage = value
+        let manifest_hex = hex::encode(proposal.manifest_digest);
+        let provider_hex = hex::encode(proposal.provider_id);
+        let metadata = value
             .get("metadata")
-            .and_then(|meta| meta.get("stage"))
+            .and_then(JsonValue::as_object)
+            .expect("metadata");
+        let stage = metadata
+            .get("stage")
             .and_then(JsonValue::as_str)
             .expect("stage");
+        let outcome = metadata
+            .get("outcome")
+            .and_then(JsonValue::as_str)
+            .expect("outcome");
+        let ticket_id = metadata
+            .get("ticket_id")
+            .and_then(JsonValue::as_str)
+            .expect("ticket_id");
+        let manifest = metadata
+            .get("manifest")
+            .and_then(JsonValue::as_str)
+            .expect("manifest");
+        let provider = metadata
+            .get("provider")
+            .and_then(JsonValue::as_str)
+            .expect("provider");
         assert_eq!(stage, "drafted");
+        assert_eq!(outcome, "drafted");
+        assert_eq!(ticket_id, proposal.ticket_id.0.as_str());
+        assert_eq!(manifest, manifest_hex.as_str());
+        assert_eq!(provider, provider_hex.as_str());
     }
 
     #[test]
