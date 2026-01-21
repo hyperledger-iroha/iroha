@@ -1,6 +1,6 @@
 //! Storage configuration helpers for the embedded SoraFS worker.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use iroha_config::parameters::actual;
 
@@ -274,8 +274,7 @@ impl StorageConfigBuilder {
 #[derive(Debug, Clone)]
 pub struct RepairConfig {
     enabled: bool,
-    db_dsn: Option<String>,
-    db_pool_max_connections: u32,
+    state_dir: Option<PathBuf>,
     claim_ttl_secs: u64,
     heartbeat_interval_secs: u64,
     max_attempts: u32,
@@ -292,16 +291,10 @@ impl RepairConfig {
         self.enabled
     }
 
-    /// Optional Postgres DSN for durable repair storage.
+    /// Optional directory for durable repair state.
     #[must_use]
-    pub fn db_dsn(&self) -> Option<&str> {
-        self.db_dsn.as_deref()
-    }
-
-    /// Maximum number of database connections for repair operations.
-    #[must_use]
-    pub fn db_pool_max_connections(&self) -> u32 {
-        self.db_pool_max_connections
+    pub fn state_dir(&self) -> Option<&PathBuf> {
+        self.state_dir.as_ref()
     }
 
     /// Claim TTL for repair tickets (seconds).
@@ -345,6 +338,15 @@ impl RepairConfig {
     pub fn default_slash_penalty_nano(&self) -> u128 {
         self.default_slash_penalty_nano
     }
+
+    /// Apply a default state directory when one is not provided.
+    #[must_use]
+    pub fn with_default_state_dir(mut self, data_dir: &Path) -> Self {
+        if self.state_dir.is_none() {
+            self.state_dir = Some(data_dir.join("repair"));
+        }
+        self
+    }
 }
 
 impl Default for RepairConfig {
@@ -363,8 +365,7 @@ impl From<&actual::SorafsRepair> for RepairConfig {
     fn from(value: &actual::SorafsRepair) -> Self {
         Self {
             enabled: value.enabled,
-            db_dsn: value.db_dsn.clone(),
-            db_pool_max_connections: value.db_pool_max_connections,
+            state_dir: value.state_dir.clone(),
             claim_ttl_secs: value.claim_ttl_secs,
             heartbeat_interval_secs: value.heartbeat_interval_secs,
             max_attempts: value.max_attempts,
@@ -380,8 +381,7 @@ impl From<&actual::SorafsRepair> for RepairConfig {
 #[derive(Debug, Clone)]
 pub struct GcConfig {
     enabled: bool,
-    db_dsn: Option<String>,
-    db_pool_max_connections: u32,
+    state_dir: Option<PathBuf>,
     interval_secs: u64,
     max_deletions_per_run: u32,
     retention_grace_secs: u64,
@@ -395,16 +395,10 @@ impl GcConfig {
         self.enabled
     }
 
-    /// Optional Postgres DSN for GC metadata storage.
+    /// Optional directory for durable GC state.
     #[must_use]
-    pub fn db_dsn(&self) -> Option<&str> {
-        self.db_dsn.as_deref()
-    }
-
-    /// Maximum number of database connections for GC operations.
-    #[must_use]
-    pub fn db_pool_max_connections(&self) -> u32 {
-        self.db_pool_max_connections
+    pub fn state_dir(&self) -> Option<&PathBuf> {
+        self.state_dir.as_ref()
     }
 
     /// GC cadence (seconds).
@@ -430,6 +424,15 @@ impl GcConfig {
     pub fn pre_admission_sweep(&self) -> bool {
         self.pre_admission_sweep
     }
+
+    /// Apply a default state directory when one is not provided.
+    #[must_use]
+    pub fn with_default_state_dir(mut self, data_dir: &Path) -> Self {
+        if self.state_dir.is_none() {
+            self.state_dir = Some(data_dir.join("gc"));
+        }
+        self
+    }
 }
 
 impl Default for GcConfig {
@@ -448,8 +451,7 @@ impl From<&actual::SorafsGc> for GcConfig {
     fn from(value: &actual::SorafsGc) -> Self {
         Self {
             enabled: value.enabled,
-            db_dsn: value.db_dsn.clone(),
-            db_pool_max_connections: value.db_pool_max_connections,
+            state_dir: value.state_dir.clone(),
             interval_secs: value.interval_secs,
             max_deletions_per_run: value.max_deletions_per_run,
             retention_grace_secs: value.retention_grace_secs,
@@ -698,8 +700,7 @@ mod tests {
     fn repair_and_gc_configs_preserve_fields() {
         let repair = actual::SorafsRepair {
             enabled: true,
-            db_dsn: Some("postgres://sorafs/repair".into()),
-            db_pool_max_connections: 20,
+            state_dir: Some(PathBuf::from("/tmp/repair_state")),
             claim_ttl_secs: 900,
             heartbeat_interval_secs: 45,
             max_attempts: 6,
@@ -711,8 +712,7 @@ mod tests {
 
         let cfg = RepairConfig::from(&repair);
         assert!(cfg.enabled());
-        assert_eq!(cfg.db_dsn(), Some("postgres://sorafs/repair"));
-        assert_eq!(cfg.db_pool_max_connections(), 20);
+        assert_eq!(cfg.state_dir(), Some(&PathBuf::from("/tmp/repair_state")));
         assert_eq!(cfg.claim_ttl_secs(), 900);
         assert_eq!(cfg.heartbeat_interval_secs(), 45);
         assert_eq!(cfg.max_attempts(), 6);
@@ -723,8 +723,7 @@ mod tests {
 
         let gc = actual::SorafsGc {
             enabled: true,
-            db_dsn: Some("postgres://sorafs/gc".into()),
-            db_pool_max_connections: 10,
+            state_dir: Some(PathBuf::from("/tmp/gc_state")),
             interval_secs: 300,
             max_deletions_per_run: 2_000,
             retention_grace_secs: 86_400,
@@ -733,11 +732,21 @@ mod tests {
 
         let gc_cfg = GcConfig::from(&gc);
         assert!(gc_cfg.enabled());
-        assert_eq!(gc_cfg.db_dsn(), Some("postgres://sorafs/gc"));
-        assert_eq!(gc_cfg.db_pool_max_connections(), 10);
+        assert_eq!(gc_cfg.state_dir(), Some(&PathBuf::from("/tmp/gc_state")));
         assert_eq!(gc_cfg.interval_secs(), 300);
         assert_eq!(gc_cfg.max_deletions_per_run(), 2_000);
         assert_eq!(gc_cfg.retention_grace_secs(), 86_400);
         assert!(!gc_cfg.pre_admission_sweep());
+    }
+
+    #[test]
+    fn repair_and_gc_default_state_dirs_follow_storage_root() {
+        let data_dir = PathBuf::from("/var/lib/sorafs");
+        let repair = RepairConfig::from(&actual::SorafsRepair::default())
+            .with_default_state_dir(&data_dir);
+        let gc = GcConfig::from(&actual::SorafsGc::default()).with_default_state_dir(&data_dir);
+
+        assert_eq!(repair.state_dir(), Some(&data_dir.join("repair")));
+        assert_eq!(gc.state_dir(), Some(&data_dir.join("gc")));
     }
 }

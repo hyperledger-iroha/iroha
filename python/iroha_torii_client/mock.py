@@ -721,8 +721,13 @@ class _MockState:
             }
             self.pipeline_sequences[hash_value] = sequence
         response_body = {
-            "hash": hash_value,
-            "accepted": plan["accepted"],
+            "payload": {
+                "tx_hash": hash_value,
+                "submitted_at_ms": 0,
+                "submitted_at_height": 0,
+                "signer": "mock-signer",
+            },
+            "signature": "mock-signature",
         }
         return _json_response(plan["submit_status"], response_body)
 

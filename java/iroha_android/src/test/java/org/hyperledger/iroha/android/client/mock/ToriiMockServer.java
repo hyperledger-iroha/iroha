@@ -35,7 +35,10 @@ import java.util.concurrent.Executors;
 public final class ToriiMockServer implements AutoCloseable {
 
   private static final MockResponse DEFAULT_SUBMIT_RESPONSE =
-      MockResponse.json(202, "{\"status\":\"Accepted\"}");
+      MockResponse.bytes(
+          202,
+          new byte[] {0x01},
+          Map.of("Content-Type", "application/x-norito"));
   private static final MockResponse DEFAULT_STATUS_RESPONSE = MockResponse.empty(404);
 
   private final HttpServer server;
@@ -318,6 +321,10 @@ public final class ToriiMockServer implements AutoCloseable {
         return Optional.empty();
       }
       return Optional.ofNullable(values.get(0));
+    }
+
+    public byte[] body() {
+      return body.clone();
     }
 
     public String bodyUtf8() {

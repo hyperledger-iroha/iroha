@@ -1361,19 +1361,19 @@ async fn explorer_account_qr_supports_compressed_literals() -> Result<()> {
             .get("canonical_id")
             .and_then(norito::json::Value::as_str),
         Some(canonical_literal.as_str()),
-        "canonical_id should remain IH58 even when rendering compressed literals"
+        "canonical_id should remain IH58 even when rendering compressed (`snx1`) literals"
     );
     assert_eq!(
         parsed.get("literal").and_then(norito::json::Value::as_str),
         Some(compressed_literal.as_str()),
-        "literal should honour the compressed preference"
+        "literal should honour the compressed (`snx1`) preference"
     );
     assert_eq!(
         parsed
             .get("address_format")
             .and_then(norito::json::Value::as_str),
         Some("compressed"),
-        "address_format label should reflect the compressed preference"
+        "address_format label should reflect the compressed (`snx1`) preference"
     );
 
     Ok(())

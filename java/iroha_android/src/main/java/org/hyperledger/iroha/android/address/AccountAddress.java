@@ -110,7 +110,7 @@ public final class AccountAddress {
   }
 
   /**
-   * Convenience helper that surfaces the IH58/compressed pair alongside the shared warning string.
+   * Convenience helper that surfaces the IH58 (preferred)/snx1 (second-best) pair alongside the shared warning string.
    * Follow {@code docs/source/sns/address_display_guidelines.md} when presenting these values.
    */
   public DisplayFormats displayFormats() throws AccountAddressException {
@@ -118,7 +118,7 @@ public final class AccountAddress {
   }
 
   /**
-   * Convenience helper that surfaces the IH58/compressed pair alongside the shared warning string.
+   * Convenience helper that surfaces the IH58 (preferred)/snx1 (second-best) pair alongside the shared warning string.
    * Follow {@code docs/source/sns/address_display_guidelines.md} when presenting these values.
    */
   public DisplayFormats displayFormats(final int networkPrefix) throws AccountAddressException {

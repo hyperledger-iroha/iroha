@@ -4,7 +4,15 @@ import XCTest
 private final class QueueStubPipelineClient: ToriiTransactionSubmitting {
     var submitted: [Data] = []
     var queuedResults: [Swift.Result<ToriiSubmitTransactionResponse?, Error>] = []
-    var defaultResult: Swift.Result<ToriiSubmitTransactionResponse?, Error> = .success(ToriiSubmitTransactionResponse(hash: "abc", accepted: true))
+    var defaultResult: Swift.Result<ToriiSubmitTransactionResponse?, Error> =
+        .success(QueueStubPipelineClient.makeReceipt())
+
+    private static func makeReceipt() -> ToriiSubmitTransactionResponse {
+        ToriiSubmitTransactionResponse(
+            payload: .init(txHash: "abc", submittedAtMs: 1, submittedAtHeight: 2, signer: "signer"),
+            signature: "deadbeef"
+        )
+    }
 
     func submitTransaction(data: Data,
                            mode: PipelineEndpointMode,

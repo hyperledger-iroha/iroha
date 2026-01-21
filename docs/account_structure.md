@@ -118,7 +118,10 @@ pub struct Common {
 ### 2. Canonical address codecs
 
 The Rust data model exposes a single canonical payload representation
-(`AccountAddress`) that can be emitted as several human-facing formats:
+(`AccountAddress`) that can be emitted as several human-facing formats. IH58 is
+the preferred account format for sharing and canonical output; the compressed
+`snx1` form is a second-best, Sora-only option for UX where the kana alphabet
+adds value. Canonical hex remains a debugging aid.
 
 - **IH58 (Iroha Base58)** – a Base58 envelope that embeds the chain
   discriminant. Decoders validate the prefix before promoting the payload to
@@ -135,7 +138,7 @@ The Rust data model exposes a single canonical payload representation
 - **Canonical hex** – a debugging-friendly `0x…` encoding of the canonical byte
   envelope.
 
-`AccountAddress::parse_any` auto-detects compressed, IH58, or canonical hex
+`AccountAddress::parse_any` auto-detects IH58 (preferred), compressed (`snx1`, second-best), or canonical hex
 inputs and returns both the decoded payload and the detected
 `AccountAddressFormat`. Torii now calls `parse_any` for ISO 20022 supplementary
 addresses and stores the canonical hex form so metadata remains deterministic
@@ -273,7 +276,7 @@ Key implementation details:
 - The binary controller payload (`ControllerPayload::Multisig`) encodes
   `version:u8`, `threshold:u16`, `member_count:u8`, then each member’s
   `(curve_id, weight:u16, key_len:u16, key_bytes)`. This is exactly what
-  `AccountAddress::canonical_bytes()` writes to IH58/compressed payloads.
+  `AccountAddress::canonical_bytes()` writes to IH58 (preferred)/snx1 (second-best) payloads.
 - Hashing (`MultisigPolicy::digest_blake2b256()`) uses Blake2b-256 with the
   `iroha-ms-policy` personalization string so governance manifests can bind to a
   deterministic policy ID that matches the controller bytes embedded in IH58.
@@ -281,7 +284,7 @@ Key implementation details:
   `addr-multisig-*`). Wallets and SDKs should assert the canonical IH58 strings
   below to confirm their encoders match the Rust implementation.
 
-| Case ID | Threshold / members | IH58 literal (prefix `0x02F1`) | Sora compressed literal | Notes |
+| Case ID | Threshold / members | IH58 literal (prefix `0x02F1`) | Sora compressed (`snx1`) literal | Notes |
 |---------|---------------------|--------------------------------|-------------------------|-------|
 | `addr-multisig-council-threshold3` | `≥3` weight, members `(2,1,1)` | `SRfSHsrH3tEmYaaAYyD248F3vfT1oQ3WEGS22MaD8W9bLefF7rsoKLYGcpbcM9EcSus5ZhCAZU7ztn2BCsyeCAdfRncAVmVsipd4ibk6CBLF3Nrzcw8P7VKJg6mtFgEhWVTjfDkUMoc63oeEmaWyV6cyiphwk8ZgKAJUe4TyVtmKm1WWcg7qZ6i` | `snx13vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnoWﾛYicaUr3ﾔｲﾖ2Ado3TﾘYQﾉJqﾜﾇｳﾑﾐd8dDjRGｦ3Vﾃ9HcﾀMヰR8ﾎﾖgEqGｵEｾDyc5ﾁ1ﾔﾉ31sUﾑﾀﾖaｸxﾘ3ｲｷMEuFｺｿﾉBQSVQnxﾈeJzrXLヰhｿｹ5SEEﾅPﾂﾗｸdヰﾋ1bUGHｲVXBWNNJ6K` | Council-domain governance quorum. |
 | `addr-multisig-wonderland-threshold2` | `≥2`, members `(1,2)` | `3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt` | `snx12ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐmﾊvEﾐCﾏﾎｦ1ﾑHﾋso2GKﾔﾕﾁwﾂﾃP6ﾁｼﾙﾖｺ9ｻｦbﾈ4wFdﾑFヰ3HaﾘｼMｷﾌHWtｷﾋLﾙﾖQ4D3XﾊﾜXmpktﾚｻ5ﾅﾅﾇ1gkﾏsCFQGH9` | Dual-signature wonderland example (weight 1 + 2). |
@@ -295,8 +298,8 @@ Key implementation details:
 - Oversized or malformed key material raises `KeyPayloadTooLong` or `InvalidPublicKey`.
 - Multisig controllers exceeding 255 members raise `MultisigMemberOverflow`.
 - IME/NFKC conversions: half-width Sora kana can be normalised to their full-width forms without breaking decoding, but the ASCII `snx1` sentinel and IH58 digits/letters MUST stay ASCII. Full-width or case-folded sentinels surface `ERR_MISSING_COMPRESSED_SENTINEL`, full-width ASCII payloads raise `ERR_INVALID_COMPRESSED_CHAR`, and checksum mismatches bubble up as `ERR_CHECKSUM_MISMATCH`. Property tests in `crates/iroha_data_model/src/account/address.rs` cover these paths so SDKs and wallets can rely on deterministic failures.
-- Torii and SDK parsing of `address@domain` aliases now emit the same `ERR_*` codes when IH58/compressed inputs fail before alias fallback (e.g., checksum mismatch, domain digest mismatch), so clients can relay structured reasons without guessing from prose strings.
-- Default-domain IH58/compressed literals may omit `@<domain>`; parsers canonicalise them to `IH58@<default-domain>` and surface `ERR_DEFAULT_DOMAIN_IMPLICIT_ONLY` if a non-default selector is supplied without an explicit domain, keeping Local/Global selectors fail-closed.
+- Torii and SDK parsing of `address@domain` aliases now emit the same `ERR_*` codes when IH58 (preferred)/snx1 (second-best) inputs fail before alias fallback (e.g., checksum mismatch, domain digest mismatch), so clients can relay structured reasons without guessing from prose strings.
+- Default-domain IH58 (preferred)/snx1 (second-best) literals may omit `@<domain>`; parsers canonicalise them to `IH58@<default-domain>` and surface `ERR_DEFAULT_DOMAIN_IMPLICIT_ONLY` if a non-default selector is supplied without an explicit domain, keeping Local/Global selectors fail-closed.
 
 #### 2.5 Normative binary vectors
 
@@ -307,9 +310,9 @@ Key implementation details:
   Canonical hex: `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8`.  
   Breakdown: `0x02` header, selector tag `0x01` plus digest `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, followed by the single-key payload (`0x00` tag, `0x01` curve id, `0x20` length, 32-byte Ed25519 key).
 
-Unit tests (`account::address::tests::parse_any_accepts_all_formats`) assert the V1 vectors below via `AccountAddress::parse_any`, guaranteeing that tooling can rely on the canonical payload across hex, IH58, and compressed forms. Regenerate the extended fixture set with `cargo run -p iroha_data_model --example address_vectors`.
+Unit tests (`account::address::tests::parse_any_accepts_all_formats`) assert the V1 vectors below via `AccountAddress::parse_any`, guaranteeing that tooling can rely on the canonical payload across hex, IH58 (preferred), and compressed (`snx1`, second-best) forms. Regenerate the extended fixture set with `cargo run -p iroha_data_model --example address_vectors`.
 
-| Domain      | Seed byte | Canonical hex                                                                 | Compressed |
+| Domain      | Seed byte | Canonical hex                                                                 | Compressed (`snx1`) |
 |-------------|-----------|-------------------------------------------------------------------------------|------------|
 | default     | `0x00`    | `0x0200000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201` | `snx12QGﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5E5` |
 | treasury    | `0x01`    | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8` | `snx15ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾘｻYﾃhﾓMQ9CBEﾅﾊﾈｷﾉVRｺnKRwTﾋｼqﾅWrﾎU7ｼiﾍQt1TPGNJ` |
@@ -335,7 +338,7 @@ consistent textual forms for every canonical payload. Selected fixtures from
 `fixtures/account/address_vectors.json` (generated via
 `cargo xtask address-vectors`) are shown below for quick reference:
 
-| Account / selector | IH58 literal (prefix `0x02F1`) | Sora compressed literal | CAIP-10 literal |
+| Account / selector | IH58 literal (prefix `0x02F1`) | Sora compressed (`snx1`) literal | CAIP-10 literal |
 |--------------------|--------------------------------|-------------------------|-----------------|
 | `default` domain (implicit selector, seed `0x00`) | `RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS` | `snx12QGﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5E5@default` (domain suffix optional for the implicit selector) | `iroha:0x02f1:RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS` |
 | `treasury` (local digest selector, seed `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `snx15ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾘｻYﾃhﾓMQ9CBEﾅﾊﾈｷﾉVRｺnKRwTﾋｼqﾅWrﾎU7ｼiﾍQt1TPGNJ@treasury` | `iroha:0x02f1:34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` |
@@ -377,17 +380,17 @@ flows can rely on them verbatim.
 
 #### 2.8 Normative textual test vectors
 
-`fixtures/account/address_vectors.json` contains full IH58, compressed, and
+`fixtures/account/address_vectors.json` contains full IH58 (preferred), compressed (`snx1`, second-best), and
 CAIP-10 literals for every canonical payload. Highlights:
 
 - **`addr-single-default-ed25519` (Sora Nexus, prefix `0x02F1`).**  
-  IH58 `RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS`, compressed
+  IH58 `RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS`, compressed (`snx1`)
   `snx12QG…U4N5E5@default`, CAIP-10
   `iroha:0x02f1:RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS`. Torii
   emits these exact strings from `AccountId::display()` and
   `AccountAddress::to_ih58`.
 - **`addr-global-registry-002a` (registry selector → treasury).**  
-  IH58 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`, compressed
+  IH58 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`, compressed (`snx1`)
   `snx1kX…CM6AEP@treasury`. Demonstrates that registry selectors still decode to
   the same canonical payload as the corresponding local digest.
 - **Failure case (`ih58-prefix-mismatch`).**  
@@ -400,7 +403,7 @@ CAIP-10 literals for every canonical payload. Highlights:
 #### 2.9 Compliance fixtures
 
 ADDR‑2 ships a replayable fixture bundle covering positive and negative
-scenarios across canonical hex, IH58, compressed (half-/full-width), implicit
+scenarios across canonical hex, IH58 (preferred), compressed (`snx1`, half-/full-width), implicit
 default selectors, global registry aliases, and multisignature controllers. The
 canonical JSON lives in `fixtures/account/address_vectors.json` and can be
 regenerated with:
@@ -575,7 +578,7 @@ the change so the audit trail is reconstructable offline.
    manifest diffs (this suffix is metadata, not a canonical account id).
    For newline-oriented exports use
    `iroha address normalize --input <file> --only-local` to mass-convert Local
-   selectors into canonical IH58 (or compressed/hex/JSON) forms while skipping
+   selectors into canonical IH58 (preferred), compressed (`snx1`, second-best), hex, or JSON forms while skipping
    non-local rows. When auditors need spreadsheet-friendly evidence, run
    `iroha address audit --input <file> --format csv` to emit a CSV summary
    (`input,status,format,domain_kind,…`) that highlights Local selectors,
@@ -585,7 +588,7 @@ the change so the audit trail is reconstructable offline.
    the manifest with `cargo xtask address-vectors` before requesting signatures.
 4. **Verify & publish.** Follow the runbook checklist (hashes, Sigstore,
    sequence monotonicity) before mirroring the bundle to SoraFS. Torii now
-   canonicalizes IH58/compressed literals immediately after the bundle lands.
+   canonicalizes IH58 (preferred)/snx1 (second-best) literals immediately after the bundle lands.
 5. **Monitor & rollback.** Keep the Local‑8 and Local‑12 collision panels at
    zero for 30 days; if regressions appear, republish the previous manifest
    only in the affected non-production environment until telemetry stabilises.
@@ -601,7 +604,7 @@ their change tickets.
   plus the resolved domain as a label fetched from the registry. Domains are
   clearly marked as descriptive metadata that may change, while IH58 is the
   stable address.
-- **Input canonicalization:** Torii and SDKs accept IH58/compressed/0x
+- **Input canonicalization:** Torii and SDKs accept IH58 (preferred)/snx1 (second-best)/0x
   addresses plus `alias@domain`, `public_key@domain`, `uaid:…`, and
   `opaque:…` forms, then canonicalize to IH58 for output. There is no
   strict-mode toggle; raw phone/email identifiers must be kept off-ledger
@@ -698,7 +701,7 @@ messages, plus recommended remediation guidance.
 |------|---------|-------------------------|
 | `ERR_INVALID_IH58_ENCODING` | IH58 string contains characters outside the alphabet. | Ensure the address uses the published IH58 alphabet and has not been truncated during copy/paste. |
 | `ERR_INVALID_LENGTH` | Payload length does not match the expected canonical size. | Supply the full canonical payload (34 bytes) when encoding or decoding addresses. |
-| `ERR_CHECKSUM_MISMATCH` | IH58 or compressed checksum validation failed. | Regenerate the address from a trusted source; this typically indicates a copy/paste error. |
+| `ERR_CHECKSUM_MISMATCH` | IH58 (preferred) or compressed (`snx1`, second-best) checksum validation failed. | Regenerate the address from a trusted source; this typically indicates a copy/paste error. |
 | `ERR_INVALID_IH58_PREFIX_ENCODING` | IH58 prefix bytes are malformed. | Re-encode the address with a compliant encoder; do not alter the leading Base58 bytes manually. |
 | `ERR_INVALID_HEX_ADDRESS` | Canonical hexadecimal form failed to decode. | Provide a `0x`-prefixed, even-length hex string produced by the official encoder. |
 | `ERR_MISSING_COMPRESSED_SENTINEL` | Compressed form does not start with `snx1`. | Prefix compressed Sora addresses with the required sentinel before handing them to decoders. |
@@ -706,7 +709,7 @@ messages, plus recommended remediation guidance.
 | `ERR_INVALID_COMPRESSED_CHAR` | Character outside the compressed alphabet encountered. | Replace the character with a valid Base-131 glyph from the published half-width/full-width tables. |
 | `ERR_INVALID_COMPRESSED_BASE` | Encoder attempted to use an unsupported radix. | File a bug against the encoder; the compressed alphabet is fixed to radix 131 in V1. |
 | `ERR_INVALID_COMPRESSED_DIGIT` | Digit value exceeds the compressed alphabet size. | Ensure each digit is within `0..131)`, regenerating the address if necessary. |
-| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | Auto-detection could not recognise the input format. | Provide IH58, compressed (`snx1`), or canonical `0x` hex strings when invoking parsers. |
+| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | Auto-detection could not recognise the input format. | Provide IH58 (preferred), compressed (`snx1`), or canonical `0x` hex strings when invoking parsers. |
 
 ### Domain and Network Validation
 

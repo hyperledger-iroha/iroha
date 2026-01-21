@@ -5,14 +5,19 @@ import CryptoKit
 #endif
 
 final class OfflineReceiptChallengeTests: XCTestCase {
+    private static let fixtureReceiverAccountId =
+        "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+    private static let fixtureAssetId =
+        "xor#sora#34mSYn6ySFTASoiVzNGuyBkedDbYTxqhobNmoDbzdhfaNtveqVrm8N49uoqtcRNvAUcapufe1"
+
     func testEncodeRejectsEmptyChainId() {
         let nonce = sampleNonceHex()
         XCTAssertThrowsError(
             try OfflineReceiptChallenge.encode(
                 chainId: " ",
                 invoiceId: "inv-empty",
-                receiverAccountId: "alice@wonderland",
-                assetId: "xor#wonderland#alice@wonderland",
+                receiverAccountId: Self.fixtureReceiverAccountId,
+                assetId: Self.fixtureAssetId,
                 amount: "1",
                 issuedAtMs: 1_700_000_000_000,
                 nonceHex: nonce
@@ -31,8 +36,8 @@ final class OfflineReceiptChallengeTests: XCTestCase {
             try OfflineReceiptChallenge.encode(
                 chainId: "testnet",
                 invoiceId: "inv-frac",
-                receiverAccountId: "alice@wonderland",
-                assetId: "xor#wonderland#alice@wonderland",
+                receiverAccountId: Self.fixtureReceiverAccountId,
+                assetId: Self.fixtureAssetId,
                 amount: "1.5",
                 issuedAtMs: 1_700_000_000_000,
                 nonceHex: nonce
@@ -46,8 +51,8 @@ final class OfflineReceiptChallengeTests: XCTestCase {
             try OfflineReceiptChallenge.encode(
                 chainId: "testnet",
                 invoiceId: "inv-frac",
-                receiverAccountId: "alice@wonderland",
-                assetId: "xor#wonderland#alice@wonderland",
+                receiverAccountId: Self.fixtureReceiverAccountId,
+                assetId: Self.fixtureAssetId,
                 amount: "1.5",
                 issuedAtMs: 1_700_000_000_000,
                 nonceHex: nonce,

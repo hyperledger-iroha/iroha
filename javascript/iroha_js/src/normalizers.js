@@ -535,7 +535,7 @@ export function normalizeAccountId(value, name) {
     if (error instanceof AccountAddressError) {
       fail(
         ValidationErrorCode.INVALID_ACCOUNT_ID,
-        `${name} must be IH58/compressed/0x, uaid:, opaque:, or <alias|public_key>@domain`,
+        `${name} must be IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain`,
         name,
       );
     }

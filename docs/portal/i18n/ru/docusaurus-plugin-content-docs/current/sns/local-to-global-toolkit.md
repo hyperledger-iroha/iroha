@@ -14,7 +14,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 - `scripts/address_local_toolkit.sh` оборачивает CLI `iroha`, чтобы получить:
   - `audit.json` -- структурированный вывод `iroha address audit --format json`.
-  - `normalized.txt` -- преобразованные IH58/compressed literals для каждого Local-domain selector.
+  - `normalized.txt` -- преобразованные IH58 (предпочтительно) / compressed (`snx1`) (второй выбор) literals для каждого Local-domain selector.
 - Используйте скрипт вместе с dashboard ingest адресов (`dashboards/grafana/address_ingest.json`)
   и правилами Alertmanager (`dashboards/alerts/address_ingest_rules.yml`), чтобы доказать безопасность cutover Local-8 /
   Local-12. Следите за панелями коллизий Local-8 и Local-12 и алертами
@@ -31,7 +31,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 
 Опции:
 
-- `--format compressed` для вывода `snx1...` вместо IH58.
+- `--format compressed (`snx1`)` для вывода `snx1...` вместо IH58.
 - `--no-append-domain` для вывода bare literals.
 - `--audit-only` чтобы пропустить шаг конвертации.
 - `--allow-errors` чтобы продолжать сканирование при ошибочных строках (поведение совпадает с CLI).

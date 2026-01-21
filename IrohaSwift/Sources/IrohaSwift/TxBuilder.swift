@@ -1149,10 +1149,9 @@ public final class IrohaSDK: @unchecked Sendable {
     public func submit(envelope: SignedTransactionEnvelope, completion: @Sendable @escaping (Error?) -> Void) -> Task<Void, Never> {
         return Task {
             do {
-                let response = try await submitTransactionWithRetry(envelope: envelope,
-                                                                    options: pipelineSubmitOptions,
-                                                                    mode: pipelineEndpointMode)
-                try Self.ensureSubmissionAccepted(response: response)
+                _ = try await submitTransactionWithRetry(envelope: envelope,
+                                                         options: pipelineSubmitOptions,
+                                                         mode: pipelineEndpointMode)
                 guard !Task.isCancelled else { return }
                 completion(nil)
             } catch {
@@ -1164,10 +1163,9 @@ public final class IrohaSDK: @unchecked Sendable {
 
     @available(iOS 15.0, macOS 12.0, *)
     public func submit(envelope: SignedTransactionEnvelope) async throws {
-        let response = try await submitTransactionWithRetry(envelope: envelope,
-                                                            options: pipelineSubmitOptions,
-                                                            mode: pipelineEndpointMode)
-        try Self.ensureSubmissionAccepted(response: response)
+        _ = try await submitTransactionWithRetry(envelope: envelope,
+                                                 options: pipelineSubmitOptions,
+                                                 mode: pipelineEndpointMode)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1716,11 +1714,10 @@ public final class IrohaSDK: @unchecked Sendable {
         for index in pending.indices {
             let record = pending[index]
             do {
-                let response = try await submitTransactionWithRetry(envelope: record.envelope,
-                                                                    options: pipelineSubmitOptions,
-                                                                    mode: mode,
-                                                                    skipQueueFlush: true)
-                try Self.ensureSubmissionAccepted(response: response)
+                _ = try await submitTransactionWithRetry(envelope: record.envelope,
+                                                         options: pipelineSubmitOptions,
+                                                         mode: mode,
+                                                         skipQueueFlush: true)
             } catch {
                 try requeueRecords(pending[index...])
                 throw error
@@ -2154,13 +2151,6 @@ extension IrohaSDK {
     static func restUnavailableError() -> IrohaSDKError {
         .restClientUnavailable
     }
-
-    static func ensureSubmissionAccepted(response: ToriiSubmitTransactionResponse?) throws {
-        if let accepted = response?.accepted, accepted == false {
-            throw IrohaSDKError.toriiRejected
-        }
-    }
-
 }
 
 @available(iOS 15.0, macOS 12.0, *)

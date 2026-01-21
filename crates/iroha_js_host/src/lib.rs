@@ -92,6 +92,7 @@ use iroha_data_model::{
     smart_contract::manifest::ContractManifest,
     transaction::{
         Executable,
+        TransactionSubmissionReceipt,
         signed::{SignedTransaction, TransactionBuilder},
     },
     trigger::{
@@ -430,7 +431,7 @@ pub fn soradns_derive_gateway_hosts(fqdn: String) -> napi::Result<JsGatewayHosts
     })
 }
 
-/// Parse an account address string (IH58, compressed, or canonical hex).
+/// Parse an account address string (IH58 (preferred), compressed (`snx1`, second-best), or canonical hex).
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for bindings
 pub fn account_address_parse_any(
@@ -6746,6 +6747,16 @@ pub fn decode_signed_transaction_json(bytes: Uint8Array) -> napi::Result<String>
     json::to_json(&tx).map_err(norito_to_napi)
 }
 
+/// Decode a Norito-framed transaction submission receipt into its JSON representation.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn decode_transaction_receipt_json(bytes: Uint8Array) -> napi::Result<String> {
+    ensure_packed_struct_disabled();
+    let receipt: TransactionSubmissionReceipt =
+        decode_from_bytes(bytes.as_ref()).map_err(norito_to_napi)?;
+    json::to_json(&receipt).map_err(norito_to_napi)
+}
+
 /// Re-sign a Norito-serialized transaction with the provided Ed25519 private key
 /// and return the updated signed transaction bytes.
 #[napi]
@@ -7007,7 +7018,7 @@ mod tests {
     use std::{fs, io::Cursor, path::PathBuf, str::FromStr, sync::Arc};
 
     use base64::engine::general_purpose::STANDARD as BASE64;
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         HasMetadata,
         account::AccountId,
@@ -7043,13 +7054,13 @@ mod tests {
         nft::NftId,
         peer::{Peer, PeerId},
         smart_contract::manifest::{AccessSetHints, ContractManifest},
-        transaction::Executable,
+        transaction::{Executable, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload},
         trigger::TriggerId,
     };
     use norito::{
         NoritoDeserialize,
         codec::{Decode as NoritoDecode, Encode as NoritoEncode},
-        from_bytes,
+        from_bytes, to_bytes,
         json::{self, Value},
     };
     use sorafs_car::{
@@ -9224,6 +9235,23 @@ mod tests {
             tx.hash().as_ref(),
             "hash must match signed transaction hash"
         );
+    }
+
+    #[test]
+    fn decode_transaction_receipt_json_roundtrip() {
+        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let payload = TransactionSubmissionReceiptPayload {
+            tx_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
+            submitted_at_ms: 42,
+            submitted_at_height: 7,
+            signer: key_pair.public_key().clone(),
+        };
+        let receipt = TransactionSubmissionReceipt::sign(payload, &key_pair);
+        let bytes = to_bytes(&receipt).expect("encode receipt");
+        let decoded =
+            decode_transaction_receipt_json(bytes.into()).expect("decode receipt into json");
+        let expected = json::to_json(&receipt).expect("serialize receipt json");
+        assert_eq!(decoded, expected);
     }
 
     #[test]

@@ -81,8 +81,12 @@ tx = build_transaction(
 )
 
 envelope = tx.sign(ADMIN_PRIVATE_KEY)
-hash_ = submit_transaction(client, envelope)
-print("Submitted tx:", hash_)
+receipt = submit_transaction(client, envelope)
+if isinstance(receipt, dict):
+    hash_ = receipt.get("payload", {}).get("tx_hash")
+else:
+    hash_ = None
+print("Submitted tx:", hash_ or "<pending>")
 
 # 4) Verify receiver balance
 result = query.find_account_assets(client, RECEIVER_ACCOUNT)
@@ -92,7 +96,7 @@ for asset in result.items:
 ```
 
 Run with `python ledger_flow.py`. The output should report the transaction hash
-followed by the new receiver balance. If the asset definition already exists,
+(from the receipt payload) followed by the new receiver balance. If the asset definition already exists,
 the register instruction is rejected while the mint/transfer continue to succeed.
 
 ## Verify parity

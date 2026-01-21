@@ -191,6 +191,10 @@ async fn pre_commit_trigger_should_be_executed_scenario(
                 move || get_asset_value(&client, &asset_id)
             })
             .await??;
+            let mut target_height = network
+                .best_effort_block_height()
+                .map(|height| height.total)
+                .unwrap_or(0);
             for _ in 0..CHECKS_COUNT {
                 let sample_isi = SetKeyValue::account(
                     account_id.clone(),
@@ -202,6 +206,10 @@ async fn pre_commit_trigger_should_be_executed_scenario(
                     move || client.submit(sample_isi)
                 })
                 .await??;
+                target_height = target_height.saturating_add(1);
+                network
+                    .ensure_blocks_with(|height| height.total >= target_height)
+                    .await?;
             }
 
             let expected_value = prev_value

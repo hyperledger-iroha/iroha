@@ -16,12 +16,12 @@ This document completes roadmap item **SF-8b — Repair automation & auditor API
 ## Component Overview
 | Component | Responsibilities | Implementation Notes |
 |-----------|-----------------|----------------------|
-| Repair Scheduler | Accepts repair signals, creates tasks, drives workflow until closure. | Lives in `sorafs_node::repair`, backed by Postgres queue + async workers. |
+| Repair Scheduler | Accepts repair signals, creates tasks, drives workflow until closure. | Lives in `sorafs_node::repair`, backed by an on-disk Norito snapshot store + async workers. |
 | Repair Worker | Executes chunk fetch/re-seed, orchestrator requests, and governance callbacks. | Uses orchestrator facade for data movement, emits Norito events. |
 | Auditor API | Signed REST/Norito endpoints for auditors to submit evidence and proposals. | Hosted by Torii (`/sorafs/auditor/*`), requires `SignedAuditorRequestV1`. |
 | Proof Verifier | Validates PoR/PoTR evidence before enqueuing tasks or slashing proposals. | Reuses `sorafs_manifest::proof_stream` helpers and PoR coordinator fixtures. |
 | SLA & Telemetry | Metrics, logs, and alerts for backlog, latency, and outcomes. | Instrumented via `iroha_telemetry`, exported to OTLP + Prometheus. |
-| Persistence | Durable recording of tasks, events, and outcomes. | Postgres tables + Parquet archival; Governance DAG receives summaries. |
+| Persistence | Durable recording of tasks, events, and outcomes. | Norito snapshot (`repair_state.to`) in `sorafs.repair.state_dir`; Governance DAG receives summaries. |
 | CLI Tooling | Operator-facing commands for queue inspection, manual escalation, and GC inspection/dry-run. | `iroha sorafs repair *` and `iroha sorafs gc *` commands with JSON output + Norito envelopes. |
 
 ## Norito Data Model
@@ -199,7 +199,7 @@ struct SignedAuditorRequestV1 {
 - Optional OIDC flow maps bearer tokens to an auditor account and injects envelopes server-side to support dashboards without bypassing signature requirements. Tokens must include `auditor_account` and `nonce` claims to prevent replay.
 
 ### Rate Limiting & Replay Protection
-- Nonce values must increase monotonically per auditor account; Torii stores the highest nonce in Redis/Postgres and rejects stale requests.  
+- Nonce values must increase monotonically per auditor account; Torii stores the highest nonce in the repair state snapshot and rejects stale requests.  
 - REST layer enforces 60 requests/minute per auditor account, configurable via `iroha_config::torii.sorafs_auditor_rate_limit`.
 
 ## Proof Verification Pipeline
@@ -213,15 +213,17 @@ struct SignedAuditorRequestV1 {
 
 ## SLA & Observability
 - Metrics (Prometheus naming):
-  - `sorafs_repair_tasks_total{status}` — Counter.
-  - `sorafs_repair_task_latency_seconds_bucket{proof_kind}` — Histogram measuring time from creation to completion/escalation.
-  - `sorafs_repair_backlog_gauge{proof_kind}` — Gauge for queued tasks.
-  - `sorafs_auditor_requests_total{endpoint,result}` — Counter for API usage.
-  - `sorafs_repair_verifier_failures_total{reason}` — Counter.
+  - `torii_sorafs_repair_tasks_total{status}` — Counter for task transitions.
+  - `torii_sorafs_repair_latency_minutes_bucket{outcome}` — Histogram measuring time from creation to completion/escalation.
+  - `torii_sorafs_repair_queue_depth{provider}` — Gauge for queued tasks per provider.
+  - `torii_sorafs_repair_backlog_oldest_age_seconds` — Age of the oldest queued task.
+  - `torii_sorafs_repair_lease_expired_total{outcome}` — Counter for expired leases (requeued/escalated).
+  - `torii_sorafs_slash_proposals_total{outcome}` — Counter for slash proposal transitions.
+- Governance audit JSON metadata mirrors the telemetry labels (`ticket_id`, `manifest`, `provider`, `status` for repair events; `outcome` for slash proposals) to keep correlation deterministic.
 - Alerts:
-  - `SORAfsRepairBacklogHigh`: queue > 50 tasks or oldest queued > SLA.
-  - `SORAfsRepairEscalations`: escalations per hour > 3.
-  - `SORAfsAuditorAuthFailures`: >10 failed signatures in 5 minutes.
+  - `SoraFsRepairBacklogHigh`: queue > 50 tasks or oldest queued > SLA.
+  - `SoraFsRepairEscalations`: escalations per hour > 3.
+  - `SoraFsRepairLeaseExpirySpike`: lease expiries per hour > 5.
 - Logs:
   - Structured JSON with `task_id`, `status`, `sla_deadline`, `retry_count`.
   - Loki retention 180 days hot, 2 years archived (mirrors pricing policy logs).
@@ -230,43 +232,10 @@ struct SignedAuditorRequestV1 {
   - Runbook links to `docs/source/sorafs_ops_playbook.md` and `sorafs_gateway_self_cert.md` for transport-related incidents.
 
 ## Persistence & Retention
-```sql
-CREATE TABLE sorafs_repair_task (
-    id UUID PRIMARY KEY,
-    manifest_digest BYTEA NOT NULL,
-    provider_id BYTEA NOT NULL,
-    priority SMALLINT NOT NULL,
-    status SMALLINT NOT NULL,
-    sla_deadline TIMESTAMPTZ NOT NULL,
-    retry_count SMALLINT NOT NULL DEFAULT 0,
-    last_transition TIMESTAMPTZ NOT NULL,
-    evidence_ref TEXT NOT NULL, -- object storage URI
-    por_history_id BIGINT REFERENCES sorafs_por_history(id)
-);
-
-CREATE TABLE sorafs_repair_event (
-    id BIGSERIAL PRIMARY KEY,
-    task_id UUID NOT NULL REFERENCES sorafs_repair_task(id),
-    status SMALLINT NOT NULL,
-    occurred_at TIMESTAMPTZ NOT NULL,
-    message TEXT,
-    actor TEXT NOT NULL -- worker id / auditor account / system
-);
-
-CREATE TABLE sorafs_slash_proposal (
-    id UUID PRIMARY KEY,
-    task_id UUID REFERENCES sorafs_repair_task(id),
-    penalty_xor NUMERIC(24,12) NOT NULL,
-    rationale TEXT NOT NULL,
-    status SMALLINT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL,
-    decided_at TIMESTAMPTZ,
-    decision TEXT
-);
-```
-
-- Retention: 180 days hot storage in Postgres. Nightly compactor emits Parquet snapshots to `s3://sorafs-audit/repair/YYYY/MM/DD`. Governance DAG stores summaries for immutable history.
-- Indexes on `(manifest_digest, status)` and `(sla_deadline)` support queue queries.
+- Repair state is persisted as a Norito snapshot (`repair_state.to`) under `sorafs.repair.state_dir` (defaults to `<sorafs.storage.data_dir>/repair` when unset).
+- Snapshot schema captures `version`, `next_por_history_id`, `next_audit_sequence`, `tasks[]` (report, state, lease, events), and `por_history[]`.
+- Writes are atomic (temp file + rename) to avoid partial state on restart; corrupted snapshots are archived with a `corrupt-*` suffix before reinitialisation.
+- Retention is enforced by capping `RepairTaskEventV1` history per ticket; governance audit events remain append-only in the DAG for immutable history.
 
 ## CLI & Torii Integration
 - `iroha sorafs repair list --manifest-digest <hex>`: shows tasks, statuses, and deadlines.

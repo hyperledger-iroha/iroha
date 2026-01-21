@@ -420,7 +420,7 @@ Torii integration
 - `Torii::new_with_handle` accepts a `routing::MaybeTelemetry` gate that pairs the runtime `Telemetry` handle with the active `TelemetryProfile`. Use `routing::MaybeTelemetry::from_profile(runtime_handle, profile)` to construct the gate, or `routing::MaybeTelemetry::disabled()` when telemetry is unavailable.
 - `Torii::new` (when the `telemetry` feature is enabled) remains as a convenience wrapper; it now forwards to `new_with_handle` with an operator profile by default. Tests can use `routing::MaybeTelemetry::for_tests()` to obtain an in-process telemetry handle.
 
-- `torii_address_invalid_total{endpoint,reason}` increments whenever HTTP routes reject an account identifier (invalid IH58/compressed payloads, domain mismatches, etc.). Keep the `<0.1%` SLO by watching the dedicated Grafana board in `dashboards/grafana/address_ingest.json`.
+- `torii_address_invalid_total{endpoint,reason}` increments whenever HTTP routes reject an account identifier (invalid IH58 (preferred)/snx1 (second-best) payloads, domain mismatches, etc.). Keep the `<0.1%` SLO by watching the dedicated Grafana board in `dashboards/grafana/address_ingest.json`.
 - `torii_address_collision_total{endpoint,kind="local12_digest"}` and `torii_address_collision_domain_total{endpoint,domain}` record Local‑12 selector collisions. Both feed the collision panel/alert in `dashboards/grafana/address_ingest.json` so operators can tie spikes to specific domains. Production should stay flat; any increment blocks manifest promotions until governance signs off on the fix.
 
 Pipeline metrics
@@ -908,7 +908,7 @@ Norito-RPC transport telemetry requirements are captured in `docs/source/torii/n
 - `torii_http_request_duration_seconds_bucket{content_type,method}` — latency histogram for content-type parity dashboards.
 - `torii_http_response_bytes_total{content_type,method,status}` — optional payload-size counter for regression detection.
 - `torii_norito_decode_failures_total{payload_kind,reason}` — bucketed Norito RPC decode failures (invalid magic, checksum mismatch, unsupported feature, etc.).
-- `torii_address_invalid_total{surface,reason}` — rejects grouped by Torii surface (e.g., `routing.source`, `iso_bridge.source`) and the stable address error code so SDK drift or malformed IH58/compressed literals are visible.
+- `torii_address_invalid_total{surface,reason}` — rejects grouped by Torii surface (e.g., `routing.source`, `iso_bridge.source`) and the stable address error code so SDK drift or malformed IH58 (preferred)/snx1 (second-best) literals are visible.
 - Local‑8 specific counters are retired; rely on `torii_address_invalid_total{surface,reason}` and `torii_address_collision_total{surface,kind}` to monitor address ingestion and Local‑12 safety.
 - Existing gauges (`torii_active_connections_total{scheme}`, `torii_pre_auth_reject_total{reason}`) must include `scheme="norito_rpc"` to track transport gating.
 

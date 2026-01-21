@@ -21,7 +21,7 @@ translator: manual
 - チェックスム付きで人間が扱いやすい **Iroha Bech32m アドレス (IH-B32)** を導入し、チェーン判別子を署名者と結び付けつつ、決定的で相互運用しやすい文字列表現を提供する。
 - グローバルに一意なドメイン識別子をレジストリで管理し、Nexus を介したクロスチェーンルーティングに利用できるようにする。
 - ウォレット、API、コントラクトを新形式へ移行する間も既存の `alias@domain` エイリアスが機能する互換レイヤーを維持する。
-- `AccountAddress` 型で IH58／Sora 圧縮（`snx1…`）／正規 Hex の各コーデックを提供し、Torii は `AccountAddress::parse_any` で入力を正規バイト列に揃える。
+- `AccountAddress` 型で IH58（推奨）／Sora 圧縮（`snx1…`、次善かつ Sora 専用）／正規 Hex の各コーデックを提供し、Torii は `AccountAddress::parse_any` で入力を正規バイト列に揃える。
 
 ## 動機
 

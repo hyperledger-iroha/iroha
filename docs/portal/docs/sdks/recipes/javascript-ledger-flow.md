@@ -55,8 +55,9 @@ const tx = buildTransaction({
 });
 
 tx.sign({publicKey, privateKey});
-const hash = await client.submitTransaction(tx);
-console.log('Submitted tx', hash);
+const receipt = await client.submitTransaction(tx);
+const txHash = receipt?.payload?.tx_hash ?? "<pending>";
+console.log('Submitted tx', txHash);
 
 const balances = await client.listAccountAssets(receiverAccount, {limit: 10});
 for (const asset of balances.items) {
@@ -67,8 +68,8 @@ for (const asset of balances.items) {
 ```
 
 Run with `node --env-file=.env ledger-flow.mjs` (or export the environment
-variables manually). The log should show the transaction hash and the updated
-receiver balance.
+variables manually). The log should show the transaction hash (from the receipt
+payload) and the updated receiver balance.
 
 ## Verify parity
 

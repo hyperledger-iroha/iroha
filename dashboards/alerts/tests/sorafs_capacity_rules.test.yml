@@ -173,3 +173,36 @@ tests:
               severity: warning
             exp_annotations:
               summary: "Reserve ledger reserve top-up mismatch"
+  - interval: 1m
+    input_series:
+      - series: 'torii_sorafs_gc_runs_total{result="error"}'
+        values: '0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_gc_blocked_total{reason="repair_active"}'
+        values: '0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_gc_evictions_total{reason="retention_expired"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'torii_sorafs_gc_expired_manifests'
+        values: '2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2'
+    alert_rule_test:
+      - alertname: SoraFSGCErrorRuns
+        eval_time: 16m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS GC sweeps reporting errors"
+      - alertname: SoraFSGCBlocked
+        eval_time: 16m
+        exp_alerts:
+          - exp_labels:
+              reason: repair_active
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS GC evictions blocked"
+      - alertname: SoraFSGCStalled
+        eval_time: 31m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS retention expiry backlog is not clearing"

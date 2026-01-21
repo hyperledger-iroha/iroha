@@ -20,8 +20,8 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 تتغير. يعرض مثال محفظة Android في
 `examples/android/retail-wallet` نمط UX المطلوب:
 
-- **هدفا نسخ منفصلان.** وفر زرين واضحين للنسخ: IH58 (الافتراضي) والصيغة
-  المضغوطة الخاصة بـ Sora (`snx1...`). IH58 امن دائما للمشاركة خارجيا ويغذي
+- **هدفا نسخ منفصلان.** وفر زرين واضحين للنسخ: IH58 (المفضل) والصيغة
+  المضغوطة الخاصة بـ Sora (`snx1...`، الخيار الثاني). IH58 امن دائما للمشاركة خارجيا ويغذي
   حمولة QR. يجب ان تتضمن الصيغة المضغوطة تحذيرا مضمنا لانها تعمل فقط داخل
   تطبيقات واعية بـ Sora. مثال Android يربط زري Material وتلميحاتهما في
   `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`، ويطابق

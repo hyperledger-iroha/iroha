@@ -431,6 +431,10 @@ test("listAccountAssets rejects Local-8 segments", async () => {
   await assert.rejects(
     () => client.listAccountAssets(forms.local8),
     (error) => {
+      if (error instanceof ValidationError) {
+        assert.equal(error.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
+        return true;
+      }
       const isAccountAddressError = error instanceof AccountAddressError;
       const cause = error?.cause;
       const code = isAccountAddressError
@@ -2242,7 +2246,7 @@ test("getUaidBindings enforces UAID formats, address_format, and normalizes entr
   const parsed = new URL(capturedUrl);
   assert.equal(parsed.origin + parsed.pathname, `${BASE_URL}/v1/space-directory/uaids/${encodeURIComponent(fixture.uaid)}`);
   assert.equal(parsed.searchParams.get("address_format"), "compressed");
-  assert.equal(result.dataspaces[0].accounts[0], "holder1@portfolio");
+  assert.equal(result.dataspaces[0].accounts[0], fixture.dataspaces[0].accounts[0]);
   await assert.rejects(() => client.getUaidBindings("uaid:xyz"), /64 hex characters/);
   await assert.rejects(
     () => client.getUaidBindings(`uaid:${"10".repeat(32)}`),
@@ -5531,29 +5535,48 @@ test("submitIsoPacs009AndWait rejects when submission omits message_id", async (
   assert.deepEqual(calls.map((call) => call.url), [`${BASE_URL}/v1/iso20022/pacs009`]);
 });
 
-test("submitTransaction posts norito payload and returns JSON when present", async () => {
+test("submitTransaction posts norito payload and decodes receipt response", async () => {
   const payload = new Uint8Array([0xde, 0xad]);
+  const receiptJson = JSON.stringify({
+    payload: {
+      tx_hash: "aa".repeat(32),
+      submitted_at_ms: 1,
+      submitted_at_height: 2,
+      signer: "ed0120" + "bb".repeat(32),
+    },
+    signature: "ed25519:" + "cc".repeat(64),
+  });
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
     assert.equal(init.method, "POST");
     assert.equal(init.headers["Content-Type"], "application/x-norito");
+    assert.equal(init.headers.Accept, "application/x-norito, application/json");
     assert.ok(Buffer.isBuffer(init.body));
     assert.deepEqual([...init.body.values()], [0xde, 0xad]);
     return createResponse({
       status: 202,
-      jsonData: {
-        kind: "Transaction",
-        content: { status: { kind: "Queued" } },
-      },
-      headers: { "content-type": "application/json" },
+      arrayData: new Uint8Array([0x01, 0x02, 0x03]),
+      headers: { "content-type": "application/x-norito" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.submitTransaction(payload);
-  assert.deepEqual(result, {
-    kind: "Transaction",
-    content: { status: { kind: "Queued" } },
-  });
+  const originalBinding = globalThis.__IROHA_NATIVE_BINDING__;
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    decodeTransactionReceiptJson: (buffer) => {
+      assert.ok(Buffer.isBuffer(buffer));
+      return receiptJson;
+    },
+  };
+  try {
+    const result = await client.submitTransaction(payload);
+    assert.deepEqual(result, JSON.parse(receiptJson));
+  } finally {
+    if (originalBinding === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = originalBinding;
+    }
+  }
 });
 
 test("submitTransaction retries transient failures via pipeline profile", async () => {
@@ -8221,7 +8244,7 @@ test("getGovernanceLocksTyped parses lock records and synthesizes not-found resu
   const result = await client.getGovernanceLocksTyped("ref-1");
   assert.equal(result.found, true);
   assert.equal(Object.keys(result.locks).length, 1);
-  assert.equal(result.locks["alice@test"].duration_blocks, 5);
+  assert.equal(result.locks[FIXTURE_ALICE_TEST_ID].duration_blocks, 5);
 
   const missingClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 404 }),
@@ -9034,7 +9057,7 @@ test("governanceDeriveCouncilVrf encodes candidate payload", async () => {
   assert.equal(captured.candidates[0].variant, "Small");
   assert.match(captured.candidates[0].pk_b64, /^[A-Za-z0-9+/]+=*$/);
   assert.match(captured.candidates[0].proof_b64, /^[A-Za-z0-9+/]+=*$/);
-  assert.equal(payload.members[0].account_id, "validator@test");
+  assert.equal(payload.members[0].account_id, FIXTURE_VALIDATOR_TEST_ID);
   assert.equal(payload.total_candidates, 1);
   assert.equal(payload.verified, 1);
   assert.equal(payload.derived_by, "Vrf");
@@ -11273,7 +11296,7 @@ test("listAccountPermissions validates entry names", async () => {
   );
 });
 
-test("listAccountPermissions normalizes IH58 and compressed account ids", async () => {
+test("listAccountPermissions normalizes IH58 and compressed (`snx1`) account ids", async () => {
   const forms = sampleAccountForms();
   for (const literal of [forms.ih58, forms.compressed]) {
     let requestedPath = null;

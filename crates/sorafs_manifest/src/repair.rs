@@ -702,6 +702,10 @@ pub struct RepairTaskEventV1 {
     pub version: u8,
     /// Ticket identifier referenced by the event.
     pub ticket_id: RepairTicketId,
+    /// Manifest digest associated with the ticket.
+    pub manifest_digest: [u8; 32],
+    /// Provider identifier associated with the ticket.
+    pub provider_id: [u8; 32],
     /// Status after the transition.
     pub status: RepairTaskStatusV1,
     /// Unix timestamp (seconds) when the event occurred.
@@ -724,6 +728,8 @@ impl RepairTaskEventV1 {
             });
         }
         self.ticket_id.validate()?;
+        ensure_digest(&self.manifest_digest, "manifest_digest")?;
+        ensure_digest(&self.provider_id, "provider_id")?;
         ensure_timestamp(self.occurred_at_unix, "occurred_at_unix")?;
         if let Some(actor) = &self.actor {
             validate_optional_string(actor, "actor")?;
@@ -1213,6 +1219,8 @@ mod tests {
         let event = RepairTaskEventV1 {
             version: REPAIR_TASK_EVENT_VERSION_V1,
             ticket_id: RepairTicketId("REP-351".into()),
+            manifest_digest: manifest_digest(),
+            provider_id: provider_id(),
             status: RepairTaskStatusV1::InProgress,
             occurred_at_unix: 1_704_361_600,
             actor: Some("worker-1".into()),
@@ -1226,6 +1234,8 @@ mod tests {
         let event = RepairTaskEventV1 {
             version: REPAIR_TASK_EVENT_VERSION_V1,
             ticket_id: RepairTicketId("REP-351".into()),
+            manifest_digest: manifest_digest(),
+            provider_id: provider_id(),
             status: RepairTaskStatusV1::Queued,
             occurred_at_unix: 1,
             actor: Some("   ".into()),
@@ -1234,6 +1244,46 @@ mod tests {
         assert!(matches!(
             event.validate(),
             Err(RepairValidationError::BlankString { field: "actor" })
+        ));
+    }
+
+    #[test]
+    fn task_event_rejects_empty_manifest_digest() {
+        let event = RepairTaskEventV1 {
+            version: REPAIR_TASK_EVENT_VERSION_V1,
+            ticket_id: RepairTicketId("REP-352".into()),
+            manifest_digest: [0u8; 32],
+            provider_id: provider_id(),
+            status: RepairTaskStatusV1::Queued,
+            occurred_at_unix: 1,
+            actor: None,
+            message: None,
+        };
+        assert!(matches!(
+            event.validate(),
+            Err(RepairValidationError::EmptyString {
+                field: "manifest_digest"
+            })
+        ));
+    }
+
+    #[test]
+    fn task_event_rejects_empty_provider_id() {
+        let event = RepairTaskEventV1 {
+            version: REPAIR_TASK_EVENT_VERSION_V1,
+            ticket_id: RepairTicketId("REP-353".into()),
+            manifest_digest: manifest_digest(),
+            provider_id: [0u8; 32],
+            status: RepairTaskStatusV1::Queued,
+            occurred_at_unix: 1,
+            actor: None,
+            message: None,
+        };
+        assert!(matches!(
+            event.validate(),
+            Err(RepairValidationError::EmptyString {
+                field: "provider_id"
+            })
         ));
     }
 
@@ -1342,6 +1392,8 @@ mod tests {
         let payload = RepairTaskEventV1 {
             version: REPAIR_TASK_EVENT_VERSION_V1,
             ticket_id: RepairTicketId("REP-600".into()),
+            manifest_digest: manifest_digest(),
+            provider_id: provider_id(),
             status: RepairTaskStatusV1::Queued,
             occurred_at_unix: 1_704_400_000,
             actor: Some("worker#sora".into()),

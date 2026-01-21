@@ -101,7 +101,7 @@ fn share_wallet_qr(client: &Client) -> eyre::Result<()> {
             address_format: Some(AddressFormat::Compressed),
         }),
     )?;
-    println!("IH58/compressed literal: {}", snapshot.literal);
+    println!("IH58 (preferred)/snx1 (second-best) literal: {}", snapshot.literal);
     std::fs::write("alice_qr.svg", snapshot.svg)?;
     Ok(())
 }

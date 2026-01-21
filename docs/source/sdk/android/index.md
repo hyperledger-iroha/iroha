@@ -83,7 +83,9 @@ transport.submitTransaction(tx).join();
 - `HttpClientTransport.submitTransaction` returns a `CompletableFuture`; use
   `waitForTransactionStatus` to poll `/v1/pipeline/transactions/status` for the
   resulting hash, or configure a `PendingTransactionQueue` so failed submissions
-  replay deterministically.
+  replay deterministically. Torii returns a Norito-encoded submission receipt in
+  the response body; `ClientResponse.body()` exposes the raw bytes and
+  `ClientResponse.hashHex()` provides the canonical hash for polling.
   A `404` response indicates Torii has no cached status yet (for example after a
   restart), so the client keeps polling until a terminal state arrives.
 
@@ -99,8 +101,8 @@ transport exposes typed helpers in `org.hyperledger.iroha.android.nexus`:
 - `HttpClientTransport.getUaidBindings(String uaid)` hits
   `/v1/space-directory/uaids/{uaid}` when only the account bindings are needed.
   Supply a `UaidBindingsQuery` when you need to override the
-  `address_format` (for example, `AddressFormatOption.COMPRESSED` to receive
-  `snx1…@domain` literals).
+  `address_format` (IH58 is preferred; use `AddressFormatOption.COMPRESSED`
+  only for the second-best `snx1…@domain` literals).
 - `HttpClientTransport.getUaidManifests(String uaid, UaidManifestQuery query)`
   fetches `/v1/space-directory/uaids/{uaid}/manifests`; the query builder lets
   you filter by dataspace, status (`active`, `inactive`, `all`), paging offsets,

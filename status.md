@@ -11,6 +11,17 @@ Last update: 2026-01-21
 - Localnet: NPoS 1 Hz / 100-block stall check with `/v1/sumeragi/status` polling completed on `/tmp/iroha-localnet-1hz-fix2` (ports 32200/35500). 100 blocks in 744.9s (~0.134 blocks/s), no view changes, `missing_payload_total=0`, RBC queues stayed under cap.
 - Tests: `cargo test -p iroha_core fetch_pending_block_npos_falls_back_without_roster_hints -- --nocapture` (ok).
 - Tests: `cargo test -p iroha_core clear_missing_block_view_change_resets_window_and_trigger -- --nocapture` (ok).
+- SDKs (Swift): aligned offline receipt Poseidon sample account to the canonical ed25519 seed `[0x01; 32]`, refreshed receiver hash expectations, and synced Swift offline_poseidon vectors to the artifacts snapshot.
+- Tests: not run (Swift SDK fixture/value updates only).
+- SoraFS repair telemetry: added backlog age/queue depth/lease expiry metrics to Prometheus + OTEL, extended repair audit events and governance metadata with manifest/provider IDs, and refreshed repair observability docs.
+- Tests: not run (SoraFS repair telemetry + governance metadata updates).
+- Integration tests: reworked `sumeragi_rbc_session_recovers_after_cold_restart` to target a full in-flight RBC session via `/v1/sumeragi/rbc/sessions`, verify the on-disk session file by hash+height prefix before shutdown, and reuse the observed peer for restart checks; removed the unused persisted-session scan helper.
+- Tests: not run (integration-test logic change only).
+- SDKs: Torii pipeline submissions now prefer Norito receipts across JS/Python/Swift, Android submit helpers send Norito payloads, Android pending-queue tests assert Norito bytes, JS dist artifacts refreshed, and SDK docs/examples now reference receipt payload hashes (including Android docs noting receipt bytes).
+- Tests: not run (SDK updates only).
+- Tests: `npm test` (failed; multiple JS test failures including `address_inspect`, `isoBridge`, `toriiClient`, `validationError`, and `transactionFixturesParity` suites).
+- Tests: `swift test` (failed; 45 failures/35 unexpected, first failure `TransactionEncoderValidationTests.testCastZkBallotAcceptsCanonicalHints` with `nativeBridgeError(.authority)`).
+- Docs/UX strings: clarified IH58 as the preferred account format and `snx1` as the second-best option across the Account Structure RFC, data-model specs, SDK/CLI help text, Torii/OpenAPI docs, portal docs/images, and translations.
 - Sumeragi worker loop now refreshes drain budgets and tick gaps each iteration from current on-chain timing to avoid stale startup timeouts; added `run_worker_loop_refreshes_config_each_iteration`.
 - Tests: `cargo test -p iroha_core run_worker_loop_refreshes_config_each_iteration` (ok).
 - Sumeragi quorum timeout now uses pending-block progress age (touched by RBC chunk/READY/DELIVER + votes) so healthy consensus activity does not trigger view changes; pending blocks track progress timestamps and tests/docs updated.
@@ -19,6 +30,7 @@ Last update: 2026-01-21
 - Localnet: re-run NPoS 1 Hz / 100-block stall check with status polling after the progress-age change (pending).
 - SoraFS repair API: added Torii contract tests for worker endpoints (report/claim/heartbeat/complete/fail) and status snapshots.
 - SoraFS CLI: added help smoke coverage for `iroha sorafs repair` and `iroha sorafs gc`.
+- SoraFS incentives state: embed domain hints so IH58 account IDs roundtrip, and install a domain-selector resolver while parsing JSON snapshots and CLI tests.
 - Accounts/UAID: enforce UAID→account 1:1 index, reject duplicate UAIDs on registration, and switch UAID portfolio/reward selection to the index with new unit coverage.
 - Account address parsing: accept full-width `ｓｎｘ１` sentinel for compressed Sora literals alongside ASCII `snx1`.
 - Tests: `cargo test -p iroha_data_model compressed_fullwidth_sentinel_accepts` (ok; waited for build dir lock).
@@ -34,12 +46,18 @@ Last update: 2026-01-21
 - SoraFS repair CLI: added `iroha sorafs repair` list/claim/complete/fail/escalate subcommands plus client helpers for repair status/worker/slash endpoints; repair plan docs updated.
 - SoraFS GC CLI: added `iroha sorafs gc` inspect/dry-run reporting for retention state (read-only).
 - Docs: added GC inspection/dry-run guidance to SoraFS ops playbook, node-ops runbook, and node-client protocol CLI helpers (including portal mirrors).
-- SoraFS repair store: introduced a repair-store abstraction with CAS updates and canonical Norito payload bytes (in-memory backend; Postgres wiring TODO).
+- SoraFS repair store: file-backed Norito snapshot (`repair_state.to`) with versioned schema, CAS updates, PoR history persistence, and corrupt-store archiving fallback.
 - SoraFS repair events: record ordered RepairTaskEventV1 transitions in the scheduler and surface them in repair status responses.
 - SoraFS repair watchdog: enforce SLA/attempt caps, requeue expired leases with backoff, emit draft slash proposals, and prioritize claimable tasks by SLA/severity/provider backlog.
+- SoraFS repair worker: integrate repair chunk fetch/verify with the storage scheduler budgets to avoid starving normal pin traffic.
+- SoraFS GC: persist `retention_epoch` in manifest metadata and index expiry scans; deterministic GC sweeper evicts expired manifests with pre-admission retry, skips active repairs, and publishes GC audit events.
+- SoraFS PoR: skip scheduling PoR challenges once manifests are past `retention_epoch + retention_grace_secs`.
+- Torii: added a GC sweeper runtime alongside the repair worker runtime and wired GC metrics/OTel counters.
+- Telemetry: added SoraFS GC Prometheus/OTel metrics plus GC panels in the capacity health dashboard and GC alerts (stall/blocked) with ops/docs updates (including portal mirrors).
+- Tests: not run for the SoraFS GC/retention and repair scheduler integration changes.
 - Norito derive: fix AoS enum `[u8; N]` length prefixing for u8 array variants and add an unpacked AoS enum roundtrip test.
-- Tests: `cargo test -p iroha_torii sorafs_repair_endpoints` (failed: `iroha_torii` tests no longer compile; missing imports in `crates/iroha_torii/src/lib.rs` test helpers and stale `gov`/`routing` test call signatures).
-- Tests: `cargo test -p iroha_cli sorafs_repair_help_is_accessible` (failed: `iroha_cli` compile errors in `crates/iroha_cli/src/main_shared.rs` JSON map literal, missing `FromStr` imports, and updated `sns` arg signatures).
+- Tests: `cargo test -p iroha_torii sorafs_repair_worker_endpoints_drive_state` (ok).
+- Tests: `cargo test -p iroha_cli sorafs_` (ok).
 - Tests: `cargo clippy -p sorafs_node --all-targets -- -D warnings` (ok).
 - Tests: `cargo test -p norito enum_aos` (ok; warning about unused_mut in `crates/norito/src/core.rs:5610`).
 - Format: `cargo fmt --all` (warned about nightly-only rustfmt options in stable toolchain).
@@ -50,7 +68,6 @@ Last update: 2026-01-21
 - Tests: `cargo test -p sorafs_node node_handle_manages_repair_queue` (ok).
 - Tests: `cargo test -p sorafs_node` (failed: `store::tests::ingest_manifest_persists_metadata_and_chunks` expected manifest hash `57950a...` vs `010203`).
 - Tests: `cargo test -p iroha_torii repair_query_tests` (ok).
-- Tests: `cargo test -p iroha_torii repair_worker_handlers_drive_state_transitions` (failed to compile `iroha_core`: `Storage<AccountId, Owned<AccountDetails>>` missing `iter`, plus type inference errors in `crates/iroha_core/src/state.rs:7515`).
 - Build: `cargo check -p iroha_executor` (ok).
 - Build: `cargo check -p iroha_core` (ok).
 - Tests: `cargo test --workspace` (aborted per user request).

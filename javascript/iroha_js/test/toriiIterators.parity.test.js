@@ -73,7 +73,10 @@ test("iterateAccountAssets paginates with addressFormat and maxItems", async () 
   let callCount = 0;
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/accounts/alice%40wonderland/assets");
+    assert.equal(
+      parsed.pathname,
+      "/v1/accounts/34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx/assets",
+    );
     assert.equal(parsed.searchParams.get("address_format"), "compressed");
     const offset = Number(parsed.searchParams.get("offset") ?? 0);
     const items =

@@ -15,7 +15,7 @@ title: اکاؤنٹ ایڈریس تعمیل
 description: ADDR-2 fixture ورک فلو کا خلاصہ اور SDK ٹیموں کی ہم آہنگی کیسے برقرار رہتی ہے۔
 ---
 
-canonical ADDR-2 bundle (`fixtures/account/address_vectors.json`) IH58, compressed (half/full width), multisignature, اور negative fixtures کو capture کرتا ہے۔ ہر SDK + Torii surface اسی JSON پر انحصار کرتی ہے تاکہ codec drift پروڈکشن تک پہنچنے سے پہلے پکڑا جا سکے۔ یہ صفحہ اندرونی status brief (`docs/source/account_address_status.md` ریپوزٹری روٹ میں) کو mirror کرتا ہے تاکہ portal readers بغیر mono-repo میں کھوج لگائے workflow دیکھ سکیں۔
+canonical ADDR-2 bundle (`fixtures/account/address_vectors.json`) IH58 (preferred), compressed (`snx1`, second-best; half/full width), multisignature, اور negative fixtures کو capture کرتا ہے۔ ہر SDK + Torii surface اسی JSON پر انحصار کرتی ہے تاکہ codec drift پروڈکشن تک پہنچنے سے پہلے پکڑا جا سکے۔ یہ صفحہ اندرونی status brief (`docs/source/account_address_status.md` ریپوزٹری روٹ میں) کو mirror کرتا ہے تاکہ portal readers بغیر mono-repo میں کھوج لگائے workflow دیکھ سکیں۔
 
 ## Bundle کو regenerate یا verify کریں
 
@@ -46,7 +46,7 @@ CI workflow **Address Vector Drift** `cargo xtask address-vectors --verify`
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-ہر harness canonical bytes + IH58 + compressed encodings کا round-trip کرتا ہے اور negative cases کیلئے Norito-style error codes کو fixture کے ساتھ match کرتا ہے۔
+ہر harness canonical bytes + IH58 + compressed (`snx1`, second-best) encodings کا round-trip کرتا ہے اور negative cases کیلئے Norito-style error codes کو fixture کے ساتھ match کرتا ہے۔
 
 ## Automation چاہئے؟
 

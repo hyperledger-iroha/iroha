@@ -35,7 +35,7 @@ translator: manual
 
 **文字列表現 (Display/FromStr 往復可)**
 - `DomainId`: `wonderland`
-- `AccountId`: 正規のアドレスは `AccountAddress` が提供する IH58 / Sora 圧縮（`snx1…`）/ 16 進表現（`canonical_hex`）コードックを利用する。`alias@domain` 形式はルーティング用エイリアスとして維持される。Torii は `AccountAddress::parse_any` で入力を正規バイト列に揃える。
+- `AccountId`: 正規のアドレスは `AccountAddress` が提供する IH58 / Sora 圧縮（`snx1…`）/ 16 進表現（`canonical_hex`）コードックを利用する。IH58 を推奨し、`snx1…` は Sora 専用の次善策とする。`alias@domain` 形式はルーティング用エイリアスとして維持される。Torii は `AccountAddress::parse_any` で入力を正規バイト列に揃える。
 - `AssetDefinitionId`: `asset#domain`
 - `AssetId`: `asset#domain#account@domain`（同一ドメインなら `asset##account@domain`）
 - `NftId`: `nft$domain`

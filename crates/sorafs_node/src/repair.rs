@@ -2,12 +2,14 @@
 //!
 //! The scheduler persists repair tickets via a repair store abstraction, tracks
 //! proof-of-retrievability failures, and emits metrics so operators can monitor
-//! SLA adherence. The in-memory store remains the default until the Postgres
-//! backend is wired into the node configuration.
+//! SLA adherence. Repair state is stored on disk using Norito snapshots.
 
 use std::{
     cmp::Reverse,
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
+    fs,
+    io,
+    path::{Path, PathBuf},
     sync::{
         Arc, RwLock,
         atomic::{AtomicU64, Ordering},
@@ -31,6 +33,7 @@ use sorafs_manifest::{
 use thiserror::Error;
 
 use crate::config::RepairConfig;
+use norito::derive::{NoritoDeserialize, NoritoSerialize};
 
 const DEFAULT_REPAIR_SLA_SECS: u64 = 4 * 60 * 60;
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
@@ -39,6 +42,10 @@ const MAX_REPAIR_NOTES_BYTES: usize = 256;
 const DEFAULT_IDEMPOTENCY_CACHE_SIZE: usize = 64;
 const MAX_REPAIR_STORE_RETRIES: usize = 3;
 const DEFAULT_REPAIR_EVENT_HISTORY_LIMIT: usize = 64;
+const REPAIR_STORE_VERSION_V1: u8 = 1;
+const REPAIR_STORE_FILE_NAME: &str = "repair_state.to";
+const REPAIR_STORE_TMP_EXT: &str = "tmp";
+static REPAIR_STORE_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Result of inserting a repair task into storage.
 #[derive(Debug, Clone)]
@@ -76,6 +83,7 @@ pub enum RepairStoreError {
 /// Storage backend for repair tickets and PoR history.
 trait RepairStore: std::fmt::Debug + Send + Sync {
     fn next_por_history_id(&self) -> u64;
+    fn next_audit_sequence(&self) -> u64;
     fn record_por_history(&self, entry: PorHistoryEntry) -> Result<(), RepairStoreError>;
     fn por_history_entry(
         &self,
@@ -98,58 +106,272 @@ trait RepairStore: std::fmt::Debug + Send + Sync {
     fn list_tasks(&self) -> Result<Vec<RepairTaskInternal>, RepairStoreError>;
 }
 
-#[derive(Debug)]
-struct InMemoryRepairStore {
-    tasks: RwLock<HashMap<String, RepairTaskInternal>>,
-    por_history: RwLock<HashMap<u64, PorHistoryEntry>>,
-    next_history_id: AtomicU64,
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct RepairStoreSnapshot {
+    version: u8,
+    next_por_history_id: u64,
+    next_audit_sequence: u64,
+    tasks: Vec<StoredRepairTask>,
+    por_history: Vec<PorHistoryEntry>,
 }
 
-impl InMemoryRepairStore {
-    fn new() -> Self {
+impl RepairStoreSnapshot {
+    fn from_state(state: &RepairStoreState) -> Self {
         Self {
-            tasks: RwLock::new(HashMap::new()),
-            por_history: RwLock::new(HashMap::new()),
-            next_history_id: AtomicU64::new(1),
+            version: REPAIR_STORE_VERSION_V1,
+            next_por_history_id: state.next_por_history_id,
+            next_audit_sequence: state.next_audit_sequence,
+            tasks: state
+                .tasks
+                .values()
+                .cloned()
+                .map(StoredRepairTask::from_internal)
+                .collect(),
+            por_history: state.por_history.values().cloned().collect(),
+        }
+    }
+
+    fn into_state(self) -> Result<RepairStoreState, RepairStoreError> {
+        if self.version != REPAIR_STORE_VERSION_V1 {
+            return Err(RepairStoreError::Other(format!(
+                "unsupported repair store version {} (expected {})",
+                self.version, REPAIR_STORE_VERSION_V1
+            )));
+        }
+        let mut tasks = BTreeMap::new();
+        for task in self.tasks {
+            let internal = task.into_internal();
+            let key = internal.report.ticket_id.0.clone();
+            tasks.insert(key, internal);
+        }
+        let mut por_history = BTreeMap::new();
+        for entry in self.por_history {
+            por_history.insert(entry.id, entry);
+        }
+        Ok(RepairStoreState {
+            tasks,
+            por_history,
+            next_por_history_id: self.next_por_history_id,
+            next_audit_sequence: self.next_audit_sequence,
+        })
+    }
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct StoredRepairTask {
+    revision: u64,
+    report: RepairReportV1,
+    state: RepairTaskStateV1,
+    sla_deadline_unix: Option<u64>,
+    scheduler_notes: Option<String>,
+    slash_proposal_digest: Option<[u8; 32]>,
+    slash_proposal_bytes: Option<Vec<u8>>,
+    lease: Option<StoredRepairTaskLease>,
+    attempts: u32,
+    next_attempt_after_unix: Option<u64>,
+    events: Vec<RepairTaskEventV1>,
+}
+
+impl StoredRepairTask {
+    fn from_internal(task: RepairTaskInternal) -> Self {
+        Self {
+            revision: task.revision,
+            report: task.report,
+            state: task.state,
+            sla_deadline_unix: task.sla_deadline_unix,
+            scheduler_notes: task.scheduler_notes,
+            slash_proposal_digest: task.slash_proposal_digest,
+            slash_proposal_bytes: task.slash_proposal_bytes,
+            lease: task.lease.map(StoredRepairTaskLease::from_lease),
+            attempts: task.attempts,
+            next_attempt_after_unix: task.next_attempt_after_unix,
+            events: task.events,
+        }
+    }
+
+    fn into_internal(self) -> RepairTaskInternal {
+        RepairTaskInternal {
+            revision: self.revision,
+            report: self.report,
+            state: self.state,
+            sla_deadline_unix: self.sla_deadline_unix,
+            scheduler_notes: self.scheduler_notes,
+            slash_proposal_digest: self.slash_proposal_digest,
+            slash_proposal_bytes: self.slash_proposal_bytes,
+            lease: self.lease.map(StoredRepairTaskLease::into_lease),
+            idempotency: RepairTaskIdempotency::new(DEFAULT_IDEMPOTENCY_CACHE_SIZE),
+            attempts: self.attempts,
+            next_attempt_after_unix: self.next_attempt_after_unix,
+            events: self.events,
         }
     }
 }
 
-impl RepairStore for InMemoryRepairStore {
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct StoredRepairTaskLease {
+    worker_id: String,
+    last_heartbeat_unix: u64,
+    expires_at_unix: u64,
+}
+
+impl StoredRepairTaskLease {
+    fn from_lease(lease: RepairTaskLease) -> Self {
+        Self {
+            worker_id: lease.worker_id,
+            last_heartbeat_unix: lease.last_heartbeat_unix,
+            expires_at_unix: lease.expires_at_unix,
+        }
+    }
+
+    fn into_lease(self) -> RepairTaskLease {
+        RepairTaskLease {
+            worker_id: self.worker_id,
+            last_heartbeat_unix: self.last_heartbeat_unix,
+            expires_at_unix: self.expires_at_unix,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RepairStoreState {
+    tasks: BTreeMap<String, RepairTaskInternal>,
+    por_history: BTreeMap<u64, PorHistoryEntry>,
+    next_por_history_id: u64,
+    next_audit_sequence: u64,
+}
+
+impl RepairStoreState {
+    fn new() -> Self {
+        Self {
+            tasks: BTreeMap::new(),
+            por_history: BTreeMap::new(),
+            next_por_history_id: 1,
+            next_audit_sequence: 1,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FileRepairStore {
+    path: PathBuf,
+    state: RwLock<RepairStoreState>,
+}
+
+impl FileRepairStore {
+    fn load_or_new(path: PathBuf) -> Result<Self, RepairStoreError> {
+        let state = if path.exists() {
+            let bytes = fs::read(&path).map_err(|err| {
+                RepairStoreError::Other(format!("failed to read repair store: {err}"))
+            })?;
+            let snapshot: RepairStoreSnapshot =
+                norito::decode_from_bytes(&bytes).map_err(|err| {
+                    RepairStoreError::Other(format!("failed to decode repair store: {err}"))
+                })?;
+            snapshot.into_state()?
+        } else {
+            RepairStoreState::new()
+        };
+        Ok(Self {
+            path,
+            state: RwLock::new(state),
+        })
+    }
+
+    fn persist(&self, state: &RepairStoreState) -> Result<(), RepairStoreError> {
+        let snapshot = RepairStoreSnapshot::from_state(state);
+        let bytes = norito::to_bytes(&snapshot).map_err(|err| {
+            RepairStoreError::Other(format!("failed to encode repair store: {err}"))
+        })?;
+        write_atomic(&self.path, &bytes).map_err(|err| {
+            RepairStoreError::Other(format!("failed to persist repair store: {err}"))
+        })
+    }
+}
+
+fn write_atomic(path: &Path, data: &[u8]) -> Result<(), std::io::Error> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let counter = REPAIR_STORE_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = temp_path_for_atomic(path, std::process::id(), counter);
+    fs::write(&tmp_path, data)?;
+    fs::rename(tmp_path, path)?;
+    Ok(())
+}
+
+fn archive_corrupt_store(path: &Path) -> Result<(), io::Error> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let counter = REPAIR_STORE_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let suffix = format!("corrupt-{pid}-{counter}");
+    let archive_path = path.with_added_extension(&suffix);
+    fs::rename(path, archive_path)?;
+    Ok(())
+}
+
+fn temp_path_for_atomic(path: &Path, pid: u32, counter: u64) -> PathBuf {
+    let suffix = format!("{REPAIR_STORE_TMP_EXT}-{pid}-{counter}");
+    let candidate = path.with_added_extension(&suffix);
+    match candidate.file_name().and_then(|name| name.to_str()) {
+        Some(name) => candidate.with_file_name(format!(".{name}")),
+        None => candidate,
+    }
+}
+
+impl RepairStore for FileRepairStore {
     fn next_por_history_id(&self) -> u64 {
-        self.next_history_id.fetch_add(1, Ordering::Relaxed)
+        let mut guard = self.state.write().expect("repair store poisoned");
+        let id = guard.next_por_history_id;
+        guard.next_por_history_id = guard.next_por_history_id.saturating_add(1);
+        if let Err(err) = self.persist(&guard) {
+            warn!(?err, "failed to persist repair store after por history id");
+        }
+        id
+    }
+
+    fn next_audit_sequence(&self) -> u64 {
+        let mut guard = self.state.write().expect("repair store poisoned");
+        let sequence = guard.next_audit_sequence;
+        guard.next_audit_sequence = guard.next_audit_sequence.saturating_add(1);
+        if let Err(err) = self.persist(&guard) {
+            warn!(?err, "failed to persist repair store after audit sequence");
+        }
+        sequence
     }
 
     fn record_por_history(&self, entry: PorHistoryEntry) -> Result<(), RepairStoreError> {
-        let mut guard = self.por_history.write().expect("por_history poisoned");
-        if guard.contains_key(&entry.id) {
+        let mut guard = self.state.write().expect("repair store poisoned");
+        if guard.por_history.contains_key(&entry.id) {
             return Err(RepairStoreError::Other(format!(
                 "por history id {} already stored",
                 entry.id
             )));
         }
-        guard.insert(entry.id, entry);
-        Ok(())
+        guard.por_history.insert(entry.id, entry);
+        self.persist(&guard)
     }
 
     fn por_history_entry(
         &self,
         por_history_id: u64,
     ) -> Result<Option<PorHistoryEntry>, RepairStoreError> {
-        let guard = self.por_history.read().expect("por_history poisoned");
-        Ok(guard.get(&por_history_id).cloned())
+        let guard = self.state.read().expect("repair store poisoned");
+        Ok(guard.por_history.get(&por_history_id).cloned())
     }
 
     fn insert_task(
         &self,
         task: RepairTaskInternal,
     ) -> Result<RepairStoreInsertResult, RepairStoreError> {
-        let mut guard = self.tasks.write().expect("repair tasks lock poisoned");
+        let mut guard = self.state.write().expect("repair store poisoned");
         let key = task.report.ticket_id.0.clone();
-        if let Some(existing) = guard.get(&key) {
+        if let Some(existing) = guard.tasks.get(&key) {
             return Ok(RepairStoreInsertResult::Existing(existing.clone()));
         }
-        guard.insert(key, task.clone());
+        guard.tasks.insert(key, task.clone());
+        self.persist(&guard)?;
         Ok(RepairStoreInsertResult::Inserted(task))
     }
 
@@ -157,8 +379,8 @@ impl RepairStore for InMemoryRepairStore {
         &self,
         ticket_id: &RepairTicketId,
     ) -> Result<Option<RepairTaskInternal>, RepairStoreError> {
-        let guard = self.tasks.read().expect("repair tasks lock poisoned");
-        Ok(guard.get(&ticket_id.0).cloned())
+        let guard = self.state.read().expect("repair store poisoned");
+        Ok(guard.tasks.get(&ticket_id.0).cloned())
     }
 
     fn compare_and_set_task(
@@ -167,24 +389,26 @@ impl RepairStore for InMemoryRepairStore {
         expected_revision: u64,
         task: RepairTaskInternal,
     ) -> Result<(), RepairStoreError> {
-        let mut guard = self.tasks.write().expect("repair tasks lock poisoned");
-        let existing = guard
-            .get(&ticket_id.0)
-            .ok_or_else(|| RepairStoreError::NotFound {
-                ticket_id: ticket_id.to_string(),
-            })?;
+        let mut guard = self.state.write().expect("repair store poisoned");
+        let existing =
+            guard
+                .tasks
+                .get(&ticket_id.0)
+                .ok_or_else(|| RepairStoreError::NotFound {
+                    ticket_id: ticket_id.to_string(),
+                })?;
         if existing.revision != expected_revision {
             return Err(RepairStoreError::Conflict {
                 ticket_id: ticket_id.to_string(),
             });
         }
-        guard.insert(ticket_id.0.clone(), task);
-        Ok(())
+        guard.tasks.insert(ticket_id.0.clone(), task);
+        self.persist(&guard)
     }
 
     fn list_tasks(&self) -> Result<Vec<RepairTaskInternal>, RepairStoreError> {
-        let guard = self.tasks.read().expect("repair tasks lock poisoned");
-        Ok(guard.values().cloned().collect())
+        let guard = self.state.read().expect("repair store poisoned");
+        Ok(guard.tasks.values().cloned().collect())
     }
 }
 
@@ -217,6 +441,17 @@ pub struct RepairTaskSnapshot {
     pub events: Vec<RepairTaskEventV1>,
 }
 
+/// Result of applying a repair task transition.
+#[derive(Debug, Clone)]
+pub struct RepairTaskUpdate {
+    /// Updated task record.
+    pub record: RepairTaskRecordV1,
+    /// Optional audit event emitted for the transition.
+    pub event: Option<RepairTaskEventV1>,
+    /// Optional slash proposal drafted during escalation.
+    pub slash_proposal: Option<RepairSlashProposalV1>,
+}
+
 /// Summary of actions taken by the repair watchdog.
 #[derive(Debug, Clone, Default)]
 pub struct RepairWatchdogReport {
@@ -224,6 +459,68 @@ pub struct RepairWatchdogReport {
     pub escalated: Vec<RepairSlashProposalV1>,
     /// Tickets re-queued by the watchdog.
     pub requeued: Vec<RepairTicketId>,
+    /// Events emitted during watchdog transitions.
+    pub events: Vec<RepairTaskEventV1>,
+    /// Number of lease expirations detected by the watchdog.
+    pub lease_expired: u32,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RepairBacklogStats {
+    oldest_age_secs: u64,
+    per_provider: BTreeMap<[u8; 32], u64>,
+}
+
+/// Summary of work performed by an automated repair worker tick.
+#[derive(Debug, Clone, Default)]
+pub struct RepairWorkerReport {
+    /// Tickets successfully claimed by the worker.
+    pub claimed: u32,
+    /// Tickets marked completed during the tick.
+    pub completed: u32,
+    /// Tickets marked failed (without escalation) during the tick.
+    pub failed: u32,
+    /// Tickets escalated during the tick.
+    pub escalated: u32,
+    /// Claim attempts skipped due to lease/backoff contention.
+    pub skipped: u32,
+    /// Unexpected errors encountered while running the worker.
+    pub errors: u32,
+}
+
+impl RepairWorkerReport {
+    pub(crate) fn record_claim(&mut self) {
+        self.claimed = self.claimed.saturating_add(1);
+    }
+
+    pub(crate) fn record_skipped(&mut self) {
+        self.skipped = self.skipped.saturating_add(1);
+    }
+
+    pub(crate) fn record_error(&mut self) {
+        self.errors = self.errors.saturating_add(1);
+    }
+
+    pub(crate) fn record_state(&mut self, state: &RepairTaskStateV1) {
+        match state {
+            RepairTaskStateV1::Completed(_) => {
+                self.completed = self.completed.saturating_add(1);
+            }
+            RepairTaskStateV1::Failed(_) => {
+                self.failed = self.failed.saturating_add(1);
+            }
+            RepairTaskStateV1::Escalated(_) => {
+                self.escalated = self.escalated.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct EscalationOutcome {
+    proposal: RepairSlashProposalV1,
+    event: Option<RepairTaskEventV1>,
 }
 
 impl RepairTaskFilters {
@@ -257,12 +554,51 @@ impl RepairTaskFilters {
 }
 
 fn build_repair_store(config: &RepairConfig) -> Arc<dyn RepairStore> {
-    if config.db_dsn().is_some() {
-        warn!("repair store database configured but Postgres backend is not wired yet");
-        // TODO: replace with Postgres repair store once the persistence layer is available.
+    let state_dir = match config.state_dir() {
+        Some(dir) => dir.clone(),
+        None => {
+            let fallback = default_repair_state_dir();
+            warn!(
+                path = ?fallback,
+                "repair store state_dir not configured; using temporary directory"
+            );
+            fallback
+        }
+    };
+    let path = state_dir.join(REPAIR_STORE_FILE_NAME);
+    match FileRepairStore::load_or_new(path.clone()) {
+        Ok(store) => Arc::new(store),
+        Err(err) => {
+            error!(?err, path = ?path, "failed to load repair store");
+            if let Err(archive_err) = archive_corrupt_store(&path) {
+                warn!(
+                    ?archive_err,
+                    path = ?path,
+                    "failed to archive corrupt repair store"
+                );
+            }
+            match FileRepairStore::load_or_new(path) {
+                Ok(store) => Arc::new(store),
+                Err(err) => {
+                    error!(?err, "failed to reinitialise repair store after archive");
+                    let fallback = default_repair_state_dir().join(REPAIR_STORE_FILE_NAME);
+                    Arc::new(
+                        FileRepairStore::load_or_new(fallback)
+                            .expect("repair store fallback should initialise"),
+                    )
+                }
+            }
+        }
     }
-    // TODO: thread event history retention limit via RepairConfig once config supports it.
-    Arc::new(InMemoryRepairStore::new())
+}
+
+fn default_repair_state_dir() -> PathBuf {
+    let pid = std::process::id();
+    let counter = REPAIR_STORE_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut dir = std::env::temp_dir();
+    dir.push("iroha-sorafs-repair");
+    dir.push(format!("pid-{pid}-{counter}"));
+    dir
 }
 
 impl RepairManager {
@@ -282,6 +618,12 @@ impl RepairManager {
             event_history_limit: DEFAULT_REPAIR_EVENT_HISTORY_LIMIT,
             config,
         }
+    }
+
+    /// Reserve the next audit sequence number for governance events.
+    #[must_use]
+    pub fn next_audit_sequence(&self) -> u64 {
+        self.store.next_audit_sequence()
     }
 
     /// Register a PoR verdict; returns a history identifier when the verdict recorded failures.
@@ -312,7 +654,7 @@ impl RepairManager {
         );
         if let Err(err) = self.store.record_por_history(entry) {
             error!(?err, history_id, "failed to persist PoR repair history");
-            // TODO: propagate store errors once durable repair persistence is available.
+            // TODO: propagate store errors once PoR ingestion is permitted to fail hard.
             return None;
         }
         Some(history_id)
@@ -323,6 +665,14 @@ impl RepairManager {
         &self,
         report: RepairReportV1,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        Ok(self.enqueue_report_with_event(report)?.record)
+    }
+
+    /// Enqueue a repair report submitted by an auditor, returning any emitted event.
+    pub fn enqueue_report_with_event(
+        &self,
+        report: RepairReportV1,
+    ) -> Result<RepairTaskUpdate, RepairSchedulerError> {
         report
             .validate()
             .map_err(RepairSchedulerError::InvalidReport)?;
@@ -351,7 +701,7 @@ impl RepairManager {
             revision: 0,
             events: Vec::new(),
         };
-        internal.push_event(
+        let event = internal.push_event(
             RepairTaskStatusV1::Queued,
             internal.report.submitted_at_unix,
             Some(internal.report.auditor_account.clone()),
@@ -363,19 +713,29 @@ impl RepairManager {
             self.event_history_limit,
         );
         let insert = self.store.insert_task(internal)?;
-        let record = match insert {
-            RepairStoreInsertResult::Inserted(inserted) => inserted.to_record(),
+        let (record, event) = match insert {
+            RepairStoreInsertResult::Inserted(inserted) => (inserted.to_record(), event),
             RepairStoreInsertResult::Existing(existing) => {
                 if existing.report.evidence != report_evidence {
                     return Err(RepairSchedulerError::DuplicateTicket { ticket_id });
                 }
-                return Ok(existing.to_record());
+                return Ok(RepairTaskUpdate {
+                    record: existing.to_record(),
+                    event: None,
+                    slash_proposal: None,
+                });
             }
         };
 
-        global_sorafs_repair_otel().record_task_transition("queued");
-        global_or_default().inc_sorafs_repair_tasks("queued");
-        Ok(record)
+        if event.is_some() {
+            global_sorafs_repair_otel().record_task_transition("queued");
+            global_or_default().inc_sorafs_repair_tasks("queued");
+        }
+        Ok(RepairTaskUpdate {
+            record,
+            event,
+            slash_proposal: None,
+        })
     }
 
     /// Submit a slash proposal associated with an escalated repair.
@@ -383,10 +743,20 @@ impl RepairManager {
         &self,
         proposal: RepairSlashProposalV1,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        Ok(self.submit_slash_proposal_with_event(proposal)?.record)
+    }
+
+    /// Submit a slash proposal associated with an escalated repair, returning any event.
+    pub fn submit_slash_proposal_with_event(
+        &self,
+        proposal: RepairSlashProposalV1,
+    ) -> Result<RepairTaskUpdate, RepairSchedulerError> {
         proposal
             .validate()
             .map_err(RepairSchedulerError::InvalidSlashProposal)?;
+        let mut event = None;
         let task = self.update_task_with_retry(&proposal.ticket_id, |task| {
+            event = None;
             if task.report.evidence.manifest_digest != proposal.manifest_digest {
                 return Err(RepairSchedulerError::ManifestMismatch {
                     ticket_id: proposal.ticket_id.to_string(),
@@ -420,7 +790,7 @@ impl RepairManager {
             task.slash_proposal_digest = Some(digest);
             task.slash_proposal_bytes = Some(buf);
             task.next_attempt_after_unix = None;
-            task.push_event(
+            event = task.push_event(
                 RepairTaskStatusV1::Escalated,
                 proposal.submitted_at_unix,
                 Some(proposal.auditor_account.clone()),
@@ -430,13 +800,19 @@ impl RepairManager {
             Ok(())
         })?;
 
-        let queued_at = queued_at_unix(&task.state);
-        global_sorafs_repair_otel().record_task_transition("escalated");
-        self.observe_latency(queued_at, proposal.submitted_at_unix, "escalated");
-        global_sorafs_repair_otel().record_slash_proposal("submitted");
-        global_or_default().inc_sorafs_repair_tasks("escalated");
-        global_or_default().inc_sorafs_slash_proposals("submitted");
-        Ok(task.to_record())
+        if event.is_some() {
+            let queued_at = queued_at_unix(&task.state);
+            global_sorafs_repair_otel().record_task_transition("escalated");
+            self.observe_latency(queued_at, proposal.submitted_at_unix, "escalated");
+            global_sorafs_repair_otel().record_slash_proposal("submitted");
+            global_or_default().inc_sorafs_repair_tasks("escalated");
+            global_or_default().inc_sorafs_slash_proposals("submitted");
+        }
+        Ok(RepairTaskUpdate {
+            record: task.to_record(),
+            event,
+            slash_proposal: Some(proposal),
+        })
     }
 
     /// Fetch all repair tasks associated with `manifest_digest`.
@@ -481,6 +857,26 @@ impl RepairManager {
             .collect();
         sort_repair_task_snapshots(&mut snapshots);
         snapshots
+    }
+
+    fn backlog_stats(&self, now_unix: u64) -> Result<RepairBacklogStats, RepairStoreError> {
+        let tasks = self.store.list_tasks()?;
+        Ok(compute_backlog_stats(&tasks, now_unix))
+    }
+
+    fn record_backlog_metrics(&self, stats: &RepairBacklogStats) {
+        let mut provider_depths = Vec::with_capacity(stats.per_provider.len());
+        for (provider_id, depth) in &stats.per_provider {
+            provider_depths.push((hex::encode(provider_id), *depth));
+        }
+        global_or_default().record_sorafs_repair_queue_depths(&provider_depths);
+        global_or_default()
+            .set_sorafs_repair_backlog_oldest_age_seconds(stats.oldest_age_secs);
+        let otel = global_sorafs_repair_otel();
+        otel.record_backlog_oldest_age_seconds(stats.oldest_age_secs as f64);
+        for (provider_hex, depth) in provider_depths {
+            otel.record_queue_depth(depth, &provider_hex);
+        }
     }
 
     /// List claimable repair tasks ordered by priority.
@@ -571,9 +967,11 @@ impl RepairManager {
                 && now_unix >= deadline
             {
                 let mut drafted = None;
+                let mut event = None;
                 let mut escalated = false;
                 let rationale = format!("SLA deadline {deadline} breached at {now_unix}");
                 let updated = self.update_task_with_retry(&ticket_id, |task| {
+                    event = None;
                     if matches!(
                         repair_task_status(&task.state),
                         RepairTaskStatusV1::Completed | RepairTaskStatusV1::Escalated
@@ -586,15 +984,19 @@ impl RepairManager {
                     if now_unix < task_deadline {
                         return Ok(());
                     }
-                    let proposal =
+                    let escalation =
                         self.apply_escalation(task, now_unix, rationale.clone(), "scheduler")?;
-                    drafted = Some(proposal);
+                    drafted = Some(escalation.proposal);
+                    event = escalation.event;
                     escalated = true;
                     Ok(())
                 })?;
                 if escalated {
                     if let Some(proposal) = drafted {
                         report.escalated.push(proposal);
+                    }
+                    if let Some(event) = event {
+                        report.events.push(event);
                     }
                     let queued_at = queued_at_unix(&updated.state);
                     global_sorafs_repair_otel().record_task_transition("escalated");
@@ -612,8 +1014,10 @@ impl RepairManager {
             {
                 let mut requeued = false;
                 let mut drafted = None;
+                let mut event = None;
                 let reason = "lease expired; requeued".to_string();
                 let updated = self.update_task_with_retry(&ticket_id, |task| {
+                    event = None;
                     let lease = match &task.lease {
                         Some(lease) => lease,
                         None => return Ok(()),
@@ -628,9 +1032,10 @@ impl RepairManager {
                             "lease expired; attempts {}/{} exceeded",
                             task.attempts, max_attempts
                         );
-                        let proposal =
+                        let escalation =
                             self.apply_escalation(task, now_unix, rationale, "scheduler")?;
-                        drafted = Some(proposal);
+                        drafted = Some(escalation.proposal);
+                        event = escalation.event;
                         return Ok(());
                     }
                     let queued_at = queued_at_unix(&task.state);
@@ -647,7 +1052,7 @@ impl RepairManager {
                     task.scheduler_notes = Some(reason.clone());
                     task.lease = None;
                     task.next_attempt_after_unix = Some(retry_after);
-                    task.push_event(
+                    event = task.push_event(
                         RepairTaskStatusV1::Queued,
                         now_unix,
                         Some("scheduler".into()),
@@ -659,23 +1064,36 @@ impl RepairManager {
                 })?;
                 if let Some(proposal) = drafted {
                     report.escalated.push(proposal);
+                    if let Some(event) = event {
+                        report.events.push(event);
+                    }
                     let queued_at = queued_at_unix(&updated.state);
                     global_sorafs_repair_otel().record_task_transition("escalated");
+                    global_sorafs_repair_otel().record_lease_expired("escalated");
                     global_or_default().inc_sorafs_repair_tasks("escalated");
+                    global_or_default().inc_sorafs_repair_lease_expired("escalated");
                     global_sorafs_repair_otel().record_slash_proposal("drafted");
                     global_or_default().inc_sorafs_slash_proposals("drafted");
                     self.observe_latency(queued_at, now_unix, "escalated");
                 } else if requeued {
                     report.requeued.push(ticket_id.clone());
+                    report.lease_expired = report.lease_expired.saturating_add(1);
+                    if let Some(event) = event {
+                        report.events.push(event);
+                    }
                     global_sorafs_repair_otel().record_task_transition("queued");
+                    global_sorafs_repair_otel().record_lease_expired("requeued");
                     global_or_default().inc_sorafs_repair_tasks("queued");
+                    global_or_default().inc_sorafs_repair_lease_expired("requeued");
                 }
             }
 
             if matches!(task.state, RepairTaskStateV1::Failed(_)) {
                 let mut requeued = false;
                 let mut drafted = None;
+                let mut event = None;
                 let updated = self.update_task_with_retry(&ticket_id, |task| {
+                    event = None;
                     let failed_state = match &task.state {
                         RepairTaskStateV1::Failed(state) => state,
                         _ => return Ok(()),
@@ -686,9 +1104,10 @@ impl RepairManager {
                             "attempts {}/{} exceeded after failure",
                             task.attempts, max_attempts
                         );
-                        let proposal =
+                        let escalation =
                             self.apply_escalation(task, now_unix, rationale, "scheduler")?;
-                        drafted = Some(proposal);
+                        drafted = Some(escalation.proposal);
+                        event = escalation.event;
                         return Ok(());
                     }
                     if let Some(retry_after) = task.next_attempt_after_unix
@@ -705,7 +1124,7 @@ impl RepairManager {
                     task.scheduler_notes = Some(reason.clone());
                     task.lease = None;
                     task.next_attempt_after_unix = None;
-                    task.push_event(
+                    event = task.push_event(
                         RepairTaskStatusV1::Queued,
                         now_unix,
                         Some("scheduler".into()),
@@ -717,6 +1136,9 @@ impl RepairManager {
                 })?;
                 if let Some(proposal) = drafted {
                     report.escalated.push(proposal);
+                    if let Some(event) = event {
+                        report.events.push(event);
+                    }
                     let queued_at = queued_at_unix(&updated.state);
                     global_sorafs_repair_otel().record_task_transition("escalated");
                     global_or_default().inc_sorafs_repair_tasks("escalated");
@@ -725,9 +1147,19 @@ impl RepairManager {
                     self.observe_latency(queued_at, now_unix, "escalated");
                 } else if requeued {
                     report.requeued.push(ticket_id.clone());
+                    if let Some(event) = event {
+                        report.events.push(event);
+                    }
                     global_sorafs_repair_otel().record_task_transition("queued");
                     global_or_default().inc_sorafs_repair_tasks("queued");
                 }
+            }
+        }
+
+        match self.backlog_stats(now_unix) {
+            Ok(stats) => self.record_backlog_metrics(&stats),
+            Err(err) => {
+                warn!(?err, "failed to refresh repair backlog metrics");
             }
         }
 
@@ -767,12 +1199,26 @@ impl RepairManager {
         started_at_unix: u64,
         repair_agent: Option<String>,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        Ok(self
+            .mark_in_progress_with_event(ticket_id, started_at_unix, repair_agent)?
+            .record)
+    }
+
+    /// Mark a repair ticket as actively being addressed, returning any event.
+    pub fn mark_in_progress_with_event(
+        &self,
+        ticket_id: &RepairTicketId,
+        started_at_unix: u64,
+        repair_agent: Option<String>,
+    ) -> Result<RepairTaskUpdate, RepairSchedulerError> {
         if started_at_unix == 0 {
             return Err(RepairSchedulerError::InvalidTimestamp {
                 ticket_id: ticket_id.to_string(),
             });
         }
+        let mut event = None;
         let task = self.update_task_with_retry(ticket_id, |task| {
+            event = None;
             let queued_at = queued_at_unix(&task.state);
             if started_at_unix <= queued_at {
                 return Err(RepairSchedulerError::InvalidTimestamp {
@@ -788,7 +1234,7 @@ impl RepairManager {
                     });
                     task.lease = None;
                     task.next_attempt_after_unix = None;
-                    task.push_event(
+                    event = task.push_event(
                         RepairTaskStatusV1::InProgress,
                         started_at_unix,
                         repair_agent.clone(),
@@ -805,9 +1251,15 @@ impl RepairManager {
             }
             Ok(())
         })?;
-        global_sorafs_repair_otel().record_task_transition("in_progress");
-        global_or_default().inc_sorafs_repair_tasks("in_progress");
-        Ok(task.to_record())
+        if event.is_some() {
+            global_sorafs_repair_otel().record_task_transition("in_progress");
+            global_or_default().inc_sorafs_repair_tasks("in_progress");
+        }
+        Ok(RepairTaskUpdate {
+            record: task.to_record(),
+            event,
+            slash_proposal: None,
+        })
     }
 
     /// Mark a repair ticket as successfully resolved.
@@ -817,12 +1269,26 @@ impl RepairManager {
         completed_at_unix: u64,
         resolution_notes: Option<String>,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        Ok(self
+            .mark_completed_with_event(ticket_id, completed_at_unix, resolution_notes)?
+            .record)
+    }
+
+    /// Mark a repair ticket as successfully resolved, returning any event.
+    pub fn mark_completed_with_event(
+        &self,
+        ticket_id: &RepairTicketId,
+        completed_at_unix: u64,
+        resolution_notes: Option<String>,
+    ) -> Result<RepairTaskUpdate, RepairSchedulerError> {
         if completed_at_unix == 0 {
             return Err(RepairSchedulerError::InvalidTimestamp {
                 ticket_id: ticket_id.to_string(),
             });
         }
+        let mut event = None;
         let task = self.update_task_with_retry(ticket_id, |task| {
+            event = None;
             let queued_at = queued_at_unix(&task.state);
             if completed_at_unix <= queued_at {
                 return Err(RepairSchedulerError::InvalidTimestamp {
@@ -850,8 +1316,7 @@ impl RepairManager {
             task.scheduler_notes = resolution_notes.clone();
             task.lease = None;
             task.next_attempt_after_unix = None;
-            task.next_attempt_after_unix = None;
-            task.push_event(
+            event = task.push_event(
                 RepairTaskStatusV1::Completed,
                 completed_at_unix,
                 None,
@@ -861,10 +1326,16 @@ impl RepairManager {
             Ok(())
         })?;
         let queued_at = queued_at_unix(&task.state);
-        global_sorafs_repair_otel().record_task_transition("completed");
-        global_or_default().inc_sorafs_repair_tasks("completed");
-        self.observe_latency(queued_at, completed_at_unix, "completed");
-        Ok(task.to_record())
+        if event.is_some() {
+            global_sorafs_repair_otel().record_task_transition("completed");
+            global_or_default().inc_sorafs_repair_tasks("completed");
+            self.observe_latency(queued_at, completed_at_unix, "completed");
+        }
+        Ok(RepairTaskUpdate {
+            record: task.to_record(),
+            event,
+            slash_proposal: None,
+        })
     }
 
     /// Mark a repair ticket as failed after an unsuccessful attempt.
@@ -874,13 +1345,30 @@ impl RepairManager {
         failed_at_unix: u64,
         reason: String,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        Ok(self
+            .mark_failed_with_event(ticket_id, failed_at_unix, reason)?
+            .record)
+    }
+
+    /// Mark a repair ticket as failed after an unsuccessful attempt, returning any event.
+    pub fn mark_failed_with_event(
+        &self,
+        ticket_id: &RepairTicketId,
+        failed_at_unix: u64,
+        reason: String,
+    ) -> Result<RepairTaskUpdate, RepairSchedulerError> {
         if failed_at_unix == 0 {
             return Err(RepairSchedulerError::InvalidTimestamp {
                 ticket_id: ticket_id.to_string(),
             });
         }
         let mut escalated = false;
+        let mut event = None;
+        let mut slash_proposal = None;
         let task = self.update_task_with_retry(ticket_id, |task| {
+            escalated = false;
+            event = None;
+            slash_proposal = None;
             let queued_at = queued_at_unix(&task.state);
             if failed_at_unix <= queued_at {
                 return Err(RepairSchedulerError::InvalidTimestamp {
@@ -894,8 +1382,10 @@ impl RepairManager {
                     "attempts {}/{} exceeded after failure",
                     task.attempts, max_attempts
                 );
-                let _proposal =
+                let escalation =
                     self.apply_escalation(task, failed_at_unix, rationale, "scheduler")?;
+                slash_proposal = Some(escalation.proposal);
+                event = escalation.event;
                 escalated = true;
                 return Ok(());
             }
@@ -909,7 +1399,7 @@ impl RepairManager {
             task.scheduler_notes = Some(reason.clone());
             task.lease = None;
             task.next_attempt_after_unix = Some(retry_after);
-            task.push_event(
+            event = task.push_event(
                 RepairTaskStatusV1::Failed,
                 failed_at_unix,
                 None,
@@ -919,18 +1409,24 @@ impl RepairManager {
             Ok(())
         })?;
         let queued_at = queued_at_unix(&task.state);
-        if escalated {
-            global_sorafs_repair_otel().record_task_transition("escalated");
-            global_or_default().inc_sorafs_repair_tasks("escalated");
-            global_sorafs_repair_otel().record_slash_proposal("drafted");
-            global_or_default().inc_sorafs_slash_proposals("drafted");
-            self.observe_latency(queued_at, failed_at_unix, "escalated");
-        } else {
-            global_sorafs_repair_otel().record_task_transition("failed");
-            global_or_default().inc_sorafs_repair_tasks("failed");
-            self.observe_latency(queued_at, failed_at_unix, "failed");
+        if event.is_some() {
+            if escalated {
+                global_sorafs_repair_otel().record_task_transition("escalated");
+                global_or_default().inc_sorafs_repair_tasks("escalated");
+                global_sorafs_repair_otel().record_slash_proposal("drafted");
+                global_or_default().inc_sorafs_slash_proposals("drafted");
+                self.observe_latency(queued_at, failed_at_unix, "escalated");
+            } else {
+                global_sorafs_repair_otel().record_task_transition("failed");
+                global_or_default().inc_sorafs_repair_tasks("failed");
+                self.observe_latency(queued_at, failed_at_unix, "failed");
+            }
         }
-        Ok(task.to_record())
+        Ok(RepairTaskUpdate {
+            record: task.to_record(),
+            event,
+            slash_proposal,
+        })
     }
 
     /// Claim a repair ticket for a worker.
@@ -941,6 +1437,19 @@ impl RepairManager {
         claimed_at_unix: u64,
         idempotency_key: &str,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        Ok(self
+            .claim_ticket_with_event(ticket_id, worker_id, claimed_at_unix, idempotency_key)?
+            .record)
+    }
+
+    /// Claim a repair ticket for a worker, returning any event.
+    pub fn claim_ticket_with_event(
+        &self,
+        ticket_id: &RepairTicketId,
+        worker_id: &str,
+        claimed_at_unix: u64,
+        idempotency_key: &str,
+    ) -> Result<RepairTaskUpdate, RepairSchedulerError> {
         ensure_idempotency_key(idempotency_key, ticket_id)?;
         ensure_worker_field(worker_id, "worker_id", MAX_WORKER_ID_BYTES, ticket_id)?;
         if claimed_at_unix == 0 {
@@ -961,7 +1470,11 @@ impl RepairManager {
                 "claim",
                 ticket_id,
             )? {
-                return Ok(record);
+                return Ok(RepairTaskUpdate {
+                    record,
+                    event: None,
+                    slash_proposal: None,
+                });
             }
 
             match &task.state {
@@ -1017,7 +1530,7 @@ impl RepairManager {
                 expires_at_unix: expires_at,
             });
             task.next_attempt_after_unix = None;
-            task.push_event(
+            let event = task.push_event(
                 RepairTaskStatusV1::InProgress,
                 claimed_at_unix,
                 Some(worker_id.to_string()),
@@ -1037,9 +1550,15 @@ impl RepairManager {
                 .compare_and_set_task(ticket_id, expected_revision, task)
             {
                 Ok(()) => {
-                    global_sorafs_repair_otel().record_task_transition("in_progress");
-                    global_or_default().inc_sorafs_repair_tasks("in_progress");
-                    return Ok(record);
+                    if event.is_some() {
+                        global_sorafs_repair_otel().record_task_transition("in_progress");
+                        global_or_default().inc_sorafs_repair_tasks("in_progress");
+                    }
+                    return Ok(RepairTaskUpdate {
+                        record,
+                        event,
+                        slash_proposal: None,
+                    });
                 }
                 Err(RepairStoreError::Conflict { .. }) => continue,
                 Err(err) => return Err(err.into()),
@@ -1150,6 +1669,26 @@ impl RepairManager {
         resolution_notes: Option<String>,
         idempotency_key: &str,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        Ok(self
+            .complete_ticket_with_event(
+                ticket_id,
+                worker_id,
+                completed_at_unix,
+                resolution_notes,
+                idempotency_key,
+            )?
+            .record)
+    }
+
+    /// Mark a claimed repair ticket as successfully resolved, returning any event.
+    pub fn complete_ticket_with_event(
+        &self,
+        ticket_id: &RepairTicketId,
+        worker_id: &str,
+        completed_at_unix: u64,
+        resolution_notes: Option<String>,
+        idempotency_key: &str,
+    ) -> Result<RepairTaskUpdate, RepairSchedulerError> {
         ensure_idempotency_key(idempotency_key, ticket_id)?;
         ensure_worker_field(worker_id, "worker_id", MAX_WORKER_ID_BYTES, ticket_id)?;
         ensure_optional_field(
@@ -1176,7 +1715,11 @@ impl RepairManager {
                 "complete",
                 ticket_id,
             )? {
-                return Ok(record);
+                return Ok(RepairTaskUpdate {
+                    record,
+                    event: None,
+                    slash_proposal: None,
+                });
             }
 
             let (queued_at, started_at) = match &task.state {
@@ -1224,7 +1767,7 @@ impl RepairManager {
             });
             task.scheduler_notes = resolution_notes.clone();
             task.lease = None;
-            task.push_event(
+            let event = task.push_event(
                 RepairTaskStatusV1::Completed,
                 completed_at_unix,
                 Some(worker_id.to_string()),
@@ -1244,10 +1787,16 @@ impl RepairManager {
                 .compare_and_set_task(ticket_id, expected_revision, task)
             {
                 Ok(()) => {
-                    global_sorafs_repair_otel().record_task_transition("completed");
-                    global_or_default().inc_sorafs_repair_tasks("completed");
-                    self.observe_latency(queued_at, completed_at_unix, "completed");
-                    return Ok(record);
+                    if event.is_some() {
+                        global_sorafs_repair_otel().record_task_transition("completed");
+                        global_or_default().inc_sorafs_repair_tasks("completed");
+                        self.observe_latency(queued_at, completed_at_unix, "completed");
+                    }
+                    return Ok(RepairTaskUpdate {
+                        record,
+                        event,
+                        slash_proposal: None,
+                    });
                 }
                 Err(RepairStoreError::Conflict { .. }) => continue,
                 Err(err) => return Err(err.into()),
@@ -1267,6 +1816,26 @@ impl RepairManager {
         reason: String,
         idempotency_key: &str,
     ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        Ok(self
+            .fail_ticket_with_event(
+                ticket_id,
+                worker_id,
+                failed_at_unix,
+                reason,
+                idempotency_key,
+            )?
+            .record)
+    }
+
+    /// Mark a claimed repair ticket as failed, returning any event.
+    pub fn fail_ticket_with_event(
+        &self,
+        ticket_id: &RepairTicketId,
+        worker_id: &str,
+        failed_at_unix: u64,
+        reason: String,
+        idempotency_key: &str,
+    ) -> Result<RepairTaskUpdate, RepairSchedulerError> {
         ensure_idempotency_key(idempotency_key, ticket_id)?;
         ensure_worker_field(worker_id, "worker_id", MAX_WORKER_ID_BYTES, ticket_id)?;
         ensure_worker_field(&reason, "reason", MAX_REPAIR_NOTES_BYTES, ticket_id)?;
@@ -1288,7 +1857,11 @@ impl RepairManager {
                 "fail",
                 ticket_id,
             )? {
-                return Ok(record);
+                return Ok(RepairTaskUpdate {
+                    record,
+                    event: None,
+                    slash_proposal: None,
+                });
             }
 
             let (queued_at, started_at) = match &task.state {
@@ -1330,13 +1903,17 @@ impl RepairManager {
 
             task.attempts = task.attempts.saturating_add(1);
             let max_attempts = self.config.max_attempts();
+            let mut event = None;
+            let mut slash_proposal = None;
             if task.attempts >= max_attempts {
                 let rationale = format!(
                     "attempts {}/{} exceeded after failure",
                     task.attempts, max_attempts
                 );
-                let _proposal =
+                let escalation =
                     self.apply_escalation(&mut task, failed_at_unix, rationale, "scheduler")?;
+                event = escalation.event;
+                slash_proposal = Some(escalation.proposal);
             } else {
                 let retry_after = next_attempt_after_unix(
                     failed_at_unix,
@@ -1352,7 +1929,7 @@ impl RepairManager {
                 task.scheduler_notes = Some(reason.clone());
                 task.lease = None;
                 task.next_attempt_after_unix = Some(retry_after);
-                task.push_event(
+                event = task.push_event(
                     RepairTaskStatusV1::Failed,
                     failed_at_unix,
                     Some(worker_id.to_string()),
@@ -1373,18 +1950,24 @@ impl RepairManager {
                 .compare_and_set_task(ticket_id, expected_revision, task)
             {
                 Ok(()) => {
-                    if matches!(record.state, RepairTaskStateV1::Escalated(..)) {
-                        global_sorafs_repair_otel().record_task_transition("escalated");
-                        global_or_default().inc_sorafs_repair_tasks("escalated");
-                        global_sorafs_repair_otel().record_slash_proposal("drafted");
-                        global_or_default().inc_sorafs_slash_proposals("drafted");
-                        self.observe_latency(queued_at, failed_at_unix, "escalated");
-                    } else {
-                        global_sorafs_repair_otel().record_task_transition("failed");
-                        global_or_default().inc_sorafs_repair_tasks("failed");
-                        self.observe_latency(queued_at, failed_at_unix, "failed");
+                    if event.is_some() {
+                        if matches!(record.state, RepairTaskStateV1::Escalated(..)) {
+                            global_sorafs_repair_otel().record_task_transition("escalated");
+                            global_or_default().inc_sorafs_repair_tasks("escalated");
+                            global_sorafs_repair_otel().record_slash_proposal("drafted");
+                            global_or_default().inc_sorafs_slash_proposals("drafted");
+                            self.observe_latency(queued_at, failed_at_unix, "escalated");
+                        } else {
+                            global_sorafs_repair_otel().record_task_transition("failed");
+                            global_or_default().inc_sorafs_repair_tasks("failed");
+                            self.observe_latency(queued_at, failed_at_unix, "failed");
+                        }
                     }
-                    return Ok(record);
+                    return Ok(RepairTaskUpdate {
+                        record,
+                        event,
+                        slash_proposal,
+                    });
                 }
                 Err(RepairStoreError::Conflict { .. }) => continue,
                 Err(err) => return Err(err.into()),
@@ -1463,7 +2046,7 @@ impl RepairManager {
         escalated_at_unix: u64,
         rationale: String,
         actor: &'static str,
-    ) -> Result<RepairSlashProposalV1, RepairSchedulerError> {
+    ) -> Result<EscalationOutcome, RepairSchedulerError> {
         ensure_transition_allowed(&task.state, "escalated", &task.report.ticket_id)?;
         let queued_at = queued_at_unix(&task.state);
         if escalated_at_unix <= queued_at {
@@ -1502,14 +2085,14 @@ impl RepairManager {
         task.slash_proposal_bytes = Some(bytes);
         task.lease = None;
         task.next_attempt_after_unix = None;
-        task.push_event(
+        let event = task.push_event(
             RepairTaskStatusV1::Escalated,
             escalated_at_unix,
             Some(actor.to_string()),
             Some(rationale),
             self.event_history_limit,
         );
-        Ok(proposal)
+        Ok(EscalationOutcome { proposal, event })
     }
 
     fn observe_latency(&self, queued_at: u64, finished_at: u64, outcome: &'static str) {
@@ -1654,13 +2237,15 @@ impl RepairTaskInternal {
         actor: Option<String>,
         message: Option<String>,
         limit: usize,
-    ) {
+    ) -> Option<RepairTaskEventV1> {
         if limit == 0 {
-            return;
+            return None;
         }
         let event = RepairTaskEventV1 {
             version: REPAIR_TASK_EVENT_VERSION_V1,
             ticket_id: self.report.ticket_id.clone(),
+            manifest_digest: self.report.evidence.manifest_digest,
+            provider_id: self.report.evidence.provider_id,
             status,
             occurred_at_unix,
             actor,
@@ -1672,18 +2257,18 @@ impl RepairTaskInternal {
                 ticket_id = %self.report.ticket_id,
                 "skipping invalid repair task event"
             );
-            return;
+            return None;
         }
-        self.events.push(event);
+        self.events.push(event.clone());
         if self.events.len() > limit {
             let excess = self.events.len().saturating_sub(limit);
             self.events.drain(0..excess);
         }
+        Some(event)
     }
 }
 
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct PorHistoryEntry {
     id: u64,
     manifest_digest: [u8; 32],
@@ -1776,6 +2361,32 @@ fn sort_repair_task_snapshots(snapshots: &mut [RepairTaskSnapshot]) {
             })
             .then_with(|| left.record.ticket_id.0.cmp(&right.record.ticket_id.0))
     });
+}
+
+fn compute_backlog_stats(tasks: &[RepairTaskInternal], now_unix: u64) -> RepairBacklogStats {
+    if now_unix == 0 {
+        return RepairBacklogStats::default();
+    }
+    let mut stats = RepairBacklogStats::default();
+    let mut oldest_queued_at = None;
+
+    for task in tasks {
+        if let RepairTaskStateV1::Queued(state) = &task.state {
+            let entry = stats
+                .per_provider
+                .entry(task.report.evidence.provider_id)
+                .or_insert(0);
+            *entry = entry.saturating_add(1);
+            let queued_at = state.queued_at_unix;
+            oldest_queued_at = Some(oldest_queued_at.map_or(queued_at, |prev| prev.min(queued_at)));
+        }
+    }
+
+    if let Some(queued_at) = oldest_queued_at {
+        stats.oldest_age_secs = now_unix.saturating_sub(queued_at);
+    }
+
+    stats
 }
 
 fn ensure_transition_allowed(
@@ -2028,9 +2639,13 @@ fn checked_add_secs(
 mod tests {
     use super::*;
     use iroha_config::parameters::actual;
+    use std::fs;
+    use sorafs_manifest::por::{AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1};
     use sorafs_manifest::repair::{
-        REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, RepairCauseV1,
+        REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
+        RepairCauseV1,
     };
+    use tempfile::{TempDir, tempdir};
 
     fn report(
         ticket: &str,
@@ -2082,9 +2697,54 @@ mod tests {
         }
     }
 
+    fn manager_with_config(config: RepairConfig) -> (RepairManager, TempDir) {
+        let temp_dir = tempdir().expect("tempdir");
+        let config = config.with_default_state_dir(temp_dir.path());
+        let manager = RepairManager::new_with_config(config);
+        (manager, temp_dir)
+    }
+
+    fn manager_with_temp_dir() -> (RepairManager, TempDir) {
+        manager_with_config(RepairConfig::default())
+    }
+
+    #[test]
+    fn repair_store_persists_state_dir_snapshot() {
+        let (manager, temp_dir) = manager_with_temp_dir();
+        let report = report("REP-009", [0x21; 32], [0x22; 32], 1_700_000_010);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+
+        let verdict = AuditVerdictV1 {
+            version: AUDIT_VERDICT_VERSION_V1,
+            manifest_digest: report.evidence.manifest_digest,
+            provider_id: report.evidence.provider_id,
+            challenge_id: [0x33; 32],
+            proof_digest: None,
+            outcome: AuditOutcomeV1::Failed,
+            failure_reason: Some("fail".into()),
+            decided_at: report.submitted_at_unix + 1,
+            auditor_signatures: Vec::new(),
+            metadata: Vec::new(),
+        };
+        manager.register_por_verdict(&verdict, 1);
+
+        let store_path = temp_dir
+            .path()
+            .join("repair")
+            .join(REPAIR_STORE_FILE_NAME);
+        let bytes = fs::read(&store_path).expect("read repair store");
+        let snapshot: RepairStoreSnapshot =
+            norito::decode_from_bytes(&bytes).expect("decode repair store");
+        assert_eq!(snapshot.tasks.len(), 1);
+        assert_eq!(snapshot.por_history.len(), 1);
+        assert_eq!(snapshot.por_history[0].manifest_digest, verdict.manifest_digest);
+    }
+
     #[test]
     fn list_tasks_sorts_by_deadline_then_ticket() {
-        let manager = RepairManager::new();
+        let (manager, _temp_dir) = manager_with_temp_dir();
         let manifest = [0x11; 32];
         let provider = [0x22; 32];
 
@@ -2105,7 +2765,7 @@ mod tests {
 
     #[test]
     fn list_tasks_filters_by_provider_and_status() {
-        let manager = RepairManager::new();
+        let (manager, _temp_dir) = manager_with_temp_dir();
         let manifest = [0x33; 32];
         let provider_a = [0x01; 32];
         let provider_b = [0x02; 32];
@@ -2143,8 +2803,36 @@ mod tests {
     }
 
     #[test]
+    fn backlog_stats_tracks_oldest_and_per_provider() {
+        let (manager, _temp_dir) = manager_with_temp_dir();
+        let provider_a = [0x11; 32];
+        let provider_b = [0x22; 32];
+        let report_a = report("REP-310", [0x01; 32], provider_a, 1_000);
+        let report_b = report("REP-311", [0x02; 32], provider_b, 1_100);
+        let report_c = report("REP-312", [0x03; 32], provider_a, 1_200);
+
+        manager
+            .enqueue_report(report_a.clone())
+            .expect("enqueue report a");
+        manager
+            .enqueue_report(report_b.clone())
+            .expect("enqueue report b");
+        manager
+            .enqueue_report(report_c.clone())
+            .expect("enqueue report c");
+        manager
+            .claim_ticket(&report_c.ticket_id, "worker", 1_210, "claim-310")
+            .expect("claim report c");
+
+        let stats = manager.backlog_stats(1_300).expect("backlog stats");
+        assert_eq!(stats.oldest_age_secs, 300);
+        assert_eq!(stats.per_provider.get(&provider_a).copied(), Some(1));
+        assert_eq!(stats.per_provider.get(&provider_b).copied(), Some(1));
+    }
+
+    #[test]
     fn task_record_returns_ticket() {
-        let manager = RepairManager::new();
+        let (manager, _temp_dir) = manager_with_temp_dir();
         let report = report("REP-320", [0x12; 32], [0x34; 32], 1_700_100_000);
         manager
             .enqueue_report(report.clone())
@@ -2156,8 +2844,101 @@ mod tests {
     }
 
     #[test]
+    fn mark_in_progress_with_event_emits_transition() {
+        let (manager, _temp_dir) = manager_with_temp_dir();
+        let report = report("REP-321", [0x12; 32], [0x34; 32], 1_700_100_100);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+
+        let update = manager
+            .mark_in_progress_with_event(
+                &report.ticket_id,
+                report.submitted_at_unix + 5,
+                Some("agent#sora".into()),
+            )
+            .expect("mark in progress");
+        let event = update.event.expect("event emitted");
+        assert_eq!(event.status, RepairTaskStatusV1::InProgress);
+        assert_eq!(event.actor.as_deref(), Some("agent#sora"));
+    }
+
+    #[test]
+    fn mark_completed_with_event_emits_transition() {
+        let (manager, _temp_dir) = manager_with_temp_dir();
+        let report = report("REP-322", [0x13; 32], [0x35; 32], 1_700_100_200);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+        manager
+            .mark_in_progress(&report.ticket_id, report.submitted_at_unix + 10, None)
+            .expect("mark in progress");
+
+        let update = manager
+            .mark_completed_with_event(
+                &report.ticket_id,
+                report.submitted_at_unix + 40,
+                Some("ok".into()),
+            )
+            .expect("mark completed");
+        let event = update.event.expect("event emitted");
+        assert_eq!(event.status, RepairTaskStatusV1::Completed);
+        assert_eq!(event.message.as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn mark_failed_with_event_escalates_and_returns_slash() {
+        let actual = actual::SorafsRepair {
+            max_attempts: 1,
+            default_slash_penalty_nano: 12_000,
+            ..Default::default()
+        };
+        let (manager, _temp_dir) = manager_with_config(RepairConfig::from(&actual));
+        let report = report("REP-323", [0x14; 32], [0x36; 32], 1_700_100_300);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+
+        let update = manager
+            .mark_failed_with_event(
+                &report.ticket_id,
+                report.submitted_at_unix + 20,
+                "loss".into(),
+            )
+            .expect("mark failed");
+        assert!(matches!(update.record.state, RepairTaskStateV1::Escalated(..)));
+        let proposal = update.slash_proposal.expect("slash proposal");
+        assert_eq!(proposal.ticket_id, report.ticket_id);
+    }
+
+    #[test]
+    fn submit_slash_proposal_rejects_manifest_mismatch() {
+        let (manager, _temp_dir) = manager_with_temp_dir();
+        let report = report("REP-324", [0x21; 32], [0x31; 32], 1_700_100_350);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            provider_id: report.evidence.provider_id,
+            manifest_digest: [0xFF; 32],
+            auditor_account: report.auditor_account.clone(),
+            proposed_penalty_nano: 1_000,
+            submitted_at_unix: report.submitted_at_unix + 10,
+            rationale: "manifest mismatch".into(),
+        };
+
+        let err = manager
+            .submit_slash_proposal_with_event(proposal)
+            .expect_err("mismatched manifest should error");
+        assert!(matches!(err, RepairSchedulerError::ManifestMismatch { .. }));
+    }
+
+    #[test]
     fn claim_ticket_sets_in_progress_and_is_idempotent() {
-        let manager = RepairManager::new();
+        let (manager, _temp_dir) = manager_with_temp_dir();
         let report = report("REP-450", [0x44; 32], [0x55; 32], 1_700_000_000);
         manager
             .enqueue_report(report.clone())
@@ -2191,8 +2972,37 @@ mod tests {
     }
 
     #[test]
+    fn claim_ticket_with_event_emits_once() {
+        let (manager, _temp_dir) = manager_with_temp_dir();
+        let report = report("REP-451", [0x44; 32], [0x55; 32], 1_700_000_050);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+
+        let update = manager
+            .claim_ticket_with_event(
+                &report.ticket_id,
+                "worker-a",
+                report.submitted_at_unix + 10,
+                "key-1",
+            )
+            .expect("claim ticket");
+        assert!(update.event.is_some());
+
+        let replay = manager
+            .claim_ticket_with_event(
+                &report.ticket_id,
+                "worker-a",
+                report.submitted_at_unix + 10,
+                "key-1",
+            )
+            .expect("idempotent claim");
+        assert!(replay.event.is_none());
+    }
+
+    #[test]
     fn heartbeat_ticket_rejects_out_of_order_updates() {
-        let manager = RepairManager::new();
+        let (manager, _temp_dir) = manager_with_temp_dir();
         let report = report("REP-451", [0x66; 32], [0x77; 32], 1_700_000_100);
         manager
             .enqueue_report(report.clone())
@@ -2228,7 +3038,7 @@ mod tests {
 
     #[test]
     fn complete_ticket_transitions_to_completed() {
-        let manager = RepairManager::new();
+        let (manager, _temp_dir) = manager_with_temp_dir();
         let report = report("REP-452", [0x88; 32], [0x99; 32], 1_700_000_200);
         manager
             .enqueue_report(report.clone())
@@ -2261,8 +3071,37 @@ mod tests {
     }
 
     #[test]
+    fn complete_ticket_with_event_emits_transition() {
+        let (manager, _temp_dir) = manager_with_temp_dir();
+        let report = report("REP-452B", [0x88; 32], [0x99; 32], 1_700_000_210);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+        manager
+            .claim_ticket(
+                &report.ticket_id,
+                "worker-c",
+                report.submitted_at_unix + 5,
+                "claim-2",
+            )
+            .expect("claim ticket");
+
+        let update = manager
+            .complete_ticket_with_event(
+                &report.ticket_id,
+                "worker-c",
+                report.submitted_at_unix + 25,
+                Some("resolved".into()),
+                "complete-1",
+            )
+            .expect("complete ticket");
+        let event = update.event.expect("event emitted");
+        assert_eq!(event.status, RepairTaskStatusV1::Completed);
+    }
+
+    #[test]
     fn fail_ticket_transitions_to_failed() {
-        let manager = RepairManager::new();
+        let (manager, _temp_dir) = manager_with_temp_dir();
         let report = report("REP-453", [0xaa; 32], [0xbb; 32], 1_700_000_300);
         manager
             .enqueue_report(report.clone())
@@ -2295,13 +3134,47 @@ mod tests {
     }
 
     #[test]
+    fn fail_ticket_with_event_returns_slash_on_escalation() {
+        let actual = actual::SorafsRepair {
+            max_attempts: 1,
+            default_slash_penalty_nano: 12_345,
+            ..Default::default()
+        };
+        let (manager, _temp_dir) = manager_with_config(RepairConfig::from(&actual));
+        let report = report("REP-453B", [0xaa; 32], [0xbb; 32], 1_700_000_310);
+        manager
+            .enqueue_report(report.clone())
+            .expect("enqueue report");
+        manager
+            .claim_ticket(
+                &report.ticket_id,
+                "worker-d",
+                report.submitted_at_unix + 8,
+                "claim-3",
+            )
+            .expect("claim ticket");
+
+        let update = manager
+            .fail_ticket_with_event(
+                &report.ticket_id,
+                "worker-d",
+                report.submitted_at_unix + 18,
+                "disk error".into(),
+                "fail-1",
+            )
+            .expect("fail ticket");
+        assert!(matches!(update.record.state, RepairTaskStateV1::Escalated(..)));
+        assert!(update.slash_proposal.is_some());
+    }
+
+    #[test]
     fn attempt_cap_escalates_failed_ticket() {
         let actual = actual::SorafsRepair {
             max_attempts: 1,
             default_slash_penalty_nano: 12_345,
             ..Default::default()
         };
-        let manager = RepairManager::new_with_config(RepairConfig::from(&actual));
+        let (manager, _temp_dir) = manager_with_config(RepairConfig::from(&actual));
         let report = report("REP-454", [0xca; 32], [0xdd; 32], 1_700_000_400);
         manager
             .enqueue_report(report.clone())
@@ -2344,7 +3217,7 @@ mod tests {
             default_slash_penalty_nano: 98_765,
             ..Default::default()
         };
-        let manager = RepairManager::new_with_config(RepairConfig::from(&actual));
+        let (manager, _temp_dir) = manager_with_config(RepairConfig::from(&actual));
         let report = report("REP-455", [0xee; 32], [0xff; 32], 1_700_000_500);
         manager
             .enqueue_report(report.clone())
@@ -2358,6 +3231,8 @@ mod tests {
             outcome.escalated[0].proposed_penalty_nano,
             actual.default_slash_penalty_nano
         );
+        assert_eq!(outcome.events.len(), 1);
+        assert_eq!(outcome.events[0].status, RepairTaskStatusV1::Escalated);
 
         let record = manager.task_record(&report.ticket_id).expect("record");
         assert!(matches!(record.state, RepairTaskStateV1::Escalated(..)));
@@ -2371,7 +3246,7 @@ mod tests {
             backoff_max_secs: 5,
             ..Default::default()
         };
-        let manager = RepairManager::new_with_config(RepairConfig::from(&actual));
+        let (manager, _temp_dir) = manager_with_config(RepairConfig::from(&actual));
         let report = report("REP-456", [0x01; 32], [0x02; 32], 1_700_000_600);
         manager
             .enqueue_report(report.clone())
@@ -2388,6 +3263,9 @@ mod tests {
         let watchdog_at = report.submitted_at_unix + 10 + actual.claim_ttl_secs + 1;
         let outcome = manager.run_watchdog(watchdog_at).expect("run watchdog");
         assert_eq!(outcome.requeued, vec![report.ticket_id.clone()]);
+        assert_eq!(outcome.lease_expired, 1);
+        assert_eq!(outcome.events.len(), 1);
+        assert_eq!(outcome.events[0].status, RepairTaskStatusV1::Queued);
 
         let backoff_claim =
             manager.claim_ticket(&report.ticket_id, "worker-f", watchdog_at, "claim-7");
@@ -2414,7 +3292,7 @@ mod tests {
             backoff_max_secs: 5,
             ..Default::default()
         };
-        let manager = RepairManager::new_with_config(RepairConfig::from(&actual));
+        let (manager, _temp_dir) = manager_with_config(RepairConfig::from(&actual));
         let report = report("REP-457", [0x03; 32], [0x04; 32], 1_700_000_700);
         manager
             .enqueue_report(report.clone())
@@ -2445,13 +3323,15 @@ mod tests {
         let after_backoff = report.submitted_at_unix + 12 + actual.backoff_initial_secs + 1;
         let outcome = manager.run_watchdog(after_backoff).expect("watchdog");
         assert_eq!(outcome.requeued, vec![report.ticket_id.clone()]);
+        assert_eq!(outcome.events.len(), 1);
+        assert_eq!(outcome.events[0].status, RepairTaskStatusV1::Queued);
         let queued = manager.task_record(&report.ticket_id).expect("record");
         assert!(matches!(queued.state, RepairTaskStateV1::Queued(..)));
     }
 
     #[test]
     fn claimable_tasks_prioritize_deadline_severity_and_provider_impact() {
-        let manager = RepairManager::new();
+        let (manager, _temp_dir) = manager_with_temp_dir();
         let provider_a = [0x10; 32];
         let provider_b = [0x11; 32];
         let provider_c = [0x12; 32];
@@ -2481,7 +3361,7 @@ mod tests {
 
     #[test]
     fn task_snapshots_include_event_log() {
-        let manager = RepairManager::new();
+        let (manager, _temp_dir) = manager_with_temp_dir();
         let report = report("REP-460", [0x10; 32], [0x20; 32], 1_700_000_000);
         manager
             .enqueue_report(report.clone())
@@ -2545,8 +3425,10 @@ mod tests {
     }
 
     #[test]
-    fn in_memory_store_compare_and_set_updates_task() {
-        let store = InMemoryRepairStore::new();
+    fn file_store_compare_and_set_updates_task() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("repair").join(REPAIR_STORE_FILE_NAME);
+        let store = FileRepairStore::load_or_new(path).expect("store");
         let report = report("REP-900", [0x10; 32], [0x20; 32], 1_700_000_000);
         let task = task_internal(report.clone());
         match store.insert_task(task).expect("insert task") {
@@ -2577,5 +3459,82 @@ mod tests {
             .compare_and_set_task(&report.ticket_id, 0, conflict)
             .expect_err("expected conflict");
         assert!(matches!(err, RepairStoreError::Conflict { .. }));
+    }
+
+    #[test]
+    fn file_store_audit_sequence_increments() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("repair").join(REPAIR_STORE_FILE_NAME);
+        let store = FileRepairStore::load_or_new(path).expect("store");
+        let first = store.next_audit_sequence();
+        let second = store.next_audit_sequence();
+        assert_eq!(first, 1);
+        assert_eq!(second, 2);
+    }
+
+    #[test]
+    fn file_store_persists_tasks_and_history() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("repair").join(REPAIR_STORE_FILE_NAME);
+        let store = FileRepairStore::load_or_new(path.clone()).expect("store");
+
+        let report = report("REP-950", [0x44; 32], [0x55; 32], 1_700_111_000);
+        let task = task_internal(report.clone());
+        store.insert_task(task).expect("insert task");
+
+        let history_id = store.next_por_history_id();
+        let entry = PorHistoryEntry {
+            id: history_id,
+            manifest_digest: report.evidence.manifest_digest,
+            provider_id: report.evidence.provider_id,
+            challenge_id: [0x99; 32],
+            decided_at: report.submitted_at_unix + 60,
+            failed_samples: 4,
+        };
+        store.record_por_history(entry.clone()).expect("record history");
+
+        let sequence = store.next_audit_sequence();
+        assert_eq!(sequence, 1);
+        drop(store);
+
+        let reloaded = FileRepairStore::load_or_new(path).expect("reload store");
+        let loaded_task = reloaded
+            .task(&report.ticket_id)
+            .expect("load task")
+            .expect("task present");
+        assert_eq!(loaded_task.report.ticket_id, report.ticket_id);
+        let loaded_history = reloaded
+            .por_history_entry(history_id)
+            .expect("history lookup")
+            .expect("history entry present");
+        assert_eq!(loaded_history.manifest_digest, entry.manifest_digest);
+        assert_eq!(loaded_history.failed_samples, entry.failed_samples);
+        let next_sequence = reloaded.next_audit_sequence();
+        assert_eq!(next_sequence, 2);
+    }
+
+    #[test]
+    fn archive_corrupt_store_moves_file_aside() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("repair").join(REPAIR_STORE_FILE_NAME);
+        fs::create_dir_all(path.parent().expect("parent")).expect("create dir");
+        fs::write(&path, b"corrupt").expect("write corrupt store");
+
+        archive_corrupt_store(&path).expect("archive");
+        assert!(!path.exists());
+
+        let entries = fs::read_dir(path.parent().expect("parent"))
+            .expect("read dir")
+            .map(|entry| entry.expect("entry").path())
+            .collect::<Vec<_>>();
+        assert!(
+            entries.iter().any(|entry| {
+                entry
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.contains("corrupt-"))
+            }),
+            "expected archived repair store"
+        );
     }
 }

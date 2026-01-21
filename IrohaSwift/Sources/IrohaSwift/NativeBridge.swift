@@ -975,6 +975,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?
     ) -> Int32
+    private typealias DecodeReceiptFn = @convention(c) (
+        UnsafePointer<UInt8>?, UInt,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<UInt>?
+    ) -> Int32
 
     private typealias FreeFn = @convention(c) (UnsafeMutablePointer<UInt8>?) -> Void
     private typealias SetChainDiscriminantFn = @convention(c) (UInt16) -> UInt16
@@ -1498,6 +1503,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var encodeGovernancePersistCouncilFn: EncodeGovernancePersistCouncilFn? = nil
     private var encodeGovernancePersistCouncilWithAlgFn: EncodeGovernancePersistCouncilWithAlgFn? = nil
     private var decodeSignedFn: DecodeSignedFn? = nil
+    private var decodeReceiptFn: DecodeReceiptFn? = nil
     private var freeFn: FreeFn? = nil
     private var setChainDiscriminantFn: SetChainDiscriminantFn? = nil
     private var setAccelerationConfigFn: SetAccelerationConfigFn? = nil
@@ -1903,6 +1909,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 self.decodeSignedFn = unsafeBitCast(decodeSymbol, to: DecodeSignedFn.self)
             } else {
                 self.decodeSignedFn = nil
+            }
+            if let decodeReceiptSymbol = dlsym(handle, "connect_norito_decode_transaction_receipt_json") {
+                self.decodeReceiptFn = unsafeBitCast(decodeReceiptSymbol, to: DecodeReceiptFn.self)
+            } else {
+                self.decodeReceiptFn = nil
             }
             if let publicKeyFromPrivateSymbol = dlsym(handle, "connect_norito_public_key_from_private") {
                 self.publicKeyFromPrivateFn = unsafeBitCast(publicKeyFromPrivateSymbol, to: PublicKeyFromPrivateFn.self)
@@ -4747,6 +4758,30 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
         let status = data.withUnsafeBytes { buffer -> Int32 in
             decodeSignedFn(buffer.bindMemory(to: UInt8.self).baseAddress, UInt(data.count), &jsonPtr, &jsonLen)
+        }
+
+        guard status == 0, let jsonPtr else {
+            if let jsonPtr { freeFn(jsonPtr) }
+            return nil
+        }
+
+        let jsonData = Data(bytes: jsonPtr, count: Int(jsonLen))
+        freeFn(jsonPtr)
+        return String(data: jsonData, encoding: .utf8)
+        #else
+        return nil
+        #endif
+    }
+
+    func decodeTransactionReceipt(_ data: Data) -> String? {
+        #if canImport(Darwin)
+        guard let decodeReceiptFn, let freeFn else { return nil }
+
+        var jsonPtr: UnsafeMutablePointer<UInt8>? = nil
+        var jsonLen: UInt = 0
+
+        let status = data.withUnsafeBytes { buffer -> Int32 in
+            decodeReceiptFn(buffer.bindMemory(to: UInt8.self).baseAddress, UInt(data.count), &jsonPtr, &jsonLen)
         }
 
         guard status == 0, let jsonPtr else {

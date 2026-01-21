@@ -223,7 +223,7 @@ Torii يتحقق من الاثباتات عبر فحص:
 
 1. يستعلم العميل `/v1/sns/policies/{suffix_id}` للحصول على الاسعار وفترة grace والشرائح المتاحة.
 2. يبني العميل `RegisterNameRequestV1`:
-   - `selector` مشتق من label IH58/المضغوط.
+   - `selector` مشتق من label IH58 (المفضل) او المضغوط (الخيار الثاني).
    - `term_years` ضمن حدود السياسة.
    - `payment` يشير الى تحويل splitter الخزينة/steward.
 3. Torii يتحقق:

@@ -141,6 +141,9 @@ pub struct Common {
 
 El modelo de datos en Rust expone una única representación binaria canónica
 (`AccountAddress`) que puede emitirse en varios formatos de cara al usuario:
+IH58 es el formato de cuenta preferido para compartir y para la salida
+canónica; la forma comprimida `snx1` es la segunda mejor opción (solo Sora)
+cuando el alfabeto kana aporta valor.
 
 - **IH58 (Iroha Base58)**: un envoltorio Base58 que incluye el discriminante
   de cadena. Los decoders validan el prefijo antes de promover la payload a la

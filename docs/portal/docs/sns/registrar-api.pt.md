@@ -226,7 +226,7 @@ Falhas retornam `sns_err_governance_missing`.
 
 1. O cliente consulta `/v1/sns/policies/{suffix_id}` para obter precos, grace e tiers disponiveis.
 2. O cliente monta `RegisterNameRequestV1`:
-   - `selector` derivado de label IH58/comprimido.
+   - `selector` derivado de label IH58 (preferido) ou comprimido (segunda melhor opcao).
    - `term_years` dentro dos limites da politica.
    - `payment` referenciando a transferencia do splitter tesouraria/steward.
 3. Torii valida:

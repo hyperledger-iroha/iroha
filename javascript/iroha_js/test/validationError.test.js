@@ -30,12 +30,8 @@ test("normalizeAccountId exposes ValidationError metadata", () => {
 });
 
 test("normalizeAccountId canonicalizes domain labels with UTS-46 rules", () => {
-  const account = AccountAddress.fromAccount({
-    domain: "Exämple",
-    publicKey: SAMPLE_KEY,
-  });
-  const normalized = normalizeAccountId(`${account.toIH58()}@Exämple`, "accountId");
-  assert.equal(normalized, account.toIH58());
+  const normalized = normalizeAccountId("alice@Exämple", "accountId");
+  assert.equal(normalized, "alice@xn--exmple-cua");
 });
 
 test("normalizeAccountId accepts default-domain literal without suffix", () => {
@@ -45,12 +41,18 @@ test("normalizeAccountId accepts default-domain literal without suffix", () => {
   });
   const literalWithoutDomain = address.toIH58();
   const normalized = normalizeAccountId(literalWithoutDomain, "accountId");
-  const normalizedWithDomain = normalizeAccountId(
-    `${literalWithoutDomain}@${DEFAULT_DOMAIN_NAME}`,
-    "accountId",
-  );
   assert.equal(normalized, literalWithoutDomain);
-  assert.equal(normalized, normalizedWithDomain);
+  assert.throws(
+    () =>
+      normalizeAccountId(
+        `${literalWithoutDomain}@${DEFAULT_DOMAIN_NAME}`,
+        "accountId",
+      ),
+    (error) =>
+      error instanceof ValidationError &&
+      error.code === ValidationErrorCode.INVALID_ACCOUNT_ID &&
+      /append '@domain'/i.test(error.message),
+  );
 });
 
 const maybeTestCompressed = process.env.IROHA_JS_DISABLE_NATIVE === "1" ? test.skip : test;
@@ -136,7 +138,7 @@ test("ValidationError preserves metadata", () => {
   assert.equal(error.cause, cause);
 });
 
-test("normalizeAccountId rejects domain mismatches for encoded signatories", () => {
+test("normalizeAccountId rejects encoded addresses with domain suffixes", () => {
   const address = AccountAddress.fromAccount({
     domain: "wonderland",
     publicKey: SAMPLE_KEY,
@@ -147,8 +149,7 @@ test("normalizeAccountId rejects domain mismatches for encoded signatories", () 
     (error) =>
       error instanceof ValidationError &&
       error.code === ValidationErrorCode.INVALID_ACCOUNT_ID &&
-      error.cause instanceof AccountAddressError &&
-      error.cause.code === AccountAddressErrorCode.DOMAIN_MISMATCH,
+      /append '@domain'/i.test(error.message),
   );
 });
 

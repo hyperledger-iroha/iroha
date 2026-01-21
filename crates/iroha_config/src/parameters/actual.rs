@@ -4818,10 +4818,8 @@ pub struct SorafsAdmission {
 pub struct SorafsRepair {
     /// Enable the repair scheduler.
     pub enabled: bool,
-    /// Optional Postgres DSN for durable repair storage.
-    pub db_dsn: Option<String>,
-    /// Maximum number of database connections for repair operations.
-    pub db_pool_max_connections: u32,
+    /// Optional directory for durable repair state.
+    pub state_dir: Option<PathBuf>,
     /// Claim TTL for repair tickets (seconds).
     pub claim_ttl_secs: u64,
     /// Heartbeat interval/TTL for active claims (seconds).
@@ -4842,8 +4840,7 @@ impl Default for SorafsRepair {
     fn default() -> Self {
         Self {
             enabled: defaults::sorafs::repair::ENABLED,
-            db_dsn: None,
-            db_pool_max_connections: defaults::sorafs::repair::DB_POOL_MAX_CONNECTIONS,
+            state_dir: defaults::sorafs::repair::state_dir(),
             claim_ttl_secs: defaults::sorafs::repair::CLAIM_TTL_SECS,
             heartbeat_interval_secs: defaults::sorafs::repair::HEARTBEAT_INTERVAL_SECS,
             max_attempts: defaults::sorafs::repair::MAX_ATTEMPTS,
@@ -4860,10 +4857,8 @@ impl Default for SorafsRepair {
 pub struct SorafsGc {
     /// Enable the GC worker.
     pub enabled: bool,
-    /// Optional Postgres DSN for GC metadata storage.
-    pub db_dsn: Option<String>,
-    /// Maximum number of database connections for GC operations.
-    pub db_pool_max_connections: u32,
+    /// Optional directory for durable GC state.
+    pub state_dir: Option<PathBuf>,
     /// GC cadence (seconds).
     pub interval_secs: u64,
     /// Maximum deletions per GC run.
@@ -4878,8 +4873,7 @@ impl Default for SorafsGc {
     fn default() -> Self {
         Self {
             enabled: defaults::sorafs::gc::ENABLED,
-            db_dsn: None,
-            db_pool_max_connections: defaults::sorafs::gc::DB_POOL_MAX_CONNECTIONS,
+            state_dir: defaults::sorafs::gc::state_dir(),
             interval_secs: defaults::sorafs::gc::INTERVAL_SECS,
             max_deletions_per_run: defaults::sorafs::gc::MAX_DELETIONS_PER_RUN,
             retention_grace_secs: defaults::sorafs::gc::RETENTION_GRACE_SECS,

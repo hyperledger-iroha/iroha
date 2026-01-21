@@ -6,7 +6,7 @@ Roadmap reference: ADDR-2 — Dual-Format Compliance Suite
 
 ### 1. Overview
 
-- Fixture: `fixtures/account/address_vectors.json` (IH58 + compressed + multisig positive/negative cases).
+- Fixture: `fixtures/account/address_vectors.json` (IH58 (preferred) + compressed (`snx1`, second-best) + multisig positive/negative cases).
 - Scope: deterministic V1 payloads spanning implicit-default, Local-12, Global registry, and multisig controllers with full error taxonomy.
 - Distribution: shared across Rust data-model, Torii, JS/TS, Swift, and Android SDKs; CI fails if any consumer deviates.
 - Source of truth: the generator lives in `crates/iroha_data_model/src/account/address/compliance_vectors.rs` and is exposed via `cargo xtask address-vectors`.
@@ -30,10 +30,10 @@ Flags:
 
 | Surface | Enforcement | Notes |
 |---------|-------------|-------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | Parses the JSON, reconstructs canonical payloads, and checks IH58/compressed/canonical conversions + structured errors. |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Validates server-side codecs so Torii refuses malformed IH58/compressed payloads deterministically. |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Mirrors V1 fixtures (IH58/compressed/fullwidth) and asserts Norito-style error codes for every negative case. |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Exercises IH58/compressed decoding, multisig payloads, and error surfacing on Apple platforms. |
+| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | Parses the JSON, reconstructs canonical payloads, and checks IH58 (preferred)/compressed (`snx1`, second-best)/canonical conversions + structured errors. |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Validates server-side codecs so Torii refuses malformed IH58 (preferred)/compressed (`snx1`, second-best) payloads deterministically. |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Mirrors V1 fixtures (IH58 preferred/compressed (`snx1`) second-best/fullwidth) and asserts Norito-style error codes for every negative case. |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Exercises IH58 (preferred)/compressed (`snx1`, second-best) decoding, multisig payloads, and error surfacing on Apple platforms. |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | Ensures Kotlin/Java bindings stay aligned with the canonical fixture. |
 
 ### 4. Monitoring & Outstanding Work
