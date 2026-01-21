@@ -3,8 +3,14 @@
 Last update: 2026-01-21
 
 - Sumeragi commit pipeline now runs finalize/precommit work every tick/event and throttles only QC rebuilds; tests updated (not run).
+- SoraFS repair backlog stats: fixed `compute_backlog_stats` type inference by annotating `oldest_queued_at`, added `compute_backlog_stats_tracks_oldest_queued` unit test.
+- Localnet readiness: `scripts/deploy_localnet.sh` now waits for `/v1/sumeragi/status` to report a non-empty `mode_tag` to avoid early-mode confusion.
 - Localnet (permissioned, 4 peers, 10 tx/s): `/tmp/iroha-localnet-4peer-perm-10tps` (32180/34337); asset register failed (`rose#wonderland` exists) but peers ran; height ~15 after ~322s (did not reach 100).
 - Localnet (NPoS requested, 4 peers, 10 tx/s): `/tmp/iroha-localnet-4peer-npos-10tps` (32280/34437, `--skip-asset-register`); height ~12 after ~324s (did not reach 100); `/status` still reported permissioned `mode_tag`.
+- Localnet (NPoS config validation, 4 peers): `/tmp/iroha-localnet-4peer-npos-verify2` (32380/34537); peer configs + `genesis.json` set `consensus_mode = Npos`; `/v1/sumeragi/status` and `/status` report `npos` after startup (early `/status` can show permissioned before mode tags update).
+- Localnet deploy script build failed earlier: `crates/sorafs_node/src/repair.rs:2381` E0282 closure type inference; fixed by annotating `oldest_queued_at`.
+- Localnet (permissioned rerun, 4 peers, 10 tx/s): `/tmp/iroha-localnet-4peer-perm-10tps-rerun` (32480/34637, `--skip-asset-register`); 200s of `transaction ping --msg ping` at 10 tx/s; height 34 (did not reach 100).
+- Localnet (NPoS rerun, 4 peers, 10 tx/s): `/tmp/iroha-localnet-4peer-npos-10tps-rerun` (32580/34737, `--skip-asset-register`); 200s of `transaction ping --msg ping` at 10 tx/s; height 30 (did not reach 100).
 - Kagami localnet help now calls out that the default build line is `iroha3`, so leaving `--consensus-mode` unset yields `npos`.
 - DA/RBC: missing-payload view-change deferral now respects backlog/backpressure so `qc_missing_block_defer` will not force view changes while RBC/block-payload queues are congested; READY/DELIVER handlers log missing READY senders and local deferral reasons to pinpoint stalled sessions.
 - DA/RBC: RbcInit/RbcChunk posts now bypass the background post queue so chunk dissemination cannot be starved by background work; tests updated (not run).
@@ -60,6 +66,7 @@ Last update: 2026-01-21
 - Tests: `cargo test -p iroha_cli sorafs_` (ok).
 - Tests: `cargo clippy -p sorafs_node --all-targets -- -D warnings` (ok).
 - Tests: `cargo test -p norito enum_aos` (ok; warning about unused_mut in `crates/norito/src/core.rs:5610`).
+- Tests: `cargo test -p sorafs_node compute_backlog_stats_tracks_oldest_queued -- --nocapture` (ok; repeated `unexpected_cfgs` warnings in `crates/sorafs_node/src/repair.rs`).
 - Format: `cargo fmt --all` (warned about nightly-only rustfmt options in stable toolchain).
 - Tests: `cargo test -p iroha_config sorafs_repair_and_gc_parse_clamps_values` (ok).
 - Tests: `cargo test -p sorafs_node repair_and_gc_configs_preserve_fields` (ok).

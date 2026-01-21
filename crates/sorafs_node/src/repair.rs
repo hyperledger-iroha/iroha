@@ -2368,7 +2368,7 @@ fn compute_backlog_stats(tasks: &[RepairTaskInternal], now_unix: u64) -> RepairB
         return RepairBacklogStats::default();
     }
     let mut stats = RepairBacklogStats::default();
-    let mut oldest_queued_at = None;
+    let mut oldest_queued_at: Option<u64> = None;
 
     for task in tasks {
         if let RepairTaskStateV1::Queued(state) = &task.state {
@@ -2706,6 +2706,19 @@ mod tests {
 
     fn manager_with_temp_dir() -> (RepairManager, TempDir) {
         manager_with_config(RepairConfig::default())
+    }
+
+    #[test]
+    fn compute_backlog_stats_tracks_oldest_queued() {
+        let report_a = report("REP-001", [0x01; 32], [0xA1; 32], 1_700_000_000);
+        let report_b = report("REP-002", [0x02; 32], [0xB2; 32], 1_700_000_100);
+        let tasks = vec![task_internal(report_b), task_internal(report_a)];
+
+        let stats = compute_backlog_stats(&tasks, 1_700_000_250);
+
+        assert_eq!(stats.oldest_age_secs, 250);
+        assert_eq!(stats.per_provider.get(&[0xA1; 32]).copied(), Some(1));
+        assert_eq!(stats.per_provider.get(&[0xB2; 32]).copied(), Some(1));
     }
 
     #[test]
