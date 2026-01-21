@@ -2807,7 +2807,7 @@
         {
           "context": "let compiler_debug = if std::env::var_os(\"IVM_COMPILER_DEBUG\").is_some() {",
           "line": 4094,
-          "path": "crates/ivm/src/kotodama/compiler.rs",
+          "path": "crates/kotodama_lang/src/compiler.rs",
           "scope": "prod"
         }
       ]

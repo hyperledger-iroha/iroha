@@ -1,0 +1,14 @@
+[package]
+name = "ivm_abi"
+version.workspace = true
+edition = "2024"
+authors = ["Iroha Contributors"]
+description = "Shared ABI definitions for the Iroha Virtual Machine"
+license = "Apache-2.0"
+repository = "https://github.com/hyperledger-iroha/iroha"
+documentation = "https://docs.rs/ivm_abi"
+
+[dependencies]
+iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "json", "governance"] }
+iroha_crypto = { path = "../iroha_crypto", features = ["rayon", "sm"] }
+norito = { path = "../norito" }

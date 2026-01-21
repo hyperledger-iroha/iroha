@@ -14,7 +14,7 @@ ivm/                         # → Cargo workspace root (a single Rust library c
 │   - Example: `koto_tuple_return_demo.rs` compiles an inline Kotodama function
 │     that returns a tuple and prints r10/r11.
 │   - Run: `cargo run -p ivm --example koto_tuple_return_demo`
-│   - Related source sample: `src/kotodama/samples/tuple_return_demo.ko` shows
+│   - Related source sample: `crates/kotodama_lang/src/samples/tuple_return_demo.ko` shows
 │     tuple creation and destructuring with `.0`/`.1`.
 ├── src/
 │   ├── lib.rs               # public re‑exports and crate‑level docs

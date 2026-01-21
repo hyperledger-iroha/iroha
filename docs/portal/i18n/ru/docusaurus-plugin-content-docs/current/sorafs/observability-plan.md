@@ -86,6 +86,25 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | Данные об успехе capacity/uptime провайдера, отображаемые в дашборде емкости. |
 | `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | Глубина backlog плюс накопленные счетчики ошибок, экспортируемые при каждом опросе `/v1/sorafs/por/ingestion/{manifest}`, питают панель/алерт "PoR Stalls". |
 
+### Ремонт и SLA
+
+| Метрика | Тип | Метки | Примечания |
+|---------|-----|-------|------------|
+| `sorafs_repair_tasks_total` | Counter | `status` | Счетчик OTEL для переходов задач ремонта. |
+| `sorafs_repair_latency_minutes` | Histogram | `outcome` | OTEL-гистограмма для латентности жизненного цикла ремонта. |
+| `sorafs_repair_queue_depth` | Histogram | `provider` | OTEL-гистограмма числа задач в очереди по провайдерам (снимок). |
+| `sorafs_repair_backlog_oldest_age_seconds` | Histogram | — | OTEL-гистограмма возраста самой старой задачи в очереди (секунды). |
+| `sorafs_repair_lease_expired_total` | Counter | `outcome` | Счетчик OTEL для истечений лизинга (`requeued`/`escalated`). |
+| `sorafs_repair_slash_proposals_total` | Counter | `outcome` | Счетчик OTEL для переходов slash-предложений. |
+| `torii_sorafs_repair_tasks_total` | Counter | `status` | Счетчик Prometheus для переходов задач. |
+| `torii_sorafs_repair_latency_minutes_bucket` | Histogram | `outcome` | Гистограмма Prometheus для латентности жизненного цикла ремонта. |
+| `torii_sorafs_repair_queue_depth` | Gauge | `provider` | Gauge Prometheus для задач в очереди по провайдерам. |
+| `torii_sorafs_repair_backlog_oldest_age_seconds` | Gauge | — | Gauge Prometheus для возраста самой старой задачи в очереди (секунды). |
+| `torii_sorafs_repair_lease_expired_total` | Counter | `outcome` | Счетчик Prometheus для истечений лизинга. |
+| `torii_sorafs_slash_proposals_total` | Counter | `outcome` | Счетчик Prometheus для переходов slash-предложений. |
+
+JSON-метаданные аудита управления отражают метки телеметрии ремонта (`status`, `ticket_id`, `manifest`, `provider` для событий ремонта; `outcome` для slash-предложений), чтобы детерминированно коррелировать метрики и артефакты аудита.
+
 ### Proof of Timely Retrieval (PoTR) и SLA по chunks
 
 | Метрика | Тип | Метки | Производитель | Примечания |

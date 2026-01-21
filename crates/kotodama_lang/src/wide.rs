@@ -194,16 +194,16 @@ pub fn encode_branch_checked(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{decoder::decode, memory::Memory};
+    use crate::encoding;
 
     #[test]
     fn wide_add_roundtrip() {
         let word = encode_add(5, 1, 2);
-        // Decode using the canonical IVM decoder to ensure it is recognised.
-        let mut mem = Memory::new(64);
-        mem.load_code(&word.to_le_bytes());
-        let (decoded, _) = decode(&mem, 0).expect("decode");
-        assert_eq!(decoded, word);
+        let (op, rd, rs1, rs2) = encoding::wide::decode_rr(word);
+        assert_eq!(op, instruction::wide::arithmetic::ADD);
+        assert_eq!(rd, 5);
+        assert_eq!(rs1, 1);
+        assert_eq!(rs2, 2);
     }
 
     #[test]
@@ -218,10 +218,11 @@ mod tests {
     #[test]
     fn addi_checked_accepts_small_immediates() {
         let word = encode_addi_checked(3, 1, -7).expect("encode");
-        let mut mem = Memory::new(16);
-        mem.load_code(&word.to_le_bytes());
-        let (decoded, _) = decode(&mem, 0).expect("decode");
-        assert_eq!(decoded, word);
+        let (op, rd, rs1, imm) = encoding::wide::decode_ri(word);
+        assert_eq!(op, instruction::wide::arithmetic::ADDI);
+        assert_eq!(rd, 3);
+        assert_eq!(rs1, 1);
+        assert_eq!(imm, -7);
     }
 
     #[test]

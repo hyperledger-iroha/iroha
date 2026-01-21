@@ -7,7 +7,7 @@ Note on bytecode target: Kotodama smart contracts compile to Iroha Virtual Machi
 ## Scope and Sources
 - IVM: `crates/ivm/src/{instruction.rs,ivm.rs,syscalls.rs,host.rs,mock_wsv.rs}` and `crates/ivm/docs/*`.
 - ISI/Data Model: `crates/iroha_data_model/src/isi/*`, `crates/iroha_core/src/smartcontracts/isi/*`, and docs `docs/source/data_model_and_isi_spec.md`.
-- Kotodama: `crates/ivm/src/kotodama/*`, docs in `crates/ivm/docs/*`.
+- Kotodama: `crates/kotodama_lang/src/*`, docs in `crates/ivm/docs/*`.
 - Core integration: `crates/iroha_core/src/{state.rs,executor.rs,smartcontracts/ivm/cache.rs}`.
 
 Terminology
@@ -154,6 +154,6 @@ Notes
 ---
 
 ## Outstanding Work
-- Finalise the Kotodama helpers that pass Norito‑encoded pointers (`crates/ivm/src/kotodama/std.rs`) and surface them through the compiler CLI.
+- Finalise the Kotodama helpers that pass Norito‑encoded pointers (`crates/ivm/src/kotodama_std.rs`) and surface them through the compiler CLI.
 - Publish the syscall gas table (including helper syscalls) and keep CoreHost enforcement/tests aligned with it.
 - ✅ Added round-trip Norito fixtures covering the pointer-argument ABI; see `crates/iroha_data_model/tests/norito_pointer_abi_roundtrip.rs` for manifest and NFT pointer coverage kept in CI.

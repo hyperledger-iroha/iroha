@@ -587,7 +587,7 @@ Total references: **505** · Unique variables: **137**
 
 ## IVM_COMPILER_DEBUG (prod: 1)
 
-- prod: crates/ivm/src/kotodama/compiler.rs:4094 — `let compiler_debug = if std::env::var_os("IVM_COMPILER_DEBUG").is_some() {`
+- prod: crates/kotodama_lang/src/compiler.rs:4094 — `let compiler_debug = if std::env::var_os("IVM_COMPILER_DEBUG").is_some() {`
 
 ## IVM_CUDA_GENCODE (build: 1)
 

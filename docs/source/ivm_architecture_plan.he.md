@@ -39,7 +39,7 @@ translator: manual
 **השפעת אבטחה/ביצועים:** שער ריכוזי מגן מפני Host ששוכח לקרוא ל-`is_syscall_allowed`, ומאפשר בעתיד קאשינג של בדיקות מצביעים עבור קריאות חוזרות.
 
 ### שלב 3 – הוצאת Kotodama
-- פיצול `crates/ivm/src/kotodama` לקרייט חדש (למשל `crates/kotodama_lang`).
+- Kotodama הועברה לקרייט `crates/kotodama_lang` (מ־`crates/ivm/src/kotodama`).
 - חשיפת API מינימלי של bytecode שה-VM צורך (`compile_to_ivm_bytecode`).
 - הותרת שכבות תאימות בתוך `ivm` עד שהשינוי יחלחל לכל המאגר.
 

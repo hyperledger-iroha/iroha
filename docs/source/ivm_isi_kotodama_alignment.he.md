@@ -19,7 +19,7 @@ translator: manual
 ## היקף ומקורות
 - IVM: הקבצים `crates/ivm/src/{instruction.rs,ivm.rs,syscalls.rs,host.rs,mock_wsv.rs}` והמסמכים תחת `crates/ivm/docs/*`.
 - ISI/מודל נתונים: `crates/iroha_data_model/src/isi/*`,‏ `crates/iroha_core/src/smartcontracts/isi/*`, והמסמך `docs/source/data_model_and_isi_spec.md`.
-- Kotodama: הקבצים `crates/ivm/src/kotodama/*` והתיעוד ב-`crates/ivm/docs/*`.
+- Kotodama: הקבצים `crates/kotodama_lang/src/*` והתיעוד ב-`crates/ivm/docs/*`.
 - אינטגרציה ליבה: `crates/iroha_core/src/{state.rs,executor.rs,smartcontracts/ivm/cache.rs}`.
 
 מונחים:

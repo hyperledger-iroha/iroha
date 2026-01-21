@@ -85,6 +85,25 @@ cooldown لمدة خمس دقائق. كلا التنبيهين موجودان ف
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | بيانات نجاح السعة/الجاهزية للمزوّد المعروضة في لوحة السعة. |
 | `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | عمق التراكم بالإضافة إلى عدادات الفشل التراكمية المصدّرة عند الاستعلام عن `/v1/sorafs/por/ingestion/{manifest}` لتغذية لوحة/تنبيه "PoR Stalls". |
 
+### الإصلاح وSLA
+
+| المقياس | النوع | Labels | الملاحظات |
+|--------|------|--------|-----------|
+| `sorafs_repair_tasks_total` | Counter | `status` | عداد OTEL لتحولات مهام الإصلاح. |
+| `sorafs_repair_latency_minutes` | Histogram | `outcome` | مدرج OTEL لزمن دورة حياة الإصلاح. |
+| `sorafs_repair_queue_depth` | Histogram | `provider` | مدرج OTEL لعدد المهام المصطفة لكل مزود (لقطة زمنية). |
+| `sorafs_repair_backlog_oldest_age_seconds` | Histogram | — | مدرج OTEL لعمر أقدم مهمة في الطابور (بالثواني). |
+| `sorafs_repair_lease_expired_total` | Counter | `outcome` | عداد OTEL لانتهاء مدد الإيجار (`requeued`/`escalated`). |
+| `sorafs_repair_slash_proposals_total` | Counter | `outcome` | عداد OTEL لتحولات مقترحات السلاش. |
+| `torii_sorafs_repair_tasks_total` | Counter | `status` | عداد Prometheus لتحولات المهام. |
+| `torii_sorafs_repair_latency_minutes_bucket` | Histogram | `outcome` | مدرج Prometheus لزمن دورة حياة الإصلاح. |
+| `torii_sorafs_repair_queue_depth` | Gauge | `provider` | مقياس Prometheus لعدد المهام المصطفة لكل مزود. |
+| `torii_sorafs_repair_backlog_oldest_age_seconds` | Gauge | — | مقياس Prometheus لعمر أقدم مهمة في الطابور (ثوانٍ). |
+| `torii_sorafs_repair_lease_expired_total` | Counter | `outcome` | عداد Prometheus لانتهاء مدد الإيجار. |
+| `torii_sorafs_slash_proposals_total` | Counter | `outcome` | عداد Prometheus لتحولات مقترحات السلاش. |
+
+تعكس بيانات JSON الوصفية لتدقيق الحوكمة تسميات تليمترية الإصلاح (`status`, `ticket_id`, `manifest`, `provider` في أحداث الإصلاح؛ و`outcome` في مقترحات السلاش) كي يمكن ربط المقاييس وأثر التدقيق بشكل حتمي.
+
 ### Proof of Timely Retrieval (PoTR) وSLA الشرائح
 
 | المقياس | النوع | Labels | المُنتِج | الملاحظات |

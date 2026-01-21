@@ -11,7 +11,7 @@ use iroha_data_model::transaction::IvmBytecode;
 use iroha_test_network::repo_root;
 use ivm::KotodamaCompiler;
 
-/// Compile a Kotodama sample from `crates/ivm/src/kotodama/samples` into bytecode.
+/// Compile a Kotodama sample from `crates/kotodama_lang/src/samples` into bytecode.
 ///
 /// Results are cached in-memory so repeated calls do not recompile.
 pub fn kotodama_program(name: &str) -> Result<IvmBytecode> {
@@ -30,7 +30,7 @@ pub fn kotodama_program(name: &str) -> Result<IvmBytecode> {
     }
 
     let mut path = repo_root();
-    path.push("crates/ivm/src/kotodama/samples");
+    path.push("crates/kotodama_lang/src/samples");
     let mut file_name = validated_name.clone();
     file_name.push_str(".ko");
     path.push(file_name);

@@ -1817,6 +1817,13 @@ fn minimal_config_snapshot() {
                     max_pdp_failures: 0,
                     max_potr_breaches: 0,
                 },
+                sorafs_repair_escalation: RepairEscalationPolicyV1 {
+                    quorum_bps: 6667,
+                    minimum_voters: 3,
+                    dispute_window_secs: 86400,
+                    appeal_window_secs: 604800,
+                    max_penalty_nano: 1000000000,
+                },
                 sorafs_telemetry: SorafsTelemetryPolicy {
                     require_submitter: true,
                     require_nonce: true,

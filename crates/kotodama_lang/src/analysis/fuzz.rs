@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::{AnalysisCategory, AnalysisFinding};
-use crate::kotodama::{
+use crate::{
     analysis::SimpleRng,
     ast::{Function as AstFunction, Item, Program, TypeExpr},
     semantic::{
@@ -491,7 +491,7 @@ impl<'a> Evaluator<'a> {
             ExprKind::Unary { op, expr } => {
                 let inner = self.eval_expr(expr, locals, depth)?;
                 match op {
-                    crate::kotodama::ast::UnaryOp::Neg => {
+                    crate::ast::UnaryOp::Neg => {
                         let val = inner.as_int().ok_or_else(|| {
                             EvalError::Runtime("negation expects integer operand".into())
                         })?;
@@ -499,7 +499,7 @@ impl<'a> Evaluator<'a> {
                             .map(Value::Int)
                             .ok_or(EvalError::ArithmeticOverflow("negation"))
                     }
-                    crate::kotodama::ast::UnaryOp::Not => {
+                    crate::ast::UnaryOp::Not => {
                         let val = inner.as_bool().ok_or_else(|| {
                             EvalError::Runtime("logical not expects boolean operand".into())
                         })?;
@@ -576,11 +576,11 @@ impl<'a> Evaluator<'a> {
 
     fn eval_binary(
         &self,
-        op: crate::kotodama::ast::BinaryOp,
+        op: crate::ast::BinaryOp,
         left: Value,
         right: Value,
     ) -> Result<Value, EvalError> {
-        use crate::kotodama::ast::BinaryOp;
+        use crate::ast::BinaryOp;
         match op {
             BinaryOp::Add => {
                 let (l, r) = (left.as_int(), right.as_int());
@@ -711,7 +711,7 @@ enum FlowControl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kotodama::parser::parse;
+    use crate::parser::parse;
 
     fn fuzz(source: &str) -> FuzzReport {
         let program = parse(source).expect("parse");

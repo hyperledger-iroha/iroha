@@ -37,6 +37,18 @@ where
     Ok(())
 }
 
+async fn submit_with_context(
+    client: &Client,
+    instruction: impl Into<InstructionBox>,
+    context: &str,
+) -> Result<()> {
+    let client = client.clone();
+    let instruction = instruction.into();
+    let context = context.to_string();
+    spawn_blocking(move || client.submit(instruction).wrap_err(context)).await??;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)]
 async fn time_trigger_scenarios() -> Result<()> {
@@ -181,7 +193,7 @@ async fn pre_commit_trigger_should_be_executed_scenario(
             ));
             spawn_blocking({
                 let client = test_client.clone();
-                move || client.submit(register_trigger)
+                move || client.submit_blocking(register_trigger)
             })
             .await??;
 
@@ -192,8 +204,11 @@ async fn pre_commit_trigger_should_be_executed_scenario(
             })
             .await??;
             let mut target_height = network
-                .best_effort_block_height()
+                .peers()
+                .iter()
+                .filter_map(|peer| peer.best_effort_block_height())
                 .map(|height| height.total)
+                .max()
                 .unwrap_or(0);
             for _ in 0..CHECKS_COUNT {
                 let sample_isi = SetKeyValue::account(
@@ -201,11 +216,12 @@ async fn pre_commit_trigger_should_be_executed_scenario(
                     "key".parse::<Name>()?,
                     "value".parse::<Json>()?,
                 );
-                spawn_blocking({
-                    let client = test_client.clone();
-                    move || client.submit(sample_isi)
-                })
-                .await??;
+                submit_with_context(
+                    &test_client,
+                    sample_isi,
+                    "pre_commit_trigger_should_be_executed sample ISI",
+                )
+                .await?;
                 target_height = target_height.saturating_add(1);
                 network
                     .ensure_blocks_with(|height| height.total >= target_height)
@@ -314,6 +330,7 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
         println!("registered time trigger, driving {expected_count} blocks");
 
         submit_sample_isi_on_every_block_commit(
+            network,
             &test_client,
             &alice_id,
             trigger_period,
@@ -356,11 +373,19 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
 
 /// Submit some sample ISIs to create new blocks
 async fn submit_sample_isi_on_every_block_commit(
+    network: &sandbox::SerializedNetwork,
     test_client: &Client,
     account_id: &AccountId,
     timeout: Duration,
     times: usize,
 ) -> Result<()> {
+    let mut target_height = network
+        .peers()
+        .iter()
+        .filter_map(|peer| peer.best_effort_block_height())
+        .map(|height| height.total)
+        .max()
+        .unwrap_or(0);
     for idx in 0..times {
         sleep(timeout).await;
         let sample_isi = SetKeyValue::account(
@@ -368,11 +393,11 @@ async fn submit_sample_isi_on_every_block_commit(
             "key".parse::<Name>()?,
             Json::new("value"),
         );
-        spawn_blocking({
-            let client = test_client.clone();
-            move || client.submit_blocking(sample_isi)
-        })
-        .await??;
+        submit_with_context(test_client, sample_isi, "time_trigger sample ISI").await?;
+        target_height = target_height.saturating_add(1);
+        network
+            .ensure_blocks_with(|height| height.total >= target_height)
+            .await?;
         println!("submitted sample ISI {}/{}", idx + 1, times);
     }
 

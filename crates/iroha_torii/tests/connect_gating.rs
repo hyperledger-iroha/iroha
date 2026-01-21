@@ -909,6 +909,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             runtime_upgrade_provenance:
                 iroha_config::parameters::actual::RuntimeUpgradeProvenancePolicy::default(),
             sorafs_penalty: iroha_config::parameters::actual::SorafsPenaltyPolicy::default(),
+            sorafs_repair_escalation:
+                iroha_config::parameters::actual::RepairEscalationPolicyV1::default(),
             sorafs_telemetry: iroha_config::parameters::actual::SorafsTelemetryPolicy::default(),
             sorafs_provider_owners: std::collections::BTreeMap::new(),
             conviction_step_blocks: 1,

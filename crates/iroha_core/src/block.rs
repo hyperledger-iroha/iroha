@@ -770,7 +770,7 @@ pub(crate) fn parse_account_literal_with_world(
     world: &impl WorldReadOnly,
     input: &str,
 ) -> Option<AccountId> {
-    const ERR_ACCOUNT_LITERAL_FORMAT: &str = "AccountId must be IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or `<alias|public_key|address>@<domain>`";
+    const ERR_ACCOUNT_LITERAL_FORMAT: &str = "AccountId must be IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or `<alias|public_key>@<domain>`";
 
     let trimmed = input.trim();
     if trimmed.is_empty() {

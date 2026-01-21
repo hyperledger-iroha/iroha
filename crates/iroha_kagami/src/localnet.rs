@@ -338,19 +338,19 @@ pub const DEFAULT_PUBLIC_HOST: &str = "127.0.0.1";
 const LOCALNET_PIPELINE_TIME_MS: u64 = 1_000;
 /// Baseline NPoS timeouts for localnet (keep in sync with config defaults).
 const LOCALNET_NPOS_DEFAULT_BLOCK_TIME_MS: u64 = 1_000;
-const LOCALNET_NPOS_TIMEOUT_PROPOSE_MS: u64 = 350;
-const LOCALNET_NPOS_TIMEOUT_PREVOTE_MS: u64 = 450;
-const LOCALNET_NPOS_TIMEOUT_PRECOMMIT_MS: u64 = 550;
-const LOCALNET_NPOS_TIMEOUT_COMMIT_MS: u64 = 750;
-const LOCALNET_NPOS_TIMEOUT_DA_MS: u64 = 650;
-const LOCALNET_NPOS_TIMEOUT_AGG_MS: u64 = 120;
+const LOCALNET_NPOS_TIMEOUT_PROPOSE_MS: u64 = 300;
+const LOCALNET_NPOS_TIMEOUT_PREVOTE_MS: u64 = 400;
+const LOCALNET_NPOS_TIMEOUT_PRECOMMIT_MS: u64 = 500;
+const LOCALNET_NPOS_TIMEOUT_COMMIT_MS: u64 = 650;
+const LOCALNET_NPOS_TIMEOUT_DA_MS: u64 = 600;
+const LOCALNET_NPOS_TIMEOUT_AGG_MS: u64 = 100;
 /// Default redundant send fanout (r) for localnet DA/RBC sessions.
 const LOCALNET_REDUNDANT_SEND_R: u8 = 2;
 /// Default DA commit-quorum timeout multiplier for localnet configs.
-const LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 3;
+const LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 1;
 /// Default DA availability timeout multiplier for localnet configs.
 /// Extra slack keeps advisory availability warnings from firing on fast pipelines.
-const LOCALNET_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 2;
+const LOCALNET_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 1;
 /// Default DA availability timeout floor (ms) for localnet configs.
 const LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: u64 = 2_000;
 /// Default RBC chunk size for localnet payloads.
@@ -372,11 +372,11 @@ const LOCALNET_TORII_TX_BURST_PER_AUTHORITY: u32 = 2_000_000;
 /// Torii pre-auth allowlist to keep localnet CLI traffic from tripping bans.
 const LOCALNET_PREAUTH_ALLOW_CIDRS: [&str; 2] = ["127.0.0.0/8", "::1/128"];
 /// Multiplier applied to block+commit time for localnet commit inflight timeout.
-const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MULTIPLIER: u64 = 10;
+const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MULTIPLIER: u64 = 6;
 /// Lower bound for localnet commit inflight timeout to avoid overly aggressive aborts.
-const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MIN_MS: u64 = 5_000;
+const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MIN_MS: u64 = 4_000;
 /// Upper bound for localnet commit inflight timeout to prevent long stalls.
-const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MAX_MS: u64 = 15_000;
+const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MAX_MS: u64 = 10_000;
 /// Default localnet telemetry toggle (mirrors config defaults).
 const LOCALNET_TELEMETRY_ENABLED: bool = true;
 /// Default localnet telemetry profile (mirrors config defaults).
@@ -2755,7 +2755,7 @@ mod tests {
         assert_eq!(npos.k_aggregators(), 3);
         assert_eq!(npos.redundant_send_r(), 2);
         assert_eq!(npos.block_time_ms(), 1_000);
-        assert_eq!(npos.timeout_commit_ms(), 750);
+        assert_eq!(npos.timeout_commit_ms(), 650);
     }
 
     #[test]
@@ -3269,12 +3269,12 @@ mod tests {
             .and_then(SumeragiNposParameters::from_custom_parameter)
             .expect("npos parameters must be present");
         assert_eq!(npos.block_time_ms(), 1_200);
-        assert_eq!(npos.timeout_propose_ms(), 420);
-        assert_eq!(npos.timeout_prevote_ms(), 540);
-        assert_eq!(npos.timeout_precommit_ms(), 660);
-        assert_eq!(npos.timeout_commit_ms(), 1_200);
-        assert_eq!(npos.timeout_da_ms(), 780);
-        assert_eq!(npos.timeout_aggregator_ms(), 144);
+        assert_eq!(npos.timeout_propose_ms(), 360);
+        assert_eq!(npos.timeout_prevote_ms(), 480);
+        assert_eq!(npos.timeout_precommit_ms(), 600);
+        assert_eq!(npos.timeout_commit_ms(), 1_040);
+        assert_eq!(npos.timeout_da_ms(), 720);
+        assert_eq!(npos.timeout_aggregator_ms(), 120);
         assert_eq!(npos.redundant_send_r(), 3);
     }
 

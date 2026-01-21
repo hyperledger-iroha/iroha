@@ -22,7 +22,7 @@ translator: manual
 - `crates/ivm/src/ivm.rs`
 - `crates/ivm/src/vector.rs`
 - `crates/ivm/src/host.rs`
-- `crates/ivm/src/syscalls.rs`
+- `crates/ivm_abi/src/syscalls.rs`
 - `crates/ivm/src/parallel.rs`
 - `crates/ivm/src/mock_wsv.rs`
 - `crates/ivm/src/axt.rs`
@@ -35,7 +35,7 @@ translator: manual
 - `crates/ivm/src/iso20022.rs`
 - `crates/ivm/src/halo2.rs`
 - `crates/ivm/src/signature.rs`
-- `crates/ivm/src/pointer_abi.rs`
+- `crates/ivm_abi/src/pointer_abi.rs`
 - `crates/ivm/src/ivm_cache.rs`
 
 ワークスペース内の残りのクレートについても、今後コメントを更新する必要が生じた場合は改めて監査を行います。

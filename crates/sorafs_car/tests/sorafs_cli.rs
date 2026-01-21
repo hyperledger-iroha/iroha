@@ -602,7 +602,7 @@ fn proof_stream_command_consumes_ndjson() {
 #[test]
 fn norito_build_compiles_contract() {
     let tempdir = tempdir().expect("tempdir");
-    let source_path = PathBuf::from("../ivm/src/kotodama/samples/kotodama_jp.ko");
+    let source_path = PathBuf::from("../kotodama_lang/src/samples/kotodama_jp.ko");
     assert!(
         source_path.exists(),
         "expected Kotodama sample `{}` to exist",

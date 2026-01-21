@@ -1637,6 +1637,8 @@ pub struct Governance {
     pub sorafs_pricing: PricingScheduleRecord,
     /// SoraFS under-delivery penalty policy applied to provider credits.
     pub sorafs_penalty: SorafsPenaltyPolicy,
+    /// Repair escalation governance policy for SoraFS incidents.
+    pub sorafs_repair_escalation: RepairEscalationPolicyV1,
     /// SoraFS telemetry authentication/replay safeguards.
     pub sorafs_telemetry: SorafsTelemetryPolicy,
     /// Static provider→owner bindings seeded at startup.
@@ -1749,6 +1751,7 @@ impl Default for Governance {
             sorafs_pin_policy: SorafsPinPolicyConstraints::default(),
             sorafs_pricing: PricingScheduleRecord::launch_default(),
             sorafs_penalty: SorafsPenaltyPolicy::default(),
+            sorafs_repair_escalation: RepairEscalationPolicyV1::default(),
             sorafs_telemetry: SorafsTelemetryPolicy::default(),
             sorafs_provider_owners: BTreeMap::new(),
             conviction_step_blocks: 100,
@@ -5023,6 +5026,34 @@ impl Default for SorafsPenaltyPolicy {
             cooldown_windows: defaults::governance::sorafs_penalty::COOLDOWN_WINDOWS,
             max_pdp_failures: defaults::governance::sorafs_penalty::MAX_PDP_FAILURES,
             max_potr_breaches: defaults::governance::sorafs_penalty::MAX_POTR_BREACHES,
+        }
+    }
+}
+
+/// Governance policy for repair escalation and slashing decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RepairEscalationPolicyV1 {
+    /// Approval quorum (basis points) required for escalation/slash decisions.
+    pub quorum_bps: u16,
+    /// Minimum number of distinct voters required.
+    pub minimum_voters: u32,
+    /// Dispute window in seconds after escalation before governance finalizes.
+    pub dispute_window_secs: u64,
+    /// Appeal window in seconds after approval before a decision is final.
+    pub appeal_window_secs: u64,
+    /// Maximum slash penalty allowed for repair escalations (nano-XOR).
+    pub max_penalty_nano: u128,
+}
+
+impl Default for RepairEscalationPolicyV1 {
+    fn default() -> Self {
+        Self {
+            quorum_bps: defaults::governance::sorafs_repair_escalation::QUORUM_BPS,
+            minimum_voters: defaults::governance::sorafs_repair_escalation::MINIMUM_VOTERS,
+            dispute_window_secs:
+                defaults::governance::sorafs_repair_escalation::DISPUTE_WINDOW_SECS,
+            appeal_window_secs: defaults::governance::sorafs_repair_escalation::APPEAL_WINDOW_SECS,
+            max_penalty_nano: defaults::governance::sorafs_repair_escalation::MAX_PENALTY_NANO,
         }
     }
 }

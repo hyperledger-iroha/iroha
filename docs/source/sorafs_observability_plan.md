@@ -119,6 +119,29 @@ Example lifecycle payload (redacted fields follow standard `iroha_logger` rules)
 | `torii_sorafs_gc_expired_manifests` | Gauge | — | Current count of expired manifests observed by GC sweeps. |
 | `torii_sorafs_gc_oldest_expired_age_seconds` | Gauge | — | Age in seconds of the oldest expired manifest (after retention grace). |
 
+### Reconciliation
+
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `sorafs.reconciliation.runs_total` | Counter | `result` | OTEL counter for reconciliation snapshots. |
+| `sorafs.reconciliation.divergence_total` | Counter | — | OTEL counter of divergence counts per run. |
+| `torii_sorafs_reconciliation_runs_total` | Counter | `result` | Prometheus counter for reconciliation runs. |
+| `torii_sorafs_reconciliation_divergence_count` | Gauge | — | Latest divergence count observed in a reconciliation report. |
+
+### Repair automation
+
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `sorafs.repair.tasks_total` | Counter | `status` | OTEL counter for repair task transitions (`queued`, `in_progress`, `completed`, `failed`, `escalated`). |
+| `sorafs.repair.latency_minutes` | Histogram | `outcome` | OTEL histogram of repair lifecycle latency in minutes. |
+| `sorafs.repair.backlog_oldest_age_seconds` | Histogram | — | OTEL histogram of oldest queued repair age (seconds). |
+| `sorafs.repair.queue_depth` | Histogram | `provider` | OTEL histogram for repair queue depth per provider. |
+| `sorafs.repair.lease_expired_total` | Counter | `outcome` | OTEL counter for repair lease expirations grouped by outcome. |
+| `torii_sorafs_repair_tasks_total` | Counter | `status` | Prometheus counter for repair task transitions. |
+| `torii_sorafs_repair_queue_depth` | Gauge | `provider` | Prometheus gauge for queued repair tickets per provider. |
+| `torii_sorafs_repair_backlog_oldest_age_seconds` | Gauge | — | Age in seconds of the oldest queued repair ticket. |
+| `torii_sorafs_repair_lease_expired_total` | Counter | `outcome` | Prometheus counter for repair lease expirations grouped by outcome. |
+
 ### Proof of Timely Retrieval (PoTR) and chunk SLA
 
 | Metric | Type | Labels | Producer | Notes |
@@ -147,13 +170,13 @@ Example lifecycle payload (redacted fields follow standard `iroha_logger` rules)
 4. **PDP & PoTR Health** (`dashboards/grafana/sorafs_pdp_potr_health.json`)
    - Consolidates SF-13/SF-14 telemetry for DA-5: PDP challenge rates/success, latency P95, duplicate counters, slash proposal history, PoTR latency histograms, and failure breakdowns filtered by provider/tier so Taikai/CDN reviewers can audit proof health before gating releases.
 5. **Capacity Health** (`dashboards/grafana/sorafs_capacity_health.json`)
-   - Tracks provider capacity, outstanding reservations, and new GC/retention panels covering sweep runs, evictions, bytes freed, blocked reasons, and expired-manifest age.
+   - Tracks provider capacity, outstanding reservations, repair SLA escalations, repair queue depth by provider, and GC/retention panels covering sweep runs, evictions, bytes freed, blocked reasons, expired-manifest age, and reconciliation divergence snapshots.
 
 ## Alerts
 
 - `dashboards/alerts/sorafs_gateway_rules.yml` — gateway availability, TTFB P95, proof failure spikes.
 - `dashboards/alerts/sorafs_fetch_rules.yml` — orchestrator failure/retry spikes (unchanged).
-- `dashboards/alerts/sorafs_capacity_rules.yml` — capacity pressure plus GC/retention stall, blocked eviction, and GC error alerts.
+- `dashboards/alerts/sorafs_capacity_rules.yml` — capacity pressure plus repair SLA/backlog/lease-expiry alerts and GC/retention stall, blocked eviction, and GC error alerts.
 - `dashboards/alerts/soranet_privacy_rules.yml` — downgrade spikes, bucket suppression, collector-idle detection, and disabled-collector alerts driven by `soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`, and poll failure counters.
 - `dashboards/alerts/soranet_policy_rules.yml` — anonymity brownout alarms tied to `sorafs_orchestrator_brownouts_total` so SNNet-5 default-on rollouts stay gated.
 - `dashboards/alerts/taikai_viewer_rules.yml` — Taikai viewer drift/ingest/CEK lag alarms plus the new SoraFS proof-health penalty/cooldown alerts derived from `torii_sorafs_proof_health_*`.
@@ -176,6 +199,8 @@ Example lifecycle payload (redacted fields follow standard `iroha_logger` rules)
   gateway. Label sets are standardised as:
   - `result` → HTTP outcome (`success`, `refused`, `failed`).
   - `reason` → refusal/error code (`unsupported_chunker`, `timeout`, etc.).
+  - `status` → repair task state (`queued`, `in_progress`, `completed`, `failed`, `escalated`).
+  - `outcome` → repair lease or latency outcome (`requeued`, `escalated`, `completed`, `failed`).
   - `provider` → hex-encoded provider identifier.
   - `manifest` → canonical manifest digest (trimmed for high-cardinality exports).
   - `tier` → declarative tier labels (`hot`, `warm`, `archive`).

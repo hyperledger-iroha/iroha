@@ -244,9 +244,9 @@ fn build_program_set_account_detail_defaults() -> Vec<u8> {
 }
 
 fn compile_kotodama_sample(root: &Path, name: &str) -> Option<Vec<u8>> {
-    // Compile a Kotodama .ko source located in crates/ivm/src/kotodama/samples/<name>.ko
+    // Compile a Kotodama .ko source located in crates/kotodama_lang/src/samples/<name>.ko
     let path = root
-        .join("crates/ivm/src/kotodama/samples")
+        .join("crates/kotodama_lang/src/samples")
         .join(format!("{name}.ko"));
     if !path.exists() {
         return None;
@@ -278,9 +278,9 @@ fn write_file_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 fn main() {
     // Do not rebuild on every run; only if this script changes
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=../crates/ivm/src/kotodama");
+    println!("cargo:rerun-if-changed=../crates/kotodama_lang/src");
     println!("cargo:rerun-if-changed=../crates/ivm/src/bin/ivm_prebuild.rs");
-    println!("cargo:rerun-if-changed=../crates/ivm/src/kotodama/samples");
+    println!("cargo:rerun-if-changed=../crates/kotodama_lang/src/samples");
     println!("cargo:rerun-if-changed=../integration_tests/fixtures/ivm");
 
     let root = workspace_root();

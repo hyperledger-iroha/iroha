@@ -114,6 +114,15 @@ Governance audit JSON metadata mirrors the repair telemetry labels (`status`, `t
 | `torii_sorafs_gc_expired_manifests` | Gauge | — | Current count of expired manifests observed by GC sweeps. |
 | `torii_sorafs_gc_oldest_expired_age_seconds` | Gauge | — | Age in seconds of the oldest expired manifest (after retention grace). |
 
+### Reconciliation
+
+| Metric | Type | Labels | Notes |
+|--------|------|--------|-------|
+| `sorafs.reconciliation.runs_total` | Counter | `result` | OTEL counter for reconciliation snapshots. |
+| `sorafs.reconciliation.divergence_total` | Counter | — | OTEL counter of divergence counts per run. |
+| `torii_sorafs_reconciliation_runs_total` | Counter | `result` | Prometheus counter for reconciliation runs. |
+| `torii_sorafs_reconciliation_divergence_count` | Gauge | — | Latest divergence count observed in a reconciliation report. |
+
 ### Proof of Timely Retrieval (PoTR) & chunk SLA
 
 | Metric | Type | Labels | Producer | Notes |
@@ -135,13 +144,13 @@ Governance audit JSON metadata mirrors the repair telemetry labels (`status`, `t
 1. **Gateway Observability** (`dashboards/grafana/sorafs_gateway_observability.json`) — tracks trustless availability, TTFB P95, refusal breakdown, and PoR/PoTR failures via the OTEL metrics.
 2. **Orchestrator Health** (`dashboards/grafana/sorafs_fetch_observability.json`) — covers multi-source load, retries, provider failures, and stall bursts.
 3. **SoraNet Privacy Metrics** (`dashboards/grafana/soranet_privacy_metrics.json`) — charts anonymised relay buckets, suppression windows, and collector health via `soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`, and `soranet_privacy_poll_errors_total{provider}`.
-4. **Capacity Health** (`dashboards/grafana/sorafs_capacity_health.json`) — tracks provider headroom plus GC sweeps, evictions, bytes freed, blocked reasons, and expired-manifest age.
+4. **Capacity Health** (`dashboards/grafana/sorafs_capacity_health.json`) — tracks provider headroom plus repair SLA escalations, repair queue depth by provider, and GC sweeps/evictions/bytes freed/blocked reasons/expired-manifest age and reconciliation divergence snapshots.
 
 Alert bundles:
 
 - `dashboards/alerts/sorafs_gateway_rules.yml` — gateway availability, TTFB, proof failure spikes.
 - `dashboards/alerts/sorafs_fetch_rules.yml` — orchestrator failures/retries/stalls; validated via `scripts/telemetry/test_sorafs_fetch_alerts.sh`, `dashboards/alerts/tests/sorafs_fetch_rules.test.yml`, `dashboards/alerts/tests/soranet_privacy_rules.test.yml`, and `dashboards/alerts/tests/soranet_policy_rules.test.yml`.
-- `dashboards/alerts/sorafs_capacity_rules.yml` — capacity pressure plus GC stall/blocked/error alerts for retention sweeps.
+- `dashboards/alerts/sorafs_capacity_rules.yml` — capacity pressure plus repair SLA/backlog/lease-expiry alerts and GC stall/blocked/error alerts for retention sweeps.
 - `dashboards/alerts/soranet_privacy_rules.yml` — privacy downgrade spikes, suppression alarms, collector-idle detection, and disabled-collector alerts (`soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`).
 - `dashboards/alerts/soranet_policy_rules.yml` — anonymity brownout alarms wired to `sorafs_orchestrator_brownouts_total`.
 - `dashboards/alerts/taikai_viewer_rules.yml` — Taikai viewer drift/ingest/CEK lag alarms plus the new SoraFS proof-health penalty/cooldown alerts powered by `torii_sorafs_proof_health_*`.
@@ -172,6 +181,8 @@ Alert bundles:
 - Label sets are standardised:
   - `result` → HTTP outcome (`success`, `refused`, `failed`).
   - `reason` → refusal/error code (`unsupported_chunker`, `timeout`, etc.).
+  - `status` → repair task state (`queued`, `in_progress`, `completed`, `failed`, `escalated`).
+  - `outcome` → repair lease or latency outcome (`requeued`, `escalated`, `completed`, `failed`).
   - `provider` → hex-encoded provider identifier.
   - `manifest` → canonical manifest digest (trimmed when high-cardinality).
   - `tier` → declarative tier labels (`hot`, `warm`, `archive`).

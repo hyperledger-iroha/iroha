@@ -854,7 +854,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kotodama::ir::{self, BasicBlock, Instr, Terminator};
+    use crate::ir::{self, BasicBlock, Instr, Terminator};
 
     #[test]
     fn reuse_registers_when_intervals_do_not_overlap() {

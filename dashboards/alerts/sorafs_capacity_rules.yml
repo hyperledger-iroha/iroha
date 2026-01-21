@@ -81,6 +81,48 @@ groups:
           description: |
             GC reported blocked evictions in the last 15 minutes (reason={{ $labels.reason }}).
             Resolve active repairs or policy constraints preventing retention cleanup.
+      - alert: SoraFSRepairBacklogHigh
+        expr: sum(torii_sorafs_repair_queue_depth) > 50 or torii_sorafs_repair_backlog_oldest_age_seconds > 14400
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS repair backlog above SLA thresholds"
+          description: |
+            Repair backlog exceeded thresholds for 10 minutes: queue depth over 50 tickets or
+            oldest queued ticket older than 4 hours. Check worker availability, per-provider
+            queue depth, and SLA timer configuration before the backlog escalates to slashes.
+      - alert: SoraFSRepairEscalations
+        expr: increase(torii_sorafs_repair_tasks_total{status="escalated"}[1h]) > 3
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS repair escalations elevated"
+          description: |
+            More than 3 repair tickets escalated within the last hour (SLA breaches). Review
+            audit evidence, verify worker health, and consider pausing new pins for affected
+            providers while the backlog is cleared.
+      - alert: SoraFSRepairLeaseExpirySpike
+        expr: increase(torii_sorafs_repair_lease_expired_total[1h]) > 5
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS repair lease expiries spiking"
+          description: |
+            Repair worker leases expired more than 5 times within the last hour. Investigate
+            worker crashes, clock skew, or stalled repair execution before SLA deadlines are missed.
+      - alert: SoraFSRetentionBlockedEvictions
+        expr: increase(torii_sorafs_gc_blocked_total{reason="repair_active"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS retention evictions blocked by active repairs"
+          description: |
+            Retention evictions were blocked by active repair tickets in the last 15 minutes.
+            Resolve outstanding repairs or reassign workers to unblock retention cleanup.
       - alert: SoraFSReserveLedgerTopUpRequired
         expr: sorafs_reserve_ledger_top_up_shortfall_xor > 0
         for: 0m

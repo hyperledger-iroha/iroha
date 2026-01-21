@@ -29,8 +29,8 @@ planned for v1). Examples:
 
 - A new `ProgramMetadata.abi_version` or `abi_hash` is proposed in `crates/ivm`
   as part of a core release.
-- Pointer-ABI types or syscall numbers change (see `crates/ivm/src/pointer_abi.rs`
-  and `crates/ivm/src/syscalls.rs`).
+- Pointer-ABI types or syscall numbers change (see `crates/ivm_abi/src/pointer_abi.rs`
+  and `crates/ivm_abi/src/syscalls.rs`).
 - Swift needs to expose ABI capability metadata (e.g., governance manifests,
   Torii `/v1/runtime/*` endpoints, or manifest builders) for Connect, multisig,
   or DA surfaces.

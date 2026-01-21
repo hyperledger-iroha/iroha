@@ -338,6 +338,14 @@ filters for audit queries. GC helpers (`gc inspect`, `gc dry-run`) scan the loca
 storage directory to report retention deadlines and expired manifests without
 performing deletions.
 
+Effective retention is computed as the minimum of `pin_policy.retention_epoch`
+and any manifest metadata caps (`sorafs.retention.deal_end_epoch`,
+`sorafs.retention.governance_cap_epoch`). Missing or zero-valued caps are
+treated as unbounded. The GC JSON output includes `retention_sources` so
+operators can see which constraint set each manifest’s expiry. When storage is
+under capacity pressure, GC sweeps evict expired manifests by least-recently-used
+ordering with `manifest_id` tie-breakers.
+
 ### Pin Registry REST Endpoints
 
 Torii now exposes read-only views of the on-chain pin registry so operators
@@ -394,7 +402,10 @@ The `iroha` CLI wraps the REST endpoints for day-to-day operations:
   `iroha sorafs replication list --status=pending` mirror the REST filters.
 - `iroha sorafs repair list --status=queued` mirrors the repair queue filters,
   while `repair claim|complete|fail|escalate` submit signed worker actions or
-  slash proposals to Torii.
+  slash proposals to Torii. Slash proposals may include a governance approval
+  summary (approve/reject/abstain vote counts plus approved_at/finalized_at
+  timestamps); when present it must satisfy quorum and dispute/appeal windows,
+  otherwise the proposal stays in dispute until votes resolve at the deadline.
 - Repair listings and worker queue selection are ordered by SLA deadline, failure severity, and provider backlog with deterministic tie-breakers (queued time, manifest digest, ticket id).
 - Repair status responses include an `events` array containing base64 Norito
   `RepairTaskEventV1` entries ordered by occurrence for audit trails; the list

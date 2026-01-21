@@ -12021,6 +12021,8 @@ impl State {
                 sorafs_pin_policy: iroha_config::parameters::actual::SorafsPinPolicyConstraints::default(),
                 sorafs_pricing: PricingScheduleRecord::default(),
                 sorafs_penalty: iroha_config::parameters::actual::SorafsPenaltyPolicy::default(),
+                sorafs_repair_escalation:
+                    iroha_config::parameters::actual::RepairEscalationPolicyV1::default(),
                 sorafs_telemetry: iroha_config::parameters::actual::SorafsTelemetryPolicy::default(),
                 sorafs_provider_owners: std::collections::BTreeMap::new(),
                 conviction_step_blocks: 100,
@@ -20380,6 +20382,8 @@ pub(crate) mod deserialize {
             sorafs_pricing:
                 iroha_data_model::sorafs::pricing::PricingScheduleRecord::launch_default(),
             sorafs_penalty: iroha_config::parameters::actual::SorafsPenaltyPolicy::default(),
+            sorafs_repair_escalation:
+                iroha_config::parameters::actual::RepairEscalationPolicyV1::default(),
             sorafs_telemetry: iroha_config::parameters::actual::SorafsTelemetryPolicy::default(),
             sorafs_provider_owners: std::collections::BTreeMap::new(),
             conviction_step_blocks: 100,

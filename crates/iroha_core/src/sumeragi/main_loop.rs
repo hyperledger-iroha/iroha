@@ -3314,6 +3314,10 @@ impl Actor {
         })
     }
 
+    fn request_commit_pipeline(&mut self) {
+        self.pending.commit_pipeline_wakeup = true;
+    }
+
     fn rbc_rebroadcast_active_with_tip_and_session(
         &self,
         key: super::rbc_store::SessionKey,
@@ -4143,6 +4147,7 @@ struct PendingBlockState {
     pending_processing: Cell<Option<HashOf<BlockHeader>>>,
     pending_processing_parent: Cell<Option<HashOf<BlockHeader>>>,
     last_commit_pipeline_run: Instant,
+    commit_pipeline_wakeup: bool,
 }
 
 struct CommitInFlight {
@@ -4198,6 +4203,7 @@ struct ProposeState {
     new_view_tracker: NewViewTracker,
     proposals_seen: BTreeSet<(u64, u64)>,
     pacemaker_backpressure: PacemakerBackpressure,
+    pacemaker_backpressure_tracker: pacing::PacemakerBackpressureTracker,
     last_pacemaker_attempt: Option<Instant>,
     last_successful_proposal: Option<Instant>,
     propose_attempt_monitor: ProposeAttemptMonitor,
@@ -4245,6 +4251,7 @@ fn reset_runtime_state_for_mode_flip(
     phase_tracker: &mut PhaseTracker,
     propose_attempt_monitor: &mut ProposeAttemptMonitor,
     pacemaker_backpressure: &mut PacemakerBackpressure,
+    pacemaker_backpressure_tracker: &mut pacing::PacemakerBackpressureTracker,
     forced_view_after_timeout: &mut Option<(u64, u64)>,
     last_pacemaker_attempt: &mut Option<Instant>,
     last_successful_proposal: &mut Option<Instant>,
@@ -4262,6 +4269,7 @@ fn reset_runtime_state_for_mode_flip(
     *phase_tracker = PhaseTracker::new(now);
     *propose_attempt_monitor = ProposeAttemptMonitor::new();
     *pacemaker_backpressure = PacemakerBackpressure::new();
+    *pacemaker_backpressure_tracker = pacing::PacemakerBackpressureTracker::new();
     *forced_view_after_timeout = None;
     *last_pacemaker_attempt = None;
     *last_successful_proposal = None;
@@ -7230,6 +7238,7 @@ impl Actor {
             new_view_tracker: NewViewTracker::default(),
             proposals_seen: BTreeSet::new(),
             pacemaker_backpressure: PacemakerBackpressure::new(),
+            pacemaker_backpressure_tracker: pacing::PacemakerBackpressureTracker::new(),
             last_pacemaker_attempt: None,
             last_successful_proposal: None,
             propose_attempt_monitor: ProposeAttemptMonitor::new(),
@@ -7313,6 +7322,7 @@ impl Actor {
                 pending_processing: Cell::new(None),
                 pending_processing_parent: Cell::new(None),
                 last_commit_pipeline_run: initial_commit_pipeline_run,
+                commit_pipeline_wakeup: false,
             },
             voting_block: None,
             pending_roster_activation,
@@ -8072,6 +8082,9 @@ impl Actor {
         if queue_len > 0 {
             return Some(now);
         }
+        if self.pending.commit_pipeline_wakeup {
+            return Some(now);
+        }
         let mut next_due = Self::merge_deadline(None, self.pending_block_next_due(now));
 
         if !self.deferred_votes.is_empty() || !self.deferred_qcs.is_empty() {
@@ -8170,9 +8183,12 @@ impl Actor {
             || rbc_rebroadcast_progress
             || rbc_outbound_progress
             || rbc_session_ttl_progress;
+        let commit_wakeup = self.pending.commit_pipeline_wakeup;
         if should_run_commit_pipeline_on_tick(self.active_pending_blocks_len())
             || self.subsystems.commit.inflight.is_some()
+            || commit_wakeup
         {
+            self.pending.commit_pipeline_wakeup = false;
             let pipeline_start = Instant::now();
             self.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick);
             commit_pipeline_cost = pipeline_start.elapsed();
@@ -8203,6 +8219,12 @@ impl Actor {
                 now,
             );
         let pacemaker_eval_cost = pacemaker_eval_start.elapsed();
+        let deferring = proposal_backpressure.should_defer() && !should_attempt_proposal;
+        let telemetry = self.telemetry_handle().cloned();
+        self.subsystems
+            .propose
+            .pacemaker_backpressure_tracker
+            .update(proposal_backpressure, deferring, now, telemetry);
         if log_initial_deferral || log_fire_deferral {
             self.on_pacemaker_backpressure_deferral(now, state);
         }
@@ -8212,6 +8234,12 @@ impl Actor {
                 progress = true;
             }
             propose_cost = propose_cost.saturating_add(propose_start.elapsed());
+        }
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.observe_pacemaker_eval_ms(pacemaker_eval_cost);
+            if propose_cost != Duration::ZERO {
+                telemetry.observe_pacemaker_propose_ms(propose_cost);
+            }
         }
         let tick_cost = tick_start.elapsed();
         let timing = self.tick_timing.observe(tick_start, tick_cost);
