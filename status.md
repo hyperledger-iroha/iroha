@@ -1,7 +1,9 @@
 # Status
 
-Last update: 2026-01-20
+Last update: 2026-01-21
 
+- Torii onboarding now publishes a default Space Directory manifest for the global dataspace when missing, binding UAIDs immediately; added onboarding integration coverage and updated UAID docs/OpenAPI descriptions.
+- Tests: not run (onboarding binding change + docs/OpenAPI updates).
 - SDKs (Swift): aligned offline receipt Poseidon sample account to the canonical ed25519 seed `[0x01; 32]`, refreshed receiver hash expectations, and synced Swift offline_poseidon vectors to the artifacts snapshot.
 - Tests: not run (Swift SDK fixture/value updates only).
 - SoraFS repair telemetry: added backlog age/queue depth/lease expiry metrics to Prometheus + OTEL, extended repair audit events and governance metadata with manifest/provider IDs, and refreshed repair observability docs.
