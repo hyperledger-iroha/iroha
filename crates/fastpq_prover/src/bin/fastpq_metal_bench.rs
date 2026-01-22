@@ -673,7 +673,7 @@ mod harness {
         PostTileSample, QueueDepthStats, TwiddleCacheStats, adaptive_schedule_snapshot,
         clear_execution_mode_observer, enable_kernel_stats, enable_lde_host_stats,
         enable_poseidon_pipeline_stats, enable_post_tile_stats, enable_queue_depth_stats,
-        enable_twiddle_cache_stats, fft_tuning_snapshot, overrides, poseidon_tuning_snapshot,
+        enable_twiddle_cache_stats, fft_tuning_snapshot, poseidon_tuning_snapshot,
         set_execution_mode_observer, snapshot_queue_depth_stats, take_column_staging_stats,
         take_kernel_stats, take_lde_host_stats, take_poseidon_pipeline_stats, take_post_tile_stats,
         take_queue_depth_stats, take_twiddle_cache_stats,
@@ -685,11 +685,24 @@ mod harness {
     use norito::json::{self, Value};
 
     fn debug_env_var(name: &str) -> Option<String> {
-        overrides::debug_env_string(name)
+        #[cfg(any(test, debug_assertions))]
+        {
+            return env::var(name).ok();
+        }
+        #[cfg(not(any(test, debug_assertions)))]
+        {
+            let _ = name;
+            None
+        }
     }
 
     fn debug_env_bool(name: &str) -> Option<bool> {
-        overrides::debug_env_bool(name)
+        debug_env_var(name).map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
     }
 
     pub(super) const DEFAULT_TRACE_TEMPLATE: &str = "Metal System Trace";
@@ -1055,7 +1068,7 @@ mod harness {
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum RunState {
+    pub(super) enum RunState {
         Ok,
         GpuUnavailable,
         GpuFallback,
@@ -1737,7 +1750,7 @@ mod harness {
         Value::Object(map)
     }
 
-    fn classify_run(
+    pub(super) fn classify_run(
         gpu_available: bool,
         backend_label: &str,
         operations: &[Value],
@@ -2944,12 +2957,12 @@ mod harness {
     #[test]
     fn enforce_gpu_requirement_errors_when_requested() {
         let error =
-            harness::enforce_gpu_requirement(true, false, false, ExecutionMode::Cpu, "none")
+            self::enforce_gpu_requirement(true, false, false, ExecutionMode::Cpu, "none")
                 .expect_err("missing GPU should error when required");
         assert!(error.contains("--require-gpu"));
         assert!(error.contains("resolved mode=cpu"));
 
-        harness::enforce_gpu_requirement(false, false, false, ExecutionMode::Cpu, "none")
+        self::enforce_gpu_requirement(false, false, false, ExecutionMode::Cpu, "none")
             .expect("cpu fallback allowed when GPU not required");
     }
 
@@ -2957,7 +2970,7 @@ mod harness {
     fn classify_run_marks_missing_queue() {
         let cpu = Summary::from_samples(&[1.0]);
         let gpu = Summary::from_samples(&[0.5]);
-        let operations = vec![harness::operation_value(
+        let operations = vec![self::operation_value(
             "fft",
             8,
             2,
@@ -2984,7 +2997,7 @@ mod harness {
     #[test]
     fn classify_run_detects_gpu_fallback() {
         let cpu = Summary::from_samples(&[1.0, 1.1]);
-        let operations = vec![harness::operation_value("fft", 8, 2, &cpu, None, None)];
+        let operations = vec![self::operation_value("fft", 8, 2, &cpu, None, None)];
         let queue = QueueDepthStats {
             limit: 2,
             dispatch_count: 1,
@@ -3014,7 +3027,7 @@ mod harness {
     fn classify_run_accepts_complete_gpu_capture() {
         let cpu = Summary::from_samples(&[1.0, 1.2]);
         let gpu = Summary::from_samples(&[0.4, 0.5]);
-        let operations = vec![harness::operation_value(
+        let operations = vec![self::operation_value(
             "fft",
             8,
             2,

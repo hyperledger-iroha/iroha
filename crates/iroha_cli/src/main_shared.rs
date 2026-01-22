@@ -3,6 +3,7 @@ mod audit;
 #[cfg(feature = "bridge")]
 mod bridge;
 mod commands;
+mod cli_output;
 mod compute;
 mod confidential;
 #[cfg(test)]
@@ -287,8 +288,9 @@ trait RunContext {
     }
 }
 
-struct PrintJsonContext<W> {
+struct PrintJsonContext<W, E> {
     write: W,
+    err_write: E,
     config: Config,
     transaction_metadata: Option<Metadata>,
     input_instructions: bool,
@@ -297,7 +299,7 @@ struct PrintJsonContext<W> {
     i18n: Localizer,
 }
 
-impl<W: std::io::Write> RunContext for PrintJsonContext<W> {
+impl<W: std::io::Write, E: std::io::Write> RunContext for PrintJsonContext<W, E> {
     fn config(&self) -> &Config {
         &self.config
     }
@@ -342,7 +344,11 @@ impl<W: std::io::Write> RunContext for PrintJsonContext<W> {
     }
 
     fn println(&mut self, data: impl Display) -> Result<()> {
-        writeln!(&mut self.write, "{data}")?;
+        if self.output_format == CliOutputFormat::Json {
+            writeln!(&mut self.err_write, "{data}")?;
+        } else {
+            writeln!(&mut self.write, "{data}")?;
+        }
         Ok(())
     }
 }
@@ -634,6 +640,34 @@ enum MainError {
     Command,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CliErrorKind {
+    Config,
+    Input,
+    Command,
+    Internal,
+}
+
+impl CliErrorKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::Input => "input",
+            Self::Command => "command",
+            Self::Internal => "internal",
+        }
+    }
+
+    fn exit_code(self) -> i32 {
+        match self {
+            Self::Config => 3,
+            Self::Input => 4,
+            Self::Command => 1,
+            Self::Internal => 7,
+        }
+    }
+}
+
 #[derive(clap::Args, Debug)]
 struct MarkdownHelp;
 
@@ -677,8 +711,20 @@ impl Run for Version {
     }
 }
 
-fn main() -> ReportResult<(), MainError> {
-    run_with_line(build_line())
+fn main() {
+    let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let output_format = output_format_override_from_args(
+        raw_args
+            .iter()
+            .skip(1)
+            .map(|arg| arg.to_string_lossy().into_owned()),
+    )
+    .unwrap_or(CliOutputFormat::Json);
+    if let Err(report) = run_with_line(build_line()) {
+        let rendered = render_cli_error(&report, output_format);
+        eprint!("{}", rendered.output);
+        std::process::exit(rendered.kind.exit_code());
+    }
 }
 
 #[allow(clippy::too_many_lines)]
@@ -792,6 +838,7 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
 
     let mut context = PrintJsonContext {
         write: io::stdout(),
+        err_write: io::stderr(),
         config,
         transaction_metadata: None,
         input_instructions: args.input,
@@ -863,6 +910,37 @@ fn localize_help_text(help: &str, i18n: &Localizer) -> String {
         }
     }
     localized
+}
+
+fn output_format_override_from_args<I, S>(args: I) -> Option<CliOutputFormat>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        let arg = arg.as_ref();
+        if arg == "--output-format" {
+            if let Some(value) = iter.next() {
+                if let Some(format) = parse_output_format(value.as_ref()) {
+                    return Some(format);
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--output-format=") {
+            if let Some(format) = parse_output_format(value) {
+                return Some(format);
+            }
+        }
+    }
+    None
+}
+
+fn parse_output_format(value: &str) -> Option<CliOutputFormat> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "json" => Some(CliOutputFormat::Json),
+        "text" => Some(CliOutputFormat::Text),
+        _ => None,
+    }
 }
 
 fn color_mode() -> ColorMode {
@@ -999,7 +1077,7 @@ fn load_client_toml_fallback(path: &Path) -> Option<Config> {
     })
 }
 
-fn fallback_config() -> Config {
+pub(crate) fn fallback_config() -> Config {
     let chain = ChainId::from("offline-cli");
     let domain: DomainId = "offline".parse().expect("offline domain parses");
     let seed = vec![0u8; 32];
@@ -6490,6 +6568,67 @@ fn decode_base64_or_hex(
 
 type ReportResult<T, E> = core::result::Result<T, Report<E>>;
 
+fn error_kind_for_report(report: &Report<MainError>) -> CliErrorKind {
+    match report.current_context() {
+        MainError::Config => CliErrorKind::Config,
+        MainError::TransactionMetadata => CliErrorKind::Input,
+        MainError::SerializeConfig => CliErrorKind::Internal,
+        MainError::Command => CliErrorKind::Command,
+    }
+}
+
+struct CliRenderedError {
+    kind: CliErrorKind,
+    output: String,
+}
+
+fn render_cli_error(report: &Report<MainError>, output_format: CliOutputFormat) -> CliRenderedError {
+    let kind = error_kind_for_report(&report);
+    let message = report.to_string();
+    let output = match output_format {
+        CliOutputFormat::Text => format!("error: {message}\n"),
+        CliOutputFormat::Json => {
+            let rendered = json_utils::json_object(vec![
+                (
+                    "error",
+                    json_utils::json_object(vec![
+                        (
+                            "kind",
+                            json_utils::json_value(&kind.label()).unwrap_or(json::Value::Null),
+                        ),
+                        (
+                            "message",
+                            json_utils::json_value(&message).unwrap_or(json::Value::Null),
+                        ),
+                        (
+                            "exit_code",
+                            json_utils::json_value(&kind.exit_code())
+                                .unwrap_or(json::Value::Null),
+                        ),
+                    ])
+                    .unwrap_or(json::Value::Null),
+                ),
+            ])
+            .and_then(|value| {
+                norito::json::to_json_pretty(&value)
+                    .map_err(|err| eyre!("failed to render error JSON: {err}"))
+            });
+            match rendered {
+                Ok(mut payload) => {
+                    if !payload.ends_with('\n') {
+                        payload.push('\n');
+                    }
+                    payload
+                }
+                Err(err) => format!(
+                    "error: {message}\nerror: failed to render JSON payload: {err}\n"
+                ),
+            }
+        }
+    };
+    CliRenderedError { kind, output }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6505,7 +6644,7 @@ mod tests {
         metadata::Metadata,
         transaction::Executable,
     };
-    use iroha_i18n::Language;
+    use iroha_i18n::{Bundle, Language, Localizer};
     use std::{
         fs,
         num::NonZeroU64,
@@ -6516,6 +6655,70 @@ mod tests {
 
     #[derive(Clone, Copy, JsonSerialize)]
     struct DummyEvent;
+
+    fn test_context(output_format: CliOutputFormat) -> PrintJsonContext<Vec<u8>, Vec<u8>> {
+        PrintJsonContext {
+            write: Vec::new(),
+            err_write: Vec::new(),
+            config: fallback_config(),
+            transaction_metadata: None,
+            input_instructions: false,
+            output_instructions: false,
+            output_format,
+            i18n: Localizer::new(Bundle::Cli, Language::English),
+        }
+    }
+
+    #[test]
+    fn output_format_override_from_args_parses_flags() {
+        let args = ["--output-format", "text"];
+        assert_eq!(
+            output_format_override_from_args(args),
+            Some(CliOutputFormat::Text)
+        );
+        let args = ["--output-format=json"];
+        assert_eq!(
+            output_format_override_from_args(args),
+            Some(CliOutputFormat::Json)
+        );
+    }
+
+    #[test]
+    fn render_cli_error_includes_kind_and_exit_code() {
+        let report = Report::new(MainError::Config);
+        let rendered = render_cli_error(&report, CliOutputFormat::Json);
+        assert_eq!(rendered.kind, CliErrorKind::Config);
+        let value: norito::json::Value =
+            norito::json::from_str(&rendered.output).expect("parse error json");
+        let obj = value.as_object().expect("error object");
+        let err = obj.get("error").expect("error field");
+        assert_eq!(
+            err.get("kind").and_then(norito::json::Value::as_str),
+            Some("config")
+        );
+        assert_eq!(
+            err.get("exit_code").and_then(norito::json::Value::as_i64),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn printjsoncontext_routes_text_to_stderr_in_json_mode() {
+        let mut ctx = test_context(CliOutputFormat::Json);
+        ctx.println("hello").expect("println");
+        assert!(ctx.write.is_empty(), "stdout should be empty");
+        let stderr = String::from_utf8(ctx.err_write).expect("stderr utf8");
+        assert_eq!(stderr, "hello\n");
+    }
+
+    #[test]
+    fn printjsoncontext_writes_text_to_stdout_in_text_mode() {
+        let mut ctx = test_context(CliOutputFormat::Text);
+        ctx.println("hello").expect("println");
+        assert!(ctx.err_write.is_empty(), "stderr should be empty");
+        let stdout = String::from_utf8(ctx.write).expect("stdout utf8");
+        assert_eq!(stdout, "hello\n");
+    }
 
     #[test]
     fn resolve_account_id_with_prefers_public_key_domain() {
