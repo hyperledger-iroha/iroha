@@ -2,6 +2,18 @@
 
 Last update: 2026-01-22
 
+- CLI: normalized JSON/text output and flag behavior across `iroha_cli` commands (da/alias/sns/kaigi/sorafs/taikai/streaming/soracles), added structured summaries, and renamed handshake token encoding flag to `--token-encoding`.
+- Tests: not run (CLI output normalization only).
+- Sumeragi worker-loop scheduling: rotate to the oldest pending tier after a vote burst to keep RBC/payload draining; added `select_next_tier_picks_oldest_pending_after_vote_burst` coverage and reordered a borrow in `proposal_backpressure_blocks_commit_qc_pending_after_reschedule`.
+- Tests: `cargo test -p iroha_core select_next_tier_picks_oldest_pending_after_vote_burst -- --nocapture` (ok).
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Build: `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target-localnet25 cargo build --release -p iroha_kagami -p irohad` (ok). `-p iroha_cli` failed: missing DA CLI output helpers (`SubmitOutput`, `build_manifest_fetch_value`) in `crates/iroha_cli/src/commands/da.rs`.
+- Localnet (NPoS, 7 peers, 753ms, telemetry=extended): `/private/tmp/iroha-localnet-7peer-run156-npos` (24980/25900). 50 TPS for 120s with 1s `/metrics` sampling → height 33 after 143s (avg block interval 4.33s). Status after load: `commit_qc.height=43`, `view_change_index=3` (`missing_qc_total=6`, `stake_quorum_timeout_total=3`), `tx_queue.depth=0`. Metrics: `metrics-sumeragi-load.log`.
+- Localnet (permissioned, 7 peers, 753ms, telemetry=extended): `/private/tmp/iroha-localnet-7peer-run156-perm` (25080/26000). 50 TPS for 120s with 1s `/metrics` sampling → height 31 after 139s (avg block interval 4.48s). Status after load: `commit_qc.height=41`, `view_change_index=0`, `tx_queue.depth=200`, commit inflight active. Metrics: `metrics-sumeragi-load.log`.
+- FASTPQ: refreshed ordering hash golden vector for the transfer fixture to match current ordering-hash output.
+- Tests: not run (fixture alignment only).
+- FASTPQ: refreshed transfer trace-commitment fixture metadata and updated the transfer golden commitment vector.
+- Tests: `cargo test -p fastpq_prover trace_commitment_matches_golden_vectors -- --nocapture` (ok).
 - FASTPQ: added a stage2 CPU/GPU proof parity check and fixed `fastpq_metal_bench` harness visibility/env parsing to compile under `fastpq-gpu`.
 - Tests: `cargo test -p fastpq_prover stage2_artifact_balanced_1k_matches_fixture -- --nocapture` (ok).
 - Tests: `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu stage2_artifact_balanced_1k_matches_fixture -- --nocapture` (failed: missing Metal Toolchain; `xcodebuild -downloadComponent MetalToolchain` required).

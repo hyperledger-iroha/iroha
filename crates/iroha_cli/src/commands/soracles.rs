@@ -21,6 +21,7 @@ use norito::{
 };
 
 use crate::{Run, RunContext};
+use crate::cli_output::print_with_optional_text;
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -61,6 +62,8 @@ pub struct Bundle {
 #[derive(Args, Debug)]
 pub struct Catalog {
     /// Output format (`json` for machine consumption, `markdown` for docs/runbooks).
+    ///
+    /// Ignored when `--output-format json` is used.
     #[arg(long, value_enum, default_value_t = CatalogFormat::Json)]
     format: CatalogFormat,
 }
@@ -144,6 +147,12 @@ pub struct BundleSummary {
     pub coverage: BundleCoverage,
 }
 
+#[derive(Debug, Clone, JsonSerialize)]
+struct BundleOutput {
+    manifest_path: String,
+    summary: BundleSummary,
+}
+
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct BundleCoverage {
     pub total_feed_events: usize,
@@ -166,6 +175,12 @@ pub struct GcReport {
     pub pruned_files: Vec<PrunedFile>,
     pub skipped_bundles: Vec<SkippedBundle>,
     pub bytes_freed: u64,
+}
+
+#[derive(Debug, JsonSerialize)]
+struct GcOutput {
+    report_path: String,
+    report: GcReport,
 }
 
 #[derive(Debug, JsonSerialize)]
@@ -232,22 +247,30 @@ impl Run for Bundle {
         fs::write(&manifest_path, rendered)
             .wrap_err_with(|| format!("failed to write {}", manifest_path.display()))?;
 
-        context.println(format!(
+        let text = format!(
             "soracles bundle wrote manifest={} (artifacts={} entries, feed_events={}, missing_hashes={})",
             manifest_path.display(),
             summary.evidence.len(),
             summary.feed_events.len(),
             summary.coverage.missing_hashes_total
-        ))
+        );
+        let output = BundleOutput {
+            manifest_path: manifest_path.display().to_string(),
+            summary,
+        };
+        print_with_optional_text(context, Some(text), &output)
     }
 }
 
 impl Run for Catalog {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let catalog = build_rejection_catalog();
-        match self.format {
-            CatalogFormat::Json => context.print_data(&catalog),
-            CatalogFormat::Markdown => context.println(render_catalog_markdown(&catalog)),
+        match context.output_format() {
+            crate::CliOutputFormat::Json => context.print_data(&catalog),
+            crate::CliOutputFormat::Text => match self.format {
+                CatalogFormat::Json => context.print_data(&catalog),
+                CatalogFormat::Markdown => context.println(render_catalog_markdown(&catalog)),
+            },
         }
     }
 }
@@ -277,14 +300,19 @@ impl Run for GcArgs {
             .wrap_err_with(|| format!("failed to write {}", report_path.display()))?;
 
         let verb = if self.dry_run { "scanned" } else { "pruned" };
-        context.println(format!(
+        let text = format!(
             "soracles evidence-gc {verb}: removed_bundles={} pruned_files={} bytes_freed={} retained={} report={}",
             report.removed_bundles.len(),
             report.pruned_files.len(),
             report.bytes_freed,
             report.retained_bundles,
             report_path.display()
-        ))
+        );
+        let output = GcOutput {
+            report_path: report_path.display().to_string(),
+            report,
+        };
+        print_with_optional_text(context, Some(text), &output)
     }
 }
 
@@ -823,7 +851,67 @@ mod tests {
         FeedEvent, FeedSuccess, ObservationBody, ObservationValue, ReportEntry,
     };
     use iroha_crypto::HashOf;
+    use iroha_i18n::{Bundle as I18nBundle, Language, Localizer};
+    use std::fmt::Display;
     use tempfile::TempDir;
+
+    struct TestContext {
+        output_format: crate::CliOutputFormat,
+        printed: Vec<String>,
+        config: iroha::config::Config,
+        i18n: Localizer,
+    }
+
+    impl TestContext {
+        fn new(output_format: crate::CliOutputFormat) -> Self {
+            Self {
+                output_format,
+                printed: Vec::new(),
+                config: crate::fallback_config(),
+                i18n: Localizer::new(I18nBundle::Cli, Language::English),
+            }
+        }
+    }
+
+    impl RunContext for TestContext {
+        fn config(&self) -> &iroha::config::Config {
+            &self.config
+        }
+
+        fn transaction_metadata(&self) -> Option<&iroha::data_model::metadata::Metadata> {
+            None
+        }
+
+        fn input_instructions(&self) -> bool {
+            false
+        }
+
+        fn output_instructions(&self) -> bool {
+            false
+        }
+
+        fn i18n(&self) -> &Localizer {
+            &self.i18n
+        }
+
+        fn output_format(&self) -> crate::CliOutputFormat {
+            self.output_format
+        }
+
+        fn print_data<T>(&mut self, data: &T) -> eyre::Result<()>
+        where
+            T: norito::json::JsonSerialize + ?Sized,
+        {
+            let rendered = norito::json::to_json_pretty(data)?;
+            self.printed.push(rendered);
+            Ok(())
+        }
+
+        fn println(&mut self, data: impl Display) -> eyre::Result<()> {
+            self.printed.push(data.to_string());
+            Ok(())
+        }
+    }
 
     #[test]
     fn builds_bundle_and_marks_missing_hashes() {
@@ -947,6 +1035,101 @@ mod tests {
             rendered.contains("Catalog version"),
             "expected catalog version header"
         );
+    }
+
+    #[test]
+    fn catalog_run_ignores_markdown_when_output_is_json() {
+        let mut ctx = TestContext::new(crate::CliOutputFormat::Json);
+        Catalog {
+            format: CatalogFormat::Markdown,
+        }
+        .run(&mut ctx)
+        .expect("run catalog");
+        assert_eq!(ctx.printed.len(), 1);
+        let value: Value = json::from_str(&ctx.printed[0]).expect("json output");
+        let obj = value.as_object().expect("object");
+        assert!(obj.contains_key("observation_errors"));
+    }
+
+    #[test]
+    fn bundle_run_emits_json_output() {
+        let tmp = TempDir::new().expect("tmpdir");
+        let events_path = tmp.path().join("events.json");
+        let artifacts_root = tmp.path().join("bundle");
+        let observed_payload = br#"{"dummy":"payload"}"#;
+        let feed_id: FeedId = "xor_usd".parse().expect("feed id");
+        let observed = Hash::new(observed_payload);
+        let observation_hash = HashOf::<ObservationBody>::from_untyped_unchecked(Hash::new(b"req"));
+        let event = FeedEventRecord {
+            event: FeedEvent {
+                feed_id,
+                feed_config_version: FeedConfigVersion(1),
+                slot: 42,
+                outcome: FeedEventOutcome::Success(FeedSuccess {
+                    value: ObservationValue::new(1_000, 2),
+                    entries: vec![ReportEntry {
+                        oracle_id: "34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA"
+                            .parse()
+                            .expect("oracle id"),
+                        observation_hash,
+                        value: ObservationValue::new(1_000, 2),
+                        outlier: false,
+                    }],
+                }),
+            },
+            evidence_hashes: vec![observed],
+        };
+        let rendered = json::to_json_pretty(&event).expect("serialize feed event");
+        fs::write(&events_path, rendered).expect("write events");
+        let observation_dir = tmp.path().join("observations");
+        fs::create_dir(&observation_dir).expect("mkdir observations");
+        let observation_path = observation_dir.join("obs.json");
+        fs::write(&observation_path, observed_payload).expect("write observation");
+
+        let mut ctx = TestContext::new(crate::CliOutputFormat::Json);
+        Bundle {
+            events: events_path,
+            output: artifacts_root,
+            observations: Some(observation_dir),
+            reports: None,
+            responses: None,
+            disputes: None,
+            telemetry: None,
+        }
+        .run(&mut ctx)
+        .expect("bundle run");
+        assert_eq!(ctx.printed.len(), 1);
+        let value: Value = json::from_str(&ctx.printed[0]).expect("json output");
+        let obj = value.as_object().expect("object");
+        assert!(obj.contains_key("manifest_path"));
+        assert!(obj.contains_key("summary"));
+    }
+
+    #[test]
+    fn gc_run_emits_json_output() {
+        let tmp = TempDir::new().expect("tmpdir");
+        let root = tmp.path().join("soracles");
+        fs::create_dir(&root).expect("mkdir root");
+        let report_path = root.join("gc_report.json");
+        let mut ctx = TestContext::new(crate::CliOutputFormat::Json);
+        GcArgs {
+            root,
+            retention_days: 1,
+            dispute_retention_days: 1,
+            report: Some(report_path.clone()),
+            prune_unreferenced: false,
+            dry_run: true,
+        }
+        .run(&mut ctx)
+        .expect("gc run");
+        assert_eq!(ctx.printed.len(), 1);
+        let value: Value = json::from_str(&ctx.printed[0]).expect("json output");
+        let obj = value.as_object().expect("object");
+        assert_eq!(
+            obj.get("report_path").and_then(Value::as_str),
+            Some(report_path.to_string_lossy().as_ref())
+        );
+        assert!(obj.get("report").is_some());
     }
 
     #[test]

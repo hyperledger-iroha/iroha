@@ -93,7 +93,7 @@ mod tests {
     #[test]
     fn print_with_optional_text_prefers_json_in_json_mode() {
         let mut ctx = TestContext::new(CliOutputFormat::Json);
-        let payload = norito::json::json!({"ok": true});
+        let payload = norito::json!({"ok": true});
         print_with_optional_text(&mut ctx, Some("hello".into()), &payload)
             .expect("emit");
         assert_eq!(ctx.printed.len(), 1);
@@ -103,7 +103,7 @@ mod tests {
     #[test]
     fn print_with_optional_text_uses_text_in_text_mode() {
         let mut ctx = TestContext::new(CliOutputFormat::Text);
-        let payload = norito::json::json!({"ok": true});
+        let payload = norito::json!({"ok": true});
         print_with_optional_text(&mut ctx, Some("hello".into()), &payload)
             .expect("emit");
         assert_eq!(ctx.printed, vec!["hello"]);
@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn print_with_optional_text_falls_back_to_json_when_missing_text() {
         let mut ctx = TestContext::new(CliOutputFormat::Text);
-        let payload = norito::json::json!({"ok": true});
+        let payload = norito::json!({"ok": true});
         print_with_optional_text(&mut ctx, None, &payload).expect("emit");
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"ok\":true"));

@@ -3083,7 +3083,9 @@ mod multisig {
             }
 
             let instructions_hash = HashOf::new(&instructions);
-            println!("{instructions_hash}");
+            if matches!(context.output_format(), CliOutputFormat::Text) {
+                context.println(format_args!("instructions_hash: {instructions_hash}"))?;
+            }
 
             let propose_multisig_transaction =
                 MultisigPropose::new(account, instructions, transaction_ttl_ms);

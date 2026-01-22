@@ -1349,5 +1349,10 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Enforce UAID uniqueness at admission/onboarding, and replace UAID scans/portfolio aggregation with direct lookup; errors on duplicates are invariant violations.
 - [x] Refactor Torii routing/address parsing to canonicalize all account inputs without config gating (remove `strict_addresses` and ISO-only alias resolver assumptions).
 - [x] Update SDKs/CLI/bridges to accept the new input forms and always render IH58; refresh docs/examples for Sora Nexus account addressing.
- - [x] Tests: unit coverage for UAID uniqueness and index behavior.
+- [x] Tests: unit coverage for UAID uniqueness and index behavior.
 - [x] Tests: unit + integration coverage for alias collisions, domain-selector reverse index determinism, and input canonicalization.
+
+28. **CLI-OUTPUT-NORMALIZATION — Unify CLI outputs/flags for first release** (Tooling/CLI, Line: Shared, Owner: DX WG, Priority: High, Status: 🈴 Completed, target TBD)
+ - [x] Normalize output formats and error handling across `iroha_cli` subcommands (JSON vs text summaries).
+ - [x] Align flag naming to avoid collisions with `--output-format` (handshake token `--token-encoding`).
+ - [x] Capture CLI output normalization status in `status.md`.

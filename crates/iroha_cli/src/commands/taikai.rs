@@ -7,7 +7,8 @@
 use super::da_common::{
     DaPublisher, metadata_map_to_extra, parse_blob_class, parse_fec_scheme, parse_storage_class,
 };
-use crate::{Run, RunContext};
+use crate::{CliOutputFormat, Run, RunContext};
+use crate::cli_output::print_with_optional_text;
 use blake3::Hasher;
 use clap::ValueEnum;
 use eyre::{Result, WrapErr, eyre};
@@ -40,6 +41,7 @@ use std::{
     collections::{HashMap, HashSet},
     env,
     fs::{self, File, OpenOptions},
+    fmt::Write as _,
     io::{Read, Write},
     path::{Path, PathBuf},
     str::FromStr,
@@ -230,36 +232,9 @@ impl Run for BundleArgs {
             extra_metadata,
         })?;
 
-        context.println("Taikai segment bundle generated")?;
-        context.println(format_args!(
-            "car_cid (multibase): {}",
-            summary.car_pointer.cid_multibase
-        ))?;
-        context.println(format_args!(
-            "car_digest (blake3-256 hex): {}",
-            hex::encode(summary.car_pointer.car_digest.as_bytes())
-        ))?;
-        context.println(format_args!(
-            "car_size_bytes: {}",
-            summary.car_pointer.car_size_bytes
-        ))?;
-        context.println(format_args!(
-            "chunk_root (blake3-256 hex): {}",
-            hex::encode(summary.chunk_root.as_bytes())
-        ))?;
-        context.println(format_args!("chunk_count: {}", summary.chunk_count))?;
-        context.println(format_args!("car_out: {}", summary.car_out.display()))?;
-        context.println(format_args!(
-            "envelope_out: {}",
-            summary.envelope_out.display()
-        ))?;
-        if let Some(path) = summary.indexes_out {
-            context.println(format_args!("indexes_out: {}", path.display()))?;
-        }
-        if let Some(path) = summary.ingest_metadata_out {
-            context.println(format_args!("ingest_metadata_out: {}", path.display()))?;
-        }
-        Ok(())
+        let summary_value = build_bundle_summary_value(&summary);
+        let text = render_bundle_summary_text(&summary);
+        print_with_optional_text(context, Some(text), &summary_value)
     }
 }
 
@@ -373,20 +348,14 @@ impl Run for IngestEdgeArgs {
             .with_output(&layout, self.first_segment_pts, self.segment_interval_ms)
             .with_node(self.ingest_node_id.as_deref());
         summary.write(&layout.drift_summary_path)?;
-        context.println(format_args!(
-            "Taikai ingest edge emitted {segments} fragments to `{dir}` (protocol={proto}, drift={base}ms±{jitter}ms)",
-            segments = self.segments,
-            dir = layout.fragments_dir.display(),
-            proto = self.protocol.as_str(),
-            base = self.drift_ms,
-            jitter = self.drift_jitter_ms,
-        ))?;
-        context.println(format_args!(
-            "drift log: {} (summary: {})",
-            layout.log_path.display(),
-            layout.drift_summary_path.display()
-        ))?;
-        Ok(())
+        let summary_value = build_edge_output_value(&summary, &layout.drift_summary_path);
+        let text = render_edge_summary_text(
+            &summary,
+            &layout.drift_summary_path,
+            self.drift_ms,
+            self.drift_jitter_ms,
+        );
+        print_with_optional_text(context, Some(text), &summary_value)
     }
 }
 
@@ -711,12 +680,19 @@ impl Run for CekRotateArgs {
         if let Some(path) = &self.json_out {
             write_json_file(path, "cek rotation receipt", &receipt)?;
         }
-        context.println("Taikai CEK rotation receipt generated")?;
-        context.println(format_args!("receipt_out: {}", self.out.display()))?;
-        if let Some(path) = &self.json_out {
-            context.println(format_args!("json_out: {}", path.display()))?;
-        }
-        Ok(())
+        let output = build_receipt_output_value(
+            "receipt",
+            &receipt,
+            &self.out,
+            self.json_out.as_deref(),
+        )?;
+        let text = render_receipt_text(
+            "Taikai CEK rotation receipt generated",
+            "receipt_out",
+            &self.out,
+            self.json_out.as_deref(),
+        );
+        print_with_optional_text(context, Some(text), &output)
     }
 }
 
@@ -802,12 +778,15 @@ impl Run for RptAttestArgs {
         if let Some(path) = &self.json_out {
             write_json_file(path, "replication proof token", &rpt)?;
         }
-        context.println("Taikai replication proof token generated")?;
-        context.println(format_args!("rpt_out: {}", self.out.display()))?;
-        if let Some(path) = &self.json_out {
-            context.println(format_args!("json_out: {}", path.display()))?;
-        }
-        Ok(())
+        let output =
+            build_receipt_output_value("rpt", &rpt, &self.out, self.json_out.as_deref())?;
+        let text = render_receipt_text(
+            "Taikai replication proof token generated",
+            "rpt_out",
+            &self.out,
+            self.json_out.as_deref(),
+        );
+        print_with_optional_text(context, Some(text), &output)
     }
 }
 
@@ -1785,6 +1764,142 @@ fn build_ingest_summary_value(source: &Path, summary: &IngestSummary) -> Value {
     Value::Object(map)
 }
 
+fn build_bundle_summary_value(summary: &BundleSummary) -> Value {
+    let mut map = Map::new();
+    map.insert(
+        "car_cid_multibase".into(),
+        Value::from(summary.car_pointer.cid_multibase.clone()),
+    );
+    map.insert(
+        "car_digest".into(),
+        Value::from(hex::encode(summary.car_pointer.car_digest.as_bytes())),
+    );
+    map.insert(
+        "car_size_bytes".into(),
+        Value::from(summary.car_pointer.car_size_bytes),
+    );
+    map.insert(
+        "chunk_root".into(),
+        Value::from(hex::encode(summary.chunk_root.as_bytes())),
+    );
+    map.insert("chunk_count".into(), Value::from(summary.chunk_count));
+    map.insert("car_out".into(), Value::from(path_to_string(&summary.car_out)));
+    map.insert(
+        "envelope_out".into(),
+        Value::from(path_to_string(&summary.envelope_out)),
+    );
+    map.insert(
+        "indexes_out".into(),
+        optional_path_value(summary.indexes_out.as_deref()),
+    );
+    map.insert(
+        "ingest_metadata_out".into(),
+        optional_path_value(summary.ingest_metadata_out.as_deref()),
+    );
+    Value::Object(map)
+}
+
+fn build_edge_output_value(summary: &EdgeSummary, drift_summary_path: &Path) -> Value {
+    let mut map = match build_edge_summary_value(summary) {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    };
+    map.insert(
+        "drift_summary".into(),
+        Value::from(path_to_string(drift_summary_path)),
+    );
+    Value::Object(map)
+}
+
+fn build_receipt_output_value<T: JsonSerialize>(
+    label: &str,
+    payload: &T,
+    out_path: &Path,
+    json_out: Option<&Path>,
+) -> Result<Value> {
+    let mut map = Map::new();
+    let payload_value =
+        json::to_value(payload).map_err(|err| eyre!("failed to render {label} JSON: {err}"))?;
+    map.insert(label.into(), payload_value);
+    map.insert(
+        format!("{label}_out"),
+        Value::from(path_to_string(out_path)),
+    );
+    map.insert("json_out".into(), optional_path_value(json_out));
+    Ok(Value::Object(map))
+}
+
+fn render_bundle_summary_text(summary: &BundleSummary) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "Taikai segment bundle generated");
+    let _ = writeln!(
+        out,
+        "car_cid (multibase): {}",
+        summary.car_pointer.cid_multibase
+    );
+    let _ = writeln!(
+        out,
+        "car_digest (blake3-256 hex): {}",
+        hex::encode(summary.car_pointer.car_digest.as_bytes())
+    );
+    let _ = writeln!(out, "car_size_bytes: {}", summary.car_pointer.car_size_bytes);
+    let _ = writeln!(
+        out,
+        "chunk_root (blake3-256 hex): {}",
+        hex::encode(summary.chunk_root.as_bytes())
+    );
+    let _ = writeln!(out, "chunk_count: {}", summary.chunk_count);
+    let _ = writeln!(out, "car_out: {}", summary.car_out.display());
+    let _ = writeln!(out, "envelope_out: {}", summary.envelope_out.display());
+    if let Some(path) = summary.indexes_out.as_ref() {
+        let _ = writeln!(out, "indexes_out: {}", path.display());
+    }
+    if let Some(path) = summary.ingest_metadata_out.as_ref() {
+        let _ = writeln!(out, "ingest_metadata_out: {}", path.display());
+    }
+    out
+}
+
+fn render_edge_summary_text(
+    summary: &EdgeSummary,
+    drift_summary_path: &Path,
+    base_drift: i32,
+    jitter_ms: u32,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "Taikai ingest edge emitted {segments} fragments to `{dir}` (protocol={proto}, drift={base}ms±{jitter}ms)",
+        segments = summary.segments,
+        dir = summary.fragment_dir.display(),
+        proto = summary.protocol.as_str(),
+        base = base_drift,
+        jitter = jitter_ms,
+    );
+    let _ = writeln!(
+        out,
+        "drift log: {} (summary: {})",
+        summary.log_path.display(),
+        drift_summary_path.display()
+    );
+    out
+}
+
+fn render_receipt_text(
+    header: &str,
+    out_label: &str,
+    out_path: &Path,
+    json_out: Option<&Path>,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "{header}");
+    let _ = writeln!(out, "{out_label}: {}", out_path.display());
+    if let Some(path) = json_out {
+        let _ = writeln!(out, "json_out: {}", path.display());
+    }
+    out
+}
+
 fn optional_path_value(path: Option<&Path>) -> Value {
     path.map_or(Value::Null, |p| Value::from(path_to_string(p)))
 }
@@ -1812,10 +1927,9 @@ mod summary_tests {
             TaikaiEventId, TaikaiRenditionId, TaikaiStreamId, TaikaiTimeIndexKey,
         },
     };
-    use std::str::FromStr;
+    use std::{path::Path, str::FromStr};
 
-    #[test]
-    fn build_ingest_summary_value_tracks_core_fields() {
+    fn sample_bundle_summary() -> BundleSummary {
         let time_key = TaikaiTimeIndexKey {
             event_id: TaikaiEventId::new(Name::from_str("event").unwrap()),
             stream_id: TaikaiStreamId::new(Name::from_str("stream").unwrap()),
@@ -1828,7 +1942,7 @@ mod summary_tests {
             rendition_id: TaikaiRenditionId::new(Name::from_str("rend").unwrap()),
             cid_multibase: "bafycarcid".to_string(),
         };
-        let bundle = BundleSummary {
+        BundleSummary {
             car_pointer: TaikaiCarPointer::new("bafycarcid", BlobDigest::new([0x11; 32]), 1_024),
             chunk_root: BlobDigest::new([0x22; 32]),
             chunk_count: 4,
@@ -1838,7 +1952,12 @@ mod summary_tests {
             indexes_out: Some(PathBuf::from("/tmp/out.json")),
             ingest_metadata_out: Some(PathBuf::from("/tmp/out.da.json")),
             ingest_metadata: Map::new(),
-        };
+        }
+    }
+
+    #[test]
+    fn build_ingest_summary_value_tracks_core_fields() {
+        let bundle = sample_bundle_summary();
         let summary = IngestSummary {
             bundle,
             drift_ms: 33,
@@ -1901,6 +2020,82 @@ mod summary_tests {
             map.get("ingest_node_id").and_then(Value::as_str),
             Some("node-a")
         );
+    }
+
+    #[test]
+    fn build_bundle_summary_value_tracks_paths() {
+        let summary = sample_bundle_summary();
+        let value = build_bundle_summary_value(&summary);
+        let map = value
+            .as_object()
+            .expect("bundle summary should be a JSON object");
+        assert_eq!(map.get("car_out").and_then(Value::as_str), Some("/tmp/out.car"));
+        assert_eq!(
+            map.get("envelope_out").and_then(Value::as_str),
+            Some("/tmp/out.to")
+        );
+        assert_eq!(
+            map.get("indexes_out").and_then(Value::as_str),
+            Some("/tmp/out.json")
+        );
+        assert_eq!(
+            map.get("ingest_metadata_out").and_then(Value::as_str),
+            Some("/tmp/out.da.json")
+        );
+    }
+
+    #[test]
+    fn render_bundle_summary_text_mentions_outputs() {
+        let summary = sample_bundle_summary();
+        let text = render_bundle_summary_text(&summary);
+        assert!(text.contains("car_out: /tmp/out.car"));
+        assert!(text.contains("envelope_out: /tmp/out.to"));
+        assert!(text.contains("indexes_out: /tmp/out.json"));
+    }
+
+    #[test]
+    fn render_edge_summary_text_mentions_paths() {
+        let summary = EdgeSummary {
+            protocol: EdgeProtocol::Srt,
+            segments: 2,
+            payload_bytes: 100,
+            start_unix_ms: 0,
+            first_segment_pts: 0,
+            segment_interval_ms: 1000,
+            fragment_dir: PathBuf::from("/tmp/fragments"),
+            log_path: PathBuf::from("/tmp/drift.log"),
+            drift_min_ms: -1,
+            drift_max_ms: 1,
+            drift_avg_ms: 0.0,
+            ingest_node_id: None,
+        };
+        let text = render_edge_summary_text(&summary, Path::new("/tmp/drift.json"), 0, 5);
+        assert!(text.contains("fragments"));
+        assert!(text.contains("drift log"));
+    }
+
+    #[test]
+    fn build_receipt_output_value_tracks_paths() {
+        let payload = norito::json!({ "ok": true });
+        let value = build_receipt_output_value("receipt", &payload, Path::new("/tmp/out.to"), None)
+            .expect("receipt output");
+        let map = value.as_object().expect("receipt output object");
+        assert_eq!(
+            map.get("receipt_out").and_then(Value::as_str),
+            Some("/tmp/out.to")
+        );
+    }
+
+    #[test]
+    fn render_receipt_text_includes_json_path() {
+        let text = render_receipt_text(
+            "Receipt saved",
+            "receipt_out",
+            Path::new("/tmp/out.to"),
+            Some(Path::new("/tmp/out.json")),
+        );
+        assert!(text.contains("receipt_out: /tmp/out.to"));
+        assert!(text.contains("json_out: /tmp/out.json"));
     }
 }
 
@@ -2067,15 +2262,23 @@ fn emit_ingest_summary<C: RunContext>(
         .as_ref()
         .map(|path| format!(" receipt=`{}`", path.display()))
         .unwrap_or_default();
-    context.println(format_args!(
-        "[{processed}] bundled `{}` -> car=`{}` envelope=`{}` chunks={} drift={:+}ms da_request=`{}`{receipt_blurb}",
-        source.display(),
-        summary.bundle.car_out.display(),
-        summary.bundle.envelope_out.display(),
-        summary.bundle.chunk_count,
-        summary.drift_ms,
-        summary.da_request_path.display(),
-    ))?;
+    match context.output_format() {
+        CliOutputFormat::Json => {
+            let summary_value = build_ingest_summary_value(source, summary);
+            context.print_data(&summary_value)?;
+        }
+        CliOutputFormat::Text => {
+            context.println(format_args!(
+                "[{processed}] bundled `{}` -> car=`{}` envelope=`{}` chunks={} drift={:+}ms da_request=`{}`{receipt_blurb}",
+                source.display(),
+                summary.bundle.car_out.display(),
+                summary.bundle.envelope_out.display(),
+                summary.bundle.chunk_count,
+                summary.drift_ms,
+                summary.da_request_path.display(),
+            ))?;
+        }
+    }
     let drift_abs = summary.drift_ms.unsigned_abs();
     if drift_abs > u128::from(warn_threshold_ms) {
         context.println(format_args!(

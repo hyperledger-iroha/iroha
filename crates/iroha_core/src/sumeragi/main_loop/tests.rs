@@ -29148,6 +29148,9 @@ async fn proposal_backpressure_blocks_commit_qc_pending_after_reschedule() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
+    let quorum_timeout = actor
+        .quorum_timeout(actor.runtime_da_enabled())
+        .max(Duration::from_millis(1));
     let key = insert_active_pending_block(actor, 0);
     let now = Instant::now();
     let pending = actor
@@ -29158,9 +29161,6 @@ async fn proposal_backpressure_blocks_commit_qc_pending_after_reschedule() {
     pending.mark_quorum_reschedule(now);
     pending.commit_qc_seen = true;
 
-    let quorum_timeout = actor
-        .quorum_timeout(actor.runtime_da_enabled())
-        .max(Duration::from_millis(1));
     let stale = now
         .checked_sub(quorum_timeout.saturating_add(Duration::from_millis(1)))
         .unwrap_or(now);
