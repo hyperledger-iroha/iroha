@@ -14133,7 +14133,7 @@ mod account_path_metric_tests {
                 .get()
         };
         assert!(
-            parse_account_path_segment("bad@wonderland", &telemetry, endpoint, false).is_err(),
+            parse_account_path_segment("bad@wonderland", &telemetry, endpoint).is_err(),
             "literal should be rejected"
         );
         let after = {

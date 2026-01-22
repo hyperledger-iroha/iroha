@@ -12,3 +12,8 @@ documentation = "https://docs.rs/ivm_abi"
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "json", "governance"] }
 iroha_crypto = { path = "../iroha_crypto", features = ["rayon", "sm"] }
 norito = { path = "../norito" }
+
+[features]
+schema-structural = []
+packed-struct = []
+compact-len = []

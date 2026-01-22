@@ -4,6 +4,28 @@ Last update: 2026-01-22
 
 - Docs: refreshed account ID/identity references to canonical IH58 across Torii/SDK/finance/SoraFS/SNS docs, portal snippets, and OpenAPI relay account descriptions; updated Java recipe code to avoid `@domain` parsing.
 - Tests: not run (docs/sample edits only).
+- Norito RPC fixtures: added explicit payload specs for transaction fixtures, regenerated canonical `.norito` payloads/manifests, and re-synced Android/Swift/Python fixture bundles.
+- Tests: `cargo test -p connect_norito_bridge -- --nocapture` (ok).
+- Tests: `cargo run --manifest-path xtask/Cargo.toml --bin xtask -- norito-rpc-verify` (ok).
+- Consensus telemetry: added pending-block + commit-inflight gauges and documented the new signals.
+- Commit pipeline: overlap Kura persistence with WSV apply; added a Kura store failure regression test.
+- Localnet (NPoS, 7 peers, 753ms, exit_teu=15060): `/private/tmp/iroha-localnet-7peer-run145b` (24680/25600). 100 TPS for 300s → height 86, avg slot 3.62s (latest 6118ms), `view_change_install_total=12`; pacemaker deferrals `active_pending=87`, `rbc_backlog=84`; commit stage averages `persist=298ms`, `qc_verify=63ms`, `block_sync=26ms`.
+- Localnet (fanout, k_aggregators=7, redundant_send_r=4): `/private/tmp/iroha-localnet-7peer-run146` (24680/25600). 100 TPS for 300s → height 80, avg slot 5.68s (latest 2679ms), `view_change_install_total=8`; pacemaker deferrals `active_pending=80`, `rbc_backlog=77`; commit inflight queue depth 1 at snapshot.
+- Build: `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target-localnet21 cargo build -p iroha_kagami -p iroha_cli -p irohad --release` (ok).
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Client tests: borrow explorer account QR payload strings and account IDs to match `&str` APIs; removed unused asset-definition numeric helper to drop dead-code warning.
+- Tests: not run (warning/type fix only).
+- IVM host pointer-ABI policy test now uses an experimental ABI header to exercise disallowed pointer types without relying on test-only variants.
+- Tests: not run (pointer-ABI test update only).
+- Warnings: declared Norito derive feature flags in `ivm_abi`, moved Kotodama metadata payload helper and SoraFS repair approval import into tests to silence unused/unknown cfg warnings.
+- Build: `cargo build --workspace` (ok).
+- Build tooling: dropped crates.io patch overrides for `rust_decimal`, `vergen-git2`, `is-terminal`, and `darling*` so upstream crates are used; removed the corresponding vendored sources; remaining local overrides unchanged.
+- Tests: not run (Cargo.lock update required to re-resolve removed patches; per repo rules not modified here).
+- Android SDK signing: signers now prehash payloads with `IrohaHash`; `TransactionBuilder` passes raw payload bytes through; `SignedTransactionHasher` remains aligned.
+- Android SDK fixtures: exporter now preserves opaque payloads by re-signing against the provided payload bytes; regenerated manifests/fixtures and `.norito` blobs.
+- Tests: `cargo test --manifest-path scripts/export_norito_fixtures/Cargo.toml` (ok).
+- Tests: `java/iroha_android/gradlew :core:test --tests org.hyperledger.iroha.android.tx.TransactionPayloadFixtureTests --tests org.hyperledger.iroha.android.tx.TransactionFixtureManifestTests --tests org.hyperledger.iroha.android.norito.NoritoCodecAdapterTests` (ok).
+- Tests: `cargo test --workspace` (failed: `crates/iroha_torii_shared/src/connect_sdk.rs` mismatched types; expected `&str`, found `String`).
 - P2P tests: add `connect_startup_delay` to integration test config literals to match Network fields.
 - Tests: not run (config literal updates only).
 - Localnet throughput: artifacts now emit on failure with error in summary; queue drain timeout is overridable via `IROHA_THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_SECS`.
@@ -20,7 +42,7 @@ Last update: 2026-01-22
 - Tests: `java/iroha_android/gradlew test` (failed: Android SDK not configured; set `ANDROID_HOME` or `local.properties` `sdk.dir`).
 - Tests: `java/iroha_android/gradlew test` (ok).
 - Tests: `python3 scripts/check_android_fixtures.py` (ok).
-- Android SDK signing: `TransactionBuilder` now prehashes payloads with Blake2b-256 + LSB via `IrohaHash` while `Signer` stays raw; `SignedTransactionHasher` shares the same prehash helper.
+- Android SDK signing: prehashing moved into `Signer` implementations (Ed25519) while `TransactionBuilder` now forwards raw payload bytes; `SignedTransactionHasher` remains aligned.
 - Account parsing: removed the global domain-selector cache and allow explicit `encoded@domain` literals to parse without a resolver; implicit encoded literals still require a resolver or default domain.
 - Tests: `cargo test -p iroha_data_model account_id_parsing_tests::encoded_literals_with_domain_parse_without_resolver -- --nocapture` (timed out after 300s while compiling dependencies).
 - Torii tests: compressed literal expectations now use the raw `snx1` form (no `@domain`); SoraFS helpers build `AccountId` values from public keys + domains.

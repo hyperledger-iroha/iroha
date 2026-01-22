@@ -544,7 +544,7 @@ mod tests {
         stack_slot_offset_bytes,
     };
     use crate::ast::ContractMeta;
-    use crate::{ProgramMetadata, encoding, instruction, pointer_abi::PointerType};
+    use crate::{encoding, instruction, metadata::ProgramMetadata, pointer_abi::PointerType};
 
     #[test]
     fn pointer_types_cover_all_data_ref_kinds() {
@@ -723,7 +723,7 @@ seiyaku NegTest {
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let mut found = false;
         for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
-            let word = u32::from_le_bytes(chunk.try_into().unwrap());
+            let word = u32::from_le_bytes(<[u8; 4]>::try_from(chunk).unwrap());
             if instruction::wide::opcode(word) == instruction::wide::arithmetic::NEG {
                 found = true;
                 break;
@@ -829,7 +829,7 @@ seiyaku Test {
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let mut found = false;
         for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
-            let word = u32::from_le_bytes(chunk.try_into().unwrap());
+            let word = u32::from_le_bytes(<[u8; 4]>::try_from(chunk).unwrap());
             if instruction::wide::opcode(word) == instruction::wide::crypto::SETVL {
                 found = true;
                 break;

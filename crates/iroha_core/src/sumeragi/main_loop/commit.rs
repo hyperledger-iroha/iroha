@@ -40,6 +40,13 @@ pub(super) struct CommitWork {
 pub(super) struct CommitResult {
     pub(super) id: u64,
     pub(super) outcome: CommitOutcome,
+    pub(super) timings: CommitStageTimings,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct CommitStageTimings {
+    pub(super) qc_verify_ms: Option<u64>,
+    pub(super) persist_ms: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -93,14 +100,21 @@ pub(super) fn spawn_commit_worker(
         .spawn(move || {
             while let Ok(work) = work_rx.recv() {
                 let id = work.id;
-                let outcome = execute_commit_work(
+                let (outcome, timings) = execute_commit_work(
                     state.as_ref(),
                     kura.as_ref(),
                     &chain_id,
                     &genesis_account,
                     work,
                 );
-                if result_tx.send(CommitResult { id, outcome }).is_err() {
+                if result_tx
+                    .send(CommitResult {
+                        id,
+                        outcome,
+                        timings,
+                    })
+                    .is_err()
+                {
                     break;
                 }
                 if let Some(wake) = wake_tx.as_ref() {
@@ -123,7 +137,7 @@ pub(super) fn execute_commit_work(
     chain_id: &ChainId,
     genesis_account: &AccountId,
     work: CommitWork,
-) -> CommitOutcome {
+) -> (CommitOutcome, CommitStageTimings) {
     let CommitWork {
         block,
         commit_topology,
@@ -134,10 +148,12 @@ pub(super) fn execute_commit_work(
         events_sender,
         ..
     } = work;
+    let mut timings = CommitStageTimings::default();
     let mut pipeline_events: Vec<PipelineEventBox> = Vec::new();
     let time_source = TimeSource::new_system();
     let mut voting_block = None;
     let topology = super::network_topology::Topology::new(signature_topology);
+    let qc_start = Instant::now();
     let result = ValidBlock::validate_keep_voting_block_with_events(
         block,
         &topology,
@@ -158,41 +174,72 @@ pub(super) fn execute_commit_work(
             .map_err(|(failed_block, err)| (Box::new((*failed_block).into()), err))
     });
 
+    let to_ms =
+        |duration: std::time::Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+    timings.qc_verify_ms = Some(to_ms(qc_start.elapsed()));
     match result {
         Ok((committed_block, mut state_block)) => {
             let exec_witness = state_block.take_exec_witness();
-            if persist_required {
-                if let Err(err) = kura.store_block(committed_block.clone()) {
-                    return CommitOutcome::KuraStoreFailed {
-                        committed_block,
-                        error: err,
-                    };
-                }
-            }
-            // Emit pipeline events as soon as the commit is durable so clients can observe
-            // `Committed` without waiting for WSV application.
+            let persist_start = Instant::now();
             let mut pipeline_events = pipeline_events;
+            let state_events = if persist_required {
+                let committed_block_for_kura = committed_block.clone();
+                let (kura_result, state_events) = std::thread::scope(|scope| {
+                    let kura_handle =
+                        scope.spawn(move || kura.store_block(committed_block_for_kura));
+                    let state_events =
+                        state_block.apply_without_execution(&committed_block, commit_topology);
+                    let kura_result = match kura_handle.join() {
+                        Ok(result) => result,
+                        Err(_) => Err(crate::kura::Error::BlockWriterUnavailable),
+                    };
+                    (kura_result, state_events)
+                });
+                if let Err(err) = kura_result {
+                    timings.persist_ms = Some(to_ms(persist_start.elapsed()));
+                    return (
+                        CommitOutcome::KuraStoreFailed {
+                            committed_block,
+                            error: err,
+                        },
+                        timings,
+                    );
+                }
+                state_events
+            } else {
+                state_block.apply_without_execution(&committed_block, commit_topology)
+            };
+            // Emit pipeline events once durability is confirmed; state apply may already be done.
             emit_pipeline_events(&events_sender, std::mem::take(&mut pipeline_events));
-            let state_events =
-                state_block.apply_without_execution(&committed_block, commit_topology);
             if let Err(err) = state_block.commit() {
-                return CommitOutcome::StateCommitFailed {
+                timings.persist_ms = Some(to_ms(persist_start.elapsed()));
+                return (
+                    CommitOutcome::StateCommitFailed {
+                        committed_block,
+                        error: err.to_string(),
+                    },
+                    timings,
+                );
+            }
+            timings.persist_ms = Some(to_ms(persist_start.elapsed()));
+            (
+                CommitOutcome::Success {
                     committed_block,
-                    error: err.to_string(),
-                };
-            }
-            CommitOutcome::Success {
-                committed_block,
-                exec_witness,
-                pipeline_events,
-                state_events,
-            }
+                    exec_witness,
+                    pipeline_events,
+                    state_events,
+                },
+                timings,
+            )
         }
-        Err((failed_block, err)) => CommitOutcome::Rejected {
-            failed_block: *failed_block,
-            error: *err,
-            pipeline_events,
-        },
+        Err((failed_block, err)) => (
+            CommitOutcome::Rejected {
+                failed_block: *failed_block,
+                error: *err,
+                pipeline_events,
+            },
+            timings,
+        ),
     }
 }
 
@@ -482,7 +529,7 @@ impl Actor {
                             continue;
                         }
                     };
-                    let _ = self.apply_commit_outcome(inflight, result.outcome);
+                    let _ = self.apply_commit_outcome(inflight, result.outcome, result.timings);
                     progress = true;
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -502,14 +549,14 @@ impl Actor {
                             persist_required,
                             events_sender: self.events_sender.clone(),
                         };
-                        let outcome = execute_commit_work(
+                        let (outcome, timings) = execute_commit_work(
                             self.state.as_ref(),
                             self.kura.as_ref(),
                             &self.common_config.chain,
                             &self.genesis_account,
                             work,
                         );
-                        let _ = self.apply_commit_outcome(inflight, outcome);
+                        let _ = self.apply_commit_outcome(inflight, outcome, timings);
                         progress = true;
                     }
                     break;
@@ -578,31 +625,38 @@ impl Actor {
                     );
                     self.subsystems.commit.work_tx = None;
                     self.subsystems.commit.result_rx = None;
-                    let outcome = execute_commit_work(
+                    let (outcome, timings) = execute_commit_work(
                         self.state.as_ref(),
                         self.kura.as_ref(),
                         &self.common_config.chain,
                         &self.genesis_account,
                         work,
                     );
-                    return self.apply_commit_outcome(inflight, outcome);
+                    return self.apply_commit_outcome(inflight, outcome, timings);
                 }
             }
         }
 
-        let outcome = execute_commit_work(
+        let (outcome, timings) = execute_commit_work(
             self.state.as_ref(),
             self.kura.as_ref(),
             &self.common_config.chain,
             &self.genesis_account,
             work,
         );
-        self.apply_commit_outcome(inflight, outcome)
+        self.apply_commit_outcome(inflight, outcome, timings)
     }
 
     #[allow(clippy::too_many_lines)]
-    fn apply_commit_outcome(&mut self, inflight: CommitInFlight, outcome: CommitOutcome) -> bool {
+    fn apply_commit_outcome(
+        &mut self,
+        inflight: CommitInFlight,
+        outcome: CommitOutcome,
+        timings: CommitStageTimings,
+    ) -> bool {
         super::status::record_commit_inflight_finish(inflight.id);
+        #[cfg(not(feature = "telemetry"))]
+        let _ = timings;
         let CommitInFlight {
             lock,
             block_hash,
@@ -648,6 +702,18 @@ impl Actor {
         });
 
         let mut pending_opt = Some(pending);
+
+        #[cfg(feature = "telemetry")]
+        {
+            if let Some(ms) = timings.qc_verify_ms {
+                self.telemetry
+                    .observe_commit_stage_ms(crate::telemetry::CommitStage::QcVerify, ms);
+            }
+            if let Some(ms) = timings.persist_ms {
+                self.telemetry
+                    .observe_commit_stage_ms(crate::telemetry::CommitStage::Persist, ms);
+            }
+        }
 
         match outcome {
             CommitOutcome::Success {
@@ -912,6 +978,8 @@ impl Actor {
                 // Proactively gossip the committed block so peers that missed the
                 // QC or payload can synchronize without waiting for block sync
                 // backoff windows.
+                #[cfg(feature = "telemetry")]
+                let block_sync_start = Instant::now();
                 let sync_block: SignedBlock = committed_block.as_ref().clone();
                 let mut sync_update = block_sync_update_with_roster(
                     &sync_block,
@@ -946,6 +1014,13 @@ impl Actor {
                         super::message::BlockCreated::from(&sync_block),
                         &world_peers,
                     );
+                }
+                #[cfg(feature = "telemetry")]
+                {
+                    let ms =
+                        u64::try_from(block_sync_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    self.telemetry
+                        .observe_commit_stage_ms(crate::telemetry::CommitStage::BlockSync, ms);
                 }
                 parent_to_cleanup = pending.block.header().prev_block_hash();
                 block_hash_to_clean = Some(block_hash);
@@ -4806,6 +4881,17 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, StateReadOnly, World},
     };
+    use iroha_config::{
+        base::{WithOrigin, util::Bytes},
+        kura::{FsyncMode, InitMode},
+        parameters::{
+            actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
+            defaults::kura::{
+                BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, FSYNC_INTERVAL,
+                MERGE_LEDGER_CACHE_CAPACITY, ROSTER_SIDECAR_RETENTION,
+            },
+        },
+    };
     use iroha_crypto::{Algorithm, Hash, KeyPair, MerkleTree, Signature, SignatureOf};
     use iroha_data_model::{
         ChainId, Registrable,
@@ -4816,6 +4902,7 @@ mod tests {
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
     use iroha_primitives::{numeric::Numeric, unique_vec::UniqueVec};
+    use tempfile::TempDir;
 
     fn signers_from_bitmap(signers_bitmap: &[u8], roster_len: usize) -> Vec<usize> {
         let mut signers = Vec::new();
@@ -4882,7 +4969,7 @@ mod tests {
             events_sender,
         };
 
-        let outcome =
+        let (outcome, timings) =
             execute_commit_work(&state, kura.as_ref(), &chain_id, &genesis_account_id, work);
         let CommitOutcome::Success {
             pipeline_events, ..
@@ -4890,6 +4977,8 @@ mod tests {
         else {
             panic!("expected commit success");
         };
+        assert!(timings.qc_verify_ms.is_some());
+        assert!(timings.persist_ms.is_some());
         assert!(
             pipeline_events.is_empty(),
             "pipeline events should be emitted early"
@@ -4913,6 +5002,67 @@ mod tests {
             }
         }
         assert!(got_pipeline_event, "expected pipeline event emission");
+    }
+
+    #[test]
+    fn execute_commit_work_reports_kura_store_failure() {
+        let genesis_key = KeyPair::random();
+        let genesis_account_id =
+            AccountId::new(GENESIS_DOMAIN_ID.clone(), genesis_key.public_key().clone());
+        let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
+        let world = World::with([genesis_domain], [genesis_account], []);
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: Bytes(1),
+            blocks_in_memory: BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, Arc::clone(&kura), query_handle);
+        let chain_id = state.view().chain_id().clone();
+
+        let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
+            .with_instructions([Log::new(Level::DEBUG, "kura failure test".to_string())])
+            .sign(genesis_key.private_key());
+        let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
+
+        let peer_key = KeyPair::random();
+        let peer_id = PeerId::new(peer_key.public_key().clone());
+        let topology = vec![peer_id];
+        let (events_sender, _events_rx) = tokio::sync::broadcast::channel(4);
+        let work = CommitWork {
+            id: 1,
+            block,
+            commit_topology: topology.clone(),
+            signature_topology: topology,
+            qc_signers: None,
+            allow_quorum_bypass: false,
+            persist_required: true,
+            events_sender,
+        };
+
+        let (outcome, timings) =
+            execute_commit_work(&state, kura.as_ref(), &chain_id, &genesis_account_id, work);
+        let CommitOutcome::KuraStoreFailed { error, .. } = outcome else {
+            panic!("expected kura store failure");
+        };
+        assert!(matches!(
+            error,
+            crate::kura::Error::StorageBudgetExceeded { .. }
+        ));
+        assert!(timings.persist_ms.is_some());
+        assert_eq!(state.view().height(), 0);
+        assert_eq!(kura.blocks_count(), 0);
     }
 
     #[test]
@@ -4964,10 +5114,12 @@ mod tests {
         };
 
         handle.work_tx.send(work).expect("send commit work");
-        handle
+        let result = handle
             .result_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("commit result");
+        assert!(result.timings.qc_verify_ms.is_some());
+        assert!(result.timings.persist_ms.is_some());
         wake_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("wake signal");
@@ -5028,10 +5180,12 @@ mod tests {
         };
 
         handle.work_tx.send(work).expect("send commit work");
-        handle
+        let result = handle
             .result_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("commit result");
+        assert!(result.timings.qc_verify_ms.is_some());
+        assert!(result.timings.persist_ms.is_some());
 
         assert!(wake_rx.try_recv().is_ok(), "prefilled wake should remain");
         assert!(matches!(wake_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));

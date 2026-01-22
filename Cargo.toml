@@ -76,7 +76,7 @@ proc-macro2 = "1.0.103"
 syn = { version = "2.0.109", default-features = false }
 quote = "1.0.42"
 manyhow = { version = "0.11.4", features = ["darling"] }
-darling = "0.22.0"
+darling = "0.23.0"
 drop_bomb = "0.1.5"
 
 futures = { version = "0.3.31", default-features = false }
@@ -165,24 +165,14 @@ halo2curves = { version = "0.9" }
 mv = { path = "crates/mv" }
 concread = "=0.5.7"
 
-# [patch.crates-io] was temporarily disabled; re-enable the Halo2 patches so the
-# vendor versions (which expose Serde helpers required by our CLI tests) are used.
+# [patch.crates-io] was temporarily disabled; keep the local overrides we still
+# rely on for Halo2 helpers and the CUDA helper.
 [patch.crates-io]
 halo2-axiom = { path = "vendor/halo2-axiom" }
 halo2curves-axiom = { path = "vendor/halo2curves-axiom" }
-rust_decimal = { path = "vendor/rust_decimal" }
-"vergen-git2" = { path = "vendor/vergen-git2" }
 find_cuda_helper = { path = "vendor/find_cuda_helper" }
-writeable = { path = "vendor/writeable" }
-document-features = { path = "vendor/document-features" }
-indoc = { path = "vendor/indoc" }
-is-terminal = { path = "vendor/is-terminal" }
-darling = { path = "vendor/darling-0.22.0/darling-0.22.0" }
-darling_core = { path = "vendor/darling_core-0.22.0/darling_core-0.22.0" }
-darling_macro = { path = "vendor/darling_macro-0.22.0/darling_macro-0.22.0" }
 #streebog = { path = "vendor/streebog" }
 #opus = { path = "vendor/opus_stub" }
-pasta_curves = { path = "vendor/pasta_curves" }
 #icrate = { path = "vendor/icrate" }
 
 [workspace.lints]

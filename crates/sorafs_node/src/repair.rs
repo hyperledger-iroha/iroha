@@ -23,11 +23,10 @@ use sorafs_manifest::{
     por::AuditVerdictV1,
     repair::{
         CompletedRepairStateV1, EscalatedRepairStateV1, FailedRepairStateV1,
-        InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_ESCALATION_APPROVAL_VERSION_V1,
-        REPAIR_TASK_EVENT_VERSION_V1, REPAIR_TASK_VERSION_V1, RepairCauseV1,
-        RepairEscalationApprovalV1, RepairEvidenceV1, RepairReportV1, RepairSlashProposalV1,
-        RepairTaskEventV1, RepairTaskRecordV1, RepairTaskStateV1, RepairTaskStatusV1,
-        RepairTicketId, RepairValidationError,
+        InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_TASK_EVENT_VERSION_V1,
+        REPAIR_TASK_VERSION_V1, RepairCauseV1, RepairEscalationApprovalV1, RepairEvidenceV1,
+        RepairReportV1, RepairSlashProposalV1, RepairTaskEventV1, RepairTaskRecordV1,
+        RepairTaskStateV1, RepairTaskStatusV1, RepairTicketId, RepairValidationError,
     },
 };
 use thiserror::Error;
@@ -3153,8 +3152,8 @@ mod tests {
     use iroha_config::parameters::actual;
     use sorafs_manifest::por::{AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1};
     use sorafs_manifest::repair::{
-        REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
-        RepairCauseV1,
+        REPAIR_ESCALATION_APPROVAL_VERSION_V1, REPAIR_EVIDENCE_VERSION_V1,
+        REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairCauseV1,
     };
     use std::fs;
     use tempfile::{TempDir, tempdir};
@@ -3499,9 +3498,6 @@ mod tests {
             .expect("enqueue report");
         let policy = *RepairConfig::default().escalation_policy();
         let approval = approval_for_policy(&policy, report.submitted_at_unix + 10);
-        let expected_approved_at = approval.approved_at_unix;
-        let expected_approvals = approval.approve_votes;
-        let expected_rejections = approval.reject_votes;
 
         let proposal = RepairSlashProposalV1 {
             version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
@@ -3563,6 +3559,9 @@ mod tests {
             .expect("enqueue report");
         let policy = *RepairConfig::default().escalation_policy();
         let approval = approval_for_policy(&policy, report.submitted_at_unix + 10);
+        let expected_approved_at = approval.approved_at_unix;
+        let expected_approvals = approval.approve_votes;
+        let expected_rejections = approval.reject_votes;
 
         let proposal = RepairSlashProposalV1 {
             version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
