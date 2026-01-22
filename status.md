@@ -2,6 +2,7 @@
 
 Last update: 2026-01-22
 
+- Docs: aligned governance API translations with IH58 account_id responses and `--owner ih58...`, updated JS SDK validation error guidance, and removed `@domain` from `inspectAccountId` examples.
 - Merge: resolved conflicts in Sumeragi pending-block gating + docs/portal CLI examples (app/tools/ledger updates).
 - Tests: not run (merge conflict resolution).
 - Docs: refreshed account ID/identity references to canonical IH58 across Torii/SDK/finance/SoraFS/SNS docs, portal snippets, and OpenAPI relay account descriptions; updated Java recipe code to avoid `@domain` parsing.
@@ -85,6 +86,7 @@ Last update: 2026-01-22
 - Localnet tuning: tightened NPoS timeouts (propose 300ms, prevote 400ms, precommit 500ms, commit 650ms, DA 600ms, agg 100ms), set DA timeout multipliers to 1/1, and tuned commit inflight timeout to 4–10s (6x multiplier).
 - Pacemaker: pending-block backpressure now lifts after min(block_time, commit_time) when no votes/QCs arrive, allowing proposals before quorum-timeout; the same fast path is applied to quorum reschedule gating, with unit coverage and pacemaker docs updated.
 - Localnet: NPoS 1 Hz / 100-block soak rerun on `/tmp/iroha-localnet-npos-1hz-run2` (ports 48080/53337); 100x1 Hz `transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `/tmp/iroha-localnet-npos-1hz-run2/status-1hz-20260121T192416Z.jsonl` (ping log `/tmp/iroha-localnet-npos-1hz-run2/ping-1hz-20260121T192416Z.log`). `commit_qc.height` 27->39 (+12 over 118s, ~0.10 blocks/s); `view_change_install_total` +3 (`stake_quorum_timeout_total` +2); pending RBC max 1040 bytes / 1 session (cap 8 MiB / 256), `rbc_store.pressure_level=0`.
+- Localnet (NPoS 1 Hz fast-path rerun, 4 peers): `/private/tmp/iroha-localnet-npos-1hz-fastpath` (ports 48280/53537). 1 Hz `ledger transaction ping --no-wait` stalled at idx 43 due to Torii POST timeout; `/v1/sumeragi/status` samples at `/private/tmp/iroha-localnet-npos-1hz-fastpath/sumeragi_status_1hz_fastpath.jsonl` and ping log at `/private/tmp/iroha-localnet-npos-1hz-fastpath/ping_1hz_fastpath.log`. `commit_qc.height` 2->7 (+5 over 119s), `view_change_install_total` +1, pending RBC max 0 bytes / 1 session. Peer0 logged a parking_lot deadlock in `Actor::active_pending_blocks_len` during pacemaker tick; telemetry sync timed out afterward. Rerun still needed.
 - Tests: `cargo test -p iroha_core pacemaker_backpressure -- --nocapture` (pass; warnings about `unexpected_cfgs` from norito derive macros).
 - Tests: `cargo test -p iroha_core proposal_backpressure_allows_fast_path_without_votes -- --nocapture` (pass).
 - Triggers: `submit_instruction_and_wait` now uses `submit_blocking` with the network sync timeout to avoid racing trigger registration/execution.
