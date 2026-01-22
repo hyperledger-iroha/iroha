@@ -74,7 +74,7 @@ entregar todas as correcoes em um patch monolitico.
    - Adicionar snapshot queries para triggers, assets e roles com ordenacao deterministica
      (trackeado via `crates/iroha_core/tests/snapshot_iterable.rs` para a cobertura atual).
 3. **Consistencia de snapshots**
-   - Garantir que o CLI `iroha query` use o mesmo caminho de snapshot que Sumeragi/fetchers.
+   - Garantir que o CLI `iroha ledger query` use o mesmo caminho de snapshot que Sumeragi/fetchers.
    - Testes de regressao de snapshot do CLI vivem em `tests/cli/state_snapshot.rs` (feature-gated
      para runs lentos).
 

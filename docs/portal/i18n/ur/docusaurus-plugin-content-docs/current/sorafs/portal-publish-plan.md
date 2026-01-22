@@ -89,9 +89,9 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 ```
 
 - `openapi.manifest.to` اور SBOM manifests کے لیے بھی دہرائیں (SBOM bundles کے لیے alias flags ہٹا دیں جب تک governance کوئی namespace تفویض نہ کرے)۔
-- متبادل: `iroha sorafs pin register` submit summary کے digest کے ساتھ کام کرتا ہے اگر بائنری پہلے سے نصب ہو۔
+- متبادل: `iroha app sorafs pin register` submit summary کے digest کے ساتھ کام کرتا ہے اگر بائنری پہلے سے نصب ہو۔
 - registry کی حالت چیک کریں:
-  `iroha sorafs pin list --alias docs:portal --format json | jq`۔
+  `iroha app sorafs pin list --alias docs:portal --format json | jq`۔
 - دیکھنے والے dashboards: `sorafs_pin_registry.json` (`torii_sorafs_replication_*` میٹرکس)۔
 
 ## 3. Gateway headers اور proofs
@@ -99,7 +99,7 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 HTTP headers بلاک + binding metadata بنائیں:
 
 ```bash
-iroha sorafs gateway route-plan \
+iroha app sorafs gateway route-plan \
   --manifest-json "${OUT}/portal.manifest.json" \
   --hostname docs.sora \
   --alias docs:portal \

@@ -13,7 +13,7 @@ translation_last_reviewed: 2026-01-01
 
 Этот bundle содержит artefacts, требуемые парламентом Sora для утверждения автоматических выплат relay (SNNet-7):
 
-- `reward_config.json` - конфигурация движка вознаграждений, сериализуемая Norito, готовая к загрузке через `iroha sorafs incentives service init`. `budget_approval_id` совпадает с hash, указанным в minutes governance.
+- `reward_config.json` - конфигурация движка вознаграждений, сериализуемая Norito, готовая к загрузке через `iroha app sorafs incentives service init`. `budget_approval_id` совпадает с hash, указанным в minutes governance.
 - `shadow_daemon.json` - карта бенефициаров и bonds, используемая replay harness (`shadow-run`) и production daemon.
 - `economic_analysis.md` - summary справедливости для shadow симуляции 2025-10 -> 2025-11.
 - `rollback_plan.md` - операционный playbook для отключения автоматических выплат.

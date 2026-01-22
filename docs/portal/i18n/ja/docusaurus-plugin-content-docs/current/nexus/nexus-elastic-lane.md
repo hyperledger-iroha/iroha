@@ -70,7 +70,7 @@ scripts/nexus_lane_bootstrap.sh \
 1. `<slug>.manifest.json` - バリデータ quorum、保護 namespace、runtime-upgrade フックの任意メタデータを含むレーンマニフェスト。
 2. `<slug>.catalog.toml` - `[[nexus.lane_catalog]]`、`[[nexus.dataspace_catalog]]`、要求したルーティングルールを含む TOML 断片。dataspace エントリに `fault_tolerance` を設定して lane-relay 委員会（`3f+1`）をサイズ設定してください。
 3. `<slug>.summary.json` - ジオメトリ（slug、セグメント、メタデータ）、必要なロールアウト手順、`cargo xtask space-directory encode` の正確なコマンド（`space_directory_encode.command`）を含む監査用サマリ。オンボーディングチケットに添付して証跡にします。
-4. `<slug>.manifest.to` - `--encode-space-directory` を指定した場合に出力され、Torii の `iroha space-directory manifest publish` フローでそのまま利用できます。
+4. `<slug>.manifest.to` - `--encode-space-directory` を指定した場合に出力され、Torii の `iroha app space-directory manifest publish` フローでそのまま利用できます。
 
 `--dry-run` でファイルを書かずに JSON/断片を確認し、`--force` で既存成果物を上書きします。
 
@@ -78,7 +78,7 @@ scripts/nexus_lane_bootstrap.sh \
 
 1. マニフェスト JSON を `nexus.registry.manifest_directory` にコピーします（レジストリがリモートバンドルをミラーする場合は cache directory にも）。設定リポジトリでマニフェストをバージョン管理している場合はコミットします。
 2. カタログ断片を `config/config.toml`（または適切な `config.d/*.toml`）に追加します。`nexus.lane_count` が `lane_id + 1` 以上であることを確認し、新しいレーンに向けるべき `nexus.routing_policy.rules` を更新します。
-3. （`--encode-space-directory` を省略した場合）エンコードして Space Directory にマニフェストを公開します。summary に記録されたコマンド（`space_directory_encode.command`）を使用してください。これにより Torii が要求する `.manifest.to` ペイロードが生成され、監査証跡も残ります。`iroha space-directory manifest publish` で送信します。
+3. （`--encode-space-directory` を省略した場合）エンコードして Space Directory にマニフェストを公開します。summary に記録されたコマンド（`space_directory_encode.command`）を使用してください。これにより Torii が要求する `.manifest.to` ペイロードが生成され、監査証跡も残ります。`iroha app space-directory manifest publish` で送信します。
 4. `irohad --sora --config path/to/config.toml --trace-config` を実行し、トレース出力をロールアウトチケットに保存します。これで新しいジオメトリが生成された slug/Kura セグメントと一致することを示せます。
 5. マニフェスト/カタログ変更が展開されたら、レーンに割り当てられたバリデータを再起動します。将来の監査用に summary JSON をチケットに保持してください。
 

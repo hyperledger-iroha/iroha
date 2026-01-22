@@ -32,7 +32,7 @@ Local-8/Local-12 の衝突に特化した事象の場合は、`AddressLocal8Resu
 | ログ | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'`（またはログ集約） | 共有前に PII を削除する。 |
 | fixture 検証 | `cargo xtask address-vectors --verify` | 正規ジェネレータとコミット済み JSON が一致することを確認する。 |
 | SDK パリティチェック | `python3 scripts/account_fixture_helper.py check --target <path> --metrics-out artifacts/account_fixture/<label>.prom --metrics-label <label>` | アラート/チケットで報告された SDK ごとに実行する。 |
-| クリップボード/IME 健全性 | `iroha address inspect <literal>` | 不可視文字や IME の書き換えを検出する。`address_display_guidelines.md` を参照。 |
+| クリップボード/IME 健全性 | `iroha tools address inspect <literal>` | 不可視文字や IME の書き換えを検出する。`address_display_guidelines.md` を参照。 |
 
 ## 即時対応
 
@@ -51,7 +51,7 @@ Local-8/Local-12 の衝突に特化した事象の場合は、`AddressLocal8Resu
 
 ### クライアントエンコーダ/IME の回帰
 
-- `iroha address inspect` でユーザ提供の literal を調べ、幅ゼロ join、kana 変換、切り詰め payload を探す。
+- `iroha tools address inspect` でユーザ提供の literal を調べ、幅ゼロ join、kana 変換、切り詰め payload を探す。
 - `docs/source/sns/address_display_guidelines.md`（二重コピーの目標、警告、QR ヘルパー）に沿って wallet/explorer のフローを確認し、承認済み UX に従っているか検証する。
 
 ### manifest またはレジストリの問題
@@ -68,7 +68,7 @@ Local-8/Local-12 の衝突に特化した事象の場合は、`AddressLocal8Resu
 | シナリオ | 対応 |
 |----------|------|
 | fixture のドリフト | `fixtures/account/address_vectors.json` を再生成し、`cargo xtask address-vectors --verify` を再実行し、SDK バンドルを更新して `address_fixture.prom` の snapshot をチケットに添付する。 |
-| SDK/クライアント回帰 | 正規 fixture と `iroha address inspect` の出力を添えて issue を作成し、SDK パリティ CI（例: `ci/check_address_normalize.sh`）でリリースをゲートする。 |
+| SDK/クライアント回帰 | 正規 fixture と `iroha tools address inspect` の出力を添えて issue を作成し、SDK パリティ CI（例: `ci/check_address_normalize.sh`）でリリースをゲートする。 |
 | 悪意ある送信 | rate-limit またはブロックを適用し、セレクタの tombstone が必要なら Governance にエスカレーションする。 |
 
 緩和後、PromQL のクエリを再実行し、`ERR_CHECKSUM_MISMATCH` が `/tests/*` を除いて 30 分以上ゼロで維持されることを確認してからインシデントを解除する。

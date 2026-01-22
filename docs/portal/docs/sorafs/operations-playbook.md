@@ -154,11 +154,11 @@ This page mirrors the runbook maintained under `docs/source/sorafs_ops_playbook.
 
 1. Run a local retention snapshot:
    ```bash
-   iroha sorafs gc inspect --data-dir /var/lib/sorafs
+   iroha app sorafs gc inspect --data-dir /var/lib/sorafs
    ```
 2. Capture an expired-only view for triage:
    ```bash
-   iroha sorafs gc dry-run --data-dir /var/lib/sorafs
+   iroha app sorafs gc dry-run --data-dir /var/lib/sorafs
    ```
 3. Attach the JSON outputs to the incident ticket for auditability.
 

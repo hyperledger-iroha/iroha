@@ -193,24 +193,24 @@ Endpoint للراحة
   - ملاحظات: مخصص للادارة/الاختبار؛ يتطلب API token اذا كان مضبوطا. للانتاج، يفضل ارسال معاملة موقعة مع `SetParameter(Custom)`.
 
 مساعدات CLI
-- `iroha gov audit-deploy --namespace apps [--contains calc --hash-prefix deadbeef --summary-only]`
+- `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - يجلب مثيلات العقود للnamespace ويتحقق من:
     - Torii يخزن bytecode لكل `code_hash`، وان digest Blake2b-32 يطابق `code_hash`.
     - manifest المخزن تحت `/v1/contracts/code/{code_hash}` يبلغ بقيم `code_hash` و`abi_hash` متطابقة.
     - يوجد اقتراح حوكمة enacted للتركيبة `(namespace, contract_id, code_hash, abi_hash)` مشتق بنفس hashing proposal-id الذي تستخدمه العقدة.
   - يخرج تقرير JSON يحتوي `results[]` لكل عقد (issues، ملخصات manifest/code/proposal) بالاضافة الى ملخص سطر واحد الا اذا تم تعطيله (`--no-summary`).
   - مفيد لتدقيق namespaces المحمية او التحقق من تدفقات deploy الخاضعة للحوكمة.
-- `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
+- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - يصدر هيكل JSON للـ metadata المستخدم عند نشر deploy الى namespaces المحمية، بما في ذلك `gov_manifest_approvers` الاختيارية لتلبية قواعد quorum للmanifest.
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — تلميحات القفل مطلوبة عندما يكون `min_bond_amount > 0`، وأي مجموعة تلميحات مقدمة يجب أن تتضمن `owner` و`amount` و`duration_blocks`.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — تلميحات القفل مطلوبة عندما يكون `min_bond_amount > 0`، وأي مجموعة تلميحات مقدمة يجب أن تتضمن `owner` و`amount` و`duration_blocks`.
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - الملخص في سطر واحد يعرض الان `fingerprint=<hex>` حتميا مشتقا من `CastZkBallot` المشفر مع hints المفككة (`owner`, `amount`, `duration_blocks`, `direction` عند توفيرها).
   - ردود CLI تضع تعليقات على `tx_instructions[]` مع `payload_fingerprint_hex` بالاضافة الى حقول مفكوكة كي تتحقق الادوات اللاحقة من الهيكل بدون اعادة تنفيذ فك ترميز Norito.
   - توفير hints للـ lock يسمح للعقدة باصدار احداث `LockCreated`/`LockExtended` للـ ZK ballots بمجرد ان تكشف الدائرة القيم نفسها.
-- `iroha gov vote-plain --referendum-id <id> --owner <account>@<domain> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner <account>@<domain> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - الـ aliases `--lock-amount`/`--lock-duration-blocks` تعكس اسماء flags الخاصة بـ ZK لتحقيق تماثل السكربتات.
-  - ناتج الملخص يعكس `vote-zk` باضافة fingerprint للتعليمة المشفرة وحقول ballot المقروءة (`owner`, `amount`, `duration_blocks`, `direction`)، لتاكيد سريع قبل توقيع الهيكل.
+  - ناتج الملخص يعكس `vote --mode zk` باضافة fingerprint للتعليمة المشفرة وحقول ballot المقروءة (`owner`, `amount`, `duration_blocks`, `direction`)، لتاكيد سريع قبل توقيع الهيكل.
 
 قائمة المثيلات
 - GET `/v1/gov/instances/{ns}` - يسرد مثيلات العقود النشطة لnamespace.
@@ -312,7 +312,7 @@ for (expected, kind) in offences.iter().enumerate() {
 يمكن للمشغلين والادوات فحص واعادة بث الحمولات عبر:
 
 - Torii: `GET /v1/sumeragi/evidence` و`GET /v1/sumeragi/evidence/count`.
-- CLI: `iroha sumeragi evidence list`, `... count`, و`... submit --evidence-hex <payload>`.
+- CLI: `iroha ops sumeragi evidence list`, `... count`, و`... submit --evidence-hex <payload>`.
 
 يجب على الحوكمة اعتبار bytes الخاصة بالevidence دليلا قانونيا:
 
@@ -334,7 +334,7 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- يعرض الـ runtime وCLI المعاملات staged عبر `/v1/sumeragi/params` و`iroha sumeragi params --summary` حتى يتمكن المشغلون من التحقق من ارتفاعات التفعيل وقوائم المدققين.
+- يعرض الـ runtime وCLI المعاملات staged عبر `/v1/sumeragi/params` و`iroha --output-format text ops sumeragi params` حتى يتمكن المشغلون من التحقق من ارتفاعات التفعيل وقوائم المدققين.
 - يجب ان تقوم اتمتة الحوكمة دائما بما يلي:
   1. انهاء قرار الازالة (او الاستعادة) المدعوم بـ evidence.
   2. جدولة اعادة تهيئة متابعة مع `mode_activation_height = h_current + activation_lag_blocks`.

@@ -75,7 +75,7 @@ CLI サマリー構造を参照してください。
 ## CLI / SDK フラグ リファレンス
 
 `sorafs_cli fetch`（`crates/sorafs_car/src/bin/sorafs_cli.rs`）と
-`iroha_cli sorafs fetch`（`crates/iroha_cli/src/commands/sorafs.rs`）は
+`iroha_cli app sorafs fetch`（`crates/iroha_cli/src/commands/sorafs.rs`）は
 同じオーケストレーター設定面を共有しています。ロールアウト証跡の
 取得やカノニカル fixtures の再現には次のフラグを使用してください:
 

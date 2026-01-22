@@ -85,7 +85,7 @@ Les deux endpoints sont servis par le worker de stockage embarqué, afin que les
 
 ## 2. Boucle Pin → Fetch
 
-1. Produisez un bundle manifest + payload (par exemple via `iroha sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
+1. Produisez un bundle manifest + payload (par exemple via `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
 2. Soumettez le manifest en base64 :
 
    ```bash

@@ -99,9 +99,9 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 ```
 
 - `openapi.manifest.to` と SBOM manifests も同様に実施します (SBOM bundles の alias フラグは、ガバナンスが namespace を割り当てた場合を除いて省略)。
-- 代替手段: `iroha sorafs pin register` は submit summary の digest があれば利用可能 (バイナリがインストール済みの場合)。
+- 代替手段: `iroha app sorafs pin register` は submit summary の digest があれば利用可能 (バイナリがインストール済みの場合)。
 - registry 状態の確認:
-  `iroha sorafs pin list --alias docs:portal --format json | jq`。
+  `iroha app sorafs pin list --alias docs:portal --format json | jq`。
 - 監視するダッシュボード: `sorafs_pin_registry.json` (`torii_sorafs_replication_*` メトリクス)。
 
 ## 3. Gateway Headers と Proofs
@@ -109,7 +109,7 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 HTTP ヘッダブロック + binding メタデータを生成します。
 
 ```bash
-iroha sorafs gateway route-plan \
+iroha app sorafs gateway route-plan \
   --manifest-json "${OUT}/portal.manifest.json" \
   --hostname docs.sora \
   --alias docs:portal \

@@ -43,7 +43,7 @@ fn build_signed_query_find_active_abi(authority: AccountId, kp: &KeyPair) -> Vec
 
 送信方法
 - HTTP 生リクエスト: エンコード済みバイト列をボディに入れて `POST /query`。
-- CLI: バイト列を base64 に変換して `iroha query stdin-raw` に渡す。
+- CLI: バイト列を base64 に変換して `iroha ledger query stdin-raw` に渡す。
 
 出力
 - 成功するとノードは Norito の `QueryResponse::Singular(ActiveAbiVersions)` を返します。

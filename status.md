@@ -2,6 +2,21 @@
 
 Last update: 2026-01-22
 
+- Config: added pacemaker backpressure soft-limit defaults to the Kiso and Torii connect-gating Sumeragi config literals.
+- Tests: not run (config literal updates only).
+- CLI: fixed `version` output borrow by precomputing localized strings and added a text-mode unit test with a stubbed server version.
+- Tests: not run (CLI borrow fix + unit test only).
+- Consensus telemetry: added `sumeragi_proposal_gap_total` counter and docs/tests; increments on missing-proposal view-change rotations.
+- Build: `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target-localnet22 cargo build --release -p iroha_kagami -p iroha_cli -p irohad` (ok).
+- Localnet (NPoS, 7 peers, 753ms, exit_teu=15060): `/private/tmp/iroha-localnet-7peer-run147` (24580/25500). 100 TPS for 240s with 1s `/metrics` sampling → height 53, avg slot 6.29s (latest 25553ms), `view_change_install_total=5`, `proposal_gap_total=2`; pending blocks/inflight mostly 0/1. Metrics: `metrics_peer0_sample_run147.txt`.
+- Localnet (permissioned, 7 peers, 753ms, exit_teu=15060): `/private/tmp/iroha-localnet-7peer-run148` (24580/25500). 100 TPS for 240s with 1s `/metrics` sampling → height 69, avg slot 4.37s (latest 2721ms), `view_change_install_total=0`, `proposal_gap_total=0`; pending blocks/inflight mostly 0/1. Metrics: `metrics_peer0_sample_run148.txt`.
+- Localnet (NPoS, `rbc_payload_chunks_per_tick=256`): `/private/tmp/iroha-localnet-7peer-run149` (24580/25500). 100 TPS for 240s → height 72, avg slot 4.88s (latest 9330ms), `view_change_install_total=4`, `proposal_gap_total=0`; pending blocks max 4. Metrics: `metrics_peer0_sample_run149.txt`.
+- Localnet (permissioned, `rbc_payload_chunks_per_tick=256`): `/private/tmp/iroha-localnet-7peer-run150` (24580/25500). 100 TPS for 240s → height 65, avg slot 5.06s (latest 13481ms), `view_change_install_total=1`, `proposal_gap_total=0`. Metrics: `metrics_peer0_sample_run150.txt`.
+- Build: `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target-localnet22 cargo build --release -p iroha_kagami` (ok).
+- Localnet (NPoS, 7 peers, 753ms, exit_teu=15060, NPoS params block_time_ms=753, `rbc_payload_chunks_per_tick=256`, consensus_future_* 32): `/private/tmp/iroha-localnet-7peer-run151` (24580/25500). 100 TPS for 240s → height 65, avg slot 5.68s (latest 5966ms), `view_change_install_total=11`, `proposal_gap_total=1`, `txs_accepted=23870`; pending blocks max 4/inflight max 1. Metrics: `metrics_peer0_sample_run151.txt`.
+- Localnet (permissioned, 7 peers, 753ms, commit_time_ms=300, `rbc_payload_chunks_per_tick=256`, consensus_future_* 32): `/private/tmp/iroha-localnet-7peer-run152` (24680/25600). 100 TPS for 240s → height 33, avg slot 10.69s (latest 27443ms), `view_change_install_total=18`, `proposal_gap_total=0`, `txs_accepted=10287`; pending blocks max 4 (blocking max 3)/inflight max 1. Metrics: `metrics_peer0_sample_run152.txt`.
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Tests: not run (telemetry addition + localnet reruns).
 - Norito RPC fixtures: added explicit payload specs for transaction fixtures, regenerated canonical `.norito` payloads/manifests, and re-synced Android/Swift/Python fixture bundles.
 - Tests: `cargo test -p connect_norito_bridge -- --nocapture` (ok).
 - Tests: `cargo run --manifest-path xtask/Cargo.toml --bin xtask -- norito-rpc-verify` (ok).

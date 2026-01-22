@@ -61,7 +61,7 @@ description: Зеркало `docs/source/nexus_refactor_plan.md`, описыва
    - Перенести pagination/cursor логику в переиспользуемые компоненты под `crates/iroha_core/src/query/`. Согласовать Norito representations в `iroha_data_model`.
    - Добавить snapshot queries для triggers, assets и roles с детерминированным порядком (отслеживается через `crates/iroha_core/tests/snapshot_iterable.rs` для текущего покрытия).
 3. **Snapshot Consistency**
-   - Убедиться, что `iroha query` CLI использует тот же snapshot path, что и Sumeragi/fetchers.
+   - Убедиться, что `iroha ledger query` CLI использует тот же snapshot path, что и Sumeragi/fetchers.
    - CLI snapshot regression tests находятся в `tests/cli/state_snapshot.rs` (feature-gated для медленных прогонов).
 
 ### Phase C - Sumeragi Pipeline

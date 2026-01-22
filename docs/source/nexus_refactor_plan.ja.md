@@ -50,7 +50,7 @@ translator: manual
    - ページング／カーソルロジックを `crates/iroha_core/src/query/` の再利用可能コンポーネントへ移動。Norito 表現を `iroha_data_model` と整合。
    - トリガー・資産・ロールのスナップショットクエリに決定的な順序付けを追加する（現状は `crates/iroha_core/tests/snapshot_iterable.rs` がカバレッジを追跡）。
 3. **スナップショット整合性**
-   - `iroha query` CLI が Sumeragi／フェッチャーと同じスナップショット経路を使用するよう調整。
+   - `iroha ledger query` CLI が Sumeragi／フェッチャーと同じスナップショット経路を使用するよう調整。
    - CLI スナップショットの回帰テストは `tests/cli/state_snapshot.rs` にあり、遅延経路向けに feature gate されています。
 
 ### Phase C — Sumeragi パイプライン

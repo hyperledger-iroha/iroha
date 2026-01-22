@@ -133,6 +133,6 @@ The REST façade now ships with attested listing endpoints:
   alias catalogue and replication order backlog with consistent pagination and
   status filters.
 
-The CLI wraps these calls (`iroha sorafs pin list`, `pin show`, `alias list`,
+The CLI wraps these calls (`iroha app sorafs pin list`, `pin show`, `alias list`,
 `replication list`) so operators can script registry audits without touching
 lower-level APIs.

@@ -223,4 +223,4 @@ supplémentaires pour la transition mais ne doivent pas remplacer le digest cano
   via les tests fournis.
 * `chunker_registry::lookup_by_profile` affirme que les paramètres du descripteur
   correspondent à `ChunkProfile::DEFAULT` pour éviter toute divergence accidentelle.
-* Les manifests produits par `iroha sorafs toolkit pack` et `sorafs_manifest_stub` incluent les métadonnées du registre.
+* Les manifests produits par `iroha app sorafs toolkit pack` et `sorafs_manifest_stub` incluent les métadonnées du registre.

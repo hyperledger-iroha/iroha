@@ -112,7 +112,7 @@ irohad --sora --config "${IROHA_CONFIG}"
 بمجرد أن تصبح العقدة online، استخدم أداة CLI للتحقق من أن lane الافتراضي مختوم (manifest محمّل) وجاهز للحركة. تعرض النظرة الملخصة صفا لكل lane:
 
 ```bash
-iroha_cli nexus lane-report --summary
+iroha_cli app nexus lane-report --summary
 ```
 
 Example output:

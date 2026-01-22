@@ -2,25 +2,26 @@
 
 use core::mem;
 
-use crate::RunContext;
+use crate::{CliOutputFormat, RunContext};
 use eyre::{Result, eyre};
 use iroha_crypto::blake2::{Blake2b512, digest::Digest};
 use norito::json::Value;
 
-/// Print a JSON payload, optionally prefixed with a summary line.
+/// Print a JSON payload or a summary line, depending on CLI output mode.
 pub fn print_with_summary<C: RunContext>(
     context: &mut C,
     summary: Option<String>,
     json: &Value,
-    summary_only: bool,
-    no_summary: bool,
 ) -> Result<()> {
-    validate_summary_flags(summary_only, no_summary)?;
-    if !no_summary && let Some(line) = summary {
-        let _ = context.println(line);
-    }
-    if !summary_only {
-        context.print_data(json)?;
+    match context.output_format() {
+        CliOutputFormat::Json => context.print_data(json)?,
+        CliOutputFormat::Text => {
+            if let Some(line) = summary {
+                context.println(line)?;
+            } else {
+                context.print_data(json)?;
+            }
+        }
     }
     Ok(())
 }
@@ -55,16 +56,6 @@ pub(super) fn decode_hex32(hex_str: &str) -> Result<[u8; 32]> {
     let mut out = [0u8; 32];
     hex::decode_to_slice(&canonical, &mut out)?;
     Ok(out)
-}
-
-/// Validate that mutually-exclusive summary flags are not both set.
-pub(super) fn validate_summary_flags(summary_only: bool, no_summary: bool) -> Result<()> {
-    if summary_only && no_summary {
-        return Err(eyre!(
-            "--summary-only and --no-summary cannot be used together"
-        ));
-    }
-    Ok(())
 }
 
 /// Compute the governance proposal id using the stable hash recipe.
@@ -154,15 +145,4 @@ mod tests {
         assert_eq!(candidate, expected);
     }
 
-    #[test]
-    fn validate_summary_flags_detects_conflict() {
-        let err = validate_summary_flags(true, true).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("--summary-only and --no-summary cannot be used together"),
-            "unexpected error message: {err}"
-        );
-        assert!(validate_summary_flags(true, false).is_ok());
-        assert!(validate_summary_flags(false, true).is_ok());
-    }
 }

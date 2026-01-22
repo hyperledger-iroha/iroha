@@ -64,7 +64,7 @@ rollout_phase = "default"
 # anonymity_policy = "anon-strict-pq"  # optional explicit override
 ```
 
-`iroha::Client` يسجل الان المرحلة المحللة (`crates/iroha/src/client.rs:2315`) بحيث يمكن لاوامر المساعدة (مثل `iroha_cli sorafs fetch`) ان تبلغ عن المرحلة الحالية مع سياسة اخفاء الهوية الافتراضية.
+`iroha::Client` يسجل الان المرحلة المحللة (`crates/iroha/src/client.rs:2315`) بحيث يمكن لاوامر المساعدة (مثل `iroha_cli app sorafs fetch`) ان تبلغ عن المرحلة الحالية مع سياسة اخفاء الهوية الافتراضية.
 
 ## الاتمتة
 

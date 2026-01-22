@@ -80,7 +80,7 @@ scripts/nexus_lane_bootstrap.sh \
    точной командой `cargo xtask space-directory encode` (в `space_directory_encode.command`).
    Приложите этот JSON к тикету onboarding как доказательство.
 4. `<slug>.manifest.to` — создается при `--encode-space-directory`; готов для
-   `iroha space-directory manifest publish` в Torii.
+   `iroha app space-directory manifest publish` в Torii.
 
 Используйте `--dry-run` для предпросмотра JSON/snippets без записи файлов и `--force` для
 перезаписи существующих артефактов.
@@ -96,7 +96,7 @@ scripts/nexus_lane_bootstrap.sh \
 3. Сгенерируйте encoding (если вы не использовали `--encode-space-directory`) и опубликуйте manifest
    в Space Directory командой из summary (`space_directory_encode.command`). Это создает payload
    `.manifest.to`, ожидаемый Torii, и фиксирует доказательства для аудиторов; отправьте через
-   `iroha space-directory manifest publish`.
+   `iroha app space-directory manifest publish`.
 4. Запустите `irohad --sora --config path/to/config.toml --trace-config` и архивируйте вывод trace
    в тикете rollout. Это доказывает, что геометрия совпадает со сгенерированными slug/kura сегментами.
 5. Перезапустите валидаторы, назначенные на lane, после deploy изменений manifest/catalog. Храните

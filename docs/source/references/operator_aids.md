@@ -34,7 +34,7 @@ Consensus (Sumeragi)
   - Aggregate Reliable Broadcast counters: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
 - GET `/v1/sumeragi/rbc/sessions`
   - Snapshot of per-session state (block hash, height/view, chunk counts, delivered flag, `invalid` marker, payload hash, recovered boolean) to troubleshoot stalled RBC deliveries and highlight recovered sessions after restart.
-  - CLI shortcut: `iroha sumeragi rbc sessions --summary` prints `hash`, `height/view`, chunk progress, ready count, and invalid/delivered flags.
+  - CLI shortcut: `iroha --output-format text ops sumeragi rbc sessions` prints `hash`, `height/view`, chunk progress, ready count, and invalid/delivered flags.
 
 Evidence (audit; non-consensus)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
@@ -45,9 +45,9 @@ Evidence (audit; non-consensus)
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`
 - POST `/v1/sumeragi/evidence` → `{ "status": "accepted", "kind": "<variant>" }`
   - CLI helpers:
-    - `iroha sumeragi evidence list --summary`
-    - `iroha sumeragi evidence count --summary`
-    - `iroha sumeragi evidence submit --evidence-hex <hex>` (or `--evidence-hex-file <path>`)
+    - `iroha --output-format text ops sumeragi evidence list`
+    - `iroha --output-format text ops sumeragi evidence count`
+    - `iroha ops sumeragi evidence submit --evidence-hex <hex>` (or `--evidence-hex-file <path>`)
 
 Operator authentication (WebAuthn/mTLS)
 - POST `/v1/operator/auth/registration/options`

@@ -144,7 +144,7 @@ governance_tag = "da.taikai.archive"
    جديدا عبر ادوات الحوكمة الموصوفة في
    [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md)
    واعِد تشغيل التدقيق حتى تتقارب مجموعة النسخ. للتجاوزات الطارئة، اربط مخرجات
-   CLI مع `iroha da prove-availability` حتى يتمكن SREs من الرجوع لنفس digest
+   CLI مع `iroha app da prove-availability` حتى يتمكن SREs من الرجوع لنفس digest
    ودليل PDP.
 
 توجد تغطية الانحدار في `integration_tests/tests/da/replication_policy.rs`؛ تقوم

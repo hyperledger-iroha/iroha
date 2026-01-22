@@ -118,4 +118,4 @@ Gateways mutually supported profile منتخب کرتے ہیں (default `sorafs.
 
 * `sorafs.sf1@1.0.0` profile public fixtures (`fixtures/sorafs_chunker`) اور `fuzz/sorafs_chunker` کے تحت register corpora سے match کرتا ہے۔ End-to-end parity Rust، Go اور Node میں دیے گئے tests سے exercise کی جاتی ہے۔
 * `chunker_registry::lookup_by_profile` assert کرتا ہے کہ descriptor parameters `ChunkProfile::DEFAULT` سے match کریں تاکہ accidental divergence سے بچا جا سکے۔
-* `iroha sorafs toolkit pack` اور `sorafs_manifest_stub` سے بنے manifests میں registry metadata شامل ہوتی ہے۔
+* `iroha app sorafs toolkit pack` اور `sorafs_manifest_stub` سے بنے manifests میں registry metadata شامل ہوتی ہے۔

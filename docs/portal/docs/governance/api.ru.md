@@ -195,24 +195,24 @@ Convenience Endpoint
   - Notes: предназначен для admin/testing; требует API token при конфигурации. В production предпочтительнее подписанная транзакция с `SetParameter(Custom)`.
 
 CLI Helpers
-- `iroha gov audit-deploy --namespace apps [--contains calc --hash-prefix deadbeef --summary-only]`
+- `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - Получает контрактные инстансы для namespace и проверяет, что:
     - Torii хранит bytecode для каждого `code_hash`, и его Blake2b-32 digest соответствует `code_hash`.
     - Manifest под `/v1/contracts/code/{code_hash}` сообщает совпадающие `code_hash` и `abi_hash`.
     - Существует enacted governance proposal для `(namespace, contract_id, code_hash, abi_hash)`, деривированный тем же proposal-id hashing, что использует нода.
   - Выводит JSON отчет с `results[]` по каждому контракту (issues, manifest/code/proposal summaries) и однострочным summary, если не подавлено (`--no-summary`).
   - Полезно для аудита protected namespaces или проверки governance-controlled deploy workflows.
-- `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
+- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - Выдает JSON skeleton metadata для деплоя в protected namespaces, включая опциональные `gov_manifest_approvers` для соблюдения quorum правил манифеста.
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — lock hints обязательны при `min_bond_amount > 0`, и любой набор hints должен включать `owner`, `amount` и `duration_blocks`.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — lock hints обязательны при `min_bond_amount > 0`, и любой набор hints должен включать `owner`, `amount` и `duration_blocks`.
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - Однострочный summary теперь содержит детерминированный `fingerprint=<hex>` из кодированного `CastZkBallot` вместе с декодированными hints (`owner`, `amount`, `duration_blocks`, `direction` при наличии).
   - CLI ответы аннотируют `tx_instructions[]` полем `payload_fingerprint_hex` и декодированными полями, чтобы downstream tooling могло проверить skeleton без повторной реализации Norito decoding.
   - Предоставление lock hints позволяет ноде эмитить `LockCreated`/`LockExtended` для ZK ballots, когда схема раскрывает те же значения.
-- `iroha gov vote-plain --referendum-id <id> --owner <account>@<domain> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner <account>@<domain> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - Алиасы `--lock-amount`/`--lock-duration-blocks` отражают имена ZK флагов для parity в скриптах.
-  - Summary вывод отражает `vote-zk`, включая fingerprint закодированной инструкции и читаемые ballot поля (`owner`, `amount`, `duration_blocks`, `direction`), давая быстрое подтверждение перед подписью skeleton.
+  - Summary вывод отражает `vote --mode zk`, включая fingerprint закодированной инструкции и читаемые ballot поля (`owner`, `amount`, `duration_blocks`, `direction`), давая быстрое подтверждение перед подписью skeleton.
 
 Instances Listing
 - GET `/v1/gov/instances/{ns}` - список активных контрактных инстансов для namespace.
@@ -314,7 +314,7 @@ for (expected, kind) in offences.iter().enumerate() {
 Операторы и инструменты могут просматривать и повторно рассылать payloads через:
 
 - Torii: `GET /v1/sumeragi/evidence` и `GET /v1/sumeragi/evidence/count`.
-- CLI: `iroha sumeragi evidence list`, `... count`, `... submit --evidence-hex <payload>`.
+- CLI: `iroha ops sumeragi evidence list`, `... count`, `... submit --evidence-hex <payload>`.
 
 Governance должна рассматривать evidence bytes как каноническое доказательство:
 
@@ -336,7 +336,7 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- Runtime и CLI показывают staged параметры через `/v1/sumeragi/params` и `iroha sumeragi params --summary`, чтобы операторы подтвердили activation heights и roster валидаторов.
+- Runtime и CLI показывают staged параметры через `/v1/sumeragi/params` и `iroha --output-format text ops sumeragi params`, чтобы операторы подтвердили activation heights и roster валидаторов.
 - Автоматизация governance всегда должна:
   1. Финализировать решение об исключении (или восстановлении), поддержанное evidence.
   2. Поставить follow-up reconfiguration с `mode_activation_height = h_current + activation_lag_blocks`.

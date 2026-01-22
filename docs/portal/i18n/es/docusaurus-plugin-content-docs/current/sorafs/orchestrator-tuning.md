@@ -79,7 +79,7 @@ Para definiciones detalladas de campos, consulta
 ## Referencia de flags de CLI y SDK
 
 `sorafs_cli fetch` (ver `crates/sorafs_car/src/bin/sorafs_cli.rs`) y el wrapper
-`iroha_cli sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) comparten la
+`iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) comparten la
 misma superficie de configuración del orquestador. Usa los siguientes flags al
 capturar evidencia de despliegue o al reproducir los fixtures canónicos:
 

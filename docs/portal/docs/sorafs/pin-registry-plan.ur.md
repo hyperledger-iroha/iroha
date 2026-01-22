@@ -143,5 +143,5 @@ REST facade اب attested listing endpoints کے ساتھ آتی ہے:
 - `GET /v1/sorafs/aliases` اور `GET /v1/sorafs/replication` فعال alias catalogue اور
   replication order backlog کو consistent pagination اور status filters کے ساتھ ظاہر کرتے ہیں۔
 
-CLI ان calls کو wrap کرتی ہے (`iroha sorafs pin list`, `pin show`, `alias list`,
+CLI ان calls کو wrap کرتی ہے (`iroha app sorafs pin list`, `pin show`, `alias list`,
 `replication list`) تاکہ operators کم سطحی APIs کو چھوئے بغیر registry audits خودکار بنا سکیں۔

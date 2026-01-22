@@ -71,7 +71,7 @@ ivm_run target/examples/hello.to --args '{}'
 Когда контракт вас устраивает, задеплойте его на узел через CLI. Укажите аккаунт-авторитет, его ключ подписи и либо файл `.to`, либо Base64 payload:
 
 ```sh
-iroha_cli contracts deploy \
+iroha_cli app contracts deploy \
   --authority alice@wonderland \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -80,19 +80,19 @@ iroha_cli contracts deploy \
 Команда отправляет bundle манифеста Norito + байткода через Torii и печатает статус транзакции. После коммита показанный в ответе хэш кода можно использовать для получения манифестов или списка инстансов:
 
 ```sh
-iroha_cli contracts manifest --code-hash 0x<hash>
-iroha_cli contracts instances --namespace apps --table
+iroha_cli app contracts manifest get --code-hash 0x<hash>
+iroha_cli app contracts instances --namespace apps --table
 ```
 
 ## 5. Запуск через Torii
 
-После регистрации байткода вы можете вызывать его, отправляя инструкцию, которая ссылается на сохраненный код (например, через `iroha_cli transaction submit` или ваш клиент приложения). Убедитесь, что права аккаунта разрешают нужные syscalls (`set_account_detail`, `transfer_asset` и т.д.).
+После регистрации байткода вы можете вызывать его, отправляя инструкцию, которая ссылается на сохраненный код (например, через `iroha_cli ledger transaction submit` или ваш клиент приложения). Убедитесь, что права аккаунта разрешают нужные syscalls (`set_account_detail`, `transfer_asset` и т.д.).
 
 ## Советы и устранение проблем
 
 - Используйте `make examples-run`, чтобы собрать и выполнить примеры одним запуском. Переопределите переменные окружения `KOTO`/`IVM`, если бинарники не находятся в `PATH`.
 - Если `koto_compile` отклоняет ABI версию, проверьте, что компилятор и узел нацелены на ABI v1 (запустите `koto_compile --abi` без аргументов, чтобы увидеть поддержку).
-- CLI принимает ключи подписи в hex или Base64. Для тестов можно использовать ключи, выданные `iroha_cli crypto keypair`.
+- CLI принимает ключи подписи в hex или Base64. Для тестов можно использовать ключи, выданные `iroha_cli tools crypto keypair`.
 - При отладке Norito payloads полезна команда `ivm_tool disassemble`, которая помогает сопоставлять инструкции с исходниками Kotodama.
 
 Этот поток отражает шаги, используемые в CI и интеграционных тестах. Для более глубокого изучения грамматики Kotodama, маппинга syscalls и внутренностей Norito см.:

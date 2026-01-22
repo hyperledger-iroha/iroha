@@ -87,7 +87,7 @@ returns HTTP 429; any handler error increments
 - Set the custom parameter `gov_protected_namespaces` (JSON array of namespace
   strings) to enable admission gating. Torii exposes helpers under
   `/v1/gov/protected-namespaces` and the CLI mirrors them via
-  `iroha_cli gov protected-set` / `protected-get`.
+  `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
 - Proposals created with `ProposeDeployContract` (or the Torii
   `/v1/gov/proposals/deploy-contract` endpoint) capture
   `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
@@ -108,28 +108,28 @@ returns HTTP 429; any handler error increments
 
 ## CLI helpers
 
-- `iroha_cli contract deploy --authority <id> --private-key <hex> --code-file <path>`
+- `iroha_cli app contracts deploy --authority <id> --private-key <hex> --code-file <path>`
   submits the Torii deploy request (computing hashes on the fly).
-- `iroha_cli contract deploy-activate --authority <id> --private-key <hex> --namespace <ns> --contract-id <id> --code-file <path>`
+- `iroha_cli app contracts deploy-activate --authority <id> --private-key <hex> --namespace <ns> --contract-id <id> --code-file <path>`
   builds the manifest (signed with the supplied key), registers bytes + manifest,
   and activates the `(namespace, contract_id)` binding in one transaction. Use
   `--dry-run` to print the computed hashes and instruction count without
   submitting, and `--manifest-out` to save the signed manifest JSON.
-- `iroha_cli contract build-manifest --code-file <path> [--sign-with <hex>]` computes
+- `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` computes
   `code_hash`/`abi_hash` for compiled `.to` and optionally signs the manifest,
   printing JSON or writing to `--out`.
-- `iroha_cli contract simulate --authority <id> --private-key <hex> --code-file <path> --gas-limit <u64>`
+- `iroha_cli app contracts simulate --authority <id> --private-key <hex> --code-file <path> --gas-limit <u64>`
   runs an offline VM pass and reports ABI/hash metadata plus the queued ISIs
   (counts and instruction ids) without touching the network. Attach
   `--namespace/--contract-id` to mirror call-time metadata.
-- `iroha_cli contract manifest --code-hash <hex>` fetches the manifest via Torii
+- `iroha_cli app contracts manifest get --code-hash <hex>` fetches the manifest via Torii
   and optionally writes it to disk.
-- `iroha_cli contract code-bytes-get --code-hash <hex> --out <path>` downloads
+- `iroha_cli app contracts code get --code-hash <hex> --out <path>` downloads
   the stored `.to` image.
-- `iroha_cli contract instances --namespace <ns> [--table]` lists activated
+- `iroha_cli app contracts instances --namespace <ns> [--table]` lists activated
   contract instances (manifest + metadata driven).
-- Governance helpers (`iroha_cli gov propose-deploy`, `gov enact`,
-  `gov protected-set/get`) orchestrate the protected-namespace workflow and
+- Governance helpers (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
+  `iroha_cli app gov protected set/get`) orchestrate the protected-namespace workflow and
   expose JSON artefacts for auditing.
 
 ## Testing & coverage

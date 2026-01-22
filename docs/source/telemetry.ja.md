@@ -14,7 +14,7 @@
 - `/v1/sumeragi/params`: コミット済み Sumeragi パラメータのスナップショット。
 - `/v1/sumeragi/phases`: コンセンサス各フェーズの最新レイテンシ。
 
-集約フィールド `lane_governance_sealed_total` と `lane_governance_sealed_aliases` は、ガバナンス・マニフェストが未適用のレーンを一目で把握するためのカウンタです。`/v1/sumeragi/status` に加えて `iroha_cli sumeragi status --summary` でも同じ値が表示され、CLI はエイリアス一覧をそのまま印字します。ローンチ手順や CI/CD では `iroha_cli nexus lane-report --only-missing --fail-on-sealed` を組み合わせ、シール解除が完了していない場合は早期に検知できるようにしてください。
+集約フィールド `lane_governance_sealed_total` と `lane_governance_sealed_aliases` は、ガバナンス・マニフェストが未適用のレーンを一目で把握するためのカウンタです。`/v1/sumeragi/status` に加えて `iroha_cli --output-format text ops sumeragi status` でも同じ値が表示され、CLI はエイリアス一覧をそのまま印字します。ローンチ手順や CI/CD では `iroha_cli app nexus lane-report --only-missing --fail-on-sealed` を組み合わせ、シール解除が完了していない場合は早期に検知できるようにしてください。
 
 ## 設定項目
 
@@ -217,10 +217,10 @@ nexus_lane_configured_total != EXPECTED_LANE_COUNT
 
 ## ガバナンス運用チェックリスト（抜粋）
 
-1. `iroha_cli gov audit-deploy` でマニフェストと `code_hash` / `abi_hash` の整合性確認。
+1. `iroha_cli app gov deploy audit` でマニフェストと `code_hash` / `abi_hash` の整合性確認。
 2. `/status` の `governance.recent_manifest_activations` を確認し、対象のアップグレードが反映されているか確認。
 3. `increase(governance_protected_namespace_total{outcome="rejected"}[5m])` や `increase(governance_manifest_quorum_total{outcome="rejected"}[5m])` が増加した場合は Torii ログで拒否理由を調査。
-4. `governance_proposals_status{status="approved"}` と `status="enacted"` のカウント推移を監視し、停滞時は `iroha_cli gov enact` の再実行を検討。
+4. `governance_proposals_status{status="approved"}` と `status="enacted"` のカウント推移を監視し、停滞時は `iroha_cli app gov enact` の再実行を検討。
 5. `increase(governance_manifest_hook_total{hook="runtime_upgrade", outcome="rejected"}[5m])` をチェックし、マニフェストポリシーにより拒否されたランタイムアップグレード申請を検出する。増加が見られた場合は Torii のアドミッションログと突き合わせ、allowlist やメタデータ要件が提案内容と一致しているか再確認する。
 
 ---

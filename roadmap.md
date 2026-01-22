@@ -105,7 +105,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 - [x] Resolve build-directory lock timeouts so full-workspace test runs complete reliably (standardize `CARGO_TARGET_DIR` or serialize builds).
 
 4. **LOCALNET-10K-TPS — 7-peer localnet throughput + stall resilience** (Consensus/Performance/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈺 In Progress, target TBD)
-- [ ] Use the new pending-block/commit-inflight metrics to isolate pacemaker backpressure during 100 TPS localnet runs (recent 7-peer release runs still show 3.6–5.7s slots with 8–12 view changes); identify the proposal-gap root cause and re-test.
+- [ ] Use the new pending-block/commit-inflight metrics to isolate pacemaker backpressure during 100 TPS localnet runs (run151 NPoS: avg slot 5.68s, view changes 11, proposal_gap 1, pending/inflight <=4/1; run152 permissioned + commit_time_ms=300: avg slot 10.69s, view changes 18, pending/inflight <=4/1); identify the proposal-gap root cause and re-test.
  - [x] NPoS roster selection now appends active validators missing from the commit topology so the full validator set participates; unit coverage added.
  - [x] Seed commit topology from the checkpoint topology when world peers are incomplete (prevents genesis roster shrink/QC stalls); unit coverage added.
  - [x] Add a Kagami/localnet regression that asserts validator count + commit QC validator-set length match the peer count on startup.

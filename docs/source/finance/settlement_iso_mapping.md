@@ -204,7 +204,7 @@ status (e.g., `ConfSts = ACCP`) rather than the PvP “purpose”.
 Example (CLI ISO preview with linkages, hold, and market MIC):
 
 ```sh
-iroha settlement dvp \
+iroha app settlement dvp \
   --settlement-id DVP-FIXTURE-1 \
   --delivery-asset security#equities \
   --delivery-quantity 500 \
@@ -263,7 +263,7 @@ iroha settlement dvp \
   payload archives remain deterministic across rebuilds.
 * Currency amounts follow ISO 4217 fraction digits (for example JPY has 0
   decimals, USD has 2); the bridge clamps Norito numeric precision accordingly.
-* The CLI settlement helpers (`iroha settlement ... --atomicity ...`) now emit
+* The CLI settlement helpers (`iroha app settlement ... --atomicity ...`) now emit
   Norito instructions whose execution plans map 1:1 to `Plan/ExecutionOrder` and
   `Plan/Atomicity` above.
 * The ISO helper (`ivm::iso20022`) validates the fields listed above and rejects

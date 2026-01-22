@@ -35,7 +35,7 @@ required artefacts and links to the code/tests that already satisfy them:
 
 ### 2.1 CLI & Norito builders
 
-- `iroha repo initiate|unwind|margin|margin-call` wrap `RepoIsi`,
+- `iroha app repo initiate|unwind|margin|margin-call` wrap `RepoIsi`,
   `ReverseRepoIsi`, and `RepoMarginCallIsi`
   (`crates/iroha_cli/src/main.rs:3821`). Each subcommand supports `--input` /
   `--output` so desks can stage instruction payloads for dual approval before
@@ -99,7 +99,7 @@ Operational checklist:
    `ToriiClient.get_configuration()` is available in the Python SDK for the same
    purpose when automation needs typed evidence.【python/iroha_python/src/iroha_python/client.py:5791】
 3. Prove that the runtime now enforces the requested cadence/haircut by querying
-   `FindRepoAgreements` (or `iroha repo margin --agreement-id ...`) and
+   `FindRepoAgreements` (or `iroha app repo margin --agreement-id ...`) and
    inspecting the embedded `RepoGovernance` values. Store the JSON responses
    under `artifacts/finance/repo/<agreement>/agreements_after.json`; those values
    are derived from `[settlement.repo]`, so they act as a secondary witness when
@@ -253,7 +253,7 @@ matrix) must ship the same artefacts before a vote is scheduled.【docs/source/g
    council’s cadence deterministic by listing file paths, SHA-256 digests, and
    reviewer acknowledgements in one place.
 2. **Instruction payloads** – stage the initiation, unwind, and margin-call
-   instructions with `iroha repo ... --output` so dual-control approvers review
+   instructions with `iroha app repo ... --output` so dual-control approvers review
    byte-identical payloads. Hash each file and store it under
    `artifacts/finance/repo/<agreement-id>/` next to the desk’s evidence bundle
    referenced elsewhere in this note.【crates/iroha_cli/src/main.rs:3821】
@@ -448,7 +448,7 @@ capture the artefacts below before the governance packet is considered complete.
 4. **Custodian readiness checklist.** When the repo references operational
    shims (for example, escrow reconciliations or standing instructions), record
    the automation contact and the command used to rehearse the workflow (such
-   as `iroha repo initiate --custodian ... --dry-run`) so reviewers can reach
+   as `iroha app repo initiate --custodian ... --dry-run`) so reviewers can reach
    the custodian operators during drills.
 
 | Evidence | Command / Path | Purpose |
@@ -509,11 +509,11 @@ under investigation.
 ## 3. Deterministic Evidence Workflow
 
 1. **Record the instruction provenance**
-   - Generate the repo/unwind payload via `iroha repo ... --output`.
+   - Generate the repo/unwind payload via `iroha app repo ... --output`.
    - Store the `InstructionBox` JSON under
      `artifacts/finance/repo/<agreement-id>/initiation.json`.
 2. **Capture ledger state**
-   - Run `iroha repo query list --pretty > artifacts/.../agreements.json` before
+   - Run `iroha app repo query list --pretty > artifacts/.../agreements.json` before
      and after settlement to prove balances cleared.
    - Optionally query `FindAssets` via `iroha json` or SDK helpers to archive
      the asset balances touched in the repo leg.
@@ -560,7 +560,7 @@ artifacts/finance/repo/<agreement-id>/
 - `agreements_before/after.json` capture `repo query list` output so auditors can
   prove the ledger cleared the agreement.
 - `initiation.json`, `unwind.json`, and `margin/*.json` are the exact Norito
-  payloads staged with `iroha repo ... --output`.
+  payloads staged with `iroha app repo ... --output`.
 - `events/repo-events.ndjson` replays the `AccountEvent::Repo(*)` stream while
   `tests/repo_lifecycle.log` preserves the `cargo test` evidence.
 - `repo_proof_snapshot.json` and `repo_proof_digest.txt` come from the snapshot
@@ -644,7 +644,7 @@ directly from the referendum minutes.【docs/source/governance_playbook.md:1】
      `hashes.txt` so reviewers can confirm the payloads they see in Torii match
      the staged bytes.
 2. **Reference the packet in the referendum**
-   - When running `iroha governance referendum submit` (or the equivalent SDK
+   - When running `iroha app governance referendum submit` (or the equivalent SDK
      helper) include the manifest hash from `hashes.txt` in the `--notes`
      payload so the GAR points back to the immutable packet.
    - File the same hash inside the governance tracker or ticketing system so
@@ -654,7 +654,7 @@ directly from the referendum minutes.【docs/source/governance_playbook.md:1】
      agreement id, deployed config hash, GAR id, and operator contact so the
      quarterly drill record includes finance actions.【ops/drill-log.md:1】
    - If a rollback drill executes, attach the signed
-     `rollback_playbook.md` and the CLI output from `iroha repo unwind` under
+     `rollback_playbook.md` and the CLI output from `iroha app repo unwind` under
      `governance/drills/<timestamp>.log` and inform the council using the same
      steps described in the governance playbook.
 
@@ -684,9 +684,9 @@ single checklist when assembling a packet.
 | Lifecycle step | Required approvals & tickets | Deterministic artefacts & commands | Linked regression coverage |
 |----------------|------------------------------|------------------------------------|----------------------------|
 | **Initiation (bilateral or tri-party)** | Dual-control sign-off recorded via `docs/examples/finance/repo_governance_packet_template.md`, governance ticket with the `[settlement.repo]` diff and GAR ID, custodian acknowledgement when `--custodian` is set. | Stage the instruction via<br>`iroha --config client.toml --output repo initiate ...`.<br>Emit the lifecycle proof snapshot (`REPO_PROOF_*` env vars) plus the bundle manifest from `scripts/repo_evidence_manifest.py`.<br>Attach the latest `FindRepoAgreements` JSON and `[settlement.repo]` snippet (haircut, eligible list, substitution matrix). | `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` (bilateral) and `integration_tests/tests/repo.rs::repo_roundtrip_with_custodian_routes_collateral` (tri-party) prove the runtime matches the staged payloads. |
-| **Margin call accrual cadence** | Desk lead + risk manager approve the cadence window documented in the governance packet; ticket references the scheduled `RepoMarginCallIsi`. | Capture `iroha repo margin --agreement-id` output before calling `iroha repo margin-call`, hash the resulting JSON, and archive the `RepoAccountEvent::MarginCalled` SSE payload in the evidence bundle.<br>Store the CLI log next to the deterministic proof hash. | `integration_tests/tests/repo.rs::repo_margin_call_enforces_cadence_and_participant_rules` guarantees the runtime rejects premature calls and non-participant submissions. |
-| **Collateral substitution & maturity unwind** | Governance change record cites the required `collateral_substitution_matrix` entries and haircut policy; council minutes list the substitution pair SHA-256 hash. | Stage the unwind leg with `iroha repo unwind --output ... --settlement-timestamp-ms <planned>` so both the ACT/360 calculation (§2.8) and substitution payload are reproducible.<br>Include the `[settlement.repo]` TOML snippet, substitution manifest, and the resulting `RepoAccountEvent::Settled` payload in the artefact bundle. | The substitution round-trip inside `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` exercises insufficient-versus-approved substitution flows while keeping the agreement id constant. |
-| **Emergency unwind / rollback drill** | Incident commander + finance council approve the rollback as described in `docs/source/finance/repo_runbook.md` (sections 4–5) and capture the entry in `ops/drill-log.md`. | Execute `iroha repo unwind` using the staged rollback payload, append CLI logs + GAR reference to `governance/drills/<timestamp>.log`, and rerun both `repo_deterministic_lifecycle_proof_matches_fixture` and the `scripts/repo_evidence_manifest.py` helper to prove determinism before/after the drill. | The happy-path unwind is covered by `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement`; following the drill steps keeps the governance artefacts aligned with the runtime guarantees exercised by that test. |
+| **Margin call accrual cadence** | Desk lead + risk manager approve the cadence window documented in the governance packet; ticket references the scheduled `RepoMarginCallIsi`. | Capture `iroha app repo margin --agreement-id` output before calling `iroha app repo margin-call`, hash the resulting JSON, and archive the `RepoAccountEvent::MarginCalled` SSE payload in the evidence bundle.<br>Store the CLI log next to the deterministic proof hash. | `integration_tests/tests/repo.rs::repo_margin_call_enforces_cadence_and_participant_rules` guarantees the runtime rejects premature calls and non-participant submissions. |
+| **Collateral substitution & maturity unwind** | Governance change record cites the required `collateral_substitution_matrix` entries and haircut policy; council minutes list the substitution pair SHA-256 hash. | Stage the unwind leg with `iroha app repo unwind --output ... --settlement-timestamp-ms <planned>` so both the ACT/360 calculation (§2.8) and substitution payload are reproducible.<br>Include the `[settlement.repo]` TOML snippet, substitution manifest, and the resulting `RepoAccountEvent::Settled` payload in the artefact bundle. | The substitution round-trip inside `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement` exercises insufficient-versus-approved substitution flows while keeping the agreement id constant. |
+| **Emergency unwind / rollback drill** | Incident commander + finance council approve the rollback as described in `docs/source/finance/repo_runbook.md` (sections 4–5) and capture the entry in `ops/drill-log.md`. | Execute `iroha app repo unwind` using the staged rollback payload, append CLI logs + GAR reference to `governance/drills/<timestamp>.log`, and rerun both `repo_deterministic_lifecycle_proof_matches_fixture` and the `scripts/repo_evidence_manifest.py` helper to prove determinism before/after the drill. | The happy-path unwind is covered by `integration_tests/tests/repo.rs::repo_roundtrip_transfers_balances_and_clears_agreement`; following the drill steps keeps the governance artefacts aligned with the runtime guarantees exercised by that test. |
 
 **Desk timeline.**
 
@@ -723,7 +723,7 @@ or policy change is heading to governance:
    `scripts/regen_repo_proof_fixture.sh --bundle-dir artifacts/finance/repo/<slug>`
    to refresh and copy the same files in one step.
 2. **Stage and hash every instruction.** Generate initiation/margin/unwind
-   payloads with `iroha repo ... --output`. Capture the SHA-256 for each file
+   payloads with `iroha app repo ... --output`. Capture the SHA-256 for each file
    (store under `hashes/`) so `docs/examples/finance/repo_governance_packet_template.md`
    can reference the same bytes the desks reviewed.
 3. **Save ledger/config snapshots.** Export `repo query list` output before/after
@@ -775,7 +775,7 @@ scrambles to recreate hashes or event streams.
 
 ### Daily pre-open
 
-1. Export the outstanding agreement set via `iroha repo query list`.
+1. Export the outstanding agreement set via `iroha app repo query list`.
 2. Compare against treasury inventory and ensure eligible collateral config
    matches the planned book.
 3. Stage upcoming repos/unwinds with `--output` and collect dual approvals.
@@ -784,7 +784,7 @@ scrambles to recreate hashes or event streams.
 
 1. Subscribe to `AccountEvent::Repo` for initiator/counterparty/custodian
    accounts; alert when unexpected initiations occur.
-2. Use `iroha repo margin --agreement-id ID` (or
+2. Use `iroha app repo margin --agreement-id ID` (or
    `RepoAgreementRecord::next_margin_check_after`) hourly to detect cadence
    drift; trigger `repo margin-call` when `is_due = true`.
 3. Log all margin calls with operator initials and attach the CLI JSON output to
@@ -821,7 +821,7 @@ require every repo review to include deterministic treasury proofs. Produce a
 quarterly bundle per book by following the checklist below.
 
 1. **Snapshot balances.** Use the `FindAssets` query that powers
-   `iroha query asset list` (`crates/iroha_cli/src/main.rs:1730`) or the
+   `iroha ledger query asset list` (`crates/iroha_cli/src/main.rs:1730`) or the
    `iroha_python` helper to export XOR balances for `treasury@sora`,
    `sorafs-reserve@sora`, and every desk account involved in the review. Store
    the JSON under

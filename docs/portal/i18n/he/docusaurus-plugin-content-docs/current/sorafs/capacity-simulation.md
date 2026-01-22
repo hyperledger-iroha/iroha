@@ -16,7 +16,7 @@ description: הפעלת ערכת הסימולציה של שוק הקיבולת S
 דף זה משקף את `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. שמרו על שתי העתקות מסונכרנות עד שמערכת התיעוד הישנה של Sphinx תועבר במלואה.
 :::
 
-מדריך זה מסביר כיצד להריץ את ערכת הסימולציה של שוק הקיבולת SF-2c וכיצד להמחיש את המדדים המתקבלים. הוא מאמת משא ומתן על מכסות, טיפול ב‑failover ותיקון slashing מקצה לקצה באמצעות ה‑fixtures הדטרמיניסטיים תחת `docs/examples/sorafs_capacity_simulation/`. ה‑payloads של הקיבולת עדיין משתמשים ב‑`sorafs_manifest_stub capacity`; השתמשו ב‑`iroha sorafs toolkit pack` לזרימות אריזה של manifest/CAR.
+מדריך זה מסביר כיצד להריץ את ערכת הסימולציה של שוק הקיבולת SF-2c וכיצד להמחיש את המדדים המתקבלים. הוא מאמת משא ומתן על מכסות, טיפול ב‑failover ותיקון slashing מקצה לקצה באמצעות ה‑fixtures הדטרמיניסטיים תחת `docs/examples/sorafs_capacity_simulation/`. ה‑payloads של הקיבולת עדיין משתמשים ב‑`sorafs_manifest_stub capacity`; השתמשו ב‑`iroha app sorafs toolkit pack` לזרימות אריזה של manifest/CAR.
 
 ## 1. הפקת ארטיפקטים של CLI
 

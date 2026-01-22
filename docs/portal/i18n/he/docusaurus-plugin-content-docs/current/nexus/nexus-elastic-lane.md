@@ -70,7 +70,7 @@ scripts/nexus_lane_bootstrap.sh \
 1. `<slug>.manifest.json` - manifest של lane הכולל quorum של validators, namespaces מוגנים ומטא-דאטה אופציונלי עבור hook runtime-upgrade.
 2. `<slug>.catalog.toml` - קטע TOML עם `[[nexus.lane_catalog]]`, `[[nexus.dataspace_catalog]]` וכללי ניתוב שביקשתם. ודאו ש-`fault_tolerance` מוגדר בערך dataspace כדי לגודל ועדת lane-relay (`3f+1`).
 3. `<slug>.summary.json` - סיכום ביקורת שמתאר את הגאומטריה (slug, segments, מטא-דאטה), שלבי rollout נדרשים והפקודה המדויקת `cargo xtask space-directory encode` (תחת `space_directory_encode.command`). צרפו את ה-JSON לטיקט onboarding כראיה.
-4. `<slug>.manifest.to` - נוצר כאשר `--encode-space-directory` פעיל; מוכן לזרימת `iroha space-directory manifest publish` ב-Torii.
+4. `<slug>.manifest.to` - נוצר כאשר `--encode-space-directory` פעיל; מוכן לזרימת `iroha app space-directory manifest publish` ב-Torii.
 
 השתמשו ב-`--dry-run` כדי להציג JSON/קטעים בלי כתיבת קבצים, ו-`--force` כדי לדרוס artefacts קיימים.
 
@@ -78,7 +78,7 @@ scripts/nexus_lane_bootstrap.sh \
 
 1. העתיקו את manifest JSON ל-`nexus.registry.manifest_directory` המוגדר (וגם ל-cache directory אם ה-registry משכפל bundles מרוחקים). בצעו commit לקובץ אם manifests מווסננים בריפו הקונפיגורציה.
 2. הוסיפו את קטע הקטלוג ל-`config/config.toml` (או ל-`config.d/*.toml` המתאים). ודאו ש-`nexus.lane_count` לפחות `lane_id + 1`, ועדכנו כל `nexus.routing_policy.rules` שצריכים להצביע ל-lane החדש.
-3. קודדו (אם דילגתם על `--encode-space-directory`) ופרסמו את ה-manifest ב-Space Directory באמצעות הפקודה שנלכדה ב-summary (`space_directory_encode.command`). זה מייצר payload `.manifest.to` ש-Torii מצפה לו ורושם ראיות עבור auditors; שלחו דרך `iroha space-directory manifest publish`.
+3. קודדו (אם דילגתם על `--encode-space-directory`) ופרסמו את ה-manifest ב-Space Directory באמצעות הפקודה שנלכדה ב-summary (`space_directory_encode.command`). זה מייצר payload `.manifest.to` ש-Torii מצפה לו ורושם ראיות עבור auditors; שלחו דרך `iroha app space-directory manifest publish`.
 4. הריצו `irohad --sora --config path/to/config.toml --trace-config` וארכבו את פלט ה-trace בטיקט rollout. זה מוכיח שהגאומטריה החדשה תואמת ל-slug/segments של Kura שנוצרו.
 5. אתחלו מחדש את ה-validators שהוקצו ל-lane לאחר פריסת שינויים במניפסט/קטלוג. שמרו את summary JSON בטיקט לביקורות עתידיות.
 

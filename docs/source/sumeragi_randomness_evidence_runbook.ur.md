@@ -34,15 +34,15 @@ Note: For the v1 release, VRF penalties jail offenders after the activation lag,
 
 ## 1. موڈ سلیکشن اور epoch context کی تصدیق
 
-1. `iroha sumeragi params --summary` چلائیں تاکہ ثابت ہو کہ بائنری نے
+1. `iroha --output-format text ops sumeragi params` چلائیں تاکہ ثابت ہو کہ بائنری نے
    `sumeragi.consensus_mode="npos"` لوڈ کیا ہے اور `k_aggregators`,
    `redundant_send_r`, epoch length، اور VRF commit/reveal offsets ریکارڈ ہوں۔
 2. runtime view دیکھیں:
 
    ```bash
-   iroha sumeragi status --summary
-   iroha sumeragi collectors --summary
-   iroha sumeragi rbc status --summary
+   iroha --output-format text ops sumeragi status
+   iroha --output-format text ops sumeragi collectors
+   iroha --output-format text ops sumeragi rbc status
    ```
 
    `status` لائن leader/view tuple، RBC backlog، DA retries، epoch offsets، اور
@@ -63,11 +63,11 @@ Note: For the v1 release, VRF penalties jail offenders after the activation lag,
 ہر validator سے persisted VRF ریکارڈز نکالنے کیلئے مخصوص CLI subcommands استعمال کریں:
 
 ```bash
-iroha sumeragi vrf-epoch --epoch "$EPOCH" --summary
-iroha sumeragi vrf-epoch --epoch "$EPOCH" > artifacts/vrf_epoch_${EPOCH}.json
+iroha --output-format text ops sumeragi vrf-epoch --epoch "$EPOCH"
+iroha ops sumeragi vrf-epoch --epoch "$EPOCH" > artifacts/vrf_epoch_${EPOCH}.json
 
-iroha sumeragi vrf-penalties --epoch "$EPOCH" --summary
-iroha sumeragi vrf-penalties --epoch "$EPOCH" > artifacts/vrf_penalties_${EPOCH}.json
+iroha --output-format text ops sumeragi vrf-penalties --epoch "$EPOCH"
+iroha ops sumeragi vrf-penalties --epoch "$EPOCH" > artifacts/vrf_penalties_${EPOCH}.json
 ```
 
 Summaries بتاتے ہیں کہ epoch finalize ہوا یا نہیں، کتنے participants نے commits/reveals
@@ -116,11 +116,11 @@ Slashing evidence ہر validator پر جمع ہونا چاہئے اور Torii ک
 
 ```bash
 # Count and list persisted evidence
-iroha sumeragi evidence count --summary
-iroha sumeragi evidence list --summary --limit 5
+iroha --output-format text ops sumeragi evidence count
+iroha --output-format text ops sumeragi evidence list --limit 5
 
 # Show JSON for audits
-iroha sumeragi evidence list --limit 100 > artifacts/evidence_snapshot.json
+iroha ops sumeragi evidence list --limit 100 > artifacts/evidence_snapshot.json
 ```
 
 یقینی بنائیں کہ رپورٹ شدہ `total` Grafana widget (`sumeragi_evidence_records_total`) سے
@@ -129,7 +129,7 @@ records reject ہوتے ہیں (CLI drop reason دکھاتا ہے)۔ alerting ک
 payload یہیں سے بھیجیں:
 
 ```bash
-iroha sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prevote.hex --summary
+iroha --output-format text ops sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prevote.hex
 ```
 
 `/v1/events/sse` کو filtered stream کے ساتھ مانیٹر کریں تاکہ ثابت ہو کہ SDKs وہی data دیکھتے ہیں:
@@ -155,7 +155,7 @@ CLI output میں آیا تھا۔
 
 ## 6. Troubleshooting signals
 
-- **Mode selection mismatch** — اگر `iroha sumeragi params --summary` میں
+- **Mode selection mismatch** — اگر `iroha --output-format text ops sumeragi params` میں
   `consensus_mode="permissioned"` آئے یا `k_aggregators` manifest سے مختلف ہو،
   تو captured artefacts حذف کریں، `iroha_config` درست کریں، validator restart کریں،
   اور {doc}`sumeragi` میں بیان کردہ validation flow دوبارہ چلائیں۔
@@ -168,7 +168,7 @@ CLI output میں آیا تھا۔
   compare کریں۔ chaos drills سے نہ ملنے والی penalties validator clock skew یا Torii
   replay protection کی نشاندہی کرتی ہیں؛ test دوبارہ چلانے سے پہلے peer درست کریں۔
 - **Evidence ingestion stalls** — جب `sumeragi_evidence_records_total` رکتا ہوا نظر آئے جبکہ
-  chaos tests faults emit کر رہے ہوں، تو `iroha sumeragi evidence count` کئی validators پر چلائیں
+  chaos tests faults emit کر رہے ہوں، تو `iroha ops sumeragi evidence count` کئی validators پر چلائیں
   اور `/v1/sumeragi/evidence/count` کو CLI output سے match کریں۔ کسی بھی فرق کا مطلب یہ ہے کہ
   SSE/webhook consumers stale ہو سکتے ہیں، اس لئے معروف fixture دوبارہ submit کریں اور اگر
   counter پھر بھی نہ بڑھے تو Torii maintainers تک معاملہ escalate کریں۔

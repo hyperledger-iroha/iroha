@@ -103,7 +103,7 @@ gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs:1207】【cr
 ## 2. Pin → Fetch Round Trip
 
 1. Produce a manifest + payload bundle (for example with
-   `iroha sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
+   `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
 2. Submit the manifest with base64 encoding:
 
    ```bash
@@ -152,13 +152,13 @@ gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs:1207】【cr
 1. Run a local retention scan against the storage directory:
 
    ```bash
-   iroha sorafs gc inspect --data-dir ./storage/sorafs
+   iroha app sorafs gc inspect --data-dir ./storage/sorafs
    ```
 
 2. Inspect only expired manifests (dry-run only, no deletions):
 
    ```bash
-   iroha sorafs gc dry-run --data-dir ./storage/sorafs
+   iroha app sorafs gc dry-run --data-dir ./storage/sorafs
    ```
 
 3. Use `--now` or `--grace-secs` to pin the evaluation window when comparing

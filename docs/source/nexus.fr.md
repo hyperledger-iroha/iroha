@@ -70,13 +70,13 @@ CI/CD automatise). Les deux chemins appliquent le droit `CanPublishSpaceDirector
  dans l executeur (`crates/iroha_core/src/smartcontracts/isi/space_directory.rs`)
 et enregistrent des evenements de cycle de vie dans le world state (`iroha_core::state::space_directory_manifests`).
 
-#### Flux de travail CLI (`iroha space-directory manifest ...`)
+#### Flux de travail CLI (`iroha app space-directory manifest ...`)
 
 1. **Encoder le JSON du manifeste** - convertir des brouillons de politique en octets Norito et emettre un
    hash reproductible avant revue:
 
    ```bash
-   iroha space-directory manifest encode \
+   iroha app space-directory manifest encode \
      --json dataspace/capability.json \
      --out artifacts/capability.manifest.to \
      --hash-out artifacts/capability.manifest.hash
@@ -90,7 +90,7 @@ et enregistrent des evenements de cycle de vie dans le world state (`iroha_core:
    depuis des sources Norito ou JSON:
 
    ```bash
-   iroha space-directory manifest publish \
+   iroha app space-directory manifest publish \
      --manifest artifacts/capability.manifest.to \
      --reason "Retail wave 4 on-boarding"
    ```
@@ -102,12 +102,12 @@ et enregistrent des evenements de cycle de vie dans le world state (`iroha_core:
    de 64 caracteres (LSB=1) et l identifiant numerique du dataspace:
 
    ```bash
-   iroha space-directory manifest expire \
+   iroha app space-directory manifest expire \
      --uaid uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11 \
      --dataspace 11 \
      --expired-epoch 4600
 
-   iroha space-directory manifest revoke \
+   iroha app space-directory manifest revoke \
      --uaid uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11 \
      --dataspace 11 \
      --revoked-epoch 9216 \
@@ -119,7 +119,7 @@ et enregistrent des evenements de cycle de vie dans le world state (`iroha_core:
    repertoire de sortie pour que les reviewers de gouvernance telechargent une seule archive:
 
    ```bash
-   iroha space-directory manifest audit-bundle \
+   iroha app space-directory manifest audit-bundle \
      --manifest-json dataspace/capability.json \
      --profile dataspace/profiles/cbdc_profile.json \
      --out-dir artifacts/capability_bundle

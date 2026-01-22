@@ -7,7 +7,7 @@
 This guide distils the UAID (Universal Account ID) rollout requirements from
 the Nexus roadmap and packages them into an operator + SDK focused walkthrough.
 It covers UAID derivation, portfolio/manifest inspection, regulator templates,
-and the evidence that must accompany every `iroha space-directory manifest
+and the evidence that must accompany every `iroha app space-directory manifest
 publish` run (roadmap reference: `roadmap.md:2209`).
 
 ## 1. UAID quick reference
@@ -52,7 +52,7 @@ There are three supported ways to obtain a UAID:
    ```
 
 Always store the literal in lower case and normalise whitespace before hashing.
-CLI helpers such as `iroha space-directory manifest scaffold` and the Android
+CLI helpers such as `iroha app space-directory manifest scaffold` and the Android
 `UaidLiteral` parser apply the same trimming rules so governance reviews can
 cross-check values without ad hoc scripts.
 
@@ -67,17 +67,17 @@ can consume the data through the following surfaces:
 | `GET /v1/accounts/{uaid}/portfolio` | Returns dataspace → asset → balance summaries; described in `docs/source/torii/portfolio_api.md`. |
 | `GET /v1/space-directory/uaids/{uaid}` | Lists dataspace IDs + account literals tied to the UAID. |
 | `GET /v1/space-directory/uaids/{uaid}/manifests` | Provides the full `AssetPermissionManifest` history for audits. |
-| `iroha space-directory bindings fetch --uaid <literal>` | CLI shortcut that wraps the bindings endpoint and optionally writes the JSON to disk (`--json-out`). |
-| `iroha space-directory manifest fetch --uaid <literal> --json-out <path>` | Fetches the manifest JSON bundle for evidence packs. |
+| `iroha app space-directory bindings fetch --uaid <literal>` | CLI shortcut that wraps the bindings endpoint and optionally writes the JSON to disk (`--json-out`). |
+| `iroha app space-directory manifest fetch --uaid <literal> --json-out <path>` | Fetches the manifest JSON bundle for evidence packs. |
 
 Example CLI session (Torii URL configured via `torii_api_url` in `iroha.json`):
 
 ```bash
-iroha space-directory bindings fetch \
+iroha app space-directory bindings fetch \
   --uaid uaid:86e8ee39a3908460a0f4ee257bb25f340cd5b5de72735e9adefe07d5ef4bb0df \
   --json-out artifacts/uaid86/bindings.json
 
-iroha space-directory manifest fetch \
+iroha app space-directory manifest fetch \
   --uaid uaid:86e8ee39a3908460a0f4ee257bb25f340cd5b5de72735e9adefe07d5ef4bb0df \
   --json-out artifacts/uaid86/manifests.json
 ```
@@ -96,7 +96,7 @@ land in the evidence bundle recorded for governance sign-off.
    submission:
 
    ```bash
-   iroha space-directory manifest encode \
+   iroha app space-directory manifest encode \
      --json fixtures/space_directory/capability/eu_regulator_audit.manifest.json \
      --out artifacts/eu_regulator_audit.manifest.to \
      --hash-out artifacts/eu_regulator_audit.manifest.hash
@@ -107,7 +107,7 @@ land in the evidence bundle recorded for governance sign-off.
    the `PublishSpaceDirectoryManifest` instruction hash:
 
    ```bash
-   iroha space-directory manifest publish \
+   iroha app space-directory manifest publish \
      --manifest artifacts/eu_regulator_audit.manifest.to \
      --reason "ESMA wave 2 onboarding"
    ```
@@ -120,7 +120,7 @@ land in the evidence bundle recorded for governance sign-off.
    telemetry hooks:
 
    ```bash
-   iroha space-directory manifest audit-bundle \
+   iroha app space-directory manifest audit-bundle \
      --manifest artifacts/eu_regulator_audit.manifest.to \
      --profile fixtures/space_directory/profile/cbdc_lane_profile.json \
      --out-dir artifacts/eu_regulator_audit_bundle

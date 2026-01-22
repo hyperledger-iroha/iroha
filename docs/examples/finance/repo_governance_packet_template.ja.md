@@ -31,7 +31,7 @@ Roadmap F1 (repo lifecycle documentation & tooling) に必要な artefact bundle
 
 ## 2. Instruction Payloads
 
-`iroha repo ... --output` で desk が承認した staged Norito instructions を記録します。各エントリには、出力ファイルの hash と、投票が通過した際に送信されるアクションの短い説明を含めてください。
+`iroha app repo ... --output` で desk が承認した staged Norito instructions を記録します。各エントリには、出力ファイルの hash と、投票が通過した際に送信されるアクションの短い説明を含めてください。
 
 | Action | File | SHA-256 | Notes |
 |--------|------|---------|-------|

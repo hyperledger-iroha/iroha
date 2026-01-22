@@ -505,7 +505,7 @@ auditoria possa ser reconstruído offline.
    que strings Local‑8 já não são aceitas em produção antes de propor um
    tombstone.
 2. **Derivar digests canônicos.** Rode
-   `iroha address convert <address-or-account_id> --format json --expect-prefix 753`
+   `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
    (ou consuma `fixtures/account/address_vectors.json` via
    `scripts/account_fixture_helper.py`) para capturar exatamente o campo
    `digest_hex`. O CLI aceita entradas como `snx1...@wonderland`; o resumo

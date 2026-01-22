@@ -146,7 +146,7 @@ non-compliant blobs کو خودکار طور پر re-replicate کر سکے۔
    `ReplicationOrderV1` جاری کریں via governance tooling جو
    [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md)
    میں بیان ہے، اور audit دوبارہ چلائیں جب تک replica set converge نہ کرے۔
-   Emergency overrides کے لئے CLI output کو `iroha da prove-availability` کے
+   Emergency overrides کے لئے CLI output کو `iroha app da prove-availability` کے
    ساتھ جوڑیں تاکہ SREs وہی digest اور PDP evidence refer کر سکیں۔
 
 Regression coverage `integration_tests/tests/da/replication_policy.rs` میں ہے؛

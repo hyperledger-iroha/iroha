@@ -5513,6 +5513,27 @@ pub struct Sumeragi {
         default = "defaults::sumeragi::PACEMAKER_JITTER_FRAC_PERMILLE"
     )]
     pub pacemaker_jitter_frac_permille: u32,
+    /// Soft limit for blocking pending blocks before pacemaker backpressure defers proposals.
+    /// 0 keeps strict gating (any pending block defers).
+    #[config(
+        env = "SUMERAGI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT",
+        default = "defaults::sumeragi::PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT"
+    )]
+    pub pacemaker_active_pending_soft_limit: usize,
+    /// Soft limit for unresolved RBC backlog sessions before pacemaker backpressure defers proposals.
+    /// 0 keeps strict gating (any backlog session defers).
+    #[config(
+        env = "SUMERAGI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT",
+        default = "defaults::sumeragi::PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT"
+    )]
+    pub pacemaker_rbc_backlog_session_soft_limit: usize,
+    /// Soft limit for missing RBC chunks before pacemaker backpressure defers proposals.
+    /// 0 keeps strict gating (any missing chunks defers).
+    #[config(
+        env = "SUMERAGI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT",
+        default = "defaults::sumeragi::PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT"
+    )]
+    pub pacemaker_rbc_backlog_chunk_soft_limit: usize,
     /// Debug-only overrides for injecting faults or altering behaviour.
     #[config(nested)]
     pub debug: SumeragiDebug,
@@ -5936,6 +5957,9 @@ impl Sumeragi {
             pacemaker_rtt_floor_multiplier,
             pacemaker_max_backoff_ms,
             pacemaker_jitter_frac_permille,
+            pacemaker_active_pending_soft_limit,
+            pacemaker_rbc_backlog_session_soft_limit,
+            pacemaker_rbc_backlog_chunk_soft_limit,
             enable_bls,
             debug,
         } = self;
@@ -6296,6 +6320,9 @@ impl Sumeragi {
             pacemaker_rtt_floor_multiplier,
             pacemaker_max_backoff: std::time::Duration::from_millis(pacemaker_max_backoff_ms),
             pacemaker_jitter_frac_permille,
+            pacemaker_active_pending_soft_limit,
+            pacemaker_rbc_backlog_session_soft_limit,
+            pacemaker_rbc_backlog_chunk_soft_limit,
             adaptive_observability,
             enable_bls,
         })

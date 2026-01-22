@@ -7,12 +7,12 @@ halt or if the telemetry guardrails fire.
    (`systemctl stop soranet-incentives.service` or the equivalent container
    deployment) and confirm the process is no longer running.
 2. **Drain pending instructions.** Run
-   `iroha sorafs incentives service daemon --state <state.json> --config <daemon.json> --metrics-dir <spool> --once`
+   `iroha app sorafs incentives service daemon --state <state.json> --config <daemon.json> --metrics-dir <spool> --once`
    to ensure there are no outstanding payout instructions. Archive the resulting
    Norito payloads for audit.
 3. **Revoke governance approval.** Edit `reward_config.json`, set
    `"budget_approval_id": null`, and redeploy the configuration with
-   `iroha sorafs incentives service init` (or `update-config` if running a
+   `iroha app sorafs incentives service init` (or `update-config` if running a
    long-lived daemon). The payout engine now fails closed with
    `MissingBudgetApprovalId`, so the daemon refuses to mint payouts until a new
    approval hash is restored. Record the git commit and the SHA-256 of the

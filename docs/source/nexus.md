@@ -61,13 +61,13 @@ CI/CD). Both paths enforce the `CanPublishSpaceDirectoryManifest{dataspace}`
 permission inside the executor (`crates/iroha_core/src/smartcontracts/isi/space_directory.rs`)
 and record lifecycle events in world state (`iroha_core::state::space_directory_manifests`).
 
-#### CLI workflow (`iroha space-directory manifest …`)
+#### CLI workflow (`iroha app space-directory manifest …`)
 
 1. **Encode manifest JSON** — convert policy drafts into Norito bytes and emit a
    reproducible hash before review:
 
    ```bash
-   iroha space-directory manifest encode \
+   iroha app space-directory manifest encode \
      --json dataspace/capability.json \
      --out artifacts/capability.manifest.to \
      --hash-out artifacts/capability.manifest.hash
@@ -81,7 +81,7 @@ and record lifecycle events in world state (`iroha_core::state::space_directory_
    instructions from either Norito or JSON sources:
 
    ```bash
-   iroha space-directory manifest publish \
+   iroha app space-directory manifest publish \
      --manifest artifacts/capability.manifest.to \
      --reason "Retail wave 4 on-boarding"
    ```
@@ -93,12 +93,12 @@ and record lifecycle events in world state (`iroha_core::state::space_directory_
    digest (LSB=1) and the numeric dataspace id:
 
    ```bash
-   iroha space-directory manifest expire \
+   iroha app space-directory manifest expire \
      --uaid uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11 \
      --dataspace 11 \
      --expired-epoch 4600
 
-   iroha space-directory manifest revoke \
+   iroha app space-directory manifest revoke \
      --uaid uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11 \
      --dataspace 11 \
      --revoked-epoch 9216 \
@@ -110,7 +110,7 @@ and record lifecycle events in world state (`iroha_core::state::space_directory_
    output directory so governance reviewers can download a single archive:
 
    ```bash
-   iroha space-directory manifest audit-bundle \
+   iroha app space-directory manifest audit-bundle \
      --manifest-json dataspace/capability.json \
      --profile dataspace/profiles/cbdc_profile.json \
      --out-dir artifacts/capability_bundle

@@ -108,7 +108,7 @@ gateway נשארות מסונכרנות.【crates/iroha_torii/src/sorafs/api.rs#
 ## 2. סבב Pin → Fetch
 
 1. הפיקו חבילה של manifest + payload (למשל עם
-   `iroha sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
+   `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
 2. שלחו את ה-manifest בקידוד base64:
 
    ```bash

@@ -37,7 +37,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 טעינו את ה‑JSON דרך `sorafs_cli fetch --config` (אוטומציה) או דרך bindings של ה‑SDK (`config_from_json`) לפני חשיפת המדיניות למפעילים. שמרו את פלט ה‑scoreboard (`persist_path`) לצורכי ביקורת.
 
-מנגנוני האכיפה בצד ה‑gateway מתועדים ב‑`docs/examples/sorafs_gateway_direct_mode.toml`. התבנית משקפת את הפלט של `iroha sorafs gateway direct-mode enable`, מנטרלת בדיקות envelope/admission, מחווטת ברירות מחדל של rate-limit, וממלאת את טבלת `direct_mode` בשמות מארחים הנגזרים מתוכנית וב‑digests של manifest. החליפו את ערכי מציין המקום בתוכנית ההשקה לפני שמקבעים את הקטע בניהול תצורה.
+מנגנוני האכיפה בצד ה‑gateway מתועדים ב‑`docs/examples/sorafs_gateway_direct_mode.toml`. התבנית משקפת את הפלט של `iroha app sorafs gateway direct-mode enable`, מנטרלת בדיקות envelope/admission, מחווטת ברירות מחדל של rate-limit, וממלאת את טבלת `direct_mode` בשמות מארחים הנגזרים מתוכנית וב‑digests של manifest. החליפו את ערכי מציין המקום בתוכנית ההשקה לפני שמקבעים את הקטע בניהול תצורה.
 
 ## 3. חבילת בדיקות תאימות
 

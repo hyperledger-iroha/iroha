@@ -24,7 +24,7 @@ source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 
 - ממן את סמכות החוזה (למשל `contract@wonderland`) בנכס שהיא תעביר והעניקו לסמכות את תפקיד `CanTransfer` או הרשאה שקולה.
 - קראו לנקודת הכניסה `call_transfer_asset` כדי להעביר 5 יחידות מחשבון החוזה אל `bob@wonderland`, באופן שמשקף כיצד אוטומציה על השרשרת יכולה לעטוף קריאות מארח.
-- אמתו יתרות דרך `FindAccountAssets` או `iroha_cli assets list --account bob@wonderland` ובדקו אירועים כדי לאשר ששומר המטא-דאטה רשם את הקשר ההעברה.
+- אמתו יתרות דרך `FindAccountAssets` או `iroha_cli ledger assets list --account bob@wonderland` ובדקו אירועים כדי לאשר ששומר המטא-דאטה רשם את הקשר ההעברה.
 
 ## מדריכי SDK קשורים
 

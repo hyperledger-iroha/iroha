@@ -51,18 +51,18 @@ translator: manual
 
 ## ガバナンス統合と保護ネームスペース
 
-- カスタムパラメータ `gov_protected_namespaces`（JSON 配列）を設定すると受理ゲートが有効化されます。Torii `/v1/gov/protected-namespaces` と CLI (`iroha_cli gov protected-set/get`) が補助します。
+- カスタムパラメータ `gov_protected_namespaces`（JSON 配列）を設定すると受理ゲートが有効化されます。Torii `/v1/gov/protected-namespaces` と CLI (`iroha_cli app gov protected set/get`) が補助します。
 - `ProposeDeployContract`（または `/v1/gov/proposals/deploy-contract`）で作成される提案は `(namespace, contract_id, code_hash, abi_hash, abi_version)` を記録します。
 - 住民投票が可決し `EnactReferendum` で施行されると、同じメタデータとコードを持つデプロイが受理されます。
 - トランザクションには `gov_namespace` / `gov_contract_id` のペアを必ず指定します。CLI は `--namespace` / `--contract-id` で自動付与します。
 
 ## CLI ヘルパー
 
-- `iroha_cli contract deploy` — Torii デプロイを呼び出し、ハッシュ計算を自動化。
-- `iroha_cli contract manifest` — マニフェスト取得。
-- `iroha_cli contract code-bytes-get` — 保存済み `.to` をダウンロード。
-- `iroha_cli contract instances` — 有効コントラクトインスタンスを一覧表示。
-- `iroha_cli gov propose-deploy` ほか各種ガバナンスコマンドで保護ネームスペースワークフローを支援します。
+- `iroha_cli app contracts deploy` — Torii デプロイを呼び出し、ハッシュ計算を自動化。
+- `iroha_cli app contracts manifest get` — マニフェスト取得。
+- `iroha_cli app contracts code get` — 保存済み `.to` をダウンロード。
+- `iroha_cli app contracts instances` — 有効コントラクトインスタンスを一覧表示。
+- `iroha_cli app gov deploy propose` ほか各種ガバナンスコマンドで保護ネームスペースワークフローを支援します。
 
 ## テストとカバレッジ
 

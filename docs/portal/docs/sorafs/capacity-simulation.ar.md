@@ -22,7 +22,7 @@ description: تشغيل مجموعة أدوات محاكاة سوق السعة S
 تعكس هذه الصفحة `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. حافظ على تزامن النسختين إلى أن تُنقَل مجموعة توثيق Sphinx القديمة بالكامل.
 :::
 
-يشرح هذا الدليل كيفية تشغيل مجموعة محاكاة سوق السعة SF-2c وعرض المقاييس الناتجة. يتحقق من تفاوض الحصص، ومعالجة failover، ومعالجة slashing من الطرف إلى الطرف باستخدام fixtures الحتمية في `docs/examples/sorafs_capacity_simulation/`. لا تزال payloads السعة تستخدم `sorafs_manifest_stub capacity`؛ استخدم `iroha sorafs toolkit pack` لتدفقات تغليف manifest/CAR.
+يشرح هذا الدليل كيفية تشغيل مجموعة محاكاة سوق السعة SF-2c وعرض المقاييس الناتجة. يتحقق من تفاوض الحصص، ومعالجة failover، ومعالجة slashing من الطرف إلى الطرف باستخدام fixtures الحتمية في `docs/examples/sorafs_capacity_simulation/`. لا تزال payloads السعة تستخدم `sorafs_manifest_stub capacity`؛ استخدم `iroha app sorafs toolkit pack` لتدفقات تغليف manifest/CAR.
 
 ## 1. إنشاء Artifacts خاصة بالـ CLI
 

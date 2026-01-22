@@ -70,7 +70,7 @@ scripts/nexus_lane_bootstrap.sh \
 1. `<slug>.manifest.json` - manifest للـ lane يحتوي quorum المدققين و namespaces المحمية وبيانات اختيارية لـ hook runtime-upgrade.
 2. `<slug>.catalog.toml` - مقتطف TOML يحتوي `[[nexus.lane_catalog]]` و `[[nexus.dataspace_catalog]]` واي قواعد توجيه مطلوبة. تاكد من تعيين `fault_tolerance` في ادخال dataspace لتحديد لجنة lane-relay (`3f+1`).
 3. `<slug>.summary.json` - ملخص تدقيق يصف الهندسة (slug والقطاعات والبيانات) وخطوات rollout المطلوبة والامر الدقيق `cargo xtask space-directory encode` (ضمن `space_directory_encode.command`). ارفق هذا JSON بتذكرة onboarding كدليل.
-4. `<slug>.manifest.to` - يصدر عند تفعيل `--encode-space-directory`؛ جاهز لتدفق `iroha space-directory manifest publish` في Torii.
+4. `<slug>.manifest.to` - يصدر عند تفعيل `--encode-space-directory`؛ جاهز لتدفق `iroha app space-directory manifest publish` في Torii.
 
 استخدم `--dry-run` لمعاينة JSON/المقتطفات دون كتابة ملفات، و `--force` لاعادة الكتابة فوق artefacts الموجودة.
 
@@ -78,7 +78,7 @@ scripts/nexus_lane_bootstrap.sh \
 
 1. انسخ manifest JSON الى `nexus.registry.manifest_directory` المهيأ (والى cache directory اذا كان registry يطابق حزم remote). التزم بالملف اذا كانت manifests تُدار بالنسخ في مستودع التهيئة.
 2. الحق مقتطف الكتالوج في `config/config.toml` (او `config.d/*.toml` المناسب). تاكد من ان `nexus.lane_count` يساوي على الاقل `lane_id + 1` وحدّث اي `nexus.routing_policy.rules` يجب ان تشير الى lane الجديد.
-3. شفّر (اذا تجاوزت `--encode-space-directory`) وانشر manifest في Space Directory باستخدام الامر الملتقط في summary (`space_directory_encode.command`). هذا ينتج payload `.manifest.to` الذي يتوقعه Torii ويسجل الادلة للمراجعين؛ ارسله عبر `iroha space-directory manifest publish`.
+3. شفّر (اذا تجاوزت `--encode-space-directory`) وانشر manifest في Space Directory باستخدام الامر الملتقط في summary (`space_directory_encode.command`). هذا ينتج payload `.manifest.to` الذي يتوقعه Torii ويسجل الادلة للمراجعين؛ ارسله عبر `iroha app space-directory manifest publish`.
 4. شغّل `irohad --sora --config path/to/config.toml --trace-config` وارشف مخرجات trace في تذكرة rollout. هذا يثبت ان الهندسة الجديدة تطابق slug/قطاعات Kura المولدة.
 5. اعد تشغيل المدققين المخصصين للlane بعد نشر تغييرات manifest/الكتالوج. احتفظ بملف summary JSON في التذكرة للتدقيقات المستقبلية.
 

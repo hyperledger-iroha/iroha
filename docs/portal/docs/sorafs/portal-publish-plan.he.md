@@ -101,9 +101,9 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 
 - חזרו על הפעולה עבור `openapi.manifest.to` ו-SBOM manifests (השמיטו flags של alias לחבילות SBOM
   אלא אם הגובראננס הקצה namespace).
-- חלופה: `iroha sorafs pin register` עובד עם digest מתוך submit summary אם הבינארי מותקן.
+- חלופה: `iroha app sorafs pin register` עובד עם digest מתוך submit summary אם הבינארי מותקן.
 - ודאו את מצב ה-registry עם
-  `iroha sorafs pin list --alias docs:portal --format json | jq`.
+  `iroha app sorafs pin list --alias docs:portal --format json | jq`.
 - דשבורדים למעקב: `sorafs_pin_registry.json` (מדדי `torii_sorafs_replication_*`).
 
 ## 3. Gateway Headers ו-Proofs
@@ -111,7 +111,7 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 צרו בלוק כותרות HTTP + metadata של binding:
 
 ```bash
-iroha sorafs gateway route-plan \
+iroha app sorafs gateway route-plan \
   --manifest-json "${OUT}/portal.manifest.json" \
   --hostname docs.sora \
   --alias docs:portal \

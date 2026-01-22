@@ -99,7 +99,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 ## 2. جولة Pin → Fetch
 
 1. أنشئ حزمة مانيفست + حمولة (على سبيل المثال عبر
-   `iroha sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
+   `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
 2. أرسل المانيفست بترميز base64:
 
    ```bash

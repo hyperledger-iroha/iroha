@@ -172,4 +172,4 @@ without relying on HTTP negotiation.
   via the provided tests.
 * `chunker_registry::lookup_by_profile` asserts that the descriptor parameters
   match `ChunkProfile::DEFAULT` to guard accidental divergence.
-* Manifests produced by `iroha sorafs toolkit pack` and `sorafs_manifest_stub` include the registry metadata.
+* Manifests produced by `iroha app sorafs toolkit pack` and `sorafs_manifest_stub` include the registry metadata.

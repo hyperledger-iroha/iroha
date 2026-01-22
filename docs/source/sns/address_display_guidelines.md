@@ -249,7 +249,7 @@ Local-domain selectors (`domain.kind = local12`) remain temporary encodings unti
 domain is backed by the Nexus registry. To detect lingering Local payloads and guide operators
 through the migration:
 
-1. Run `iroha address convert <address-or-account_id> --format json`. The payload now includes a
+1. Run `iroha tools address convert <address-or-account_id> --format json`. The payload now includes a
    `domain` object with `kind`/`warning` fields and echoes any provided domain via the `input_domain`
    field. When `kind` is `local12`, the CLI prints a warning to stderr and the JSON summary echoes the
    same guidance so CI pipelines and SDKs can surface it. Pass `--append-domain` whenever you want the
@@ -273,7 +273,7 @@ through the migration:
    (or request another encoding via `--format`). These strings are already safe to share externally.
 4. Update manifests, registries, and customer-facing documents with the canonical form and notify
    counterparties that Local selectors will be rejected once the cutover completes.
-5. For bulk data sets, run `iroha address audit --input addresses.txt --network-prefix 753`. The command
+5. For bulk data sets, run `iroha tools address audit --input addresses.txt --network-prefix 753`. The command
    reads newline-separated literals (comments starting with `#` are ignored, and `--input -` or no flag uses STDIN),
    emits a JSON report with canonical/preferred IH58/second-best compressed (`snx1`) summaries for every entry, and counts both parse errors
    automation with `--fail-on-warning` once operators are ready to block Local selectors in CI.
@@ -282,8 +282,8 @@ through the migration:
    (IH58 preferred/compressed (`snx1`) second-best/hex/JSON), and preserves the original domain when `--append-domain` is set. Pair it with
    `--allow-errors` to keep scanning even when a dump contains malformed literals.
 7. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts the Local selectors from
-   `fixtures/account/address_vectors.json`, converts them via `iroha address normalize`, and replays
-   `iroha address audit --fail-on-warning` to prove releases no longer emit Local digests.
+   `fixtures/account/address_vectors.json`, converts them via `iroha tools address normalize`, and replays
+   `iroha tools address audit --fail-on-warning` to prove releases no longer emit Local digests.
 
 `torii_address_local8_total{endpoint}` plus
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,

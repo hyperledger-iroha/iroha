@@ -17,7 +17,7 @@ The CLI inspects manifests and (optionally) admission envelopes to compute the d
 direct-CAR endpoints, and capability flags required for a safe rollout:
 
 ```bash
-iroha sorafs gateway direct-mode plan \
+iroha app sorafs gateway direct-mode plan \
   --manifest fixtures/sorafs_manifest/example_manifest.to \
   --provider-id 1111111111111111111111111111111111111111111111111111111111111111
 ```
@@ -40,7 +40,7 @@ Feed the JSON plan into the `enable` subcommand to produce a configuration snipp
 targets the new `torii.sorafs_gateway.direct_mode` table alongside the standard gateway knobs:
 
 ```bash
-iroha sorafs gateway direct-mode enable --plan direct-mode-plan.json
+iroha app sorafs gateway direct-mode enable --plan direct-mode-plan.json
 ```
 
 Apply the snippet to your Torii configuration (`config.toml`). The fields under
@@ -60,7 +60,7 @@ To restore the secure defaults, remove the `direct_mode` table and re-enable env
 checks. The CLI prints the rollback snippet for convenience:
 
 ```bash
-iroha sorafs gateway direct-mode rollback
+iroha app sorafs gateway direct-mode rollback
 ```
 
 Paste the snippet into your configuration or use it as a checklist when reverting changes in your

@@ -127,10 +127,10 @@ groups:
    - אם החמצות SLA עולות בזמן שה-backlog נמוך, התמקדו בביצועי providers (כשלי PoR, השלמות מאוחרות).
    - אם ה-backlog גדל עם החמצות יציבות, בדקו את ה-admission (`/v1/sorafs/pin/*`) כדי לאשר manifests שממתינים לאישור המועצה.
 2. **אימות מצב providers**
-   - הריצו `iroha sorafs providers list` ואמתו שהיכולות המוצהרות תואמות לדרישות הרפליקציה.
+   - הריצו `iroha app sorafs providers list` ואמתו שהיכולות המוצהרות תואמות לדרישות הרפליקציה.
    - בדקו את מדדי `torii_sorafs_capacity_*` כדי לאשר GiB מוקצים והצלחת PoR.
 3. **הקצאת רפליקציה מחדש**
-   - הנפיקו פקודות חדשות דרך `sorafs_manifest_stub capacity replication-order` כאשר מרווח ה-backlog (`stat="avg"`) יורד מתחת ל-5 איפוקים (אריזת manifest/CAR משתמשת ב-`iroha sorafs toolkit pack`).
+   - הנפיקו פקודות חדשות דרך `sorafs_manifest_stub capacity replication-order` כאשר מרווח ה-backlog (`stat="avg"`) יורד מתחת ל-5 איפוקים (אריזת manifest/CAR משתמשת ב-`iroha app sorafs toolkit pack`).
    - עדכנו את הממשל אם ל-aliases אין bindings פעילים של manifest (ירידה בלתי צפויה ב-`torii_sorafs_registry_aliases_total`).
 4. **תיעוד התוצאה**
    - רשמו הערות אירוע ביומן התפעול של SoraFS עם חותמות זמן ו-digests של manifest מושפעים.

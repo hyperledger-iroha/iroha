@@ -18,7 +18,7 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 - ודאו שחשבון היעד (לדוגמה `alice@wonderland`) קיים, בדומה לשלב ההכנה בכל quickstart של ה-SDK.
 - הפעילו את נקודת הכניסה `register_and_mint` כדי ליצור את הגדרת הנכס ROSE ולהטביע 250 יחידות עבור Alice בעסקה אחת.
-- אמתו יתרות דרך `client.request(FindAccountAssets)` או `iroha_cli assets list --account alice@wonderland` כדי לוודא שההטבעה הצליחה.
+- אמתו יתרות דרך `client.request(FindAccountAssets)` או `iroha_cli ledger assets list --account alice@wonderland` כדי לוודא שההטבעה הצליחה.
 
 ## מדריכי SDK קשורים
 

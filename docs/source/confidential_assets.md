@@ -220,7 +220,7 @@ replay governance-driven audits. The default policy, enforced by
   compact older checkpoints only after all nullifiers within the interval expire.
 - **Stale digest remediation:** if `HandshakeConfidentialMismatch` is raised due
   to digest drift, operators should (1) verify that nullifier retention windows
-  align across the cluster, (2) run `iroha_cli confidential verify-ledger` to
+  align across the cluster, (2) run `iroha_cli app confidential verify-ledger` to
   regenerate the digest against the retained nullifier set, and (3) redeploy the
   refreshed manifest. Any nullifiers pruned prematurely must be restored from
   cold storage before rejoining the network.
@@ -248,7 +248,7 @@ lockstep.
 - Per-account key derivation hierarchy:
   - `sk_spend` → `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
 - Encrypted note payloads use AEAD with ECDH-derived shared keys; optional auditor view keys may be attached to outputs per asset policy.
-- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, auditor tooling for decrypting memos, and the `iroha zk envelope` helper for producing/inspecting Norito memo envelopes offline. Torii exposes the same derivation flow via `POST /v1/confidential/derive-keyset`, returning both hex and base64 forms so wallets can fetch key hierarchies programmatically.
+- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, auditor tooling for decrypting memos, and the `iroha app zk envelope` helper for producing/inspecting Norito memo envelopes offline. Torii exposes the same derivation flow via `POST /v1/confidential/derive-keyset`, returning both hex and base64 forms so wallets can fetch key hierarchies programmatically.
 
 ## Gas, Limits & DoS Controls
 - Deterministic gas schedule:

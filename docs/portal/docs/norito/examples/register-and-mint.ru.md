@@ -24,7 +24,7 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 - Убедитесь, что аккаунт назначения (например `alice@wonderland`) существует, повторяя фазу подготовки в каждом quickstart SDK.
 - Вызовите точку входа `register_and_mint`, чтобы создать определение актива ROSE и выпустить 250 единиц для Alice в одной транзакции.
-- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli assets list --account alice@wonderland`, чтобы подтвердить успешный выпуск.
+- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account alice@wonderland`, чтобы подтвердить успешный выпуск.
 
 ## Связанные руководства SDK
 

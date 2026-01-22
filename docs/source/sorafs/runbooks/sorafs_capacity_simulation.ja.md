@@ -13,7 +13,7 @@ translation_last_reviewed: 2025-12-28
 
 # SoraFS 容量シミュレーション・ランブック
 
-このランブックは、SF-2c 容量マーケットプレイスのシミュレーションツールキットを実行し、得られたメトリクスを可視化する方法を説明します。目的は、`docs/examples/sorafs_capacity_simulation/` にある再現可能なフィクスチャを使って、クォータ交渉、フェイルオーバー処理、スラッシング是正をエンドツーエンドで検証することです。容量ペイロードは引き続き `sorafs_manifest_stub capacity` を使用します。manifest/CAR のパッケージングには `iroha sorafs toolkit pack` を使ってください。
+このランブックは、SF-2c 容量マーケットプレイスのシミュレーションツールキットを実行し、得られたメトリクスを可視化する方法を説明します。目的は、`docs/examples/sorafs_capacity_simulation/` にある再現可能なフィクスチャを使って、クォータ交渉、フェイルオーバー処理、スラッシング是正をエンドツーエンドで検証することです。容量ペイロードは引き続き `sorafs_manifest_stub capacity` を使用します。manifest/CAR のパッケージングには `iroha app sorafs toolkit pack` を使ってください。
 
 ## 1. CLI アーティファクトを生成
 

@@ -64,7 +64,7 @@ rollout_phase = "default"
 # anonymity_policy = "anon-strict-pq"  # optional explicit override
 ```
 
-`iroha::Client` מתעד כעת את ה-phase המפורש (`crates/iroha/src/client.rs:2315`) כך שפקודות עזר (למשל `iroha_cli sorafs fetch`) יכולות לדווח על ה-phase הנוכחי לצד מדיניות האנונימיות ברירת המחדל.
+`iroha::Client` מתעד כעת את ה-phase המפורש (`crates/iroha/src/client.rs:2315`) כך שפקודות עזר (למשל `iroha_cli app sorafs fetch`) יכולות לדווח על ה-phase הנוכחי לצד מדיניות האנונימיות ברירת המחדל.
 
 ## אוטומציה
 

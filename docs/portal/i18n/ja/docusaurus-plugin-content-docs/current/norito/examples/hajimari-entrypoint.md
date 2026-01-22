@@ -18,7 +18,7 @@ source: crates/ivm/docs/examples/01_hajimari.ko
 
 - `koto_compile --abi 1` でコントラクトをコンパイルします。[Norito 入門](/norito/getting-started#1-compile-a-kotodama-contract) の手順に従うか、`cargo test -p ivm developer_portal_norito_snippets_compile` を使います。
 - `ivm_run` / `developer_portal_norito_snippets_run` でバイトコードをローカルにスモークテストし、`info!` ログと初期 syscall を確認してからノードに触れます。
-- `iroha_cli contracts deploy` でアーティファクトをデプロイし、[Norito 入門](/norito/getting-started#4-deploy-via-iroha_cli) の手順でマニフェストを確認します。
+- `iroha_cli app contracts deploy` でアーティファクトをデプロイし、[Norito 入門](/norito/getting-started#4-deploy-via-iroha_cli) の手順でマニフェストを確認します。
 
 ## 関連 SDK ガイド
 

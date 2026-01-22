@@ -67,7 +67,7 @@ the roadmap milestone.
   `iroha_core::soranet_incentives::RelayPayoutLedger`, records per-epoch payouts, materialises XOR
   transfers, manages `RelayRewardDisputeV1` lifecycles (credit/debit/no-change), and exposes
   dashboard-ready aggregates for the treasury daemon.【crates/sorafs_orchestrator/src/treasury.rs:1】【crates/iroha_core/src/soranet_incentives.rs:351】
-- Operators can now drive the full payout workflow via `iroha sorafs incentives service <subcommand>`:
+- Operators can now drive the full payout workflow via `iroha app sorafs incentives service <subcommand>`:
   `init` seeds a Norito state file, `process` records epoch rewards, `record` ingests replayed
   instructions, `dispute` manages credits/debits, `dashboard` renders live earnings summaries,
   `daemon` polls a metrics spool to evaluate pending epochs, and `reconcile` compares the recorded
@@ -110,7 +110,7 @@ the roadmap milestone.
 - Operators can run `./check_pending_incentive_snapshots.sh --details` to audit
   the spool and highlight epochs missing either the uptime or measurement
   snapshots before shipping logs to treasury tooling.
-- CLI tooling under `iroha_cli sorafs incentives` now covers reward evaluation (`compute`),
+- CLI tooling under `iroha_cli app sorafs incentives` now covers reward evaluation (`compute`),
   dispute authoring (`open-dispute`), and offline dashboard summaries so operators can reconcile
   payouts before the treasury daemon lands.【crates/iroha_cli/src/commands/sorafs.rs:929】
 - Operators can pin the production Grafana dashboard shipped in
@@ -133,10 +133,10 @@ the roadmap milestone.
 Before Sora Parliament authorises automatic payouts, the operations lead must confirm:
 
 - [x] `RelayBondPolicyV1` and `RelayBondLedgerEntryV1` state is current for every exit relay (run
-      `iroha sorafs incentives service audit --scope bond`).
+      `iroha app sorafs incentives service audit --scope bond`).
 - [x] `increase(soranet_reward_skips_total{reason="insufficient_bond"}[24h]) == 0` on staging and the
       `SoranetRelayBondDeficit` alert stays green for at least 24 h.
-- [x] Treasury reconciliation via `iroha sorafs incentives service reconcile --window 3` reports
+- [x] Treasury reconciliation via `iroha app sorafs incentives service reconcile --window 3` reports
       zero missing transfers and dispute adjustments remain below the 5 % budget guardrail.
 - [x] The Grafana dashboard `dashboards/grafana/soranet_incentives.json` is published to the shared
       Observatory instance with datasource bindings reviewed by SRE.
@@ -154,7 +154,7 @@ Running with `--allow-missing-budget-approval` is reserved for lab/staging repla
 daemons/shadow-runs should keep the default enforcement so the `expected_budget_approval` hash stays
 present and the `missing_budget_approval` / `mismatched_budget_approval` counters remain at zero.
 
-Use `iroha sorafs incentives service audit --scope all --config <daemon.json> --state <state.json>`
+Use `iroha app sorafs incentives service audit --scope all --config <daemon.json> --state <state.json>`
 to gate both bond and budget readiness. The budget scope fails when a payout is missing or carrying
 a mismatched `budget_approval_id` and echoes the configured Parliament hash in the JSON summary so
 operators can lift the digest straight into governance packets.【crates/iroha_cli/src/commands/sorafs.rs:3122】【crates/iroha_cli/src/commands/sorafs.rs:12758】
@@ -177,7 +177,7 @@ operators can lift the digest straight into governance packets.【crates/iroha_c
 
 1. Wire the treasury daemon to `treasury::RelayPayoutService` so it ingests `RelayRewardInstructionV1`,
    verifies Norito payloads, and mints XOR payouts deterministically. _Status:_ Implemented via batched
-   payout processing (`RelayPayoutService::process_batch`) and the `iroha sorafs incentives service process`
+   payout processing (`RelayPayoutService::process_batch`) and the `iroha app sorafs incentives service process`
    CLI batch mode that feeds bonded beneficiaries and reconciles multi-epoch exports.【crates/sorafs_orchestrator/src/treasury.rs#L202】【crates/iroha_cli/src/commands/sorafs.rs#L1261】【crates/iroha_cli/tests/cli_smoke.rs:1358】
 2. Publish dashboards + SLOs for the incentives pipeline and run dry-runs on the staging network.
    _Status:_ Completed — dashboards/alerts are live (`dashboards/grafana/soranet_incentives.json`,

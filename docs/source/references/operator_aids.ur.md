@@ -45,7 +45,7 @@ translation_last_reviewed: 2026-01-01
   - Reliable Broadcast کے مجموعی کاؤنٹرز: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`۔
 - GET `/v1/sumeragi/rbc/sessions`
   - ہر سیشن کی حالت کا سنیپ شاٹ (بلاک ہیش، height/view، chunk کاؤنٹس، delivered فلیگ، `invalid` مارکر، payload ہیش، recovered boolean) تاکہ RBC ڈلیوری میں رکاوٹ کی تشخیص ہو اور ری اسٹارٹ کے بعد ریکورڈ سیشنز نمایاں ہوں۔
-  - CLI شارٹ کٹ: `iroha sumeragi rbc sessions --summary` `hash`, `height/view`, chunk پروگریس، ready کاؤنٹس اور invalid/delivered فلیگز پرنٹ کرتا ہے۔
+  - CLI شارٹ کٹ: `iroha --output-format text ops sumeragi rbc sessions` `hash`, `height/view`, chunk پروگریس، ready کاؤنٹس اور invalid/delivered فلیگز پرنٹ کرتا ہے۔
 
 ثبوت (آڈٹ؛ غیر‑کنسینسس)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
@@ -56,9 +56,9 @@ translation_last_reviewed: 2026-01-01
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`
 - POST `/v1/sumeragi/evidence` → `{ "status": "accepted", "kind": "<variant>" }`
   - CLI مددگار:
-    - `iroha sumeragi evidence list --summary`
-    - `iroha sumeragi evidence count --summary`
-    - `iroha sumeragi evidence submit --evidence-hex <hex>` (یا `--evidence-hex-file <path>`)
+    - `iroha --output-format text ops sumeragi evidence list`
+    - `iroha --output-format text ops sumeragi evidence count`
+    - `iroha ops sumeragi evidence submit --evidence-hex <hex>` (یا `--evidence-hex-file <path>`)
 
 آپریٹر توثیق (WebAuthn/mTLS)
 - POST `/v1/operator/auth/registration/options`

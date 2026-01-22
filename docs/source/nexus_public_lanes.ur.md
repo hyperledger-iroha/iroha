@@ -224,12 +224,12 @@ NX-9 کے بعد runtime logic `PublicLaneRewardRecord` annotations emit کرے 
   انہیں `iroha_config::parameters::actual::Nexus` کے ذریعے تھریڈ کریں اور GA اقدار منظور ہونے کے بعد
   `status.md` میں ظاہر کریں۔
 - **Torii/CLI quickstart:**
-  - `iroha nexus lane-report --summary` lane catalog entries، manifest readiness، اور validator modes
+  - `iroha app nexus lane-report --summary` lane catalog entries، manifest readiness، اور validator modes
     (stake-elected vs admin-managed) دکھاتا ہے تاکہ آپریٹرز confirm کر سکیں کہ کسی lane کے لئے staking admission فعال ہے۔
-  - `iroha_cli nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
+  - `iroha_cli app nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
     lifecycle/activation markers (pending target epoch, `activation_epoch` / `activation_height`, exit release, slash id)
     کو bonded/self stake کے ساتھ دکھاتا ہے۔
-    `iroha_cli nexus public-lane stake --lane <id> [--validator account@domain] [--summary]`
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator account@domain] [--summary]`
     `/stake` endpoint کو `(validator, staker)` جوڑی کے pending-unbond hints کے ساتھ mirror کرتا ہے۔
   - Torii snapshots for dashboards and SDKs:
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status

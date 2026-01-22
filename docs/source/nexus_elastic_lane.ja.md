@@ -79,7 +79,7 @@ encoding が有効な場合は 4 つ目も生成します:
    `cargo xtask space-directory encode` の正確なコマンド ( `space_directory_encode.command` ) を
    含む audit summary。onboarding ticket に証拠として添付します。
 4. `<slug>.manifest.to` — `--encode-space-directory` 時に生成。Torii の
-   `iroha space-directory manifest publish` 用。
+   `iroha app space-directory manifest publish` 用。
 
 `--dry-run` で JSON/snippets を出力だけ確認でき、`--force` で既存 artifacts を上書きできます。
 

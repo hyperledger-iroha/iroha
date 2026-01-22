@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-01-01
 ## جائزہ
 
 - `scripts/address_local_toolkit.sh` `iroha` CLI کو wrap کرتا ہے تاکہ یہ پیدا کرے:
-  - `audit.json` -- `iroha address audit --format json` کا structured output۔
+  - `audit.json` -- `iroha tools address audit --format json` کا structured output۔
   - `normalized.txt` -- ہر Local-domain selector کے لیے IH58 (ترجیحی) / compressed (`snx1`, second-best) literals۔
 - اس اسکرپٹ کو address ingest dashboard (`dashboards/grafana/address_ingest.json`)
   اور Alertmanager rules (`dashboards/alerts/address_ingest_rules.yml`) کے ساتھ استعمال کریں تاکہ
@@ -48,7 +48,7 @@ change-management ticket کے ساتھ منسلک کریں اور Grafana screen
 1. اسکرپٹ کو dedicated job میں چلائیں اور outputs اپ لوڈ کریں۔
 2. جب `audit.json` Local selectors رپورٹ کرے (`domain.kind = local12`) تو merges روک دیں۔
    default `true` پر رکھیں (صرف dev/test میں regressions کی تشخیص کے وقت `false` کریں) اور
-   `iroha address normalize --fail-on-warning --only-local` کو CI میں شامل کریں تاکہ
+   `iroha tools address normalize --fail-on-warning --only-local` کو CI میں شامل کریں تاکہ
    regressions production تک پہنچنے سے پہلے فیل ہوں۔
 
 مزید تفصیلات، evidence checklists، اور release-note snippet کے لیے سورس دستاویز دیکھیں

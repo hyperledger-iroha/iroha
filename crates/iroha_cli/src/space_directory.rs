@@ -362,7 +362,7 @@ pub struct ManifestScaffoldArgs {
 #[derive(clap::Args, Debug, Default)]
 pub struct ManifestScaffoldAllowArgs {
     /// Optional dataspace override for the allow entry scope.
-    #[arg(long = "allow-dataspace", value_name = "ID")]
+    #[arg(long = "allow-dataspace", value_name = "ID", id = "allow_dataspace")]
     pub dataspace: Option<u64>,
     /// Program identifier (`contract.name`) for the allow entry.
     #[arg(long = "allow-program", value_name = "PROGRAM")]
@@ -390,7 +390,7 @@ pub struct ManifestScaffoldAllowArgs {
 #[derive(clap::Args, Debug, Default)]
 pub struct ManifestScaffoldDenyArgs {
     /// Optional dataspace override for the deny entry scope.
-    #[arg(long = "deny-dataspace", value_name = "ID")]
+    #[arg(long = "deny-dataspace", value_name = "ID", id = "deny_dataspace")]
     pub dataspace: Option<u64>,
     /// Program identifier (`contract.name`) for the deny entry.
     #[arg(long = "deny-program", value_name = "PROGRAM")]

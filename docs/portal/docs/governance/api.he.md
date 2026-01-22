@@ -195,24 +195,24 @@ Endpoint נוחות
   - הערות: מיועד לאדמין/בדיקה; דורש API token אם הוגדר. לפרודקשן עדיף לשלוח עסקה חתומה עם `SetParameter(Custom)`.
 
 Helpers ל-CLI
-- `iroha gov audit-deploy --namespace apps [--contains calc --hash-prefix deadbeef --summary-only]`
+- `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - מאחזר אינסטנסים של חוזים ל-namespace ומוודא ש:
     - Torii מאחסנת bytecode לכל `code_hash`, וה-digest Blake2b-32 שלו תואם ל-`code_hash`.
     - ה-manifest המאוחסן תחת `/v1/contracts/code/{code_hash}` מדווח על `code_hash` ו-`abi_hash` תואמים.
     - קיימת הצעת ממשל enacted עבור `(namespace, contract_id, code_hash, abi_hash)` שנגזרת באותו hashing של proposal-id שבו הצומת משתמש.
   - מפיק דוח JSON עם `results[]` לכל חוזה (issues, סיכומי manifest/code/proposal) ועוד סיכום שורה אחת אלא אם הוא מושתק (`--no-summary`).
   - שימושי לאודיט של namespaces מוגנים או לאימות זרימות deploy נשלטות ממשל.
-- `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
+- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - מפיק שלד JSON של metadata המשמש בעת שליחת deployments ל-namespaces מוגנים, כולל `gov_manifest_approvers` אופציונלי כדי לעמוד בכללי quorum של ה-manifest.
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — רמזי lock נדרשים כאשר `min_bond_amount > 0`, וכל סט רמזים שסופק חייב לכלול `owner`, `amount` ו-`duration_blocks`.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — רמזי lock נדרשים כאשר `min_bond_amount > 0`, וכל סט רמזים שסופק חייב לכלול `owner`, `amount` ו-`duration_blocks`.
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - סיכום שורה אחת מציג כעת `fingerprint=<hex>` דטרמיניסטי שנגזר מ-`CastZkBallot` המוצפן יחד עם hints מפוענחים (`owner`, `amount`, `duration_blocks`, `direction` כאשר סופקו).
   - תשובות CLI מסמנות `tx_instructions[]` עם `payload_fingerprint_hex` ועוד שדות מפוענחים כדי שכלי downstream יוכלו לאמת את השלד בלי ליישם שוב Norito decoding.
   - מתן hints של lock מאפשר לצומת לשדר אירועים `LockCreated`/`LockExtended` עבור ballots של ZK כאשר המעגל יחשוף את אותם ערכים.
-- `iroha gov vote-plain --referendum-id <id> --owner <account>@<domain> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner <account>@<domain> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - ה-aliases `--lock-amount`/`--lock-duration-blocks` משקפים את שמות הדגלים של ZK לשם פריטיות בסקריפטים.
-  - פלט הסיכום משקף `vote-zk` בכך שהוא כולל את ה-fingerprint של ההוראה המקודדת ושדות ballot קריאים (`owner`, `amount`, `duration_blocks`, `direction`), ומספק אישור מהיר לפני חתימת השלד.
+  - פלט הסיכום משקף `vote --mode zk` בכך שהוא כולל את ה-fingerprint של ההוראה המקודדת ושדות ballot קריאים (`owner`, `amount`, `duration_blocks`, `direction`), ומספק אישור מהיר לפני חתימת השלד.
 
 Listing של אינסטנסים
 - GET `/v1/gov/instances/{ns}` - מציג אינסטנסים פעילים של חוזים עבור namespace.
@@ -314,7 +314,7 @@ for (expected, kind) in offences.iter().enumerate() {
 מפעילים וכלים יכולים לבדוק ולשדר מחדש payloads דרך:
 
 - Torii: `GET /v1/sumeragi/evidence` ו-`GET /v1/sumeragi/evidence/count`.
-- CLI: `iroha sumeragi evidence list`, `... count`, ו-`... submit --evidence-hex <payload>`.
+- CLI: `iroha ops sumeragi evidence list`, `... count`, ו-`... submit --evidence-hex <payload>`.
 
 הממשל חייב להתייחס ל-bytes של evidence כהוכחה קנונית:
 
@@ -336,7 +336,7 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- ה-runtime וה-CLI מציגים פרמטרים staged דרך `/v1/sumeragi/params` ו-`iroha sumeragi params --summary`, כדי שמפעילים יאמתו גבהי הפעלה ורוסטרים של מאמתים.
+- ה-runtime וה-CLI מציגים פרמטרים staged דרך `/v1/sumeragi/params` ו-`iroha --output-format text ops sumeragi params`, כדי שמפעילים יאמתו גבהי הפעלה ורוסטרים של מאמתים.
 - אוטומצית הממשל חייבת תמיד:
   1. לסיים החלטת הסרה (או השבה) שמגובה ב-evidence.
   2. לשגר reconfiguration המשך עם `mode_activation_height = h_current + activation_lag_blocks`.

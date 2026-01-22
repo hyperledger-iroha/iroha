@@ -13,7 +13,7 @@ translation_last_reviewed: 2025-12-28
 
 # دليل تشغيل محاكاة سعة SoraFS
 
-يشرح هذا الدليل كيفية تشغيل مجموعة أدوات محاكاة سوق السعة SF-2c وعرض المقاييس الناتجة. الهدف هو التحقق من تفاوض الحصص، ومعالجة failover، ومعالجة slashing من الطرف إلى الطرف باستخدام fixtures القابلة لإعادة الإنتاج ضمن `docs/examples/sorafs_capacity_simulation/`. لا تزال payloads السعة تستخدم `sorafs_manifest_stub capacity`؛ استخدم `iroha sorafs toolkit pack` لتدفقات تغليف manifest/CAR.
+يشرح هذا الدليل كيفية تشغيل مجموعة أدوات محاكاة سوق السعة SF-2c وعرض المقاييس الناتجة. الهدف هو التحقق من تفاوض الحصص، ومعالجة failover، ومعالجة slashing من الطرف إلى الطرف باستخدام fixtures القابلة لإعادة الإنتاج ضمن `docs/examples/sorafs_capacity_simulation/`. لا تزال payloads السعة تستخدم `sorafs_manifest_stub capacity`؛ استخدم `iroha app sorafs toolkit pack` لتدفقات تغليف manifest/CAR.
 
 ## 1. إنشاء Artifacts خاصة بالـ CLI
 

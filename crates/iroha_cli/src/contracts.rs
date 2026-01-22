@@ -27,17 +27,16 @@ use crate::{Run, RunContext};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// Fetch on-chain contract code bytes by code hash and write to a file
-    CodeBytesGet(CodeBytesGetArgs),
+    /// Contract code helpers
+    #[command(subcommand)]
+    Code(CodeCommand),
     /// Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
     Deploy(DeployArgs),
     /// Deploy bytecode, register manifest, and activate a namespace binding in one transaction
     DeployActivate(DeployActivateArgs),
-    /// Build a manifest for compiled bytecode (with optional signing)
-    BuildManifest(BuildManifestArgs),
-    /// Fetch on-chain contract manifest by code hash and either print or save (if --out is provided)
-    #[command(alias = "man")]
-    Manifest(ManifestArgs),
+    /// Contract manifest helpers
+    #[command(subcommand)]
+    Manifest(ManifestCommand),
     /// Run an offline simulation of IVM bytecode to see the queued ISIs and header metadata
     Simulate(SimulateArgs),
     /// List active contract instances in a namespace (supports filters and pagination)
@@ -47,13 +46,43 @@ pub enum Command {
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
-            Command::CodeBytesGet(args) => args.run(context),
+            Command::Code(cmd) => cmd.run(context),
             Command::Deploy(args) => args.run(context),
             Command::DeployActivate(args) => args.run(context),
-            Command::BuildManifest(args) => args.run(context),
-            Command::Manifest(args) => args.run(context),
+            Command::Manifest(cmd) => cmd.run(context),
             Command::Simulate(args) => args.run(context),
             Command::Instances(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum CodeCommand {
+    /// Fetch on-chain contract code bytes by code hash and write to a file
+    Get(CodeBytesGetArgs),
+}
+
+impl Run for CodeCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            CodeCommand::Get(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum ManifestCommand {
+    /// Fetch on-chain contract manifest by code hash and either print or save (if --out is provided)
+    Get(ManifestArgs),
+    /// Build a manifest for compiled bytecode (with optional signing)
+    Build(BuildManifestArgs),
+}
+
+impl Run for ManifestCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            ManifestCommand::Get(args) => args.run(context),
+            ManifestCommand::Build(args) => args.run(context),
         }
     }
 }

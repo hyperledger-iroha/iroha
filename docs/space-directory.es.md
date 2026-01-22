@@ -63,9 +63,9 @@ let filter = SpaceDirectoryEventFilter::new()
 |------|----------------|-------|----------|
 | Draft | Propietario del dataspace | Clonar fixture, editar permisos/gobernanza, ejecutar `cargo test -p iroha_data_model nexus::manifest`. | Diff de Git, log de tests. |
 | Review | Governance WG | Validar JSON del manifest + bytes Norito, firmar registro de decisión. | Acta firmada, hash del manifest (BLAKE3 + Norito `.to`). |
-| Publish | Lane ops | Enviar vía CLI (`iroha space-directory manifest publish`) usando un payload Norito `.to` o JSON raw **o** hacer POST a `/v1/space-directory/manifests` con el JSON del manifest + reason opcional, verificar la respuesta de Torii y capturar `SpaceDirectoryEvent`. | Recibo CLI/Torii, log de eventos. |
-| Expire | Lane ops / Gobernanza | Ejecutar `iroha space-directory manifest expire` (UAID, dataspace, epoch) cuando un manifest llegue al final de su vida útil, verificar `SpaceDirectoryEvent::ManifestExpired`, archivar evidencias de limpieza de bindings. | Salida de CLI, log de eventos. |
-| Revoke | Gobernanza + Lane ops | Ejecutar `iroha space-directory manifest revoke` (UAID, dataspace, epoch, reason) **o** hacer POST a `/v1/space-directory/manifests/revoke` con el mismo payload hacia Torii, verificar `SpaceDirectoryEvent::ManifestRevoked`, actualizar el paquete de evidencias. | Recibo CLI/Torii, log de eventos, nota en el ticket. |
+| Publish | Lane ops | Enviar vía CLI (`iroha app space-directory manifest publish`) usando un payload Norito `.to` o JSON raw **o** hacer POST a `/v1/space-directory/manifests` con el JSON del manifest + reason opcional, verificar la respuesta de Torii y capturar `SpaceDirectoryEvent`. | Recibo CLI/Torii, log de eventos. |
+| Expire | Lane ops / Gobernanza | Ejecutar `iroha app space-directory manifest expire` (UAID, dataspace, epoch) cuando un manifest llegue al final de su vida útil, verificar `SpaceDirectoryEvent::ManifestExpired`, archivar evidencias de limpieza de bindings. | Salida de CLI, log de eventos. |
+| Revoke | Gobernanza + Lane ops | Ejecutar `iroha app space-directory manifest revoke` (UAID, dataspace, epoch, reason) **o** hacer POST a `/v1/space-directory/manifests/revoke` con el mismo payload hacia Torii, verificar `SpaceDirectoryEvent::ManifestRevoked`, actualizar el paquete de evidencias. | Recibo CLI/Torii, log de eventos, nota en el ticket. |
 | Monitor | SRE/Compliance | Seguir la telemetría + logs de auditoría, configurar alertas para revocaciones/expiración. | Captura de Grafana, logs archivados. |
 | Rotate/Revoke | Lane ops + Gobernanza | Preparar manifest de reemplazo (nuevo epoch), hacer tabletop, abrir incidente (en caso de revoke). | Ticket de rotación, post‑mortem del incidente. |
 
@@ -274,7 +274,7 @@ whitelist para apuntar a los manifests de capacidades relevantes.
    con el digest BLAKE3‑256):
 
    ```bash
-   iroha space-directory manifest encode \
+   iroha app space-directory manifest encode \
      --json fixtures/space_directory/capability/cbdc_wholesale.manifest.json \
      --out artifacts/nexus/cbdc/manifest/cbdc_wholesale.manifest.to
    ```
@@ -283,7 +283,7 @@ whitelist para apuntar a los manifests de capacidades relevantes.
 
    ```bash
    # Si ya codificaste el manifest en Norito:
-   iroha space-directory manifest publish \
+   iroha app space-directory manifest publish \
      --uaid uaid:0f4d…ab11 \
      --dataspace 11 \
      --payload artifacts/nexus/cbdc/manifest/cbdc_wholesale.manifest.to

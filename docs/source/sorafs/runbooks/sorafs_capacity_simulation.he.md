@@ -13,7 +13,7 @@ translation_last_reviewed: 2025-12-28
 
 # ראנבוק סימולציית קיבולת של SoraFS
 
-מדריך זה מסביר כיצד להפעיל את ערכת הסימולציה של שוק הקיבולת SF-2c וכיצד להמחיש את המדדים המתקבלים. המטרה היא לאמת משא ומתן על מכסות, טיפול ב‑failover ותיקון slashing מקצה לקצה באמצעות ה‑fixtures הניתנים לשחזור תחת `docs/examples/sorafs_capacity_simulation/`. ה‑payloads של הקיבולת עדיין משתמשים ב‑`sorafs_manifest_stub capacity`; השתמשו ב‑`iroha sorafs toolkit pack` לזרימות אריזה של manifest/CAR.
+מדריך זה מסביר כיצד להפעיל את ערכת הסימולציה של שוק הקיבולת SF-2c וכיצד להמחיש את המדדים המתקבלים. המטרה היא לאמת משא ומתן על מכסות, טיפול ב‑failover ותיקון slashing מקצה לקצה באמצעות ה‑fixtures הניתנים לשחזור תחת `docs/examples/sorafs_capacity_simulation/`. ה‑payloads של הקיבולת עדיין משתמשים ב‑`sorafs_manifest_stub capacity`; השתמשו ב‑`iroha app sorafs toolkit pack` לזרימות אריזה של manifest/CAR.
 
 ## 1. הפקת ארטיפקטים של CLI
 

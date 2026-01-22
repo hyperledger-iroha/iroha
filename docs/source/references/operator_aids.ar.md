@@ -45,7 +45,7 @@ translation_last_reviewed: 2026-01-01
   - عدادات Reliable Broadcast الإجمالية: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
 - GET `/v1/sumeragi/rbc/sessions`
   - لقطة لحالة كل جلسة (تجزئة الكتلة، height/view، عدادات القطع، علامة delivered، مؤشر `invalid`، تجزئة الحمولة، وقيمة recovered) لتشخيص تعطل تسليم RBC وإبراز الجلسات المستعادة بعد إعادة التشغيل.
-  - اختصار CLI: `iroha sumeragi rbc sessions --summary` يطبع `hash` و`height/view` وتقدّم القطع وعدد ready وعلامات invalid/delivered.
+  - اختصار CLI: `iroha --output-format text ops sumeragi rbc sessions` يطبع `hash` و`height/view` وتقدّم القطع وعدد ready وعلامات invalid/delivered.
 
 الأدلة (تدقيق؛ خارج التوافق)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
@@ -56,9 +56,9 @@ translation_last_reviewed: 2026-01-01
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`
 - POST `/v1/sumeragi/evidence` → `{ "status": "accepted", "kind": "<variant>" }`
   - أدوات CLI:
-    - `iroha sumeragi evidence list --summary`
-    - `iroha sumeragi evidence count --summary`
-    - `iroha sumeragi evidence submit --evidence-hex <hex>` (أو `--evidence-hex-file <path>`)
+    - `iroha --output-format text ops sumeragi evidence list`
+    - `iroha --output-format text ops sumeragi evidence count`
+    - `iroha ops sumeragi evidence submit --evidence-hex <hex>` (أو `--evidence-hex-file <path>`)
 
 مصادقة المشغّل (WebAuthn/mTLS)
 - POST `/v1/operator/auth/registration/options`

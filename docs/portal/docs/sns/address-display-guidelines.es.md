@@ -177,7 +177,7 @@ selector/estado y `docs/account_structure.md` para el diagrama de bytes completo
 Los operadores que convierten codificaciones Local heredadas a IH58 canonico o
 cadenas comprimidas deben seguir el flujo CLI documentado en ADDR-5:
 
-1. `iroha address inspect` ahora emite un resumen JSON estructurado con IH58,
+1. `iroha tools address inspect` ahora emite un resumen JSON estructurado con IH58,
    comprimido y payloads hex canonicos. El resumen tambien incluye un objeto
    `domain` con campos `kind`/`warning` y refleja cualquier dominio proporcionado
    via el campo `input_domain`. Cuando `kind` es `local12`, el CLI imprime una
@@ -208,7 +208,7 @@ cadenas comprimidas deben seguir el flujo CLI documentado en ADDR-5:
    forma canonica y notifica a las contrapartes que los selectores Local seran
    rechazados una vez completado el cutover.
 5. Para conjuntos de datos masivos, ejecuta
-   `iroha address audit --input addresses.txt --network-prefix 753`. El comando
+   `iroha tools address audit --input addresses.txt --network-prefix 753`. El comando
    lee literales separados por nueva linea (comentarios que empiezan con `#` se
    ignoran, y `--input -` o ningun flag usa STDIN), emite un reporte JSON con
    resumenes canonicos/IH58/comprimidos para cada entrada, y cuenta errores de
@@ -226,8 +226,8 @@ cadenas comprimidas deben seguir el flujo CLI documentado en ADDR-5:
    seguir escaneando incluso cuando un dump contiene literales mal formados.
 7. La automatizacion de CI/lint puede ejecutar `ci/check_address_normalize.sh`,
    que extrae los selectores Local de `fixtures/account/address_vectors.json`,
-   los convierte via `iroha address normalize`, y vuelve a ejecutar
-   `iroha address audit --fail-on-warning` para demostrar que los releases ya no
+   los convierte via `iroha tools address normalize`, y vuelve a ejecutar
+   `iroha tools address audit --fail-on-warning` para demostrar que los releases ya no
    emiten digests Local.
 
 `torii_address_local8_total{endpoint}` junto con
@@ -268,7 +268,7 @@ ventana requerida de 30 dias antes de que mainnet deshabilite los selectores
 Incluye el siguiente bullet en las notas de lanzamiento de billetera/explorador
 al publicar el cutover:
 
-> **Direcciones:** Se agrego el helper `iroha address normalize --only-local --append-domain`
+> **Direcciones:** Se agrego el helper `iroha tools address normalize --only-local --append-domain`
 > y se conecto en CI (`ci/check_address_normalize.sh`) para que las pipelines de
 > billetera/explorador puedan convertir selectores Local heredados a formas
 > canonicas IH58/comprimidas antes de que Local-8/Local-12 se bloqueen en mainnet.

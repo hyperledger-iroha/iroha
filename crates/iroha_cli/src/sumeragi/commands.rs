@@ -36,7 +36,14 @@ pub enum Command {
     /// Show persisted VRF epoch snapshot (seed, participants, penalties)
     VrfEpoch(VrfEpochArgs),
     /// Fetch commit QC (if present) for a block hash
-    CommitQcGet(CommitQcGetArgs),
+    #[command(subcommand)]
+    CommitQc(CommitQcCommand),
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum CommitQcCommand {
+    /// Fetch commit QC (if present) for a block hash
+    Get(CommitQcGetArgs),
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -59,23 +66,14 @@ pub enum RbcCommand {
 
 #[derive(clap::Args, Debug)]
 pub struct StatusArgs {
-    /// Print a single compact line instead of JSON
-    #[arg(long, default_value_t = false)]
-    pub summary: bool,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct LeaderArgs {
-    /// Print a single compact line instead of JSON
-    #[arg(long, default_value_t = false)]
-    pub summary: bool,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct ParamsArgs {
-    /// Print a compact summary instead of JSON
-    #[arg(long, default_value_t = false)]
-    pub summary: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -89,22 +87,10 @@ pub struct EvidenceListArgs {
     /// Filter by evidence kind
     #[arg(long, value_enum)]
     pub kind: Option<EvidenceKindArg>,
-    /// Print human-readable summaries before JSON
-    #[arg(long, default_value_t = false)]
-    pub summary: bool,
-    /// Print summaries only (omit JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct EvidenceCountArgs {
-    /// Print human-readable summary before JSON
-    #[arg(long, default_value_t = false)]
-    pub summary: bool,
-    /// Print summary only (omit JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -115,12 +101,6 @@ pub struct EvidenceSubmitArgs {
     /// Path to file containing hex-encoded proof (whitespace ignored)
     #[arg(long, value_name = "PATH", conflicts_with = "evidence_hex")]
     pub evidence_hex_file: Option<PathBuf>,
-    /// Print human-readable summary before JSON
-    #[arg(long, default_value_t = false)]
-    pub summary: bool,
-    /// Print summary only (omit JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -145,51 +125,30 @@ impl EvidenceKindArg {
 
 #[derive(clap::Args, Debug)]
 pub struct CollectorsArgs {
-    /// Print a compact summary instead of JSON
-    #[arg(long, default_value_t = false)]
-    pub summary: bool,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct QcArgs {
-    /// Print a compact summary instead of JSON
-    #[arg(long, default_value_t = false)]
-    pub summary: bool,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct PacemakerArgs {
-    /// Print a compact summary instead of JSON
-    #[arg(long, default_value_t = false)]
-    pub summary: bool,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct PhasesArgs {
-    /// Print a compact summary instead of JSON
-    #[arg(long, default_value_t = false)]
-    pub summary: bool,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct TelemetryArgs {
-    /// Print a compact summary instead of JSON
-    #[arg(long, default_value_t = false)]
-    pub summary: bool,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct RbcStatusArgs {
-    /// Print a compact summary instead of JSON
-    #[arg(long, default_value_t = false)]
-    pub summary: bool,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct RbcSessionsArgs {
-    /// Print a compact summary instead of JSON
-    #[arg(long, default_value_t = false)]
-    pub summary: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -197,9 +156,6 @@ pub struct VrfPenaltiesArgs {
     /// Epoch index (decimal or 0x-prefixed hex)
     #[arg(long, value_name = "EPOCH")]
     pub epoch: String,
-    /// Print a compact summary instead of JSON
-    #[arg(long, default_value_t = false)]
-    pub summary: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -207,9 +163,6 @@ pub struct VrfEpochArgs {
     /// Epoch index (decimal or 0x-prefixed hex)
     #[arg(long, value_name = "EPOCH")]
     pub epoch: String,
-    /// Print a compact summary instead of JSON
-    #[arg(long, default_value_t = false)]
-    pub summary: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -234,7 +187,15 @@ impl Run for Command {
             Command::Rbc(cmd) => rbc::run(context, cmd),
             Command::VrfPenalties(args) => vrf::penalties(context, args),
             Command::VrfEpoch(args) => vrf::epoch(context, args),
-            Command::CommitQcGet(args) => commit_qc::get(context, args),
+            Command::CommitQc(cmd) => cmd.run(context),
+        }
+    }
+}
+
+impl Run for CommitQcCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            CommitQcCommand::Get(args) => commit_qc::get(context, args),
         }
     }
 }

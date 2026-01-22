@@ -324,7 +324,7 @@ governance triage.
   `{ chunkIndex, bytes, providerId, attempts }`.
 - **Go** bindings wrap the FFI surface and surface results on a channel alongside a
   context-aware error channel.
-- The CLI command `iroha sorafs fetch` accepts a manifest (`--manifest`), chunk plan (`--plan`),
+- The CLI command `iroha app sorafs fetch` accepts a manifest (`--manifest`), chunk plan (`--plan`),
   gateway descriptors (`--gateway-provider=*`), and surfaces `--max-peers` / `--retry-budget`
   knobs while emitting human-readable receipts and JSON summaries.
 - The Rust SDK (`crates/iroha`) exposes `Client::sorafs_fetch_via_gateway` with

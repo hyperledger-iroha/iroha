@@ -138,5 +138,5 @@ REST ファサードはアテスト付きリストエンドポイントを提供
   alias カタログとレプリケーションオーダー backlog を一貫したページネーションと
   ステータスフィルタで公開。
 
-CLI はこれらの呼び出し (`iroha sorafs pin list`, `pin show`, `alias list`,
+CLI はこれらの呼び出し (`iroha app sorafs pin list`, `pin show`, `alias list`,
 `replication list`) を包み、低レベル API を触らずに registry 監査を自動化できます。

@@ -22,7 +22,7 @@ The defaults remain configurable through `torii.sorafs_gateway.denylist.*` and `
 ## Workflow
 
 1. **Prepare metadata:** include `policy_tier`, `issued_at`, `expires_at` (when applicable), and `emergency_canon`/`governance_reference` inside each JSON entry (`docs/source/sorafs_gateway_denylist_sample.json`).
-2. **Validate locally:** run `iroha sorafs gateway lint-denylist --path <denylist.json>` so the CLI enforces tier-specific TTLs and required fields before the file is committed or pinned.
+2. **Validate locally:** run `iroha app sorafs gateway lint-denylist --path <denylist.json>` so the CLI enforces tier-specific TTLs and required fields before the file is committed or pinned.
 3. **Publish evidence:** attach the canon id or governance reference cited in the entry to the GAR case bundle (agenda packet, referendum minutes, etc.) so auditors can trace the decision.
 4. **Review emergency entries:** emergency canons auto-expire within 30 days. Operators must complete post-facto review inside the 7-day window and record the outcome in the ministry tracker/SoraFS evidence store.
 5. **Reload Torii:** once validated, deploy the denylist path via `torii.sorafs_gateway.denylist.path` and restart/reload Torii; the runtime enforces the same limits before admitting entries.
@@ -106,7 +106,7 @@ cover the entire workflow.
    GAR vote packet so auditors can replay the evidence trail without access to
    internal CI. `ci/check_sorafs_gateway_denylist.sh --evidence-out \
    artifacts/ministry/denylist_registry/<STAMP>/denylist_evidence.json` now
-   performs the pack/diff/evidence dry-run (calling `iroha_cli sorafs gateway
+   performs the pack/diff/evidence dry-run (calling `iroha_cli app sorafs gateway
    evidence` under the hood) so automation can persist the summary alongside the
    canonical bundles.
 3. After publication, anchor the governance payload via
@@ -126,7 +126,7 @@ After the bundle/diff pair is produced, run the CLI evidence helper to capture
 the TTL summaries and emergency-review deadlines that governance requires:
 
 ```bash
-iroha sorafs gateway evidence \
+iroha app sorafs gateway evidence \
   --denylist artifacts/ministry/denylist_registry/2026-05-14/denylist.json \
   --out artifacts/ministry/denylist_registry/2026-05-14/denylist_evidence.json \
   --label csam-canon-2026-05
@@ -154,12 +154,12 @@ root and per-entry proofs alongside the TTL summary. Immediately after running
 the evidence helper, capture the Merkle artefacts:
 
 ```bash
-iroha sorafs gateway merkle snapshot \
+iroha app sorafs gateway merkle snapshot \
   --denylist artifacts/ministry/denylist_registry/2026-05-14/denylist.json \
   --json-out artifacts/ministry/denylist_registry/2026-05-14/denylist_merkle_snapshot.json \
   --norito-out artifacts/ministry/denylist_registry/2026-05-14/denylist_merkle_snapshot.to
 
-iroha sorafs gateway merkle proof \
+iroha app sorafs gateway merkle proof \
   --denylist artifacts/ministry/denylist_registry/2026-05-14/denylist.json \
   --index 12 \
   --json-out artifacts/ministry/denylist_registry/2026-05-14/denylist_merkle_proof_entry_12.json \
