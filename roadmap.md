@@ -458,6 +458,11 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Replace `docs/source/status/soranet_testnet_weekly_digest.*` stubs (he/ja) with translations.
  - [x] Replace `docs/source/sdk/swift/readiness/reports/202603_and7_quiz.*` stubs (he/ja) with translations.
  - [x] Replace `docs/source/torii/api_versioning.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/zk/proof_retention.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sorafs/migration_ledger.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soranet/lane_profiles.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soranet_billing_m0.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soranet_gateway_bug_bounty.*` stubs (he/ja) with translations.
  - [ ] Replace stub translation files across repo root, `docs/source`, and `docs/portal` (preserve front matter, keep `source_hash`/`translation_last_reviewed` aligned).
  - [x] Complete translations for core policy/docs (CODE_OF_CONDUCT, PATENTS, README, AGENTS, status/roadmap, configuration/runbooks).
  - [ ] Prioritize portal docs: `docs/portal/i18n/*/docusaurus-plugin-content-docs` (especially SoraFS/SoraNet) and mark completion per locale.

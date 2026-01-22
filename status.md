@@ -209,6 +209,11 @@ Last update: 2026-01-22
 - Docs/i18n: replaced `docs/source/status/soranet_testnet_weekly_digest.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
 - Docs/i18n: replaced `docs/source/sdk/swift/readiness/reports/202603_and7_quiz.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
 - Docs/i18n: replaced `docs/source/torii/api_versioning.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
+- Docs/i18n: replaced `docs/source/zk/proof_retention.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
+- Docs/i18n: replaced `docs/source/sorafs/migration_ledger.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
+- Docs/i18n: replaced `docs/source/soranet/lane_profiles.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
+- Docs/i18n: replaced `docs/source/soranet_billing_m0.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
+- Docs/i18n: replaced `docs/source/soranet_gateway_bug_bounty.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
 - SoraFS repair governance policy now enforces approval quorum/minimum voters, dispute/appeal windows, tie-break rules, and penalty caps; added approval/policy Norito payloads, capped scheduler draft penalties, updated CLI slash proposals to require approval summaries, and refreshed repair plan + node client protocol docs (portal mirror included).
 - Tests: not run (repair escalation policy + docs updates only).
 - SoraFS retention precedence now resolves effective retention as the minimum of pin policy, deal end, and governance cap metadata, persists `RetentionSourceV1` + access counters in storage metadata/index, and GC capacity sweeps evict expired manifests by LRU; CLI GC output adds `retention_sources`, docs updated (ops playbook, node client protocol, architecture RFC + portal mirror).
