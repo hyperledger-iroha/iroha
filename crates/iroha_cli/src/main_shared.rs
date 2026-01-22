@@ -2792,9 +2792,13 @@ mod peer {
         if args.verbose {
             context.print_data(&entries)
         } else {
-            let ids: Vec<_> = entries.iter().map(ToString::to_string).collect();
+            let ids = peer_ids_only(&entries);
             context.print_data(&ids)
         }
+    }
+
+    fn peer_ids_only(entries: &[PeerId]) -> Vec<String> {
+        entries.iter().map(ToString::to_string).collect()
     }
 
     fn apply_common_args<'a>(
@@ -2829,6 +2833,19 @@ mod peer {
         /// Peer's public key in multihash format
         #[arg(short, long)]
         pub key: PublicKey,
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use iroha_test_samples::PEER_KEYPAIR;
+
+        #[test]
+        fn peer_ids_only_renders_public_key_strings() {
+            let peer_id = PeerId::from(PEER_KEYPAIR.public_key().clone());
+            let rendered = peer_ids_only(&[peer_id]);
+            assert_eq!(rendered, vec![PEER_KEYPAIR.public_key().to_string()]);
+        }
     }
 }
 

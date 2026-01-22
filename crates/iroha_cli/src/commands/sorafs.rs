@@ -6962,15 +6962,26 @@ impl HandshakeTokenIssueArgs {
 #[derive(clap::Args, Debug)]
 pub struct HandshakeTokenIdArgs {
     /// Path to the admission token frame (binary).
-    #[arg(long = "token", value_name = "PATH", conflicts_with_all = ["token_hex", "token_base64"])]
+    #[arg(
+        long = "token",
+        value_name = "PATH",
+        id = "token",
+        conflicts_with_all = ["token_hex", "token_base64"]
+    )]
     path: Option<PathBuf>,
     /// Hex-encoded admission token frame.
-    #[arg(long = "token-hex", value_name = "HEX", conflicts_with_all = ["token", "token_base64"])]
+    #[arg(
+        long = "token-hex",
+        value_name = "HEX",
+        id = "token_hex",
+        conflicts_with_all = ["token", "token_base64"]
+    )]
     hex_input: Option<String>,
     /// Base64url-encoded admission token frame.
     #[arg(
         long = "token-base64",
         value_name = "BASE64",
+        id = "token_base64",
         conflicts_with_all = ["token", "token_hex"]
     )]
     base64_input: Option<String>,

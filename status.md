@@ -2,6 +2,11 @@
 
 Last update: 2026-01-22
 
+- CLI: fixed peer list for `FindPeers` (PeerId output), added helper test, and resolved clap arg-id collisions in Space Directory scaffolds + SoraFS token helpers; regenerated `crates/iroha_cli/CommandLineHelp.md`.
+- Docs: `cargo run -p iroha_cli --bin iroha_cli -- tools markdown-help > crates/iroha_cli/CommandLineHelp.md` (ok).
+- Tests: not run (CLI doc regen + clap fixes only).
+- FASTPQ trace tests: validate `path_bit_0`/`sibling_0` columns against indexed transfer proofs instead of assuming non-zero bits.
+- Tests: not run (FASTPQ trace test fix only).
 - Config: added pacemaker backpressure soft-limit defaults to the Kiso and Torii connect-gating Sumeragi config literals.
 - Tests: not run (config literal updates only).
 - CLI: fixed `version` output borrow by precomputing localized strings and added a text-mode unit test with a stubbed server version.

@@ -2341,30 +2341,32 @@ mod tests {
         let expected =
             transfer::transcripts_to_witnesses(&[transcript]).expect("witness extraction");
         assert_eq!(trace.transfer_witnesses, expected);
-        let path_column = trace
-            .columns
-            .iter()
-            .find(|column| column.name == "path_bit_0")
-            .expect("path_bit_0 column present");
-        assert!(
-            path_column
-                .values
+        let proof_index = transfer::index_row_proofs(&expected);
+        let mut canonical = batch.clone();
+        canonical.sort();
+        for (row, transition) in canonical.transitions.iter().enumerate() {
+            if !matches!(transition.operation, OperationKind::Transfer) {
+                continue;
+            }
+            let row_key = transfer::TransferRowKey::from_transition(transition);
+            let proof = proof_index
+                .get(&row_key)
+                .expect("transfer proof for row");
+            let path_bit = trace
+                .columns
                 .iter()
-                .take(trace.rows)
-                .any(|&value| value == 1)
-        );
-        let sibling_column = trace
-            .columns
-            .iter()
-            .find(|column| column.name == "sibling_0")
-            .expect("sibling_0 column present");
-        assert!(
-            sibling_column
-                .values
+                .find(|column| column.name == "path_bit_0")
+                .expect("path_bit_0 column present")
+                .values[row];
+            assert_eq!(path_bit, proof.bit(0));
+            let sibling_value = trace
+                .columns
                 .iter()
-                .take(trace.rows)
-                .any(|&value| value != 0)
-        );
+                .find(|column| column.name == "sibling_0")
+                .expect("sibling_0 column present")
+                .values[row];
+            assert_eq!(sibling_value, hash_to_field(&proof.sibling(0)));
+        }
     }
 
     #[test]
