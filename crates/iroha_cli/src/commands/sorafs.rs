@@ -8,7 +8,7 @@ use super::{
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     convert::TryFrom,
-    fmt,
+    fmt::{self, Write as _},
     fs,
     io::{self, Write},
     num::{NonZeroU64, NonZeroUsize},
@@ -18,7 +18,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crate::{Run, RunContext};
+use crate::{CliOutputFormat, Run, RunContext};
+use crate::cli_output::print_with_optional_text;
 use base64::{
     Engine,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
@@ -2863,6 +2864,8 @@ pub struct IncentivesComputeArgs {
     #[arg(long = "norito-out", value_name = "PATH")]
     pub norito_out: Option<PathBuf>,
     /// Emit pretty-printed JSON.
+    ///
+    /// Ignored when `--output-format json` is used.
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
@@ -2918,6 +2921,8 @@ pub struct IncentivesOpenDisputeArgs {
     #[arg(long = "norito-out", value_name = "PATH")]
     pub norito_out: Option<PathBuf>,
     /// Emit pretty-printed JSON.
+    ///
+    /// Ignored when `--output-format json` is used.
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
@@ -3115,6 +3120,8 @@ pub struct IncentivesServiceProcessArgs {
     #[arg(long = "submit-transfer", default_value_t = false)]
     pub submit_transfer: bool,
     /// Emit pretty JSON instead of a compact payload.
+    ///
+    /// Ignored when `--output-format json` is used.
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
@@ -3245,6 +3252,8 @@ pub struct IncentivesServiceRecordArgs {
     #[arg(long = "submit-transfer", default_value_t = false)]
     pub submit_transfer: bool,
     /// Emit pretty JSON instead of a compact payload.
+    ///
+    /// Ignored when `--output-format json` is used.
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
@@ -3354,6 +3363,8 @@ pub struct IncentivesServiceDisputeFileArgs {
     #[arg(long = "norito-out", value_name = "PATH")]
     pub norito_out: Option<PathBuf>,
     /// Emit pretty JSON instead of a compact payload.
+    ///
+    /// Ignored when `--output-format json` is used.
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
@@ -3426,6 +3437,8 @@ pub struct IncentivesServiceDisputeResolveArgs {
     #[arg(long = "transfer-out", value_name = "PATH")]
     pub transfer_out: Option<PathBuf>,
     /// Emit pretty JSON instead of a compact payload.
+    ///
+    /// Ignored when `--output-format json` is used.
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
@@ -3497,6 +3510,8 @@ pub struct IncentivesServiceDisputeRejectArgs {
     #[arg(long = "rejected-at", value_name = "SECONDS")]
     pub rejected_at: Option<u64>,
     /// Emit pretty JSON instead of a compact payload.
+    ///
+    /// Ignored when `--output-format json` is used.
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
@@ -3560,6 +3575,8 @@ pub struct IncentivesServiceAuditArgs {
     )]
     pub scopes: Vec<IncentiveAuditScope>,
     /// Emit pretty JSON instead of a compact payload.
+    ///
+    /// Ignored when `--output-format json` is used.
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
@@ -3606,6 +3623,8 @@ pub struct IncentivesServiceShadowRunArgs {
     #[arg(long = "report-out", value_name = "PATH")]
     pub report_out: Option<PathBuf>,
     /// Emit pretty JSON instead of a compact payload.
+    ///
+    /// Ignored when `--output-format json` is used.
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
     /// Allow payouts without `budget_approval_id` (for local testing only).
@@ -3684,6 +3703,8 @@ pub struct IncentivesServiceReconcileArgs {
     #[arg(long = "ledger-export", value_name = "PATH")]
     pub ledger_export: PathBuf,
     /// Emit pretty JSON instead of a compact payload.
+    ///
+    /// Ignored when `--output-format json` is used.
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
@@ -3725,6 +3746,8 @@ pub struct IncentivesServiceDaemonArgs {
     #[arg(long = "once", default_value_t = false)]
     pub once: bool,
     /// Emit JSON summaries instead of plain-text logs.
+    ///
+    /// Ignored when `--output-format json` is used.
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
     /// Allow payouts without `budget_approval_id` (for local testing only).
@@ -4971,60 +4994,68 @@ fn log_daemon_summary<C: RunContext>(
     summary: &DaemonIterationSummary,
     pretty: bool,
 ) -> Result<()> {
-    if pretty {
-        context.print_data(summary)?;
-    } else {
-        let _ = context.println(format_args!(
-            "Processed {} payout(s); skipped {} missing config, {} missing bond, {} duplicate.",
-            summary.processed.len(),
-            summary.skipped_missing_config,
-            summary.skipped_missing_bond,
-            summary.skipped_duplicate
-        ));
-        if summary.missing_budget_approval > 0 {
-            let _ = context.println(format_args!(
-                "  missing budget approval id on {} payout(s)",
-                summary.missing_budget_approval
-            ));
+    match context.output_format() {
+        CliOutputFormat::Json => {
+            context.print_data(summary)?;
         }
-        if summary.mismatched_budget_approval > 0 {
-            let _ = context.println(format_args!(
-                "  mismatched budget approval id on {} payout(s)",
-                summary.mismatched_budget_approval
-            ));
-        }
-        if let Some(expected) = &summary.expected_budget_approval {
-            let _ = context.println(format_args!("  expected budget approval id: {expected}"));
-        }
-
-        for payout in &summary.processed {
-            let _ = context.println(format_args!(
-                "  relay {} epoch {} payout {}",
-                payout.relay_id_hex, payout.epoch, payout.payout_amount
-            ));
-            if let Some(budget) = &payout.budget_approval_id {
-                let _ = context.println(format_args!("    budget approval: {budget}"));
+        CliOutputFormat::Text => {
+            if pretty {
+                context.print_data(summary)?;
             } else {
-                let _ = context.println("    budget approval: <missing>");
-            }
-            if let Some(path) = &payout.instruction_path {
-                let _ = context.println(format_args!("    instruction: {path}"));
-            }
-            if let Some(path) = &payout.transfer_path {
-                let _ = context.println(format_args!("    transfer: {path}"));
-            }
-            if let Some(path) = &payout.metrics_archived_to {
-                let _ = context.println(format_args!("    archived metrics: {path}"));
-            }
-        }
+                let _ = context.println(format_args!(
+                    "Processed {} payout(s); skipped {} missing config, {} missing bond, {} duplicate.",
+                    summary.processed.len(),
+                    summary.skipped_missing_config,
+                    summary.skipped_missing_bond,
+                    summary.skipped_duplicate
+                ));
+                if summary.missing_budget_approval > 0 {
+                    let _ = context.println(format_args!(
+                        "  missing budget approval id on {} payout(s)",
+                        summary.missing_budget_approval
+                    ));
+                }
+                if summary.mismatched_budget_approval > 0 {
+                    let _ = context.println(format_args!(
+                        "  mismatched budget approval id on {} payout(s)",
+                        summary.mismatched_budget_approval
+                    ));
+                }
+                if let Some(expected) = &summary.expected_budget_approval {
+                    let _ =
+                        context.println(format_args!("  expected budget approval id: {expected}"));
+                }
 
-        if !summary.errors.is_empty() {
-            let _ = context.println(format_args!(
-                "Encountered {} error(s):",
-                summary.errors.len()
-            ));
-            for err in &summary.errors {
-                let _ = context.println(format_args!("  - {err}"));
+                for payout in &summary.processed {
+                    let _ = context.println(format_args!(
+                        "  relay {} epoch {} payout {}",
+                        payout.relay_id_hex, payout.epoch, payout.payout_amount
+                    ));
+                    if let Some(budget) = &payout.budget_approval_id {
+                        let _ = context.println(format_args!("    budget approval: {budget}"));
+                    } else {
+                        let _ = context.println("    budget approval: <missing>");
+                    }
+                    if let Some(path) = &payout.instruction_path {
+                        let _ = context.println(format_args!("    instruction: {path}"));
+                    }
+                    if let Some(path) = &payout.transfer_path {
+                        let _ = context.println(format_args!("    transfer: {path}"));
+                    }
+                    if let Some(path) = &payout.metrics_archived_to {
+                        let _ = context.println(format_args!("    archived metrics: {path}"));
+                    }
+                }
+
+                if !summary.errors.is_empty() {
+                    let _ = context.println(format_args!(
+                        "Encountered {} error(s):",
+                        summary.errors.len()
+                    ));
+                    for err in &summary.errors {
+                        let _ = context.println(format_args!("  - {err}"));
+                    }
+                }
             }
         }
     }
@@ -5886,14 +5917,19 @@ where
     C: RunContext,
     T: norito::json::JsonSerialize,
 {
-    if pretty {
-        context.print_data(summary)
-    } else {
-        let bytes = norito::json::to_vec(summary)
-            .map_err(|err| eyre!("failed to serialise summary: {err}"))?;
-        let output = String::from_utf8(bytes)
-            .map_err(|err| eyre!("summary JSON is not valid UTF-8: {err}"))?;
-        context.println(output)
+    match context.output_format() {
+        CliOutputFormat::Json => context.print_data(summary),
+        CliOutputFormat::Text => {
+            if pretty {
+                context.print_data(summary)
+            } else {
+                let bytes = norito::json::to_vec(summary)
+                    .map_err(|err| eyre!("failed to serialise summary: {err}"))?;
+                let output = String::from_utf8(bytes)
+                    .map_err(|err| eyre!("summary JSON is not valid UTF-8: {err}"))?;
+                context.println(output)
+            }
+        }
     }
 }
 
@@ -6765,8 +6801,8 @@ pub struct HandshakeTokenIssueArgs {
     #[arg(long = "output", value_name = "PATH")]
     output: Option<PathBuf>,
     /// Encoding used when writing the token to --output (base64, hex, binary).
-    #[arg(long = "output-format", value_enum, default_value_t = TokenOutputFormat::Base64)]
-    output_format: TokenOutputFormat,
+    #[arg(long = "token-encoding", value_enum, default_value_t = TokenOutputFormat::Base64)]
+    token_encoding: TokenOutputFormat,
 }
 
 #[derive(Debug)]
@@ -6792,7 +6828,7 @@ impl HandshakeTokenIssueArgs {
             context,
             &artifacts,
             self.output.as_deref(),
-            self.output_format,
+            self.token_encoding,
         )?;
         Ok(())
     }
@@ -6898,11 +6934,6 @@ impl HandshakeTokenIssueArgs {
     ) -> Result<()> {
         if let Some(path) = output {
             write_token_to_file(path, format, &artifacts.token_bytes)?;
-            context.println(format!(
-                "Token written to {} ({})",
-                path.display(),
-                format.describe()
-            ))?;
         }
 
         let token_base64 = URL_SAFE_NO_PAD.encode(&artifacts.token_bytes);
@@ -6954,9 +6985,73 @@ impl HandshakeTokenIssueArgs {
         obj.insert("issued_at".into(), Value::from(issued_str));
         obj.insert("expires_at".into(), Value::from(expires_str));
         obj.insert("ttl_secs".into(), Value::from(artifacts.ttl_secs));
+        obj.insert("token_encoding".into(), Value::from(format.describe()));
+        obj.insert(
+            "output_path".into(),
+            output.map_or(Value::Null, |path| {
+                Value::from(path.to_string_lossy().into_owned())
+            }),
+        );
 
-        context.print_data(&Value::Object(obj))
+        let text = render_token_issue_text(artifacts, &obj, output, format.describe());
+        print_with_optional_text(context, Some(text), &Value::Object(obj))
     }
+}
+
+fn render_token_issue_text(
+    artifacts: &TokenIssueArtifacts,
+    payload: &Map,
+    output: Option<&Path>,
+    encoding_label: &str,
+) -> String {
+    let token_base64 = payload
+        .get("token_base64url")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let token_id_hex = payload
+        .get("token_id_hex")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let fingerprint_hex = payload
+        .get("issuer_fingerprint_hex")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let relay_id_hex = payload
+        .get("relay_id_hex")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let transcript_hash_hex = payload
+        .get("transcript_hash_hex")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let issued_at = payload
+        .get("issued_at")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let expires_at = payload
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let ttl_secs = payload
+        .get("ttl_secs")
+        .and_then(Value::as_u64)
+        .unwrap_or(artifacts.ttl_secs);
+
+    let mut out = String::new();
+    let _ = writeln!(out, "SoraNet admission token issued");
+    let _ = writeln!(out, "suite: {}", artifacts.suite);
+    let _ = writeln!(out, "token_base64url: {token_base64}");
+    let _ = writeln!(out, "token_id_hex: {token_id_hex}");
+    let _ = writeln!(out, "issuer_fingerprint_hex: {fingerprint_hex}");
+    let _ = writeln!(out, "relay_id_hex: {relay_id_hex}");
+    let _ = writeln!(out, "transcript_hash_hex: {transcript_hash_hex}");
+    let _ = writeln!(out, "issued_at: {issued_at}");
+    let _ = writeln!(out, "expires_at: {expires_at}");
+    let _ = writeln!(out, "ttl_secs: {ttl_secs}");
+    if let Some(path) = output {
+        let _ = writeln!(out, "output: {} ({encoding_label})", path.display());
+    }
+    out
 }
 
 #[derive(clap::Args, Debug)]
@@ -12031,6 +12126,7 @@ const fn reserve_duration_label(duration: ReserveDuration) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CliOutputFormat;
     use blake3::Hasher as Blake3Hasher;
     use ed25519_dalek::{SigningKey, VerifyingKey as Ed25519VerifyingKey};
     use iroha::{
@@ -12311,10 +12407,15 @@ mod tests {
         cfg: Config,
         printed: Vec<String>,
         i18n: Localizer,
+        output_format: CliOutputFormat,
     }
 
     impl TestContext {
         pub(super) fn new() -> Self {
+            Self::with_output_format(CliOutputFormat::Json)
+        }
+
+        pub(super) fn with_output_format(output_format: CliOutputFormat) -> Self {
             let kp = KeyPair::random();
             let account: AccountId = format!("{}@wonderland", kp.public_key())
                 .parse()
@@ -12341,12 +12442,94 @@ mod tests {
                 cfg,
                 printed: Vec::new(),
                 i18n: Localizer::new(Bundle::Cli, Language::English),
+                output_format,
             }
         }
 
         pub(super) fn outputs(&self) -> &[String] {
             &self.printed
         }
+    }
+
+    struct OutputModeContext {
+        config: Config,
+        output_format: CliOutputFormat,
+        printed: Vec<String>,
+        i18n: Localizer,
+    }
+
+    impl OutputModeContext {
+        fn new(output_format: CliOutputFormat) -> Self {
+            Self {
+                config: crate::fallback_config(),
+                output_format,
+                printed: Vec::new(),
+                i18n: Localizer::new(Bundle::Cli, Language::English),
+            }
+        }
+    }
+
+    impl RunContext for OutputModeContext {
+        fn config(&self) -> &Config {
+            &self.config
+        }
+
+        fn transaction_metadata(&self) -> Option<&Metadata> {
+            None
+        }
+
+        fn input_instructions(&self) -> bool {
+            false
+        }
+
+        fn output_instructions(&self) -> bool {
+            false
+        }
+
+        fn i18n(&self) -> &Localizer {
+            &self.i18n
+        }
+
+        fn output_format(&self) -> CliOutputFormat {
+            self.output_format
+        }
+
+        fn print_data<T>(&mut self, _data: &T) -> Result<()>
+        where
+            T: JsonSerialize + ?Sized,
+        {
+            self.printed.push("json".to_string());
+            Ok(())
+        }
+
+        fn println(&mut self, _data: impl Display) -> Result<()> {
+            self.printed.push("text".to_string());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn output_summary_prefers_json_in_json_mode() {
+        let mut ctx = OutputModeContext::new(CliOutputFormat::Json);
+        let summary = DaemonIterationSummary::default();
+        output_summary(&mut ctx, &summary, false).expect("summary output");
+        assert_eq!(ctx.printed, vec!["json"]);
+    }
+
+    #[test]
+    fn output_summary_uses_text_in_text_mode() {
+        let mut ctx = OutputModeContext::new(CliOutputFormat::Text);
+        let summary = DaemonIterationSummary::default();
+        output_summary(&mut ctx, &summary, false).expect("summary output");
+        assert_eq!(ctx.printed, vec!["text"]);
+    }
+
+    #[test]
+    fn log_daemon_summary_emits_json_in_json_mode() {
+        let mut ctx = OutputModeContext::new(CliOutputFormat::Json);
+        let summary = DaemonIterationSummary::default();
+        log_daemon_summary(&mut ctx, &summary, false).expect("daemon summary");
+        assert_eq!(ctx.printed, vec!["json"]);
     }
 
     #[test]
@@ -12705,7 +12888,7 @@ mod tests {
             ttl_secs: Some(900),
             flags: Some(5),
             output: None,
-            output_format: TokenOutputFormat::Base64,
+            token_encoding: TokenOutputFormat::Base64,
         };
 
         let mut rng = StdRng::seed_from_u64(0x5eed);
@@ -12762,7 +12945,7 @@ mod tests {
             ttl_secs: Some(600),
             flags: None,
             output: None,
-            output_format: TokenOutputFormat::Base64,
+            token_encoding: TokenOutputFormat::Base64,
         };
 
         let mut rng = StdRng::seed_from_u64(0xabad_1dea);
@@ -12830,6 +13013,10 @@ mod tests {
 
         fn i18n(&self) -> &Localizer {
             &self.i18n
+        }
+
+        fn output_format(&self) -> CliOutputFormat {
+            self.output_format
         }
 
         fn print_data<T>(&mut self, data: &T) -> Result<()>

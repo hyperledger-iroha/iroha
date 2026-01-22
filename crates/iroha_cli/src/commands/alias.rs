@@ -5,9 +5,11 @@
 //! handling not-yet-implemented responses gracefully.
 
 use crate::{Run, RunContext};
+use crate::cli_output::print_with_optional_text;
 use eyre::{Result, eyre};
 use iroha::data_model::{alias::AliasIndex, name::Name};
 use iroha::{client::Client, http::Response, http::StatusCode};
+use std::fmt::Write as _;
 use std::str::FromStr;
 
 #[cfg(test)]
@@ -97,21 +99,21 @@ where
     let body = response.into_body();
 
     match status {
-        StatusCode::NOT_IMPLEMENTED => {
-            if let Ok(err) = norito::json::from_slice::<AliasErrorResponse>(&body) {
-                context.println(err.error)?;
-            } else {
-                context.println("alias VOPRF evaluation is not available")?;
-            }
-            Ok(())
-        }
         StatusCode::OK => {
             let value: norito::json::Value = norito::json::from_slice(&body)?;
-            context.print_data(&value)
+            let text = render_voprf_evaluate_text(&value);
+            print_with_optional_text(context, Some(text), &value)
         }
+        StatusCode::NOT_IMPLEMENTED => Err(eyre!(
+            "{}",
+            format_alias_error(
+                "alias VOPRF evaluation is not available",
+                &body
+            )
+        )),
         status => Err(eyre!(
             "alias VOPRF evaluation failed with status {status}: {}",
-            String::from_utf8_lossy(&body)
+            format_alias_error("server response", &body)
         )),
     }
 }
@@ -123,8 +125,12 @@ where
 {
     let _ = Name::from_str(alias).map_err(|err| eyre!("invalid alias: {err}"))?;
     if dry_run {
-        context.println("alias resolve dry-run completed")?;
-        return Ok(());
+        let output = norito::json!({
+            "alias": alias,
+            "dry_run": true,
+        });
+        let text = "alias resolve dry-run completed".to_string();
+        return print_with_optional_text(context, Some(text), &output);
     }
 
     let client = context.client_from_config();
@@ -135,23 +141,20 @@ where
     match status {
         StatusCode::OK => {
             let dto: AliasResolveResponse = norito::json::from_slice(&body)?;
-            let source = dto
-                .source
-                .as_deref()
-                .map(|s| format!(" ({s})"))
-                .unwrap_or_default();
-            context.println(format_args!(
-                "alias `{}` resolved to `{}`{}",
-                dto.alias, dto.account_id, source
-            ))
+            let text = render_alias_resolve_text(&dto);
+            print_with_optional_text(context, Some(text), &dto)
         }
-        StatusCode::NOT_FOUND => context.println(format_args!("alias `{alias}` not found")),
-        StatusCode::SERVICE_UNAVAILABLE => {
-            context.println("alias service is unavailable on the target node")
-        }
+        StatusCode::NOT_FOUND => Err(eyre!(
+            "{}",
+            format_alias_error(&format!("alias `{alias}` not found"), &body)
+        )),
+        StatusCode::SERVICE_UNAVAILABLE => Err(eyre!(
+            "{}",
+            format_alias_error("alias service is unavailable on the target node", &body)
+        )),
         status => Err(eyre!(
             "alias resolve failed with status {status}: {}",
-            String::from_utf8_lossy(&body)
+            format_alias_error("server response", &body)
         )),
     }
 }
@@ -168,27 +171,98 @@ where
     let body = response.into_body();
 
     match status {
-        StatusCode::NOT_IMPLEMENTED => {
-            if let Ok(err) = norito::json::from_slice::<AliasErrorResponse>(&body) {
-                context.println(err.error)?;
-            } else {
-                context.println("alias index resolution is not supported")?;
-            }
-            Ok(())
-        }
         StatusCode::OK => {
-            context.println(String::from_utf8_lossy(&body))?;
-            Ok(())
+            let dto: AliasResolveIndexResponse = norito::json::from_slice(&body)?;
+            let text = render_alias_resolve_index_text(&dto);
+            print_with_optional_text(context, Some(text), &dto)
         }
+        StatusCode::NOT_IMPLEMENTED => Err(eyre!(
+            "{}",
+            format_alias_error("alias index resolution is not supported", &body)
+        )),
         status => Err(eyre!(
             "alias resolve-index failed with status {status}: {}",
-            String::from_utf8_lossy(&body)
+            format_alias_error("server response", &body)
         )),
     }
 }
 
-#[derive(norito::json::JsonDeserialize)]
+fn format_alias_error(fallback: &str, body: &[u8]) -> String {
+    if let Some(message) = parse_alias_error_message(body) {
+        return format!("{fallback}: {message}");
+    }
+    let trimmed = String::from_utf8_lossy(body).trim().to_string();
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        format!("{fallback}: {trimmed}")
+    }
+}
+
+fn parse_alias_error_message(body: &[u8]) -> Option<String> {
+    norito::json::from_slice::<AliasErrorResponse>(body)
+        .ok()
+        .map(|err| err.error)
+}
+
+fn render_voprf_evaluate_text(value: &norito::json::Value) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "alias VOPRF evaluation completed");
+    if let Some(obj) = value.as_object() {
+        if let Some(evaluated) = obj
+            .get("evaluated_element_hex")
+            .and_then(norito::json::Value::as_str)
+        {
+            let _ = writeln!(out, "evaluated_element_hex: {evaluated}");
+        }
+        if let Some(backend) = obj
+            .get("backend")
+            .and_then(norito::json::Value::as_str)
+        {
+            let _ = writeln!(out, "backend: {backend}");
+        }
+    }
+    out
+}
+
+fn render_alias_resolve_text(dto: &AliasResolveResponse) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "alias `{}` resolved to `{}`",
+        dto.alias, dto.account_id
+    );
+    if let Some(source) = dto.source.as_deref() {
+        let _ = writeln!(out, "source: {source}");
+    }
+    out
+}
+
+fn render_alias_resolve_index_text(dto: &AliasResolveIndexResponse) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "alias index {} resolved to `{}`",
+        dto.index, dto.alias
+    );
+    let _ = writeln!(out, "account_id: {}", dto.account_id);
+    if let Some(source) = dto.source.as_deref() {
+        let _ = writeln!(out, "source: {source}");
+    }
+    out
+}
+
+#[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct AliasResolveResponse {
+    alias: String,
+    account_id: String,
+    #[norito(default)]
+    source: Option<String>,
+}
+
+#[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
+struct AliasResolveIndexResponse {
+    index: u64,
     alias: String,
     account_id: String,
     #[norito(default)]
@@ -212,6 +286,7 @@ mod tests {
             prelude::{AccountId, ChainId},
         },
     };
+    use crate::CliOutputFormat;
     use norito::json::JsonSerialize;
     use std::fmt::Display;
     use url::Url;
@@ -238,10 +313,11 @@ mod tests {
         cfg: Config,
         printed: Vec<String>,
         i18n: Localizer,
+        output_format: CliOutputFormat,
     }
 
     impl TestContext {
-        fn new() -> Self {
+        fn new(output_format: CliOutputFormat) -> Self {
             let kp = KeyPair::random();
             let account: AccountId = format!("{}@wonderland", kp.public_key())
                 .parse()
@@ -268,6 +344,7 @@ mod tests {
                 cfg,
                 printed: Vec::new(),
                 i18n: Localizer::new(Bundle::Cli, Language::English),
+                output_format,
             }
         }
     }
@@ -291,6 +368,10 @@ mod tests {
 
         fn i18n(&self) -> &Localizer {
             &self.i18n
+        }
+
+        fn output_format(&self) -> crate::CliOutputFormat {
+            self.output_format
         }
 
         fn print_data<T>(&mut self, data: &T) -> Result<()>
@@ -321,7 +402,7 @@ mod tests {
 
     #[test]
     fn voprf_helper_prints_ok_payload() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::new(CliOutputFormat::Json);
         alias_voprf_evaluate_with(&mut ctx, "deadbeef", |_, _| {
             Ok(Response::builder()
                 .status(StatusCode::OK)
@@ -338,23 +419,34 @@ mod tests {
     }
 
     #[test]
+    fn voprf_text_includes_backend() {
+        let payload = norito::json!({
+            "evaluated_element_hex": "aa",
+            "backend": "mock"
+        });
+        let text = render_voprf_evaluate_text(&payload);
+        assert!(text.contains("backend: mock"));
+    }
+
+    #[test]
     fn voprf_helper_handles_not_implemented() {
-        let mut ctx = TestContext::new();
-        alias_voprf_evaluate_with(&mut ctx, "deadbeef", |_, _| not_implemented_response())
-            .expect("helper should succeed");
-        assert_eq!(ctx.printed, vec!["not ready".to_string()]);
+        let mut ctx = TestContext::new(CliOutputFormat::Json);
+        let err =
+            alias_voprf_evaluate_with(&mut ctx, "deadbeef", |_, _| not_implemented_response())
+                .expect_err("expected error");
+        assert!(err.to_string().contains("not ready"));
     }
 
     #[test]
     fn voprf_helper_validates_hex() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::new(CliOutputFormat::Json);
         let err = alias_voprf_evaluate_with(&mut ctx, "zz", |_, _| unreachable!());
         assert!(err.is_err());
     }
 
     #[test]
     fn resolve_helper_prints_result() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::new(CliOutputFormat::Json);
         alias_resolve_with(&mut ctx, "alice", false, |_, _| {
             Ok(Response::builder()
                 .status(StatusCode::OK)
@@ -372,29 +464,40 @@ mod tests {
     }
 
     #[test]
+    fn resolve_text_includes_source() {
+        let dto = AliasResolveResponse {
+            alias: "alice".to_string(),
+            account_id: "alice@wonderland".to_string(),
+            source: Some("iso_bridge".to_string()),
+        };
+        let text = render_alias_resolve_text(&dto);
+        assert!(text.contains("source: iso_bridge"));
+    }
+
+    #[test]
     fn resolve_helper_handles_not_found() {
-        let mut ctx = TestContext::new();
-        alias_resolve_with(&mut ctx, "alice", false, |_, _| {
+        let mut ctx = TestContext::new(CliOutputFormat::Json);
+        let err = alias_resolve_with(&mut ctx, "alice", false, |_, _| {
             Ok(Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Vec::new())
                 .unwrap())
         })
-        .expect("helper should succeed");
-        assert_eq!(ctx.printed, vec!["alias `alice` not found".to_string()]);
+        .expect_err("expected error");
+        assert!(err.to_string().contains("alias `alice` not found"));
     }
 
     #[test]
     fn resolve_index_helper_handles_not_implemented() {
-        let mut ctx = TestContext::new();
-        alias_resolve_index_with(&mut ctx, 0, |_, _| not_implemented_response())
-            .expect("helper should succeed");
-        assert_eq!(ctx.printed, vec!["not ready".to_string()]);
+        let mut ctx = TestContext::new(CliOutputFormat::Json);
+        let err = alias_resolve_index_with(&mut ctx, 0, |_, _| not_implemented_response())
+            .expect_err("expected error");
+        assert!(err.to_string().contains("not ready"));
     }
 
     #[test]
     fn resolve_index_helper_prints_result() {
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::new(CliOutputFormat::Json);
         alias_resolve_index_with(&mut ctx, 0, |_, _| {
             Ok(Response::builder()
                 .status(StatusCode::OK)
@@ -410,5 +513,25 @@ mod tests {
         .expect("helper should succeed");
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("GB82WEST12345698765432"));
+    }
+
+    #[test]
+    fn resolve_index_text_mentions_account() {
+        let dto = AliasResolveIndexResponse {
+            index: 0,
+            alias: "GB82WEST12345698765432".to_string(),
+            account_id: "alice@wonderland".to_string(),
+            source: None,
+        };
+        let text = render_alias_resolve_index_text(&dto);
+        assert!(text.contains("account_id: alice@wonderland"));
+    }
+
+    #[test]
+    fn alias_error_prefers_json_message() {
+        let body = norito::json::to_vec(&norito::json!({ "error": "not ready" }))
+            .expect("encode error");
+        let rendered = format_alias_error("fallback", &body);
+        assert_eq!(rendered, "fallback: not ready");
     }
 }

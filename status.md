@@ -2,10 +2,33 @@
 
 Last update: 2026-01-22
 
+- Merge: resolved remaining status.md conflict markers from the i23 merge.
 - State: reorder `State::block`/`block_and_revert` lock acquisition to take block hashes before the world (matching `State::view`) to avoid deadlocks; added `state_block_orders_block_hashes_before_world` coverage.
 - Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Tests: `cargo test -p iroha_core state_block_orders_block_hashes_before_world -- --nocapture` (ok).
 - Localnet (NPoS 1 Hz fast-path rerun, 4 peers): `/private/tmp/iroha-localnet-npos-1hz-fastpath2` (ports 48280/53537). 100x1 Hz `ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `/private/tmp/iroha-localnet-npos-1hz-fastpath2/sumeragi_status_1hz_fastpath2.jsonl` (ping log `/private/tmp/iroha-localnet-npos-1hz-fastpath2/ping_1hz_fastpath2.log`). `commit_qc.height` 1->13 (+12 over 123s), `view_change_install_total` +2, pending RBC max 0 bytes / 2 sessions; 0 ping failures.
+- CLI: normalized JSON/text output and flag behavior across `iroha_cli` commands (da/alias/sns/kaigi/sorafs/taikai/streaming/soracles), added structured summaries, and renamed handshake token encoding flag to `--token-encoding`.
+- Tests: not run (CLI output normalization only).
+- Sumeragi worker-loop scheduling: rotate to the oldest pending tier after a vote burst to keep RBC/payload draining; added `select_next_tier_picks_oldest_pending_after_vote_burst` coverage and reordered a borrow in `proposal_backpressure_blocks_commit_qc_pending_after_reschedule`.
+- Tests: `cargo test -p iroha_core select_next_tier_picks_oldest_pending_after_vote_burst -- --nocapture` (ok).
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Build: `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target-localnet25 cargo build --release -p iroha_kagami -p irohad` (ok). `-p iroha_cli` failed: missing DA CLI output helpers (`SubmitOutput`, `build_manifest_fetch_value`) in `crates/iroha_cli/src/commands/da.rs`.
+- Localnet (NPoS, 7 peers, 753ms, telemetry=extended): `/private/tmp/iroha-localnet-7peer-run156-npos` (24980/25900). 50 TPS for 120s with 1s `/metrics` sampling → height 33 after 143s (avg block interval 4.33s). Status after load: `commit_qc.height=43`, `view_change_index=3` (`missing_qc_total=6`, `stake_quorum_timeout_total=3`), `tx_queue.depth=0`. Metrics: `metrics-sumeragi-load.log`.
+- Localnet (permissioned, 7 peers, 753ms, telemetry=extended): `/private/tmp/iroha-localnet-7peer-run156-perm` (25080/26000). 50 TPS for 120s with 1s `/metrics` sampling → height 31 after 139s (avg block interval 4.48s). Status after load: `commit_qc.height=41`, `view_change_index=0`, `tx_queue.depth=200`, commit inflight active. Metrics: `metrics-sumeragi-load.log`.
+- FASTPQ: refreshed ordering hash golden vector for the transfer fixture to match current ordering-hash output.
+- Tests: not run (fixture alignment only).
+- FASTPQ: refreshed transfer trace-commitment fixture metadata and updated the transfer golden commitment vector.
+- Tests: `cargo test -p fastpq_prover trace_commitment_matches_golden_vectors -- --nocapture` (ok).
+- FASTPQ: added a stage2 CPU/GPU proof parity check and fixed `fastpq_metal_bench` harness visibility/env parsing to compile under `fastpq-gpu`.
+- Tests: `cargo test -p fastpq_prover stage2_artifact_balanced_1k_matches_fixture -- --nocapture` (ok).
+- Tests: `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu stage2_artifact_balanced_1k_matches_fixture -- --nocapture` (failed: missing Metal Toolchain; `xcodebuild -downloadComponent MetalToolchain` required).
+- FASTPQ: refreshed stage2 balanced 1k/5k fixture proofs for backend regression coverage.
+- Tests: `FASTPQ_UPDATE_FIXTURES=1 FASTPQ_GPU=cpu cargo test -p fastpq_prover --test backend_regression -- --nocapture` (ok).
+- Tests: `cargo test -p fastpq_prover stage2_artifact_balanced_1k_matches_fixture -- --nocapture` (ok).
+- Build: `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target-localnet23 cargo build --release -p iroha_kagami -p irohad -p iroha_cli` (ok; existing `iroha_cli` unused-import/unused-variable warnings).
+- Localnet (NPoS, 7 peers, 753ms, soft limits 1/2/8, telemetry=extended): `/private/tmp/iroha-localnet-7peer-run153-npos` (24680/25600). 100 TPS for 120s via `iroha_cli ... ping --count 100 --parallel 20 --no-wait` → height 5, peer0 view changes 42 (`missing_qc_total=24`, `stake_quorum_timeout_total=6`), `tx_queue.depth=4796`, `sumeragi_pending_blocks_total` max 5 (`blocking` max 1), `sumeragi_commit_inflight_queue_depth` max 0; commit intervals after initial gap ~3.7s (4 commits). Metrics: `metrics-sumeragi-load3.log`.
+- Localnet (permissioned, 7 peers, 753ms, soft limits 1/2/8, telemetry=extended): `/private/tmp/iroha-localnet-7peer-run154-perm` (24780/25700). 100 TPS for 120s → height 5, peer0 view changes 9 (`missing_qc_total=7`, `quorum_timeout_total=2`), `tx_queue.depth=11522`, `sumeragi_pending_blocks_total` max 0, `sumeragi_commit_inflight_queue_depth` max 0; commit intervals after initial gap ~3.8s (4 commits). Metrics: `metrics-sumeragi-load.log`.
+- Tests: not run (localnet-only focus per request).
 - Merge: resolved status.md conflict markers between doc updates, CLI fixes, and FASTPQ test adjustments.
 - Docs: aligned governance API translations with IH58 account_id responses and `--owner ih58...`, updated JS SDK validation error guidance, and removed `@domain` from `inspectAccountId` examples.
 - Docs: switched Soranet incentive packet beneficiary example to canonical IH58 account ids.
