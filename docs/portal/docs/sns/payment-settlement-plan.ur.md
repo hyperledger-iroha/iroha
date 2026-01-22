@@ -33,7 +33,7 @@ governance اسپریڈشیٹس کے بغیر مالی بہاؤ replay کر سک
 | Component | Purpose | Evidence |
 |-----------|---------|----------|
 | `sns_settlementd` | Policy apply کرتا ہے، bundles sign کرتا ہے، `/v1/sns/settlements` expose کرتا ہے۔ | JSON bundle + hash. |
-| Settlement queue & writer | Idempotent queue + ledger submitter جو `iroha_cli sns settlement ledger` سے چلتا ہے۔ | bundle hash <-> tx hash manifest. |
+| Settlement queue & writer | Idempotent queue + ledger submitter جو `iroha_cli app sns settlement ledger` سے چلتا ہے۔ | bundle hash <-> tx hash manifest. |
 | Reconciliation job | Daily diff + monthly statement `docs/source/sns/reports/` کے تحت۔ | Markdown + JSON digest. |
 | Refund desk | Governance-approved refunds via `/settlements/{id}/refund`. | `RefundRecordV1` + ticket. |
 
@@ -41,13 +41,13 @@ CI helpers ان flows کو mirror کرتے ہیں:
 
 ```bash
 # Quote & ledger projection
-iroha_cli sns settlement quote --selector makoto.sora --term-years 1 --pricing hot-tier-a
+iroha_cli app sns settlement quote --selector makoto.sora --term-years 1 --pricing hot-tier-a
 
 # Emit transfers for automation/pipeline
-iroha_cli sns settlement ledger --bundle artifacts/sns/settlements/2026-05/makoto.sora.json
+iroha_cli app sns settlement ledger --bundle artifacts/sns/settlements/2026-05/makoto.sora.json
 
 # Produce a reconciliation statement
-iroha_cli sns settlement reconcile --period 2026-05 --out docs/source/sns/reports/settlement_202605.md
+iroha_cli app sns settlement reconcile --period 2026-05 --out docs/source/sns/reports/settlement_202605.md
 ```
 
 ## Observability اور reporting

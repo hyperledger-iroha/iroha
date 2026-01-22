@@ -41,7 +41,7 @@ If the incident is specifically about Local-8/Local-12 collisions, follow the
 | Logs | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` (or log aggregation) | Scrub PII before sharing. |
 | Fixture verification | `cargo xtask address-vectors --verify` | Confirms canonical generator and committed JSON agree. |
 | SDK parity check | `python3 scripts/account_fixture_helper.py check --target <path> --metrics-out artifacts/account_fixture/<label>.prom --metrics-label <label>` | Run for every SDK reported in alerts/tickets. |
-| Clipboard/IME sanity | `iroha address inspect <literal>` | Detects hidden characters or IME rewrites; cite `address_display_guidelines.md`. |
+| Clipboard/IME sanity | `iroha tools address inspect <literal>` | Detects hidden characters or IME rewrites; cite `address_display_guidelines.md`. |
 
 ## Immediate response
 
@@ -64,7 +64,7 @@ If the incident is specifically about Local-8/Local-12 collisions, follow the
 
 ### Client encoders / IME regressions
 
-- Inspect user-provided literals via `iroha address inspect` to find zero-width
+- Inspect user-provided literals via `iroha tools address inspect` to find zero-width
   joins, kana conversions, or truncated payloads.
 - Cross-check wallet/explorer flows with
   `docs/source/sns/address_display_guidelines.md` (dual copy targets, warnings,
@@ -86,7 +86,7 @@ If the incident is specifically about Local-8/Local-12 collisions, follow the
 | Scenario | Actions |
 |----------|---------|
 | Fixture drift | Regenerate `fixtures/account/address_vectors.json`, rerun `cargo xtask address-vectors --verify`, update SDK bundles, and attach `address_fixture.prom` snapshots to the ticket. |
-| SDK/client regression | File issues referencing the canonical fixture + `iroha address inspect` output, and gate releases behind the SDK parity CI (e.g., `ci/check_address_normalize.sh`). |
+| SDK/client regression | File issues referencing the canonical fixture + `iroha tools address inspect` output, and gate releases behind the SDK parity CI (e.g., `ci/check_address_normalize.sh`). |
 | Malicious submissions | Rate-limit or block offending principals, escalate to Governance if tombstoning selectors is required. |
 
 Once mitigations land, rerun the PromQL query above to confirm

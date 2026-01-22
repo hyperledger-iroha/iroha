@@ -18,11 +18,11 @@ translator: manual
 - `authority` と `private_key` が提供された場合（または ballot DTO の `private_key` 指定時）、Torii はトランザクションを署名・送信し、`tx_instructions` は引き続き返します。
 - それ以外はクライアントが `authority` と `chain_id` を使って `SignedTransaction` を組み立て、署名後に `/transaction` へ POST します。
 - CLI 補助コマンド:
-  - `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+  - `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - When any lock hint is provided, ZK ballots must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required. Direction remains optional and is treated as a hint only.
-  - `iroha gov vote-plain --referendum-id <id> --owner <account> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+  - `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
     - `--lock-amount` / `--lock-duration-blocks` の別名をサポートし、ZK コマンドと同様に fingerprint とヒントをサマリーと JSON へ出力します。
 
 ## エンドポイント一覧

@@ -218,7 +218,7 @@ SPDX-License-Identifier: Apache-2.0
 - **Nullifier retention:** الاحتفاظ بـ nullifiers المصروفة لمدة *ادنى* `730` يوما (24 شهرا) بعد ارتفاع الصرف، او لفترة اطول اذا فرضها المنظم. يمكن للمشغلين تمديدها عبر `confidential.retention.nullifier_days`. يجب ان تبقى nullifiers ضمن النافذة قابلة للاستعلام عبر Torii حتى يتمكن المدققون من اثبات عدم وجود double-spend.
 - **Reveal pruning:** تقوم Reveals الشفافة (`RevealConfidential`) بتقليم commitments المرتبطة فورا بعد اكتمال الكتلة، لكن nullifier المصروف يبقى خاضعا لقاعدة الاحتفاظ. تسجل احداث reveal (`ConfidentialEvent::Unshielded`) المبلغ العلني والمستلم وhash proof كي لا تتطلب اعادة بناء الكشوف التاريخية ciphertext المقتطع.
 - **Frontier checkpoints:** تحافظ frontier commitments على checkpoints متحركة تغطي الاكبر من `max_anchor_age_blocks` ونافذة الاحتفاظ. لا تقوم العقد بضغط checkpoints الاقدم الا بعد انتهاء كل nullifiers في تلك الفترة.
-- **Stale digest remediation:** اذا رُفع `HandshakeConfidentialMismatch` بسبب انحراف digest، يجب على المشغلين (1) التحقق من تطابق نوافذ الاحتفاظ عبر الكتلة، (2) تشغيل `iroha_cli confidential verify-ledger` لاعادة توليد digest مقابل مجموعة nullifier المحتفظ بها، و(3) اعادة نشر manifest المحدث. يجب استعادة اي nullifiers حذفت مبكرا من التخزين البارد قبل اعادة الانضمام للشبكة.
+- **Stale digest remediation:** اذا رُفع `HandshakeConfidentialMismatch` بسبب انحراف digest، يجب على المشغلين (1) التحقق من تطابق نوافذ الاحتفاظ عبر الكتلة، (2) تشغيل `iroha_cli app confidential verify-ledger` لاعادة توليد digest مقابل مجموعة nullifier المحتفظ بها، و(3) اعادة نشر manifest المحدث. يجب استعادة اي nullifiers حذفت مبكرا من التخزين البارد قبل اعادة الانضمام للشبكة.
 
 وثق التعديلات المحلية في operations runbook؛ سياسات الحوكمة التي تمد نافذة الاحتفاظ يجب ان تحدث تهيئة العقد وخطط التخزين الارشيفي بالتزامن.
 
@@ -241,7 +241,7 @@ SPDX-License-Identifier: Apache-2.0
 - تسلسل اشتقاق المفاتيح لكل حساب:
   - `sk_spend` → `nk` (nullifier key)، `ivk` (incoming viewing key)، `ovk` (outgoing viewing key)، `fvk`.
 - تستخدم payloads notes المشفرة AEAD مع مفاتيح مشتركة مشتقة من ECDH؛ يمكن ارفاق auditor view keys اختيارية الى outputs حسب سياسة الاصل.
-- اضافات CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ادوات للمدققين لفك memos، والمساعد `iroha zk envelope` لانتاج/فحص envelopes Norito دون اتصال. يعرض Torii نفس تدفق الاشتقاق عبر `POST /v1/confidential/derive-keyset` ويعيد اشكالا hex وbase64 لكي تستطيع المحافظ جلب هياكل المفاتيح برمجيا.
+- اضافات CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ادوات للمدققين لفك memos، والمساعد `iroha app zk envelope` لانتاج/فحص envelopes Norito دون اتصال. يعرض Torii نفس تدفق الاشتقاق عبر `POST /v1/confidential/derive-keyset` ويعيد اشكالا hex وbase64 لكي تستطيع المحافظ جلب هياكل المفاتيح برمجيا.
 
 ## الغاز، الحدود، وضوابط DoS
 - جدول gas حتمي:

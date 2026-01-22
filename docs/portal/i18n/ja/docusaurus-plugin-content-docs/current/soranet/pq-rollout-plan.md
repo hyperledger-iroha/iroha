@@ -55,7 +55,7 @@ rollout_phase = "default"
 # anonymity_policy = "anon-strict-pq"  # optional explicit override
 ```
 
-`iroha::Client` は parse した phase を記録するようになった (`crates/iroha/src/client.rs:2315`) ため、helper commands (例: `iroha_cli sorafs fetch`) は現在の phase を default anonymity policy とともに報告できる。
+`iroha::Client` は parse した phase を記録するようになった (`crates/iroha/src/client.rs:2315`) ため、helper commands (例: `iroha_cli app sorafs fetch`) は現在の phase を default anonymity policy とともに報告できる。
 
 ## Automation
 

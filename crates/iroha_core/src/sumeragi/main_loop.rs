@@ -3254,6 +3254,18 @@ fn is_peer_admin_instruction(instr: &iroha_data_model::isi::InstructionBox) -> b
     id.contains("registerpeer") || id.contains("unregisterpeer")
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct RbcBacklogSummary {
+    sessions_pending: usize,
+    missing_chunks_total: usize,
+}
+
+impl RbcBacklogSummary {
+    fn has_backlog(self) -> bool {
+        self.sessions_pending > 0
+    }
+}
+
 #[allow(
     dead_code,
     clippy::large_types_passed_by_value,
@@ -3369,7 +3381,7 @@ impl Actor {
         })
     }
 
-    fn has_blocking_pending_blocks(&self) -> bool {
+    fn blocking_pending_blocks_len(&self) -> usize {
         let now = Instant::now();
         let view = self.state.view();
         let tip_height = view.height();
@@ -3377,18 +3389,26 @@ impl Actor {
         let pending_height = u64::try_from(tip_height.saturating_add(1)).unwrap_or(u64::MAX);
         let (consensus_mode, _, _) = self.consensus_context_for_height(pending_height);
         let fast_timeout = self.pending_fast_path_timeout(&view, consensus_mode);
-        self.pending.pending_blocks.values().any(|pending| {
-            !pending.aborted
-                && pending_extends_tip(
-                    pending.height,
-                    pending.block.header().prev_block_hash(),
-                    tip_height,
-                    tip_hash,
-                )
-                && (pending.commit_qc_seen
-                    || (pending.last_quorum_reschedule.is_none()
-                        && !self.pending_fast_unblock_due(pending, now, fast_timeout)))
-        })
+        self.pending
+            .pending_blocks
+            .values()
+            .filter(|pending| {
+                !pending.aborted
+                    && pending_extends_tip(
+                        pending.height,
+                        pending.block.header().prev_block_hash(),
+                        tip_height,
+                        tip_hash,
+                    )
+                    && (pending.commit_qc_seen
+                        || (pending.last_quorum_reschedule.is_none()
+                            && !self.pending_fast_unblock_due(pending, now, fast_timeout)))
+            })
+            .count()
+    }
+
+    fn has_blocking_pending_blocks(&self) -> bool {
+        self.blocking_pending_blocks_len() > 0
     }
 
     fn request_commit_pipeline(&mut self) {
@@ -3509,61 +3529,81 @@ impl Actor {
         }
     }
 
-    fn has_unresolved_rbc_backlog(&self) -> bool {
+    fn rbc_backlog_summary(&self) -> RbcBacklogSummary {
         if !self.runtime_da_enabled() {
-            return false;
+            return RbcBacklogSummary::default();
         }
         let view = self.state.view();
         let tip_height = view.height();
         let tip_height_u64 = u64::try_from(tip_height).unwrap_or(u64::MAX);
         let tip_hash = view.latest_block_hash();
         drop(view);
-        let session_backlog = self
+        let mut summary = RbcBacklogSummary::default();
+        for (key, session) in &self.subsystems.da_rbc.rbc.sessions {
+            if !self.rbc_rebroadcast_active_with_tip_and_session(
+                *key,
+                tip_height,
+                tip_hash,
+                Some(session),
+            ) {
+                continue;
+            }
+            if session.is_invalid() {
+                continue;
+            }
+            let total_chunks = session.total_chunks();
+            let received_chunks = session.received_chunks();
+            let missing_chunks = total_chunks != 0 && received_chunks < total_chunks;
+            let roster = self.rbc_session_roster(*key);
+            let roster_source = self
+                .rbc_session_roster_source(*key)
+                .unwrap_or(RbcRosterSource::Init);
+            let ready_quorum = if !roster.is_empty() && roster_source.is_authoritative() {
+                let topology = super::network_topology::Topology::new(roster);
+                session.ready_signatures.len() >= self.rbc_deliver_quorum(&topology)
+            } else {
+                false
+            };
+            let payload_available =
+                self.block_payload_available_locally(key.0) || session.delivered;
+            if missing_chunks || !ready_quorum || !payload_available {
+                summary.sessions_pending = summary.sessions_pending.saturating_add(1);
+                if missing_chunks {
+                    let missing = total_chunks.saturating_sub(received_chunks);
+                    summary.missing_chunks_total = summary
+                        .missing_chunks_total
+                        .saturating_add(usize::try_from(missing).unwrap_or(usize::MAX));
+                }
+            }
+        }
+        let pending_payload_sessions = self
             .subsystems
             .da_rbc
             .rbc
-            .sessions
-            .iter()
-            .any(|(key, session)| {
-                if !self.rbc_rebroadcast_active_with_tip_and_session(
-                    *key,
-                    tip_height,
-                    tip_hash,
-                    Some(session),
-                ) {
-                    return false;
-                }
-                if session.is_invalid() {
-                    return false;
-                }
-                let missing_chunks = session.total_chunks() != 0
-                    && session.received_chunks() < session.total_chunks();
-                let roster = self.rbc_session_roster(*key);
-                let roster_source = self
-                    .rbc_session_roster_source(*key)
-                    .unwrap_or(RbcRosterSource::Init);
-                let ready_quorum = if !roster.is_empty() && roster_source.is_authoritative() {
-                    let topology = super::network_topology::Topology::new(roster);
-                    session.ready_signatures.len() >= self.rbc_deliver_quorum(&topology)
-                } else {
-                    false
-                };
-                let payload_available =
-                    self.block_payload_available_locally(key.0) || session.delivered;
-                missing_chunks || !ready_quorum || !payload_available
-            });
-        if session_backlog {
-            return true;
+            .pending
+            .keys()
+            .filter(|key| {
+                self.rbc_rebroadcast_active_with_tip(**key, tip_height, tip_hash)
+                    || key.1 == tip_height_u64
+                    || key.1 == tip_height_u64.saturating_add(1)
+            })
+            .count();
+        summary.sessions_pending = summary
+            .sessions_pending
+            .saturating_add(pending_payload_sessions);
+        summary
+    }
+
+    fn has_unresolved_rbc_backlog(&self) -> bool {
+        self.rbc_backlog_summary().has_backlog()
+    }
+
+    fn rbc_backlog_exceeds_pacemaker_soft_limits(&self, summary: RbcBacklogSummary) -> bool {
+        if !summary.has_backlog() {
+            return false;
         }
-        let pending_payload = self.subsystems.da_rbc.rbc.pending.keys().any(|key| {
-            self.rbc_rebroadcast_active_with_tip(*key, tip_height, tip_hash)
-                || key.1 == tip_height_u64
-                || key.1 == tip_height_u64.saturating_add(1)
-        });
-        if pending_payload {
-            return true;
-        }
-        false
+        summary.sessions_pending > self.config.pacemaker_rbc_backlog_session_soft_limit
+            || summary.missing_chunks_total > self.config.pacemaker_rbc_backlog_chunk_soft_limit
     }
 
     fn is_peer_admin_transaction(tx: &AcceptedTransaction<'_>) -> bool {
@@ -8329,23 +8369,7 @@ impl Actor {
             let pending_blocks_blocking = if pending_blocks_total == 0 {
                 0
             } else {
-                let view = self.state.view();
-                let tip_height = view.height();
-                let tip_hash = view.latest_block_hash();
-                self.pending
-                    .pending_blocks
-                    .values()
-                    .filter(|pending| {
-                        !pending.aborted
-                            && pending_extends_tip(
-                                pending.height,
-                                pending.block.header().prev_block_hash(),
-                                tip_height,
-                                tip_hash,
-                            )
-                            && (pending.commit_qc_seen || pending.last_quorum_reschedule.is_none())
-                    })
-                    .count() as u64
+                self.blocking_pending_blocks_len() as u64
             };
             let commit_inflight_queue_depth = u64::from(self.subsystems.commit.inflight.is_some());
             telemetry.record_pending_block_metrics(

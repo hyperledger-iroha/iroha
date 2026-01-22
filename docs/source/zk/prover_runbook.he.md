@@ -16,7 +16,7 @@ translator: manual
 
 ## רכיבים
 
-- **ממשק הקבצים המצורפים** – `POST /v1/zk/attachments` שומר מטענים אטומים (הוכחות, טרנסקריפטים). כאשר המוכיח מופעל, הרשומות נסרקות ברקע. ניתן לרשום, להוריד ולמחוק מצורפים דרך ה-API או `iroha_cli zk attachments *`.
+- **ממשק הקבצים המצורפים** – `POST /v1/zk/attachments` שומר מטענים אטומים (הוכחות, טרנסקריפטים). כאשר המוכיח מופעל, הרשומות נסרקות ברקע. ניתן לרשום, להוריד ולמחוק מצורפים דרך ה-API או `iroha_cli app zk attachments *`.
 - **מוכיח ברקע** – נשלט על ידי `torii.zk_prover_enabled=true`. התהליך מרוקן את תור המצורפים, מאמת `ProofAttachment`, ומפיק דוחות JSON (`/v1/zk/prover/reports`). תקציבי משאבים: `torii.zk_prover_max_inflight`, ‏`torii.zk_prover_max_scan_bytes`, ‏`torii.zk_prover_max_scan_millis`. הסקופ נשלט על ידי `torii.zk_prover_allowed_backends`/`torii.zk_prover_allowed_circuits`, ובמקרה שאין VK אינליין נטענים בייטים מ-`torii.zk_prover_keys_dir` בשם `<backend>__<name>.vk`.
 - **משטח טלמטריה** – מדדים רשומים ב-`crates/iroha_telemetry::metrics` ומפורסמים תחת `/metrics`.
 
@@ -92,7 +92,7 @@ translator: manual
 
 ## אינטגרציה עם CLI ו-SDK
 
-- `iroha_cli zk attachments` עוטף את נקודות הקצה של Torii; לבנות את הכלי מאותו הקומיט של הצומת כדי לשמור על סנכרון DTO.
+- `iroha_cli app zk attachments` עוטף את נקודות הקצה של Torii; לבנות את הכלי מאותו הקומיט של הצומת כדי לשמור על סנכרון DTO.
 - כלי העזר של Swift ו-Python תחת `ToriiClient` מספקים `upload_attachment`, ‏`list_attachments`, ‏`get_attachment` ו-`delete_attachment`. יש להשתמש במדדים מהרנבוק כדי לאמת את הזרימות שמונעות על ידי SDK.
 
 ## ניהול שינויים

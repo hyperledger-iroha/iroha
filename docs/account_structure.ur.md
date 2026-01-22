@@ -567,45 +567,40 @@ the change so the audit trail is reconstructable offline.
 
 #### Alias/tombstone workflow & telemetry
 
-1. **Detect drift.** Use `torii_address_local8_total{endpoint}`,
-   `torii_address_local8_domain_total{endpoint,domain}`,
-   `torii_address_collision_total{endpoint,kind="local12_digest"}`,
-   `torii_address_collision_domain_total{endpoint,domain}`,
-   `torii_address_domain_total{endpoint,domain_kind}`, and
-   `torii_address_invalid_total{endpoint,reason}` (rendered in
-   `dashboards/grafana/address_ingest.json`) to confirm Local submissions and
-   Local-12 collisions stay at zero before proposing a tombstone. The
-   per-domain counters let owners prove that only dev/test domains emit Local‑8
-   traffic (and that Local‑12 collisions map to known staging domains) while
-   includes the **Domain Kind Mix (5m)** panel so SREs can graph how much
-   `domain_kind="local12"` traffic remains, and the `AddressLocal12Traffic`
-   alert fires whenever production still sees Local-12 selectors despite the
-   retirement gate.
-2. **Derive canonical digests.** Run
-   `iroha address convert <address> --format json --expect-prefix 753`
-   (or consume `fixtures/account/address_vectors.json` via
-   `scripts/account_fixture_helper.py`) to capture the exact `digest_hex`.
-   The CLI accepts IH58, `snx1…`, and canonical `0x…` literals; append
-   `@<domain>` only when you need to preserve a label for manifests.
-   The JSON summary surfaces that domain via the `input_domain` field, and
-   `--append-domain` replays the converted encoding as `<address>@<domain>` for
-   manifest diffs (this suffix is metadata, not a canonical account id).
-   For newline-oriented exports use
-   `iroha address normalize --input <file> --only-local` to mass-convert Local
-   selectors into canonical IH58 (preferred), compressed (`snx1`, second-best), hex, or JSON forms while skipping
-   non-local rows. When auditors need spreadsheet-friendly evidence, run
-   `iroha address audit --input <file> --format csv` to emit a CSV summary
-   (`input,status,format,domain_kind,…`) that highlights Local selectors,
-   canonical encodings, and parse failures in the same file.
-3. **Append manifest entries.** Draft the `tombstone` record (and the follow-up
-   `global_domain` record when migrating to the global registry) and validate
-   the manifest with `cargo xtask address-vectors` before requesting signatures.
-4. **Verify & publish.** Follow the runbook checklist (hashes, Sigstore,
-   sequence monotonicity) before mirroring the bundle to SoraFS. Torii now
-   canonicalizes IH58 (preferred)/snx1 (second-best) literals immediately after the bundle lands.
-5. **Monitor & rollback.** Keep the Local‑8 and Local‑12 collision panels at
-   zero for 30 days; if regressions appear, republish the previous manifest
-   only in the affected non-production environment until telemetry stabilises.
+1. **Drift detect کرنا۔** `torii_address_local8_total{endpoint}` اور
+   `torii_address_invalid_total{endpoint,reason}` (جو
+   `dashboards/grafana/address_ingest.json` میں render ہوتے ہیں) استعمال کر
+   کے verify کریں کہ production میں Local‑8 strings اب قبول نہیں ہوتیں،
+   پھر tombstone تجویز کریں۔
+2. **Canonical digests derive کرنا۔**  
+   `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
+   چلائیں (یا  
+   `fixtures/account/address_vectors.json` کو
+   `scripts/account_fixture_helper.py` کے ذریعے consume کریں) تاکہ عین
+   `digest_hex` capture ہو سکے۔  
+   CLI اب `snx1...@wonderland` جیسے inputs قبول کرتا ہے؛ JSON summary
+   `input_domain` فیلڈ میں domain دکھاتا ہے، اور `--append-domain` option
+   converted encoding کو `<ih58>@wonderland` کی صورت میں replay کر کے
+   manifests اپ ڈیٹ کرنے میں مدد دیتا ہے۔  
+   newline‑oriented exports کیلئے  
+   استعمال کریں تاکہ Local selectors کو mass‑convert کر کے canonical IH58
+   (یا compressed/hex/JSON) forms میں لایا جا سکے، جبکہ non‑local rows skip
+   ہوتی رہیں۔ auditors کو spreadsheet‑friendly evidence دینے کیلئے  
+   چلائیں، جو CSV (`input,status,format,domain_kind,…`) تیار کرے گا جس میں
+   Local selectors، canonical encodings اور parse failures ایک ہی فائل میں
+   نمایاں رہیں۔
+3. **Manifest entries append کرنا۔** `tombstone` record (اور جب global
+   registry پر migrate کریں تو follow‑up `global_domain` record) لکھیں اور
+   signatures مانگنے سے پہلے manifest کو `cargo xtask address-vectors` کے
+   ساتھ validate کریں۔
+4. **Verify اور publish کرنا.** runbook checklist (hashes، Sigstore، اور
+   `sequence` کی monotonicity) follow کریں اور bundle کو SoraFS پر mirror
+   کرتا ہے، لہٰذا production clusters bundle landing کے فوراً بعد canonical
+   IH58 (preferred)/snx1 (second-best) literals enforce کرتے ہیں۔
+5. **Monitoring اور rollback.** کم از کم 30 دن تک Local‑8 panels کو zero پر
+   رکھیں؛ اگر regressions نظر آئیں تو previous manifest bundle دوبارہ
+   publish کریں، اور متاثرہ non‑production environment میں عارضی طور پر
+   جائے۔
 
 All of the steps above are mandatory evidence for ADDR‑7c: manifests without
 the `cosign` signature bundle or without matching `previous_digest` values must

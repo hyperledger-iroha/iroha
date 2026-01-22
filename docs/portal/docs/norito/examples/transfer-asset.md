@@ -13,7 +13,7 @@ Straightforward asset transfer workflow that mirrors SDK quickstarts and ledger 
 
 - Pre-fund Alice with the target asset (for example via the “register and mint” snippet or SDK quickstart flows).
 - Execute the `do_transfer` entrypoint to move 10 units from Alice to Bob, satisfying the `AssetTransferRole` permission.
-- Query balances (`FindAccountAssets`, `iroha_cli assets list`) or subscribe to pipeline events to observe the transfer outcome.
+- Query balances (`FindAccountAssets`, `iroha_cli ledger assets list`) or subscribe to pipeline events to observe the transfer outcome.
 
 ## Related SDK guides
 

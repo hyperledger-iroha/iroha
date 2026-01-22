@@ -3,57 +3,52 @@
 use eyre::Result;
 use norito::json::Value;
 
-use crate::RunContext;
+use crate::{CliOutputFormat, RunContext};
 
 use super::commands::{CollectorsArgs, LeaderArgs, ParamsArgs, QcArgs, StatusArgs};
 
-pub(crate) fn status<C: RunContext>(context: &mut C, args: StatusArgs) -> Result<()> {
+pub(crate) fn status<C: RunContext>(context: &mut C, _args: StatusArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_status_json()?;
-    if args.summary {
-        context.println(summarize_status(&value))
-    } else {
-        context.print_data(&value)
+    match context.output_format() {
+        CliOutputFormat::Text => context.println(summarize_status(&value)),
+        CliOutputFormat::Json => context.print_data(&value),
     }
 }
 
-pub(crate) fn leader<C: RunContext>(context: &mut C, args: LeaderArgs) -> Result<()> {
+pub(crate) fn leader<C: RunContext>(context: &mut C, _args: LeaderArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_leader_json()?;
-    if args.summary {
-        context.println(summarize_leader(&value))
-    } else {
-        context.print_data(&value)
+    match context.output_format() {
+        CliOutputFormat::Text => context.println(summarize_leader(&value)),
+        CliOutputFormat::Json => context.print_data(&value),
     }
 }
 
-pub(crate) fn params<C: RunContext>(context: &mut C, args: ParamsArgs) -> Result<()> {
+pub(crate) fn params<C: RunContext>(context: &mut C, _args: ParamsArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_params_json()?;
-    if args.summary {
-        context.println(summarize_params(&value))
-    } else {
-        context.print_data(&value)
+    match context.output_format() {
+        CliOutputFormat::Text => context.println(summarize_params(&value)),
+        CliOutputFormat::Json => context.print_data(&value),
     }
 }
 
-pub(crate) fn collectors<C: RunContext>(context: &mut C, args: CollectorsArgs) -> Result<()> {
+pub(crate) fn collectors<C: RunContext>(context: &mut C, _args: CollectorsArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_collectors_json()?;
-    if args.summary {
-        context.println(summarize_collectors(&value))
-    } else {
-        context.print_data(&value)
+    match context.output_format() {
+        CliOutputFormat::Text => context.println(summarize_collectors(&value)),
+        CliOutputFormat::Json => context.print_data(&value),
     }
 }
 
-pub(crate) fn qc<C: RunContext>(context: &mut C, args: QcArgs) -> Result<()> {
+pub(crate) fn qc<C: RunContext>(context: &mut C, _args: QcArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_qc_json()?;
-    if args.summary {
-        context.println(summarize_qc(&value))
-    } else {
-        context.print_data(&value)
+    match context.output_format() {
+        CliOutputFormat::Text => context.println(summarize_qc(&value)),
+        CliOutputFormat::Json => context.print_data(&value),
     }
 }
 

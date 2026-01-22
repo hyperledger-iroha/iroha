@@ -211,7 +211,7 @@ le hashing, le chunking et la verification des manifests optionnels.
 
 ## Tooling CLI & SDK (DA-8)
 
-- `iroha da submit` (nouvel entrypoint CLI) enveloppe maintenant le builder
+- `iroha app da submit` (nouvel entrypoint CLI) enveloppe maintenant le builder
   d'ingest partage afin que les operateurs puissent ingerer des blobs
   arbitraires hors du flux Taikai bundle. La commande vit dans
   `crates/iroha_cli/src/commands/da.rs:1` et consomme un payload, un profil
@@ -228,8 +228,8 @@ le hashing, le chunking et la verification des manifests optionnels.
   Torii personnalises. Le receipt JSON est imprime sur stdout en plus d'etre
   ecrit sur disque, fermant l'exigence tooling "submit_blob" de DA-8 et
   debloquant le travail de parite SDK.
-- `iroha da get` ajoute un alias DA pour l'orchestrateur multi-source qui alimente
-  deja `iroha sorafs fetch`. Les operateurs peuvent le pointer vers des artefacts
+- `iroha app da get` ajoute un alias DA pour l'orchestrateur multi-source qui alimente
+  deja `iroha app sorafs fetch`. Les operateurs peuvent le pointer vers des artefacts
   manifest + chunk-plan (`--manifest`, `--plan`, `--manifest-id`) **ou** fournir
   un storage ticket Torii via `--storage-ticket`. Quand le chemin ticket est
   utilise, la CLI recupere le manifest depuis `/v1/da/manifests/<ticket>`,
@@ -242,12 +242,12 @@ le hashing, le chunking et la verification des manifests optionnels.
   `--manifest-endpoint` pour des hosts Torii personnalises, donc les checks
   end-to-end d'availability vivent entierement sous le namespace `da` sans
   dupliquer la logique d'orchestrateur.
-- `iroha da get-blob` recupere les manifests canoniques directement depuis Torii
+- `iroha app da get-blob` recupere les manifests canoniques directement depuis Torii
   via `GET /v1/da/manifests/{storage_ticket}`. La commande ecrit
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` et
   `chunk_plan_{ticket}.json` sous `artifacts/da/fetch_<timestamp>/` (ou un
   `--output-dir` fourni par l'utilisateur) tout en affichant la commande exacte
-  `iroha da get` (incluant `--manifest-id`) requise pour le fetch orchestrateur.
+  `iroha app da get` (incluant `--manifest-id`) requise pour le fetch orchestrateur.
   Cela garde les operateurs hors des repertoires spool de manifests et garantit
   que le fetcher utilise toujours les artefacts signes emis par Torii. Le client
   Torii JavaScript reproduit ce flux via
@@ -260,7 +260,7 @@ le hashing, le chunking et la verification des manifests optionnels.
   manifests, executer des fetches multi-source et capturer des preuves sans
   invoquer la CLI.
   [IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240][IrohaSwift/Sources/IrohaSwift/SorafsOrchestratorClient.swift:12]
-- `iroha da rent-quote` calcule des rentas deterministes et la ventilation des
+- `iroha app da rent-quote` calcule des rentas deterministes et la ventilation des
   incentives pour une taille de storage et une fenetre de retention fournies.
   L'helper consomme la `DaRentPolicyV1` active (JSON ou bytes Norito) ou le
   default integre, valide la politique et imprime un resume JSON (`gib`,
@@ -276,12 +276,12 @@ le hashing, le chunking et la verification des manifests optionnels.
   `crates/iroha_cli/src/commands/da.rs` pour le sous-commande et
   `docs/source/da/rent_policy.md` pour le schema de politique.
   [crates/iroha_cli/src/commands/da.rs:1][docs/source/da/rent_policy.md:1]
-- `iroha da prove-availability` chaine tout ce qui precede: il prend un storage
+- `iroha app da prove-availability` chaine tout ce qui precede: il prend un storage
   ticket, telecharge le bundle canonique de manifest, execute l'orchestrateur
-  multi-source (`iroha sorafs fetch`) contre la liste `--gateway-provider`
+  multi-source (`iroha app sorafs fetch`) contre la liste `--gateway-provider`
   fournie, persiste le payload telecharge + scoreboard sous
   `artifacts/da/prove_availability_<timestamp>/`, et invoque immediatement le
-  helper PoR existant (`iroha da prove`) avec les bytes recuperes. Les operateurs
+  helper PoR existant (`iroha app da prove`) avec les bytes recuperes. Les operateurs
   peuvent ajuster les knobs de l'orchestrateur (`--max-peers`, `--scoreboard-out`,
   overrides d'endpoint manifest) et le sampler de proof (`--sample-count`,
   `--leaf-index`, `--sample-seed`) tandis qu'une seule commande produit les

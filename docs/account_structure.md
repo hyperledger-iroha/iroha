@@ -356,7 +356,7 @@ consistent textual forms for every canonical payload. Selected fixtures from
 | `treasury` (local digest selector, seed `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `snx15ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾘｻYﾃhﾓMQ9CBEﾅﾊﾈｷﾉVRｺnKRwTﾋｼqﾅWrﾎU7ｼiﾍQt1TPGNJ` |
 | Global registry pointer (`registry_id = 0x0000_002A`, equivalent to `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `snx1kXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
-These strings match the ones emitted by the CLI (`iroha address convert`), Torii
+These strings match the ones emitted by the CLI (`iroha tools address convert`), Torii
 responses (`address_format=ih58|compressed`), and SDK helpers, so UX copy/paste
 flows can rely on them verbatim. Append `<address>@<domain>` only when you need an explicit routing hint; the suffix is not part of the canonical output.
 
@@ -580,7 +580,7 @@ the change so the audit trail is reconstructable offline.
    alert fires whenever production still sees Local-12 selectors despite the
    retirement gate.
 2. **Derive canonical digests.** Run
-   `iroha address convert <address> --format json --expect-prefix 753`
+   `iroha tools address convert <address> --format json --expect-prefix 753`
    (or consume `fixtures/account/address_vectors.json` via
    `scripts/account_fixture_helper.py`) to capture the exact `digest_hex`.
    The CLI accepts IH58, `snx1…`, and canonical `0x…` literals; append
@@ -589,10 +589,10 @@ the change so the audit trail is reconstructable offline.
    `--append-domain` replays the converted encoding as `<address>@<domain>` for
    manifest diffs (this suffix is metadata, not a canonical account id).
    For newline-oriented exports use
-   `iroha address normalize --input <file> --only-local` to mass-convert Local
+   `iroha tools address normalize --input <file> --only-local` to mass-convert Local
    selectors into canonical IH58 (preferred), compressed (`snx1`, second-best), hex, or JSON forms while skipping
    non-local rows. When auditors need spreadsheet-friendly evidence, run
-   `iroha address audit --input <file> --format csv` to emit a CSV summary
+   `iroha tools address audit --input <file> --format csv` to emit a CSV summary
    (`input,status,format,domain_kind,…`) that highlights Local selectors,
    canonical encodings, and parse failures in the same file.
 3. **Append manifest entries.** Draft the `tombstone` record (and the follow-up
@@ -653,7 +653,7 @@ their change tickets.
 - **Textual helpers:** Ship IH58 ↔ compressed (`snx1…`) codecs in Rust,
   TypeScript/JavaScript, Python, and Kotlin with shared test vectors (CAIP-10
   mappings remain future work).
-- **CLI tooling:** Provide a deterministic operator workflow via `iroha address convert`
+- **CLI tooling:** Provide a deterministic operator workflow via `iroha tools address convert`
   (see `crates/iroha_cli/src/address.rs`), which accepts IH58/`snx1…`/`0x…` literals and
   optional `<address>@<domain>` labels, defaults to IH58 output using the Sora Nexus prefix (`753`),
   and only emits the Sora-only compressed alphabet when operators explicitly request it with

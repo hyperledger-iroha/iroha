@@ -50,9 +50,9 @@ let filter = SpaceDirectoryEventFilter::new()
 |-------|----------|-------|----------|
 | Draft | Dataspace owner | Clone fixture, edit allowances/governance, run `cargo test -p iroha_data_model nexus::manifest`. | Git diff, test log. |
 | Review | Governance WG | Validate manifest JSON + Norito bytes, sign decision log. | Signed minutes, manifest hash (BLAKE3 + Norito `.to`). |
-| Publish | Lane ops | Submit via CLI (`iroha space-directory manifest publish`) using either a Norito `.to` payload or raw JSON **or** POST `/v1/space-directory/manifests` with the manifest JSON + optional reason, verify Torii response, capture `SpaceDirectoryEvent`. | CLI/Torii receipt, event log. |
-| Expire | Lane ops / Governance | Run `iroha space-directory manifest expire` (UAID, dataspace, epoch) when a manifest reaches its scheduled end-of-life, verify `SpaceDirectoryEvent::ManifestExpired`, archive binding cleanup evidence. | CLI output, event log. |
-| Revoke | Governance + Lane ops | Run `iroha space-directory manifest revoke` (UAID, dataspace, epoch, reason) **or** POST `/v1/space-directory/manifests/revoke` with the same payload to Torii, verify `SpaceDirectoryEvent::ManifestRevoked`, update evidence bundle. | CLI/Torii receipt, event log, ticket note. |
+| Publish | Lane ops | Submit via CLI (`iroha app space-directory manifest publish`) using either a Norito `.to` payload or raw JSON **or** POST `/v1/space-directory/manifests` with the manifest JSON + optional reason, verify Torii response, capture `SpaceDirectoryEvent`. | CLI/Torii receipt, event log. |
+| Expire | Lane ops / Governance | Run `iroha app space-directory manifest expire` (UAID, dataspace, epoch) when a manifest reaches its scheduled end-of-life, verify `SpaceDirectoryEvent::ManifestExpired`, archive binding cleanup evidence. | CLI output, event log. |
+| Revoke | Governance + Lane ops | Run `iroha app space-directory manifest revoke` (UAID, dataspace, epoch, reason) **or** POST `/v1/space-directory/manifests/revoke` with the same payload to Torii, verify `SpaceDirectoryEvent::ManifestRevoked`, update evidence bundle. | CLI/Torii receipt, event log, ticket note. |
 | Monitor | SRE/Compliance | Track telemetry + audit logs, set alerts for revocations/expiry. | Grafana screenshot, archived logs. |
 | Rotate/Revoke | Lane ops + Governance | Stage replacement manifest (new epoch), run tabletop, file incident (if revoke). | Rotation ticket, incident postmortem. |
 
@@ -61,12 +61,12 @@ with a checksum manifest to satisfy regulator evidence requests.
 
 ### 3.1 Audit bundle automation
 
-Use `iroha space-directory manifest audit-bundle` to assemble the evidence pack for
+Use `iroha app space-directory manifest audit-bundle` to assemble the evidence pack for
 each capability manifest. The helper accepts either the JSON or Norito payload,
 plus the dataspace profile JSON, and emits a self-contained bundle:
 
 ```bash
-iroha space-directory manifest audit-bundle \
+iroha app space-directory manifest audit-bundle \
   --manifest-json fixtures/space_directory/capability/cbdc_wholesale.manifest.json \
   --profile fixtures/space_directory/profile/cbdc_lane_profile.json \
   --out-dir artifacts/nexus/cbdc/2026-02-01T00-00Z \
@@ -87,12 +87,12 @@ so the regulator packet includes the same bytes the CLI emitted.
 
 Roadmap item NX-16 calls for deterministic manifest/profile scaffolds so
 operators and SDK automation can bootstrap UAID capability bundles without
-hand-editing fixtures. Use `iroha space-directory manifest scaffold` to emit a
+hand-editing fixtures. Use `iroha app space-directory manifest scaffold` to emit a
 pair of JSON templates (manifest + dataspace profile) that already match the
 Space Directory schema and subscribe to the required audit hooks:
 
 ```bash
-iroha space-directory manifest scaffold \
+iroha app space-directory manifest scaffold \
   --uaid uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11 \
   --dataspace 11 \
   --activation-epoch 4097 \
@@ -107,11 +107,11 @@ iroha space-directory manifest scaffold \
   --deny-program cbdc.kit \
   --deny-method withdraw \
   --deny-reason "Withdrawals disabled for this UAID." \
-  --profile-governance-issuer parliament@cbdc \
+  --profile-governance-issuer ih58... \
   --profile-governance-ticket gov-2026-02-rotation \
-  --profile-validator cbdc-validator-1@cbdc \
-  --profile-validator cbdc-validator-2@cbdc \
-  --profile-da-attester da-attester-1@cbdc
+  --profile-validator ih58... \
+  --profile-validator ih58... \
+  --profile-da-attester ih58...
 ```
 
 The command writes `manifest.json` + `profile.json` (defaults to
@@ -202,12 +202,12 @@ that the JSON and Norito payloads remain in lockstep.
 ### 3.2 CLI publish evidence checklist
 
 Publishing manifests directly from the CLI must leave the same audit trail as
-Torii-assisted flows. Before running `iroha space-directory manifest publish`,
+Torii-assisted flows. Before running `iroha app space-directory manifest publish`,
 stage the following evidence:
 
 1. **Encode and hash.** Produce the `.to` payload with
    `cargo xtask space-directory encode` (or the Norito helper embedded in
-   `iroha space-directory manifest encode`) and capture the emitted BLAKE3
+   `iroha app space-directory manifest encode`) and capture the emitted BLAKE3
    digest. Store both outputs under
    `artifacts/nexus/<dataspace>/<timestamp>/manifest/`.
 2. **Command log.** Save the full CLI invocation (arguments, commit hash, and
@@ -251,14 +251,14 @@ manifest change (or during audits) to capture deterministic JSON snapshots:
 
 ```bash
 # Fetch the manifest inventory for a UAID, filtering to active entries
-iroha space-directory manifest fetch \
+iroha app space-directory manifest fetch \
   --uaid uaid:0f4d…ab11 \
   --status active \
   --address-format compressed \
   --json-out artifacts/nexus/cbdc/2026-05-01T00Z/uaid_manifests.json
 
 # Inspect the dataspace bindings and persist the response for auditors
-iroha space-directory bindings fetch \
+iroha app space-directory bindings fetch \
   --uaid uaid:0f4d…ab11 \
   --json-out artifacts/nexus/cbdc/2026-05-01T00Z/uaid_bindings.json
 ```
@@ -330,7 +330,7 @@ canonical `AssetPermissionManifest` JSON:
         "expired_epoch": null,
         "revocation": null
       },
-      "accounts": ["wholesale@cbdc"],
+      "accounts": ["ih58..."],
       "manifest": {
         "version": 1,
         "uaid": "uaid:0f4d…ab11",
@@ -388,7 +388,7 @@ Sample request body:
 
 ```jsonc
 {
-  "authority": "ops@cbdc",
+  "authority": "ih58...",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -445,7 +445,7 @@ Sample JSON body:
 
 ```jsonc
 {
-  "authority": "ops@cbdc",
+  "authority": "ih58...",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
   "dataspace": 11,
@@ -465,7 +465,7 @@ fee-policy gates match the read endpoints.
 Profiles capture everything a new validator needs before connecting. The
 `profile/cbdc_lane_profile.json` fixture documents:
 
-- Governance issuer/quorum (`parliament@cbdc` + evidence ticket ID).
+- Governance issuer/quorum (`ih58...` + evidence ticket ID).
 - Validator set + quorum and protected namespaces (`cbdc`, `gov`).
 - DA profile (class A, attester roster, rotation cadence).
 - Composability group ID and whitelist linking UAIDs to capability manifests.
@@ -498,7 +498,7 @@ paths to point at the relevant capability manifests.
    BLAKE3-256 digest):
 
    ```bash
-   iroha space-directory manifest encode \
+   iroha app space-directory manifest encode \
      --json fixtures/space_directory/capability/cbdc_wholesale.manifest.json \
      --out artifacts/nexus/cbdc/manifest/cbdc_wholesale.manifest.to
    ```
@@ -507,11 +507,11 @@ paths to point at the relevant capability manifests.
 
    ```bash
    # If you already encoded the Norito payload
-   iroha space-directory manifest publish \
+   iroha app space-directory manifest publish \
      --manifest artifacts/nexus/cbdc/manifest/cbdc_wholesale.manifest.to
 
    # Or publish directly from the JSON manifest
-   iroha space-directory manifest publish \
+   iroha app space-directory manifest publish \
      --manifest-json fixtures/space_directory/capability/cbdc_wholesale.manifest.json
    ```
 
@@ -544,7 +544,7 @@ existing manifest before publishing the replacement. Gather the UAID, dataspace,
 and revocation epoch from the manifest catalog, then run:
 
 ```bash
-iroha space-directory manifest revoke \
+iroha app space-directory manifest revoke \
   --uaid uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11 \
   --dataspace 11 \
   --revoked-epoch 4610 \
@@ -574,7 +574,7 @@ Manual CLI expiries are still available when governance needs an override or a
 backfilled lifecycle record:
 
 ```bash
-iroha space-directory manifest expire \
+iroha app space-directory manifest expire \
   --uaid uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11 \
   --dataspace 11 \
   --expired-epoch 4700
@@ -705,8 +705,8 @@ activation_epoch: 4097
 expiry_epoch: 4600
 change_type: activation
 owners:
-  - parliament@cbdc
-  - treasury@cbdc
+  - ih58...
+  - ih58...
 approvals_required: 5
 ---
 
@@ -743,7 +743,7 @@ bundle expectations described earlier in this guide.
 Usage notes:
 
 - Update the `uaid` literals before publishing (the fixtures default to sample
-  UAIDs with the least-significant bit already set). `iroha space-directory
+  UAIDs with the least-significant bit already set). `iroha app space-directory
   manifest encode` and `publish` accept either the raw JSON or the `.to`
   payloads emitted by `cargo xtask space-directory encode`.
 - The fixtures include inline `notes` that spell out policy intent (“Regulator

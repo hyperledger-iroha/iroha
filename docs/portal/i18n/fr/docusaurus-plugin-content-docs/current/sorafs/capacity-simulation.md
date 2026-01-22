@@ -16,7 +16,7 @@ description: Exercer le kit de simulation du marketplace de capacité SF-2c avec
 Cette page reflète `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Gardez les deux copies synchronisées jusqu'à ce que l'ensemble de documentation Sphinx hérité soit entièrement migré.
 :::
 
-Ce runbook explique comment exécuter le kit de simulation du marketplace de capacité SF-2c et visualiser les métriques résultantes. Il valide la négociation de quotas, la gestion du failover et la remédiation du slashing de bout en bout à l'aide des fixtures déterministes dans `docs/examples/sorafs_capacity_simulation/`. Les payloads de capacité utilisent toujours `sorafs_manifest_stub capacity`; utilisez `iroha sorafs toolkit pack` pour les flux d'empaquetage manifest/CAR.
+Ce runbook explique comment exécuter le kit de simulation du marketplace de capacité SF-2c et visualiser les métriques résultantes. Il valide la négociation de quotas, la gestion du failover et la remédiation du slashing de bout en bout à l'aide des fixtures déterministes dans `docs/examples/sorafs_capacity_simulation/`. Les payloads de capacité utilisent toujours `sorafs_manifest_stub capacity`; utilisez `iroha app sorafs toolkit pack` pour les flux d'empaquetage manifest/CAR.
 
 ## 1. Générer les artefacts CLI
 

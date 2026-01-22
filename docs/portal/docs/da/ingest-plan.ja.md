@@ -192,7 +192,7 @@ pub struct DaIngestReceipt {
 
 ## CLI & SDK ツール (DA-8)
 
-- `iroha da submit` (新 CLI エントリポイント) は共有 ingest builder/publisher を
+- `iroha app da submit` (新 CLI エントリポイント) は共有 ingest builder/publisher を
   包装し、Taikai bundle フロー外でも任意 blob を ingest できるようにします。コマンドは
   `crates/iroha_cli/src/commands/da.rs:1` にあり、payload、erasure/retention プロファイル、
   任意の metadata/manifest ファイルを受け取って CLI 設定キーで正規 `DaIngestRequest` を
@@ -205,7 +205,7 @@ pub struct DaIngestReceipt {
   `--endpoint` によるカスタム Torii ホストも可能です。receipt JSON は stdout に出力し
   つつディスクにも保存され、DA-8 の "submit_blob" 要件を満たして SDK パリティを前進
   させます。
-- `iroha da get` は `iroha sorafs fetch` を動かす multi-source orchestrator の DA 向け
+- `iroha app da get` は `iroha app sorafs fetch` を動かす multi-source orchestrator の DA 向け
   エイリアスです。manifest + chunk-plan artefact (`--manifest`, `--plan`, `--manifest-id`)
   を指定するか、Torii storage ticket を `--storage-ticket` で渡せます。ticket パスでは
   `/v1/da/manifests/<ticket>` から manifest を取得し、`artifacts/da/fetch_<timestamp>/`
@@ -215,10 +215,10 @@ pub struct DaIngestReceipt {
   scoreboard export、`--output` パス) はそのまま維持され、`--manifest-endpoint` で
   manifest endpoint を差し替え可能です。これにより end-to-end availability 検証は
   `da` 名前空間内で完結し、orchestrator ロジックの複製が不要になります。
-- `iroha da get-blob` は Torii から `GET /v1/da/manifests/{storage_ticket}` で正規
+- `iroha app da get-blob` は Torii から `GET /v1/da/manifests/{storage_ticket}` で正規
   manifest を直接取得します。`manifest_{ticket}.norito`、`manifest_{ticket}.json`、
   `chunk_plan_{ticket}.json` を `artifacts/da/fetch_<timestamp>/` (または `--output-dir`)
-  に書き込み、続く orchestrator fetch に必要な `iroha da get` コマンド
+  に書き込み、続く orchestrator fetch に必要な `iroha app da get` コマンド
   ( `--manifest-id` 含む ) を表示します。これにより manifest spool ディレクトリを
   直接触らず、Torii 署名 artefact を常に使用できます。JavaScript の Torii クライアントも
   `ToriiClient.getDaManifest(storageTicketHex)` で同じフローを提供し、Norito bytes、
@@ -228,7 +228,7 @@ pub struct DaIngestReceipt {
   ラッパーに bundle を渡して iOS クライアントが manifest 取得、multi-source fetch、
   証明取得を CLI なしで行えるようにしています。
   [IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240][IrohaSwift/Sources/IrohaSwift/SorafsOrchestratorClient.swift:12]
-- `iroha da rent-quote` は指定した storage サイズと retention 期間に対する
+- `iroha app da rent-quote` は指定した storage サイズと retention 期間に対する
   決定論的 rent とインセンティブ内訳を計算します。`DaRentPolicyV1` (JSON/Norito bytes)
   または内蔵デフォルトを読み込み、ポリシーを検証して JSON 要約 (`gib`, `months`,
   ポリシー metadata、`DaRentQuote` の各フィールド) を出力します。これにより監査担当は
@@ -240,11 +240,11 @@ pub struct DaIngestReceipt {
   保ちます。サブコマンドは `crates/iroha_cli/src/commands/da.rs`、ポリシースキーマは
   `docs/source/da/rent_policy.md` を参照してください。
   [crates/iroha_cli/src/commands/da.rs:1][docs/source/da/rent_policy.md:1]
-- `iroha da prove-availability` は一連の処理を連結します。storage ticket を受け取り、
+- `iroha app da prove-availability` は一連の処理を連結します。storage ticket を受け取り、
   正規 manifest bundle を取得し、`--gateway-provider` で multi-source orchestrator
-  (`iroha sorafs fetch`) を実行、取得 payload + scoreboard を
+  (`iroha app sorafs fetch`) を実行、取得 payload + scoreboard を
   `artifacts/da/prove_availability_<timestamp>/` に保存し、既存の PoR helper
-  (`iroha da prove`) を即座に実行します。オペレータは orchestrator knobs
+  (`iroha app da prove`) を即座に実行します。オペレータは orchestrator knobs
   (`--max-peers`, `--scoreboard-out`, manifest endpoint overrides) と proof sampler
   (`--sample-count`, `--leaf-index`, `--sample-seed`) を調整でき、1 回のコマンドで
   DA-5/DA-9 監査に必要な artefact (payload コピー、scoreboard 証拠、JSON 証明サマリ)

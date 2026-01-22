@@ -62,9 +62,9 @@ let filter = SpaceDirectoryEventFilter::new()
 |------|---------------|------|-----------|
 | Draft | Владелец dataspace | Клонировать fixture, отредактировать права/gov, выполнить `cargo test -p iroha_data_model nexus::manifest`. | Diff в Git, лог тестов. |
 | Review | Governance WG | Валидировать JSON manifest’а + Norito‑bytes, подписать журнал решения. | Подписанный протокол, хеш manifest’а (BLAKE3 + Norito `.to`). |
-| Publish | Lane ops | Отправить через CLI (`iroha space-directory manifest publish`) с Norito‑payload’ом `.to` или «сырым» JSON **или** сделать POST на `/v1/space-directory/manifests` с JSON‑manifest’ом + опциональной reason; проверить ответ Torii, зафиксировать `SpaceDirectoryEvent`. | Квитанция CLI/Torii, лог событий. |
-| Expire | Lane ops / Governance | Выполнить `iroha space-directory manifest expire` (UAID, dataspace, epoch) при достижении конца срока; проверить `SpaceDirectoryEvent::ManifestExpired`, заархивировать доказательства очищения bindings. | Вывод CLI, лог событий. |
-| Revoke | Governance + Lane ops | Выполнить `iroha space-directory manifest revoke` (UAID, dataspace, epoch, reason) **или** POST `/v1/space-directory/manifests/revoke` с тем же payload в Torii, проверить `SpaceDirectoryEvent::ManifestRevoked`, обновить комплект доказательств. | Квитанция CLI/Torii, лог событий, заметка в тикете. |
+| Publish | Lane ops | Отправить через CLI (`iroha app space-directory manifest publish`) с Norito‑payload’ом `.to` или «сырым» JSON **или** сделать POST на `/v1/space-directory/manifests` с JSON‑manifest’ом + опциональной reason; проверить ответ Torii, зафиксировать `SpaceDirectoryEvent`. | Квитанция CLI/Torii, лог событий. |
+| Expire | Lane ops / Governance | Выполнить `iroha app space-directory manifest expire` (UAID, dataspace, epoch) при достижении конца срока; проверить `SpaceDirectoryEvent::ManifestExpired`, заархивировать доказательства очищения bindings. | Вывод CLI, лог событий. |
+| Revoke | Governance + Lane ops | Выполнить `iroha app space-directory manifest revoke` (UAID, dataspace, epoch, reason) **или** POST `/v1/space-directory/manifests/revoke` с тем же payload в Torii, проверить `SpaceDirectoryEvent::ManifestRevoked`, обновить комплект доказательств. | Квитанция CLI/Torii, лог событий, заметка в тикете. |
 | Monitor | SRE/Compliance | Отслеживать телеметрию + audit‑логи, настраивать алерты по revocation/expiry. | Скриншот Grafana, архив логов. |
 | Rotate/Revoke | Lane ops + Governance | Подготовить manifest‑замену (новый epoch), провести tabletop, открыть инцидент (при revoke). | Тикет на ротацию, пост‑мортем. |
 
@@ -161,7 +161,7 @@ POST /v1/space-directory/manifests
 
 ```jsonc
 {
-  "authority": "ops@cbdc",
+  "authority": "ih58...",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -217,7 +217,7 @@ POST /v1/space-directory/manifests/revoke
 
 ```jsonc
 {
-  "authority": "ops@cbdc",
+  "authority": "ih58...",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
   "dataspace": 11,
@@ -236,7 +236,7 @@ Torii возвращает `202 Accepted` после постановки тра
 Профили содержат всё необходимое новому валидатору до подключения. Fixture
 `profile/cbdc_lane_profile.json` документирует:
 
-- Эмитента/кворум governance (`parliament@cbdc` + ID тикета с evidence).
+- Эмитента/кворум governance (`ih58...` + ID тикета с evidence).
 - Набор валидаторов + кворум и защищённые namespaces (`cbdc`, `gov`).
 - DA‑профиль (класс A, список подтверждающих лиц, период ротации).
 - ID группы composability и whitelist, связывающий UAID’ы с capability‑manifest’ами.
@@ -269,7 +269,7 @@ whitelist под соответствующие manifests.
    BLAKE3‑256‑digest’ом):
 
    ```bash
-   iroha space-directory manifest encode \
+   iroha app space-directory manifest encode \
      --json fixtures/space_directory/capability/cbdc_wholesale.manifest.json \
      --out artifacts/nexus/cbdc/manifest/cbdc_wholesale.manifest.to
    ```
@@ -278,7 +278,7 @@ whitelist под соответствующие manifests.
 
    ```bash
    # Если manifest уже закодирован в Norito:
-   iroha space-directory manifest publish \
+   iroha app space-directory manifest publish \
      --uaid uaid:0f4d…ab11 \
      --dataspace 11 \
      --payload artifacts/nexus/cbdc/manifest/cbdc_wholesale.manifest.to

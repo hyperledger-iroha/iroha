@@ -68,7 +68,7 @@ ivm_run target/examples/hello.to --args '{}'
 جب آپ کنٹریکٹ سے مطمئن ہوں تو CLI کے ذریعے اسے نوڈ پر ڈپلائے کریں۔ ایک authority اکاؤنٹ، اس کی signing key، اور `.to` فائل یا Base64 payload فراہم کریں:
 
 ```sh
-iroha_cli contracts deploy \
+iroha_cli app contracts deploy \
   --authority ih58... \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -77,19 +77,19 @@ iroha_cli contracts deploy \
 یہ کمانڈ Torii کے ذریعے Norito manifest + bytecode bundle جمع کرتی ہے اور نتیجے میں ٹرانزیکشن کی حیثیت پرنٹ کرتی ہے۔ ٹرانزیکشن commit ہونے کے بعد، جواب میں دکھایا گیا code hash manifests حاصل کرنے یا instances لسٹ کرنے کے لئے استعمال کیا جا سکتا ہے:
 
 ```sh
-iroha_cli contracts manifest --code-hash 0x<hash>
-iroha_cli contracts instances --namespace apps --table
+iroha_cli app contracts manifest get --code-hash 0x<hash>
+iroha_cli app contracts instances --namespace apps --table
 ```
 
 ## 5. Torii کے خلاف چلائیں
 
-bytecode رجسٹر ہونے کے بعد، آپ ایک instruction submit کر کے اسے کال کر سکتے ہیں جو محفوظ شدہ کوڈ کو حوالہ دے (مثلا `iroha_cli transaction submit` یا آپ کے ایپ کلائنٹ کے ذریعے). یقینی بنائیں کہ اکاؤنٹ permissions مطلوبہ syscalls (`set_account_detail`, `transfer_asset`, وغیرہ) کی اجازت دیتے ہیں۔
+bytecode رجسٹر ہونے کے بعد، آپ ایک instruction submit کر کے اسے کال کر سکتے ہیں جو محفوظ شدہ کوڈ کو حوالہ دے (مثلا `iroha_cli ledger transaction submit` یا آپ کے ایپ کلائنٹ کے ذریعے). یقینی بنائیں کہ اکاؤنٹ permissions مطلوبہ syscalls (`set_account_detail`, `transfer_asset`, وغیرہ) کی اجازت دیتے ہیں۔
 
 ## تجاویز اور خرابیوں کا حل
 
 - `make examples-run` استعمال کریں تاکہ فراہم کردہ مثالیں ایک ہی قدم میں کمپائل اور چل سکیں۔ اگر بائنریز `PATH` میں نہیں ہیں تو `KOTO`/`IVM` environment variables کو override کریں۔
 - اگر `koto_compile` ABI ورژن مسترد کرے تو تصدیق کریں کہ کمپائلر اور نوڈ دونوں ABI v1 کو ہدف بنا رہے ہیں (`koto_compile --abi` بغیر دلائل کے چلائیں تاکہ سپورٹ دکھے).
-- CLI hex یا Base64 signing keys قبول کرتا ہے۔ ٹیسٹنگ کے لئے `iroha_cli crypto keypair` سے نکلے ہوئے keys استعمال کیے جا سکتے ہیں۔
+- CLI hex یا Base64 signing keys قبول کرتا ہے۔ ٹیسٹنگ کے لئے `iroha_cli tools crypto keypair` سے نکلے ہوئے keys استعمال کیے جا سکتے ہیں۔
 - Norito payloads کی ڈیبگنگ میں `ivm_tool disassemble` سب کمانڈ مدد کرتی ہے تاکہ ہدایات کو Kotodama سورس سے جوڑا جا سکے۔
 
 یہ فلو CI اور انٹیگریشن ٹیسٹس میں استعمال ہونے والے مراحل کی عکاسی کرتا ہے۔ Kotodama گرامر، syscall mappings اور Norito internals کی مزید تفصیل کے لئے دیکھیں:

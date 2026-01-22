@@ -17,11 +17,11 @@ translation_last_reviewed: 2026-01-01
 1. **Заморозить автоматизацию.** Остановите incentives daemon на каждом orchestrator хосте
    (`systemctl stop soranet-incentives.service` или эквивалентный контейнерный деплой) и подтвердите, что процесс больше не работает.
 2. **Слить ожидающие инструкции.** Запустите
-   `iroha sorafs incentives service daemon --state <state.json> --config <daemon.json> --metrics-dir <spool> --once`
+   `iroha app sorafs incentives service daemon --state <state.json> --config <daemon.json> --metrics-dir <spool> --once`
    чтобы убедиться, что нет незавершенных payout инструкций. Архивируйте полученные Norito payloads для аудита.
 3. **Отозвать governance approval.** Отредактируйте `reward_config.json`, установите
    `"budget_approval_id": null`, и заново разверните конфигурацию через
-   `iroha sorafs incentives service init` (или `update-config` при long-lived daemon). Payout engine теперь fail-closed с
+   `iroha app sorafs incentives service init` (или `update-config` при long-lived daemon). Payout engine теперь fail-closed с
    `MissingBudgetApprovalId`, поэтому daemon отказывается mint payouts, пока не будет восстановлен новый approval hash. Запишите git commit и SHA-256
    измененного конфига в журнал инцидента.
 4. **Уведомить Sora Parliament.** Приложите drained payout ledger, shadow-run report и краткое описание инцидента. В minutes парламента должны быть указаны hash отозванной конфигурации и время остановки daemon.

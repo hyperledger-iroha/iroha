@@ -254,7 +254,7 @@ auditeurs puissent se concentrer sur une seule execution CSV.
   references a des fichiers sont resolues relativement a l'emplacement du CSV.
   Les metadata non-objet produisent une erreur de validation.
 - **Controllers:** les cellules vides respectent `--default-controllers`. Fournissez
-  des listes explicites (par exemple `owner;ops@dao`) quand vous deleguez a des
+  des listes explicites (par exemple `ih58...;ih58...`) quand vous deleguez a des
   acteurs non owner.
 
 Les echecs sont signales avec des numeros de ligne contextuels (par exemple

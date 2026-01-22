@@ -55,7 +55,7 @@ snapshots diverge.
   - Torii admission still rejects SM2 signatures while `sm2` is absent from
     `allowed_signing` and accepts mixed Ed25519/SM2 batches when the list
     includes both algorithms.
-  - `iroha_cli crypto sm2 export …` round-trips key material seeded via the new
+  - `iroha_cli tools crypto sm2 export …` round-trips key material seeded via the new
     defaults.
 - Run the integration smoke scripts that cover SM2 deterministic signatures and
   SM3 hashing to confirm host/VM consistency.

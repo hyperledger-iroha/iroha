@@ -35,7 +35,7 @@ translation_last_reviewed: 2026-01-01
 | Логи | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` (или агрегация логов) | Очистите PII перед обменом. |
 | Проверка fixture | `cargo xtask address-vectors --verify` | Подтверждает, что канонический генератор и коммитнутый JSON совпадают. |
 | Проверка паритета SDK | `python3 scripts/account_fixture_helper.py check --target <path> --metrics-out artifacts/account_fixture/<label>.prom --metrics-label <label>` | Запустите для каждого SDK из алертов/тикетов. |
-| Буфер обмена/IME | `iroha address inspect <literal>` | Выявляет скрытые символы или переписывание IME; см. `address_display_guidelines.md`. |
+| Буфер обмена/IME | `iroha tools address inspect <literal>` | Выявляет скрытые символы или переписывание IME; см. `address_display_guidelines.md`. |
 
 ## Немедленный ответ
 
@@ -54,7 +54,7 @@ translation_last_reviewed: 2026-01-01
 
 ### Регрессии клиентских энкодеров / IME
 
-- Проверьте literals, предоставленные пользователями, через `iroha address inspect` и ищите нулевой join, преобразования kana или обрезанные payloads.
+- Проверьте literals, предоставленные пользователями, через `iroha tools address inspect` и ищите нулевой join, преобразования kana или обрезанные payloads.
 - Сверьте потоки wallet/explorer с `docs/source/sns/address_display_guidelines.md` (двойное копирование, предупреждения, QR helpers), чтобы убедиться в следовании утвержденному UX.
 
 ### Проблемы manifest или реестра
@@ -71,7 +71,7 @@ translation_last_reviewed: 2026-01-01
 | Сценарий | Действия |
 |----------|----------|
 | Дрейф fixture | Пересоздайте `fixtures/account/address_vectors.json`, повторно запустите `cargo xtask address-vectors --verify`, обновите SDK bundles и приложите snapshots `address_fixture.prom` к тикету. |
-| Регрессия SDK/клиента | Откройте issues, ссылаясь на канонический fixture + вывод `iroha address inspect`, и заблокируйте релизы через SDK parity CI (например, `ci/check_address_normalize.sh`). |
+| Регрессия SDK/клиента | Откройте issues, ссылаясь на канонический fixture + вывод `iroha tools address inspect`, и заблокируйте релизы через SDK parity CI (например, `ci/check_address_normalize.sh`). |
 | Злонамеренные отправки | Примените rate-limit или блокировку offending principals, эскалируйте в Governance при необходимости tombstone селекторов. |
 
 После применения мер снова выполните запрос PromQL и убедитесь, что `ERR_CHECKSUM_MISMATCH` остается на нуле (кроме `/tests/*`) минимум 30 минут перед понижением инцидента.

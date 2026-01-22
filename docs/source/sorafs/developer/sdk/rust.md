@@ -198,7 +198,7 @@ while the CLI remains the recommended path for deterministic pipelines.
 ### DA proof artefacts
 
 The Rust client now ships the same proof emitters as the CLI, letting SDKs
-produce PoR artefacts without shelling out to `iroha da prove`. Provide the
+produce PoR artefacts without shelling out to `iroha app da prove`. Provide the
 paths (or labels) that should appear in the JSON so downstream governance
 reports can trace every artefact to its source.
 
@@ -221,7 +221,7 @@ async fn emit_proof(client: &Client, storage_ticket: &str) -> Result<()> {
         "artifacts/da/manifest.to",
         "artifacts/da/payload.car",
     );
-    // Build the JSON structure (matches `iroha da prove --json-out`):
+    // Build the JSON structure (matches `iroha app da prove --json-out`):
     let summary = client.build_da_proof_artifact(
         &bundle,
         &payload_bytes,

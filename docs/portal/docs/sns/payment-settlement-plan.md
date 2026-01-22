@@ -27,7 +27,7 @@ for portal audiences.
 | Component | Purpose | Evidence |
 |-----------|---------|----------|
 | `sns_settlementd` | Applies policy, signs bundles, surfaces `/v1/sns/settlements`. | JSON bundle + hash. |
-| Settlement queue & writer | Idempotent queue + ledger submitter driven by `iroha_cli sns settlement ledger`. | Bundle hash ↔ tx hash manifest. |
+| Settlement queue & writer | Idempotent queue + ledger submitter driven by `iroha_cli app sns settlement ledger`. | Bundle hash ↔ tx hash manifest. |
 | Reconciliation job | Daily diff + monthly statement under `docs/source/sns/reports/`. | Markdown + JSON digest. |
 | Refund desk | Governance-approved refunds via `/settlements/{id}/refund`. | `RefundRecordV1` + ticket. |
 
@@ -35,13 +35,13 @@ CI helpers mirror these flows:
 
 ```bash
 # Quote & ledger projection
-iroha_cli sns settlement quote --selector makoto.sora --term-years 1 --pricing hot-tier-a
+iroha_cli app sns settlement quote --selector makoto.sora --term-years 1 --pricing hot-tier-a
 
 # Emit transfers for automation/pipeline
-iroha_cli sns settlement ledger --bundle artifacts/sns/settlements/2026-05/makoto.sora.json
+iroha_cli app sns settlement ledger --bundle artifacts/sns/settlements/2026-05/makoto.sora.json
 
 # Produce a reconciliation statement
-iroha_cli sns settlement reconcile --period 2026-05 --out docs/source/sns/reports/settlement_202605.md
+iroha_cli app sns settlement reconcile --period 2026-05 --out docs/source/sns/reports/settlement_202605.md
 ```
 
 ## Observability & reporting

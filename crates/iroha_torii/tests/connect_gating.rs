@@ -483,6 +483,12 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             ),
             pacemaker_jitter_frac_permille:
                 iroha_config::parameters::defaults::sumeragi::PACEMAKER_JITTER_FRAC_PERMILLE,
+            pacemaker_active_pending_soft_limit:
+                iroha_config::parameters::defaults::sumeragi::PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT,
+            pacemaker_rbc_backlog_session_soft_limit:
+                iroha_config::parameters::defaults::sumeragi::PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT,
+            pacemaker_rbc_backlog_chunk_soft_limit:
+                iroha_config::parameters::defaults::sumeragi::PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
             adaptive_observability: iroha_config::parameters::actual::AdaptiveObservability::default(),
             enable_bls: iroha_config::parameters::defaults::sumeragi::ENABLE_BLS,
         },

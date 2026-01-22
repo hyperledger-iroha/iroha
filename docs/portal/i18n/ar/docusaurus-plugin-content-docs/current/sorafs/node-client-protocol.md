@@ -120,9 +120,9 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## مساعدات CLI وREST
 
-- `iroha sorafs pin list|show` و`alias list` و`replication list` تغلف نقاط REST
+- `iroha app sorafs pin list|show` و`alias list` و`replication list` تغلف نقاط REST
   الخاصة بسجل pins وتطبع Norito JSON الخام مع كتل attestation لأدلة التدقيق.
-- `iroha sorafs storage pin` و`torii /v1/sorafs/pin/register` يقبلان manifests
+- `iroha app sorafs storage pin` و`torii /v1/sorafs/pin/register` يقبلان manifests
   بنمط Norito أو JSON مع proofs اختيارية للـ alias والـ successor؛ تؤدي proofs
   المشوهة إلى `400`، وتُظهر proofs القديمة `503` مع `Warning: 110`، بينما تعيد
   proofs المنتهية تمامًا `412`.

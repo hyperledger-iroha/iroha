@@ -3,14 +3,14 @@
 use eyre::Result;
 use norito::json::Value;
 
-use crate::RunContext;
+use crate::{CliOutputFormat, RunContext};
 
 use super::commands::{PacemakerArgs, PhasesArgs, TelemetryArgs};
 
-pub(crate) fn pacemaker<C: RunContext>(context: &mut C, args: PacemakerArgs) -> Result<()> {
+pub(crate) fn pacemaker<C: RunContext>(context: &mut C, _args: PacemakerArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_pacemaker_json()?;
-    if args.summary {
+    if matches!(context.output_format(), CliOutputFormat::Text) {
         let backoff = value
             .get("backoff_ms")
             .and_then(norito::json::Value::as_u64)
@@ -47,23 +47,21 @@ pub(crate) fn pacemaker<C: RunContext>(context: &mut C, args: PacemakerArgs) -> 
     }
 }
 
-pub(crate) fn phases<C: RunContext>(context: &mut C, args: PhasesArgs) -> Result<()> {
+pub(crate) fn phases<C: RunContext>(context: &mut C, _args: PhasesArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_phases_json()?;
-    if args.summary {
-        context.println(summarize_phases(&value))
-    } else {
-        context.print_data(&value)
+    match context.output_format() {
+        CliOutputFormat::Text => context.println(summarize_phases(&value)),
+        CliOutputFormat::Json => context.print_data(&value),
     }
 }
 
-pub(crate) fn telemetry<C: RunContext>(context: &mut C, args: TelemetryArgs) -> Result<()> {
+pub(crate) fn telemetry<C: RunContext>(context: &mut C, _args: TelemetryArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_telemetry_json()?;
-    if args.summary {
-        context.println(summarize_telemetry(&value))
-    } else {
-        context.print_data(&value)
+    match context.output_format() {
+        CliOutputFormat::Text => context.println(summarize_telemetry(&value)),
+        CliOutputFormat::Json => context.print_data(&value),
     }
 }
 

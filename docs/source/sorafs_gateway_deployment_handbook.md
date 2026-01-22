@@ -120,7 +120,7 @@ Recommended alerts:
 | Incident | Detection | Immediate Action | Follow-up |
 |----------|-----------|------------------|-----------|
 | Stream token exhaustion | Alert: `rate_limited` denials | Issue new token with higher `max_streams` via `/token`; adjust orchestrator concurrency. | Review client budget; update `torii.sorafs_gateway.stream_tokens.default_max_streams`. |
-| GAR mismatch / provider not admitted | Policy denial metric spikes | Verify admission registry sync; run `iroha_cli sorafs direct-mode status`. | Re-sign manifest/envelope; document in governance log. |
+| GAR mismatch / provider not admitted | Policy denial metric spikes | Verify admission registry sync; run `iroha_cli app sorafs direct-mode status`. | Re-sign manifest/envelope; document in governance log. |
 | TLS automation failure | `X-Sora-TLS-State` transitions to `degraded` | Trigger manual ACME renewal (`sorafs-gateway tls renew`); fall back to stored cert. | File incident report with cert timeline. |
 | Denylist hit / governance takedown | `gateway_policy_denials_total{reason="denylisted"}` | Confirm request metadata, inform governance, block offending provider/alias. | Update denylist documentation; retain logs for compliance. |
 

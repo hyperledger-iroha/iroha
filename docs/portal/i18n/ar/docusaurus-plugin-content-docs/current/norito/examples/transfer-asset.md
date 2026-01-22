@@ -18,7 +18,7 @@ source: examples/transfer/transfer.ko
 
 - موّل Alice بالأصل المستهدف مسبقا (على سبيل المثال عبر المقتطف `register and mint` أو تدفقات البدء السريع للـ SDK).
 - نفّذ نقطة الدخول `do_transfer` لنقل 10 وحدات من Alice إلى Bob مع استيفاء إذن `AssetTransferRole`.
-- استعلم عن الأرصدة (`FindAccountAssets`, `iroha_cli assets list`) أو اشترك في أحداث خط الأنابيب لملاحظة نتيجة النقل.
+- استعلم عن الأرصدة (`FindAccountAssets`, `iroha_cli ledger assets list`) أو اشترك في أحداث خط الأنابيب لملاحظة نتيجة النقل.
 
 ## أدلة SDK ذات صلة
 

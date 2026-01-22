@@ -151,7 +151,7 @@ hors conformite automatiquement.
    emettez un nouveau `ReplicationOrderV1` via les outils de gouvernance decrits
    dans [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md)
    et relancez l'audit jusqu'a convergence du set de replicas. Pour les overrides
-   d'urgence, associez la sortie CLI avec `iroha da prove-availability` afin que
+   d'urgence, associez la sortie CLI avec `iroha app da prove-availability` afin que
    les SREs puissent referencer le meme digest et la preuve PDP.
 
 La couverture de regression vit dans `integration_tests/tests/da/replication_policy.rs`;

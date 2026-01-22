@@ -13,7 +13,7 @@ translation_last_reviewed: 2026-01-01
 
 Este bundle captura os artefatos exigidos pelo Parlamento Sora para aprovar pagamentos automaticos de relay (SNNet-7):
 
-- `reward_config.json` - configuracao do motor de recompensas serializavel Norito, pronta para ingestao por `iroha sorafs incentives service init`. O `budget_approval_id` corresponde ao hash listado nas atas de governance.
+- `reward_config.json` - configuracao do motor de recompensas serializavel Norito, pronta para ingestao por `iroha app sorafs incentives service init`. O `budget_approval_id` corresponde ao hash listado nas atas de governance.
 - `shadow_daemon.json` - mapeamento de beneficiarios e bonds consumido pelo harness de replay (`shadow-run`) e pelo daemon de producao.
 - `economic_analysis.md` - resumo de fairness para a simulacao shadow 2025-10 -> 2025-11.
 - `rollback_plan.md` - playbook operacional para desabilitar pagamentos automaticos.

@@ -2,8 +2,25 @@
 
 Last update: 2026-01-22
 
+- Merge: resolved conflicts in Sumeragi pending-block gating + docs/portal CLI examples (app/tools/ledger updates).
+- Tests: not run (merge conflict resolution).
 - Docs: refreshed account ID/identity references to canonical IH58 across Torii/SDK/finance/SoraFS/SNS docs, portal snippets, and OpenAPI relay account descriptions; updated Java recipe code to avoid `@domain` parsing.
 - Tests: not run (docs/sample edits only).
+- Config: added pacemaker backpressure soft-limit defaults to the Kiso and Torii connect-gating Sumeragi config literals.
+- Tests: not run (config literal updates only).
+- CLI: fixed `version` output borrow by precomputing localized strings and added a text-mode unit test with a stubbed server version.
+- Tests: not run (CLI borrow fix + unit test only).
+- Consensus telemetry: added `sumeragi_proposal_gap_total` counter and docs/tests; increments on missing-proposal view-change rotations.
+- Build: `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target-localnet22 cargo build --release -p iroha_kagami -p iroha_cli -p irohad` (ok).
+- Localnet (NPoS, 7 peers, 753ms, exit_teu=15060): `/private/tmp/iroha-localnet-7peer-run147` (24580/25500). 100 TPS for 240s with 1s `/metrics` sampling → height 53, avg slot 6.29s (latest 25553ms), `view_change_install_total=5`, `proposal_gap_total=2`; pending blocks/inflight mostly 0/1. Metrics: `metrics_peer0_sample_run147.txt`.
+- Localnet (permissioned, 7 peers, 753ms, exit_teu=15060): `/private/tmp/iroha-localnet-7peer-run148` (24580/25500). 100 TPS for 240s with 1s `/metrics` sampling → height 69, avg slot 4.37s (latest 2721ms), `view_change_install_total=0`, `proposal_gap_total=0`; pending blocks/inflight mostly 0/1. Metrics: `metrics_peer0_sample_run148.txt`.
+- Localnet (NPoS, `rbc_payload_chunks_per_tick=256`): `/private/tmp/iroha-localnet-7peer-run149` (24580/25500). 100 TPS for 240s → height 72, avg slot 4.88s (latest 9330ms), `view_change_install_total=4`, `proposal_gap_total=0`; pending blocks max 4. Metrics: `metrics_peer0_sample_run149.txt`.
+- Localnet (permissioned, `rbc_payload_chunks_per_tick=256`): `/private/tmp/iroha-localnet-7peer-run150` (24580/25500). 100 TPS for 240s → height 65, avg slot 5.06s (latest 13481ms), `view_change_install_total=1`, `proposal_gap_total=0`. Metrics: `metrics_peer0_sample_run150.txt`.
+- Build: `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target-localnet22 cargo build --release -p iroha_kagami` (ok).
+- Localnet (NPoS, 7 peers, 753ms, exit_teu=15060, NPoS params block_time_ms=753, `rbc_payload_chunks_per_tick=256`, consensus_future_* 32): `/private/tmp/iroha-localnet-7peer-run151` (24580/25500). 100 TPS for 240s → height 65, avg slot 5.68s (latest 5966ms), `view_change_install_total=11`, `proposal_gap_total=1`, `txs_accepted=23870`; pending blocks max 4/inflight max 1. Metrics: `metrics_peer0_sample_run151.txt`.
+- Localnet (permissioned, 7 peers, 753ms, commit_time_ms=300, `rbc_payload_chunks_per_tick=256`, consensus_future_* 32): `/private/tmp/iroha-localnet-7peer-run152` (24680/25600). 100 TPS for 240s → height 33, avg slot 10.69s (latest 27443ms), `view_change_install_total=18`, `proposal_gap_total=0`, `txs_accepted=10287`; pending blocks max 4 (blocking max 3)/inflight max 1. Metrics: `metrics_peer0_sample_run152.txt`.
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Tests: not run (telemetry addition + localnet reruns).
 - Norito RPC fixtures: added explicit payload specs for transaction fixtures, regenerated canonical `.norito` payloads/manifests, and re-synced Android/Swift/Python fixture bundles.
 - Tests: `cargo test -p connect_norito_bridge -- --nocapture` (ok).
 - Tests: `cargo run --manifest-path xtask/Cargo.toml --bin xtask -- norito-rpc-verify` (ok).
@@ -69,7 +86,7 @@ Last update: 2026-01-22
 - Pacemaker: pending-block backpressure now lifts after min(block_time, commit_time) when no votes/QCs arrive, allowing proposals before quorum-timeout; the same fast path is applied to quorum reschedule gating, with unit coverage and pacemaker docs updated.
 - Localnet: NPoS 1 Hz / 100-block soak rerun on `/tmp/iroha-localnet-npos-1hz-run2` (ports 48080/53337); 100x1 Hz `transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `/tmp/iroha-localnet-npos-1hz-run2/status-1hz-20260121T192416Z.jsonl` (ping log `/tmp/iroha-localnet-npos-1hz-run2/ping-1hz-20260121T192416Z.log`). `commit_qc.height` 27->39 (+12 over 118s, ~0.10 blocks/s); `view_change_install_total` +3 (`stake_quorum_timeout_total` +2); pending RBC max 1040 bytes / 1 session (cap 8 MiB / 256), `rbc_store.pressure_level=0`.
 - Tests: `cargo test -p iroha_core pacemaker_backpressure -- --nocapture` (pass; warnings about `unexpected_cfgs` from norito derive macros).
-- Tests: `cargo test -p iroha_core proposal_backpressure_allows_fast_path_without_votes -- --nocapture` failed to compile `build-support` due to vergen-lib version mismatch (`vergen::feature::cargo::Cargo` vs `vergen_lib::entries::Add`).
+- Tests: `cargo test -p iroha_core proposal_backpressure_allows_fast_path_without_votes -- --nocapture` (pass).
 - Triggers: `submit_instruction_and_wait` now uses `submit_blocking` with the network sync timeout to avoid racing trigger registration/execution.
 - Tests: `IROHA_TEST_NETWORK_PARALLELISM=1 CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target cargo test -p integration_tests --test mod call_execute_trigger -- --nocapture` (ok).
 - Tests: `IROHA_TEST_NETWORK_PARALLELISM=1 CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target cargo test -p integration_tests --test mod -- --nocapture --test-threads=1` (timed out after 2h; last observed running `triggers::time_trigger::time_trigger_scenarios`).
@@ -113,6 +130,11 @@ Last update: 2026-01-22
 - Docs/i18n: replaced `docs/source/mochi/packaging.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
 - Docs/i18n: replaced `docs/source/mochi/index.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
 - Docs/i18n: replaced `docs/source/mochi/quickstart.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/mochi/troubleshooting.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/benchmarks/history.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/agents.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/agents/missing_docs_inventory.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/agents/env_var_migration.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
 - SoraFS repair governance policy now enforces approval quorum/minimum voters, dispute/appeal windows, tie-break rules, and penalty caps; added approval/policy Norito payloads, capped scheduler draft penalties, updated CLI slash proposals to require approval summaries, and refreshed repair plan + node client protocol docs (portal mirror included).
 - Tests: not run (repair escalation policy + docs updates only).
 - SoraFS retention precedence now resolves effective retention as the minimum of pin policy, deal end, and governance cap metadata, persists `RetentionSourceV1` + access counters in storage metadata/index, and GC capacity sweeps evict expired manifests by LRU; CLI GC output adds `retention_sources`, docs updated (ops playbook, node client protocol, architecture RFC + portal mirror).

@@ -71,7 +71,7 @@ ivm_run target/examples/hello.to --args '{}'
 כשאתם מרוצים מהחוזה, פרסו אותו לצומת באמצעות CLI. ספקו חשבון סמכות, מפתח החתימה שלו, וקובץ `.to` או payload ב-Base64:
 
 ```sh
-iroha_cli contracts deploy \
+iroha_cli app contracts deploy \
   --authority ih58... \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -80,19 +80,19 @@ iroha_cli contracts deploy \
 הפקודה שולחת bundle של manifest Norito + בייטקוד דרך Torii ומדפיסה את סטטוס העסקה. לאחר שהעסקה נחתמת בבלוק, ניתן להשתמש ב-hash הקוד שמופיע בתגובה כדי לשלוף manifests או להציג רשימת instances:
 
 ```sh
-iroha_cli contracts manifest --code-hash 0x<hash>
-iroha_cli contracts instances --namespace apps --table
+iroha_cli app contracts manifest get --code-hash 0x<hash>
+iroha_cli app contracts instances --namespace apps --table
 ```
 
 ## 5. הרצה מול Torii
 
-לאחר רישום הבייטקוד, אפשר לקרוא לו על ידי שליחת instruction שמפנה לקוד המאוחסן (למשל דרך `iroha_cli transaction submit` או הלקוח האפליקטיבי שלכם). ודאו שהרשאות החשבון מאפשרות את ה-syscalls הרצויים (`set_account_detail`, `transfer_asset`, וכו').
+לאחר רישום הבייטקוד, אפשר לקרוא לו על ידי שליחת instruction שמפנה לקוד המאוחסן (למשל דרך `iroha_cli ledger transaction submit` או הלקוח האפליקטיבי שלכם). ודאו שהרשאות החשבון מאפשרות את ה-syscalls הרצויים (`set_account_detail`, `transfer_asset`, וכו').
 
 ## טיפים ופתרון תקלות
 
 - השתמשו ב-`make examples-run` כדי לקמפל ולהריץ את הדוגמאות במכה אחת. דרסו את משתני הסביבה `KOTO`/`IVM` אם הבינארים אינם ב-`PATH`.
 - אם `koto_compile` דוחה את גרסת ה-ABI, בדקו שהקומפיילר והצומת מכוונים ל-ABI v1 (הריצו `koto_compile --abi` ללא ארגומנטים כדי לראות תמיכה).
-- ה-CLI מקבל מפתחות חתימה ב-hex או Base64. לצורך בדיקות אפשר להשתמש במפתחות שמופקים ב-`iroha_cli crypto keypair`.
+- ה-CLI מקבל מפתחות חתימה ב-hex או Base64. לצורך בדיקות אפשר להשתמש במפתחות שמופקים ב-`iroha_cli tools crypto keypair`.
 - בעת ניפוי תקלות ב-payloads של Norito, תת-פקודת `ivm_tool disassemble` מסייעת לקשור את ההוראות לקוד המקור של Kotodama.
 
 הזרימה הזו משקפת את השלבים שמשמשים ב-CI ובבדיקות אינטגרציה. להעמקה בדקדוק Kotodama, מיפוי syscalls ופרטי Norito, ראו:

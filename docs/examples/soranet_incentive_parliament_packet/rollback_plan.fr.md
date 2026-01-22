@@ -17,11 +17,11 @@ demande un halt ou si les guardrails de telemetrie se declenchent.
 1. **Geler l'automatisation.** Arretez le daemon d'incentives sur chaque host orchestrator
    (`systemctl stop soranet-incentives.service` ou l'equivalent container) et confirmez que le processus ne tourne plus.
 2. **Drenner les instructions en attente.** Executez
-   `iroha sorafs incentives service daemon --state <state.json> --config <daemon.json> --metrics-dir <spool> --once`
+   `iroha app sorafs incentives service daemon --state <state.json> --config <daemon.json> --metrics-dir <spool> --once`
    pour garantir qu'il n'y a pas d'instructions de payout en attente. Archivez les payloads Norito resultants pour audit.
 3. **Revoquer l'approbation governance.** Editez `reward_config.json`, mettez
    `"budget_approval_id": null`, puis redeployez la configuration via
-   `iroha sorafs incentives service init` (ou `update-config` si un daemon long-terme tourne). Le moteur de payout echoue maintenant en ferme avec
+   `iroha app sorafs incentives service init` (ou `update-config` si un daemon long-terme tourne). Le moteur de payout echoue maintenant en ferme avec
    `MissingBudgetApprovalId`, donc le daemon refuse de minter des payouts tant qu'un nouveau hash d'approbation n'est pas restaure. Enregistrez le commit git et le SHA-256 de la config modifiee dans le log d'incident.
 4. **Notifier le Parlement Sora.** Joignez le ledger de payouts draine, le rapport shadow-run et un resume court de l'incident. Les minutes du Parlement doivent noter le hash de la configuration revoquee et l'heure d'arret du daemon.
 5. **Validation rollback.** Gardez le daemon desactive jusqu'a:

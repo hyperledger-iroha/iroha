@@ -18,7 +18,7 @@ source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 
 - موّل سلطة العقد (مثلا `ih58...`) بالأصل الذي ستنقله وامنح السلطة دور `CanTransfer` أو إذنا مكافئا.
 - استدعِ نقطة الدخول `call_transfer_asset` لنقل 5 وحدات من حساب العقد إلى `ih58...`، بما يعكس طريقة تغليف الأتمتة على السلسلة لنداءات المضيف.
-- تحقق من الأرصدة عبر `FindAccountAssets` أو `iroha_cli assets list --account ih58...` وافحص الأحداث لتأكيد أن حارس بيانات التعريف سجل سياق النقل.
+- تحقق من الأرصدة عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account ih58...` وافحص الأحداث لتأكيد أن حارس بيانات التعريف سجل سياق النقل.
 
 ## أدلة SDK ذات صلة
 

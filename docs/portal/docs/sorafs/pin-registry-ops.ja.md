@@ -127,10 +127,10 @@ groups:
    - SLA miss が増加し backlog が低い場合は、providers の性能 (PoR 失敗、遅延完了) に注力。
    - backlog が増えて miss が安定している場合は、`/v1/sorafs/pin/*` の admission を確認し、評議会承認待ちの manifests を特定。
 2. **providers の状態を検証**
-   - `iroha sorafs providers list` を実行し、広告された能力が複製要件を満たすことを確認。
+   - `iroha app sorafs providers list` を実行し、広告された能力が複製要件を満たすことを確認。
    - `torii_sorafs_capacity_*` のゲージで provisioned GiB と PoR 成功を確認。
 3. **複製の再割り当て**
-   - backlog の余裕 (`stat="avg"`) が 5 エポック未満になったら `sorafs_manifest_stub capacity replication-order` で新しいオーダーを発行 (manifest/CAR のパッケージングは `iroha sorafs toolkit pack`)。
+   - backlog の余裕 (`stat="avg"`) が 5 エポック未満になったら `sorafs_manifest_stub capacity replication-order` で新しいオーダーを発行 (manifest/CAR のパッケージングは `iroha app sorafs toolkit pack`)。
    - alias にアクティブな manifest bindings がない場合 ( `torii_sorafs_registry_aliases_total` の予期せぬ低下) はガバナンスに通知。
 4. **結果を記録**
    - SoraFS オペレーションログに、タイムスタンプと影響を受けた manifest digest を記録。

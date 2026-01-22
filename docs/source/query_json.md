@@ -4,7 +4,7 @@ Iroha exposes a Norito-based `/query` endpoint that accepts signed frames. For
 interactive tooling (CLI, scripting) it is convenient to author the request as
 JSON and let the tooling convert it into a signed `SignedQuery`. The
 `iroha_data_model::query::json` module defines the canonical envelope used by
-`iroha_cli query stdin` and other utilities.
+`iroha_cli ledger query stdin` and other utilities.
 
 ## Envelope shape
 

@@ -148,7 +148,7 @@ Torii חושף שלושה endpoints:
 - `DaCommitmentProof` אורז את הרשומה היעד עם וקטור של `(sibling_hash, position)`
   כדי שמאמתים יוכלו לשחזר את השורש. ההוכחות כוללות גם hash בלוק וכותרת חתומה
   כדי שלקוחות קלים יאמתו finality.
-- helpers של CLI (`iroha_cli da prove-commitment`) עוטפים את מחזור הבקשה/אימות
+- helpers של CLI (`iroha_cli app da prove-commitment`) עוטפים את מחזור הבקשה/אימות
   ומציגים פלטים Norito/hex עבור מפעילים.
 
 ## 5. Storage ואינדוקס
@@ -184,7 +184,7 @@ Torii חושף שלושה endpoints:
 |-------|-------------|---------------|
 | P0 - Data model merge | שילוב `DaCommitmentRecord`, עדכוני כותרת בלוק וקודקים Norito. | `cargo test -p iroha_data_model` ירוק עם fixtures חדשים. |
 | P1 - Core/WSV wiring | חיווט לוגיקת תור + block builder, שמירת indexes וחשיפת handlers של RPC. | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` עוברים עם assertions של bundle proof. |
-| P2 - Operator tooling | שחרור helpers של CLI, דשבורד Grafana ועדכוני docs לאימות proofs. | `iroha_cli da prove-commitment` עובד מול devnet; הדשבורד מציג נתונים חיים. |
+| P2 - Operator tooling | שחרור helpers של CLI, דשבורד Grafana ועדכוני docs לאימות proofs. | `iroha_cli app da prove-commitment` עובד מול devnet; הדשבורד מציג נתונים חיים. |
 | P3 - Governance gate | הפעלת מאמת בלוקים שמחייב commitments של DA ב-lanes המסומנות ב-`iroha_config::nexus`. | עדכון status + roadmap מסמנים את DA-3 כשלם. |
 
 ## שאלות פתוחות

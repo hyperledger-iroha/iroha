@@ -148,7 +148,7 @@ handlers بجانب endpoints ingest الحالية لDA لاعادة استخد
 - يحزم `DaCommitmentProof` السجل المستهدف مع متجه من `(sibling_hash, position)`
   لكي يعيد المدققون بناء الجذر. تتضمن البراهين ايضا hash الكتلة والترويسة
   الموقعة حتى يتمكن العملاء الخفيفون من التحقق من finality.
-- تساعد اوامر CLI (`iroha_cli da prove-commitment`) على تنفيذ دورة طلب/تحقق
+- تساعد اوامر CLI (`iroha_cli app da prove-commitment`) على تنفيذ دورة طلب/تحقق
   البراهين وتعرض مخارج Norito/hex للمشغلين.
 
 ## 5. التخزين والفهرسة
@@ -184,7 +184,7 @@ handlers بجانب endpoints ingest الحالية لDA لاعادة استخد
 |---------|-------|--------------|
 | P0 - دمج نموذج البيانات | دمج `DaCommitmentRecord` وتحديثات ترويسة الكتلة وكودكات Norito. | `cargo test -p iroha_data_model` ينجح مع fixtures جديدة. |
 | P1 - توصيل Core/WSV | تمرير منطق الطابور + block builder، وحفظ الفهارس، وكشف handlers RPC. | `cargo test -p iroha_core` و `integration_tests/tests/da/commitments.rs` ينجحان مع اثباتات bundle proof. |
-| P2 - ادوات المشغلين | شحن helpers للـ CLI ولوحة Grafana وتحديثات توثيق تحقق proof. | `iroha_cli da prove-commitment` يعمل على devnet؛ اللوحة تعرض بيانات حية. |
+| P2 - ادوات المشغلين | شحن helpers للـ CLI ولوحة Grafana وتحديثات توثيق تحقق proof. | `iroha_cli app da prove-commitment` يعمل على devnet؛ اللوحة تعرض بيانات حية. |
 | P3 - بوابة الحوكمة | تفعيل مدقق الكتل الذي يفرض تعهدات DA على lanes المحددة في `iroha_config::nexus`. | تحديث status وroadmap يشيران الى اكتمال DA-3. |
 
 ## اسئلة مفتوحة

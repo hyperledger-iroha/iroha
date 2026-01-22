@@ -76,7 +76,7 @@ O script produz tres artefatos dentro do `--output-dir` (por padrao o diretorio 
 1. `<slug>.manifest.json` - manifest de lane contendo o quorum de validadores, namespaces protegidos e metadados opcionais do hook de runtime-upgrade.
 2. `<slug>.catalog.toml` - um snippet TOML com `[[nexus.lane_catalog]]`, `[[nexus.dataspace_catalog]]` e quaisquer regras de roteamento solicitadas. Garanta que `fault_tolerance` esteja definido na entrada de dataspace para dimensionar o comite de lane-relay (`3f+1`).
 3. `<slug>.summary.json` - resumo de auditoria descrevendo a geometria (slug, segmentos, metadados) mais os passos de rollout requeridos e o comando exato de `cargo xtask space-directory encode` (em `space_directory_encode.command`). Anexe esse JSON ao ticket de onboarding como evidencia.
-4. `<slug>.manifest.to` - emitido quando `--encode-space-directory` esta habilitado; pronto para o fluxo `iroha space-directory manifest publish` do Torii.
+4. `<slug>.manifest.to` - emitido quando `--encode-space-directory` esta habilitado; pronto para o fluxo `iroha app space-directory manifest publish` do Torii.
 
 Use `--dry-run` para visualizar os JSON/snippets sem gravar arquivos e `--force` para sobrescrever artefatos existentes.
 
@@ -84,7 +84,7 @@ Use `--dry-run` para visualizar os JSON/snippets sem gravar arquivos e `--force`
 
 1. Copie o manifest JSON para o `nexus.registry.manifest_directory` configurado (e para o cache directory se o registry espelha bundles remotos). Comite o arquivo se manifests sao versionados no seu repositorio de configuracao.
 2. Anexe o snippet de catalogo em `config/config.toml` (ou no `config.d/*.toml` apropriado). Garanta que `nexus.lane_count` seja pelo menos `lane_id + 1` e atualize quaisquer `nexus.routing_policy.rules` que devam apontar para o novo lane.
-3. Encode (se voce pulou `--encode-space-directory`) e publique o manifest no Space Directory usando o comando capturado no summary (`space_directory_encode.command`). Isso produz o payload `.manifest.to` que o Torii espera e registra evidencia para auditores; envie via `iroha space-directory manifest publish`.
+3. Encode (se voce pulou `--encode-space-directory`) e publique o manifest no Space Directory usando o comando capturado no summary (`space_directory_encode.command`). Isso produz o payload `.manifest.to` que o Torii espera e registra evidencia para auditores; envie via `iroha app space-directory manifest publish`.
 4. Execute `irohad --sora --config path/to/config.toml --trace-config` e arquive a saida do trace no ticket de rollout. Isso prova que a nova geometria corresponde ao slug/segmentos de Kura gerados.
 5. Reinicie os validadores atribuidos ao lane quando as mudancas de manifest/catalogo estiverem implantadas. Mantenha o summary JSON no ticket para auditorias futuras.
 

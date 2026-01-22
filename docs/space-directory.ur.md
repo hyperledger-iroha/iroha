@@ -64,9 +64,9 @@ let filter = SpaceDirectoryEventFilter::new()
 |-----|----------|---------|-----------------|
 | Draft | Dataspace مالک | fixture کو کلون کریں، allowances/gov میں ترمیم کریں، `cargo test -p iroha_data_model nexus::manifest` چلائیں۔ | Git diff، test log۔ |
 | Review | Governance WG | manifest JSON + Norito bytes کو validate کریں، decision log پر دستخط کریں۔ | دستخط شدہ minutes، manifest hash (BLAKE3 + Norito `.to`)۔ |
-| Publish | Lane ops | CLI (`iroha space-directory manifest publish`) کے ذریعے publish کریں، Norito `.to` payload یا raw JSON استعمال کرتے ہوئے **یا** Torii پر `/v1/space-directory/manifests` POST کریں، Torii رسپانس verify کریں، اور `SpaceDirectoryEvent` capture کریں۔ | CLI/Torii receipt، event log۔ |
-| Expire | Lane ops / گورننس | جب manifest طے شدہ end‑of‑life پر پہنچ جائے تو `iroha space-directory manifest expire` (UAID، dataspace، epoch) چلائیں، `SpaceDirectoryEvent::ManifestExpired` کو verify کریں، bindings cleanup کے شواہد آرکائیو کریں۔ | CLI آؤٹ پٹ، event log۔ |
-| Revoke | گورننس + Lane ops | `iroha space-directory manifest revoke` (UAID، dataspace، epoch، reason) چلائیں **یا** Torii پر `/v1/space-directory/manifests/revoke` POST کریں، `SpaceDirectoryEvent::ManifestRevoked` verify کریں، اور evidence bundle اپ ڈیٹ کریں۔ | CLI/Torii receipt، event log، ٹکٹ نوٹ۔ |
+| Publish | Lane ops | CLI (`iroha app space-directory manifest publish`) کے ذریعے publish کریں، Norito `.to` payload یا raw JSON استعمال کرتے ہوئے **یا** Torii پر `/v1/space-directory/manifests` POST کریں، Torii رسپانس verify کریں، اور `SpaceDirectoryEvent` capture کریں۔ | CLI/Torii receipt، event log۔ |
+| Expire | Lane ops / گورننس | جب manifest طے شدہ end‑of‑life پر پہنچ جائے تو `iroha app space-directory manifest expire` (UAID، dataspace، epoch) چلائیں، `SpaceDirectoryEvent::ManifestExpired` کو verify کریں، bindings cleanup کے شواہد آرکائیو کریں۔ | CLI آؤٹ پٹ، event log۔ |
+| Revoke | گورننس + Lane ops | `iroha app space-directory manifest revoke` (UAID، dataspace، epoch، reason) چلائیں **یا** Torii پر `/v1/space-directory/manifests/revoke` POST کریں، `SpaceDirectoryEvent::ManifestRevoked` verify کریں، اور evidence bundle اپ ڈیٹ کریں۔ | CLI/Torii receipt، event log، ٹکٹ نوٹ۔ |
 | Monitor | SRE/Compliance | telemetry + audit logs مانیٹر کریں، revocations/expiry کے لیے alerts سیٹ کریں۔ | Grafana اسکرین شاٹ، archived logs۔ |
 | Rotate/Revoke | Lane ops + گورننس | replacement manifest (نیا epoch) تیار کریں، tabletop exercise کریں، اور revoke کی صورت میں incident فائل کریں۔ | rotation ticket، incident post‑mortem۔ |
 
@@ -165,7 +165,7 @@ JSON باڈی کی مثال:
 
 ```jsonc
 {
-  "authority": "ops@cbdc",
+  "authority": "ih58...",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -223,7 +223,7 @@ JSON باڈی کی مثال:
 
 ```jsonc
 {
-  "authority": "ops@cbdc",
+  "authority": "ih58...",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
   "dataspace": 11,
@@ -244,7 +244,7 @@ revoked اسٹیٹ ظاہر کریں گے۔ CIDR اور fee‑policy gates، rea
 کنیکٹ ہونے سے پہلے ضرورت ہوتی ہے۔ `profile/cbdc_lane_profile.json` fixture درج ذیل
 باتیں دستاویزی شکل میں رکھتا ہے:
 
-- گورننس issuer/quorum (`parliament@cbdc` + evidence ticket ID)۔
+- گورننس issuer/quorum (`ih58...` + evidence ticket ID)۔
 - validators کا سیٹ + quorum اور محفوظ namespaces (`cbdc`, `gov`)۔
 - DA پروفائل (کلاس A، attesters کی فہرست، rotation cadence)۔
 - composability group ID اور whitelist جو UAIDs کو capability manifests سے جوڑتی ہے۔
@@ -277,7 +277,7 @@ whitelist paths کو متعلقہ capability manifests کی طرف اشارہ ک
    لکھے گا):
 
    ```bash
-   iroha space-directory manifest encode \
+   iroha app space-directory manifest encode \
      --json fixtures/space_directory/capability/cbdc_wholesale.manifest.json \
      --out artifacts/nexus/cbdc/manifest/cbdc_wholesale.manifest.to
    ```
@@ -286,7 +286,7 @@ whitelist paths کو متعلقہ capability manifests کی طرف اشارہ ک
 
    ```bash
    # اگر آپ نے manifest کو پہلے ہی Norito میں encode کر لیا ہے:
-   iroha space-directory manifest publish \
+   iroha app space-directory manifest publish \
      --uaid uaid:0f4d…ab11 \
      --dataspace 11 \
      --payload artifacts/nexus/cbdc/manifest/cbdc_wholesale.manifest.to

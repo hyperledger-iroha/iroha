@@ -32,7 +32,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | السجلات | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` (او تجميع السجلات) | نظف PII قبل المشاركة. |
 | تحقق fixture | `cargo xtask address-vectors --verify` | يؤكد ان المولد القياسي و JSON الملتزم متطابقان. |
 | فحص تكافؤ SDK | `python3 scripts/account_fixture_helper.py check --target <path> --metrics-out artifacts/account_fixture/<label>.prom --metrics-label <label>` | شغل لكل SDK مذكور في التنبيهات/التذاكر. |
-| سلامة الحافظة/IME | `iroha address inspect <literal>` | يكشف المحارف المخفية او اعادة كتابة IME؛ استشهد بـ `address_display_guidelines.md`. |
+| سلامة الحافظة/IME | `iroha tools address inspect <literal>` | يكشف المحارف المخفية او اعادة كتابة IME؛ استشهد بـ `address_display_guidelines.md`. |
 
 ## الاستجابة الفورية
 
@@ -51,7 +51,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ### تراجعات ترميز العميل / IME
 
-- افحص القيم التي قدمها المستخدمون عبر `iroha address inspect` للعثور على joins بعرض صفري او تحويلات kana او payloads مبتورة.
+- افحص القيم التي قدمها المستخدمون عبر `iroha tools address inspect` للعثور على joins بعرض صفري او تحويلات kana او payloads مبتورة.
 - طابق تدفقات wallet/explorer مع `docs/source/sns/address_display_guidelines.md` (اهداف النسخ المزدوج، التحذيرات، مساعدات QR) للتاكد من انها تتبع UX المعتمدة.
 
 ### مشاكل manifest او السجل
@@ -69,7 +69,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | السيناريو | الاجراءات |
 |-----------|-----------|
 | انحراف fixture | اعد توليد `fixtures/account/address_vectors.json`, اعد تشغيل `cargo xtask address-vectors --verify`, حدث حزم SDK, وارفق لقطات `address_fixture.prom` بالتذكرة. |
-| تراجع SDK/عميل | افتح قضايا تشير الى fixture القياسي + خرج `iroha address inspect`, وامنع الاصدارات عبر CI تكافؤ SDK (مثل `ci/check_address_normalize.sh`). |
+| تراجع SDK/عميل | افتح قضايا تشير الى fixture القياسي + خرج `iroha tools address inspect`, وامنع الاصدارات عبر CI تكافؤ SDK (مثل `ci/check_address_normalize.sh`). |
 | ارساليات خبيثة | طبق rate-limit او احظر principals المخالفين، وصعد الى Governance اذا تطلب الامر tombstone للمحددات. |
 
 بعد تطبيق التخفيفات، اعد تشغيل استعلام PromQL اعلاه لتاكيد ان `ERR_CHECKSUM_MISMATCH` يبقى عند الصفر (باستثناء `/tests/*`) لمدة 30 دقيقة على الاقل قبل خفض الحادث.

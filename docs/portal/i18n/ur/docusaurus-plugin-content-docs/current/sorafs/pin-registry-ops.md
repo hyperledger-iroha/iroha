@@ -118,10 +118,10 @@ groups:
    - اگر SLA misses بڑھیں اور backlog کم رہے تو providers کارکردگی پر توجہ دیں (PoR failures، late completions)۔
    - اگر backlog بڑھے اور misses مستحکم ہوں تو admission (`/v1/sorafs/pin/*`) چیک کریں تاکہ manifests جو کونسل کی منظوری کے منتظر ہیں واضح ہوں۔
 2. **Providers کی حالت کی توثیق**
-   - `iroha sorafs providers list` چلائیں اور دیکھیں کہ اعلان کردہ صلاحیتیں replication تقاضوں سے میل کھاتی ہیں۔
+   - `iroha app sorafs providers list` چلائیں اور دیکھیں کہ اعلان کردہ صلاحیتیں replication تقاضوں سے میل کھاتی ہیں۔
    - `torii_sorafs_capacity_*` gauges چیک کریں تاکہ provisioned GiB اور PoR success کی تصدیق ہو۔
 3. **Replication کی reassign**
-   - جب backlog slack (`stat="avg"`) 5 epochs سے نیچے جائے تو `sorafs_manifest_stub capacity replication-order` کے ذریعے نئے orders جاری کریں (manifest/CAR packaging `iroha sorafs toolkit pack` استعمال کرتا ہے)۔
+   - جب backlog slack (`stat="avg"`) 5 epochs سے نیچے جائے تو `sorafs_manifest_stub capacity replication-order` کے ذریعے نئے orders جاری کریں (manifest/CAR packaging `iroha app sorafs toolkit pack` استعمال کرتا ہے)۔
    - اگر aliases کے پاس فعال manifest bindings نہ ہوں تو governance کو مطلع کریں (`torii_sorafs_registry_aliases_total` میں غیر متوقع کمی)۔
 4. **نتیجہ دستاویزی بنائیں**
    - SoraFS operations log میں timestamps اور متاثرہ manifest digests کے ساتھ incident notes درج کریں۔

@@ -45,7 +45,7 @@ description: الإعدادات المطلوبة وفحوصات الامتثال
 
 حمّل JSON عبر `sorafs_cli fetch --config` (الأتمتة) أو ربط SDK (`config_from_json`) قبل عرض السياسة على المشغلين. احتفظ بمخرجات الـ scoreboard (`persist_path`) لمسارات التدقيق.
 
-تُلتقط مفاتيح الإنفاذ على جانب الـ gateway في `docs/examples/sorafs_gateway_direct_mode.toml`. يعكس القالب مخرجات `iroha sorafs gateway direct-mode enable`، مع تعطيل فحوصات envelope/admission، وتوصيل إعدادات rate-limit الافتراضية، وتعبئة جدول `direct_mode` بأسماء المضيفين المشتقة من الخطة وملخصات manifest. استبدل القيم النائبة بخطة الإطلاق قبل حفظ المقتطف في إدارة التهيئة.
+تُلتقط مفاتيح الإنفاذ على جانب الـ gateway في `docs/examples/sorafs_gateway_direct_mode.toml`. يعكس القالب مخرجات `iroha app sorafs gateway direct-mode enable`، مع تعطيل فحوصات envelope/admission، وتوصيل إعدادات rate-limit الافتراضية، وتعبئة جدول `direct_mode` بأسماء المضيفين المشتقة من الخطة وملخصات manifest. استبدل القيم النائبة بخطة الإطلاق قبل حفظ المقتطف في إدارة التهيئة.
 
 ## 3. مجموعة اختبارات الامتثال
 

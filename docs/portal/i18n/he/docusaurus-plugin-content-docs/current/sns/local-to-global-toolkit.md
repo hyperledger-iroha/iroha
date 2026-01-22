@@ -13,7 +13,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## סקירה
 
 - `scripts/address_local_toolkit.sh` עוטף את ה-CLI `iroha` כדי להפיק:
-  - `audit.json` -- פלט מובנה של `iroha address audit --format json`.
+  - `audit.json` -- פלט מובנה של `iroha tools address audit --format json`.
   - `normalized.txt` -- IH58 (מועדף) / compressed (`snx1`) (אפשרות שנייה) literals לכל selector בתחום Local.
 - השתמשו בסקריפט יחד עם dashboard ingest לכתובות (`dashboards/grafana/address_ingest.json`)
   וכללי Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) כדי להוכיח שה-cutover של Local-8 /
@@ -45,7 +45,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 1. הריצו את הסקריפט ב-job ייעודי והעלו את הפלטים.
 2. חסמו merges כאשר `audit.json` מדווח על Local selectors (`domain.kind = local12`).
    בערך ברירת המחדל `true` (החליפו ל-`false` רק ב-dev/test לאבחון רגרסיות) והוסיפו
-   `iroha address normalize --fail-on-warning --only-local` ל-CI כדי שניסיונות
+   `iroha tools address normalize --fail-on-warning --only-local` ל-CI כדי שניסיונות
    רגרסיה ייכשלו לפני production.
 
 לפרטים נוספים, checklists של evidence ו-release-note snippet שניתן להשתמש בו בהכרזת cutover,

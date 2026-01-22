@@ -64,7 +64,7 @@ rollout_phase = "default"
 # anonymity_policy = "anon-strict-pq"  # optional explicit override
 ```
 
-`iroha::Client` agora registra a fase parseada (`crates/iroha/src/client.rs:2315`) para que helper commands (por exemplo `iroha_cli sorafs fetch`) reportem a fase atual junto com a politica de anonimato padrao.
+`iroha::Client` agora registra a fase parseada (`crates/iroha/src/client.rs:2315`) para que helper commands (por exemplo `iroha_cli app sorafs fetch`) reportem a fase atual junto com a politica de anonimato padrao.
 
 ## Automacao
 

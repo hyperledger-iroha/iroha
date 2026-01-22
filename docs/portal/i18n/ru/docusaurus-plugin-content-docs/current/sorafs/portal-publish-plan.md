@@ -70,7 +70,7 @@ SBOM) проходил через pipeline manifests SoraFS и отдавалс�
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
 TORII_URL="https://torii.stg.sora.net/"
-AUTHORITY="docs-admin@sora"
+AUTHORITY="ih58..."
 KEY_FILE="secrets/docs-admin.key"
 ALIAS_PROOF="secrets/docs.alias.proof"
 SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v1/status | jq '.sumeragi.epoch')"
@@ -92,10 +92,10 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 
 - Повторите для `openapi.manifest.to` и SBOM manifests (уберите флаги alias для SBOM bundles,
   если governance не назначила namespace).
-- Альтернатива: `iroha sorafs pin register` работает с digest из submit summary, если
+- Альтернатива: `iroha app sorafs pin register` работает с digest из submit summary, если
   бинарь уже установлен.
 - Проверьте состояние registry командой
-  `iroha sorafs pin list --alias docs:portal --format json | jq`.
+  `iroha app sorafs pin list --alias docs:portal --format json | jq`.
 - Дашборды для мониторинга: `sorafs_pin_registry.json` (метрики `torii_sorafs_replication_*`).
 
 ## 3. Gateway headers и proofs
@@ -103,7 +103,7 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 Сгенерируйте блок HTTP headers + binding metadata:
 
 ```bash
-iroha sorafs gateway route-plan \
+iroha app sorafs gateway route-plan \
   --manifest-json "${OUT}/portal.manifest.json" \
   --hostname docs.sora \
   --alias docs:portal \

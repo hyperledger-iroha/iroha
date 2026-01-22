@@ -43,7 +43,7 @@ Consensus (Sumeragi)
   - Compteurs agrégés de Reliable Broadcast : `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
 - GET `/v1/sumeragi/rbc/sessions`
   - Instantané de l’état par session (hash de bloc, height/view, comptes de chunks, indicateur delivered, marqueur `invalid`, hash de payload, booléen recovered) pour diagnostiquer les livraisons RBC bloquées et mettre en évidence les sessions récupérées après redémarrage.
-  - Raccourci CLI : `iroha sumeragi rbc sessions --summary` imprime `hash`, `height/view`, progression des chunks, compteur de ready et indicateurs invalid/delivered.
+  - Raccourci CLI : `iroha --output-format text ops sumeragi rbc sessions` imprime `hash`, `height/view`, progression des chunks, compteur de ready et indicateurs invalid/delivered.
 
 Preuves (audit ; hors consensus)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
@@ -54,9 +54,9 @@ Preuves (audit ; hors consensus)
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`
 - POST `/v1/sumeragi/evidence` → `{ "status": "accepted", "kind": "<variant>" }`
   - Aides CLI :
-    - `iroha sumeragi evidence list --summary`
-    - `iroha sumeragi evidence count --summary`
-    - `iroha sumeragi evidence submit --evidence-hex <hex>` (ou `--evidence-hex-file <path>`)
+    - `iroha --output-format text ops sumeragi evidence list`
+    - `iroha --output-format text ops sumeragi evidence count`
+    - `iroha ops sumeragi evidence submit --evidence-hex <hex>` (ou `--evidence-hex-file <path>`)
 
 Authentification opérateur (WebAuthn/mTLS)
 - POST `/v1/operator/auth/registration/options`

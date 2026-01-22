@@ -239,7 +239,7 @@ in-sync with the implementation.
    `docs/source/sorafs/provider_admission_policy.md` and the runbook at
    `docs/source/sorafs/runbooks/multi_source_rollout.md`.
 3. Exercise the exit path once per release candidate:
-   - Drain pending assignments by replaying `iroha sorafs replication list --status pending`
+   - Drain pending assignments by replaying `iroha app sorafs replication list --status pending`
      (filters live in `crates/iroha/src/client.rs:294`) and queuing reassignment ballots for
      any manifest digests that still reference the retiring provider.
    - Use `sorafs_manifest_stub capacity telemetry` to publish the final telemetry snapshot

@@ -28,7 +28,7 @@ governance council can replay the bytes referenced in the proposal.
 ## 2. Instruction Payloads
 
 Record the staged Norito instructions that desks signed off on via
-`iroha repo ... --output`. Each entry should include the hash of the emitted
+`iroha app repo ... --output`. Each entry should include the hash of the emitted
 file and a short description of the action that will be submitted once the vote
 passes.
 
@@ -52,7 +52,7 @@ file referenced in §2.8 of `docs/source/finance/repo_ops.md`.
 
 | Custodian | File | SHA-256 | Notes |
 |-----------|------|---------|-------|
-| `<custodian@domain>` | `custodian_ack_<custodian>.md` | `<sha256>` | Signed SLA covering custody window, routing account, and drill contact. |
+| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Signed SLA covering custody window, routing account, and drill contact. |
 
 > Store the acknowledgement next to the other evidence (`artifacts/finance/repo/<slug>/`)
 > so `scripts/repo_evidence_manifest.py` records the file in the same tree as

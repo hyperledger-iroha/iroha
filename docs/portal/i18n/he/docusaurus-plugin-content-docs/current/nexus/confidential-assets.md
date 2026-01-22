@@ -206,7 +206,7 @@ Ledgers חסויים חייבים לשמור מספיק היסטוריה כדי 
 - **Nullifier retention:** לשמור nullifiers שנצרכו לפחות `730` ימים (24 חודשים) אחרי גובה ההוצאה, או חלון ארוך יותר אם נדרש רגולטורית. אופרטורים יכולים להאריך דרך `confidential.retention.nullifier_days`. Nullifiers צעירים מחלון השימור חייבים להישאר ניתנים לשאילתה דרך Torii כדי שהאודיטורים יוכלו להוכיח היעדר double-spend.
 - **Reveal pruning:** reveals שקופים (`RevealConfidential`) גוזמים את note commitments המשויכים מיד לאחר סיום הבלוק, אך ה-nullifier הנצרך נשאר כפוף לכלל השימור לעיל. אירועי reveal (`ConfidentialEvent::Unshielded`) מתעדים את הסכום הציבורי, הנמען ו-hash ה-proof כך ששחזור reveal היסטורי לא דורש ciphertext שנגזם.
 - **Frontier checkpoints:** commitment frontiers שומרים checkpoints מתגלגלים שמכסים את הגדול בין `max_anchor_age_blocks` לחלון השימור. צמתים מדחסים checkpoints ישנים רק לאחר שפגו כל nullifiers בתוך הטווח.
-- **Stale digest remediation:** אם `HandshakeConfidentialMismatch` מופעל עקב סטייה ב-digest, על האופרטורים (1) לוודא שחלונות שימור nullifier מיושרים בכל הקלאסטר, (2) להריץ `iroha_cli confidential verify-ledger` לשחזור digest מול קבוצת nullifier שמורה, ו-(3) לפרוס מחדש manifest מעודכן. Nullifiers שנגזמו מוקדם צריכים להיות משוחזרים מ-cold storage לפני חיבור מחדש לרשת.
+- **Stale digest remediation:** אם `HandshakeConfidentialMismatch` מופעל עקב סטייה ב-digest, על האופרטורים (1) לוודא שחלונות שימור nullifier מיושרים בכל הקלאסטר, (2) להריץ `iroha_cli app confidential verify-ledger` לשחזור digest מול קבוצת nullifier שמורה, ו-(3) לפרוס מחדש manifest מעודכן. Nullifiers שנגזמו מוקדם צריכים להיות משוחזרים מ-cold storage לפני חיבור מחדש לרשת.
 
 תעדו overrides מקומיים ב-operations runbook; מדיניות governance שמאריכות את חלון השימור חייבות לעדכן את קונפיגורציית הצמתים ואת תוכניות האחסון הארכיוני במקביל.
 
@@ -229,7 +229,7 @@ Ledgers חסויים חייבים לשמור מספיק היסטוריה כדי 
 - היררכיית derivation לכל חשבון:
   - `sk_spend` → `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
 - payloads מוצפנים של notes משתמשים ב-AEAD עם מפתחות שיתוף נגזרים ב-ECDH; אפשר לצרף auditor view keys לאופציות outputs בהתאם למדיניות הנכס.
-- תוספות CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling לאודיטורים לפענוח memos, ו-helper `iroha zk envelope` ליצירה/בדיקה של מעטפות Norito offline. Torii חושף את אותו זרם derivation דרך `POST /v1/confidential/derive-keyset`, ומחזיר hex ו-base64 כדי שה-wallets יוכלו למשוך היררכיות מפתחות בצורה פרוגרמטית.
+- תוספות CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling לאודיטורים לפענוח memos, ו-helper `iroha app zk envelope` ליצירה/בדיקה של מעטפות Norito offline. Torii חושף את אותו זרם derivation דרך `POST /v1/confidential/derive-keyset`, ומחזיר hex ו-base64 כדי שה-wallets יוכלו למשוך היררכיות מפתחות בצורה פרוגרמטית.
 
 ## Gas, מגבלות ובקרות DoS
 - לוח גז דטרמיניסטי:

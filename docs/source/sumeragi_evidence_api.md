@@ -25,7 +25,7 @@ Temporary audit endpoints for Sumeragi evidence.
   - Request body (JSON): `{ "evidence_hex": "<hex string>" }`; the hex string encodes Norito-framed `ConsensusEvidence` bytes and ignores whitespace.
   - Response (JSON): `{ "status": "accepted", "kind": "<variant>" }` on success.
   - Validation covers signer/height/view/epoch equality for double-vote payloads, requires non-empty single-signer payloads, enforces receipt quorums for `Censorship` evidence (signed `TransactionSubmissionReceipt` payloads), and rejects `InvalidProposal` records that fail to advance height or whose parent hash disagrees with the embedded commit certificate.
-  - CLI helper: `iroha sumeragi evidence submit --evidence-hex <hex>` or `--evidence-hex-file <path>`.
+  - CLI helper: `iroha ops sumeragi evidence submit --evidence-hex <hex>` or `--evidence-hex-file <path>`.
 
 Additional consensus status and commit QC proofs
 

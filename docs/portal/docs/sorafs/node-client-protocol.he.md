@@ -122,10 +122,10 @@ SDKs דרך `sorafs_orchestrator`):
 
 ## עזרי CLI ו-REST
 
-- `iroha sorafs pin list|show`, `alias list` ו-`replication list` עוטפים את
+- `iroha app sorafs pin list|show`, `alias list` ו-`replication list` עוטפים את
   נקודות הקצה של pin-registry ומדפיסים Norito JSON גולמי עם בלוקי attestation
   לצורכי ראיות ביקורת.
-- `iroha sorafs storage pin` ו-`torii /v1/sorafs/pin/register` מקבלים manifests
+- `iroha app sorafs storage pin` ו-`torii /v1/sorafs/pin/register` מקבלים manifests
   של Norito או JSON יחד עם alias proofs אופציונליים ו-successors; proofs פגומים
   מחזירים `400`, proofs ישנים מחזירים `503` עם `Warning: 110`, ו-proofs שפג
   תוקפם מחזירים `412`.

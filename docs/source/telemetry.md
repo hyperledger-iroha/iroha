@@ -28,9 +28,9 @@ Endpoints
 Aggregate governance-seal counters (`lane_governance_sealed_total`,
 `lane_governance_sealed_aliases`) ride alongside the lane records. They provide a
 quick “are any lanes still sealed?” view in both `/v1/sumeragi/status` and
-`iroha_cli sumeragi status --summary`; the CLI prints the alias list inline so
+`iroha_cli --output-format text ops sumeragi status`; the CLI prints the alias list inline so
 operators can reconcile outstanding manifests without diffing the full payload.
-Use `iroha_cli nexus lane-report --only-missing --fail-on-sealed` during rollouts
+Use `iroha_cli app nexus lane-report --only-missing --fail-on-sealed` during rollouts
 or CI to surface the same data with a non-zero exit when seals remain.
 
 SM helper telemetry (Prometheus metrics)
@@ -360,7 +360,7 @@ trigger remediation workflows when drops exceed acceptable limits.
   `status="approved"` stays flat — council approvals are stuck in enactment.
 
 **Triage checklist**
-1. Run `iroha_cli gov audit-deploy --namespace <ns>` (optionally filter by
+1. Run `iroha_cli app gov deploy audit --namespace <ns>` (optionally filter by
    `--hash-prefix`) to compare stored manifests against the `code_hash` and
    `abi_hash` recorded in governance proposals. The command flags mismatches or
    missing manifests.
@@ -369,11 +369,11 @@ trigger remediation workflows when drops exceed acceptable limits.
    `abi_hash_hex` at the upgrade height.
 3. Examine `increase(governance_protected_namespace_total{outcome="rejected"}[5m])`.
    If it spiked, grab Torii logs for the failing deploy and ensure the proposal
-   was enacted; re-run `iroha_cli gov protected-get` to confirm the namespace
+   was enacted; re-run `iroha_cli app gov protected get` to confirm the namespace
    list.
 4. Verify that `governance_proposals_status{status="approved"}` decreased while
    `status="enacted"` increased after the rollout. If counts drift, queue an
-   `EnactReferendum` check and confirm the `iroha_cli gov enact` automation ran.
+   `EnactReferendum` check and confirm the `iroha_cli app gov enact` automation ran.
 5. Inspect `increase(governance_manifest_hook_total{hook="runtime_upgrade", outcome="rejected"}[5m])`
    to spot runtime upgrade submissions blocked by manifest policy. Correlate
    spikes with Torii admission logs and confirm the manifest allowlist /
@@ -410,7 +410,7 @@ exhaustion.
 2. Review Torii logs (target `torii::zk_prover`) for scan summaries and budget
    hits. Enable debug logging temporarily when attachment ids are required.
 3. Confirm configuration values in `iroha_config` (`[torii] zk_prover_*`).
-4. Prune or retry problematic attachments with `iroha_cli zk attachments delete`
+4. Prune or retry problematic attachments with `iroha_cli app zk attachments delete`
    when backlog cleanup is required.
 5. Document any threshold changes in the ops notebook and update Grafana panel
    annotations.
@@ -791,7 +791,7 @@ Additional gauges track backlog pressure: `sumeragi_rbc_backlog_chunks_total`, `
 
 ### Troubleshooting: RBC & pacemaker backpressure
 
-1. **Capture live snapshots.** Start with `iroha_cli sumeragi telemetry --summary` (or `GET /v1/sumeragi/telemetry`) to inspect `rbc_backlog` and vote ingestion, then fetch `/v1/sumeragi/rbc` and `/v1/sumeragi/rbc/sessions` to list active payloads, chunk counts, and recovery flags.
+1. **Capture live snapshots.** Start with `iroha_cli --output-format text ops sumeragi telemetry` (or `GET /v1/sumeragi/telemetry`) to inspect `rbc_backlog` and vote ingestion, then fetch `/v1/sumeragi/rbc` and `/v1/sumeragi/rbc/sessions` to list active payloads, chunk counts, and recovery flags.
 2. **Inspect backlog counters.** Watch `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`, and `sumeragi_rbc_backlog_sessions_pending`. Sustained non-zero values over five minutes (e.g., `max_over_time(sumeragi_rbc_backlog_chunks_max[5m]) > 0`) imply slow chunk delivery; correlate with `ready_count` vs `delivered` in the session snapshot.
 3. **Check DA availability warnings.** Alert on spikes in `sumeragi_da_gate_block_total{reason="missing_local_data"}`; `sumeragi_rbc_da_reschedule_total` is legacy and should remain zero now that DA is advisory.
 4. **Evaluate pacemaker deferrals and proposal backpressure.** Use `increase(sumeragi_pacemaker_backpressure_deferrals_total[5m])`, `increase(sumeragi_pacemaker_backpressure_deferrals_by_reason_total{reason="..."}[5m])`, `max_over_time(sumeragi_pacemaker_backpressure_deferral_age_ms{reason="..."}[5m])`, `max_over_time(sumeragi_tx_queue_saturated[5m])`, `max_over_time(sumeragi_pending_blocks_blocking[5m])`, `max_over_time(sumeragi_commit_inflight_queue_depth[5m])`, `sumeragi_rbc_backlog_*`, and relay drop/backpressure counters to confirm whether the pacemaker halted due to queue saturation, relay/RBC backlog, or blocking pending blocks. Combine with `increase(gossip_fallback_total[5m])` and `increase(block_created_proposal_mismatch_total[5m])` to surface collectors retrying without progress.
@@ -803,7 +803,7 @@ Additional gauges track backlog pressure: `sumeragi_rbc_backlog_chunks_total`, `
    by default and supports `--json` for feeding structured reports into on-call automation.
 7. **Escalate persistent issues.** If backlog/deferral metrics stay high beyond two blocks:
    - Freeze new client submissions via admission rate limiting.
-   - Manually inspect problematic sessions with `iroha_cli sumeragi telemetry --json` to confirm which height/view is stuck.
+   - Manually inspect problematic sessions with `iroha_cli --output-format json ops sumeragi telemetry` to confirm which height/view is stuck.
    - Consider increasing `sumeragi.rbc_chunk_max_bytes` or provisioning additional bandwidth before re-enabling full load.
 
 
@@ -831,7 +831,7 @@ labels:
 annotations:
   summary: "Validator skipped VRF commit and reveal windows"
   description: |
-    Non-participation penalties incremented (count={{ $value }}). Inspect `iroha_cli sumeragi vrf-epoch --epoch <current>`
+    Non-participation penalties incremented (count={{ $value }}). Inspect `iroha_cli ops sumeragi vrf-epoch --epoch <current>`
     to identify the offline signer and stage reconfiguration or slashing if the validator cannot recover.
 
 alert: SumeragiVrfNonReveal
@@ -1139,7 +1139,7 @@ Alert thresholds:
   `increase(nexus_scheduler_must_serve_truncations_total[1h]) > 0`.
 
 Operator triage:
-1. Run `iroha_cli nexus lane-report --lane <id>` to inspect the lane cap,
+1. Run `iroha_cli app nexus lane-report --lane <id>` to inspect the lane cap,
    configured bound, and backlog snapshot (CLI update tracked under Nexus
    router workstreams).
 2. Check `nexus_scheduler_lane_trigger_level` (tier `>0` implies a

@@ -17,7 +17,7 @@ translation_last_reviewed: 2026-01-01
 
 تلتقط هذه الحزمة artefacts المطلوبة من برلمان Sora لاعتماد مدفوعات relay التلقائية (SNNet-7):
 
-- `reward_config.json` - اعدادات محرك المكافآت القابلة للتسلسل عبر Norito، جاهزة للاستيعاب بواسطة `iroha sorafs incentives service init`. يطابق `budget_approval_id` الهاش المدرج في محاضر الحوكمة.
+- `reward_config.json` - اعدادات محرك المكافآت القابلة للتسلسل عبر Norito، جاهزة للاستيعاب بواسطة `iroha app sorafs incentives service init`. يطابق `budget_approval_id` الهاش المدرج في محاضر الحوكمة.
 - `shadow_daemon.json` - خريطة المستفيدين والسندات المستخدمة من قبل ادوات replay (`shadow-run`) والdaemon في الانتاج.
 - `economic_analysis.md` - ملخص الانصاف لمحاكاة shadow 2025-10 -> 2025-11.
 - `rollback_plan.md` - دليل تشغيلي لتعطيل المدفوعات التلقائية.

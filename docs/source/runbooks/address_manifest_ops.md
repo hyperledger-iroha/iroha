@@ -88,7 +88,7 @@ address-manifest-<REVISION>/
 6. **Entry sanity.**
    - `global_domain` entries MUST include `{ "domain": "example", "chain": "sora:nexus:global", "selector": "global" }`.
    - `local_alias` entries MUST embed the 12-byte digest produced by Norm v1
-     (use `iroha address convert <address-or-account_id> --format json --expect-prefix 753`
+     (use `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
      to confirm; the JSON summary echoes the provided domain via `input_domain` and
      `--append-domain` replays the converted encoding as `<ih58>@<domain>` for manifests).
    - `tombstone` entries MUST reference the exact selector being retired,
@@ -124,7 +124,7 @@ address-manifest-<REVISION>/
 2. **Derive canonical payloads.** For each alias being updated, run:
 
    ```bash
-   iroha address convert snx1...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
+   iroha tools address convert snx1...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
    jq '.canonical_hex, .input_domain' /tmp/alias.json
    ```
 

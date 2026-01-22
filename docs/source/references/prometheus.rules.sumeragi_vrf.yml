@@ -9,7 +9,7 @@ groups:
         annotations:
           summary: "Validator skipped VRF commit and reveal windows"
           description: |
-            Non-participation penalties incremented (count={{ $value }}). Inspect `iroha_cli sumeragi vrf-epoch --epoch <current>`
+            Non-participation penalties incremented (count={{ $value }}). Inspect `iroha_cli --output-format text ops sumeragi vrf-epoch --epoch <current>`
             to identify the offline signer and stage reconfiguration or slashing if the validator cannot recover.
 
       - alert: SumeragiVrfNonReveal

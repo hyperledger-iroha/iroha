@@ -74,7 +74,7 @@ coherente et testable sans tenter de livrer toutes les corrections dans un patch
    - Ajouter des requetes snapshot pour triggers, assets et roles avec un ordre deterministe (suivi
      via `crates/iroha_core/tests/snapshot_iterable.rs` pour la couverture actuelle).
 3. **Consistance des snapshots**
-   - S'assurer que la CLI `iroha query` utilise le meme chemin de snapshot que Sumeragi/fetchers.
+   - S'assurer que la CLI `iroha ledger query` utilise le meme chemin de snapshot que Sumeragi/fetchers.
    - Les tests de regression snapshot CLI vivent sous `tests/cli/state_snapshot.rs` (feature-gated
      pour les runs lents).
 

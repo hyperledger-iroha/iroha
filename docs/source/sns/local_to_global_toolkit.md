@@ -36,7 +36,7 @@ Pair it with:
 
 `scripts/address_local_toolkit.sh` wraps the `iroha` CLI and emits two outputs:
 
-1. `audit.json` — structured report from `iroha address audit` with entry-by-entry status,
+1. `audit.json` — structured report from `iroha tools address audit` with entry-by-entry status,
    Local-domain warnings, and parse errors. Use this to prioritise remediation.
 2. `normalized.txt` — converted address list that replaces every Local selector
    with the chosen format (IH58 preferred or compressed (`snx1`, second-best)) while optionally preserving the
@@ -59,13 +59,13 @@ Flags of note:
   that store the domain separately).
 - `--audit-only` trims the run to the JSON report (no conversion).
 - `--allow-errors` keeps scanning when malformed rows are present; the behaviour
-  matches the CLI flags exposed by `iroha address audit/normalize`.
+  matches the CLI flags exposed by `iroha tools address audit/normalize`.
 - `IROHA_CLI_BIN=/path/to/iroha scripts/address_local_toolkit.sh …` overrides
   the CLI binary (for example inside CI containers).
 
 ### 2.2 JSON report format
 
-`audit.json` mirrors the output of `iroha address audit --format json`, which
+`audit.json` mirrors the output of `iroha tools address audit --format json`, which
 already powers SDK heuristics. Each entry contains:
 
 ```jsonc
@@ -94,7 +94,7 @@ already powers SDK heuristics. Each entry contains:
 1. Check the script out as part of your pipeline (point it at your export).
 2. Archive both `audit.json` and `normalized.txt` as build artefacts; reference
    them from release tickets or readiness reports.
-3. Run `iroha address normalize --fail-on-warning --only-local` during PR
+3. Run `iroha tools address normalize --fail-on-warning --only-local` during PR
    validation once dashboards show zero legitimate Local usage. This blocks
    regressions before enforcement gates activate and keeps Local selectors out
    of new releases.

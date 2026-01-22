@@ -60,11 +60,11 @@ Alias Service
   - Errors: malformed hex input پر HTTP `400`۔ Torii Norito `ValidationFail::QueryFailed::Conversion` envelope اور decoder error message واپس کرتا ہے۔
 - POST `/v1/aliases/resolve`
   - Request: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - Response: { "alias": "GB82WEST12345698765432", "account_id": "...@...", "index": 0, "source": "iso_bridge" }
+  - Response: { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
   - Notes: ISO bridge runtime staging درکار ہے (`[iso_bridge.account_aliases]` in `iroha_config`)۔ Torii whitespace ہٹا کر اور uppercase بنا کر lookup کرتا ہے۔ alias نہ ہو تو 404 اور ISO bridge runtime بند ہو تو 503 دیتا ہے۔
 - POST `/v1/aliases/resolve_index`
   - Request: { "index": 0 }
-  - Response: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "...@...", "source": "iso_bridge" }
+  - Response: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }
   - Notes: alias indices configuration order کے مطابق deterministic طریقے سے assign ہوتے ہیں (0-based)۔ کلائنٹس offline cache کر کے alias attestation events کے audit trails بنا سکتے ہیں۔
 
 Code Size Cap
@@ -193,24 +193,24 @@ Convenience Endpoint
   - Notes: admin/testing کے لئے ہے؛ اگر configure ہو تو API token درکار ہوگا۔ production کے لئے `SetParameter(Custom)` کے ساتھ signed transaction ترجیح دیں۔
 
 CLI Helpers
-- `iroha gov audit-deploy --namespace apps [--contains calc --hash-prefix deadbeef --summary-only]`
+- `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - namespace کے contract instances fetch کرتا ہے اور cross-check کرتا ہے کہ:
     - Torii ہر `code_hash` کے لئے bytecode ذخیرہ کرتا ہے، اور اس کا Blake2b-32 digest `code_hash` سے match کرتا ہے۔
     - `/v1/contracts/code/{code_hash}` میں موجود manifest matching `code_hash` اور `abi_hash` values رپورٹ کرتا ہے۔
     - `(namespace, contract_id, code_hash, abi_hash)` کے لئے enacted governance proposal موجود ہے جو اسی proposal-id hashing سے derive ہوتا ہے جو node استعمال کرتا ہے۔
   - `results[]` کے ساتھ JSON رپورٹ دیتا ہے (issues, manifest/code/proposal summaries) اور ایک لائن کا خلاصہ (اگر `--no-summary` نہ ہو)۔
   - Protected namespaces کے audit یا governance-controlled deploy workflows کی تصدیق کے لئے مفید۔
-- `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
   - Protected namespaces میں deployment کے لئے JSON metadata skeleton دیتا ہے، جس میں optional `gov_manifest_approvers` شامل ہیں تاکہ manifest quorum rules پوری ہوں۔
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` ہونے پر lock hints لازم ہیں، اور فراہم کیے گئے کسی بھی hints سیٹ میں `owner`, `amount` اور `duration_blocks` شامل ہونا ضروری ہے۔
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` ہونے پر lock hints لازم ہیں، اور فراہم کیے گئے کسی بھی hints سیٹ میں `owner`, `amount` اور `duration_blocks` شامل ہونا ضروری ہے۔
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - ایک لائن خلاصہ اب deterministic `fingerprint=<hex>` دکھاتا ہے جو encoded `CastZkBallot` سے derive ہوتا ہے، ساتھ decoded hints (`owner`, `amount`, `duration_blocks`, `direction` جب فراہم ہوں)۔
   - CLI responses `tx_instructions[]` کو `payload_fingerprint_hex` اور decoded fields کے ساتھ annotate کرتے ہیں تاکہ downstream tooling skeleton کو بغیر Norito decoding کے verify کر سکے۔
   - Lock hints دینے سے node ZK ballots کے لئے `LockCreated`/`LockExtended` events emit کر سکتا ہے جب circuit وہی values expose کرے۔
-- `iroha gov vote-plain --referendum-id <id> --owner <account> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - `--lock-amount`/`--lock-duration-blocks` aliases ZK flags کے ناموں کو mirror کرتے ہیں تاکہ scripting parity ہو۔
-  - Summary output `vote-zk` کی طرح encoded instruction fingerprint اور readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`) شامل کرتا ہے، جس سے signature سے پہلے فوری تصدیق ہو جاتی ہے۔
+  - Summary output `vote --mode zk` کی طرح encoded instruction fingerprint اور readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`) شامل کرتا ہے، جس سے signature سے پہلے فوری تصدیق ہو جاتی ہے۔
 
 Instances Listing
 - GET `/v1/gov/instances/{ns}` - namespace کے لئے active contract instances کی فہرست۔
@@ -312,7 +312,7 @@ for (expected, kind) in offences.iter().enumerate() {
 Operators اور tooling payloads کو inspect اور re-broadcast کر سکتے ہیں:
 
 - Torii: `GET /v1/sumeragi/evidence` اور `GET /v1/sumeragi/evidence/count`.
-- CLI: `iroha sumeragi evidence list`, `... count`, اور `... submit --evidence-hex <payload>`.
+- CLI: `iroha ops sumeragi evidence list`, `... count`, اور `... submit --evidence-hex <payload>`.
 
 Governance کو evidence bytes کو canonical proof کے طور پر treat کرنا چاہئے:
 
@@ -334,7 +334,7 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- Runtime اور CLI staged parameters کو `/v1/sumeragi/params` اور `iroha sumeragi params --summary` کے ذریعے ظاہر کرتے ہیں، تاکہ operators activation heights اور validator rosters کی تصدیق کر سکیں۔
+- Runtime اور CLI staged parameters کو `/v1/sumeragi/params` اور `iroha --output-format text ops sumeragi params` کے ذریعے ظاہر کرتے ہیں، تاکہ operators activation heights اور validator rosters کی تصدیق کر سکیں۔
 - Governance automation کو ہمیشہ:
   1. evidence پر مبنی removal (یا reinstatement) فیصلہ finalize کرنا چاہیے۔
   2. `mode_activation_height = h_current + activation_lag_blocks` کے ساتھ follow-up reconfiguration queue کرنا چاہیے۔

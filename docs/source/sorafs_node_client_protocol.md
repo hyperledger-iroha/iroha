@@ -328,7 +328,7 @@ message instead of a stack trace.
 > forwards the request; production operators should rely on the REST surface
 > directly until the VOPRF endpoint reaches GA.
 
-The SoraFS subcommands under `iroha sorafs …` expose structured JSON for pin
+The SoraFS subcommands under `iroha app sorafs …` expose structured JSON for pin
 registry listings (`pin list`), alias enumeration (`alias list`), replication
 order listings (`replication list`), repair queue listings (`repair list`), and
 storage stats (`storage show`). Pin/alias/replication list commands accept
@@ -394,13 +394,13 @@ against the latest block header before acting on it.
 
 The `iroha` CLI wraps the REST endpoints for day-to-day operations:
 
-- `iroha sorafs pin list --status=approved` returns the registry snapshot and
+- `iroha app sorafs pin list --status=approved` returns the registry snapshot and
   its `attestation` metadata so operators can verify the reported block hash.
-- `iroha sorafs pin show --digest=<hex>` fetches a single manifest together with
+- `iroha app sorafs pin show --digest=<hex>` fetches a single manifest together with
   bound aliases and replication orders.
-- `iroha sorafs alias list --namespace=docs` and
-  `iroha sorafs replication list --status=pending` mirror the REST filters.
-- `iroha sorafs repair list --status=queued` mirrors the repair queue filters,
+- `iroha app sorafs alias list --namespace=docs` and
+  `iroha app sorafs replication list --status=pending` mirror the REST filters.
+- `iroha app sorafs repair list --status=queued` mirrors the repair queue filters,
   while `repair claim|complete|fail|escalate` submit signed worker actions or
   slash proposals to Torii. Slash proposals may include a governance approval
   summary (approve/reject/abstain vote counts plus approved_at/finalized_at
@@ -410,9 +410,9 @@ The `iroha` CLI wraps the REST endpoints for day-to-day operations:
 - Repair status responses include an `events` array containing base64 Norito
   `RepairTaskEventV1` entries ordered by occurrence for audit trails; the list
   is capped to the most recent transitions.
-- `iroha sorafs storage pin --manifest=manifest.to --payload=payload.bin`
+- `iroha app sorafs storage pin --manifest=manifest.to --payload=payload.bin`
   submits a Norito manifest and payload to the storage façade for pinning.
-- `iroha sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` emits read-only
+- `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` emits read-only
   retention reports from the local manifest store for audit evidence.
 - GC eviction sweeps emit `GcAuditEventV1` payloads into the governance DAG, so
   operators can archive retention evidence alongside repair and settlement

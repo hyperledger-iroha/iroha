@@ -81,7 +81,7 @@ scripts/nexus_lane_bootstrap.sh \
    והפקודה המדויקת של `cargo xtask space-directory encode` (בשדה `space_directory_encode.command`).
    צירפו JSON זה לטיקט onboarding כהוכחה.
 4. `<slug>.manifest.to` — נוצר כש-`--encode-space-directory` פעיל; מוכן לזרימה
-   `iroha space-directory manifest publish` של Torii.
+   `iroha app space-directory manifest publish` של Torii.
 
 השתמשו ב-`--dry-run` כדי להציג JSON/snippets בלי כתיבה, וב-`--force` כדי לדרוס artifacts קיימים.
 
@@ -93,7 +93,7 @@ scripts/nexus_lane_bootstrap.sh \
    לפחות `lane_id + 1`, ועדכנו כל `nexus.routing_policy.rules` שצריכים להפנות ל-lane החדשה.
 3. בצעו encoding (אם דילגתם על `--encode-space-directory`) ופרסמו את manifest ב-Space Directory לפי
    הפקודה מתוך summary (`space_directory_encode.command`). זה מייצר את `.manifest.to` הדרוש ל-Torii
-   ומספק evidence לאודיטורים; שלחו עם `iroha space-directory manifest publish`.
+   ומספק evidence לאודיטורים; שלחו עם `iroha app space-directory manifest publish`.
 4. הריצו `irohad --sora --config path/to/config.toml --trace-config` וארכבו את פלט ה-trace בטיקט
    rollout. זה מוכיח שהגאומטריה החדשה תואמת ל-slug/segments שנוצרו.
 5. אתחלו מחדש את ה-validators שמוקצים ל-lane לאחר פריסת manifest/catalog. שמרו את summary JSON

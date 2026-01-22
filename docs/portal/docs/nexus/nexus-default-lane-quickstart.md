@@ -126,7 +126,7 @@ sealed (manifest loaded) and ready for traffic. The summary view prints one row
 per lane:
 
 ```bash
-iroha_cli nexus lane-report --summary
+iroha_cli app nexus lane-report --summary
 ```
 
 Example output:

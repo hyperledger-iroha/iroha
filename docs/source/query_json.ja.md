@@ -10,7 +10,7 @@ translator: manual
 
 # クエリ JSON エンベロープ
 
-Iroha は署名付きフレームを受け付ける Norito ベースの `/query` エンドポイントを提供しています。CLI やスクリプトなど対話的なツールから扱いやすいよう、リクエストを JSON で記述し、ツール側で署名済み `SignedQuery` へ変換できます。`iroha_data_model::query::json` モジュールが `iroha_cli query stdin` などのユーティリティで使用する正規エンベロープを定義しています。
+Iroha は署名付きフレームを受け付ける Norito ベースの `/query` エンドポイントを提供しています。CLI やスクリプトなど対話的なツールから扱いやすいよう、リクエストを JSON で記述し、ツール側で署名済み `SignedQuery` へ変換できます。`iroha_data_model::query::json` モジュールが `iroha_cli ledger query stdin` などのユーティリティで使用する正規エンベロープを定義しています。
 
 ## エンベロープ形状
 

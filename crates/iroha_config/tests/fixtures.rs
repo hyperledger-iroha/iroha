@@ -1087,6 +1087,9 @@ fn minimal_config_snapshot() {
                 pacemaker_rtt_floor_multiplier: 2,
                 pacemaker_max_backoff: 10s,
                 pacemaker_jitter_frac_permille: 0,
+                pacemaker_active_pending_soft_limit: 0,
+                pacemaker_rbc_backlog_session_soft_limit: 0,
+                pacemaker_rbc_backlog_chunk_soft_limit: 0,
                 enable_bls: true,
                 adaptive_observability: AdaptiveObservability {
                     enabled: false,

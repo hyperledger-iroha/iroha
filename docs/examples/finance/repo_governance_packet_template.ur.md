@@ -36,7 +36,7 @@ translation_last_reviewed: 2026-01-01
 ## 2. Instruction Payloads
 
 desk کی منظور شدہ staged Norito instructions کو
-`iroha repo ... --output` کے ذریعے ریکارڈ کریں۔ ہر entry میں emitted file کا hash اور
+`iroha app repo ... --output` کے ذریعے ریکارڈ کریں۔ ہر entry میں emitted file کا hash اور
 ایک مختصر description شامل ہو جو vote پاس ہونے پر submit ہوگی۔
 
 | Action | File | SHA-256 | Notes |
@@ -56,7 +56,7 @@ sha256sum artifacts/finance/repo/<slug>/instructions/initiate.json       | tee a
 
 | Custodian | File | SHA-256 | Notes |
 |-----------|------|---------|-------|
-| `<custodian@domain>` | `custodian_ack_<custodian>.md` | `<sha256>` | Signed SLA جو custody window، routing account اور drill contact کو cover کرتا ہے۔ |
+| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Signed SLA جو custody window، routing account اور drill contact کو cover کرتا ہے۔ |
 
 > acknowledgement کو باقی evidence کے ساتھ (`artifacts/finance/repo/<slug>/`) محفوظ کریں تاکہ
 > `scripts/repo_evidence_manifest.py` فائل کو اسی tree میں ریکارڈ کرے جہاں staged instructions

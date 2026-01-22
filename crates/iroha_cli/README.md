@@ -36,32 +36,32 @@ At startup, nodes adopt the on‑chain values and log a mismatch if config diffe
 Fetch status (leader, HighestQC, LockedQC, membership digest):
 
 ```bash
-iroha sumeragi status [--summary]
+iroha --output-format text ops sumeragi status
 ```
 
-> `--summary` prints leader/HighestQC/LockedQC, membership height/view/epoch/hash, RBC pressure, and VRF counters in one line.
+> `--output-format text` prints leader/HighestQC/LockedQC, membership height/view/epoch/hash, RBC pressure, and VRF counters in one line.
 
 Fetch latest per-phase latencies (ms):
 
 ```bash
-iroha sumeragi phases --summary
+iroha --output-format text ops sumeragi phases
 # Example: propose=11 da=22 prevote=33 precommit=44 exec=55 witness=66 commit=77 ms | ema(propose=15 da=24 prevote=31 precommit=40 commit=70)
 ```
 
 RBC status and sessions (throughput and active sessions):
 
 ```bash
-iroha sumeragi rbc status --summary
+iroha --output-format text ops sumeragi rbc status
 # Example: active=2 pruned=10 ready=8 deliver=7 bytes=1234567
 
-iroha sumeragi rbc sessions --summary
+iroha --output-format text ops sumeragi rbc sessions
 # Example: active=1 first=[h:1234 v:7 chunks=12/12 delivered=true] items=1
 ```
 
 Fetch commit QC (if present) for a block hash:
 
 ```bash
-iroha sumeragi commit-qc-get --hash BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2
+iroha ops sumeragi commit-qc-get --hash BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2
 # Prints JSON with fields: subject_block_hash, parent_state_root, post_state_root (hex), height, view, epoch,
 # signers_bitmap (hex), bls_aggregate_signature (hex). If missing, commit_qc is null.
 ```
@@ -73,7 +73,7 @@ Tip: You can combine these with `jq` for consistency checks.
 Validate operator-maintained denylist files before deploying them to Torii:
 
 ```bash
-iroha sorafs gateway lint-denylist --path docs/source/sorafs_gateway_denylist_sample.json
+iroha app sorafs gateway lint-denylist --path docs/source/sorafs_gateway_denylist_sample.json
 ```
 
 The command checks required fields for each entry type (provider, manifest digest, CID, URL,
@@ -83,7 +83,7 @@ per-kind summary so operators can catch mistakes before rolling out new lists.
 Generate a TOML snippet with default gateway settings (rate limits, denylist path, ACME hosts):
 
 ```bash
-iroha sorafs gateway template-config --host gateway-a.example.com --host gateway-b.example.com
+iroha app sorafs gateway template-config --host gateway-a.example.com --host gateway-b.example.com
 ```
 
 Pipe the output into your node configuration to bootstrap `torii.sorafs_gateway`.
@@ -91,7 +91,7 @@ Pipe the output into your node configuration to bootstrap `torii.sorafs_gateway`
 Derive canonical and vanity hostnames for a provider (useful for direct-mode tooling):
 
 ```bash
-iroha sorafs gateway generate-hosts --provider-id 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --chain-id nexus
+iroha app sorafs gateway generate-hosts --provider-id 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --chain-id nexus
 ```
 
 The command prints JSON with the canonical and vanity hostnames derived from the provider id.
@@ -99,7 +99,7 @@ The command prints JSON with the canonical and vanity hostnames derived from the
 Plan a direct-mode rollout by inspecting manifest metadata and (optionally) admission envelopes:
 
 ```bash
-iroha sorafs gateway direct-mode plan \
+iroha app sorafs gateway direct-mode plan \
   --manifest fixtures/sorafs_manifest/example_manifest.to \
   --provider-id 1111111111111111111111111111111111111111111111111111111111111111
 ```
@@ -111,13 +111,13 @@ Apply the plan to generate a configuration snippet (the snippet targets `torii.s
 the new `torii.sorafs_gateway.direct_mode` table):
 
 ```bash
-iroha sorafs gateway direct-mode enable --plan direct-mode-plan.json
+iroha app sorafs gateway direct-mode enable --plan direct-mode-plan.json
 ```
 
 To restore default gateway settings, emit the rollback snippet:
 
 ```bash
-iroha sorafs gateway direct-mode rollback
+iroha app sorafs gateway direct-mode rollback
 ```
 
 ### ZK vote tally (app API convenience)
@@ -125,7 +125,7 @@ iroha sorafs gateway direct-mode rollback
 The CLI provides helpers for app‑facing ZK endpoints. For example, to fetch a vote tally for an election id via Torii:
 
 ```bash
-iroha zk vote tally --election-id demo-election-1
+iroha app zk vote tally --election-id demo-election-1
 ```
 
 This posts to `/v1/zk/vote/tally` and prints the JSON response, e.g. `{ "finalized": true, "tally": [42, 58] }`.
@@ -137,8 +137,8 @@ Build governance transaction skeletons and query governance state via Torii app 
 - Propose deployment of IVM bytecode via governance:
 
 ```bash
-iroha gov propose-deploy \
-  --namespace apps --id my.contract.v1 \
+iroha app gov deploy propose \
+  --namespace apps --contract-id my.contract.v1 \
   --code-hash 0123...ABCD --abi-hash 0123...ABCD \
   --abi-version v1 --window-lower 12345 --window-upper 12400 \
   --mode Plain
@@ -149,19 +149,16 @@ Responds with `{ ok, proposal_id, tx_instructions: [{ wire_id, payload_hex }] }`
 - Submit a ballot (auto-detects referendum mode unless overridden):
 
 ```bash
-iroha gov vote --referendum-id r1 --proof-b64 BASE64_PROOF \
+iroha app gov vote --referendum-id r1 --proof-b64 BASE64_PROOF \
   [--public public.json]
 ```
 
 For plain (non-ZK) referenda provide the required fields explicitly:
 
 ```bash
-iroha gov vote --referendum-id r1 --mode plain --owner alice@domain \
+iroha app gov vote --referendum-id r1 --mode plain --owner alice@domain \
   --amount 1000 --duration-blocks 6000 --direction Aye
 ```
-
-Compat helpers `iroha gov vote-zk` and `iroha gov vote-plain` remain available
-when you want to target a specific mode without auto-detection.
 
 - Finalize a referendum (compute tally, emit Approved/Rejected):
 
@@ -171,49 +168,45 @@ curl -sS -X POST -H 'Content-Type: application/json' \
 
 - Build an enactment transaction (for an approved proposal):
 
-  iroha gov enact --proposal-id 0123...ABCD [--preimage-hash 00..00] [--window-lower H --window-upper H]
+  iroha app gov enact --proposal-id 0123...ABCD [--preimage-hash 00..00] [--window-lower H --window-upper H]
 
 - Apply protected namespaces on the server (admin/testing):
 
-  iroha gov protected-apply --namespaces apps,system
+  iroha app gov protected apply --namespaces apps,system
 
 - Build an ActivateContractInstance skeleton (pass `--blocking` to submit via CLI context):
 
-  iroha gov activate-instance --namespace apps --contract-id calc.v1 --code-hash 0xAA..AA [--blocking]
+  iroha app gov instance activate --namespace apps --contract-id calc.v1 --code-hash 0xAA..AA [--blocking]
 
 - List active instances for a namespace (admin/testing):
 
-  iroha gov instances --namespace apps
+  iroha app gov instance list --namespace apps
 
 - Combined manifest command (prints or saves when --out is provided):
 
-  iroha contracts manifest --code-hash 0xAA..AA
-  iroha contracts manifest --code-hash 0xAA..AA --out manifest.json
-
-  Alias:
-
-  iroha contracts man --code-hash 0xAA..AA
+  iroha app contracts manifest get --code-hash 0xAA..AA
+  iroha app contracts manifest get --code-hash 0xAA..AA --out manifest.json
 
 - List contract instances in a namespace (filters and pagination):
 
-  iroha contracts instances --namespace apps \
+  iroha app contracts instances --namespace apps \
     [--contains calc] [--hash-prefix aabb] [--offset 0] [--limit 50] [--order cid_desc]
 
   Add --table to render a clean table instead of raw JSON (columns: Namespace, Contract ID, Code Hash):
 
-  iroha contracts instances --namespace apps --table [--short-hash]
+  iroha app contracts instances --namespace apps --table [--short-hash]
 ```
 
 - Read governance state:
 
 ```bash
-iroha gov proposal-get --id 0123...ABCD
-iroha gov locks-get --referendum-id r1
-iroha gov council
-iroha gov referendum-get --id r1
-iroha gov tally-get --id r1
+iroha app gov proposal get --id 0123...ABCD
+iroha app gov locks get --referendum-id r1
+iroha app gov council
+iroha app gov referendum get --referendum-id r1
+iroha app gov tally get --referendum-id r1
 
-Governance events (subscribe via `iroha events`)
+Governance events (subscribe via `iroha ledger events`)
 - ProposalSubmitted, ProposalApproved, ProposalRejected, ProposalEnacted
 - ReferendumOpened, ReferendumClosed
 - BallotAccepted { mode, weight }, BallotRejected { reason }
@@ -223,7 +216,7 @@ Governance events (subscribe via `iroha events`)
 - Stream governance events:
 
 ```bash
-iroha events governance [--proposal-id 0123...ABCD] [--referendum-id r1]
+iroha ledger events governance [--proposal-id 0123...ABCD] [--referendum-id r1]
 ```
 
 
@@ -246,7 +239,7 @@ cat >vk_register.json <<'JSON'
   "vk_bytes": "BASE64..."
 }
 JSON
-iroha zk vk register --json vk_register.json
+iroha app zk vk register --json vk_register.json
 ```
 
 Update an existing verifying key (version must increase). You may supply only the commitment:
@@ -264,13 +257,13 @@ cat >vk_update.json <<'JSON'
   "commitment_hex": "0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd"
 }
 JSON
-iroha zk vk update --json vk_update.json
+iroha app zk vk update --json vk_update.json
 ```
 
 Read a VK record as JSON:
 
 ```bash
-iroha zk vk get --backend halo2/ipa --name vk_add
+iroha app zk vk get --backend halo2/ipa --name vk_add
 ```
 
 Deprecate a VK (removes the record in v1):
@@ -284,16 +277,16 @@ cat >vk_deprecate.json <<'JSON'
   "name": "vk_add"
 }
 JSON
-iroha zk vk deprecate --json vk_deprecate.json
+iroha app zk vk deprecate --json vk_deprecate.json
 ```
 
 Compute the schema hash expected in the VK registry:
 
 ```bash
 # From a Norito-encoded OpenVerifyEnvelope
-iroha zk schema-hash --norito proof_env.norito
+iroha app zk schema-hash --norito proof_env.norito
 # Or from raw public-input bytes (hex)
-iroha zk schema-hash --public-inputs-hex 0x0123abcd...
+iroha app zk schema-hash --public-inputs-hex 0x0123abcd...
 ```
 
 ### ZK attachments and prover reports (app API convenience)
@@ -301,28 +294,28 @@ iroha zk schema-hash --public-inputs-hex 0x0123abcd...
 Upload an attachment (set Content-Type appropriately):
 
 ```bash
-iroha zk attachments upload --file ./proof.json --content-type application/json
+iroha app zk attachments upload --file ./proof.json --content-type application/json
 ```
 
 List attachments, download one, and delete it:
 
 ```bash
-iroha zk attachments list
-iroha zk attachments get --id 0123ab... --out ./downloaded.bin
-iroha zk attachments delete --id 0123ab...
+iroha app zk attachments list
+iroha app zk attachments get --id 0123ab... --out ./downloaded.bin
+iroha app zk attachments delete --id 0123ab...
 
 # Clean up attachments (client-side filtering)
 # Preview Norito attachments older than 7 days
-iroha zk attachments cleanup --content-type application/x-norito --older-than-secs 604800 --summary
+iroha app zk attachments cleanup --content-type application/x-norito --older-than-secs 604800 --summary
 # Delete all JSON attachments created before a timestamp
-iroha zk attachments cleanup --content-type application/json --before-ms 1725500000000 --yes
+iroha app zk attachments cleanup --content-type application/json --before-ms 1725500000000 --yes
 
 ### Sample shield/unshield flows
 
 Shield public funds (append a shielded note commitment):
 
 ```
-iroha zk shield --asset rose#wonderland --from alice@wonderland \
+iroha app zk shield --asset rose#wonderland --from alice@wonderland \
   --amount 1000 --note-commitment 0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD
 ```
 
@@ -334,7 +327,7 @@ falls back to loading raw bytes via `--enc-payload`.
 To materialize memo bytes or inspect them without broadcasting a shield, use:
 
 ```
-iroha zk envelope --ephemeral-pubkey 0101... --nonce-hex 0202... \
+iroha app zk envelope --ephemeral-pubkey 0101... --nonce-hex 0202... \
   --ciphertext-b64 AQIDBA== --print-json --output memo.bin
 ```
 
@@ -352,13 +345,13 @@ cat > fuzz/attachments/zk/unshield_proof.sample.json <<'JSON'
 }
 JSON
 
-iroha zk unshield --asset rose#wonderland --to alice@wonderland --amount 1000 \
+iroha app zk unshield --asset rose#wonderland --to alice@wonderland --amount 1000 \
   --inputs DEADBEEF...CAFE,0123ABCD...ABCD --proof-json fuzz/attachments/zk/unshield_proof.sample.json
 
 ### Register a ZK-capable asset (Hybrid)
 
 ```
-iroha zk register-asset --asset rose#wonderland \
+iroha app zk register-asset --asset rose#wonderland \
   --allow-shield true --allow-unshield true \
   --vk-transfer halo2/ipa:vk_transfer --vk-unshield halo2/ipa:vk_unshield
 ```
@@ -376,16 +369,16 @@ iroha zk register-asset --asset rose#wonderland \
 2) Register verifying keys (transfer and unshield):
 
 ```
-iroha zk vk register --json fuzz/attachments/zk/vk_register.json
-iroha zk vk register --json fuzz/attachments/zk/vk_register.json \
+iroha app zk vk register --json fuzz/attachments/zk/vk_register.json
+iroha app zk vk register --json fuzz/attachments/zk/vk_register.json \
   # adjust backend/name to create a second VK, e.g., vk_unshield
 ```
 
 3) Inspect VKs:
 
 ```
-iroha zk vk get --backend halo2/ipa --name vk_transfer | jq .
-iroha zk vk get --backend halo2/ipa --name vk_unshield | jq .
+iroha app zk vk get --backend halo2/ipa --name vk_transfer | jq .
+iroha app zk vk get --backend halo2/ipa --name vk_unshield | jq .
 
 ### ZK Verify Batch (transparent Halo2 IPA)
 
@@ -393,24 +386,24 @@ Verify multiple OpenVerify envelopes in one request and print per‑item statuse
 
 ```
 # Given a Norito-encoded vector of envelopes
-iroha zk verify-batch --norito ./batch.norito
+iroha app zk verify-batch --norito ./batch.norito
 
 # Or a JSON array of base64-encoded Norito envelopes
 # Example: ["BASE64(norito(OpenVerifyEnvelope))", "BASE64(...)"]
-iroha zk verify-batch --json ./batch.json
+iroha app zk verify-batch --json ./batch.json
 ```
 ```
 
 4) Update VK (version bump):
 
 ```
-iroha zk vk update --json fuzz/attachments/zk/vk_update.json
+iroha app zk vk update --json fuzz/attachments/zk/vk_update.json
 ```
 
 5) Bind VKs to an asset policy (Hybrid) using the new helper:
 
 ```
-iroha zk register-asset --asset rose#wonderland \
+iroha app zk register-asset --asset rose#wonderland \
   --allow-shield true --allow-unshield true \
   --vk-transfer halo2/ipa:vk_transfer --vk-unshield halo2/ipa:vk_unshield
 ```
@@ -458,34 +451,34 @@ Notes:
 List background prover reports and fetch one (non‑consensus):
 
 ```bash
-iroha zk prover reports list
-iroha zk prover reports get --id 0123ab...
+iroha app zk prover reports list
+iroha app zk prover reports get --id 0123ab...
 ```
 
 Count prover reports matching filters (server‑side):
 
 ```bash
 # Total count
-iroha zk prover reports count
+iroha app zk prover reports count
 
 # Only Norito reports with a specific ZK1 tag
-iroha zk prover reports count --content-type application/x-norito --has-tag IPAK
+iroha app zk prover reports count --content-type application/x-norito --has-tag IPAK
 
 # Only successful reports since a timestamp (ms)
-iroha zk prover reports count --ok-only --since-ms 1725500000000
+iroha app zk prover reports count --ok-only --since-ms 1725500000000
 ```
 
 Server‑side bulk cleanup (dangerous; use filters + --yes):
 
 ```bash
 # Dry‑run: show what would be deleted (client lists, server filters applied by CLI)
-iroha zk prover reports cleanup --failed-only --content-type application/x-norito
+iroha app zk prover reports cleanup --failed-only --content-type application/x-norito
 
 # Server‑side delete of matching reports (confirm with --yes)
-iroha zk prover reports cleanup --server --yes --failed-only --content-type application/x-norito --since-ms 1725500000000
+iroha app zk prover reports cleanup --server --yes --failed-only --content-type application/x-norito --since-ms 1725500000000
 
 # Delete within a time window [since_ms, before_ms]
-iroha zk prover reports cleanup --server --yes \
+iroha app zk prover reports cleanup --server --yes \
   --content-type application/x-norito \
   --since-ms 1725500000000 \
   --before-ms 1725600000000
@@ -507,7 +500,7 @@ bash ./run.sh
 To create a domain, you need to specify the entity type first (`domain` in our case) and then the command (`register`) with a list of required parameters. For the `domain` entity, you only need to provide the `id` argument as a string that doesn't contain the `@`, `#` or `$` symbols.
 
 ```bash
-iroha domain register --id "Soramitsu"
+iroha ledger domain register --id "Soramitsu"
 ```
 
 ### Create new Account
@@ -515,7 +508,7 @@ iroha domain register --id "Soramitsu"
 To create an account, specify the entity type (`account`) and the command (`register`). Then define the value of the `id` argument using an account alias in the `alias@domain` format, where the alias is the account's public key in multihash representation:
 
 ```bash
-iroha account register --id "ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu"
+iroha ledger account register --id "ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu"
 ```
 
 ### Mint Asset to Account
@@ -523,8 +516,8 @@ iroha account register --id "ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C1
 To add assets to the account, you must first register an Asset Definition. Specify the `asset` entity and then use the `register` and `mint` commands respectively. Here is an example of adding Assets of the type `Quantity` to the account:
 
 ```bash
-iroha asset register --id "XOR#Soramitsu" --type Numeric
-iroha asset mint --id "XOR##ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu" --quantity 1010
+iroha ledger asset register --id "XOR#Soramitsu" --type Numeric
+iroha ledger asset mint --id "XOR##ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu" --quantity 1010
 ```
 
 With this, you created `XOR#Soramitsu`, an asset of type `Numeric`, and then gave `1010` units of this asset to the account `ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu`.
@@ -534,22 +527,22 @@ With this, you created `XOR#Soramitsu`, an asset of type `Numeric`, and then gav
 You can use Query API to check that your instructions were applied and the _world_ is in the desired state. For example, to know how many units of a particular asset an account has, use `asset get` with the specified account and asset:
 
 ```bash
-iroha asset get --id "XOR##ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu"
+iroha ledger asset get --id "XOR##ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu"
 ```
 
 This query returns the quantity of `XOR#Soramitsu` asset for the `ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu` account.
 
-You can also filter based on either account, asset or domain id by using the filtering API provided by the Iroha client CLI. Generally, filtering follows the `iroha ENTITY list filter PREDICATE` pattern, where ENTITY is asset, account or domain and PREDICATE is condition used for filtering serialized using JSON (check `iroha::data_model::predicate::value::ValuePredicate` type).
+You can also filter based on either account, asset or domain id by using the filtering API provided by the Iroha client CLI. Generally, filtering follows the `iroha ledger ENTITY list filter PREDICATE` pattern, where ENTITY is asset, account or domain and PREDICATE is condition used for filtering serialized using JSON (check `iroha::data_model::predicate::value::ValuePredicate` type).
 
 Here are some examples of filtering:
 
 ```bash
 # Filter domains by id
-iroha domain list filter '{"Atom": {"Id": {"Atom": {"Equals": "wonderland"}}}}'
+iroha ledger domain list filter '{"Atom": {"Id": {"Atom": {"Equals": "wonderland"}}}}'
 # Filter accounts by domain
-iroha account list filter '{"Atom": {"Id": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}' 
+iroha ledger account list filter '{"Atom": {"Id": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}' 
 # Filter asset by domain
-iroha asset list filter '{"Or": [{"Atom": {"Id": {"Definition": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}}, {"Atom": {"Id": {"Account": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}}]}'
+iroha ledger asset list filter '{"Or": [{"Atom": {"Id": {"Definition": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}}, {"Atom": {"Id": {"Account": {"Domain": {"Atom": {"Equals": "wonderland"}}}}}}]}'
 ```
 
 ### Execute IVM transaction
@@ -557,13 +550,13 @@ iroha asset list filter '{"Or": [{"Atom": {"Id": {"Definition": {"Domain": {"Ato
 Use `--file` to specify a path to the IVM bytecode file (typically a `.to` file produced by compiling Kotodama `.ko` source):
 
 ```bash
-iroha transaction ivm --file /path/to/contract.to
+iroha ledger transaction ivm --file /path/to/contract.to
 ```
 
 Or skip `--file` to read IVM bytecode from standard input:
 
 ```bash
-cat /path/to/contract.to | iroha transaction ivm
+cat /path/to/contract.to | iroha ledger transaction ivm
 ```
 
 These subcommands submit the provided IVM bytecode as an `Executable` to be executed outside a trigger context.
@@ -575,13 +568,13 @@ The reference implementation of the Rust client, `iroha`, is often used for diag
 To test transactions in the JSON format (used in the genesis block and by other SDKs), pipe the transaction into the client and add the `transaction stdin` subcommand to the arguments:
 
 ```bash
-cat fuzz/cli_dsl/transaction_log_message.json | iroha transaction stdin
+cat fuzz/cli_dsl/transaction_log_message.json | iroha ledger transaction stdin
 ```
 
 ### Request arbitrary query
 
 ```bash
-cat fuzz/cli_dsl/iterable_accounts_query.json | iroha query stdin
+cat fuzz/cli_dsl/iterable_accounts_query.json | iroha ledger query stdin
 ```
 
 ### Experimental: IDs-only projection (`--select ids`)
@@ -593,11 +586,11 @@ Examples (feature-gated):
 ```bash
 # List only domain identifiers (requires --features ids_projection)
 cargo run --bin iroha --features ids_projection -- \
-  domain list all --select ids
+  ledger domain list all --select ids
 
 # List only account identifiers with sorting/pagination
 cargo run --bin iroha --features ids_projection -- \
-  account list all --select ids --sort-by-metadata-key rank --order desc --offset 10 --limit 5
+  ledger account list all --select ids --sort-by-metadata-key rank --order desc --offset 10 --limit 5
 ```
 
 Expected output format is the same JSON as for full objects, but the entries are now identifier values, for example:
@@ -618,7 +611,7 @@ Ensure the CLI builds, then run:
 ```
 make docs-cli
 # or
-cargo run -p iroha_cli -- markdown-help > crates/iroha_cli/CommandLineHelp.md
+cargo run -p iroha_cli -- tools markdown-help > crates/iroha_cli/CommandLineHelp.md
 ```
 
 This regenerates the full `CommandLineHelp.md` directly from the live CLI, keeping the docs in sync with the actual arguments and subcommands.

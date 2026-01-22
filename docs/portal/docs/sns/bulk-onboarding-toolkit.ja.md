@@ -243,7 +243,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
 - **metadata/governance のパース:** inline JSON は直接解析し、ファイル参照は
   CSV 位置から相対解決。オブジェクトでない metadata は検証エラーになります。
 - **Controllers:** 空セルは `--default-controllers` に従います。非 owner へ委任
-  する場合は `owner;ops@dao` など明示的なリストを指定します。
+  する場合は `ih58...;ih58...` など明示的なリストを指定します。
 
 失敗時は行番号付きで報告されます (例: `error: row 12 term_years must be between 1 and 255`).
 スクリプトは検証エラーで `1`、CSV パス欠落で `2` を返します。

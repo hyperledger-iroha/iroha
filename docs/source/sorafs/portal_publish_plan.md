@@ -81,7 +81,7 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
    ```bash
    OUT="artifacts/devportal/sorafs/20260219T130012Z"
    TORII_URL="https://torii.stg.sora.net/"
-   AUTHORITY="docs-admin@sora"
+   AUTHORITY="ih58..."
    KEY_FILE="secrets/docs-admin.key"
    ALIAS_PROOF="secrets/docs.alias.proof"
 
@@ -110,13 +110,13 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
      `curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` or your ops
      dashboard) so the registry can track when the manifest entered the ledger.
 
-2. **Alternative: `iroha sorafs pin register`**
+2. **Alternative: `iroha app sorafs pin register`**
 
    - When the deployment host carries the compiled CLI (`cargo install --path .`),
      the same manifest can be pinned via:
 
      ```bash
-     iroha sorafs pin register \
+     iroha app sorafs pin register \
      --manifest "${OUT}/portal.manifest.to" \
      --chunk-digest "$(jq -r '.chunk_digest_sha3_hex' "${OUT}/portal.manifest.submit.json")" \
      --submitted-epoch "${SUBMITTED_EPOCH}" \
@@ -130,7 +130,7 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
 
 3. **Verify registry state**
 
-   - `iroha sorafs pin list --alias docs:portal --format json | jq`
+   - `iroha app sorafs pin list --alias docs:portal --format json | jq`
      should show the new manifest digest, pin policy, and replication orders.
    - Dashboards: check `dashboards/grafana/sorafs_pin_registry.json` for alias
      counts and `torii_sorafs_replication_backlog_total` (should stay near zero).
@@ -141,7 +141,7 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
 
    ```bash
    OUT="artifacts/devportal/sorafs/20260219T130012Z"
-   iroha sorafs gateway route-plan \
+   iroha app sorafs gateway route-plan \
      --manifest-json "${OUT}/portal.manifest.json" \
      --hostname docs.sora \
      --alias docs:portal \

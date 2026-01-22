@@ -110,8 +110,8 @@ Reward distributions کے لئے `PublicLaneRewardRecord` اور `PublicLaneRewa
   "asset": "xor#wonderland",
   "total_reward": "250.0000",
   "shares": [
-    { "account": "validator@lane", "role": "Validator", "amount": "150" },
-    { "account": "delegator@lane", "role": "Nominator", "amount": "100" }
+    { "account": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS", "role": "Validator", "amount": "150" },
+    { "account": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", "role": "Nominator", "amount": "100" }
   ],
   "metadata": {
     "telemetry_epoch_root": "0x4afe…",
@@ -143,8 +143,8 @@ Runtime guards:
 ```norito
 {
   "lane_id": 1,
-  "validator": "validator@lane",
-  "stake_account": "validator@lane",
+  "validator": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS",
+  "stake_account": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS",
   "initial_stake": "150000",
   "metadata": {
     "commission_bps": 750,
@@ -224,12 +224,12 @@ NX-9 کے بعد runtime logic `PublicLaneRewardRecord` annotations emit کرے 
   انہیں `iroha_config::parameters::actual::Nexus` کے ذریعے تھریڈ کریں اور GA اقدار منظور ہونے کے بعد
   `status.md` میں ظاہر کریں۔
 - **Torii/CLI quickstart:**
-  - `iroha nexus lane-report --summary` lane catalog entries، manifest readiness، اور validator modes
+  - `iroha app nexus lane-report --summary` lane catalog entries، manifest readiness، اور validator modes
     (stake-elected vs admin-managed) دکھاتا ہے تاکہ آپریٹرز confirm کر سکیں کہ کسی lane کے لئے staking admission فعال ہے۔
-  - `iroha_cli nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
+  - `iroha_cli app nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
     lifecycle/activation markers (pending target epoch, `activation_epoch` / `activation_height`, exit release, slash id)
     کو bonded/self stake کے ساتھ دکھاتا ہے۔
-    `iroha_cli nexus public-lane stake --lane <id> [--validator account@domain] [--summary]`
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator ih58...] [--summary]`
     `/stake` endpoint کو `(validator, staker)` جوڑی کے pending-unbond hints کے ساتھ mirror کرتا ہے۔
   - Torii snapshots for dashboards and SDKs:
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
@@ -237,18 +237,18 @@ NX-9 کے بعد runtime logic `PublicLaneRewardRecord` annotations emit کرے 
       release timers, bonded stake, last reward epoch.
       `address_format=ih58|compressed` literal rendering کو کنٹرول کرتا ہے۔
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
-      `staker`, bonded amount) کے ساتھ pending unbond timers۔ `?validator=account@domain` response کو
+      `staker`, bonded amount) کے ساتھ pending unbond timers۔ `?validator=ih58...` response کو
       ایک validator فوکس والے dashboards کے لئے filter کرتا ہے؛ `address_format` سب literals پر لاگو ہوتا ہے۔
   - Lifecycle ISIs standard transaction path استعمال کرتے ہیں (Torii `/v1/transactions`
     یا CLI instruction pipeline)۔ مثال Norito JSON payloads:
 
     ```jsonc
     [
-      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "validator@nexus" } },
+      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS" } },
       {
         "ExitPublicLaneValidator": {
           "lane_id": 1,
-          "validator": "validator@nexus",
+          "validator": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS",
           "release_at_ms": 1730000000000
         }
       }

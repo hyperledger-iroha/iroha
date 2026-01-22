@@ -43,7 +43,7 @@ translator: manual
   - Reliable Broadcast の集計カウンター `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`。
 - `GET /v1/sumeragi/rbc/sessions`
   - セッションごとの状態（ブロックハッシュ、height/view、チャンク総数／受信数、`ready_count`、`delivered`/`invalid` フラグ、ペイロードハッシュ、`recovered`）を確認し、停滞や再起動後の復旧を診断。
-  - CLI ショートカット: `iroha sumeragi rbc sessions --summary` が `hash`、`height/view`、チャンク進捗、`ready` 数、`invalid`／`delivered` フラグを出力。
+  - CLI ショートカット: `iroha --output-format text ops sumeragi rbc sessions` が `hash`、`height/view`、チャンク進捗、`ready` 数、`invalid`／`delivered` フラグを出力。
 
 ## エビデンス（監査・非コンセンサス）
 
@@ -55,9 +55,9 @@ translator: manual
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`
 - `POST /v1/sumeragi/evidence` → `{ "status": "accepted", "kind": "<variant>" }`
   - CLI ヘルパー:
-    - `iroha sumeragi evidence list --summary`
-    - `iroha sumeragi evidence count --summary`
-    - `iroha sumeragi evidence submit --evidence-hex <hex>`（または `--evidence-hex-file <path>`）
+    - `iroha --output-format text ops sumeragi evidence list`
+    - `iroha --output-format text ops sumeragi evidence count`
+    - `iroha ops sumeragi evidence submit --evidence-hex <hex>`（または `--evidence-hex-file <path>`）
 
 ## オペレーター認証（WebAuthn/mTLS）
 

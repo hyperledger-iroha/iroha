@@ -36,7 +36,7 @@ Fallback применяется к staging и регулируемым прод-
 
 Загружайте JSON через `sorafs_cli fetch --config` (автоматизация) или SDK-биндинги (`config_from_json`) до публикации политики операторам. Сохраняйте вывод scoreboard (`persist_path`) для аудиторских следов.
 
-Параметры принудительного режима на стороне gateway описаны в `docs/examples/sorafs_gateway_direct_mode.toml`. Шаблон отражает вывод `iroha sorafs gateway direct-mode enable`, отключая проверки envelope/admission, подключая defaults для rate-limit и заполняя таблицу `direct_mode` хостами из плана и digest значениями manifest. Замените placeholder-значения на данные вашего плана rollout перед фиксацией фрагмента в системе управления конфигурациями.
+Параметры принудительного режима на стороне gateway описаны в `docs/examples/sorafs_gateway_direct_mode.toml`. Шаблон отражает вывод `iroha app sorafs gateway direct-mode enable`, отключая проверки envelope/admission, подключая defaults для rate-limit и заполняя таблицу `direct_mode` хостами из плана и digest значениями manifest. Замените placeholder-значения на данные вашего плана rollout перед фиксацией фрагмента в системе управления конфигурациями.
 
 ## 3. Набор проверок соответствия
 

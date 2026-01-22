@@ -32,7 +32,7 @@ translation_last_reviewed: 2026-01-01
        "chain" : "testnet",
        "peers" : ["127.0.0.1:1337"],
        "accounts" : [{
-           "id" : "admin@test",
+           "id" : "ih58...",
            "public_key" : "ed0120..."
        }]
    }))?;

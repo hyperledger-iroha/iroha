@@ -147,6 +147,6 @@ A fachada REST agora entrega endpoints de listagem com atestacao:
   alias ativo e o backlog de ordens de replicacao com paginacao consistente e
   filtros de status.
 
-A CLI encapsula essas chamadas (`iroha sorafs pin list`, `pin show`, `alias list`,
+A CLI encapsula essas chamadas (`iroha app sorafs pin list`, `pin show`, `alias list`,
 `replication list`) para que operadores possam automatizar auditorias do
 registry sem tocar APIs de baixo nivel.

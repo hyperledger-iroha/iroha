@@ -25,7 +25,7 @@ iroha --config defaults/client.toml asset definition register --id coffee#wonder
 ## 2. Prepare credentials
 
 ```bash
-# raw 32-byte Ed25519 key in hex (use `iroha_cli crypto private-key export --raw` if needed)
+# raw 32-byte Ed25519 key in hex (use `iroha_cli tools crypto private-key export --raw` if needed)
 export ADMIN_PRIVATE_KEY_RAW="4f94...<64 hex chars>..."
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."

@@ -50,7 +50,7 @@ follow the steps below.
 | Logs | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` | Collect at least 5 sample payloads (redacting PII) per context. |
 | Fixture verification | `cargo xtask address-vectors --verify` | Ensures canonical fixture matches committed JSON. |
 | SDK parity check | `python3 scripts/account_fixture_helper.py check --target <path> --metrics-out artifacts/account_fixture/<label>.prom --metrics-label <label>` | Run for each SDK copy referenced in alerts/tickets. |
-| Clipboard/IME sanity | `iroha address inspect <literal>` (documented in `address_display_guidelines.md`) | Confirms problematic strings were not mangled before reaching Torii. |
+| Clipboard/IME sanity | `iroha tools address inspect <literal>` (documented in `address_display_guidelines.md`) | Confirms problematic strings were not mangled before reaching Torii. |
 
 ## 3. Immediate response steps
 
@@ -83,7 +83,7 @@ follow the steps below.
 
 ### 4.2 Client-side encoding/IME regressions
 
-- Use `iroha address inspect <literal>` to reconstruct the canonical payload and
+- Use `iroha tools address inspect <literal>` to reconstruct the canonical payload and
   detect hidden characters. Cross-check with `address_display_guidelines.md`
   (copy helpers, NFC handling, IME/Kana fuzz notes) and ensure affected clients
   follow the documented dual-format display requirements.
@@ -112,7 +112,7 @@ follow the steps below.
 | Scenario | Actions |
 |----------|---------|
 | Fixture drift | Regenerate `fixtures/account/address_vectors.json`, land the update with `cargo xtask address-vectors --verify`, run `ci/account_fixture_metrics.sh`, and coordinate SDK releases so each language vendor consumes the refreshed bundle. Record the change in `status.md` and the governance tracker. |
-| SDK/client regression | File bugs against the offending SDK, link to the canonical fixtures, and provide the `iroha address inspect` output. Gate releases via `ci/check_address_normalize.sh` or the SDK’s existing parity jobs until the fix lands. |
+| SDK/client regression | File bugs against the offending SDK, link to the canonical fixtures, and provide the `iroha tools address inspect` output. Gate releases via `ci/check_address_normalize.sh` or the SDK’s existing parity jobs until the fix lands. |
 | Malicious submissions | Apply Torii-level filters (e.g., block offending JWT/app IDs), throttle via the gateway, and log the abusive addresses in the governance incident tracker so any corresponding Local selectors can be tombstoned if necessary. |
 
 After remediation, rerun the PromQL query for `ERR_CHECKSUM_MISMATCH` to confirm

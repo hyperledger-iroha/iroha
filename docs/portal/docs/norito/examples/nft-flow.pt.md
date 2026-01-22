@@ -24,7 +24,7 @@ Percorre o ciclo de vida de um NFT do inicio ao fim: cunhagem para o dono, trans
 
 - Garanta que a definicao do NFT (por exemplo `n0#wonderland`) exista junto com as contas de dono/destinatario usadas no trecho (`ih58...`, `ih58...`).
 - Invoque o entrypoint `nft_issue_and_transfer` para cunhar o NFT, transferi-lo de Alice para Bob e anexar um sinal de metadados que descreva a emissao.
-- Inspecione o estado do livro razao de NFT com `iroha_cli nfts list --account <id>` ou os equivalentes do SDK para verificar a transferencia, depois confirme que o ativo e removido quando a instrucao de queima roda.
+- Inspecione o estado do livro razao de NFT com `iroha_cli ledger nfts list --account <id>` ou os equivalentes do SDK para verificar a transferencia, depois confirme que o ativo e removido quando a instrucao de queima roda.
 
 ## Guias de SDK relacionados
 

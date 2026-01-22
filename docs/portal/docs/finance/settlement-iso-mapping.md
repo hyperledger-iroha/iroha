@@ -247,7 +247,7 @@ status (e.g., `ConfSts = ACCP`) rather than the PvP “purpose”.
   payload archives remain deterministic across rebuilds.
 * Currency amounts follow ISO 4217 fraction digits (for example JPY has 0
   decimals, USD has 2); the bridge clamps Norito numeric precision accordingly.
-* The CLI settlement helpers (`iroha settlement ... --atomicity ...`) now emit
+* The CLI settlement helpers (`iroha app settlement ... --atomicity ...`) now emit
   Norito instructions whose execution plans map 1:1 to `Plan/ExecutionOrder` and
   `Plan/Atomicity` above.
 * The ISO helper (`ivm::iso20022`) validates the fields listed above and rejects

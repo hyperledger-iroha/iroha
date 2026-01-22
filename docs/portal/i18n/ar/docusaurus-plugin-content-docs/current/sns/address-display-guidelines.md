@@ -155,7 +155,7 @@ payload bit: │version  │ class  │  norm  │ext │
 يجب على المشغلين الذين يحولون ترميزات Local القديمة الى IH58 قانوني او سلاسل
 مضغوطة اتباع مسار CLI الموثق تحت ADDR-5:
 
-1. `iroha address inspect` يصدر الان ملخص JSON منظم مع IH58 والحمولة المضغوطة
+1. `iroha tools address inspect` يصدر الان ملخص JSON منظم مع IH58 والحمولة المضغوطة
    والـ hex القانوني. يتضمن الملخص ايضا كائن `domain` مع حقول `kind`/`warning`
    ويعكس اي نطاق مقدم عبر الحقل `input_domain`. عندما يكون `kind` هو `local12`
    تطبع CLI تحذيرا على stderr ويعكس ملخص JSON نفس التوجيه حتى تتمكن خطوط CI و
@@ -166,7 +166,7 @@ payload bit: │version  │ class  │  norm  │ext │
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("snx1...@wonderland");
+   const summary = inspectAccountId("snx1...");
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
@@ -181,7 +181,7 @@ payload bit: │version  │ class  │  norm  │ext │
 4. حدث manifests والسجلات والوثائق المواجهة للعميل بالصيغ القانونية وابلغ
    الاطراف المقابلة ان محددات Local سترفض بعد اكتمال cutover.
 5. لمجموعات البيانات الكبيرة، شغل
-   `iroha address audit --input addresses.txt --network-prefix 753`. يقرأ الامر
+   `iroha tools address audit --input addresses.txt --network-prefix 753`. يقرأ الامر
    literals مفصولة باسطر جديدة (التعليقات التي تبدا بـ `#` يتم تجاهلها، و
    `--input -` او عدم وجود علم يستخدم STDIN)، ويصدر تقرير JSON بملخصات
    قانونية/IH58/مضغوطة لكل ادخال، ويحسب اخطاء التحليل وتحذيرات نطاق Local. استخدم
@@ -196,8 +196,8 @@ payload bit: │version  │ class  │  norm  │ext │
   لمواصلة الفحص حتى عند وجود literals تالفة.
 7. يمكن لاتمتة CI/lint تشغيل `ci/check_address_normalize.sh` الذي يستخرج محددات
    Local من `fixtures/account/address_vectors.json`، ويحولها عبر
-   `iroha address normalize`، ويعيد تشغيل
-   `iroha address audit --fail-on-warning` لاثبات ان الاصدارات لم تعد تصدر digests
+   `iroha tools address normalize`، ويعيد تشغيل
+   `iroha tools address audit --fail-on-warning` لاثبات ان الاصدارات لم تعد تصدر digests
    Local.
 
 `torii_address_local8_total{endpoint}` بالاضافة الى
@@ -231,7 +231,7 @@ Grafana (`dashboards/grafana/address_ingest.json`) حتى يتمكن حزمة د
 
 ادرج النقطة التالية في ملاحظات اصدار المحفظة/المستكشف عند تنفيذ cutover:
 
-> **العناوين:** تمت اضافة مساعد `iroha address normalize --only-local --append-domain`
+> **العناوين:** تمت اضافة مساعد `iroha tools address normalize --only-local --append-domain`
 > وربطه في CI (`ci/check_address_normalize.sh`) حتى تتمكن مسارات المحفظة/المستكشف
 > من تحويل محددات Local القديمة الى صيغ IH58/مضغوطة قانونية قبل حظر Local-8/Local-12
 > على mainnet. حدث اي عمليات تصدير مخصصة لتشغيل الامر وارفق القائمة المعيارية

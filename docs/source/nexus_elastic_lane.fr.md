@@ -81,7 +81,7 @@ quatrieme optionnel lorsque l'encoding est active :
    etapes de rollout et la commande exacte `cargo xtask space-directory encode` (dans
    `space_directory_encode.command`). Attachez ce JSON au ticket d'onboarding pour preuve.
 4. `<slug>.manifest.to` - emis quand `--encode-space-directory` est active; pret pour
-   `iroha space-directory manifest publish` via Torii.
+   `iroha app space-directory manifest publish` via Torii.
 
 Utilisez `--dry-run` pour previsualiser les JSON/snippets sans ecrire de fichiers, et `--force`
 pour ecraser des artefacts existants.
@@ -97,7 +97,7 @@ pour ecraser des artefacts existants.
 3. Encodez (si vous avez saute `--encode-space-directory`) et publiez le manifest dans Space
    Directory avec la commande capturee dans le summary (`space_directory_encode.command`). Cela
    produit le payload `.manifest.to` attendu par Torii et enregistre la preuve pour les auditeurs;
-   soumettez via `iroha space-directory manifest publish`.
+   soumettez via `iroha app space-directory manifest publish`.
 4. Lancez `irohad --sora --config path/to/config.toml --trace-config` et archivez la sortie de trace
    dans le ticket de rollout. Cela prouve que la nouvelle geometrie correspond au slug/segments
    genere.

@@ -7,7 +7,7 @@ summary: Methodology and tooling for 60-day relay incentive shadow runs across l
 
 To promote relay incentives safely, the economics and networking teams must replay long
 telemetry windows and verify that payout weights remain fair, resistant to latency regressions,
-and resilient to DoS strategies. The `iroha sorafs incentives service shadow-run` command
+and resilient to DoS strategies. The `iroha app sorafs incentives service shadow-run` command
 replays Norito-encoded telemetry snapshots against the treasury reward engine and
 produces fairness diagnostics without minting on-ledger payouts.
 
@@ -17,7 +17,7 @@ the mandatory **60-day shadow run** before enabling automated payouts.
 ## Prerequisites
 
 - A fresh incentives state initialised with the production reward configuration
-  (`iroha sorafs incentives service init ...`).
+  (`iroha app sorafs incentives service init ...`).
 - A daemon config JSON mapping relay fingerprints to beneficiary accounts and bond entries
   (see `DaemonConfigFile` in `crates/iroha_cli/src/commands/sorafs.rs`).
 - A telemetry spool directory containing Norito-encoded `RelayEpochMetricsV1`
@@ -28,7 +28,7 @@ the mandatory **60-day shadow run** before enabling automated payouts.
 ## Running the Shadow Simulation
 
 ```bash
-iroha sorafs incentives service shadow-run \
+iroha app sorafs incentives service shadow-run \
   --state artifacts/incentives/shadow_state.json \
   --config configs/sorafs/shadow_daemon.json \
   --metrics-dir telemetry/soranet/relay_metrics \

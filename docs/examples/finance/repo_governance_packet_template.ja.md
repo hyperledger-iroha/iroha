@@ -31,7 +31,7 @@ Roadmap F1 (repo lifecycle documentation & tooling) に必要な artefact bundle
 
 ## 2. Instruction Payloads
 
-`iroha repo ... --output` で desk が承認した staged Norito instructions を記録します。各エントリには、出力ファイルの hash と、投票が通過した際に送信されるアクションの短い説明を含めてください。
+`iroha app repo ... --output` で desk が承認した staged Norito instructions を記録します。各エントリには、出力ファイルの hash と、投票が通過した際に送信されるアクションの短い説明を含めてください。
 
 | Action | File | SHA-256 | Notes |
 |--------|------|---------|-------|
@@ -50,7 +50,7 @@ repo が `--custodian` を使う場合は必ずこのセクションを記入し
 
 | Custodian | File | SHA-256 | Notes |
 |-----------|------|---------|-------|
-| `<custodian@domain>` | `custodian_ack_<custodian>.md` | `<sha256>` | custody window、routing account、drill contact を含む署名済み SLA。 |
+| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | custody window、routing account、drill contact を含む署名済み SLA。 |
 
 > acknowledgement は他の evidence (`artifacts/finance/repo/<slug>/`) と同じ場所に保存し、
 > `scripts/repo_evidence_manifest.py` が staged instructions と config snippets と同じツリーに記録できるようにしてください。詳細は

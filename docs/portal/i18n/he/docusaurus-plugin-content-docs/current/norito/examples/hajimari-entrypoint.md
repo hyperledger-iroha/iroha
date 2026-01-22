@@ -18,7 +18,7 @@ source: crates/ivm/docs/examples/01_hajimari.ko
 
 - קומפלו את החוזה עם `koto_compile --abi 1` כפי שמוצג ב-[Norito Getting Started](/norito/getting-started#1-compile-a-kotodama-contract) או באמצעות `cargo test -p ivm developer_portal_norito_snippets_compile`.
 - בצעו בדיקת עשן לבייטקוד מקומית עם `ivm_run` / `developer_portal_norito_snippets_run` כדי לאמת את לוג `info!` ואת ה-syscall הראשוני לפני שנוגעים בצומת.
-- פרסו את הארטיפקט באמצעות `iroha_cli contracts deploy` ואמתו את המניפסט באמצעות השלבים ב-[Norito Getting Started](/norito/getting-started#4-deploy-via-iroha_cli).
+- פרסו את הארטיפקט באמצעות `iroha_cli app contracts deploy` ואמתו את המניפסט באמצעות השלבים ב-[Norito Getting Started](/norito/getting-started#4-deploy-via-iroha_cli).
 
 ## מדריכי SDK קשורים
 

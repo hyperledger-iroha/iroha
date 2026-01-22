@@ -24,12 +24,12 @@ This document captures how verifying keys (VKs) and zero-knowledge proof envelop
 
 ### CLI helpers
 
-`iroha_cli zk` exposes thin wrappers that post the JSON DTOs Torii expects:
+`iroha_cli app zk` exposes thin wrappers that post the JSON DTOs Torii expects:
 
-- `iroha_cli zk vk register --json path/to/register.json`
-- `iroha_cli zk vk update --json path/to/update.json`
-- `iroha_cli zk vk deprecate --json path/to/deprecate.json`
-- `iroha_cli zk vk get --backend halo2/ipa --name vk_transfer`
+- `iroha_cli app zk vk register --json path/to/register.json`
+- `iroha_cli app zk vk update --json path/to/update.json`
+- `iroha_cli app zk vk deprecate --json path/to/deprecate.json`
+- `iroha_cli app zk vk get --backend halo2/ipa --name vk_transfer`
 
 The JSON DTOs mirror the `iroha_data_model::proof` payloads. Inline VK bytes remain base64-encoded, while commitments are lowercase hex strings.
 
@@ -58,11 +58,11 @@ The JSON DTOs mirror the `iroha_data_model::proof` payloads. Inline VK bytes rem
 
 ### CLI coverage
 
-New subcommands are available under `iroha_cli zk proofs`:
+New subcommands are available under `iroha_cli app zk proofs`:
 
-- `iroha_cli zk proofs list [--backend halo2/ipa] [--status Verified] [--has-tag PROF] [--limit 20]`
-- `iroha_cli zk proofs count [--backend halo2/ipa] [--has-tag IPAK]`
-- `iroha_cli zk proofs get --backend halo2/ipa --hash 0123...`
+- `iroha_cli app zk proofs list [--backend halo2/ipa] [--status Verified] [--has-tag PROF] [--limit 20]`
+- `iroha_cli app zk proofs count [--backend halo2/ipa] [--has-tag IPAK]`
+- `iroha_cli app zk proofs get --backend halo2/ipa --hash 0123...`
 
 All commands emit Norito JSON responses. Filters match the HTTP query parameters one-to-one, making it easy to script pagination or supply the output into monitoring tooling.
 

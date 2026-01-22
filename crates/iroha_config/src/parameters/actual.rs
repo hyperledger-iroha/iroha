@@ -3692,6 +3692,15 @@ pub struct Sumeragi {
     pub pacemaker_max_backoff: Duration,
     /// Pacemaker jitter band (permille of window). 0 disables jitter.
     pub pacemaker_jitter_frac_permille: u32,
+    /// Soft limit for blocking pending blocks before pacemaker backpressure defers proposals.
+    /// 0 keeps strict gating (any pending block defers).
+    pub pacemaker_active_pending_soft_limit: usize,
+    /// Soft limit for unresolved RBC backlog sessions before pacemaker backpressure defers proposals.
+    /// 0 keeps strict gating (any backlog session defers).
+    pub pacemaker_rbc_backlog_session_soft_limit: usize,
+    /// Soft limit for missing RBC chunks before pacemaker backpressure defers proposals.
+    /// 0 keeps strict gating (any missing chunks defers).
+    pub pacemaker_rbc_backlog_chunk_soft_limit: usize,
     /// Enable real BLS signing/verification for consensus votes (mandatory).
     pub enable_bls: bool,
     /// Adaptive observability/auto-mitigation knobs.

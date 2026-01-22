@@ -17,7 +17,7 @@ translation_last_reviewed: 2026-01-01
 
 חבילה זו כוללת את ה-artefacts הנדרשים לפרלמנט Sora לאישור תשלומי relay אוטומטיים (SNNet-7):
 
-- `reward_config.json` - תצורת מנוע תגמולים הניתנת לסריאליזציה ב-Norito, מוכנה לטעינה ע"י `iroha sorafs incentives service init`. `budget_approval_id` תואם ל-hash הרשום בפרוטוקולי הממשל.
+- `reward_config.json` - תצורת מנוע תגמולים הניתנת לסריאליזציה ב-Norito, מוכנה לטעינה ע"י `iroha app sorafs incentives service init`. `budget_approval_id` תואם ל-hash הרשום בפרוטוקולי הממשל.
 - `shadow_daemon.json` - מיפוי מוטבים ו-bonds שמנוצל ע"י harness ה-replay (`shadow-run`) וה-daemon בפרודקשן.
 - `economic_analysis.md` - סיכום הוגנות עבור סימולציית shadow 2025-10 -> 2025-11.
 - `rollback_plan.md` - playbook תפעולי להשבתת תשלומים אוטומטיים.

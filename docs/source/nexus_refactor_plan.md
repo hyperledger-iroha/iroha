@@ -40,7 +40,7 @@ This document captures the immediate roadmap for the Sora Nexus Ledger ("Iroha 3
    - Move pagination/cursor logic into reusable components under `crates/iroha_core/src/query/`. Align Norito representations in `iroha_data_model`.
   - Add snapshot queries for triggers, assets, and roles with deterministic ordering (tracked via `crates/iroha_core/tests/snapshot_iterable.rs` for current coverage).
 3. **Snapshot Consistency**
-   - Ensure `iroha query` CLI uses the same snapshot path as Sumeragi/fetchers.
+   - Ensure `iroha ledger query` CLI uses the same snapshot path as Sumeragi/fetchers.
    - CLI snapshot regression tests live under `tests/cli/state_snapshot.rs` (feature-gated for slow runs).
 
 ### Phase C – Sumeragi Pipeline

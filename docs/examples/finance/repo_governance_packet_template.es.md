@@ -35,7 +35,7 @@ consejo de governance pueda reproducir los bytes referenciados en la propuesta.
 ## 2. Payloads de instrucciones
 
 Registra las instrucciones Norito staged que los desks aprobaron via
-`iroha repo ... --output`. Cada entrada debe incluir el hash del archivo emitido
+`iroha app repo ... --output`. Cada entrada debe incluir el hash del archivo emitido
 y una descripcion corta de la accion que se enviara una vez que el voto pase.
 
 | Accion | Archivo | SHA-256 | Notas |
@@ -57,7 +57,7 @@ sec 2.8 de `docs/source/finance/repo_ops.md`.
 
 | Custodio | Archivo | SHA-256 | Notas |
 |-----------|------|---------|-------|
-| `<custodian@domain>` | `custodian_ack_<custodian>.md` | `<sha256>` | SLA firmado que cubre ventana de custodia, cuenta de ruteo y contacto de drill. |
+| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | SLA firmado que cubre ventana de custodia, cuenta de ruteo y contacto de drill. |
 
 > Guarda el acuse junto al resto de evidencia (`artifacts/finance/repo/<slug>/`)
 > para que `scripts/repo_evidence_manifest.py` registre el archivo en el mismo arbol que

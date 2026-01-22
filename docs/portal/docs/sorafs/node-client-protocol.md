@@ -113,14 +113,14 @@ Common errors raised to operators/SDKs:
 
 ## CLI & REST Helpers
 
-- `iroha sorafs pin list|show`, `alias list`, and `replication list` wrap the
+- `iroha app sorafs pin list|show`, `alias list`, and `replication list` wrap the
   pin-registry REST endpoints and print raw Norito JSON with attestation blocks
   for audit evidence.
-- `iroha sorafs storage pin` and `torii /v1/sorafs/pin/register` accept Norito
+- `iroha app sorafs storage pin` and `torii /v1/sorafs/pin/register` accept Norito
   or JSON manifests plus optional alias proofs and successors; malformed proofs
   raise `400`, stale proofs surface `503` with `Warning: 110`, and
   hard-expired proofs return `412`.
-- `iroha sorafs repair list` mirrors repair queue filters, while
+- `iroha app sorafs repair list` mirrors repair queue filters, while
   `repair claim|complete|fail|escalate` submit signed worker actions or slash
   proposals to Torii. Slash proposals may include a governance approval summary
   (approve/reject/abstain vote counts plus approved_at/finalized_at
@@ -130,7 +130,7 @@ Common errors raised to operators/SDKs:
 - Repair status responses include an `events` array containing base64 Norito
   `RepairTaskEventV1` entries ordered by occurrence for audit trails; the list
   is capped to the most recent transitions.
-- `iroha sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` emits read-only
+- `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` emits read-only
   retention reports from the local manifest store for audit evidence.
 - REST endpoints (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
   `/v1/sorafs/replication`) include attestation structures so clients can

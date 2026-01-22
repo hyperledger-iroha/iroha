@@ -47,17 +47,17 @@ translator: manual
 
 ## אינטגרציית ממשל וניימספייס מוגנים
 
-- `gov_protected_namespaces` (פרמטר מותאם) מפעיל שער קבלה. Torii מספק `/v1/gov/protected-namespaces`; CLI: `iroha_cli gov protected-set/get`.
+- `gov_protected_namespaces` (פרמטר מותאם) מפעיל שער קבלה. Torii מספק `/v1/gov/protected-namespaces`; CLI: `iroha_cli app gov protected set/get`.
 - הצעות `ProposeDeployContract` מאחסנות `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
 - לאחר `EnactReferendum` מתקבלות פריסות עם נתונים תואמים ומטא-דאטה `gov_namespace`/`gov_contract_id`.
 
 ## CLI
 
-- `iroha_cli contract deploy` – שולח בקשת פריסה.
-- `iroha_cli contract manifest` – שולף מניפסט.
-- `iroha_cli contract code-bytes-get` – מוריד `.to`.
-- `iroha_cli contract instances` – מציג מופעים פעילים.
-- פקודות ממשל (`gov propose-deploy`, `gov enact`, `gov protected-set/get`) משלימות את ה-flow.
+- `iroha_cli app contracts deploy` – שולח בקשת פריסה.
+- `iroha_cli app contracts manifest get` – שולף מניפסט.
+- `iroha_cli app contracts code get` – מוריד `.to`.
+- `iroha_cli app contracts instances` – מציג מופעים פעילים.
+- פקודות ממשל (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`, `iroha_cli app gov protected set/get`) משלימות את ה-flow.
 
 ## בדיקות
 

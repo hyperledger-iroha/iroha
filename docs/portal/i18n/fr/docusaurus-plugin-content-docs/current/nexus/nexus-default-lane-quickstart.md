@@ -112,7 +112,7 @@ Le noeud journalise la politique de routage derivee au demarrage. Toute erreur d
 Une fois le noeud en ligne, utilisez l'helper CLI pour verifier que la lane par defaut est scellee (manifest charge) et prete pour le trafic. La vue recap affiche une ligne par lane :
 
 ```bash
-iroha_cli nexus lane-report --summary
+iroha_cli app nexus lane-report --summary
 ```
 
 Example output:
