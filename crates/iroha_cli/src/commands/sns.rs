@@ -5,6 +5,7 @@
 //! crafting raw JSON payloads.
 
 use crate::{Run, RunContext};
+use crate::cli_output::print_with_optional_text;
 use clap::{Args, Subcommand};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
@@ -20,8 +21,9 @@ use iroha::data_model::{
 };
 use iroha::sns::CaseExportQuery;
 use iroha_primitives::json::Json;
-use norito::json::{self, Value};
+use norito::json::{self, Map, Value};
 use std::{
+    fmt::Write as _,
     fs,
     path::{Path, PathBuf},
     str::FromStr,
@@ -537,34 +539,121 @@ impl Run for GetPolicyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = context.client_from_config();
         let policy = client.sns().get_policy(self.suffix_id)?;
-        context.print_data(&policy)?;
-        match suffix_catalog().get(self.suffix_id) {
-            Some(entry) => {
-                {
-                    let resolve = |literal: &str| crate::resolve_account_id(context, literal);
-                    entry
-                        .verify_policy(&policy, &resolve)
-                        .wrap_err_with(|| {
-                            format!("catalog mismatch for suffix id {}", self.suffix_id)
-                        })?;
-                }
-                context.println(format!(
-                    "Catalog entry `{}` verified (status: {}, catalog version {}).",
-                    entry.suffix,
-                    entry.status,
-                    suffix_catalog().version
-                ))?;
+        let catalog_version = suffix_catalog().version;
+        let catalog_entry = suffix_catalog().get(self.suffix_id);
+        let mut verify_error = None;
+        let mut catalog_error = None;
+        if let Some(entry) = catalog_entry {
+            let resolve = |literal: &str| crate::resolve_account_id(context, literal);
+            if let Err(err) = entry
+                .verify_policy(&policy, &resolve)
+                .wrap_err_with(|| format!("catalog mismatch for suffix id {}", self.suffix_id))
+            {
+                catalog_error = Some(err.to_string());
+                verify_error = Some(err);
             }
-            None => {
-                context.println(format!(
-                    "Suffix id {} is not present in the embedded catalog snapshot (version {}).",
-                    self.suffix_id,
-                    suffix_catalog().version
-                ))?;
-            }
+        }
+
+        let output =
+            build_policy_output_value(&policy, catalog_entry, catalog_version, catalog_error.as_deref())?;
+        let text = render_policy_summary_text(
+            &policy,
+            catalog_entry,
+            catalog_version,
+            catalog_error.as_deref(),
+        );
+        print_with_optional_text(context, Some(text), &output)?;
+
+        if let Some(err) = verify_error {
+            return Err(err);
         }
         Ok(())
     }
+}
+
+fn build_policy_output_value(
+    policy: &SuffixPolicyV1,
+    catalog_entry: Option<&SuffixCatalogEntry>,
+    catalog_version: u32,
+    catalog_error: Option<&str>,
+) -> Result<Value> {
+    let mut map = Map::new();
+    let policy_value = json::to_value(policy).wrap_err("failed to serialize suffix policy")?;
+    map.insert("policy".into(), policy_value);
+    map.insert(
+        "catalog_version".into(),
+        Value::from(u64::from(catalog_version)),
+    );
+    match catalog_entry {
+        Some(entry) => {
+            let entry_value =
+                json::to_value(entry).wrap_err("failed to serialize suffix catalog entry")?;
+            map.insert("catalog_entry".into(), entry_value);
+            map.insert("catalog_present".into(), Value::from(true));
+            map.insert(
+                "catalog_match".into(),
+                Value::from(catalog_error.is_none()),
+            );
+        }
+        None => {
+            map.insert("catalog_entry".into(), Value::Null);
+            map.insert("catalog_present".into(), Value::from(false));
+            map.insert("catalog_match".into(), Value::Null);
+        }
+    }
+    if let Some(error) = catalog_error {
+        map.insert("catalog_error".into(), Value::from(error.to_string()));
+    }
+    Ok(Value::Object(map))
+}
+
+fn render_policy_summary_text(
+    policy: &SuffixPolicyV1,
+    catalog_entry: Option<&SuffixCatalogEntry>,
+    catalog_version: u32,
+    catalog_error: Option<&str>,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "SNS suffix policy");
+    let _ = writeln!(out, "suffix_id: {}", policy.suffix_id);
+    let _ = writeln!(out, "suffix: {}", policy.suffix);
+    let _ = writeln!(out, "status: {:?}", policy.status);
+    let _ = writeln!(out, "steward: {}", policy.steward);
+    let _ = writeln!(out, "payment_asset_id: {}", policy.payment_asset_id);
+    let _ = writeln!(
+        out,
+        "term_years: {}-{}",
+        policy.min_term_years, policy.max_term_years
+    );
+    let _ = writeln!(out, "grace_period_days: {}", policy.grace_period_days);
+    let _ = writeln!(
+        out,
+        "redemption_period_days: {}",
+        policy.redemption_period_days
+    );
+    let _ = writeln!(out, "policy_version: {}", policy.policy_version);
+    match catalog_entry {
+        Some(entry) => {
+            let _ = writeln!(
+                out,
+                "catalog: {} (status: {}, version {})",
+                entry.suffix, entry.status, catalog_version
+            );
+            if let Some(error) = catalog_error {
+                let _ = writeln!(out, "catalog_match: false ({error})");
+            } else {
+                let _ = writeln!(out, "catalog_match: true");
+            }
+        }
+        None => {
+            let _ = writeln!(
+                out,
+                "catalog: missing (version {})",
+                catalog_version
+            );
+        }
+    }
+    out
 }
 
 impl CaseCreateArgs {
@@ -586,14 +675,14 @@ impl Run for CaseCreateArgs {
         let case_payload = self.load_case()?;
         validate_case_against_schema(&schema, &case_payload, "case")?;
         if self.dry_run {
-            context.println("Arbitration case validated (dry-run).")?;
-            context.print_data(&case_payload)
+            let text = "Arbitration case validated (dry-run).".to_string();
+            print_with_optional_text(context, Some(text), &case_payload)
         } else {
             let result = context
                 .client_from_config()
                 .sns()
                 .create_case(&case_payload)?;
-            context.print_data(&result)
+            print_with_optional_text(context, None, &result)
         }
     }
 }
@@ -655,7 +744,7 @@ fn suffix_catalog() -> &'static SuffixCatalog {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, norito::json::JsonDeserialize)]
+#[derive(Debug, Clone, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct SuffixCatalog {
     version: u32,
     generated_at: String,
@@ -671,7 +760,7 @@ impl SuffixCatalog {
     }
 }
 
-#[derive(Debug, Clone, norito::json::JsonDeserialize)]
+#[derive(Debug, Clone, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct SuffixCatalogEntry {
     suffix: String,
     suffix_id: u16,
@@ -692,7 +781,7 @@ struct SuffixCatalogEntry {
     fee_split: CatalogFeeSplit,
 }
 
-#[derive(Debug, Clone, norito::json::JsonDeserialize)]
+#[derive(Debug, Clone, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct CatalogReservedLabel {
     label: String,
     #[norito(default)]
@@ -703,13 +792,13 @@ struct CatalogReservedLabel {
     note: String,
 }
 
-#[derive(Debug, Clone, norito::json::JsonDeserialize)]
+#[derive(Debug, Clone, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct CatalogTokenValue {
     asset_id: String,
     amount: u128,
 }
 
-#[derive(Debug, Clone, norito::json::JsonDeserialize)]
+#[derive(Debug, Clone, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct CatalogPriceTier {
     tier_id: u8,
     label_regex: String,
@@ -722,7 +811,7 @@ struct CatalogPriceTier {
 }
 
 #[allow(clippy::struct_field_names)]
-#[derive(Debug, Clone, norito::json::JsonDeserialize)]
+#[derive(Debug, Clone, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct CatalogFeeSplit {
     treasury_bps: u16,
     steward_bps: u16,
@@ -1165,6 +1254,7 @@ fn parse_json_literal(raw: &str) -> Json {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::sns::fixtures;
     use iroha::data_model::sns::ControllerType;
     use iroha_test_samples::ALICE_ID;
     use tempfile::NamedTempFile;
@@ -1199,6 +1289,31 @@ mod tests {
             settlement: Some("\"tx-1\"".into()),
             signature: Some("\"sig\"".into()),
             ..PaymentOptions::default()
+        }
+    }
+
+    fn sample_catalog_entry() -> SuffixCatalogEntry {
+        SuffixCatalogEntry {
+            suffix: "sora".to_string(),
+            suffix_id: 1,
+            status: "active".to_string(),
+            steward_account: "alice@wonderland".to_string(),
+            fund_splitter_account: "splitter@wonderland".to_string(),
+            payment_asset_id: "xor#sora".to_string(),
+            referral_cap_bps: 0,
+            min_term_years: 1,
+            max_term_years: 2,
+            grace_period_days: 30,
+            redemption_period_days: 30,
+            policy_version: 1,
+            reserved_labels: Vec::new(),
+            pricing: Vec::new(),
+            fee_split: CatalogFeeSplit {
+                treasury_bps: 50,
+                steward_bps: 50,
+                referral_max_bps: 0,
+                escrow_bps: 0,
+            },
         }
     }
 
@@ -1255,6 +1370,52 @@ mod tests {
             .expect("renew payload");
         assert_eq!(payload.term_years, 2);
         assert_eq!(payload.payment.gross_amount, 120);
+    }
+
+    #[test]
+    fn build_policy_output_value_includes_catalog() {
+        let policy = fixtures::default_policy();
+        let entry = sample_catalog_entry();
+        let value = build_policy_output_value(&policy, Some(&entry), 7, None)
+            .expect("policy output");
+        let obj = value.as_object().expect("policy output object");
+        assert_eq!(obj.get("catalog_version").and_then(Value::as_u64), Some(7));
+        assert_eq!(
+            obj.get("catalog_match").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(obj.get("catalog_entry").is_some());
+    }
+
+    #[test]
+    fn render_policy_summary_text_mentions_catalog() {
+        let policy = fixtures::default_policy();
+        let entry = sample_catalog_entry();
+        let text = render_policy_summary_text(&policy, Some(&entry), 7, None);
+        assert!(text.contains("catalog: sora"));
+        assert!(text.contains("catalog_match: true"));
+    }
+
+    #[test]
+    fn build_policy_output_value_records_error() {
+        let policy = fixtures::default_policy();
+        let entry = sample_catalog_entry();
+        let value = build_policy_output_value(
+            &policy,
+            Some(&entry),
+            7,
+            Some("mismatch details"),
+        )
+        .expect("policy output");
+        let obj = value.as_object().expect("policy output object");
+        assert_eq!(
+            obj.get("catalog_match").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            obj.get("catalog_error").and_then(Value::as_str),
+            Some("mismatch details")
+        );
     }
 
     #[test]

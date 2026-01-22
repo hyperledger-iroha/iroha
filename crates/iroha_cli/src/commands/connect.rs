@@ -14,7 +14,7 @@ use eyre::{Context, Result, eyre};
 use norito::json;
 
 use crate::{
-    Run, RunContext,
+    CliOutputFormat, Run, RunContext,
     json_macros::{JsonDeserialize, JsonSerialize},
 };
 
@@ -28,13 +28,13 @@ pub enum Command {
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let connect_root = context.config().connect_queue_root.clone();
-        run(self, &connect_root)
+        run(self, &connect_root, context)
     }
 }
 
-pub fn run(command: Command, connect_root: &Path) -> Result<()> {
+pub fn run<C: RunContext>(command: Command, connect_root: &Path, context: &mut C) -> Result<()> {
     match command {
-        Command::Queue(sub) => queue::run(sub, connect_root),
+        Command::Queue(sub) => queue::run(sub, connect_root, context),
     }
 }
 
@@ -50,27 +50,25 @@ pub mod queue {
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let connect_root = context.config().connect_queue_root.clone();
-            run(self, &connect_root)
+            run(self, &connect_root, context)
         }
     }
 
-    pub fn run(command: Command, connect_root: &Path) -> Result<()> {
+    pub fn run<C: RunContext>(
+        command: Command,
+        connect_root: &Path,
+        context: &mut C,
+    ) -> Result<()> {
         match command {
             Command::Inspect(args) => {
                 let report = build_report(&args, connect_root)?;
-                match args.format {
-                    OutputFormat::Table => {
-                        println!("{}", render_table(&report));
-                    }
-                    OutputFormat::Json => {
-                        let json_value = json::to_value(&report)
-                            .wrap_err("failed to encode inspection summary")?;
-                        let json_text = json::to_string_pretty(&json_value)
-                            .wrap_err("failed to encode inspection summary")?;
-                        println!("{json_text}");
-                    }
+                match context.output_format() {
+                    CliOutputFormat::Json => context.print_data(&report),
+                    CliOutputFormat::Text => match args.format {
+                        OutputFormat::Table => context.println(render_table(&report)),
+                        OutputFormat::Json => context.print_data(&report),
+                    },
                 }
-                Ok(())
             }
         }
     }
@@ -89,7 +87,9 @@ pub mod queue {
         /// Include metrics summary derived from `metrics.ndjson`.
         #[arg(long)]
         pub metrics: bool,
-        /// Output format (`table` or `json`).
+        /// Output format for text mode (`table` or `json`).
+        ///
+        /// Ignored when `--output-format json` is used.
         #[arg(long, value_enum, default_value = "table")]
         pub format: OutputFormat,
     }
@@ -387,7 +387,67 @@ pub mod queue {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use crate::{CliOutputFormat, RunContext};
+        use iroha_i18n::{Bundle, Language, Localizer};
         use tempfile::TempDir;
+
+        struct TestContext {
+            output_format: CliOutputFormat,
+            printed: Vec<String>,
+            config: iroha::config::Config,
+            i18n: Localizer,
+        }
+
+        impl TestContext {
+            fn new(output_format: CliOutputFormat) -> Self {
+                Self {
+                    output_format,
+                    printed: Vec::new(),
+                    config: crate::fallback_config(),
+                    i18n: Localizer::new(Bundle::Cli, Language::English),
+                }
+            }
+        }
+
+        impl RunContext for TestContext {
+            fn config(&self) -> &iroha::config::Config {
+                &self.config
+            }
+
+            fn transaction_metadata(&self) -> Option<&iroha::data_model::metadata::Metadata> {
+                None
+            }
+
+            fn input_instructions(&self) -> bool {
+                false
+            }
+
+            fn output_instructions(&self) -> bool {
+                false
+            }
+
+            fn i18n(&self) -> &Localizer {
+                &self.i18n
+            }
+
+            fn output_format(&self) -> CliOutputFormat {
+                self.output_format
+            }
+
+            fn print_data<T>(&mut self, data: &T) -> Result<()>
+            where
+                T: json::JsonSerialize + ?Sized,
+            {
+                let payload = json::to_json_pretty(data).expect("serialize json");
+                self.printed.push(payload);
+                Ok(())
+            }
+
+            fn println(&mut self, data: impl std::fmt::Display) -> Result<()> {
+                self.printed.push(data.to_string());
+                Ok(())
+            }
+        }
 
         fn write_snapshot(dir: &TempDir, sid: &str, snapshot: &ConnectQueueSnapshot) -> PathBuf {
             let session_dir = dir.path().join(sid);
@@ -480,6 +540,32 @@ pub mod queue {
                     json::from_str(&json_text).expect("deserialize state");
                 assert_eq!(decoded, state);
             }
+        }
+
+        #[test]
+        fn inspect_outputs_json_in_json_mode() {
+            let tmp = TempDir::new().unwrap();
+            let sid = "AQID";
+            let snapshot = sample_snapshot(sid);
+            let path = write_snapshot(&tmp, sid, &snapshot);
+            let args = Inspect {
+                sid: Some(sid.to_string()),
+                snapshot: Some(path),
+                root: Some(tmp.path().to_path_buf()),
+                metrics: false,
+                format: OutputFormat::Table,
+            };
+            let mut ctx = TestContext::new(CliOutputFormat::Json);
+            run(Command::Inspect(args), tmp.path(), &mut ctx).unwrap();
+            assert_eq!(ctx.printed.len(), 1);
+            let value: json::Value = json::from_str(&ctx.printed[0]).expect("json output");
+            assert_eq!(
+                value
+                    .get("snapshot")
+                    .and_then(|v| v.get("state"))
+                    .and_then(|v| v.as_str()),
+                Some("healthy")
+            );
         }
     }
 }

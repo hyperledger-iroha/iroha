@@ -1305,7 +1305,7 @@ impl Actor {
     pub(super) fn proposal_backpressure_at(&mut self, now: Instant) -> ProposalBackpressure {
         self.subsystems.propose.backpressure_gate.refresh();
         let queue_state = self.subsystems.propose.backpressure_gate.state();
-        let blocking_pending = self.blocking_pending_blocks_len();
+        let blocking_pending = self.blocking_pending_blocks_len_with_progress(now);
         let active_pending = blocking_pending > self.config.pacemaker_active_pending_soft_limit;
         let rbc_backlog_summary = self.rbc_backlog_summary();
         let mut rbc_backlog = self.rbc_backlog_exceeds_pacemaker_soft_limits(rbc_backlog_summary);
@@ -1483,7 +1483,7 @@ impl Actor {
         now: Instant,
         state: BackpressureState,
     ) {
-        let blocking_pending = self.blocking_pending_blocks_len();
+        let blocking_pending = self.blocking_pending_blocks_len_with_progress(now);
         let active_pending = blocking_pending > self.config.pacemaker_active_pending_soft_limit;
         let rbc_backlog_summary = self.rbc_backlog_summary();
         let rbc_backlog = self.rbc_backlog_exceeds_pacemaker_soft_limits(rbc_backlog_summary);

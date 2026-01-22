@@ -1048,6 +1048,106 @@ mod tests {
     }
 
     #[test]
+    fn select_next_tier_picks_oldest_pending_after_vote_burst() {
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        let vote = Vote {
+            phase: Phase::Prepare,
+            block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        vote_tx
+            .send(inbound(BlockMessage::QcVote(vote)))
+            .expect("send prevote");
+
+        let proposal = Proposal {
+            header: ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::new(b"tx"),
+                state_root: Hash::new(b"state"),
+                proposer: 0,
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: QcHeaderRef {
+                    height: 0,
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: block_hash,
+                    phase: Phase::Prepare,
+                },
+            },
+            payload_hash: Hash::new(b"payload"),
+        };
+        block_payload_tx
+            .send(inbound(BlockMessage::Proposal(proposal)))
+            .expect("send proposal");
+
+        let cfg = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(2),
+            non_vote_starve_max: Duration::from_secs(2),
+        };
+        let now = Instant::now();
+        let mut loop_state = WorkerLoopState {
+            last_tick: now,
+            last_served: [now; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        loop_state.last_served[PriorityTier::BlockPayload.idx()] =
+            backdate(now, Duration::from_millis(500));
+        let budgets = TierBudgets::new(&cfg);
+        let mut mailbox = WorkerMailbox::new(
+            &mut loop_state.mailbox,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+        mailbox.fill_slots(&budgets);
+
+        let selected = select_next_tier(
+            now,
+            &mailbox,
+            &budgets,
+            &loop_state.last_served,
+            &cfg,
+            false,
+        );
+        assert_eq!(selected, Some(PriorityTier::BlockPayload));
+    }
+
+    #[test]
     fn resolve_sumeragi_timeouts_prefers_on_chain_values() {
         let (block_time, commit_time) = resolve_sumeragi_timeouts(
             Duration::from_millis(900),
@@ -7741,6 +7841,18 @@ impl PriorityTier {
     }
 }
 
+const HIGH_PRIORITY_TIERS: [PriorityTier; 4] = [
+    PriorityTier::Votes,
+    PriorityTier::RbcChunks,
+    PriorityTier::BlockPayload,
+    PriorityTier::Blocks,
+];
+const LOW_PRIORITY_TIERS: [PriorityTier; 3] = [
+    PriorityTier::Consensus,
+    PriorityTier::LaneRelay,
+    PriorityTier::Background,
+];
+
 #[derive(Debug)]
 enum WorkerMessage {
     Block(InboundBlockMessage),
@@ -8230,6 +8342,30 @@ fn tier_starve_max(cfg: &WorkerLoopConfig, tier: PriorityTier) -> Duration {
     }
 }
 
+fn select_oldest_pending(
+    now: Instant,
+    mailbox: &WorkerMailbox<'_>,
+    budgets: &TierBudgets,
+    last_served: &[Instant; PRIORITY_TIER_COUNT],
+    tiers: &[PriorityTier],
+) -> Option<PriorityTier> {
+    let mut oldest: Option<(PriorityTier, Duration)> = None;
+    for &tier in tiers {
+        if budgets.remaining(tier) == 0 || !mailbox.has_pending(tier) {
+            continue;
+        }
+        let elapsed = now.saturating_duration_since(last_served[tier.idx()]);
+        let replace = match oldest {
+            None => true,
+            Some((_, best)) => elapsed > best,
+        };
+        if replace {
+            oldest = Some((tier, elapsed));
+        }
+    }
+    oldest.map(|(tier, _)| tier)
+}
+
 fn select_next_tier(
     now: Instant,
     mailbox: &WorkerMailbox<'_>,
@@ -8270,15 +8406,13 @@ fn select_next_tier(
     {
         return Some(PriorityTier::Votes);
     }
-    for tier in PriorityTier::ORDER {
-        if budgets.remaining(tier) == 0 {
-            continue;
-        }
-        if mailbox.has_pending(tier) {
-            return Some(tier);
-        }
+    // After the vote burst, rotate to the oldest pending tier to keep payload/RBC moving.
+    if let Some(tier) =
+        select_oldest_pending(now, mailbox, budgets, last_served, &HIGH_PRIORITY_TIERS)
+    {
+        return Some(tier);
     }
-    None
+    select_oldest_pending(now, mailbox, budgets, last_served, &LOW_PRIORITY_TIERS)
 }
 
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]

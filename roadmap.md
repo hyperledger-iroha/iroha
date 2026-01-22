@@ -105,7 +105,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 - [x] Resolve build-directory lock timeouts so full-workspace test runs complete reliably (standardize `CARGO_TARGET_DIR` or serialize builds).
 
 4. **LOCALNET-10K-TPS — 7-peer localnet throughput + stall resilience** (Consensus/Performance/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈺 In Progress, target TBD)
-- [ ] Use the new pending-block/commit-inflight metrics to isolate pacemaker backpressure during 100 TPS localnet runs (run151 NPoS: avg slot 5.68s, view changes 11, proposal_gap 1, pending/inflight <=4/1; run152 permissioned + commit_time_ms=300: avg slot 10.69s, view changes 18, pending/inflight <=4/1); identify the proposal-gap root cause and re-test.
+- [ ] Use the new pending-block/commit-inflight metrics to isolate pacemaker backpressure during 100 TPS localnet runs (run151 NPoS: avg slot 5.68s, view changes 11, proposal_gap 1, pending/inflight <=4/1; run152 permissioned + commit_time_ms=300: avg slot 10.69s, view changes 18, pending/inflight <=4/1; run153 NPoS 7-peer 753ms soft limits: height 5, view changes 42, tx_queue depth 4796, pending max 5/inflight 0, missing_qc/stake_quorum timeouts; run154 permissioned 7-peer 753ms: height 5, view changes 9, tx_queue depth 11522, pending/inflight 0, missing_qc/quorum timeouts). Identify the proposal-gap root cause and re-test.
  - [x] NPoS roster selection now appends active validators missing from the commit topology so the full validator set participates; unit coverage added.
  - [x] Seed commit topology from the checkpoint topology when world peers are incomplete (prevents genesis roster shrink/QC stalls); unit coverage added.
  - [x] Add a Kagami/localnet regression that asserts validator count + commit QC validator-set length match the peer count on startup.
@@ -1372,5 +1372,10 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Enforce UAID uniqueness at admission/onboarding, and replace UAID scans/portfolio aggregation with direct lookup; errors on duplicates are invariant violations.
 - [x] Refactor Torii routing/address parsing to canonicalize all account inputs without config gating (remove `strict_addresses` and ISO-only alias resolver assumptions).
 - [x] Update SDKs/CLI/bridges to accept the new input forms and always render IH58; refresh docs/examples for Sora Nexus account addressing.
- - [x] Tests: unit coverage for UAID uniqueness and index behavior.
+- [x] Tests: unit coverage for UAID uniqueness and index behavior.
 - [x] Tests: unit + integration coverage for alias collisions, domain-selector reverse index determinism, and input canonicalization.
+
+28. **CLI-OUTPUT-NORMALIZATION — Unify CLI outputs/flags for first release** (Tooling/CLI, Line: Shared, Owner: DX WG, Priority: High, Status: 🈴 Completed, target TBD)
+ - [x] Normalize output formats and error handling across `iroha_cli` subcommands (JSON vs text summaries).
+ - [x] Align flag naming to avoid collisions with `--output-format` (handshake token `--token-encoding`).
+ - [x] Capture CLI output normalization status in `status.md`.

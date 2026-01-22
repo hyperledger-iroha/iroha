@@ -7,7 +7,8 @@ use super::{
     },
     sorafs::FetchArgs,
 };
-use crate::{Run, RunContext};
+use crate::{CliOutputFormat, Run, RunContext};
+use crate::cli_output::print_with_optional_text;
 use base64::{Engine, engine::general_purpose::STANDARD as Base64Standard};
 #[cfg(test)]
 use blake3::hash as blake3_hash;
@@ -40,6 +41,7 @@ use sorafs_manifest::deal::{MICRO_XOR_PER_XOR, XorAmount};
 use std::{
     collections::HashSet,
     convert::{TryFrom, TryInto},
+    fmt::Write as _,
     fs,
     path::{Path, PathBuf},
     str::FromStr,
@@ -152,6 +154,29 @@ pub struct SubmitArgs {
     pub receipt_fixture: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, norito::json::JsonSerialize)]
+struct SubmitRequestOutput {
+    client_blob_id: String,
+    request_path: String,
+    request_json_path: String,
+    request_bytes: usize,
+}
+
+#[derive(Debug, Clone, norito::json::JsonSerialize)]
+struct SubmitReceiptOutput {
+    receipt: DaIngestReceipt,
+    receipt_path: String,
+    receipt_json_path: String,
+    pdp_commitment_header: Option<String>,
+}
+
+#[derive(Debug, Clone, norito::json::JsonSerialize)]
+struct SubmitOutput {
+    submitted: bool,
+    request: SubmitRequestOutput,
+    receipt: Option<SubmitReceiptOutput>,
+}
+
 #[derive(Args, Debug)]
 pub struct GetBlobArgs {
     /// Storage ticket identifier (hex string) issued by Torii.
@@ -181,13 +206,9 @@ impl GetBlobArgs {
         let manifest_label = bundle.manifest_hash_hex.to_ascii_lowercase();
         let persisted =
             persist_manifest_bundle(context, &bundle, self.output_dir, &manifest_label)?;
-        if let Some(path) = &persisted.sampling_plan {
-            context.println(format_args!(
-                "sampling plan JSON saved to `{}`",
-                path.display()
-            ))?;
-        }
-        Ok(())
+        let output = build_manifest_fetch_value(&bundle, &persisted);
+        let text = render_manifest_fetch_text(&bundle, &persisted);
+        print_with_optional_text(context, Some(text), &output)
     }
 }
 
@@ -235,20 +256,25 @@ impl SubmitArgs {
                 request_json_path.display()
             )
         })?;
-        context.println(format_args!(
-            "prepared DA request blob={} bytes={} request=`{}`",
-            hex::encode(request.client_blob_id.as_bytes()),
-            request_bytes.len(),
-            request_path.display(),
-        ))?;
+        let request_output = SubmitRequestOutput {
+            client_blob_id: hex::encode(request.client_blob_id.as_bytes()),
+            request_path: request_path.display().to_string(),
+            request_json_path: request_json_path.display().to_string(),
+            request_bytes: request_bytes.len(),
+        };
         if self.no_submit {
             if self.receipt_fixture.is_some() {
                 return Err(eyre!(
                     "--receipt-fixture cannot be combined with --no-submit (fixture already skips HTTP)"
                 ));
             }
-            context.println("skipping Torii publish (--no-submit)")?;
-            return Ok(());
+            let output = SubmitOutput {
+                submitted: false,
+                request: request_output,
+                receipt: None,
+            };
+            let text = render_submit_text(&output);
+            return print_with_optional_text(context, Some(text), &output);
         }
         let receipt = if let Some(path) = &self.receipt_fixture {
             load_da_receipt_fixture(path)?
@@ -269,18 +295,20 @@ impl SubmitArgs {
         if let Some(header_value) = &receipt.pdp_commitment_header {
             persist_receipt_headers(&artifact_root, header_value)?;
         }
-        context.println(format_args!(
-            "Torii accepted blob {} storage_ticket={} queued_at={}",
-            hex::encode(receipt.receipt.client_blob_id.as_bytes()),
-            hex::encode(receipt.receipt.storage_ticket.as_bytes()),
-            receipt.receipt.queued_at_unix,
-        ))?;
-        context.println(format_args!(
-            "{}",
-            format_rent_quote_summary(&receipt.receipt.rent_quote)
-        ))?;
-        context.print_data(&receipt.receipt)?;
-        Ok(())
+        let receipt_record = receipt.receipt.clone();
+        let receipt_output = SubmitReceiptOutput {
+            receipt: receipt_record,
+            receipt_path: receipt_path.display().to_string(),
+            receipt_json_path: receipt_json_path.display().to_string(),
+            pdp_commitment_header: receipt.pdp_commitment_header.clone(),
+        };
+        let output = SubmitOutput {
+            submitted: true,
+            request: request_output,
+            receipt: Some(receipt_output),
+        };
+        let text = render_submit_text(&output);
+        print_with_optional_text(context, Some(text), &output)
     }
 }
 
@@ -348,9 +376,10 @@ impl ProveArgs {
             sample_count: sampling.sample_count,
             sample_seed: sampling.sample_seed,
         };
+        let text = render_proof_summary_text(&summary_inputs, &proofs);
         let summary = build_proof_summary(summary_inputs, &proofs);
 
-        context.print_data(&summary)?;
+        print_with_optional_text(context, Some(text), &summary)?;
 
         if let Some(path) = &self.json_out {
             if let Some(parent) = path.parent()
@@ -534,11 +563,13 @@ impl ProveAvailabilityArgs {
             Some(manifest_target_dir.clone()),
             &normalized_ticket,
         )?;
-        if let Some(path) = &persisted.sampling_plan {
-            context.println(format_args!(
-                "sampling plan JSON saved to `{}`",
-                path.display()
-            ))?;
+        if matches!(context.output_format(), CliOutputFormat::Text) {
+            if let Some(path) = &persisted.sampling_plan {
+                context.println(format_args!(
+                    "sampling plan JSON saved to `{}`",
+                    path.display()
+                ))?;
+            }
         }
 
         let payload_path = artifact_root.join("payload.car");
@@ -593,16 +624,18 @@ impl ProveAvailabilityArgs {
         };
         fetch_args.run(context)?;
 
-        context.println(format_args!(
-            "downloaded payload to `{}`; scoreboard persisted at `{}`",
-            payload_path.display(),
-            scoreboard_path.display()
-        ))?;
-        if let Some(sampling) = plan_sampling {
+        if matches!(context.output_format(), CliOutputFormat::Text) {
             context.println(format_args!(
-                "using Torii sampling plan: samples={} seed=0x{:016x}",
-                sampling.sample_count, sampling.sample_seed
+                "downloaded payload to `{}`; scoreboard persisted at `{}`",
+                payload_path.display(),
+                scoreboard_path.display()
             ))?;
+            if let Some(sampling) = plan_sampling {
+                context.println(format_args!(
+                    "using Torii sampling plan: samples={} seed=0x{:016x}",
+                    sampling.sample_count, sampling.sample_seed
+                ))?;
+            }
         }
 
         let prove_args = ProveArgs {
@@ -700,8 +733,8 @@ impl RentQuoteArgs {
         if let Some(path) = self.quote_out.as_deref() {
             write_rent_quote_artifact(path, &value)?;
         }
-        context.println(format_rent_quote_summary(&quote))?;
-        context.print_data(&value)
+        let text = render_rent_quote_text(&quote, &source_label, self.quote_out.as_deref());
+        print_with_optional_text(context, Some(text), &value)
     }
 }
 
@@ -892,12 +925,13 @@ fn normalize_block_hash_hex(input: &str) -> Result<String> {
 #[derive(Debug)]
 pub(super) struct PersistedManifestPaths {
     pub(super) manifest: PathBuf,
+    pub(super) manifest_json: PathBuf,
     pub(super) chunk_plan: PathBuf,
     pub(super) sampling_plan: Option<PathBuf>,
 }
 
 pub(super) fn persist_manifest_bundle<C: RunContext>(
-    context: &mut C,
+    _context: &mut C,
     bundle: &DaManifestFetchBundle,
     output_dir: Option<PathBuf>,
     ticket_label: &str,
@@ -934,42 +968,93 @@ pub(super) fn persist_manifest_bundle<C: RunContext>(
         fs::write(path, sampling_json)
             .wrap_err_with(|| format!("failed to write `{}`", path.display()))?;
     }
-
-    context.println(format_args!(
-        "wrote manifest bytes to `{}`",
-        manifest_path.display()
-    ))?;
-    context.println(format_args!(
-        "wrote manifest JSON to `{}`",
-        manifest_json_path.display()
-    ))?;
-    context.println(format_args!(
-        "wrote chunk plan JSON to `{}`",
-        chunk_plan_path.display()
-    ))?;
-    context.println(format_args!(
-        "blob hash: {}",
-        bundle.blob_hash_hex
-    ))?;
-    context.println(format_args!(
-        "manifest hash (blob id): {}",
-        bundle.manifest_hash_hex
-    ))?;
-    context.println(format_args!(
-        "storage ticket: {}",
-        bundle.storage_ticket_hex
-    ))?;
-    context.println(format_args!(
-        "next step: `iroha da get --manifest {manifest} --plan {plan} --manifest-id {blob}`",
-        manifest = manifest_path.display(),
-        plan = chunk_plan_path.display(),
-        blob = bundle.manifest_hash_hex,
-    ))?;
     Ok(PersistedManifestPaths {
         manifest: manifest_path,
+        manifest_json: manifest_json_path,
         chunk_plan: chunk_plan_path,
         sampling_plan: sampling_plan_path,
     })
+}
+
+fn build_manifest_fetch_value(
+    bundle: &DaManifestFetchBundle,
+    persisted: &PersistedManifestPaths,
+) -> Value {
+    let mut map = Map::new();
+    map.insert(
+        "storage_ticket".into(),
+        Value::from(bundle.storage_ticket_hex.clone()),
+    );
+    map.insert(
+        "manifest_hash".into(),
+        Value::from(bundle.manifest_hash_hex.clone()),
+    );
+    map.insert(
+        "blob_hash".into(),
+        Value::from(bundle.blob_hash_hex.clone()),
+    );
+    map.insert(
+        "manifest_path".into(),
+        Value::from(path_to_string(&persisted.manifest)),
+    );
+    map.insert(
+        "manifest_json_path".into(),
+        Value::from(path_to_string(&persisted.manifest_json)),
+    );
+    map.insert(
+        "chunk_plan_path".into(),
+        Value::from(path_to_string(&persisted.chunk_plan)),
+    );
+    map.insert(
+        "sampling_plan_path".into(),
+        optional_path_value(persisted.sampling_plan.as_deref()),
+    );
+    map.insert("manifest".into(), bundle.manifest_json.clone());
+    map.insert("chunk_plan".into(), bundle.chunk_plan.clone());
+    map.insert(
+        "sampling_plan".into(),
+        bundle.sampling_plan.clone().unwrap_or(Value::Null),
+    );
+    Value::Object(map)
+}
+
+fn render_manifest_fetch_text(
+    bundle: &DaManifestFetchBundle,
+    persisted: &PersistedManifestPaths,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "DA manifest fetched");
+    let _ = writeln!(out, "storage_ticket: {}", bundle.storage_ticket_hex);
+    let _ = writeln!(out, "manifest_hash: {}", bundle.manifest_hash_hex);
+    let _ = writeln!(out, "blob_hash: {}", bundle.blob_hash_hex);
+    let _ = writeln!(out, "manifest: {}", persisted.manifest.display());
+    let _ = writeln!(out, "manifest_json: {}", persisted.manifest_json.display());
+    let _ = writeln!(out, "chunk_plan: {}", persisted.chunk_plan.display());
+    if let Some(path) = persisted.sampling_plan.as_ref() {
+        let _ = writeln!(out, "sampling_plan: {}", path.display());
+    }
+    out
+}
+
+fn render_submit_text(output: &SubmitOutput) -> String {
+    let mut out = String::new();
+    if output.submitted {
+        let _ = writeln!(out, "DA ingest submitted");
+    } else {
+        let _ = writeln!(out, "DA ingest request prepared (submission skipped)");
+    }
+    let _ = writeln!(out, "client_blob_id: {}", output.request.client_blob_id);
+    let _ = writeln!(out, "request: {}", output.request.request_path);
+    let _ = writeln!(out, "request_json: {}", output.request.request_json_path);
+    let _ = writeln!(out, "request_bytes: {}", output.request.request_bytes);
+    if let Some(receipt) = output.receipt.as_ref() {
+        let _ = writeln!(out, "receipt: {}", receipt.receipt_path);
+        let _ = writeln!(out, "receipt_json: {}", receipt.receipt_json_path);
+        if let Some(header) = receipt.pdp_commitment_header.as_deref() {
+            let _ = writeln!(out, "pdp_commitment_header: {}", header);
+        }
+    }
+    out
 }
 
 fn persist_receipt_headers(root: &Path, header_value: &str) -> Result<()> {
@@ -1154,6 +1239,37 @@ struct ProofSummaryInputs<'a> {
     sample_seed: u64,
 }
 
+fn render_proof_summary_text(inputs: &ProofSummaryInputs<'_>, proofs: &[ProofReport]) -> String {
+    let verified = proofs.iter().filter(|report| report.verified).count();
+    let mut out = String::new();
+    let _ = writeln!(out, "DA proof summary");
+    let _ = writeln!(out, "manifest: {}", inputs.manifest_path.display());
+    let _ = writeln!(out, "payload: {}", inputs.payload_path.display());
+    let _ = writeln!(
+        out,
+        "blob_hash: {}",
+        hex::encode(inputs.manifest.blob_hash.as_ref())
+    );
+    let _ = writeln!(
+        out,
+        "chunk_root: {}",
+        hex::encode(inputs.manifest.chunk_root.as_ref())
+    );
+    let _ = writeln!(out, "por_root: {}", inputs.por_root_hex);
+    let _ = writeln!(out, "chunk_count: {}", inputs.chunk_total);
+    let _ = writeln!(out, "segment_count: {}", inputs.segment_total);
+    let _ = writeln!(out, "leaf_count: {}", inputs.leaf_total);
+    let _ = writeln!(out, "sample_count: {}", inputs.sample_count);
+    let _ = writeln!(out, "sample_seed: 0x{:016x}", inputs.sample_seed);
+    let _ = writeln!(
+        out,
+        "proofs: {} (verified {})",
+        proofs.len(),
+        verified
+    );
+    out
+}
+
 fn build_proof_summary(inputs: ProofSummaryInputs<'_>, proofs: &[ProofReport]) -> Value {
     let mut map = Map::new();
     map.insert(
@@ -1335,6 +1451,20 @@ fn format_rent_quote_summary(quote: &DaRentQuote) -> String {
     )
 }
 
+fn render_rent_quote_text(
+    quote: &DaRentQuote,
+    source_label: &str,
+    quote_out: Option<&Path>,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "{}", format_rent_quote_summary(quote));
+    let _ = writeln!(out, "policy_source: {}", source_label);
+    if let Some(path) = quote_out {
+        let _ = writeln!(out, "quote_out: {}", path.display());
+    }
+    out
+}
+
 fn format_xor_amount(amount: XorAmount, unit: &str, micro_unit: &str) -> String {
     let micro = amount.as_micro();
     let whole = micro / MICRO_XOR_PER_XOR;
@@ -1464,6 +1594,14 @@ fn value_from_u32(value: u32) -> Value {
     Value::from(u64::from(value))
 }
 
+fn path_to_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+fn optional_path_value(path: Option<&Path>) -> Value {
+    path.map_or(Value::Null, |path| Value::from(path_to_string(path)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1489,7 +1627,7 @@ mod tests {
     use iroha_torii_shared::da::sampling::{build_sampling_plan, sampling_plan_to_value};
     use norito::{json::JsonSerialize, to_bytes};
     use sorafs_manifest::deal::XorAmount;
-    use std::{fmt::Display, fs, path::PathBuf};
+    use std::{fmt::Display, fs, path::{Path, PathBuf}};
     use tempfile::{NamedTempFile, tempdir};
     use url::Url;
 
@@ -1497,10 +1635,11 @@ mod tests {
         cfg: Config,
         printed: Vec<String>,
         i18n: Localizer,
+        output_format: CliOutputFormat,
     }
 
     impl TestContext {
-        fn new() -> Self {
+        fn new(output_format: CliOutputFormat) -> Self {
             let key_pair = KeyPair::random();
             let account: AccountId = format!("{}@wonderland", key_pair.public_key())
                 .parse()
@@ -1527,6 +1666,7 @@ mod tests {
                 cfg,
                 printed: Vec::new(),
                 i18n: Localizer::new(Bundle::Cli, Language::English),
+                output_format,
             }
         }
     }
@@ -1550,6 +1690,10 @@ mod tests {
 
         fn i18n(&self) -> &Localizer {
             &self.i18n
+        }
+
+        fn output_format(&self) -> CliOutputFormat {
+            self.output_format
         }
 
         fn print_data<T>(&mut self, data: &T) -> Result<()>
@@ -1764,8 +1908,8 @@ mod tests {
     }
 
     #[test]
-    fn rent_quote_run_emits_summary_and_json() {
-        let mut ctx = TestContext::new();
+    fn rent_quote_run_emits_text_in_text_mode() {
+        let mut ctx = TestContext::new(CliOutputFormat::Text);
         let args = RentQuoteArgs {
             gib: 4,
             months: 2,
@@ -1775,18 +1919,33 @@ mod tests {
             quote_out: None,
         };
         args.run(&mut ctx).expect("rent quote run");
-        assert_eq!(ctx.printed.len(), 2, "expected summary + JSON output");
+        assert_eq!(ctx.printed.len(), 1, "expected text summary only");
         assert!(
             ctx.printed[0].starts_with("rent_quote base="),
             "summary should include rent base line: {}",
             ctx.printed[0]
         );
         assert!(
-            ctx.printed[0].contains("egress_credit_per_gib="),
-            "summary should include egress credit text: {}",
+            ctx.printed[0].contains("policy_source: demo policy"),
+            "summary should include policy source: {}",
             ctx.printed[0]
         );
-        let root: Value = json::from_str(&ctx.printed[1]).expect("parse quote JSON");
+    }
+
+    #[test]
+    fn rent_quote_run_emits_json_in_json_mode() {
+        let mut ctx = TestContext::new(CliOutputFormat::Json);
+        let args = RentQuoteArgs {
+            gib: 4,
+            months: 2,
+            policy_json: None,
+            policy_norito: None,
+            policy_label: Some("demo policy".to_string()),
+            quote_out: None,
+        };
+        args.run(&mut ctx).expect("rent quote run");
+        assert_eq!(ctx.printed.len(), 1, "expected JSON output only");
+        let root: Value = json::from_str(&ctx.printed[0]).expect("parse quote JSON");
         assert_eq!(
             root.get("policy_source"),
             Some(&Value::String("demo policy".into()))
@@ -1829,7 +1988,7 @@ mod tests {
         };
 
         let dir = tempdir().expect("tempdir");
-        let mut ctx = TestContext::new();
+        let mut ctx = TestContext::new(CliOutputFormat::Json);
         let paths = persist_manifest_bundle(
             &mut ctx,
             &bundle,
@@ -1853,6 +2012,117 @@ mod tests {
             Some(expected_assignment),
             "persisted sampling plan should retain assignment hash"
         );
+    }
+
+    #[test]
+    fn manifest_fetch_value_includes_paths() {
+        let manifest = sample_manifest();
+        let manifest_bytes = to_bytes(&manifest).expect("encode manifest");
+        let manifest_json = norito::json::to_value(&manifest).expect("manifest JSON");
+        let storage_ticket = "feedface".repeat(8);
+        let bundle = DaManifestFetchBundle {
+            manifest_bytes,
+            manifest_json,
+            chunk_plan: Value::Object(Map::new()),
+            storage_ticket_hex: storage_ticket.clone(),
+            manifest_hash_hex: "aa".repeat(32),
+            blob_hash_hex: hex::encode(manifest.blob_hash.as_ref()),
+            sampling_plan: None,
+            sampling_plan_typed: None,
+        };
+        let persisted = PersistedManifestPaths {
+            manifest: PathBuf::from("/tmp/manifest.norito"),
+            manifest_json: PathBuf::from("/tmp/manifest.json"),
+            chunk_plan: PathBuf::from("/tmp/chunk_plan.json"),
+            sampling_plan: None,
+        };
+
+        let value = build_manifest_fetch_value(&bundle, &persisted);
+        let obj = value.as_object().expect("manifest fetch value object");
+        assert_eq!(
+            obj.get("manifest_path").and_then(Value::as_str),
+            Some("/tmp/manifest.norito")
+        );
+        assert_eq!(
+            obj.get("manifest_json_path").and_then(Value::as_str),
+            Some("/tmp/manifest.json")
+        );
+        assert_eq!(
+            obj.get("chunk_plan_path").and_then(Value::as_str),
+            Some("/tmp/chunk_plan.json")
+        );
+        assert_eq!(
+            obj.get("storage_ticket").and_then(Value::as_str),
+            Some(storage_ticket.as_str())
+        );
+    }
+
+    #[test]
+    fn manifest_fetch_text_includes_paths() {
+        let manifest = sample_manifest();
+        let bundle = DaManifestFetchBundle {
+            manifest_bytes: Vec::new(),
+            manifest_json: norito::json::to_value(&manifest).expect("manifest JSON"),
+            chunk_plan: Value::Object(Map::new()),
+            storage_ticket_hex: "feedface".repeat(8),
+            manifest_hash_hex: "aa".repeat(32),
+            blob_hash_hex: hex::encode(manifest.blob_hash.as_ref()),
+            sampling_plan: None,
+            sampling_plan_typed: None,
+        };
+        let persisted = PersistedManifestPaths {
+            manifest: PathBuf::from("/tmp/manifest.norito"),
+            manifest_json: PathBuf::from("/tmp/manifest.json"),
+            chunk_plan: PathBuf::from("/tmp/chunk_plan.json"),
+            sampling_plan: None,
+        };
+        let text = render_manifest_fetch_text(&bundle, &persisted);
+        assert!(text.contains("manifest: /tmp/manifest.norito"));
+        assert!(text.contains("chunk_plan: /tmp/chunk_plan.json"));
+    }
+
+    #[test]
+    fn render_submit_text_includes_request_paths() {
+        let output = SubmitOutput {
+            submitted: false,
+            request: SubmitRequestOutput {
+                client_blob_id: "abcd".to_string(),
+                request_path: "/tmp/request.norito".to_string(),
+                request_json_path: "/tmp/request.json".to_string(),
+                request_bytes: 128,
+            },
+            receipt: None,
+        };
+        let text = render_submit_text(&output);
+        assert!(text.contains("client_blob_id: abcd"));
+        assert!(text.contains("request: /tmp/request.norito"));
+        assert!(text.contains("request_json: /tmp/request.json"));
+    }
+
+    #[test]
+    fn render_proof_summary_text_includes_counts() {
+        let manifest = sample_manifest();
+        let proof = ProofReport {
+            origin: ProofOrigin::Sampled,
+            leaf_index: 0,
+            proof: dummy_proof(),
+            verified: true,
+        };
+        let proofs = vec![proof];
+        let inputs = ProofSummaryInputs {
+            manifest: &manifest,
+            manifest_path: Path::new("manifest.to"),
+            payload_path: Path::new("payload.bin"),
+            por_root_hex: "abcd".into(),
+            leaf_total: 1,
+            segment_total: 1,
+            chunk_total: 1,
+            sample_count: 1,
+            sample_seed: 42,
+        };
+        let text = render_proof_summary_text(&inputs, &proofs);
+        assert!(text.contains("proofs: 1 (verified 1)"));
+        assert!(text.contains("sample_seed: 0x000000000000002a"));
     }
 
     #[test]
