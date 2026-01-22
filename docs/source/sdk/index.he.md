@@ -1,20 +1,28 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/source/sdk/index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b8bee7c0ad901e15e00d1715b1426aeb51529b492c9decf65fbb7cd8f0a27bfe
-source_last_modified: "2025-11-09T07:09:17.759304+00:00"
-translation_last_reviewed: null
+source_hash: 06b8d1fdc0ce9de560a6cf3bc9fa52d8d3d120f9046ac16e711f9b3897366309
+source_last_modified: "2025-11-14T04:03:47.773484+00:00"
+translation_last_reviewed: 2026-01-21
 ---
 
-# בתהליך תרגום
-
 <div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
+<!-- תרגום עברי ל-docs/source/sdk/index.md -->
+
+# מדריכי SDK
+
+```{toctree}
+:caption: פלטפורמות SDK
+:maxdepth: 1
+
+android/index
+js/index
+python/index
+swift/index
+```
+
 </div>

@@ -1,20 +1,22 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/source/compliance/android/jp/README.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: cd69e46f7e342df6175da553f00608f7fa55f3ef57b55fa09a151b627d15b30e
-source_last_modified: "2025-11-07T17:46:22.976110+00:00"
-translation_last_reviewed: null
+source_hash: 4c7c899450f9249a7fb80f00c6c61056cb7f38582ed214e6c9a0a8f19911db43
+source_last_modified: "2025-11-14T04:03:47.773484+00:00"
+translation_last_reviewed: 2026-01-21
 ---
 
-# בתהליך תרגום
-
 <div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
+<!-- תרגום עברי ל-docs/source/compliance/android/jp/README.md -->
+
+# ארטיפקטים לציות ביפן
+
+השתמשו בתיקייה זו עבור רשימות בקרה של FISC, חבילות אישור StrongBox דו‑לשוניות,
+וכל ראיה ספציפית לרגולטור הנדרשת עבור שותפים יפניים. קישרו למסמך המקור הבלתי
+משתנה וכללו מטא‑נתוני ביקורת/חתימה.
+
 </div>

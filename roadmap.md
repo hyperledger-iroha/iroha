@@ -420,6 +420,21 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Replace `docs/source/agents.*` stubs (he/ja) with translations.
  - [x] Replace `docs/source/agents/missing_docs_inventory.*` stubs (he/ja) with translations.
  - [x] Replace `docs/source/agents/env_var_migration.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/android_support_playbook.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/compliance/android/checklists/and8_ga_2027-10_rehearsal.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/android/and7_governance_hotlist.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/android/android_support_playbook.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/android/partner_sla_discovery.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/compliance/android/eu/README.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/compliance/android/jp/README.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/android/norito_fixture_alignment.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/index.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/project_tracker/norito_streaming_post_mvp.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/compliance/android/device_lab_contingency.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/swift/connect_risk_tracker.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/crypto/attachments/sm_openssl_provenance.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/governance_pipeline.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/kagami_profiles.*` stubs (he/ja) with translations.
  - [ ] Replace stub translation files across repo root, `docs/source`, and `docs/portal` (preserve front matter, keep `source_hash`/`translation_last_reviewed` aligned).
  - [x] Complete translations for core policy/docs (CODE_OF_CONDUCT, PATENTS, README, AGENTS, status/roadmap, configuration/runbooks).
  - [ ] Prioritize portal docs: `docs/portal/i18n/*/docusaurus-plugin-content-docs` (especially SoraFS/SoraNet) and mark completion per locale.
