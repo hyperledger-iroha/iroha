@@ -365,25 +365,25 @@ pub struct ManifestScaffoldAllowArgs {
     #[arg(long = "allow-dataspace", value_name = "ID", id = "allow_dataspace")]
     pub dataspace: Option<u64>,
     /// Program identifier (`contract.name`) for the allow entry.
-    #[arg(long = "allow-program", value_name = "PROGRAM")]
+    #[arg(long = "allow-program", value_name = "PROGRAM", id = "allow_program")]
     pub program: Option<String>,
     /// Method/entry-point for the allow entry.
-    #[arg(long = "allow-method", value_name = "NAME")]
+    #[arg(long = "allow-method", value_name = "NAME", id = "allow_method")]
     pub method: Option<String>,
     /// Asset identifier (e.g. `xor#sora`) for the allow entry.
-    #[arg(long = "allow-asset", value_name = "DEF#DOMAIN")]
+    #[arg(long = "allow-asset", value_name = "DEF#DOMAIN", id = "allow_asset")]
     pub asset: Option<String>,
     /// AMX role enforced by the allow entry (`initiator` or `participant`).
-    #[arg(long = "allow-role", value_name = "ROLE")]
+    #[arg(long = "allow-role", value_name = "ROLE", id = "allow_role")]
     pub role: Option<String>,
     /// Deterministic allowance cap (decimal string).
-    #[arg(long = "allow-max-amount", value_name = "DECIMAL")]
+    #[arg(long = "allow-max-amount", value_name = "DECIMAL", id = "allow_max_amount")]
     pub max_amount: Option<String>,
     /// Allowance window (`per-slot`, `per-minute`, or `per-day`).
-    #[arg(long = "allow-window", value_name = "WINDOW")]
+    #[arg(long = "allow-window", value_name = "WINDOW", id = "allow_window")]
     pub window: Option<String>,
     /// Optional operator note stored alongside the entry.
-    #[arg(long = "allow-notes", value_name = "TEXT")]
+    #[arg(long = "allow-notes", value_name = "TEXT", id = "allow_notes")]
     pub notes: Option<String>,
 }
 
@@ -393,71 +393,71 @@ pub struct ManifestScaffoldDenyArgs {
     #[arg(long = "deny-dataspace", value_name = "ID", id = "deny_dataspace")]
     pub dataspace: Option<u64>,
     /// Program identifier (`contract.name`) for the deny entry.
-    #[arg(long = "deny-program", value_name = "PROGRAM")]
+    #[arg(long = "deny-program", value_name = "PROGRAM", id = "deny_program")]
     pub program: Option<String>,
     /// Method/entry-point for the deny entry.
-    #[arg(long = "deny-method", value_name = "NAME")]
+    #[arg(long = "deny-method", value_name = "NAME", id = "deny_method")]
     pub method: Option<String>,
     /// Asset identifier (e.g. `xor#sora`) for the deny entry.
-    #[arg(long = "deny-asset", value_name = "DEF#DOMAIN")]
+    #[arg(long = "deny-asset", value_name = "DEF#DOMAIN", id = "deny_asset")]
     pub asset: Option<String>,
     /// AMX role enforced by the deny entry.
-    #[arg(long = "deny-role", value_name = "ROLE")]
+    #[arg(long = "deny-role", value_name = "ROLE", id = "deny_role")]
     pub role: Option<String>,
     /// Optional reason recorded for the deny directive.
-    #[arg(long = "deny-reason", value_name = "TEXT")]
+    #[arg(long = "deny-reason", value_name = "TEXT", id = "deny_reason")]
     pub reason: Option<String>,
     /// Optional operator note stored alongside the entry.
-    #[arg(long = "deny-notes", value_name = "TEXT")]
+    #[arg(long = "deny-notes", value_name = "TEXT", id = "deny_notes")]
     pub notes: Option<String>,
 }
 
 #[derive(clap::Args, Debug, Default)]
 pub struct ManifestScaffoldProfileArgs {
     /// Dataspace profile identifier (default `profile.<dataspace>.v1`).
-    #[arg(long = "profile-id", value_name = "ID")]
+    #[arg(long = "profile-id", value_name = "ID", id = "profile_id")]
     pub profile_id: Option<String>,
     /// Epoch recorded in the profile metadata.
-    #[arg(long = "profile-activation-epoch", value_name = "EPOCH")]
+    #[arg(long = "profile-activation-epoch", value_name = "EPOCH", id = "profile_activation_epoch")]
     pub activation_epoch: Option<u64>,
     /// Dataspace governance issuer account.
-    #[arg(long = "profile-governance-issuer", value_name = "ACCOUNT_ID")]
+    #[arg(long = "profile-governance-issuer", value_name = "ACCOUNT_ID", id = "profile_governance_issuer")]
     pub governance_issuer: Option<String>,
     /// Governance ticket/evidence label.
-    #[arg(long = "profile-governance-ticket", value_name = "TEXT")]
+    #[arg(long = "profile-governance-ticket", value_name = "TEXT", id = "profile_governance_ticket")]
     pub governance_ticket: Option<String>,
     /// Governance quorum threshold.
-    #[arg(long = "profile-governance-quorum", value_name = "N")]
+    #[arg(long = "profile-governance-quorum", value_name = "N", id = "profile_governance_quorum")]
     pub governance_quorum: Option<u32>,
     /// Validator account identifiers.
-    #[arg(long = "profile-validator", value_name = "ACCOUNT_ID")]
+    #[arg(long = "profile-validator", value_name = "ACCOUNT_ID", id = "profile_validator")]
     pub validators: Vec<String>,
     /// Validator quorum threshold.
-    #[arg(long = "profile-validator-quorum", value_name = "N")]
+    #[arg(long = "profile-validator-quorum", value_name = "N", id = "profile_validator_quorum")]
     pub validator_quorum: Option<u32>,
     /// Protected namespace entries.
-    #[arg(long = "profile-protected-namespace", value_name = "NAME")]
+    #[arg(long = "profile-protected-namespace", value_name = "NAME", id = "profile_protected_namespace")]
     pub protected_namespaces: Vec<String>,
     /// DA class label (default `A`).
-    #[arg(long = "profile-da-class", value_name = "TEXT")]
+    #[arg(long = "profile-da-class", value_name = "TEXT", id = "profile_da_class")]
     pub da_class: Option<String>,
     /// DA attester quorum.
-    #[arg(long = "profile-da-quorum", value_name = "N")]
+    #[arg(long = "profile-da-quorum", value_name = "N", id = "profile_da_quorum")]
     pub da_quorum: Option<u32>,
     /// DA attester identifiers.
-    #[arg(long = "profile-da-attester", value_name = "ACCOUNT_ID")]
+    #[arg(long = "profile-da-attester", value_name = "ACCOUNT_ID", id = "profile_da_attester")]
     pub da_attesters: Vec<String>,
     /// DA rotation cadence in epochs.
-    #[arg(long = "profile-da-rotation-epochs", value_name = "EPOCHS")]
+    #[arg(long = "profile-da-rotation-epochs", value_name = "EPOCHS", id = "profile_da_rotation_epochs")]
     pub da_rotation_epochs: Option<u64>,
     /// Composability group identifier (hex string).
-    #[arg(long = "profile-composability-group", value_name = "HEX")]
+    #[arg(long = "profile-composability-group", value_name = "HEX", id = "profile_composability_group")]
     pub composability_group: Option<String>,
     /// Optional audit log schema hint.
-    #[arg(long = "profile-audit-log-schema", value_name = "TEXT")]
+    #[arg(long = "profile-audit-log-schema", value_name = "TEXT", id = "profile_audit_log_schema")]
     pub audit_log_schema: Option<String>,
     /// Optional `PagerDuty` service label.
-    #[arg(long = "profile-pagerduty-service", value_name = "TEXT")]
+    #[arg(long = "profile-pagerduty-service", value_name = "TEXT", id = "profile_pagerduty_service")]
     pub pagerduty_service: Option<String>,
 }
 
