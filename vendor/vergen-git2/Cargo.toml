@@ -107,7 +107,7 @@ version = "9.0.5"
 default-features = false
 
 [dependencies.vergen-lib]
-version = "0.1.6"
+version = "9.1"
 features = ["git"]
 
 [dev-dependencies.lazy_static]
