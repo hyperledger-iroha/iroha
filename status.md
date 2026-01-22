@@ -2,6 +2,12 @@
 
 Last update: 2026-01-22
 
+- Torii: enforce account-scoped filtering for `/v1/accounts/{account_id}/transactions/query` and align query tests to the account path semantics.
+- Tests: not run (not requested).
+- Integration tests: submit an Alice-authored transaction before validating account transactions address_format responses.
+- Tests: not run (integration test update only).
+- Integration tests: wait for all peers to reach the post-registration block height before querying alias/compressed account literals in `accounts_query_accepts_alias_and_compressed_filter_literals`.
+- Tests: not run (test-only sync guard update).
 - Merge: resolved remaining status.md conflict markers from the i23 merge.
 - State: reorder `State::block`/`block_and_revert` lock acquisition to take block hashes before the world (matching `State::view`) to avoid deadlocks; added `state_block_orders_block_hashes_before_world` coverage.
 - Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
