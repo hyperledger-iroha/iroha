@@ -97,7 +97,9 @@ mod tests {
         print_with_optional_text(&mut ctx, Some("hello".into()), &payload)
             .expect("emit");
         assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"ok\":true"));
+        let value: norito::json::Value =
+            norito::json::from_str(&ctx.printed[0]).expect("json output");
+        assert_eq!(value.get("ok").and_then(norito::json::Value::as_bool), Some(true));
     }
 
     #[test]
@@ -115,6 +117,8 @@ mod tests {
         let payload = norito::json!({"ok": true});
         print_with_optional_text(&mut ctx, None, &payload).expect("emit");
         assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"ok\":true"));
+        let value: norito::json::Value =
+            norito::json::from_str(&ctx.printed[0]).expect("json output");
+        assert_eq!(value.get("ok").and_then(norito::json::Value::as_bool), Some(true));
     }
 }
