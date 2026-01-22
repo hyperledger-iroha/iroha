@@ -953,7 +953,7 @@ mod tests {
 
     #[test]
     fn genesis_executes_offline_allowance_instruction() {
-        use std::{fs, path::PathBuf};
+        use std::{fs, path::PathBuf, sync::Arc};
 
         use iroha_core::{
             block::ValidBlock,
@@ -965,7 +965,10 @@ mod tests {
             telemetry::StateTelemetry,
         };
         use iroha_data_model::{
-            account::Account,
+            account::{
+                Account, AccountDomainSelector, clear_account_domain_selector_resolver,
+                set_account_domain_selector_resolver,
+            },
             isi::InstructionBox,
             metadata::Metadata,
             offline::OfflineWalletCertificate,
@@ -983,6 +986,35 @@ mod tests {
             .get("certificate")
             .cloned()
             .expect("fixture must contain `certificate` field");
+        let domains: Vec<iroha_data_model::domain::DomainId> = ["wonderland", "treasury"]
+            .into_iter()
+            .map(|label| label.parse())
+            .collect::<Result<_, _>>()
+            .expect("fixture domain labels should parse");
+        let mut selectors = Vec::with_capacity(domains.len());
+        for domain in &domains {
+            let selector =
+                AccountDomainSelector::from_domain(domain).expect("domain selector should derive");
+            selectors.push((selector, domain.clone()));
+        }
+        set_account_domain_selector_resolver(Arc::new(move |candidate| {
+            selectors
+                .iter()
+                .find_map(|(selector, domain)| {
+                    if candidate == selector {
+                        Some(domain.clone())
+                    } else {
+                        None
+                    }
+                })
+        }));
+        struct DomainSelectorResolverGuard;
+        impl Drop for DomainSelectorResolverGuard {
+            fn drop(&mut self) {
+                clear_account_domain_selector_resolver();
+            }
+        }
+        let _resolver_guard = DomainSelectorResolverGuard;
         let certificate: OfflineWalletCertificate =
             norito::json::from_value(certificate_value).expect("fixture certificate should decode");
         let instruction = InstructionBox::from(RegisterOfflineAllowance { certificate });

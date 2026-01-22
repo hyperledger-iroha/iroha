@@ -3,6 +3,7 @@
 use std::{
     fs,
     path::PathBuf,
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -17,6 +18,10 @@ use iroha::data_model::{
     offline::OfflineWalletCertificate,
     prelude::*,
     repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
+};
+use iroha_data_model::account::{
+    AccountDomainSelector, clear_account_domain_selector_resolver,
+    set_account_domain_selector_resolver,
 };
 use iroha_data_model::prelude::RepoInstructionBox;
 use iroha_primitives::json::Json;
@@ -150,6 +155,37 @@ fn find_offline_allowance_entry<'a>(
         })
 }
 
+struct DomainSelectorResolverGuard;
+
+impl DomainSelectorResolverGuard {
+    fn install(domains: &[DomainId]) -> Result<Self> {
+        let mut selectors = Vec::with_capacity(domains.len());
+        for domain in domains {
+            let selector = AccountDomainSelector::from_domain(domain)
+                .map_err(|err| eyre!("failed to derive domain selector for {domain}: {err}"))?;
+            selectors.push((selector, domain.clone()));
+        }
+        set_account_domain_selector_resolver(Arc::new(move |candidate| {
+            selectors
+                .iter()
+                .find_map(|(selector, domain)| {
+                    if candidate == selector {
+                        Some(domain.clone())
+                    } else {
+                        None
+                    }
+                })
+        }));
+        Ok(Self)
+    }
+}
+
+impl Drop for DomainSelectorResolverGuard {
+    fn drop(&mut self) {
+        clear_account_domain_selector_resolver();
+    }
+}
+
 fn load_offline_certificate_fixture() -> Result<OfflineWalletCertificate> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../fixtures/offline_allowance/android-demo/register_instruction.json");
@@ -165,6 +201,12 @@ fn load_offline_certificate_fixture() -> Result<OfflineWalletCertificate> {
             path.display()
         )
     })?;
+    let domains: Vec<DomainId> = ["wonderland", "treasury"]
+        .into_iter()
+        .map(|label| label.parse())
+        .collect::<Result<_, _>>()
+        .map_err(|err| eyre!("failed to parse fixture domain label: {err}"))?;
+    let _resolver_guard = DomainSelectorResolverGuard::install(&domains)?;
     let certificate_value = fixture
         .get("certificate")
         .ok_or_else(|| {
@@ -827,9 +869,22 @@ async fn account_transactions_get_supports_address_format() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
 
+    // Ensure the account has at least one external transaction to format.
+    let client = network.client();
+    tokio::task::spawn_blocking({
+        let client = client.clone();
+        move || {
+            client.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
+                "addrfmtget#wonderland".parse().expect("asset definition id"),
+            )))
+        }
+    })
+    .await??;
+    network.ensure_blocks(2).await?;
+
     let http = http_client();
-    let account_literal = SAMPLE_GENESIS_ACCOUNT_ID.to_string();
-    let account_address = SAMPLE_GENESIS_ACCOUNT_ID
+    let account_literal = ALICE_ID.to_string();
+    let account_address = ALICE_ID
         .to_account_address()
         .expect("account address should encode");
     let compressed_literal = account_address.to_compressed_sora().expect("compressed");
@@ -872,7 +927,7 @@ async fn account_transactions_get_supports_address_format() -> Result<()> {
     let authorities = extract_account_transaction_authorities(&parsed);
     assert!(
         !authorities.is_empty(),
-        "IH58 default should return at least one authority literal (genesis tx)"
+        "IH58 default should return at least one authority literal (submitted tx)"
     );
     assert!(
         authorities
@@ -922,9 +977,22 @@ async fn account_transactions_query_supports_address_format() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
 
+    // Ensure the account has at least one external transaction to format.
+    let client = network.client();
+    tokio::task::spawn_blocking({
+        let client = client.clone();
+        move || {
+            client.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
+                "addrfmtquery#wonderland".parse().expect("asset definition id"),
+            )))
+        }
+    })
+    .await??;
+    network.ensure_blocks(2).await?;
+
     let http = http_client();
-    let account_literal = SAMPLE_GENESIS_ACCOUNT_ID.to_string();
-    let account_address = SAMPLE_GENESIS_ACCOUNT_ID
+    let account_literal = ALICE_ID.to_string();
+    let account_address = ALICE_ID
         .to_account_address()
         .expect("account address should encode");
     let compressed_literal = account_address.to_compressed_sora().expect("compressed");
@@ -952,7 +1020,7 @@ async fn account_transactions_query_supports_address_format() -> Result<()> {
     let authorities = extract_account_transaction_authorities(&parsed);
     assert!(
         !authorities.is_empty(),
-        "IH58 default query should return at least one authority literal (genesis tx)"
+        "IH58 default query should return at least one authority literal (submitted tx)"
     );
     assert!(
         authorities
@@ -1500,6 +1568,9 @@ async fn accounts_query_accepts_alias_and_compressed_filter_literals() -> Result
         dup_msg.contains("Account label already registered"),
         "expected alias collision error, got {dup_msg}"
     );
+
+    let blocks = client.get_status()?.blocks;
+    network.ensure_blocks(blocks).await?;
 
     let alias_literal = format!("{}@{}", label.label, domain_id);
     let compressed_literal = account_id
