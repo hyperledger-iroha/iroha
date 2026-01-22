@@ -38,15 +38,56 @@ where
 }
 
 async fn submit_with_context(
+    network: &sandbox::SerializedNetwork,
     client: &Client,
     instruction: impl Into<InstructionBox>,
     context: &str,
 ) -> Result<()> {
-    let client = client.clone();
+    let mut client = leader_client_for_submit(network, client).await;
+    client.transaction_status_timeout = network.sync_timeout();
     let instruction = instruction.into();
     let context = context.to_string();
-    spawn_blocking(move || client.submit(instruction).wrap_err(context)).await??;
+    spawn_blocking(move || client.submit_blocking(instruction).wrap_err(context)).await??;
     Ok(())
+}
+
+async fn submit_all_with_context(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+    instructions: Vec<InstructionBox>,
+    context: &str,
+) -> Result<()> {
+    let mut client = leader_client_for_submit(network, client).await;
+    client.transaction_status_timeout = network.sync_timeout();
+    let context = context.to_string();
+    spawn_blocking(move || client.submit_all_blocking(instructions).wrap_err(context)).await??;
+    Ok(())
+}
+
+async fn leader_client_for_submit(network: &sandbox::SerializedNetwork, probe: &Client) -> Client {
+    let status = spawn_blocking({
+        let client = probe.clone();
+        move || client.get_status()
+    })
+    .await
+    .ok()
+    .and_then(Result::ok);
+    let leader_index = status
+        .as_ref()
+        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+        .and_then(|idx| usize::try_from(idx).ok())
+        .filter(|&idx| idx < network.peers().len())
+        .unwrap_or(0);
+    network
+        .peers()
+        .get(leader_index)
+        .unwrap_or_else(|| {
+            network
+                .peers()
+                .first()
+                .expect("network should have at least one peer")
+        })
+        .client()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -93,6 +134,13 @@ async fn mint_asset_after_3_sec_scenario(
             .clone()
             .checked_add(1u32.into())
             .expect("quantity should increment");
+        let mut target_height = network
+            .peers()
+            .iter()
+            .filter_map(|peer| peer.best_effort_block_height())
+            .map(|height| height.total)
+            .max()
+            .unwrap_or(0);
 
         let start_time = curr_time();
         let pipeline_time = network.pipeline_time();
@@ -111,19 +159,29 @@ async fn mint_asset_after_3_sec_scenario(
                 TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
             ),
         ));
-        spawn_blocking({
-            let client = test_client.clone();
-            move || client.submit_blocking(register_trigger)
-        })
-        .await??;
+        submit_with_context(
+            network,
+            &test_client,
+            register_trigger,
+            "mint_asset_after_3_sec register trigger",
+        )
+        .await?;
+        target_height = target_height.saturating_add(1);
+        network
+            .ensure_blocks_with(|height| height.total >= target_height)
+            .await?;
 
-        spawn_blocking({
-            let client = test_client.clone();
-            move || {
-                client.submit_blocking(Log::new(Level::DEBUG, "Just to create block".to_string()))
-            }
-        })
-        .await??;
+        submit_with_context(
+            network,
+            &test_client,
+            Log::new(Level::DEBUG, "Just to create block".to_string()),
+            "mint_asset_after_3_sec create block",
+        )
+        .await?;
+        target_height = target_height.saturating_add(1);
+        network
+            .ensure_blocks_with(|height| height.total >= target_height)
+            .await?;
         let after_registration_quantity = spawn_blocking({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
@@ -137,13 +195,17 @@ async fn mint_asset_after_3_sec_scenario(
         assert_eq!(init_quantity, after_registration_quantity);
 
         let poll_delay = pipeline_time.checked_div(2).unwrap_or(pipeline_time);
-        spawn_blocking({
-            let client = test_client.clone();
-            move || {
-                client.submit_blocking(Log::new(Level::DEBUG, "Just to create block".to_string()))
-            }
-        })
-        .await??;
+        submit_with_context(
+            network,
+            &test_client,
+            Log::new(Level::DEBUG, "Just to create block".to_string()),
+            "mint_asset_after_3_sec create block after poll delay",
+        )
+        .await?;
+        target_height = target_height.saturating_add(1);
+        network
+            .ensure_blocks_with(|height| height.total >= target_height)
+            .await?;
 
         timeout(sync_timeout, async {
             loop {
@@ -191,18 +253,6 @@ async fn pre_commit_trigger_should_be_executed_scenario(
                     TimeEventFilter::new(ExecutionTime::PreCommit),
                 ),
             ));
-            spawn_blocking({
-                let client = test_client.clone();
-                move || client.submit_blocking(register_trigger)
-            })
-            .await??;
-
-            let prev_value = spawn_blocking({
-                let client = test_client.clone();
-                let asset_id = asset_id.clone();
-                move || get_asset_value(&client, &asset_id)
-            })
-            .await??;
             let mut target_height = network
                 .peers()
                 .iter()
@@ -210,6 +260,24 @@ async fn pre_commit_trigger_should_be_executed_scenario(
                 .map(|height| height.total)
                 .max()
                 .unwrap_or(0);
+            submit_with_context(
+                network,
+                &test_client,
+                register_trigger,
+                "pre_commit_trigger_should_be_executed register trigger",
+            )
+            .await?;
+            target_height = target_height.saturating_add(1);
+            network
+                .ensure_blocks_with(|height| height.total >= target_height)
+                .await?;
+
+            let prev_value = spawn_blocking({
+                let client = test_client.clone();
+                let asset_id = asset_id.clone();
+                move || get_asset_value(&client, &asset_id)
+            })
+            .await??;
             for _ in 0..CHECKS_COUNT {
                 let sample_isi = SetKeyValue::account(
                     account_id.clone(),
@@ -217,6 +285,7 @@ async fn pre_commit_trigger_should_be_executed_scenario(
                     "value".parse::<Json>()?,
                 );
                 submit_with_context(
+                    network,
                     &test_client,
                     sample_isi,
                     "pre_commit_trigger_should_be_executed sample ISI",
@@ -256,12 +325,17 @@ async fn pre_commit_trigger_should_be_executed_scenario(
             .wrap_err("pre_commit_trigger_should_be_executed poll timed out")??;
 
             let trigger_id: TriggerId = "mint_rose_precommit".parse()?;
-            spawn_blocking({
-                let client = test_client.clone();
-                let trigger_id = trigger_id.clone();
-                move || client.submit_blocking(Unregister::trigger(trigger_id))
-            })
-            .await??;
+            submit_with_context(
+                network,
+                &test_client,
+                Unregister::trigger(trigger_id),
+                "pre_commit_trigger_should_be_executed unregister trigger",
+            )
+            .await?;
+            target_height = target_height.saturating_add(1);
+            network
+                .ensure_blocks_with(|height| height.total >= target_height)
+                .await?;
 
             Ok(())
         },
@@ -300,11 +374,28 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
             .cloned()
             .map(|account_id| Register::account(Account::new(account_id)))
             .collect::<Vec<_>>();
-        spawn_blocking({
-            let client = test_client.clone();
-            move || client.submit_all_blocking(register_accounts)
-        })
-        .await??;
+        let mut target_height = network
+            .peers()
+            .iter()
+            .filter_map(|peer| peer.best_effort_block_height())
+            .map(|height| height.total)
+            .max()
+            .unwrap_or(0);
+        let register_accounts = register_accounts
+            .into_iter()
+            .map(InstructionBox::from)
+            .collect::<Vec<_>>();
+        submit_all_with_context(
+            network,
+            &test_client,
+            register_accounts,
+            "mint_nft_for_every_user_every_1_sec register accounts",
+        )
+        .await?;
+        target_height = target_height.saturating_add(1);
+        network
+            .ensure_blocks_with(|height| height.total >= target_height)
+            .await?;
         println!("registered additional accounts for time trigger");
 
         let offset = trigger_period.saturating_mul(2);
@@ -316,16 +407,22 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
             "mint_nft_for_all".parse()?,
             Action::new(
                 load_sample_ivm("create_nft_for_every_user_trigger"),
-                Repeats::Indefinitely,
+                Repeats::Exactly(u32::try_from(expected_count)?),
                 alice_id.clone(),
                 filter,
             ),
         ));
-        spawn_blocking({
-            let client = test_client.clone();
-            move || client.submit_blocking(register_trigger)
-        })
-        .await??;
+        submit_with_context(
+            network,
+            &test_client,
+            register_trigger,
+            "mint_nft_for_every_user_every_1_sec register trigger",
+        )
+        .await?;
+        target_height = target_height.saturating_add(1);
+        network
+            .ensure_blocks_with(|height| height.total >= target_height)
+            .await?;
         sleep(offset).await;
         println!("registered time trigger, driving {expected_count} blocks");
 
@@ -393,7 +490,7 @@ async fn submit_sample_isi_on_every_block_commit(
             "key".parse::<Name>()?,
             Json::new("value"),
         );
-        submit_with_context(test_client, sample_isi, "time_trigger sample ISI").await?;
+        submit_with_context(network, test_client, sample_isi, "time_trigger sample ISI").await?;
         target_height = target_height.saturating_add(1);
         network
             .ensure_blocks_with(|height| height.total >= target_height)

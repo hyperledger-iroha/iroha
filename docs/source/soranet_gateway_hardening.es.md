@@ -1,18 +1,26 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/source/soranet_gateway_hardening.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 1a7a7fb86b2d307aea1b367c9c83a09b19e24cea3f5f4ccd29937fcae3d80997
 source_last_modified: "2025-11-21T15:11:47.334996+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-21
 ---
 
-# Traducción en curso
+# Endurecimiento del Gateway SoraGlobal (SNNet-15H)
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+El helper de endurecimiento captura evidencias de seguridad y privacidad antes de promocionar builds del Gateway.
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+## Comando
+- `cargo xtask soranet-gateway-hardening --sbom <path> --vuln-report <path> --hsm-policy <path> --sandbox-profile <path> --data-retention-days 30 --log-retention-days 30 --out artifacts/soranet/gateway_hardening`
+
+## Salidas
+- `gateway_hardening_summary.json` — estado por entrada (SBOM, reporte de vulnerabilidades, política de HSM, perfil de sandbox) más la señal de retención. Entradas ausentes muestran `warn` o `error`.
+- `gateway_hardening_summary.md` — resumen legible para humanos para paquetes de gobernanza.
+
+## Notas de aceptación
+- Los informes de SBOM y vulnerabilidades deben existir; entradas ausentes degradan el estado.
+- Retención mayor a 30 días marca `warn` para revisión; use valores por defecto más estrictos antes de GA.
+- Use los artefactos de resumen como adjuntos para revisiones GAR/SOC y runbooks de incidentes.

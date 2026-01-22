@@ -4869,6 +4869,48 @@ impl<'state> StateView<'state> {
         StateReadOnly::latest_block_hash(self)
     }
 
+    /// Check if any time triggers should fire for a block with the given header.
+    pub fn time_triggers_due_for_block(&self, block_header: &BlockHeader) -> bool {
+        let to = block_header.creation_time();
+        let since = self
+            .latest_block()
+            .map_or(to, |latest_block| latest_block.header().creation_time());
+        let (since, length) = to.checked_sub(since).map_or_else(
+            || {
+                warn!(
+                    prev_time_ms = since.as_millis(),
+                    block_time_ms = to.as_millis(),
+                    "Block creation time regressed; clamping time interval to zero."
+                );
+                (to, Duration::ZERO)
+            },
+            |length| (since, length),
+        );
+        let interval = TimeInterval::new(since, length);
+        let event = TimeEvent { interval };
+        let current_block_height = block_header.height().get();
+        let key_height = "__registered_block_height".parse::<Name>().ok();
+        self.world
+            .triggers()
+            .time_triggers()
+            .iter()
+            .filter(|(_, action)| trigger_is_enabled(action.metadata()))
+            .any(|(_, action)| {
+                let mut count = action.filter.count_matches(&event);
+                if let Repeats::Exactly(repeats) = action.repeats {
+                    count = std::cmp::min(repeats, count);
+                }
+                if count == 0 {
+                    return false;
+                }
+                let registered_height = key_height
+                    .as_ref()
+                    .and_then(|key| action.metadata().get(key))
+                    .and_then(|json| json.try_into_any_norito::<u64>().ok());
+                registered_height.is_some_and(|height| height != current_block_height)
+            })
+    }
+
     /// Previous committed block hash (if any) for this snapshot.
     #[inline]
     pub fn prev_block_hash(&self) -> Option<HashOf<BlockHeader>> {
@@ -15815,10 +15857,11 @@ impl<'state> StateBlock<'state> {
             );
         }
 
-        matched.iter().fold(
+        matched.iter().enumerate().fold(
             (Vec::new(), Vec::new(), Vec::new()),
-            |mut acc, (trg_id, action)| {
-                let (entrypoint, result) = self.execute_time_trigger(trg_id, action, &time_event);
+            |mut acc, (invocation_index, (trg_id, action))| {
+                let (entrypoint, result) =
+                    self.execute_time_trigger(trg_id, action, &time_event, invocation_index);
 
                 match &result {
                     Err(reason) => {
@@ -15848,6 +15891,14 @@ impl<'state> StateBlock<'state> {
         )
     }
 
+    fn time_trigger_nft_seq_base(block_height: u64, invocation_index: usize) -> u64 {
+        let height_part = u32::try_from(block_height).unwrap_or(u32::MAX) as u128;
+        let index_part = u32::try_from(invocation_index).unwrap_or(u32::MAX) as u128;
+        let combined = (height_part << 32) | index_part;
+        let base = combined << 8;
+        u64::try_from(base).unwrap_or(u64::MAX & !0xFF)
+    }
+
     /// Execute a scheduled trigger, applying its state changes on success, or leaving the state unchanged on failure.
     ///
     /// Returns the hash and the result of this "transaction" --
@@ -15857,7 +15908,10 @@ impl<'state> StateBlock<'state> {
         trg_id: &TriggerId,
         action: &LoadedAction<TimeEventFilter>,
         time_event: &TimeEvent,
+        invocation_index: usize,
     ) -> (TimeTriggerEntrypoint, TransactionResultInner) {
+        let nft_seq_base =
+            Self::time_trigger_nft_seq_base(self._curr_block.height().get(), invocation_index);
         let mut transaction = self.transaction();
 
         let mut entrypoint = TimeTriggerEntrypoint {
@@ -15870,6 +15924,7 @@ impl<'state> StateBlock<'state> {
             action.authority(),
             action.executable(),
             (*time_event).into(),
+            Some(nft_seq_base),
         ) {
             Ok(step) => {
                 entrypoint.instructions = step;
@@ -18953,8 +19008,13 @@ impl StateTransaction<'_, '_> {
             .mutate_vec(|events| events.push(event.clone().into()));
 
         // Execute the trigger entrypoint and collect its step.
-        let step =
-            self.execute_trigger(id, &action_authority, &executable, event.clone().into())?;
+        let step = self.execute_trigger(
+            id,
+            &action_authority,
+            &executable,
+            event.clone().into(),
+            None,
+        )?;
 
         // Immediately process any data triggers emitted by the executed step so that
         // trigger-chained effects are applied within the same transaction.
@@ -19012,7 +19072,7 @@ impl StateTransaction<'_, '_> {
                 action.executable().clone()
             };
 
-            let step = self.execute_trigger(&trg_id, authority, &executable, event)?;
+            let step = self.execute_trigger(&trg_id, authority, &executable, event, None)?;
 
             let depleted = self.world.triggers.decrease_repeats([&trg_id].into_iter());
             stack.retain(|(_, trg_id, _)| !depleted.contains(trg_id));
@@ -19082,6 +19142,7 @@ impl StateTransaction<'_, '_> {
         authority: &AccountId,
         executable: &ExecutableRef,
         event: EventBox,
+        nft_seq_base_override: Option<u64>,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
         let (res, outcome_override) = match executable {
             ExecutableRef::Instructions(instructions) => (
@@ -19143,9 +19204,11 @@ impl StateTransaction<'_, '_> {
                             .expect("block creation timestamp must fit into u64");
                     host.set_trigger_id(id.clone());
                     host.set_block_time_ms(current_block_time_ms);
-                    // Seed sample NFT helper sequence with the current block height so repeated
-                    // executions across blocks generate unique ids.
-                    host.set_nft_seq_base(self._curr_block.height().get().saturating_mul(256));
+                    // Seed sample NFT helper sequence with a deterministic base so repeated
+                    // executions (including multiple time-trigger matches in one block) generate
+                    // unique ids without relying on mutable global state.
+                    let default_base = self._curr_block.height().get().saturating_mul(256);
+                    host.set_nft_seq_base(nft_seq_base_override.unwrap_or(default_base));
                     #[cfg(feature = "telemetry")]
                     host.set_telemetry(self.telemetry.clone());
                     host.set_crypto_config(self.crypto());
@@ -27729,7 +27792,7 @@ mod tests {
         };
 
         let (entrypoint, result) =
-            state_block.execute_time_trigger(&trigger_id, &action, &time_event);
+            state_block.execute_time_trigger(&trigger_id, &action, &time_event, 0);
 
         assert!(result.is_err(), "expected trigger execution to fail");
         let expected_step = ExecutionStep(ConstVec::from(vec![failing_instruction]));
@@ -27738,6 +27801,18 @@ mod tests {
         assert_eq!(entrypoint.authority, *ALICE_ID);
 
         Ok(())
+    }
+
+    #[test]
+    fn time_trigger_nft_seq_base_strides_by_256() {
+        let base0 = StateBlock::time_trigger_nft_seq_base(42, 0);
+        let base1 = StateBlock::time_trigger_nft_seq_base(42, 1);
+        let base2 = StateBlock::time_trigger_nft_seq_base(42, 2);
+        assert_eq!(base1, base0.saturating_add(256));
+        assert_eq!(base2, base1.saturating_add(256));
+
+        let next_block = StateBlock::time_trigger_nft_seq_base(43, 0);
+        assert!(next_block > base2);
     }
 
     #[test]
@@ -27765,6 +27840,48 @@ mod tests {
 
         assert_eq!(time_event.interval.since(), Duration::from_millis(1_000));
         assert_eq!(time_event.interval.length(), Duration::ZERO);
+    }
+
+    #[test]
+    fn time_triggers_due_for_block_detects_precommit_trigger() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+
+        let header1 = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut state_block1 = state.block(header1);
+        {
+            let mut stx = state_block1.transaction();
+            let domain_id: DomainId = "wonderland".parse()?;
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+            let trigger = Trigger::new(
+                "precommit_probe".parse()?,
+                Action::new(
+                    vec![InstructionBox::from(Log::new(
+                        Level::INFO,
+                        "probe".to_owned(),
+                    ))],
+                    Repeats::Exactly(1),
+                    ALICE_ID.clone(),
+                    TimeEventFilter::new(ExecutionTime::PreCommit),
+                ),
+            );
+            Register::trigger(trigger).execute(&ALICE_ID, &mut stx)?;
+            stx.apply();
+        }
+        state_block1.commit().unwrap();
+
+        let header2 = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let view = state.view();
+        assert!(
+            view.time_triggers_due_for_block(&header2),
+            "precommit triggers should be due for the next block"
+        );
+
+        Ok(())
     }
 
     #[test]
