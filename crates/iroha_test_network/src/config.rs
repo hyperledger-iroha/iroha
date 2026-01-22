@@ -998,15 +998,13 @@ mod tests {
             selectors.push((selector, domain.clone()));
         }
         set_account_domain_selector_resolver(Arc::new(move |candidate| {
-            selectors
-                .iter()
-                .find_map(|(selector, domain)| {
-                    if candidate == selector {
-                        Some(domain.clone())
-                    } else {
-                        None
-                    }
-                })
+            selectors.iter().find_map(|(selector, domain)| {
+                if candidate == selector {
+                    Some(domain.clone())
+                } else {
+                    None
+                }
+            })
         }));
         struct DomainSelectorResolverGuard;
         impl Drop for DomainSelectorResolverGuard {

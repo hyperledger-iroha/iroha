@@ -3348,8 +3348,14 @@ impl Actor {
 
     fn active_pending_blocks_len(&self) -> usize {
         let view = self.state.view();
-        let tip_height = view.height();
-        let tip_hash = view.latest_block_hash();
+        self.active_pending_blocks_len_for_tip(view.height(), view.latest_block_hash())
+    }
+
+    fn active_pending_blocks_len_for_tip(
+        &self,
+        tip_height: usize,
+        tip_hash: Option<HashOf<BlockHeader>>,
+    ) -> usize {
         self.pending
             .pending_blocks
             .values()
