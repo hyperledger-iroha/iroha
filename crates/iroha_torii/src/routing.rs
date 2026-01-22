@@ -17125,14 +17125,16 @@ mod tx_query_integration_smoke {
         };
 
         // A: success, A: failure
-        let mut b1 = dm::transaction::signed::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b1 =
+            dm::transaction::signed::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b1.set_creation_time(core::time::Duration::from_millis(100));
         let tx1 = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
-        let mut b2 = dm::transaction::signed::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
+        let mut b2 =
+            dm::transaction::signed::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b2.set_creation_time(core::time::Duration::from_millis(200));
         let signed_b = b2
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
@@ -17364,7 +17366,8 @@ mod tx_query_integration_smoke {
         let tx_fail_c = AcceptedTransaction::new_unchecked(Cow::Owned(signed_c));
 
         // tx_fail_d: failure due to missing account (unregister non-existent)
-        let mut unregister_missing_builder = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
+        let mut unregister_missing_builder =
+            dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
         unregister_missing_builder.set_creation_time(core::time::Duration::from_millis(1500));
         let fail_inst_d = dm::Unregister::domain("void".parse::<dm::DomainId>().unwrap());
         let signed_d = unregister_missing_builder
@@ -17373,7 +17376,8 @@ mod tx_query_integration_smoke {
         let tx_fail_d = AcceptedTransaction::new_unchecked(Cow::Owned(signed_d));
 
         // tx_fail_e: another failure case (duplicate domain register)
-        let mut duplicate_domain_builder = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
+        let mut duplicate_domain_builder =
+            dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
         duplicate_domain_builder.set_creation_time(core::time::Duration::from_millis(1500));
         let fail_inst_e = dm::Register::domain(dm::Domain::new(dom.clone()));
         let signed_e = duplicate_domain_builder

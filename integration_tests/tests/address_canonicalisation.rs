@@ -166,15 +166,13 @@ impl DomainSelectorResolverGuard {
             selectors.push((selector, domain.clone()));
         }
         set_account_domain_selector_resolver(Arc::new(move |candidate| {
-            selectors
-                .iter()
-                .find_map(|(selector, domain)| {
-                    if candidate == selector {
-                        Some(domain.clone())
-                    } else {
-                        None
-                    }
-                })
+            selectors.iter().find_map(|(selector, domain)| {
+                if candidate == selector {
+                    Some(domain.clone())
+                } else {
+                    None
+                }
+            })
         }));
         Ok(Self)
     }
@@ -875,7 +873,9 @@ async fn account_transactions_get_supports_address_format() -> Result<()> {
         let client = client.clone();
         move || {
             client.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
-                "addrfmtget#wonderland".parse().expect("asset definition id"),
+                "addrfmtget#wonderland"
+                    .parse()
+                    .expect("asset definition id"),
             )))
         }
     })
@@ -983,7 +983,9 @@ async fn account_transactions_query_supports_address_format() -> Result<()> {
         let client = client.clone();
         move || {
             client.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
-                "addrfmtquery#wonderland".parse().expect("asset definition id"),
+                "addrfmtquery#wonderland"
+                    .parse()
+                    .expect("asset definition id"),
             )))
         }
     })

@@ -28213,11 +28213,13 @@ async fn active_pending_blocks_len_ignores_aborted_and_nonextending() {
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
 
-    let tip_hash = actor
-        .state
-        .view()
-        .latest_block_hash()
-        .expect("tip hash available");
+    let (tip_height, tip_hash) = {
+        let view = actor.state.view();
+        (
+            view.height(),
+            view.latest_block_hash().expect("tip hash available"),
+        )
+    };
 
     let aborted_block = sample_block(2, 1, Some(tip_hash));
     let aborted_payload = Hash::new(super::proposals::block_payload_bytes(&aborted_block));
@@ -28244,10 +28246,18 @@ async fn active_pending_blocks_len_ignores_aborted_and_nonextending() {
         PendingBlock::new(extending_block, extending_payload, 2, 0),
     );
 
+    assert_eq!(
+        actor.active_pending_blocks_len_for_tip(tip_height, Some(tip_hash)),
+        1
+    );
     assert_eq!(actor.active_pending_blocks_len(), 1);
     assert!(actor.has_active_pending_blocks());
 
     actor.pending.pending_blocks.remove(&extending_hash);
+    assert_eq!(
+        actor.active_pending_blocks_len_for_tip(tip_height, Some(tip_hash)),
+        0
+    );
     assert_eq!(actor.active_pending_blocks_len(), 0);
     assert!(!actor.has_active_pending_blocks());
 

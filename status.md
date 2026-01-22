@@ -2,6 +2,11 @@
 
 Last update: 2026-01-22
 
+- Sumeragi pacemaker: reuse the existing state snapshot when gating proposals to avoid nested `State::view` reads under writer pressure; added `active_pending_blocks_len_for_tip` and updated coverage.
+- Tests: `cargo test -p iroha_core active_pending_blocks_len_ignores_aborted_and_nonextending -- --nocapture` (ok).
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Offline allowance fixtures: install domain-selector resolvers for `wonderland`/`treasury` in test fixture decode paths (integration tests + iroha_test_network).
+- Tests: `cargo test -p integration_tests --test address_canonicalisation offline_allowances_listing_respects_address_format_hint -- --nocapture` (ok; network startup skipped due to loopback sandbox restriction).
 - Torii: enforce account-scoped filtering for `/v1/accounts/{account_id}/transactions/query` and align query tests to the account path semantics.
 - Tests: not run (not requested).
 - Integration tests: submit an Alice-authored transaction before validating account transactions address_format responses.
