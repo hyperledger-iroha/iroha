@@ -112,6 +112,7 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # rbc_pending_session_limit = 256       # max pending RBC sessions before INIT
 # msg_channel_cap_blocks = 256          # block message capacity (block sync updates, params, etc.)
 # control_msg_channel_cap = 1024        # control/background/lane channel capacity
+# worker_iteration_budget_cap_ms = 2000 # cap worker drain budget per iteration
 # msg_channel_cap = 100                 # fallback when per-queue caps are omitted
 # commit_inflight_timeout_ms = 30000
 # missing_block_signer_fallback_attempts = 1 # fetch from commit certificate signers before falling back to full topology

@@ -5,7 +5,6 @@ import java.util.Optional;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.SigningException;
-import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.crypto.keystore.KeyAttestation;
 import org.hyperledger.iroha.android.model.TransactionPayload;
@@ -155,8 +154,7 @@ public final class TransactionBuilder {
     Objects.requireNonNull(signer, "signer");
 
     final byte[] encoded = codecAdapter.encodeTransaction(payload);
-    final byte[] prehashed = IrohaHash.prehash(encoded);
-    final byte[] signature = signer.sign(prehashed);
+    final byte[] signature = signer.sign(encoded);
     return SignedTransaction.builder()
         .setEncodedPayload(encoded)
         .setSignature(signature)

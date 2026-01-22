@@ -10,8 +10,8 @@ import org.hyperledger.iroha.android.SigningException;
 /**
  * Ed25519 signer that relies on the JCA provider available on the runtime.
  *
- * <p>This signer expects raw bytes. Iroha-specific prehashing is applied by higher-level
- * transaction helpers before calling {@link #sign(byte[])}.
+ * <p>Implements Iroha's signing convention: the payload is pre-hashed with Blake2b-256 and the
+ * least-significant bit is set to {@code 1} before signing.
  */
 public final class Ed25519Signer implements Signer {
 
@@ -35,9 +35,10 @@ public final class Ed25519Signer implements Signer {
       throw new SigningException("message must not be null");
     }
     try {
+      final byte[] prehashed = IrohaHash.prehash(message);
       final Signature signature = Signature.getInstance("Ed25519");
       signature.initSign(privateKey);
-      signature.update(message);
+      signature.update(prehashed);
       return signature.sign();
     } catch (final GeneralSecurityException ex) {
       throw new SigningException("Ed25519 signing failed", ex);

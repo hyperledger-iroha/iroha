@@ -110,6 +110,7 @@ fn trust_config(
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
+        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -221,6 +222,7 @@ async fn network_create() {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
+        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -587,6 +589,7 @@ async fn ws_fallback_connects_and_handshakes() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout: idle,
+            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -803,6 +806,7 @@ async fn ws_fallback_connects_and_handshakes() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout: idle,
+            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1022,6 +1026,7 @@ async fn two_networks() {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
+        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -1135,6 +1140,7 @@ async fn two_networks() {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
+        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -1314,6 +1320,7 @@ async fn update_peers_triggers_immediate_connect() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
+            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1429,6 +1436,7 @@ async fn update_peers_triggers_immediate_connect() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
+            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1586,6 +1594,7 @@ async fn happy_eyeballs_parallel_dials() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
+            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1702,6 +1711,7 @@ async fn happy_eyeballs_parallel_dials() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
+            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1856,6 +1866,7 @@ async fn low_topics_do_not_starve_each_other() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
+            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -1972,6 +1983,7 @@ async fn low_topics_do_not_starve_each_other() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
+            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2183,6 +2195,7 @@ async fn relay_hub_routes_consensus_between_spokes() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
+            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2483,6 +2496,7 @@ async fn start_network(
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
+        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -2668,6 +2682,7 @@ async fn tls_inbound_listener_smoke() {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
+        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -2788,6 +2803,7 @@ async fn tls_inbound_listener_smoke() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
+            connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             peer_gossip_period: PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: PEER_GOSSIP_PERIOD,
             trust_decay_half_life:

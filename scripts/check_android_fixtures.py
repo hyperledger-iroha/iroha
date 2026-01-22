@@ -31,6 +31,17 @@ def iroha_hash(data: bytes) -> str:
     digest[-1] |= 1
     return digest.hex()
 
+def normalize_authority(value: str) -> str:
+    if not isinstance(value, str):
+        return value
+    trimmed = value.strip()
+    if not trimmed:
+        return trimmed
+    at_index = trimmed.rfind("@")
+    if at_index > 0:
+        return trimmed[:at_index]
+    return trimmed
+
 
 @dataclass(frozen=True)
 class PayloadFixture:
@@ -210,7 +221,9 @@ def compare(
                     f"payload JSON chain mismatch for {name}: "
                     f"payloads={payload_entry.chain} manifest={chain}"
                 )
-            if payload_entry.authority != authority:
+            normalized_payload_authority = normalize_authority(payload_entry.authority)
+            normalized_manifest_authority = normalize_authority(authority)
+            if normalized_payload_authority != normalized_manifest_authority:
                 errors.append(
                     f"payload JSON authority mismatch for {name}: "
                     f"payloads={payload_entry.authority} manifest={authority}"

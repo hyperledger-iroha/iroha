@@ -5215,6 +5215,12 @@ pub struct Sumeragi {
     /// Capacity for Sumeragi control-message channel.
     #[config(default = "defaults::sumeragi::CONTROL_MSG_CHANNEL_CAP")]
     pub control_msg_channel_cap: usize,
+    /// Cap (ms) on the worker loop's per-iteration time budget.
+    #[config(
+        env = "SUMERAGI_WORKER_ITERATION_BUDGET_CAP_MS",
+        default = "defaults::sumeragi::WORKER_ITERATION_BUDGET_CAP_MS"
+    )]
+    pub worker_iteration_budget_cap_ms: u64,
     /// Runtime consensus mode: `permissioned` (default) or `npos`.
     #[config(
         env = "SUMERAGI_CONSENSUS_MODE",
@@ -5875,6 +5881,7 @@ impl Sumeragi {
             msg_channel_cap_rbc_chunks,
             msg_channel_cap_blocks,
             control_msg_channel_cap,
+            worker_iteration_budget_cap_ms,
             consensus_mode,
             mode_flip_enabled,
             da_enabled,
@@ -6044,6 +6051,15 @@ impl Sumeragi {
         } else {
             true
         };
+        let worker_budget_ok = if worker_iteration_budget_cap_ms == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.worker_iteration_budget_cap_ms must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
 
         let membership_mismatch_threshold_ok =
             if membership_mismatch_alert_threshold == 0 {
@@ -6141,6 +6157,7 @@ impl Sumeragi {
             && da_openings_ok
             && kura_retry_ok
             && commit_inflight_ok
+            && worker_budget_ok
             && membership_mismatch_threshold_ok
             && bls_ok)
         {
@@ -6209,6 +6226,9 @@ impl Sumeragi {
             msg_channel_cap_rbc_chunks,
             msg_channel_cap_blocks,
             control_msg_channel_cap,
+            worker_iteration_budget_cap: std::time::Duration::from_millis(
+                worker_iteration_budget_cap_ms,
+            ),
             commit_cert_history_cap,
             consensus_mode: match consensus_mode {
                 ConsensusMode::Permissioned => actual::ConsensusMode::Permissioned,

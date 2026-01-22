@@ -1957,6 +1957,48 @@ async fn actor_next_tick_deadline_tracks_pending_quorum_timeout() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn actor_next_tick_deadline_tracks_commit_pipeline_wakeup() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let now = Instant::now();
+    assert!(
+        actor.next_tick_deadline(now).is_none(),
+        "fresh actor should not schedule ticks"
+    );
+
+    actor.request_commit_pipeline();
+
+    let deadline = actor
+        .next_tick_deadline(now)
+        .expect("commit pipeline wakeup should schedule immediate tick");
+    assert_eq!(deadline, now);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_tick_clears_commit_pipeline_wakeup() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    actor.request_commit_pipeline();
+    assert!(
+        actor.pending.commit_pipeline_wakeup,
+        "commit pipeline wakeup should be set"
+    );
+
+    let progressed = actor.tick();
+    assert!(progressed, "commit pipeline wakeup should trigger progress");
+    assert!(
+        !actor.pending.commit_pipeline_wakeup,
+        "tick should clear commit pipeline wakeup"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn actor_next_tick_deadline_prioritizes_queue_with_pending_block() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
@@ -1965,8 +2007,7 @@ async fn actor_next_tick_deadline_prioritizes_queue_with_pending_block() {
     let (public_key, private_key) = key_pair.clone().into_parts();
     let authority = AccountId::new("wonderland".parse().expect("domain id"), public_key);
     let domain_id: DomainId = "queue".parse().expect("domain id");
-    let instruction: InstructionBox =
-        Register::domain(Domain::new(domain_id)).into();
+    let instruction: InstructionBox = Register::domain(Domain::new(domain_id)).into();
     let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority)
         .with_instructions([instruction])
         .sign(&private_key);

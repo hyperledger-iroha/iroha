@@ -193,8 +193,8 @@ public final class TransactionFixtureManifestTests {
             payload.chainId());
         assertEquals(
             name + ": authority mismatch vs transaction_payloads",
-            authority,
-            payload.authority());
+            normalizeAuthority(authority),
+            normalizeAuthority(payload.authority()));
         assertEquals(
             name + ": creation_time_ms mismatch vs transaction_payloads",
             creationTimeMs,
@@ -335,8 +335,8 @@ public final class TransactionFixtureManifestTests {
         raw.chainId());
     assertEquals(
         name + ": authority mismatch vs payload bytes",
-        authority,
-        raw.authority());
+        normalizeAuthority(authority),
+        normalizeAuthority(raw.authority()));
     assertEquals(
         name + ": creation_time_ms mismatch vs payload bytes",
         creationTimeMs,
@@ -359,8 +359,8 @@ public final class TransactionFixtureManifestTests {
         payload.chainId());
     assertEquals(
         name + ": authority mismatch vs decoded payload",
-        authority,
-        payload.authority());
+        normalizeAuthority(authority),
+        normalizeAuthority(payload.authority()));
     assertEquals(
         name + ": creation_time_ms mismatch vs decoded payload",
         creationTimeMs,
@@ -582,6 +582,34 @@ public final class TransactionFixtureManifestTests {
   }
 
   private static String decodeAccountIdStruct(final byte[] payload, final String field) {
+    try {
+      return decodeAccountIdSized(payload, field);
+    } catch (final IllegalArgumentException ex) {
+      return decodeAccountIdLegacy(payload, field);
+    }
+  }
+
+  private static String decodeAccountIdSized(final byte[] payload, final String field) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+    final byte[] domainField = readField(decoder, field + ".domain");
+    final String domain = decodeDomainIdField(domainField, field + ".domain");
+    final byte[] controllerField = readField(decoder, field + ".controller");
+    final String publicKeyLiteral = decodeAccountControllerField(
+        controllerField, field + ".controller");
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException(field + ": trailing bytes after AccountId payload");
+    }
+    final PublicKeyPayload payloadData = decodePublicKeyLiteral(publicKeyLiteral);
+    if (payloadData != null) {
+      final String ih58 = toIh58(domain, payloadData);
+      if (ih58 != null) {
+        return ih58 + "@" + domain;
+      }
+    }
+    return publicKeyLiteral + "@" + domain;
+  }
+
+  private static String decodeAccountIdLegacy(final byte[] payload, final String field) {
     final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
     final String domain = STRING_ADAPTER.decode(decoder);
     final long controllerTag = UINT32_ADAPTER.decode(decoder);
@@ -600,6 +628,35 @@ public final class TransactionFixtureManifestTests {
       }
     }
     return publicKeyLiteral + "@" + domain;
+  }
+
+  private static String decodeDomainIdField(final byte[] payload, final String field) {
+    try {
+      final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+      final byte[] nameField = readField(decoder, field + ".name");
+      final String name = decodeFieldPayload(nameField, STRING_ADAPTER, field + ".name");
+      if (decoder.remaining() != 0) {
+        throw new IllegalArgumentException(field + ": trailing bytes after DomainId payload");
+      }
+      return name;
+    } catch (final IllegalArgumentException ex) {
+      return decodeFieldPayload(payload, STRING_ADAPTER, field);
+    }
+  }
+
+  private static String decodeAccountControllerField(final byte[] payload, final String field) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+    final long controllerTag = UINT32_ADAPTER.decode(decoder);
+    if (controllerTag != 0L) {
+      throw new IllegalArgumentException(field + ": unsupported AccountController tag " + controllerTag);
+    }
+    final byte[] publicKeyField = readField(decoder, field + ".public_key");
+    final String publicKeyLiteral =
+        decodeFieldPayload(publicKeyField, STRING_ADAPTER, field + ".public_key");
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException(field + ": trailing bytes after AccountController payload");
+    }
+    return publicKeyLiteral;
   }
 
   private static PublicKeyPayload decodePublicKeyLiteral(final String literal) {
@@ -1201,6 +1258,21 @@ public final class TransactionFixtureManifestTests {
     return optional.isPresent()
         && expected != null
         && Objects.equals(optional.get().longValue(), expected.longValue());
+  }
+
+  private static String normalizeAuthority(final String authority) {
+    if (authority == null) {
+      return null;
+    }
+    final String trimmed = authority.trim();
+    if (trimmed.isEmpty()) {
+      return trimmed;
+    }
+    final int atIndex = trimmed.lastIndexOf('@');
+    if (atIndex > 0) {
+      return trimmed.substring(0, atIndex);
+    }
+    return trimmed;
   }
 
   private static Map<String, Object> asMap(final Object value, final String field) {

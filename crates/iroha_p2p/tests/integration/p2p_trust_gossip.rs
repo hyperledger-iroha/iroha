@@ -74,6 +74,7 @@ fn make_config(addr: &SocketAddr, trust_gossip: bool) -> Config {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout: Duration::from_secs(10),
+        connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: TRUST_DECAY_HALF_LIFE,

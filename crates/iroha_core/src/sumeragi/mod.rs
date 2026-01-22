@@ -1081,6 +1081,7 @@ mod tests {
             true,
             1,
             Duration::from_millis(200),
+            Duration::from_millis(VOTE_DRAIN_BUDGET_CAP_MS),
         );
         assert_eq!(budget, Duration::from_millis(200));
     }
@@ -1093,6 +1094,7 @@ mod tests {
             true,
             1,
             Duration::from_secs(1),
+            Duration::from_millis(VOTE_DRAIN_BUDGET_CAP_MS),
         );
         assert_eq!(budget, Duration::from_millis(280));
     }
@@ -1105,6 +1107,7 @@ mod tests {
             true,
             1,
             Duration::from_millis(200),
+            Duration::from_millis(VOTE_DRAIN_BUDGET_CAP_MS),
         );
         assert_eq!(budget, Duration::from_millis(1));
     }
@@ -1117,6 +1120,7 @@ mod tests {
             true,
             2,
             Duration::from_secs(5),
+            Duration::from_millis(VOTE_DRAIN_BUDGET_CAP_MS),
         );
         assert_eq!(budget, Duration::from_millis(180));
     }
@@ -1129,8 +1133,22 @@ mod tests {
             true,
             3,
             Duration::from_secs(10),
+            Duration::from_millis(VOTE_DRAIN_BUDGET_CAP_MS),
         );
         assert_eq!(budget, Duration::from_millis(VOTE_DRAIN_BUDGET_CAP_MS));
+    }
+
+    #[test]
+    fn vote_rx_drain_budget_clamps_to_config_cap() {
+        let budget = vote_rx_drain_budget(
+            Duration::from_millis(200),
+            Duration::from_millis(300),
+            true,
+            3,
+            Duration::from_secs(10),
+            Duration::from_millis(150),
+        );
+        assert_eq!(budget, Duration::from_millis(150));
     }
 
     #[test]
@@ -1140,13 +1158,20 @@ mod tests {
             Duration::from_millis(10),
             true,
             1,
+            Duration::from_millis(TIME_BUDGET_CAP_MS),
         );
         assert_eq!(budget, Duration::from_millis(TIME_BUDGET_FLOOR_MS));
     }
 
     #[test]
     fn worker_time_budget_clamps_to_cap_for_large_quorum_timeout() {
-        let budget = worker_time_budget(Duration::from_secs(1), Duration::from_secs(2), true, 1);
+        let budget = worker_time_budget(
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+            true,
+            1,
+            Duration::from_millis(TIME_BUDGET_CAP_MS),
+        );
         assert_eq!(budget, Duration::from_millis(TIME_BUDGET_CAP_MS));
     }
 
@@ -1157,8 +1182,21 @@ mod tests {
             Duration::from_millis(200),
             false,
             1,
+            Duration::from_millis(TIME_BUDGET_CAP_MS),
         );
         assert_eq!(budget, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn worker_time_budget_respects_config_cap() {
+        let budget = worker_time_budget(
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+            true,
+            1,
+            Duration::from_millis(150),
+        );
+        assert_eq!(budget, Duration::from_millis(150));
     }
 
     #[test]
@@ -1188,13 +1226,17 @@ mod tests {
     #[test]
     fn cap_drain_budget_clamps_to_floor_and_cap() {
         let floor = Duration::from_millis(200);
+        let cap = Duration::from_millis(DRAIN_BUDGET_CAP_MS);
         assert_eq!(
-            cap_drain_budget(Duration::from_secs(2), floor),
+            cap_drain_budget(Duration::from_secs(2), floor, cap),
             Duration::from_millis(DRAIN_BUDGET_CAP_MS)
         );
-        assert_eq!(cap_drain_budget(Duration::from_millis(100), floor), floor);
         assert_eq!(
-            cap_drain_budget(Duration::from_millis(300), floor),
+            cap_drain_budget(Duration::from_millis(100), floor, cap),
+            floor
+        );
+        assert_eq!(
+            cap_drain_budget(Duration::from_millis(300), floor, cap),
             Duration::from_millis(300)
         );
     }
@@ -1202,16 +1244,17 @@ mod tests {
     #[test]
     fn cap_vote_drain_budget_clamps_to_floor_and_cap() {
         let floor = Duration::from_millis(200);
+        let cap = Duration::from_millis(VOTE_DRAIN_BUDGET_CAP_MS);
         assert_eq!(
-            cap_vote_drain_budget(Duration::from_secs(5), floor),
+            cap_vote_drain_budget(Duration::from_secs(5), floor, cap),
             Duration::from_millis(VOTE_DRAIN_BUDGET_CAP_MS)
         );
         assert_eq!(
-            cap_vote_drain_budget(Duration::from_millis(100), floor),
+            cap_vote_drain_budget(Duration::from_millis(100), floor, cap),
             floor
         );
         assert_eq!(
-            cap_vote_drain_budget(Duration::from_millis(300), floor),
+            cap_vote_drain_budget(Duration::from_millis(300), floor, cap),
             Duration::from_millis(300)
         );
     }
@@ -1219,16 +1262,17 @@ mod tests {
     #[test]
     fn cap_rbc_drain_budget_clamps_to_floor_and_cap() {
         let floor = Duration::from_millis(200);
+        let cap = Duration::from_millis(RBC_DRAIN_BUDGET_CAP_MS);
         assert_eq!(
-            cap_rbc_drain_budget(Duration::from_secs(5), floor),
+            cap_rbc_drain_budget(Duration::from_secs(5), floor, cap),
             Duration::from_millis(RBC_DRAIN_BUDGET_CAP_MS)
         );
         assert_eq!(
-            cap_rbc_drain_budget(Duration::from_millis(100), floor),
+            cap_rbc_drain_budget(Duration::from_millis(100), floor, cap),
             floor
         );
         assert_eq!(
-            cap_rbc_drain_budget(Duration::from_millis(300), floor),
+            cap_rbc_drain_budget(Duration::from_millis(300), floor, cap),
             Duration::from_millis(300)
         );
     }
@@ -4038,6 +4082,38 @@ mod tests {
     }
 
     #[derive(Default)]
+    struct ValidationPollingActor {
+        poll_calls: usize,
+    }
+
+    impl WorkerActor for ValidationPollingActor {
+        fn on_block_message(&mut self, _msg: InboundBlockMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            Ok(())
+        }
+
+        fn poll_validation_results(&mut self) -> bool {
+            self.poll_calls = self.poll_calls.saturating_add(1);
+            true
+        }
+
+        fn tick(&mut self) -> bool {
+            false
+        }
+    }
+
+    #[derive(Default)]
     struct RbcPollingActor {
         poll_calls: usize,
     }
@@ -4827,6 +4903,61 @@ mod tests {
             mailbox: WorkerMailboxState::new(),
         };
         let mut actor = CommitPollingActor::default();
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(actor.poll_calls, 1);
+        assert!(stats.progress);
+    }
+
+    #[test]
+    fn run_worker_iteration_polls_validation_results() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let now = Instant::now();
+        let mut loop_state = WorkerLoopState {
+            last_tick: now,
+            last_served: [now; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = ValidationPollingActor::default();
 
         let stats = run_worker_iteration(
             &mut actor,
@@ -7404,6 +7535,7 @@ fn worker_time_budget(
     commit_time: Duration,
     da_enabled: bool,
     da_quorum_timeout_multiplier: u32,
+    budget_cap: Duration,
 ) -> Duration {
     let quorum_timeout = crate::sumeragi::main_loop::commit_quorum_timeout_from_durations(
         block_time,
@@ -7414,9 +7546,13 @@ fn worker_time_budget(
     let scaled = quorum_timeout
         .checked_div(4)
         .unwrap_or_else(|| Duration::from_millis(1));
-    scaled
-        .min(Duration::from_millis(TIME_BUDGET_CAP_MS))
-        .max(Duration::from_millis(TIME_BUDGET_FLOOR_MS))
+    let cap = Duration::from_millis(TIME_BUDGET_CAP_MS).min(budget_cap);
+    let mut budget = scaled.min(cap);
+    let floor = Duration::from_millis(TIME_BUDGET_FLOOR_MS);
+    if floor <= cap {
+        budget = budget.max(floor);
+    }
+    budget
 }
 
 fn vote_rx_drain_budget(
@@ -7425,6 +7561,7 @@ fn vote_rx_drain_budget(
     da_enabled: bool,
     da_quorum_timeout_multiplier: u32,
     max_budget: Duration,
+    budget_cap: Duration,
 ) -> Duration {
     let quorum_timeout = crate::sumeragi::main_loop::commit_quorum_timeout_from_durations(
         block_time,
@@ -7434,7 +7571,8 @@ fn vote_rx_drain_budget(
     );
     let budget = quorum_timeout.min(max_budget);
     // Cap vote draining so long queues don't stall RBC/DA progress in a single iteration.
-    cap_vote_drain_budget(budget, Duration::from_millis(1))
+    let cap = Duration::from_millis(VOTE_DRAIN_BUDGET_CAP_MS).min(budget_cap);
+    cap_vote_drain_budget(budget, Duration::from_millis(1), cap)
 }
 
 const TIME_BUDGET_FLOOR_MS: u64 = 200;
@@ -7456,19 +7594,18 @@ fn idle_tick_gap(block_time: Duration, commit_time: Duration, max_tick_gap: Dura
         .min(max_tick_gap)
 }
 
-fn cap_drain_budget(raw: Duration, floor: Duration) -> Duration {
-    raw.min(Duration::from_millis(DRAIN_BUDGET_CAP_MS))
-        .max(floor)
+fn cap_drain_budget(raw: Duration, floor: Duration, budget_cap: Duration) -> Duration {
+    let cap = Duration::from_millis(DRAIN_BUDGET_CAP_MS).min(budget_cap);
+    raw.min(cap).max(floor)
 }
 
-fn cap_vote_drain_budget(raw: Duration, floor: Duration) -> Duration {
-    raw.min(Duration::from_millis(VOTE_DRAIN_BUDGET_CAP_MS))
-        .max(floor)
+fn cap_vote_drain_budget(raw: Duration, floor: Duration, budget_cap: Duration) -> Duration {
+    raw.min(budget_cap).max(floor)
 }
 
-fn cap_rbc_drain_budget(raw: Duration, floor: Duration) -> Duration {
-    raw.min(Duration::from_millis(RBC_DRAIN_BUDGET_CAP_MS))
-        .max(floor)
+fn cap_rbc_drain_budget(raw: Duration, floor: Duration, budget_cap: Duration) -> Duration {
+    let cap = Duration::from_millis(RBC_DRAIN_BUDGET_CAP_MS).min(budget_cap);
+    raw.min(cap).max(floor)
 }
 
 trait WorkerActor {
@@ -7478,6 +7615,9 @@ trait WorkerActor {
     fn on_background_request(&mut self, request: BackgroundRequest) -> Result<()>;
     fn refresh_worker_loop_config(&mut self, _cfg: &mut WorkerLoopConfig) {}
     fn poll_commit_results(&mut self) -> bool {
+        false
+    }
+    fn poll_validation_results(&mut self) -> bool {
         false
     }
     fn poll_rbc_persist_results(&mut self) -> bool {
@@ -7511,6 +7651,10 @@ impl WorkerActor for crate::sumeragi::main_loop::Actor {
 
     fn poll_commit_results(&mut self) -> bool {
         crate::sumeragi::main_loop::Actor::poll_commit_results(self)
+    }
+
+    fn poll_validation_results(&mut self) -> bool {
+        crate::sumeragi::main_loop::Actor::poll_validation_results(self)
     }
 
     fn poll_rbc_persist_results(&mut self) -> bool {
@@ -8005,6 +8149,9 @@ fn run_worker_iteration<A: WorkerActor>(
     if actor.poll_commit_results() {
         stats.progress = true;
     }
+    if actor.poll_validation_results() {
+        stats.progress = true;
+    }
     if actor.poll_rbc_persist_results() {
         stats.progress = true;
     }
@@ -8336,6 +8483,7 @@ impl SumeragiWorker {
         let msg_channel_cap_blocks = config.msg_channel_cap_blocks;
         let msg_channel_cap_rbc_chunks = config.msg_channel_cap_rbc_chunks;
         let control_msg_channel_cap = config.control_msg_channel_cap;
+        let worker_iteration_budget_cap = config.worker_iteration_budget_cap;
         let (block_time, commit_time, da_enabled) = {
             let view = state.view();
             let params = view.world.parameters().sumeragi();
@@ -8362,6 +8510,7 @@ impl SumeragiWorker {
             commit_time,
             da_enabled,
             da_quorum_timeout_multiplier,
+            worker_iteration_budget_cap,
         );
         let mut actor = match crate::sumeragi::main_loop::Actor::new(
             config,
@@ -8394,6 +8543,7 @@ impl SumeragiWorker {
             }
         };
         let commit_worker_join = actor.attach_commit_worker();
+        let validation_worker_join = actor.attach_validation_worker();
         let rbc_persist_worker_join: Option<std::thread::JoinHandle<()>> =
             actor.attach_rbc_persist_worker();
         let vote_rx_drain_budget = vote_rx_drain_budget(
@@ -8402,11 +8552,15 @@ impl SumeragiWorker {
             da_enabled,
             da_quorum_timeout_multiplier,
             Duration::from_secs(8),
+            worker_iteration_budget_cap,
         )
         .max(time_budget);
-        let non_vote_drain_budget = cap_drain_budget(block_time / 2, time_budget);
-        let rbc_chunk_drain_budget = cap_rbc_drain_budget(block_time / 2, time_budget);
-        let block_rx_drain_budget = cap_drain_budget(block_time / 4, time_budget);
+        let non_vote_drain_budget =
+            cap_drain_budget(block_time / 2, time_budget, worker_iteration_budget_cap);
+        let rbc_chunk_drain_budget =
+            cap_rbc_drain_budget(block_time / 2, time_budget, worker_iteration_budget_cap);
+        let block_rx_drain_budget =
+            cap_drain_budget(block_time / 4, time_budget, worker_iteration_budget_cap);
         let starve_max = block_time.max(commit_time).max(time_budget);
         let tick_min_gap = idle_tick_gap(block_time, commit_time, time_budget);
         let loop_config = WorkerLoopConfig {
@@ -8452,6 +8606,9 @@ impl SumeragiWorker {
         drop(actor);
         if let Err(err) = commit_worker_join.join() {
             iroha_logger::warn!(?err, "sumeragi commit worker thread exited with error");
+        }
+        if let Err(err) = validation_worker_join.join() {
+            iroha_logger::warn!(?err, "sumeragi validation worker thread exited with error");
         }
         if let Some(join) = rbc_persist_worker_join {
             if let Err(err) = join.join() {
