@@ -79,7 +79,7 @@ translator: manual
 - SIMD バックエンドは任意。有効にしてもガス計算は変化しない。
 
 ## フロントエンドとツール
-- CLI には `confidential create-keys`, `confidential send`, `confidential export-view-key`、監査向けメモ復号ツール、`iroha zk envelope` などを追加。
+- CLI には `confidential create-keys`, `confidential send`, `confidential export-view-key`、監査向けメモ復号ツール、`iroha app zk envelope` などを追加。
 - Torii API に `POST /v1/confidential/derive-keyset` を追加し、ウォレットがキー階層を自動取得可能。
 - アカウントごとのキー階層:
   - `sk_spend` → `nk`（nullifier キー）、`ivk`（incoming viewing key）、`ovk`（outgoing viewing key）、`fvk`

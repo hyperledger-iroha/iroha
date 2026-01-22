@@ -12,7 +12,7 @@ __Prerequisites:__
 __Example usage:__
 
 ```bash
-iroha multisig register \
+iroha ledger multisig register \
 --account ed01203EB45C199FD3998A18FCA1E567F5F228C714BFF5203FEFF00FF06230836BAD22@domain \
 --signatories \
 ed01203EB45C199FD3998A18FCA1E567F5F228C714BFF5203FEFF00FF06230836BAD22@domain \
@@ -47,7 +47,7 @@ After submitting the registration, query for accounts whose metadata contains th
 `multisig/spec` to discover the multisig account ID:
 
 ```bash
-iroha query account list \
+iroha ledger query account list \
   filter '{"Atom":{"Metadata":{"Atom":{"Contains":{"key":"multisig/spec"}}}}}'
 ```
 
@@ -65,10 +65,10 @@ __Prerequisites:__
 __Example usage:__
 
 ```bash
-echo '"congratulations"' | iroha -o account meta set \
+echo '"congratulations"' | iroha -o ledger account meta set \
 --id ed0120987EE8092B2CE4622B4F66D6FE87F5D61575F0D0DFCB2D6B2E8905FE68F685B6@domain \
 --key success_marker \
-| iroha multisig propose \
+| iroha ledger multisig propose \
 --account ed0120987EE8092B2CE4622B4F66D6FE87F5D61575F0D0DFCB2D6B2E8905FE68F685B6@domain
 ```
 
@@ -87,7 +87,7 @@ __Assumptions:__
 __Usage:__
 
 ```bash
-iroha multisig list all
+iroha ledger multisig list all
 ```
 
 __Example output:__
@@ -134,7 +134,7 @@ __Prerequisites:__
 __Example usage:__
 
 ```bash
-iroha multisig approve \
+iroha ledger multisig approve \
 --account ed0120987EE8092B2CE4622B4F66D6FE87F5D61575F0D0DFCB2D6B2E8905FE68F685B6@domain \
 --instructions-hash FB8AEBB405236A9B4CCD26BBA4988D0B8E03957FDC52DD2A1F9F0A6953079989
 ```

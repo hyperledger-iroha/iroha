@@ -714,6 +714,12 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             pacemaker_rtt_floor_multiplier: 1,
             pacemaker_max_backoff: core::time::Duration::from_secs(1),
             pacemaker_jitter_frac_permille: 0,
+            pacemaker_active_pending_soft_limit:
+                defaults::sumeragi::PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT,
+            pacemaker_rbc_backlog_session_soft_limit:
+                defaults::sumeragi::PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT,
+            pacemaker_rbc_backlog_chunk_soft_limit:
+                defaults::sumeragi::PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
             adaptive_observability: A::AdaptiveObservability::default(),
             enable_bls: false,
         },

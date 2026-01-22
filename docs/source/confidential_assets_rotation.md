@@ -25,7 +25,7 @@ so governance can schedule upgrades via
 
 1. **Publish new parameter bundles.** Operators submit
    `PublishPedersenParams`/`PublishPoseidonParams` instructions (CLI
-   `iroha zk params publish ...`) to stage new generator sets with metadata,
+   `iroha app zk params publish ...`) to stage new generator sets with metadata,
    activation/deprecation windows, and status markers. The executor rejects
    duplicate IDs, non-increasing versions, or bad status transitions per
    `crates/iroha_core/src/smartcontracts/isi/world.rs:2499`–`2635`, and the
@@ -57,7 +57,7 @@ so governance can schedule upgrades via
   plus any pending transition, so wallets can warn users before signing. See
   `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:309` (DTO) and the associated
   tests at `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift:591`.
-- The CLI mirrors the same metadata via `iroha assets data-policy get` (helper in
+- The CLI mirrors the same metadata via `iroha ledger assets data-policy get` (helper in
   `crates/iroha_cli/src/main.rs:1497`–`1670`), enabling operators to audit the
   policy/parameter IDs wired into an asset definition without spelunking the
   block store.

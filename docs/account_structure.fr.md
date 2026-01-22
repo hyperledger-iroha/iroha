@@ -514,7 +514,7 @@ la piste d’audit puisse être reconstruite offline.
    les chaînes Local‑8 ne sont plus acceptées en production avant de proposer
    un `tombstone`.
 2. **Dériver les digests canoniques.** Lancer
-   `iroha address convert <address-or-account_id> --format json --expect-prefix 753`
+   `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
    (ou consommer `fixtures/account/address_vectors.json` via
    `scripts/account_fixture_helper.py`) pour capturer exactement le champ
    `digest_hex`. Le CLI accepte des entrées comme `snx1...@wonderland` ; le

@@ -118,7 +118,7 @@ irohad --sora --config "${IROHA_CONFIG}"
 ノードがオンラインになったら、CLI ヘルパーで default lane が sealed（manifest 読み込み済み）かつトラフィックに対応できる状態であることを確認します。サマリービューは lane ごとに 1 行を出力します。
 
 ```bash
-iroha_cli nexus lane-report --summary
+iroha_cli app nexus lane-report --summary
 ```
 
 出力例:

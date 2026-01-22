@@ -51,7 +51,7 @@ per_provider_submitters = { "deadbeef..." = ["ed0120...@sora"] }
 
 - Register a pin manifest with the CLI, carrying the alias proof when required:
   ```bash
-  iroha_cli sorafs pin register \
+  iroha_cli app sorafs pin register \
     --manifest /var/lib/sorafs/manifests/pin.to \
     --chunk-digest 0123abcd... \
     --submitted-epoch 0 \
@@ -65,7 +65,7 @@ per_provider_submitters = { "deadbeef..." = ["ed0120...@sora"] }
   ```
 - Confirm telemetry submitter bindings before sending windows (rejects surface as `unauthorised_submitter[_provider]` in logs/telemetry):
   ```bash
-  iroha_cli query --config /etc/iroha/config.toml \
+  iroha_cli ledger query --config /etc/iroha/config.toml \
     --name governance.sorafs_telemetry.submitters
   ```
 

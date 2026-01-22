@@ -5,7 +5,7 @@ toolkit and visualise the resulting metrics. The goal is to validate quota
 negotiation, failover handling, and slashing remediation end-to-end using the
 reproducible fixtures under `docs/examples/sorafs_capacity_simulation/`.
 Capacity payloads still use `sorafs_manifest_stub capacity`; use
-`iroha sorafs toolkit pack` for manifest/CAR packaging flows.
+`iroha app sorafs toolkit pack` for manifest/CAR packaging flows.
 
 ## 1. Generate CLI artefacts
 

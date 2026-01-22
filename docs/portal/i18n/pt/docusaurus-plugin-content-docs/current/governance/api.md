@@ -193,24 +193,24 @@ Endpoint de conveniencia
   - Notas: destinado a admin/testing; requer token de API se configurado. Para producao, prefira enviar uma transacao assinada com `SetParameter(Custom)`.
 
 Helpers CLI
-- `iroha gov audit-deploy --namespace apps [--contains calc --hash-prefix deadbeef --summary-only]`
+- `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - Busca instancias de contrato para o namespace e confere que:
     - Torii armazena bytecode para cada `code_hash`, e seu digest Blake2b-32 corresponde ao `code_hash`.
     - O manifesto armazenado em `/v1/contracts/code/{code_hash}` reporta `code_hash` e `abi_hash` correspondentes.
     - Existe uma proposta de governanca enacted para `(namespace, contract_id, code_hash, abi_hash)` derivada pelo mesmo hashing de proposal-id que o no usa.
   - Emite um relatorio JSON com `results[]` por contrato (issues, resumos de manifest/code/proposal) mais um resumo de uma linha a menos que suprimido (`--no-summary`).
   - Util para auditar namespaces protegidos ou verificar fluxos de deploy controlados por governanca.
-- `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
+- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver validator@wonderland --approver bob@wonderland]`
   - Emite o esqueleto JSON de metadata usado ao submeter deployments em namespaces protegidos, incluindo `gov_manifest_approvers` opcionais para satisfazer regras de quorum do manifesto.
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — lock hints são obrigatórios quando `min_bond_amount > 0`, e qualquer conjunto de hints fornecido deve incluir `owner`, `amount` e `duration_blocks`.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner <account>@<domain> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — lock hints são obrigatórios quando `min_bond_amount > 0`, e qualquer conjunto de hints fornecido deve incluir `owner`, `amount` e `duration_blocks`.
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - O resumo de uma linha agora exibe `fingerprint=<hex>` deterministico derivado do `CastZkBallot` codificado junto com hints decodificados (`owner`, `amount`, `duration_blocks`, `direction` quando fornecidos).
   - As respostas da CLI anotam `tx_instructions[]` com `payload_fingerprint_hex` mais campos decodificados para que ferramentas downstream verifiquem o esqueleto sem reimplementar decodificacao Norito.
   - Fornecer hints de lock permite que o no emita eventos `LockCreated`/`LockExtended` para ballots ZK assim que o circuito expuser os mesmos valores.
-- `iroha gov vote-plain --referendum-id <id> --owner <account>@<domain> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner <account>@<domain> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - Os aliases `--lock-amount`/`--lock-duration-blocks` espelham os nomes de flags ZK para paridade de script.
-  - A saida de resumo espelha `vote-zk` ao incluir o fingerprint da instrucao codificada e campos de ballot legiveis (`owner`, `amount`, `duration_blocks`, `direction`), oferecendo confirmacao rapida antes de assinar o esqueleto.
+  - A saida de resumo espelha `vote --mode zk` ao incluir o fingerprint da instrucao codificada e campos de ballot legiveis (`owner`, `amount`, `duration_blocks`, `direction`), oferecendo confirmacao rapida antes de assinar o esqueleto.
 
 Listagem de instancias
 - GET `/v1/gov/instances/{ns}` - lista instancias de contrato ativas para um namespace.
@@ -312,7 +312,7 @@ for (expected, kind) in offences.iter().enumerate() {
 Operadores e tooling podem inspecionar e re-broadcast payloads via:
 
 - Torii: `GET /v1/sumeragi/evidence` e `GET /v1/sumeragi/evidence/count`.
-- CLI: `iroha sumeragi evidence list`, `... count`, e `... submit --evidence-hex <payload>`.
+- CLI: `iroha ops sumeragi evidence list`, `... count`, e `... submit --evidence-hex <payload>`.
 
 A governanca deve tratar os bytes de evidence como prova canonica:
 
@@ -334,7 +334,7 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- O runtime e a CLI expoem parametros staged via `/v1/sumeragi/params` e `iroha sumeragi params --summary`, para que operadores confirmem alturas de ativacao e rosters de validadores.
+- O runtime e a CLI expoem parametros staged via `/v1/sumeragi/params` e `iroha --output-format text ops sumeragi params`, para que operadores confirmem alturas de ativacao e rosters de validadores.
 - A automacao de governanca deve sempre:
   1. Finalizar a decisao de remocao (ou reintegro) respaldada por evidence.
   2. Enfileirar uma reconfiguracao de acompanhamento com `mode_activation_height = h_current + activation_lag_blocks`.

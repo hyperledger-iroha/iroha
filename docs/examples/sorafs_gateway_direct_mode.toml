@@ -2,7 +2,7 @@
 #
 # Sample Torii configuration snippet for the SNNet-5a direct-mode fallback.
 # Replace the placeholder values with the output from
-# `iroha sorafs gateway direct-mode plan --manifest …`.
+# `iroha app sorafs gateway direct-mode plan --manifest …`.
 
 [torii.sorafs_gateway]
 require_manifest_envelope = false

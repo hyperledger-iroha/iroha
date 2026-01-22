@@ -130,10 +130,10 @@ SDKs через `sorafs_orchestrator`):
 
 ## CLI и REST хелперы
 
-- `iroha sorafs pin list|show`, `alias list` и `replication list` оборачивают
+- `iroha app sorafs pin list|show`, `alias list` и `replication list` оборачивают
   pin-registry REST endpoints и печатают сырой Norito JSON с блоками attestation
   для аудиторских доказательств.
-- `iroha sorafs storage pin` и `torii /v1/sorafs/pin/register` принимают Norito
+- `iroha app sorafs storage pin` и `torii /v1/sorafs/pin/register` принимают Norito
   или JSON manifests плюс опциональные alias proofs и successors; malformed proofs
   возвращают `400`, stale proofs дают `503` с `Warning: 110`, а hard-expired proofs
   возвращают `412`.

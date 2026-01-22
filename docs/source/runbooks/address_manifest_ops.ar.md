@@ -94,7 +94,7 @@ address-manifest-<REVISION>/
 6. **سلامة الإدخالات.**
    - يجب أن تتضمن إدخالات `global_domain` `{ "domain": "example", "chain": "sora:nexus:global", "selector": "global" }`.
    - يجب أن تتضمن إدخالات `local_alias` digest بطول 12 بايت ينتجه Norm v1
-     (استخدم `iroha address convert <address-or-account_id> --format json --expect-prefix 753`
+     (استخدم `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
      للتحقق؛ يعكس ملخص JSON المجال عبر `input_domain` ويعيد `--append-domain` الترميز كـ `<ih58>@<domain>` للبيانات).
    - يجب أن تشير إدخالات `tombstone` إلى selector المتقاعد بدقة وتضمين
      `reason_code` و`ticket` و`replaces_sequence`.
@@ -128,7 +128,7 @@ address-manifest-<REVISION>/
 2. **اشتقاق حمولة قياسية.** لكل alias يتم تحديثه نفّذ:
 
    ```bash
-   iroha address convert snx1...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
+   iroha tools address convert snx1...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
    jq '.canonical_hex, .input_domain' /tmp/alias.json
    ```
 

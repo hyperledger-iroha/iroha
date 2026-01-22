@@ -512,7 +512,7 @@ reconstruirse la traza de auditoría offline.
    que las cadenas Local‑8 ya no se aceptan en producción antes de proponer un
    tombstone.
 2. **Derivar digests canónicos.** Ejecute
-   `iroha address convert <address-or-account_id> --format json --expect-prefix 753`
+   `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
    (o consuma `fixtures/account/address_vectors.json` vía
    `scripts/account_fixture_helper.py`) para capturar exactamente el
    `digest_hex`. El CLI acepta entradas como `snx1...@wonderland`; el resumen

@@ -35,7 +35,7 @@ consejo de governance pueda reproducir los bytes referenciados en la propuesta.
 ## 2. Payloads de instrucciones
 
 Registra las instrucciones Norito staged que los desks aprobaron via
-`iroha repo ... --output`. Cada entrada debe incluir el hash del archivo emitido
+`iroha app repo ... --output`. Cada entrada debe incluir el hash del archivo emitido
 y una descripcion corta de la accion que se enviara una vez que el voto pase.
 
 | Accion | Archivo | SHA-256 | Notas |

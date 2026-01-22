@@ -221,7 +221,7 @@ hashing, chunking, and verifying optional manifests.
 
 ## CLI & SDK Tooling (DA-8)
 
-- `iroha da submit` (new CLI entrypoint) now wraps the shared ingest builder/publisher so operators
+- `iroha app da submit` (new CLI entrypoint) now wraps the shared ingest builder/publisher so operators
   can ingest arbitrary blobs outside of the Taikai bundle flow. The command lives in
   `crates/iroha_cli/src/commands/da.rs:1` and consumes a payload, erasure/retention profile, and
   optional metadata/manifest files before signing the canonical `DaIngestRequest` with the CLI
@@ -233,8 +233,8 @@ hashing, chunking, and verifying optional manifests.
   (`--manifest`), and supports `--no-submit` for offline preparation plus `--endpoint` for custom
   Torii hosts. Receipt JSON is printed to stdout in addition to being written to disk, closing the
   DA-8 “submit_blob” tooling requirement and unblocking SDK parity work.
-- `iroha da get` adds a DA-focused alias for the multi-source orchestrator that already powers
-  `iroha sorafs fetch`. Operators can point it at manifest + chunk-plan artefacts (`--manifest`,
+- `iroha app da get` adds a DA-focused alias for the multi-source orchestrator that already powers
+  `iroha app sorafs fetch`. Operators can point it at manifest + chunk-plan artefacts (`--manifest`,
   `--plan`, `--manifest-id`) **or** simply pass a Torii storage ticket via `--storage-ticket`. When the
   ticket path is used the CLI pulls the manifest from `/v1/da/manifests/<ticket>`, persists the bundle
   under `artifacts/da/fetch_<timestamp>/` (override with `--manifest-cache-dir`), derives the **manifest
@@ -245,11 +245,11 @@ hashing, chunking, and verifying optional manifests.
   overrides, scoreboard export, and `--output` paths), and the manifest endpoint can be overridden via
   `--manifest-endpoint` for custom Torii hosts, so end-to-end availability checks live entirely under the
   `da` namespace without duplicating orchestrator logic.
-- `iroha da get-blob` pulls canonical manifests straight from Torii via `GET /v1/da/manifests/{storage_ticket}`.
+- `iroha app da get-blob` pulls canonical manifests straight from Torii via `GET /v1/da/manifests/{storage_ticket}`.
   The command now labels artefacts with the manifest hash (blob id), writing
   `manifest_{manifest_hash}.norito`, `manifest_{manifest_hash}.json`, and `chunk_plan_{manifest_hash}.json`
   under `artifacts/da/fetch_<timestamp>/` (or a user-supplied `--output-dir`) while echoing the exact
-  `iroha da get` invocation (including `--manifest-id`) required for the follow-up orchestrator fetch.
+  `iroha app da get` invocation (including `--manifest-id`) required for the follow-up orchestrator fetch.
   This keeps operators out of the manifest spool directories and guarantees the fetcher always uses the
   signed artefacts emitted by Torii. The JavaScript Torii client mirrors this flow via
   `ToriiClient.getDaManifest(storageTicketHex)` while the Swift SDK now exposes
@@ -257,10 +257,10 @@ hashing, chunking, and verifying optional manifests.
   and chunk plan so SDK callers can hydrate orchestrator sessions without shelling out to the CLI, and Swift
   clients can additionally call `fetchDaPayloadViaGateway(...)` to pipe those bundles through the native
   SoraFS orchestrator wrapper.【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240】
-- `/v1/da/manifests` responses now surface `manifest_hash`, and both CLI + SDK helpers (`iroha da get`,
+- `/v1/da/manifests` responses now surface `manifest_hash`, and both CLI + SDK helpers (`iroha app da get`,
   `ToriiClient.fetchDaPayloadViaGateway`, and the Swift/JS gateway wrappers) treat this digest as the
   canonical manifest identifier while continuing to verify payloads against the embedded CAR/blob hash.
-- `iroha da rent-quote` computes deterministic rent and incentive breakdowns for a supplied storage size
+- `iroha app da rent-quote` computes deterministic rent and incentive breakdowns for a supplied storage size
   and retention window. The helper consumes either the active `DaRentPolicyV1` (JSON or Norito bytes) or
   the built-in default, validates the policy, and prints a JSON summary (`gib`, `months`, policy metadata,
   and the `DaRentQuote` fields) so auditors can cite exact XOR charges inside governance minutes without
@@ -273,16 +273,16 @@ hashing, chunking, and verifying optional manifests.
   `crates/iroha_cli/src/commands/da.rs` for the subcommand and `docs/source/da/rent_policy.md`
   for the policy schema.【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
 - Pin registry parity now extends to SDKs: `ToriiClient.registerSorafsPinManifest(...)` in the
-  JavaScript SDK builds the exact payload used by `iroha sorafs pin register`, enforcing canonical
+  JavaScript SDK builds the exact payload used by `iroha app sorafs pin register`, enforcing canonical
   chunker metadata, pin policies, alias proofs, and successor digests before POSTing to
   `/v1/sorafs/pin/register`. This keeps CI bots and automation from shelling out to the CLI when
   recording manifest registrations, and the helper ships with TypeScript/README coverage so DA-8’s
   “submit/get/prove” tooling parity is fully satisfied on JS alongside Rust/Swift.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
-- `iroha da prove-availability` chains all of the above: it takes a storage ticket, downloads the
-  canonical manifest bundle, runs the multi-source orchestrator (`iroha sorafs fetch`) against the
+- `iroha app da prove-availability` chains all of the above: it takes a storage ticket, downloads the
+  canonical manifest bundle, runs the multi-source orchestrator (`iroha app sorafs fetch`) against the
   supplied `--gateway-provider` list, persists the downloaded payload + scoreboard under
   `artifacts/da/prove_availability_<timestamp>/`, and immediately invokes the existing PoR helper
-  (`iroha da prove`) using the fetched bytes. Operators can tweak the orchestrator knobs
+  (`iroha app da prove`) using the fetched bytes. Operators can tweak the orchestrator knobs
   (`--max-peers`, `--scoreboard-out`, manifest endpoint overrides) and the proof sampler
   (`--sample-count`, `--leaf-index`, `--sample-seed`) while a single command produces the artefacts
   expected by DA-5/DA-9 audits: payload copy, scoreboard evidence, and JSON proof summaries.
@@ -290,9 +290,9 @@ hashing, chunking, and verifying optional manifests.
   store (`chunk_{index:05}.bin` layout) and deterministically reassembles the payload while verifying
   every Blake3 commitment. The CLI lives under `crates/sorafs_car/src/bin/da_reconstruct.rs` and ships as
   part of the SoraFS tooling bundle. Typical flow:
-  1. `iroha da get-blob --storage-ticket <ticket>` to download `manifest_<manifest_hash>.norito` and the chunk plan.
-  2. `iroha sorafs fetch --manifest manifest_<manifest_hash>.json --plan chunk_plan_<manifest_hash>.json --output payload.car`
-     (or `iroha da prove-availability`, which writes the fetch artefacts under
+  1. `iroha app da get-blob --storage-ticket <ticket>` to download `manifest_<manifest_hash>.norito` and the chunk plan.
+  2. `iroha app sorafs fetch --manifest manifest_<manifest_hash>.json --plan chunk_plan_<manifest_hash>.json --output payload.car`
+     (or `iroha app da prove-availability`, which writes the fetch artefacts under
      `artifacts/da/prove_availability_<ts>/` and persists per-chunk files inside the `chunks/` directory).
   3. `cargo run -p sorafs_car --features cli --bin da_reconstruct --manifest manifest_<manifest_hash>.norito --chunks-dir ./artifacts/da/prove_availability_<ts>/chunks --output reconstructed.bin --json-out summary.json`.
 
@@ -383,10 +383,10 @@ All previously blocked ingest TODOs have been implemented and verified:
   `sampling_plan` rooted in `block_hash || client_blob_id` (shared across validators) containing the
   `assignment_hash`, the requested `sample_window`, and sampled `(index, role, group)` tuples spanning
   the entire 2D stripe layout so PoR samplers and validators can replay the same indices. The sampler
-  mixes `client_blob_id`, `chunk_root`, and `ipa_commitment` into the assignment hash; `iroha da get
+  mixes `client_blob_id`, `chunk_root`, and `ipa_commitment` into the assignment hash; `iroha app da get
   --block-hash <hex>` now writes `sampling_plan_<ticket>.json` next to the manifest + chunk plan with
   the hash preserved, and the JS/Swift Torii clients expose the same `assignment_hash_hex` so validators
-  and provers share a single deterministic probe set. When Torii returns a sampling plan, `iroha da
+  and provers share a single deterministic probe set. When Torii returns a sampling plan, `iroha app da
   prove-availability` now reuses that deterministic probe set (seed derived from `sample_seed`) instead
   of ad-hoc sampling so PoR witnesses line up with validator assignments even if the operator omits a
   `--block-hash` override.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
@@ -451,7 +451,7 @@ SDKs that embed the Rust client no longer need to shell out to the CLI to
 produce the canonical PoR JSON bundle. The `Client` exposes two helpers:
 
 - `build_da_proof_artifact` returns the exact structure generated by
-  `iroha da prove --json-out`, including the manifest/payload annotations supplied
+  `iroha app da prove --json-out`, including the manifest/payload annotations supplied
   via [`DaProofArtifactMetadata`].【crates/iroha/src/client.rs:3638】
 - `write_da_proof_artifact` wraps the builder and persists the artefact to disk
   (pretty JSON + trailing newline by default) so automation can attach the file

@@ -135,6 +135,6 @@ Dashboards:
 - `GET /v1/sorafs/aliases` ו-`GET /v1/sorafs/replication` מציגות קטלוג alias פעיל
   ו-backlog של הזמנות שכפול עם עימוד עקבי וסינוני סטטוס.
 
-ה-CLI עוטף קריאות אלו (`iroha sorafs pin list`, `pin show`, `alias list`,
+ה-CLI עוטף קריאות אלו (`iroha app sorafs pin list`, `pin show`, `alias list`,
 `replication list`) כדי שמפעילים יוכלו לאוטומט בדיקות registry ללא נגיעה
 ב-API ברמת נמוכה.

@@ -43,7 +43,7 @@ translation_last_reviewed: 2026-01-01
   - Агрегированные счётчики Reliable Broadcast: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
 - GET `/v1/sumeragi/rbc/sessions`
   - Снимок состояния по сессиям (хэш блока, height/view, счётчики чанков, флаг delivered, метка `invalid`, хэш payload, boolean recovered) для диагностики зависших доставок RBC и выделения восстановленных сессий после перезапуска.
-  - CLI‑сокращение: `iroha sumeragi rbc sessions --summary` печатает `hash`, `height/view`, прогресс чанков, количество ready и флаги invalid/delivered.
+  - CLI‑сокращение: `iroha --output-format text ops sumeragi rbc sessions` печатает `hash`, `height/view`, прогресс чанков, количество ready и флаги invalid/delivered.
 
 Доказательства (аудит; вне консенсуса)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
@@ -54,9 +54,9 @@ translation_last_reviewed: 2026-01-01
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`
 - POST `/v1/sumeragi/evidence` → `{ "status": "accepted", "kind": "<variant>" }`
   - CLI‑помощники:
-    - `iroha sumeragi evidence list --summary`
-    - `iroha sumeragi evidence count --summary`
-    - `iroha sumeragi evidence submit --evidence-hex <hex>` (или `--evidence-hex-file <path>`)
+    - `iroha --output-format text ops sumeragi evidence list`
+    - `iroha --output-format text ops sumeragi evidence count`
+    - `iroha ops sumeragi evidence submit --evidence-hex <hex>` (или `--evidence-hex-file <path>`)
 
 Аутентификация оператора (WebAuthn/mTLS)
 - POST `/v1/operator/auth/registration/options`

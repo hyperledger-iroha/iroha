@@ -12,7 +12,7 @@ translator: manual
 
 # מעטפת JSON לשאילתות
 
-Iroha מספקת נקודת קצה מבוססת Norito בכתובת `/query` לקבלת מסגרות חתומות. לכלי CLI וסקריפטים נוח לנסח את הבקשה ב-JSON ולאפשר לכלי להמיר אותה ל-`SignedQuery` חתום. המודול `iroha_data_model::query::json` מגדיר את המעטפת הקנונית בשימוש `iroha_cli query stdin` וכלי עזר נוספים.
+Iroha מספקת נקודת קצה מבוססת Norito בכתובת `/query` לקבלת מסגרות חתומות. לכלי CLI וסקריפטים נוח לנסח את הבקשה ב-JSON ולאפשר לכלי להמיר אותה ל-`SignedQuery` חתום. המודול `iroha_data_model::query::json` מגדיר את המעטפת הקנונית בשימוש `iroha_cli ledger query stdin` וכלי עזר נוספים.
 
 ## מבנה המעטפת
 

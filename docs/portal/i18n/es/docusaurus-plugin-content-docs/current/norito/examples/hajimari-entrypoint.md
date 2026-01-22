@@ -18,7 +18,7 @@ Andamiaje mínimo de contrato Kotodama con un único entrypoint público y un ma
 
 - Compila el contrato con `koto_compile --abi 1` como se muestra en [Inicio de Norito](/norito/getting-started#1-compile-a-kotodama-contract) o mediante `cargo test -p ivm developer_portal_norito_snippets_compile`.
 - Haz una prueba rápida del bytecode localmente con `ivm_run` / `developer_portal_norito_snippets_run` para verificar el log `info!` y el syscall inicial antes de tocar un nodo.
-- Despliega el artefacto con `iroha_cli contracts deploy` y confirma el manifiesto usando los pasos de [Inicio de Norito](/norito/getting-started#4-deploy-via-iroha_cli).
+- Despliega el artefacto con `iroha_cli app contracts deploy` y confirma el manifiesto usando los pasos de [Inicio de Norito](/norito/getting-started#4-deploy-via-iroha_cli).
 
 ## Guías de SDK relacionadas
 

@@ -504,7 +504,7 @@ Release‑автоматизация публикует `manifest.sigstore` и `
    Local‑8‑строки больше не принимаются в продакшене перед тем, как
    предлагать tombstone.
 2. **Вывести канонические digest’ы.** Запустите
-   `iroha address convert <address-or-account_id> --format json --expect-prefix 753`
+   `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
    (или используйте `fixtures/account/address_vectors.json` через
    `scripts/account_fixture_helper.py`), чтобы получить точное значение
    `digest_hex`. CLI принимает ввод вида `snx1...@wonderland`; JSON‑сводка

@@ -15,7 +15,7 @@ use iroha::data_model::isi::{
 use iroha_crypto::Hash as CryptoHash;
 use norito::{decode_from_bytes, json};
 
-use super::shared::{canonicalize_hex32, print_with_summary, validate_summary_flags};
+use super::shared::{canonicalize_hex32, print_with_summary};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 /// Voting mode selector for `iroha_cli gov vote`.
@@ -172,12 +172,6 @@ pub struct VoteArgs {
     /// Optional 32-byte nullifier hint for ZK ballots (hex).
     #[arg(long = "nullifier")]
     pub nullifier: Option<String>,
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for VoteArgs {
@@ -192,11 +186,8 @@ impl Run for VoteArgs {
             duration_blocks,
             direction,
             nullifier,
-            summary_only,
-            no_summary,
         } = self;
 
-        validate_summary_flags(summary_only, no_summary)?;
         let client: Client = context.client_from_config();
         let resolved = resolve_vote_mode(&client, &referendum_id, mode)?;
 
@@ -214,8 +205,6 @@ impl Run for VoteArgs {
                     duration_blocks,
                     direction,
                     nullifier,
-                    summary_only,
-                    no_summary,
                 };
                 args.run(context)
             }
@@ -246,8 +235,6 @@ impl Run for VoteArgs {
                     amount,
                     duration_blocks,
                     direction,
-                    summary_only,
-                    no_summary,
                 };
                 args.run(context)
             }
@@ -279,17 +266,10 @@ pub struct VoteZkArgs {
     /// Optional 32-byte nullifier hint derived from the proof commitment.
     #[arg(long = "nullifier")]
     pub nullifier: Option<String>,
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for VoteZkArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_summary_flags(self.summary_only, self.no_summary)?;
         let client: Client = context.client_from_config();
         let mut public = if let Some(p) = self.public {
             let s = std::fs::read_to_string(&p)?;
@@ -340,7 +320,7 @@ impl Run for VoteZkArgs {
             .and_then(|v| v.as_array())
             .map_or(0, Vec::len);
         let summary = format_vote_summary(&VoteSummaryInput {
-            prefix: "vote-zk",
+            prefix: "vote zk",
             id_label: "election_id",
             id_value: &self.election_id,
             ok,
@@ -349,13 +329,7 @@ impl Run for VoteZkArgs {
             reason,
             annotation: annotation.as_ref(),
         });
-        print_with_summary(
-            context,
-            Some(summary),
-            &value,
-            self.summary_only,
-            self.no_summary,
-        )
+        print_with_summary(context, Some(summary), &value)
     }
 }
 
@@ -371,17 +345,10 @@ pub struct VotePlainArgs {
     pub duration_blocks: u64,
     #[arg(long)]
     pub direction: String,
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for VotePlainArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_summary_flags(self.summary_only, self.no_summary)?;
         let client: Client = context.client_from_config();
         let body = json_object(vec![
             ("referendum_id", json_value(&self.referendum_id)?),
@@ -406,7 +373,7 @@ impl Run for VotePlainArgs {
             .and_then(|v| v.as_array())
             .map_or(0, Vec::len);
         let summary = format_vote_summary(&VoteSummaryInput {
-            prefix: "vote-plain",
+            prefix: "vote plain",
             id_label: "referendum_id",
             id_value: &self.referendum_id,
             ok,
@@ -415,13 +382,7 @@ impl Run for VotePlainArgs {
             reason,
             annotation: annotation.as_ref(),
         });
-        print_with_summary(
-            context,
-            Some(summary),
-            &value,
-            self.summary_only,
-            self.no_summary,
-        )
+        print_with_summary(context, Some(summary), &value)
     }
 }
 
@@ -429,30 +390,18 @@ impl Run for VotePlainArgs {
 pub struct ProposalGetArgs {
     #[arg(long, value_name = "ID_HEX")]
     pub id: String,
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for ProposalGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_summary_flags(self.summary_only, self.no_summary)?;
         let client: Client = context.client_from_config();
         let value = client.get_gov_proposal_json(&self.id)?;
-        if !self.no_summary {
-            let found = value
-                .get("found")
-                .and_then(norito::json::Value::as_bool)
-                .unwrap_or(false);
-            let _ = context.println(format!("proposal-get: id={} found={}", self.id, found));
-        }
-        if !self.summary_only {
-            context.print_data(&value)?;
-        }
-        Ok(())
+        let found = value
+            .get("found")
+            .and_then(norito::json::Value::as_bool)
+            .unwrap_or(false);
+        let summary = Some(format!("proposal get: id={} found={found}", self.id));
+        print_with_summary(context, summary, &value)
     }
 }
 
@@ -533,7 +482,7 @@ mod tests {
         assert_eq!(summary.direction.as_deref(), Some("Aye"));
 
         let line = format_vote_summary(&VoteSummaryInput {
-            prefix: "vote-plain",
+            prefix: "vote plain",
             id_label: "referendum_id",
             id_value: "ref-plain",
             ok: true,
@@ -603,7 +552,7 @@ mod tests {
         assert_eq!(summary.nullifier.as_deref(), Some(nullifier.as_str()));
 
         let line = format_vote_summary(&VoteSummaryInput {
-            prefix: "vote-zk",
+            prefix: "vote zk",
             id_label: "election_id",
             id_value: "ref-zk",
             ok: true,
@@ -712,81 +661,57 @@ mod tests {
 pub struct LocksGetArgs {
     #[arg(long)]
     pub referendum_id: String,
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for LocksGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_summary_flags(self.summary_only, self.no_summary)?;
         let client: Client = context.client_from_config();
         let value = client.get_gov_locks_json(&self.referendum_id)?;
-        if !self.no_summary {
-            let found = value
-                .get("found")
-                .and_then(norito::json::Value::as_bool)
-                .unwrap_or(false);
-            let voters = value
-                .get("locks")
-                .and_then(|v| v.get("locks"))
-                .and_then(norito::json::Value::as_object)
-                .map_or(0, norito::json::Map::len);
-            let referendum_id = &self.referendum_id;
-            let _ = context.println(format!(
-                "locks-get: referendum={referendum_id} found={found} voters={voters}"
-            ));
-        }
-        if !self.summary_only {
-            context.print_data(&value)?;
-        }
-        Ok(())
+        let found = value
+            .get("found")
+            .and_then(norito::json::Value::as_bool)
+            .unwrap_or(false);
+        let voters = value
+            .get("locks")
+            .and_then(|v| v.get("locks"))
+            .and_then(norito::json::Value::as_object)
+            .map_or(0, norito::json::Map::len);
+        let summary = Some(format!(
+            "locks get: referendum={} found={found} voters={voters}",
+            self.referendum_id
+        ));
+        print_with_summary(context, summary, &value)
     }
 }
 
 #[derive(clap::Args, Debug)]
 pub struct UnlockStatsArgs {
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for UnlockStatsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_summary_flags(self.summary_only, self.no_summary)?;
         let client: Client = context.client_from_config();
         let value = client.get_gov_unlock_stats_json()?;
-        if !self.no_summary {
-            let height = value
-                .get("height_current")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or(0);
-            let expired = value
-                .get("expired_locks_now")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or(0);
-            let refs = value
-                .get("referenda_with_expired")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or(0);
-            let last = value
-                .get("last_sweep_height")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or(0);
-            let _ = context.println(format!(
-                "unlock-stats: height={height} expired={expired} refs={refs} last_sweep={last}"
-            ));
-        }
-        if !self.summary_only {
-            context.print_data(&value)?;
-        }
-        Ok(())
+        let height = value
+            .get("height_current")
+            .and_then(norito::json::Value::as_u64)
+            .unwrap_or(0);
+        let expired = value
+            .get("expired_locks_now")
+            .and_then(norito::json::Value::as_u64)
+            .unwrap_or(0);
+        let refs = value
+            .get("referenda_with_expired")
+            .and_then(norito::json::Value::as_u64)
+            .unwrap_or(0);
+        let last = value
+            .get("last_sweep_height")
+            .and_then(norito::json::Value::as_u64)
+            .unwrap_or(0);
+        let summary = Some(format!(
+            "unlock stats: height={height} expired={expired} refs={refs} last_sweep={last}"
+        ));
+        print_with_summary(context, summary, &value)
     }
 }
 
@@ -794,31 +719,21 @@ impl Run for UnlockStatsArgs {
 pub struct ReferendumGetArgs {
     #[arg(long = "referendum-id", alias = "id")]
     pub referendum_id: String,
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for ReferendumGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_summary_flags(self.summary_only, self.no_summary)?;
         let client: Client = context.client_from_config();
         let value = client.get_gov_referendum_json(&self.referendum_id)?;
-        if !self.no_summary {
-            let found = value
-                .get("found")
-                .and_then(norito::json::Value::as_bool)
-                .unwrap_or(false);
-            let referendum_id = &self.referendum_id;
-            let _ = context.println(format!("referendum-get: id={referendum_id} found={found}"));
-        }
-        if !self.summary_only {
-            context.print_data(&value)?;
-        }
-        Ok(())
+        let found = value
+            .get("found")
+            .and_then(norito::json::Value::as_bool)
+            .unwrap_or(false);
+        let summary = Some(format!(
+            "referendum get: id={} found={found}",
+            self.referendum_id
+        ));
+        print_with_summary(context, summary, &value)
     }
 }
 
@@ -826,41 +741,29 @@ impl Run for ReferendumGetArgs {
 pub struct TallyGetArgs {
     #[arg(long = "referendum-id", alias = "id")]
     pub referendum_id: String,
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for TallyGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_summary_flags(self.summary_only, self.no_summary)?;
         let client: Client = context.client_from_config();
         let value = client.get_gov_tally_json(&self.referendum_id)?;
-        if !self.no_summary {
-            let approve = value
-                .get("approve")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or(0);
-            let reject = value
-                .get("reject")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or(0);
-            let abstain = value
-                .get("abstain")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or(0);
-            let _ = context.println(format!(
-                "tally: id={} approve={} reject={} abstain={}",
-                self.referendum_id, approve, reject, abstain
-            ));
-        }
-        if !self.summary_only {
-            context.print_data(&value)?;
-        }
-        Ok(())
+        let approve = value
+            .get("approve")
+            .and_then(norito::json::Value::as_u64)
+            .unwrap_or(0);
+        let reject = value
+            .get("reject")
+            .and_then(norito::json::Value::as_u64)
+            .unwrap_or(0);
+        let abstain = value
+            .get("abstain")
+            .and_then(norito::json::Value::as_u64)
+            .unwrap_or(0);
+        let summary = Some(format!(
+            "tally get: id={} approve={} reject={} abstain={}",
+            self.referendum_id, approve, reject, abstain
+        ));
+        print_with_summary(context, summary, &value)
     }
 }
 

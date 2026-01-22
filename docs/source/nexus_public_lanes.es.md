@@ -225,13 +225,13 @@ Este ISI es idempotente por `(lane_id, epoch)` y sustenta la contabilidad noctur
   validador anteriores. Enlazarlos a traves de `iroha_config::parameters::actual::Nexus` y
   exponerlos en `status.md` una vez que los valores GA queden ratificados.
 - **Torii/CLI quickstart:**
-  - `iroha nexus lane-report --summary` muestra entradas del catalogo de lanes, readiness de manifest,
+  - `iroha app nexus lane-report --summary` muestra entradas del catalogo de lanes, readiness de manifest,
     y modos de validadores (stake-elected vs admin-managed) para que operadores confirmen si la admision
     de staking esta habilitada para una lane.
-  - `iroha_cli nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
+  - `iroha_cli app nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
     muestra marcadores de ciclo de vida/activacion (epoca objetivo pendiente, `activation_epoch` /
     `activation_height`, release de salida, slash id) junto con stake bonded/self.
-    `iroha_cli nexus public-lane stake --lane <id> [--validator account@domain] [--summary]`
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator account@domain] [--summary]`
     refleja el endpoint `/stake` con hints de pending-unbond por par `(validator, staker)`.
   - Snapshots Torii para dashboards y SDKs:
     - `GET /v1/nexus/public_lanes/{lane}/validators` - metadata, estado

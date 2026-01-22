@@ -81,7 +81,7 @@ plus an optional fourth when encoding is enabled:
    required rollout steps and the exact `cargo xtask space-directory encode` command (under
    `space_directory_encode.command`). Attach this JSON to the onboarding ticket for evidence.
 4. `<slug>.manifest.to` — emitted when `--encode-space-directory` is set; ready for Torii’s
-   `iroha space-directory manifest publish` flow.
+   `iroha app space-directory manifest publish` flow.
 
 Use `--dry-run` to preview the JSON/ snippets without writing files, and `--force` to overwrite
 existing artefacts.
@@ -97,7 +97,7 @@ existing artefacts.
 3. Encode (if you skipped `--encode-space-directory`) and publish the manifest to the Space Directory
    using the command captured in the summary (`space_directory_encode.command`). This produces the
    `.manifest.to` payload Torii expects and records the evidence for auditors; submit via
-   `iroha space-directory manifest publish`.
+   `iroha app space-directory manifest publish`.
 4. Run `irohad --sora --config path/to/config.toml --trace-config` and archive the trace output in
    the rollout ticket. This proves the new geometry matches the generated slug/kura segments.
 5. Restart the validators assigned to the lane once the manifest/catalog changes are deployed. Keep

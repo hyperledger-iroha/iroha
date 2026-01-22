@@ -67,7 +67,7 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
 
 ## 2. Pin → Fetch Round Trip
 
-1. Produce a manifest + payload bundle (for example with `iroha sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
+1. Produce a manifest + payload bundle (for example with `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
 2. Submit the manifest with base64 encoding:
 
    ```bash

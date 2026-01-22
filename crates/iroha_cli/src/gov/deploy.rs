@@ -1,6 +1,6 @@
 //! Governance deployment CLI helpers.
 
-use super::shared::{decode_hex32, print_with_summary, validate_summary_flags};
+use super::shared::{decode_hex32, print_with_summary};
 use crate::{
     Run, RunContext,
     json_utils::{json_array, json_object, json_value},
@@ -34,12 +34,6 @@ pub struct ProposeDeployArgs {
     /// Optional voting mode for the referendum: Zk or Plain (defaults to server policy)
     #[arg(long, value_name = "MODE", value_parser = ["Zk", "Plain"])]
     pub mode: Option<String>,
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for ProposeDeployArgs {
@@ -86,8 +80,8 @@ impl Run for ProposeDeployArgs {
             .get("proposal_id")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let summary = Some(format!("propose-deploy: ok={ok} proposal_id={pid}"));
-        print_with_summary(context, summary, &value, self.summary_only, self.no_summary)
+        let summary = Some(format!("deploy propose: ok={ok} proposal_id={pid}"));
+        print_with_summary(context, summary, &value)
     }
 }
 
@@ -99,12 +93,6 @@ pub struct FinalizeArgs {
     /// Proposal id (hex 64)
     #[arg(long, value_name = "ID_HEX")]
     pub proposal_id: String,
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 fn build_finalize_body(args: &FinalizeArgs) -> Result<norito::json::Value> {
@@ -116,28 +104,22 @@ fn build_finalize_body(args: &FinalizeArgs) -> Result<norito::json::Value> {
 
 impl Run for FinalizeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_summary_flags(self.summary_only, self.no_summary)?;
         let client: Client = context.client_from_config();
         let body = build_finalize_body(&self)?;
         let value = client.post_gov_finalize_json(&body)?;
-        if !self.no_summary {
-            let ok = value
-                .get("ok")
-                .and_then(norito::json::Value::as_bool)
-                .unwrap_or(false);
-            let n_instr = value
-                .get("tx_instructions")
-                .and_then(|v| v.as_array())
-                .map_or(0, Vec::len);
-            let referendum_id = &self.referendum_id;
-            let _ = context.println(format!(
-                "finalize: referendum_id={referendum_id} ok={ok} tx_instrs={n_instr}"
-            ));
-        }
-        if !self.summary_only {
-            context.print_data(&value)?;
-        }
-        Ok(())
+        let ok = value
+            .get("ok")
+            .and_then(norito::json::Value::as_bool)
+            .unwrap_or(false);
+        let n_instr = value
+            .get("tx_instructions")
+            .and_then(|v| v.as_array())
+            .map_or(0, Vec::len);
+        let summary = Some(format!(
+            "finalize: referendum_id={} ok={ok} tx_instrs={n_instr}",
+            self.referendum_id
+        ));
+        print_with_summary(context, summary, &value)
     }
 }
 
@@ -155,17 +137,10 @@ pub struct EnactArgs {
     /// Optional window upper bound (height)
     #[arg(long)]
     pub window_upper: Option<u64>,
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for EnactArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_summary_flags(self.summary_only, self.no_summary)?;
         let client: Client = context.client_from_config();
         let window = match (self.window_lower, self.window_upper) {
             (Some(lower), Some(upper)) => json_object(vec![
@@ -180,24 +155,19 @@ impl Run for EnactArgs {
             ("window", window),
         ])?;
         let value = client.post_gov_enact_json(&body)?;
-        if !self.no_summary {
-            let ok = value
-                .get("ok")
-                .and_then(norito::json::Value::as_bool)
-                .unwrap_or(false);
-            let n_instr = value
-                .get("tx_instructions")
-                .and_then(|v| v.as_array())
-                .map_or(0, Vec::len);
-            let proposal_id = &self.proposal_id;
-            let _ = context.println(format!(
-                "enact: proposal_id={proposal_id} ok={ok} tx_instrs={n_instr}"
-            ));
-        }
-        if !self.summary_only {
-            context.print_data(&value)?;
-        }
-        Ok(())
+        let ok = value
+            .get("ok")
+            .and_then(norito::json::Value::as_bool)
+            .unwrap_or(false);
+        let n_instr = value
+            .get("tx_instructions")
+            .and_then(|v| v.as_array())
+            .map_or(0, Vec::len);
+        let summary = Some(format!(
+            "enact: proposal_id={} ok={ok} tx_instrs={n_instr}",
+            self.proposal_id
+        ));
+        print_with_summary(context, summary, &value)
     }
 }
 
@@ -206,17 +176,10 @@ pub struct ProtectedSetArgs {
     /// Comma-separated namespaces (e.g., apps,system)
     #[arg(long)]
     pub namespaces: String,
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for ProtectedSetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_summary_flags(self.summary_only, self.no_summary)?;
         // Build a SetParameter(Custom) instruction for gov_protected_namespaces
         let name: Name = "gov_protected_namespaces".parse()?;
         let id = CustomParameterId(name);
@@ -242,19 +205,14 @@ impl Run for ProtectedSetArgs {
             ("ok", json_value(&true)?),
             ("tx_instructions", tx_instructions),
         ])?;
-        if !self.no_summary {
-            let count = self
-                .namespaces
-                .split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .count();
-            let _ = context.println(format!("protected-set: namespaces_count={count}"));
-        }
-        if !self.summary_only {
-            context.print_data(&out)?;
-        }
-        Ok(())
+        let count = self
+            .namespaces
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .count();
+        let summary = Some(format!("protected set: namespaces_count={count}"));
+        print_with_summary(context, summary, &out)
     }
 }
 
@@ -263,17 +221,10 @@ pub struct ProtectedApplyArgs {
     /// Comma-separated namespaces (e.g., apps,system)
     #[arg(long)]
     pub namespaces: String,
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for ProtectedApplyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_summary_flags(self.summary_only, self.no_summary)?;
         let client: Client = context.client_from_config();
         let namespaces: Vec<String> = self
             .namespaces
@@ -282,54 +233,37 @@ impl Run for ProtectedApplyArgs {
             .filter(|s| !s.is_empty())
             .collect();
         let value = client.post_gov_protected_set_json(&namespaces)?;
-        if !self.no_summary {
-            let ok = value
-                .get("ok")
-                .and_then(norito::json::Value::as_bool)
-                .unwrap_or(false);
-            let applied = value
-                .get("applied")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or(0);
-            let _ = context.println(format!("protected-apply: ok={ok} applied={applied}"));
-        }
-        if !self.summary_only {
-            context.print_data(&value)?;
-        }
-        Ok(())
+        let ok = value
+            .get("ok")
+            .and_then(norito::json::Value::as_bool)
+            .unwrap_or(false);
+        let applied = value
+            .get("applied")
+            .and_then(norito::json::Value::as_u64)
+            .unwrap_or(0);
+        let summary = Some(format!("protected apply: ok={ok} applied={applied}"));
+        print_with_summary(context, summary, &value)
     }
 }
 
 #[derive(clap::Args, Debug)]
 pub struct ProtectedGetArgs {
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for ProtectedGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_summary_flags(self.summary_only, self.no_summary)?;
         let client: Client = context.client_from_config();
         let value = client.get_gov_protected_namespaces_json()?;
-        if !self.no_summary {
-            let found = value
-                .get("found")
-                .and_then(norito::json::Value::as_bool)
-                .unwrap_or(false);
-            let count = value
-                .get("namespaces")
-                .and_then(|v| v.as_array())
-                .map_or(0, Vec::len);
-            let _ = context.println(format!("protected-get: found={found} count={count}"));
-        }
-        if !self.summary_only {
-            context.print_data(&value)?;
-        }
-        Ok(())
+        let found = value
+            .get("found")
+            .and_then(norito::json::Value::as_bool)
+            .unwrap_or(false);
+        let count = value
+            .get("namespaces")
+            .and_then(|v| v.as_array())
+            .map_or(0, Vec::len);
+        let summary = Some(format!("protected get: found={found} count={count}"));
+        print_with_summary(context, summary, &value)
     }
 }
 
@@ -405,17 +339,10 @@ pub struct InstancesArgs {
     /// Order: `cid_asc` (default), `cid_desc`, `hash_asc`, `hash_desc`
     #[arg(long)]
     pub order: Option<String>,
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for InstancesArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_summary_flags(self.summary_only, self.no_summary)?;
         let client: Client = context.client_from_config();
         let value = client.get_gov_instances_by_ns_filtered_json(
             &self.namespace,
@@ -425,25 +352,23 @@ impl Run for InstancesArgs {
             self.limit,
             self.order.as_deref(),
         )?;
-        let summary = (!self.no_summary).then(|| {
-            let total = value
-                .get("total")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or(0);
-            let offset = value
-                .get("offset")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or(0);
-            let limit = value
-                .get("limit")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or(0);
-            format!(
-                "gov-instances: namespace={} total={} offset={} limit={}",
-                self.namespace, total, offset, limit
-            )
-        });
-        print_with_summary(context, summary, &value, self.summary_only, self.no_summary)
+        let total = value
+            .get("total")
+            .and_then(norito::json::Value::as_u64)
+            .unwrap_or(0);
+        let offset = value
+            .get("offset")
+            .and_then(norito::json::Value::as_u64)
+            .unwrap_or(0);
+        let limit = value
+            .get("limit")
+            .and_then(norito::json::Value::as_u64)
+            .unwrap_or(0);
+        let summary = Some(format!(
+            "instance list: namespace={} total={} offset={} limit={}",
+            self.namespace, total, offset, limit
+        ));
+        print_with_summary(context, summary, &value)
     }
 }
 
@@ -666,8 +591,6 @@ mod tests {
         let args = FinalizeArgs {
             referendum_id: "ref-123".to_string(),
             proposal_id: "0x".to_string() + &"aa".repeat(32),
-            summary_only: false,
-            no_summary: false,
         };
         let body = build_finalize_body(&args).expect("build finalize body");
         let s = norito::json::to_json(&body).expect("serialize body");

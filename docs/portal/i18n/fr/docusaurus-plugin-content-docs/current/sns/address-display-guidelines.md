@@ -176,7 +176,7 @@ bytes.
 Les operateurs qui convertissent les encodages Local herites en IH58 canonique
 ou en chaines compressees doivent suivre le workflow CLI documente sous ADDR-5:
 
-1. `iroha address inspect` emet maintenant un resume JSON structure avec IH58,
+1. `iroha tools address inspect` emet maintenant un resume JSON structure avec IH58,
    compresse et des payloads hex canoniques. Le resume inclut aussi un objet
    `domain` avec les champs `kind`/`warning` et reflete tout domaine fourni via
    le champ `input_domain`. Quand `kind` vaut `local12`, la CLI imprime un
@@ -206,7 +206,7 @@ ou en chaines compressees doivent suivre le workflow CLI documente sous ADDR-5:
    forme canonique et notifiez les contreparties que les selecteurs Local seront
    refuses une fois le cutover termine.
 5. Pour les jeux de donnees en masse, executez
-   `iroha address audit --input addresses.txt --network-prefix 753`. La commande
+   `iroha tools address audit --input addresses.txt --network-prefix 753`. La commande
    lit des literaux separes par nouvelle ligne (les commentaires commencant par
    `#` sont ignores, et `--input -` ou aucun flag utilise STDIN), emet un rapport
    JSON avec des resumes canoniques/IH58/compresse pour chaque entree, et compte
@@ -225,8 +225,8 @@ ou en chaines compressees doivent suivre le workflow CLI documente sous ADDR-5:
    literaux mal formes.
 7. L'automatisation CI/lint peut executer `ci/check_address_normalize.sh`, qui
    extrait les selecteurs Local de `fixtures/account/address_vectors.json`, les
-   convertit via `iroha address normalize`, et rejoue
-   `iroha address audit --fail-on-warning` pour prouver que les releases
+   convertit via `iroha tools address normalize`, et rejoue
+   `iroha tools address audit --fail-on-warning` pour prouver que les releases
    n'emetent plus de digests Local.
 
 `torii_address_local8_total{endpoint}` plus
@@ -267,7 +267,7 @@ barrieres:
 Incluez le bullet suivant dans les notes de release portefeuille/explorateur
 lors du cutover:
 
-> **Adresses:** Ajoute le helper `iroha address normalize --only-local --append-domain`
+> **Adresses:** Ajoute le helper `iroha tools address normalize --only-local --append-domain`
 > et l'a branche dans CI (`ci/check_address_normalize.sh`) pour que les pipelines
 > portefeuille/explorateur puissent convertir les selecteurs Local herites vers
 > des formes canoniques IH58/compressees avant que Local-8/Local-12 soient

@@ -22,15 +22,15 @@ Note: For the v1 release, VRF penalties jail offenders after the activation lag,
 
 ## 1. Confirm mode selection and epoch context
 
-1. Run `iroha sumeragi params --summary` to prove the binary loaded
+1. Run `iroha --output-format text ops sumeragi params` to prove the binary loaded
    `sumeragi.consensus_mode="npos"` and to record `k_aggregators`,
    `redundant_send_r`, epoch length, and the VRF commit/reveal offsets.
 2. Inspect the runtime view:
 
    ```bash
-   iroha sumeragi status --summary
-   iroha sumeragi collectors --summary
-   iroha sumeragi rbc status --summary
+   iroha --output-format text ops sumeragi status
+   iroha --output-format text ops sumeragi collectors
+   iroha --output-format text ops sumeragi rbc status
    ```
 
    The `status` line prints the leader/view tuple, RBC backlog, DA retries,
@@ -52,11 +52,11 @@ Use the dedicated CLI subcommands to pull the persisted VRF records from each
 validator:
 
 ```bash
-iroha sumeragi vrf-epoch --epoch "$EPOCH" --summary
-iroha sumeragi vrf-epoch --epoch "$EPOCH" > artifacts/vrf_epoch_${EPOCH}.json
+iroha --output-format text ops sumeragi vrf-epoch --epoch "$EPOCH"
+iroha ops sumeragi vrf-epoch --epoch "$EPOCH" > artifacts/vrf_epoch_${EPOCH}.json
 
-iroha sumeragi vrf-penalties --epoch "$EPOCH" --summary
-iroha sumeragi vrf-penalties --epoch "$EPOCH" > artifacts/vrf_penalties_${EPOCH}.json
+iroha --output-format text ops sumeragi vrf-penalties --epoch "$EPOCH"
+iroha ops sumeragi vrf-penalties --epoch "$EPOCH" > artifacts/vrf_penalties_${EPOCH}.json
 ```
 
 The summaries show whether the epoch is finalized, how many participants
@@ -107,11 +107,11 @@ Use the CLI helpers to demonstrate parity with the HTTP endpoints documented in
 
 ```bash
 # Count and list persisted evidence
-iroha sumeragi evidence count --summary
-iroha sumeragi evidence list --summary --limit 5
+iroha --output-format text ops sumeragi evidence count
+iroha --output-format text ops sumeragi evidence list --limit 5
 
 # Show JSON for audits
-iroha sumeragi evidence list --limit 100 > artifacts/evidence_snapshot.json
+iroha ops sumeragi evidence list --limit 100 > artifacts/evidence_snapshot.json
 ```
 
 Verify that the reported `total` matches the Grafana widget fed by
@@ -120,7 +120,7 @@ Verify that the reported `total` matches the Grafana widget fed by
 the drop reason). When testing alerting, submit a known-good payload via:
 
 ```bash
-iroha sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prevote.hex --summary
+iroha --output-format text ops sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prevote.hex
 ```
 
 Monitor `/v1/events/sse` with a filtered stream to prove SDKs see the same data:
@@ -148,7 +148,7 @@ trail back to the captured metrics and CLI snapshots.
 
 ## 6. Troubleshooting signals
 
-- **Mode selection mismatch** — If `iroha sumeragi params --summary` shows
+- **Mode selection mismatch** — If `iroha --output-format text ops sumeragi params` shows
   `consensus_mode="permissioned"` or `k_aggregators` differs from the manifest,
   delete the captured artefacts, correct `iroha_config`, restart the validator,
   and re-run the validation flow described in {doc}`sumeragi`.
@@ -162,7 +162,7 @@ trail back to the captured metrics and CLI snapshots.
   drills indicate either a validator clock skew or Torii replay protection; fix
   the offending peer before rerunning the test.
 - **Evidence ingestion stalls** — When `sumeragi_evidence_records_total`
-  plateaus while chaos tests emit faults, run `iroha sumeragi evidence count`
+  plateaus while chaos tests emit faults, run `iroha ops sumeragi evidence count`
   on multiple validators and confirm `/v1/sumeragi/evidence/count` matches the
   CLI output. Any divergence means SSE/webhook consumers may also be stale, so
   re-submit a known-good fixture and escalate to the Torii maintainers if the

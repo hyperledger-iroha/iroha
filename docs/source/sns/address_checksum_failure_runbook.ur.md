@@ -59,7 +59,7 @@ IH58/کمپریسڈ چیک سم فیلیرز (`ERR_CHECKSUM_MISMATCH` / `Checksu
 | لاگز | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` | ہر کانٹیکسٹ کے کم از کم 5 نمونے، PII ہٹا کر۔ |
 | فکسچر ویری فیکیشن | `cargo xtask address-vectors --verify` | یقینی بنائے کہ کینو نیکل فکسچر کمیٹیڈ JSON سے میل کھاتا ہے۔ |
 | SDK parity | `python3 scripts/account_fixture_helper.py check --target <path> ...` | الرٹس میں مذکور ہر SDK کے لیے چلائیں؛ بنے ہوئے `address_fixture.prom` کو ٹکٹ میں لگائیں۔ |
-| Clipboard/IME sanity | `iroha address inspect <literal>` | مسئلہ والے strings میں چھپے حروف/IME تبدیلیاں ڈھونڈیں؛ `address_display_guidelines.md` کے مطابق تصدیق کریں۔ |
+| Clipboard/IME sanity | `iroha tools address inspect <literal>` | مسئلہ والے strings میں چھپے حروف/IME تبدیلیاں ڈھونڈیں؛ `address_display_guidelines.md` کے مطابق تصدیق کریں۔ |
 
 ## 3. فوری ردِعمل کے مراحل
 
@@ -87,7 +87,7 @@ IH58/کمپریسڈ چیک سم فیلیرز (`ERR_CHECKSUM_MISMATCH` / `Checksu
 
 ### 4.2 کلائنٹ انکوڈر/IME ریگریشنز
 
-- `iroha address inspect <literal>` کے ذریعے اصل payload بحال کریں اور
+- `iroha tools address inspect <literal>` کے ذریعے اصل payload بحال کریں اور
   زیرو وِد یا kana تبدیلیاں تلاش کریں۔ `address_display_guidelines.md` اور
   ADDR‑6 کے QR/ڈسپلے اصولوں کے خلاف نفاذ کی تصدیق کریں۔
 - اگر clipboard/کیمرہ ingestion وجہ ہو تو والٹس کے QR ہیلپر endpoints بدستور
@@ -112,7 +112,7 @@ IH58/کمپریسڈ چیک سم فیلیرز (`ERR_CHECKSUM_MISMATCH` / `Checksu
 | منظر | اقدامات |
 |------|---------|
 | فکسچر ڈرفٹ | `fixtures/account/address_vectors.json` دوبارہ بنائیں، `cargo xtask address-vectors --verify` اور `ci/account_fixture_metrics.sh` چلائیں، اور SDK ریلیزز کو تازہ بنڈل پر منتقل کریں۔ تبدیلی کو `status.md` اور گورننس ٹریکر میں نوٹ کریں۔ |
-| SDK/کلائنٹ ریگریشن | متاثرہ SDK کے خلاف بگ فائل کریں، کینو نیکل فکسچر اور `iroha address inspect` آؤٹ پٹ کا حوالہ دیں، اور ریلیز کو `ci/check_address_normalize.sh` یا متعلقہ parity جاب کے پیچھے گیٹ کریں۔ |
+| SDK/کلائنٹ ریگریشن | متاثرہ SDK کے خلاف بگ فائل کریں، کینو نیکل فکسچر اور `iroha tools address inspect` آؤٹ پٹ کا حوالہ دیں، اور ریلیز کو `ci/check_address_normalize.sh` یا متعلقہ parity جاب کے پیچھے گیٹ کریں۔ |
 | بدنیتی ٹریفک | Torii سطح پر JWT/app IDs فلٹر کریں، گیٹ وے پر تھروٹل لگائیں، اور خراب ایڈریسز کو گورننس انسیڈنٹ ٹریکر میں درج کریں تاکہ ضرورت پڑنے پر Local سلیکٹر tombstone کیے جا سکیں۔ |
 
 اصلاحات کے بعد PromQL کو دوبارہ چلائیں تاکہ `ERR_CHECKSUM_MISMATCH` کم از کم

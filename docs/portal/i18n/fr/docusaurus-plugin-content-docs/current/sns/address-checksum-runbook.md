@@ -32,7 +32,7 @@ Si l'incident concerne specifiquement les collisions Local-8/Local-12, suivez pl
 | Logs | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` (ou agregation de logs) | Nettoyer les PII avant partage. |
 | Verification du fixture | `cargo xtask address-vectors --verify` | Confirme que le generateur canonique et le JSON committe concordent. |
 | Controle parite SDK | `python3 scripts/account_fixture_helper.py check --target <path> --metrics-out artifacts/account_fixture/<label>.prom --metrics-label <label>` | Lancer pour chaque SDK cite dans les alertes/tickets. |
-| Sanite presse-papiers/IME | `iroha address inspect <literal>` | Detecte les caracteres invisibles ou les reecritures IME; citer `address_display_guidelines.md`. |
+| Sanite presse-papiers/IME | `iroha tools address inspect <literal>` | Detecte les caracteres invisibles ou les reecritures IME; citer `address_display_guidelines.md`. |
 
 ## Reponse immediate
 
@@ -51,7 +51,7 @@ Si l'incident concerne specifiquement les collisions Local-8/Local-12, suivez pl
 
 ### Regressions encodeurs client / IME
 
-- Inspecter les literaux fournis par les utilisateurs via `iroha address inspect` pour trouver des joins a largeur zero, des conversions kana ou des payloads tronques.
+- Inspecter les literaux fournis par les utilisateurs via `iroha tools address inspect` pour trouver des joins a largeur zero, des conversions kana ou des payloads tronques.
 - Verifier les flux wallet/explorer avec `docs/source/sns/address_display_guidelines.md` (objectifs de copie double, avertissements, helpers QR) pour s'assurer qu'ils suivent l'UX approuvee.
 
 ### Problemes de manifest ou de registre
@@ -68,7 +68,7 @@ Si l'incident concerne specifiquement les collisions Local-8/Local-12, suivez pl
 | Scenario | Actions |
 |----------|---------|
 | Derive de fixture | Regenerer `fixtures/account/address_vectors.json`, relancer `cargo xtask address-vectors --verify`, mettre a jour les bundles SDK, et joindre des snapshots `address_fixture.prom` au ticket. |
-| Regression SDK/client | Ouvrir des issues avec le fixture canonique + la sortie de `iroha address inspect`, et bloquer les releases via la CI de parite SDK (ex.: `ci/check_address_normalize.sh`). |
+| Regression SDK/client | Ouvrir des issues avec le fixture canonique + la sortie de `iroha tools address inspect`, et bloquer les releases via la CI de parite SDK (ex.: `ci/check_address_normalize.sh`). |
 | Soumissions malveillantes | Appliquer du rate-limit ou bloquer les principals fautifs, escalader a Governance si un tombstone de selecteurs est requis. |
 
 Une fois les mitigations appliquees, relancer la requete PromQL ci-dessus pour confirmer que `ERR_CHECKSUM_MISMATCH` reste a zero (hors `/tests/*`) pendant au moins 30 minutes avant de degrader l'incident.

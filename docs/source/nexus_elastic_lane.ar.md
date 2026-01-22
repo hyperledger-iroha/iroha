@@ -84,7 +84,7 @@ scripts/nexus_lane_bootstrap.sh \
    والامر الدقيق لـ `cargo xtask space-directory encode` (ضمن `space_directory_encode.command`).
    ارفق هذا JSON بتذكرة onboarding كدليل.
 4. `<slug>.manifest.to` — ينتج عند تفعيل `--encode-space-directory`؛ جاهز لامر
-   `iroha space-directory manifest publish` عبر Torii.
+   `iroha app space-directory manifest publish` عبر Torii.
 
 استخدم `--dry-run` لمعاينة JSON/snippets دون كتابة ملفات، و `--force` لاستبدال artefacts الموجودة.
 
@@ -97,7 +97,7 @@ scripts/nexus_lane_bootstrap.sh \
    الى الـ lane الجديدة.
 3. قم بعمل encode (اذا لم تستخدم `--encode-space-directory`) وانشر manifest في Space Directory عبر
    الامر المخزن في summary (`space_directory_encode.command`). هذا يولد payload `.manifest.to`
-   المتوقع من Torii ويسجل الادلة للمراجعين؛ ارسل عبر `iroha space-directory manifest publish`.
+   المتوقع من Torii ويسجل الادلة للمراجعين؛ ارسل عبر `iroha app space-directory manifest publish`.
 4. شغل `irohad --sora --config path/to/config.toml --trace-config` واحفظ مخرجات trace في تذكرة
    rollout. هذا يثبت ان الهندسة الجديدة تطابق slug/segments المولدة.
 5. اعد تشغيل المدققين المعينين للـ lane بعد نشر تغييرات manifest/catalog. احتفظ بـ summary JSON

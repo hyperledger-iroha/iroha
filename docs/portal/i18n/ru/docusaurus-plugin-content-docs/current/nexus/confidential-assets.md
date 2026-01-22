@@ -218,7 +218,7 @@ Observer узлы, намеренно пропускающие проверку 
 - **Хранение nullifier:** хранить потраченные nullifiers минимум `730` дней (24 месяца) после высоты траты или дольше, если требуется регулятором. Операторы могут увеличить окно через `confidential.retention.nullifier_days`. Nullifiers, которые моложе окна, ДОЛЖНЫ оставаться доступными через Torii, чтобы аудиторы могли доказать отсутствие double-spend.
 - **Удаление reveal:** прозрачные reveal (`RevealConfidential`) удаляют соответствующие commitments немедленно после финализации блока, но использованный nullifier остается под правилом retention выше. События reveal (`ConfidentialEvent::Unshielded`) фиксируют публичную сумму, получателя и hash proof, чтобы реконструкция исторических reveal не требовала удаленного ciphertext.
 - **Frontier checkpoints:** фронтиры commitments поддерживают rolling checkpoints, покрывающие большее из `max_anchor_age_blocks` и окна retention. Узлы компактизируют более старые checkpoints только после истечения всех nullifiers в интервале.
-- **Ремедиация устаревшего digest:** если `HandshakeConfidentialMismatch` поднят из-за дрейфа digest, операторам следует (1) проверить, что окна retention nullifier совпадают по кластеру, (2) запустить `iroha_cli confidential verify-ledger` для пересчета digest по сохраненному набору nullifier, и (3) переразвернуть обновленный manifest. Любые nullifiers, удаленные раньше срока, должны быть восстановлены из холодного хранения перед повторным входом в сеть.
+- **Ремедиация устаревшего digest:** если `HandshakeConfidentialMismatch` поднят из-за дрейфа digest, операторам следует (1) проверить, что окна retention nullifier совпадают по кластеру, (2) запустить `iroha_cli app confidential verify-ledger` для пересчета digest по сохраненному набору nullifier, и (3) переразвернуть обновленный manifest. Любые nullifiers, удаленные раньше срока, должны быть восстановлены из холодного хранения перед повторным входом в сеть.
 
 Документируйте локальные переопределения в operations runbook; governance-политики, расширяющие окно retention, должны синхронно обновлять конфигурацию узлов и планы архивного хранения.
 
@@ -241,7 +241,7 @@ Observer узлы, намеренно пропускающие проверку 
 - Иерархия derivation ключей на аккаунт:
   - `sk_spend` → `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
 - Зашифрованные payloads notes используют AEAD с ECDH-derived shared keys; опциональные auditor view keys могут быть прикреплены к outputs в соответствии с политикой актива.
-- Дополнения CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, аудит-инструменты для расшифровки memo и helper `iroha zk envelope` для создания/инспекции Norito memo envelopes офлайн. Torii предоставляет тот же flow derivation через `POST /v1/confidential/derive-keyset`, возвращая hex и base64 формы, чтобы кошельки могли программно получать иерархии ключей.
+- Дополнения CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, аудит-инструменты для расшифровки memo и helper `iroha app zk envelope` для создания/инспекции Norito memo envelopes офлайн. Torii предоставляет тот же flow derivation через `POST /v1/confidential/derive-keyset`, возвращая hex и base64 формы, чтобы кошельки могли программно получать иерархии ключей.
 
 ## Газ, лимиты и DoS-контроли
 - Детерминированный gas schedule:

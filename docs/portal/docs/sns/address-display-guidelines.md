@@ -154,7 +154,7 @@ table and `docs/account_structure.md` for the complete byte diagram.
 
 strings must follow the CLI workflow documented under ADDR-5:
 
-1. `iroha address inspect` now emits a structured JSON summary with IH58,
+1. `iroha tools address inspect` now emits a structured JSON summary with IH58,
    compressed, and canonical hex payloads. The summary also includes a `domain`
    object with `kind`/`warning` fields and echoes any provided domain via the
    `input_domain` field. When `kind` is `local12`, the CLI prints a warning to
@@ -183,7 +183,7 @@ strings must follow the CLI workflow documented under ADDR-5:
    canonical form and notify counterparties that Local selectors will be
    rejected once the cutover completes.
 5. For bulk data sets, run
-   `iroha address audit --input addresses.txt --network-prefix 753`. The command
+   `iroha tools address audit --input addresses.txt --network-prefix 753`. The command
    reads newline-separated literals (comments starting with `#` are ignored, and
    `--input -` or no flag uses STDIN), emits a JSON report with
    canonical/preferred IH58/second-best compressed (`snx1`) summaries for every entry, and counts both parse
@@ -198,8 +198,8 @@ strings must follow the CLI workflow documented under ADDR-5:
    to keep scanning even when a dump contains malformed literals.
 7. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts
    the Local selectors from `fixtures/account/address_vectors.json`, converts
-   them via `iroha address normalize`, and replays
-   `iroha address audit --fail-on-warning` to prove releases no longer emit
+   them via `iroha tools address normalize`, and replays
+   `iroha tools address audit --fail-on-warning` to prove releases no longer emit
    Local digests.
 
 `torii_address_local8_total{endpoint}` plus
@@ -234,7 +234,7 @@ can prove `domain_kind="local12"` stayed at zero for the required 30-day window 
 Include the following bullet in the wallet/explorer release notes when shipping
 the cutover:
 
-> **Addresses:** Added the `iroha address normalize --only-local --append-domain`
+> **Addresses:** Added the `iroha tools address normalize --only-local --append-domain`
 > helper and wired it into CI (`ci/check_address_normalize.sh`) so wallet/explorer
 > before Local-8/Local-12 are blocked on mainnet. Update any custom exports to
 > run the command and attach the normalized list to the release evidence bundle.

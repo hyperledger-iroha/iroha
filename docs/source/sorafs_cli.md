@@ -447,7 +447,7 @@ Use the new `moderation honey-audit` helper to probe gateways with known
 denylisted digests and capture cache-version evidence:
 
 ```bash
-iroha sorafs moderation honey-audit \
+iroha app sorafs moderation honey-audit \
   --manifest-id feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface \
   --honey 35c60c0f4cf6a1116fd17c2a930f37390f34030e7c5f23d77ecbb543c1a2d9ba \
   --expected-cache-version cache-v7 \
@@ -474,16 +474,16 @@ and auditors can prove inclusion of specific entries. The CLI exposes two
 helpers under `sorafs gateway merkle`:
 
 ```bash
-iroha sorafs gateway merkle snapshot \
+iroha app sorafs gateway merkle snapshot \
   --denylist artifacts/ministry/denylist_registry/2026-05-14/denylist.json \
   --json-out artifacts/ministry/denylist_registry/2026-05-14/denylist_merkle_snapshot.json
 
-iroha sorafs gateway merkle proof \
+iroha app sorafs gateway merkle proof \
   --denylist artifacts/ministry/denylist_registry/2026-05-14/denylist.json \
   --index 5 \
   --json-out artifacts/ministry/denylist_registry/2026-05-14/denylist_merkle_proof_entry_5.json
 
-iroha sorafs gateway merkle proof \
+iroha app sorafs gateway merkle proof \
   --denylist artifacts/ministry/denylist_registry/2026-05-14/denylist.json \
   --descriptor provider:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \
   --json-out artifacts/ministry/denylist_registry/2026-05-14/denylist_merkle_proof_provider.json

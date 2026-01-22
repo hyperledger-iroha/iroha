@@ -18,7 +18,7 @@ Démontre la création de domaines avec autorisations, l'enregistrement d'actifs
 
 - Assurez-vous que le compte de destination (par exemple `alice@wonderland`) existe, en reflétant la phase de mise en place dans chaque quickstart SDK.
 - Invoquez le point d'entrée `register_and_mint` pour créer la définition d'actif ROSE et frapper 250 unités pour Alice en une seule transaction.
-- Vérifiez les soldes via `client.request(FindAccountAssets)` ou `iroha_cli assets list --account alice@wonderland` pour confirmer que la frappe a réussi.
+- Vérifiez les soldes via `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account alice@wonderland` pour confirmer que la frappe a réussi.
 
 ## Guides SDK associés
 

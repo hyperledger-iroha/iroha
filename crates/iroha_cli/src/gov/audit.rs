@@ -28,12 +28,6 @@ pub struct AuditDeployArgs {
     /// Order: `cid_asc` (default), `cid_desc`, `hash_asc`, `hash_desc`
     #[arg(long)]
     pub order: Option<String>,
-    /// Print only a summary line
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress summary (print JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 struct AuditNamespacePage {
@@ -209,13 +203,7 @@ impl AuditDeployArgs {
         output.insert("results".into(), Value::Array(records));
 
         let output_value = Value::Object(output);
-        print_with_summary(
-            context,
-            Some(summary),
-            &output_value,
-            self.summary_only,
-            self.no_summary,
-        )
+        print_with_summary(context, Some(summary), &output_value)
     }
 }
 

@@ -155,7 +155,7 @@ policies reuse ہوں۔
 - `DaCommitmentProof` target record کے ساتھ `(sibling_hash, position)` کا vector
   پیک کرتا ہے تاکہ verifiers root دوبارہ بنا سکیں۔ proofs میں block hash اور
   signed header بھی شامل ہیں تاکہ light clients finality verify کر سکیں۔
-- CLI helpers (`iroha_cli da prove-commitment`) proof request/verify cycle کو
+- CLI helpers (`iroha_cli app da prove-commitment`) proof request/verify cycle کو
   wrap کرتے ہیں اور operators کیلئے Norito/hex outputs دیتے ہیں۔
 
 ## 5. Storage & Indexing
@@ -196,7 +196,7 @@ index تیزی سے rebuild کر سکتے ہیں۔
 |-------|-------------|---------------|
 | P0 — Data model merge | `DaCommitmentRecord`, block header updates اور Norito codecs land کریں۔ | `cargo test -p iroha_data_model` نئی fixtures کے ساتھ green۔ |
 | P1 — Core/WSV wiring | queue + block builder logic thread کریں، indexes persist کریں، اور RPC handlers expose کریں۔ | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` bundle proof assertions کے ساتھ pass۔ |
-| P2 — Operator tooling | CLI helpers، Grafana dashboard، اور proof verification docs ship کریں۔ | `iroha_cli da prove-commitment` devnet پر چلتا ہو؛ dashboard live data دکھائے۔ |
+| P2 — Operator tooling | CLI helpers، Grafana dashboard، اور proof verification docs ship کریں۔ | `iroha_cli app da prove-commitment` devnet پر چلتا ہو؛ dashboard live data دکھائے۔ |
 | P3 — Governance gate | `iroha_config::nexus` میں flagged lanes کیلئے DA commitments require کرنے والا block validator enable کریں۔ | status entry + roadmap update DA-3 کو complete mark کریں۔ |
 
 ## Open Questions

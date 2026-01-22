@@ -51,7 +51,7 @@ Este documento captura el roadmap inmediato para la refactorizacion del Ledger S
    - Mover la logica de paginacion/cursor a componentes reutilizables bajo `crates/iroha_core/src/query/`. Alinear representaciones Norito en `iroha_data_model`.
    - Agregar snapshot queries para triggers, assets y roles con orden determinista (trackeado via `crates/iroha_core/tests/snapshot_iterable.rs` para la cobertura actual).
 3. **Consistencia de snapshots**
-   - Asegurar que `iroha query` CLI use la misma ruta de snapshot que Sumeragi/fetchers.
+   - Asegurar que `iroha ledger query` CLI use la misma ruta de snapshot que Sumeragi/fetchers.
    - Las pruebas de regresion de snapshots en CLI viven en `tests/cli/state_snapshot.rs` (feature-gated para ejecuciones lentas).
 
 ### Fase C - Pipeline Sumeragi

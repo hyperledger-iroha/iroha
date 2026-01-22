@@ -37,7 +37,7 @@ cargo run --bin kagami -- genesis generate --ivm-dir . --genesis-public-key ed01
 # update schema
 cargo run --bin kagami -- schema --genesis-out ./docs/source/references/genesis_schema.json > ./docs/source/references/schema.json
 # update command-line help
-cargo run --bin iroha -- markdown-help > ./crates/iroha_cli/CommandLineHelp.md
+cargo run --bin iroha -- tools markdown-help > ./crates/iroha_cli/CommandLineHelp.md
 cargo run --bin kagami -- markdown-help > ./crates/iroha_kagami/CommandLineHelp.md
 # update docker compose files
 cargo run --bin kagami -- swarm -p 1 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.single.yml -F

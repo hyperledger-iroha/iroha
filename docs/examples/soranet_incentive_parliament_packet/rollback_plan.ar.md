@@ -20,11 +20,11 @@ translation_last_reviewed: 2026-01-01
 1. **تجميد الاتمتة.** اوقف daemon الحوافز على كل مضيف orchestrator
    (`systemctl stop soranet-incentives.service` او نشر الحاويات المكافئ) وتاكد من توقف العملية.
 2. **تصريف التعليمات المعلقة.** شغّل
-   `iroha sorafs incentives service daemon --state <state.json> --config <daemon.json> --metrics-dir <spool> --once`
+   `iroha app sorafs incentives service daemon --state <state.json> --config <daemon.json> --metrics-dir <spool> --once`
    لضمان عدم وجود تعليمات دفع عالقة. ارشف payloads Norito الناتجة للتدقيق.
 3. **الغاء موافقة الحوكمة.** عدّل `reward_config.json`، واضبط
    `"budget_approval_id": null`، ثم اعد نشر الاعدادات عبر
-   `iroha sorafs incentives service init` (او `update-config` اذا كان daemon يعمل بشكل دائم). محرك الدفع الآن يفشل مغلقا مع
+   `iroha app sorafs incentives service init` (او `update-config` اذا كان daemon يعمل بشكل دائم). محرك الدفع الآن يفشل مغلقا مع
    `MissingBudgetApprovalId`، لذلك يرفض daemon سك المدفوعات حتى تتم استعادة هاش موافقة جديد. سجل git commit و SHA-256
    للاعدادات المعدلة في سجل الحادث.
 4. **اخطار برلمان Sora.** ارفق سجل المدفوعات المصرف، وتقرير shadow-run، وملخص حادث قصير. يجب ان تشير محاضر البرلمان

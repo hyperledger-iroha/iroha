@@ -94,7 +94,7 @@ Ambos os endpoints sao servidos pelo worker de storage embutido, portanto smoke 
 
 ## 2. Ciclo Pin → Fetch
 
-1. Gere um bundle de manifest + payload (por exemplo com `iroha sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
+1. Gere um bundle de manifest + payload (por exemplo com `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
 2. Envie o manifest com codificacao base64:
 
    ```bash

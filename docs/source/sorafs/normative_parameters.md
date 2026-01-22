@@ -102,7 +102,7 @@ auditors share a single source of truth.
   metadata so UX can surface fiat equivalents (`docs/source/sorafs/deal_engine.md`).
 - Auto-renew is **enabled by default**. Clients configure caps via Norito
   payloads (`DealTermsV1.account_cap`, `DealTermsV1.egress_cap`) and the CLI/SDK
-  surfaces them through `sorafs_cli deal terms` / `iroha sorafs deal terms`.
+  surfaces them through `sorafs_cli deal terms` / `iroha app sorafs deal terms`.
 - Degradation ladder:
   1. **Full service** — healthy autopayments.
   2. **Read-only** (30 days) — replication orders freeze; clients can fetch data
@@ -127,7 +127,7 @@ auditors share a single source of truth.
   `cargo xtask soradns-gar-template`, and `cargo xtask soradns-binding-template`.
 - Handshake: hybrid X25519 + Kyber (ML-KEM‑768) per `crates/iroha_crypto` and
   `crates/soranet_pq`. The PQ rollout plan in `docs/source/soranet/pq_rollout_plan.md`
-  tracks ticket/identity adoption gates. CLI helpers (`iroha streaming hpke
+  tracks ticket/identity adoption gates. CLI helpers (`iroha app streaming hpke
   fingerprint`) expose fingerprints used in telemetry.
 - Telemetry: `torii_stream_transport_policy_total` and
   `torii_stream_anonymity_stage_total` back the SNNet dashboards. Alerts fire

@@ -101,10 +101,10 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 
 - Repita para `openapi.manifest.to` e os manifests de SBOM (omita flags de alias para bundles SBOM
   a menos que a governanca atribua um namespace).
-- Alternativa: `iroha sorafs pin register` funciona com o digest do resumo de submit se o
+- Alternativa: `iroha app sorafs pin register` funciona com o digest do resumo de submit se o
   binario ja estiver instalado.
 - Verifique o estado do registry com
-  `iroha sorafs pin list --alias docs:portal --format json | jq`.
+  `iroha app sorafs pin list --alias docs:portal --format json | jq`.
 - Dashboards para observar: `sorafs_pin_registry.json` (metricas `torii_sorafs_replication_*`).
 
 ## 3. Headers e proofs do gateway
@@ -112,7 +112,7 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 Gere o bloco de headers HTTP + metadata de binding:
 
 ```bash
-iroha sorafs gateway route-plan \
+iroha app sorafs gateway route-plan \
   --manifest-json "${OUT}/portal.manifest.json" \
   --hostname docs.sora \
   --alias docs:portal \

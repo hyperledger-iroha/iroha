@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-01-01
 ## Обзор
 
 - `scripts/address_local_toolkit.sh` оборачивает CLI `iroha`, чтобы получить:
-  - `audit.json` -- структурированный вывод `iroha address audit --format json`.
+  - `audit.json` -- структурированный вывод `iroha tools address audit --format json`.
   - `normalized.txt` -- преобразованные IH58 (предпочтительно) / compressed (`snx1`) (второй выбор) literals для каждого Local-domain selector.
 - Используйте скрипт вместе с dashboard ingest адресов (`dashboards/grafana/address_ingest.json`)
   и правилами Alertmanager (`dashboards/alerts/address_ingest_rules.yml`), чтобы доказать безопасность cutover Local-8 /
@@ -48,7 +48,7 @@ Local-8 детекций и ноль Local-12 коллизий минимум з
 1. Запустите скрипт в отдельном job и загрузите outputs.
 2. Блокируйте merges, когда `audit.json` сообщает Local selectors (`domain.kind = local12`).
    со значением по умолчанию `true` (меняйте на `false` только в dev/test при диагностике регрессий) и
-   добавьте `iroha address normalize --fail-on-warning --only-local` в CI, чтобы попытки регрессии
+   добавьте `iroha tools address normalize --fail-on-warning --only-local` в CI, чтобы попытки регрессии
    падали до production.
 
 См. исходный документ для деталей, evidence чеклистов и release-note snippet, который можно

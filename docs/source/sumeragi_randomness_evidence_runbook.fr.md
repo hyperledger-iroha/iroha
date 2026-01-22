@@ -29,15 +29,15 @@ Note: For the v1 release, VRF penalties jail offenders after the activation lag,
 
 ## 1. Confirmer la selection de mode et le contexte d epoch
 
-1. Lancez `iroha sumeragi params --summary` pour prouver que le binaire a charge
+1. Lancez `iroha --output-format text ops sumeragi params` pour prouver que le binaire a charge
    `sumeragi.consensus_mode="npos"` et enregistrer `k_aggregators`,
    `redundant_send_r`, la longueur d epoch, et les offsets VRF commit/reveal.
 2. Inspectez la vue runtime:
 
    ```bash
-   iroha sumeragi status --summary
-   iroha sumeragi collectors --summary
-   iroha sumeragi rbc status --summary
+   iroha --output-format text ops sumeragi status
+   iroha --output-format text ops sumeragi collectors
+   iroha --output-format text ops sumeragi rbc status
    ```
 
    La ligne `status` imprime le tuple leader/view, le backlog RBC, les retries DA,
@@ -59,11 +59,11 @@ Utilisez les sous-commandes CLI dediees pour extraire les enregistrements VRF
 persistes de chaque validateur:
 
 ```bash
-iroha sumeragi vrf-epoch --epoch "$EPOCH" --summary
-iroha sumeragi vrf-epoch --epoch "$EPOCH" > artifacts/vrf_epoch_${EPOCH}.json
+iroha --output-format text ops sumeragi vrf-epoch --epoch "$EPOCH"
+iroha ops sumeragi vrf-epoch --epoch "$EPOCH" > artifacts/vrf_epoch_${EPOCH}.json
 
-iroha sumeragi vrf-penalties --epoch "$EPOCH" --summary
-iroha sumeragi vrf-penalties --epoch "$EPOCH" > artifacts/vrf_penalties_${EPOCH}.json
+iroha --output-format text ops sumeragi vrf-penalties --epoch "$EPOCH"
+iroha ops sumeragi vrf-penalties --epoch "$EPOCH" > artifacts/vrf_penalties_${EPOCH}.json
 ```
 
 Les resumes indiquent si l epoch est finalise, combien de participants ont soumis
@@ -114,11 +114,11 @@ documentes dans {doc}`torii/sumeragi_evidence_app_api`:
 
 ```bash
 # Count and list persisted evidence
-iroha sumeragi evidence count --summary
-iroha sumeragi evidence list --summary --limit 5
+iroha --output-format text ops sumeragi evidence count
+iroha --output-format text ops sumeragi evidence list --limit 5
 
 # Show JSON for audits
-iroha sumeragi evidence list --limit 100 > artifacts/evidence_snapshot.json
+iroha ops sumeragi evidence list --limit 100 > artifacts/evidence_snapshot.json
 ```
 
 Verifiez que le `total` reporte correspond au widget Grafana alimente par
@@ -127,7 +127,7 @@ que `sumeragi.npos.reconfig.evidence_horizon_blocks` sont rejetes (le CLI imprim
 la raison). Lors des tests d alerting, soumettez un payload connu via:
 
 ```bash
-iroha sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prevote.hex --summary
+iroha --output-format text ops sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prevote.hex
 ```
 
 Surveillez `/v1/events/sse` avec un stream filtre pour prouver que les SDK voient
@@ -155,7 +155,7 @@ Suivre cette checklist garde les preuves d alea VRF et d evidence de slashing
 
 ## 6. Signaux de troubleshooting
 
-- **Mode selection mismatch** - Si `iroha sumeragi params --summary` montre
+- **Mode selection mismatch** - Si `iroha --output-format text ops sumeragi params` montre
   `consensus_mode="permissioned"` ou `k_aggregators` differe du manifest,
   supprimez les artefacts captures, corrigez `iroha_config`, redemarrez le validateur,
   et relancez le flux de validation decrit dans {doc}`sumeragi`.
@@ -169,7 +169,7 @@ Suivre cette checklist garde les preuves d alea VRF et d evidence de slashing
   de chaos indiquent un decalage d horloge du validateur ou une protection replay Torii;
   corrigez le peer fautif avant de relancer le test.
 - **Evidence ingestion stalls** - Quand `sumeragi_evidence_records_total` stagne alors
-  que les tests de chaos emettent des fautes, lancez `iroha sumeragi evidence count`
+  que les tests de chaos emettent des fautes, lancez `iroha ops sumeragi evidence count`
   sur plusieurs validateurs et confirmez que `/v1/sumeragi/evidence/count` correspond
   a la sortie CLI. Toute divergence signifie que les consommateurs SSE/webhook peuvent
   etre stale, donc re-soumettez un fixture connu et escaladez aux mainteneurs Torii si

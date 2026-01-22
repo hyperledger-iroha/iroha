@@ -4,7 +4,7 @@ This bundle captures the artefacts required by Sora Parliament to approve
 automatic relay payouts (SNNet-7):
 
 - `reward_config.json` - Norito-serialisable reward engine configuration, ready
-  to be ingested by `iroha sorafs incentives service init`. The
+  to be ingested by `iroha app sorafs incentives service init`. The
   `budget_approval_id` matches the hash listed in the governance minutes.
 - `shadow_daemon.json` - beneficiary and bond mapping consumed by the replay
   harness (`shadow-run`) and the production daemon.

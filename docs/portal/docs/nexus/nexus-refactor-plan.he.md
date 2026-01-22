@@ -61,7 +61,7 @@ description: מראה של `docs/source/nexus_refactor_plan.md`, המפרטת א
    - להעביר לוגיקת pagination/cursor לרכיבים שימושיים מחדש תחת `crates/iroha_core/src/query/`. ליישר ייצוגי Norito ב-`iroha_data_model`.
    - להוסיף snapshot queries עבור triggers, assets ותפקידים עם סדר דטרמיניסטי (נעקב דרך `crates/iroha_core/tests/snapshot_iterable.rs` לכיסוי הנוכחי).
 3. **עקביות Snapshots**
-   - לוודא ש-CLI `iroha query` משתמש באותו נתיב snapshot כמו Sumeragi/fetchers.
+   - לוודא ש-CLI `iroha ledger query` משתמש באותו נתיב snapshot כמו Sumeragi/fetchers.
    - בדיקות רגרסיה של snapshot ב-CLI נמצאות תחת `tests/cli/state_snapshot.rs` (feature-gated לריצות איטיות).
 
 ### שלב C - Pipeline של Sumeragi

@@ -149,7 +149,7 @@ manifests и replication orders остаются согласованными с
    новый `ReplicationOrderV1` через инструменты управления, описанные в
    [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md),
    и повторяйте аудит, пока набор реплик не сойдется. Для emergency overrides
-   сопоставьте CLI вывод с `iroha da prove-availability`, чтобы SRE могли ссылаться
+   сопоставьте CLI вывод с `iroha app da prove-availability`, чтобы SRE могли ссылаться
    на тот же digest и PDP evidence.
 
 Regression coverage находится в `integration_tests/tests/da/replication_policy.rs`;

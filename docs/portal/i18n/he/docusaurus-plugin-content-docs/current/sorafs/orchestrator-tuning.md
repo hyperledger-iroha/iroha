@@ -71,7 +71,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## רפרנס דגלי CLI ו‑SDK
 
 `sorafs_cli fetch` (ראו `crates/sorafs_car/src/bin/sorafs_cli.rs`) והעטיפה
-`iroha_cli sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) משתמשים באותו
+`iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) משתמשים באותו
 משטח הגדרה של האורקסטרטור. השתמשו בדגלים הבאים בעת לכידת evidence או שחזור
 ה‑fixtures הקנוניים:
 

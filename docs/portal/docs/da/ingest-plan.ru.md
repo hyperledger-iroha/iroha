@@ -204,7 +204,7 @@ chunking и проверкой опциональных manifests.
 
 ## CLI и SDK tooling (DA-8)
 
-- `iroha da submit` (новый CLI entrypoint) оборачивает общий ingest builder/
+- `iroha app da submit` (новый CLI entrypoint) оборачивает общий ingest builder/
   publisher, чтобы операторы могли ingest-ить произвольные blobs вне потока
   Taikai bundle. Команда находится в `crates/iroha_cli/src/commands/da.rs:1` и
   принимает payload, профиль erasure/retention и опциональные файлы
@@ -219,8 +219,8 @@ chunking и проверкой опциональных manifests.
   `--no-submit` для офлайн подготовки и `--endpoint` для кастомных Torii хостов.
   Receipt JSON выводится в stdout и пишется на диск, закрывая требование DA-8
   "submit_blob" и разблокируя SDK parity работу.
-- `iroha da get` добавляет DA-ориентированный alias для multi-source orchestrator,
-  который уже питает `iroha sorafs fetch`. Операторы могут указать artefacts
+- `iroha app da get` добавляет DA-ориентированный alias для multi-source orchestrator,
+  который уже питает `iroha app sorafs fetch`. Операторы могут указать artefacts
   manifest + chunk-plan (`--manifest`, `--plan`, `--manifest-id`) **или** передать
   Torii storage ticket через `--storage-ticket`. При использовании ticket CLI
   загружает manifest из `/v1/da/manifests/<ticket>`, сохраняет bundle в
@@ -232,11 +232,11 @@ chunking и проверкой опциональных manifests.
   можно переопределить через `--manifest-endpoint` для кастомных Torii хостов,
   так что end-to-end availability проверки живут в namespace `da` без
   дублирования orchestrator логики.
-- `iroha da get-blob` забирает канонические manifests напрямую из Torii через
+- `iroha app da get-blob` забирает канонические manifests напрямую из Torii через
   `GET /v1/da/manifests/{storage_ticket}`. Команда пишет
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` и `chunk_plan_{ticket}.json`
   в `artifacts/da/fetch_<timestamp>/` (или пользовательский `--output-dir`), при
-  этом выводит точную команду `iroha da get` (включая `--manifest-id`), нужную
+  этом выводит точную команду `iroha app da get` (включая `--manifest-id`), нужную
   для последующего orchestrator fetch. Это избавляет операторов от работы с
   manifest spool директориями и гарантирует, что fetcher всегда использует
   подписанные artefacts Torii. JavaScript клиент Torii повторяет этот поток через
@@ -248,7 +248,7 @@ chunking и проверкой опциональных manifests.
   скачивать manifests, выполнять multi-source fetch и собирать доказательства без
   вызова CLI.
   [IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240][IrohaSwift/Sources/IrohaSwift/SorafsOrchestratorClient.swift:12]
-- `iroha da rent-quote` вычисляет детерминированную rent и разбор incentive для
+- `iroha app da rent-quote` вычисляет детерминированную rent и разбор incentive для
   заданного размера storage и окна retention. Хелпер потребляет активную
   `DaRentPolicyV1` (JSON или Norito bytes) либо встроенный default, валидирует
   политику и печатает JSON-сводку (`gib`, `months`, policy metadata и поля
@@ -262,11 +262,11 @@ chunking и проверкой опциональных manifests.
   дашбордов. См. `crates/iroha_cli/src/commands/da.rs` для подкоманды и
   `docs/source/da/rent_policy.md` для схемы политики.
   [crates/iroha_cli/src/commands/da.rs:1][docs/source/da/rent_policy.md:1]
-- `iroha da prove-availability` объединяет все выше: берет storage ticket,
+- `iroha app da prove-availability` объединяет все выше: берет storage ticket,
   скачивает канонический manifest bundle, запускает multi-source orchestrator
-  (`iroha sorafs fetch`) против списка `--gateway-provider`, сохраняет
+  (`iroha app sorafs fetch`) против списка `--gateway-provider`, сохраняет
   скачанный payload + scoreboard в `artifacts/da/prove_availability_<timestamp>/`,
-  и сразу вызывает существующий PoR helper (`iroha da prove`) с полученными
+  и сразу вызывает существующий PoR helper (`iroha app da prove`) с полученными
   bytes. Операторы могут настраивать orchestrator knobs (`--max-peers`,
   `--scoreboard-out`, manifest endpoint overrides) и proof sampler
   (`--sample-count`, `--leaf-index`, `--sample-seed`), при этом одна команда

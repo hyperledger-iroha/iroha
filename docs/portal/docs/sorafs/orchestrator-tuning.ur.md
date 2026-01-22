@@ -85,7 +85,7 @@ Scoreboard manifest کی ضروریات، provider adverts اور ٹیلیمیٹ
 ## CLI اور SDK فلیگ ریفرنس
 
 `sorafs_cli fetch` (دیکھیں `crates/sorafs_car/src/bin/sorafs_cli.rs`) اور
-`iroha_cli sorafs fetch` wrapper (`crates/iroha_cli/src/commands/sorafs.rs`) ایک ہی
+`iroha_cli app sorafs fetch` wrapper (`crates/iroha_cli/src/commands/sorafs.rs`) ایک ہی
 orchestrator configuration surface شیئر کرتے ہیں۔ rollout evidence یا canonical
 fixtures replay کرنے کے لیے یہ flags استعمال کریں:
 

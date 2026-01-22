@@ -97,7 +97,7 @@ Champs d'en‑tête de `manifest.json` :
 6. **Sanité des entrées.**
    - Les entrées `global_domain` DOIVENT inclure `{ "domain": "example", "chain": "sora:nexus:global", "selector": "global" }`.
    - Les entrées `local_alias` DOIVENT embarquer le digest de 12 octets produit par
-     Norm v1 (utilisez `iroha address convert <address-or-account_id> --format json --expect-prefix 753`
+     Norm v1 (utilisez `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
      pour confirmer ; le résumé JSON reflète le domaine fourni via `input_domain` et
      `--append-domain` rejoue l'encodage converti sous la forme `<ih58>@<domain>` pour les manifestes).
    - Les entrées `tombstone` DOIVENT référencer exactement le sélecteur retiré,
@@ -134,7 +134,7 @@ Champs d'en‑tête de `manifest.json` :
 2. **Dériver les payloads canoniques.** Pour chaque alias mis à jour, exécutez :
 
    ```bash
-   iroha address convert snx1...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
+   iroha tools address convert snx1...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
    jq '.canonical_hex, .input_domain' /tmp/alias.json
    ```
 

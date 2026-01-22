@@ -2,7 +2,7 @@
 
 use eyre::Result;
 
-use crate::{Run, RunContext};
+use crate::{CliOutputFormat, Run, RunContext};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -46,10 +46,14 @@ impl Run for Command {
                     .and_then(|m| m.get("canceled"))
                     .and_then(norito::json::Value::as_u64)
                     .unwrap_or(0);
-                context.println(format!(
+                let summary = format!(
                     "runtime: active_abi_versions={active} proposed={proposed} activated={activated} canceled={canceled}"
-                ))?;
-                context.print_data(&value)
+                );
+                match context.output_format() {
+                    CliOutputFormat::Text => context.println(summary)?,
+                    CliOutputFormat::Json => context.print_data(&value)?,
+                }
+                Ok(())
             }
             Command::Capabilities => {
                 let client = context.client_from_config();
@@ -73,10 +77,14 @@ impl Run for Command {
                     .and_then(|v| v.get("openssl_preview"))
                     .and_then(norito::json::Value::as_bool)
                     .unwrap_or(false);
-                context.println(format!(
+                let summary = format!(
                     "node capabilities: sm_enabled={sm_enabled} policy={policy} openssl_preview={openssl_preview}"
-                ))?;
-                context.print_data(&value)
+                );
+                match context.output_format() {
+                    CliOutputFormat::Text => context.println(summary)?,
+                    CliOutputFormat::Json => context.print_data(&value)?,
+                }
+                Ok(())
             }
         }
     }

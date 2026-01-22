@@ -149,7 +149,7 @@ automatica.
    novo `ReplicationOrderV1` via as ferramentas de governanca descritas em
    [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md)
    e rode a auditoria novamente ate que o set de replicas converja. Para overrides
-   de emergencia, emparelhe a saida da CLI com `iroha da prove-availability` para
+   de emergencia, emparelhe a saida da CLI com `iroha app da prove-availability` para
    que SREs possam referenciar o mesmo digest e evidencia PDP.
 
 A cobertura de regressao vive em `integration_tests/tests/da/replication_policy.rs`;

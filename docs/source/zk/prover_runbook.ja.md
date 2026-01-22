@@ -13,7 +13,7 @@ translator: manual
 本ランブックは、Torii の添付ファイルサービスとバックグラウンド ZK プローバーワーカーを監視・アラート・トリアージするための手引きです。Prometheus メトリクスを公開するテレメトリプロファイル（`telemetry_profile = "extended"` または `"full"`）が有効で、ダッシュボードが `/metrics` を取得していることを前提とします。
 
 ## コンポーネント
-- **添付 API** — `POST /v1/zk/attachments` で証明やトランスクリプトなどのペイロードを保存。ワーカー有効時に順次スキャン。`iroha_cli zk attachments *` で操作可能。
+- **添付 API** — `POST /v1/zk/attachments` で証明やトランスクリプトなどのペイロードを保存。ワーカー有効時に順次スキャン。`iroha_cli app zk attachments *` で操作可能。
 - **バックグラウンドプローバー** — `torii.zk_prover_enabled=true` で有効化。添付キューを処理し `ProofAttachment` を検証、JSON レポート（`/v1/zk/prover/reports`）を生成。リソース上限は `torii.zk_prover_max_inflight`, `torii.zk_prover_max_scan_bytes`, `torii.zk_prover_max_scan_millis`。スコープは `torii.zk_prover_allowed_backends`/`torii.zk_prover_allowed_circuits` で制御。インライン VK がない場合は `torii.zk_prover_keys_dir` から `<backend>__<name>.vk` を読み込む。
 - **テレメトリ** — `crates/iroha_telemetry::metrics` で登録され `/metrics` に露出。
 
@@ -77,7 +77,7 @@ translator: manual
 4. 必要なら添付を手動取得しオフライン処理。
 
 ## CLI／SDK との連携
-- `iroha_cli zk attachments` は Torii エンドポイントをラップ。ノードと同じコミットで構築し DTO を同期する。
+- `iroha_cli app zk attachments` は Torii エンドポイントをラップ。ノードと同じコミットで構築し DTO を同期する。
 - Swift/Python SDK の `ToriiClient` は `upload_attachment`, `list_attachment`, `get_attachment`, `delete_attachment` を提供。ランブックのメトリクスで SDK 経路を検証。
 
 ## 変更管理

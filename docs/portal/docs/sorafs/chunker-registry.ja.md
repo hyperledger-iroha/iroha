@@ -91,7 +91,7 @@ JSON を書き出す CLI フラグ (`--json-out`, `--por-json-out`, `--por-proof
 | コンポーネント | 状態 | 備考 |
 |---------------|------|------|
 | `sorafs_manifest_chunk_store` | ✅ サポート | 正規ハンドル + エイリアスを検証し、`--json-out=-` でレポートをストリームし、`ensure_charter_compliance()` でレジストリチャーターを強制します。 |
-| `sorafs_manifest_stub` | ⚠️ レガシー | レガシー manifest builder。CAR/manifest のパッケージングには `iroha sorafs toolkit pack` を使い、決定的な再検証のために `--plan=-` を維持します。 |
+| `sorafs_manifest_stub` | ⚠️ レガシー | レガシー manifest builder。CAR/manifest のパッケージングには `iroha app sorafs toolkit pack` を使い、決定的な再検証のために `--plan=-` を維持します。 |
 | `sorafs_provider_advert_stub` | ⚠️ レガシー | オフライン検証 helper のみ。provider advert は公開パイプラインで生成し、`/v1/sorafs/providers` で検証してください。 |
 | `sorafs_fetch`（developer orchestrator） | ✅ サポート | `chunk_fetch_specs` を読み取り、`range` 能力 payload を理解し、CARv2 出力を組み立てます。 |
 | SDK fixtures（Rust/Go/TS） | ✅ サポート | `export_vectors` で再生成。正規ハンドルがエイリアス一覧の先頭に入り、council envelopes により署名されます。 |
@@ -221,4 +221,4 @@ manifest は常に CARv2/BLAKE3 のコミットメントを広告します。
   パリティは Rust、Go、Node のテストで検証されています。
 * `chunker_registry::lookup_by_profile` は、descriptor のパラメータが
   `ChunkProfile::DEFAULT` に一致することをアサートし、偶発的な乖離を防ぎます。
-* `iroha sorafs toolkit pack` と `sorafs_manifest_stub` が生成する manifest にはレジストリメタデータが含まれます。
+* `iroha app sorafs toolkit pack` と `sorafs_manifest_stub` が生成する manifest にはレジストリメタデータが含まれます。

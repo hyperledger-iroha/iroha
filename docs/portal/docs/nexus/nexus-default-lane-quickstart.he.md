@@ -118,7 +118,7 @@ irohad --sora --config "${IROHA_CONFIG}"
 לאחר שה-node עולה, השתמשו ב-CLI helper כדי לוודא שה-default lane sealed (manifest נטען) ומוכן לתעבורה. תצוגת הסיכום מדפיסה שורה אחת לכל lane:
 
 ```bash
-iroha_cli nexus lane-report --summary
+iroha_cli app nexus lane-report --summary
 ```
 
 Example output:

@@ -18,7 +18,7 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 - یقینی بنائیں کہ منزل اکاؤنٹ (مثلا `alice@wonderland`) موجود ہے، جو ہر SDK quickstart کے سیٹ اپ مرحلے کی عکاسی کرتا ہے۔
 - `register_and_mint` انٹری پوائنٹ کال کریں تاکہ ROSE اثاثہ ڈیفینیشن بنے اور ایک ہی ٹرانزیکشن میں Alice کو 250 یونٹس منٹ ہوں۔
-- `client.request(FindAccountAssets)` یا `iroha_cli assets list --account alice@wonderland` کے ذریعے بیلنس چیک کریں تاکہ منٹنگ کی کامیابی کی تصدیق ہو۔
+- `client.request(FindAccountAssets)` یا `iroha_cli ledger assets list --account alice@wonderland` کے ذریعے بیلنس چیک کریں تاکہ منٹنگ کی کامیابی کی تصدیق ہو۔
 
 ## متعلقہ SDK گائیڈز
 

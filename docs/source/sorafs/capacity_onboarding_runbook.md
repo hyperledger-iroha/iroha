@@ -112,7 +112,7 @@ dump so SRE can prove telemetry coverage.
 
 ## Exit / Retirement Workflow
 
-1. **Drain assignments.** Run `iroha sorafs replication list --status active \
+1. **Drain assignments.** Run `iroha app sorafs replication list --status active \
    --provider-id <hex>` until no manifest references remain. Queue reassignment
    ballots for any stragglers before approving retirement.
 2. **Publish final telemetry.** Use `sorafs_manifest_stub capacity telemetry` to

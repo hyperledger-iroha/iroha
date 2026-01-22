@@ -51,7 +51,7 @@ Before a ballot reaches the agenda, council staff must prove that the manifest
 bytes under review match the Parliament envelope and the SoraFS artefact. Use
 the existing tooling to collect that evidence:
 
-1. Fetch the manifest bundle from Torii (`iroha da get-blob --storage-ticket <hex>`
+1. Fetch the manifest bundle from Torii (`iroha app da get-blob --storage-ticket <hex>`
    or the equivalent SDK helper) so everyone hashes the same bytes that reached
    the gateways.
 2. Run the manifest stub verifier with the signed envelope:

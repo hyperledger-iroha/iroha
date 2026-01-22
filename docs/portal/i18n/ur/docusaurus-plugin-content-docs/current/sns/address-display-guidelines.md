@@ -158,7 +158,7 @@ UIs اور SDKs کو selector کی قسم دکھانے کے لئے تیار ہو
 
 آپریٹرز کو ADDR-5 میں درج CLI workflow فالو کرنا چاہیے:
 
-1. `iroha address inspect` اب IH58، کمپریسڈ، اور canonical hex payloads کے ساتھ
+1. `iroha tools address inspect` اب IH58، کمپریسڈ، اور canonical hex payloads کے ساتھ
    structured JSON summary دیتا ہے۔ summary میں `kind`/`warning` والے `domain`
    آبجیکٹ بھی ہوتے ہیں اور `input_domain` کے ذریعے دیے گئے ڈومین کو بھی echo
    کرتا ہے۔ جب `kind` `local12` ہو تو CLI stderr پر وارننگ دیتا ہے اور JSON
@@ -187,7 +187,7 @@ UIs اور SDKs کو selector کی قسم دکھانے کے لئے تیار ہو
    کریں اور فریقین کو مطلع کریں کہ cutover مکمل ہونے پر Local selectors ریجیکٹ
    ہوں گے۔
 5. بلک ڈیٹا سیٹس کے لئے
-   `iroha address audit --input addresses.txt --network-prefix 753` چلائیں۔ کمانڈ
+   `iroha tools address audit --input addresses.txt --network-prefix 753` چلائیں۔ کمانڈ
    newline-separated literals پڑھتی ہے ( `#` سے شروع ہونے والے comments نظرانداز
    ہوتے ہیں، اور `--input -` یا کوئی فلیگ نہ ہو تو STDIN استعمال ہوتا ہے)، ہر
    اندراج کے لئے canonical/IH58 (ترجیحی)/compressed (`snx1`, second-best) summaries کے ساتھ JSON رپورٹ بناتی
@@ -202,8 +202,8 @@ UIs اور SDKs کو selector کی قسم دکھانے کے لئے تیار ہو
   کے ساتھ جوڑیں تاکہ خراب literals والے dumps پر بھی scan جاری رہے۔
 7. CI/lint automation `ci/check_address_normalize.sh` چلا سکتی ہے، جو
    `fixtures/account/address_vectors.json` سے Local selectors نکال کر
-   `iroha address normalize` سے تبدیل کرتی ہے، اور
-   `iroha address audit --fail-on-warning` دوبارہ چلاتی ہے تاکہ ثابت ہو کہ
+   `iroha tools address normalize` سے تبدیل کرتی ہے، اور
+   `iroha tools address audit --fail-on-warning` دوبارہ چلاتی ہے تاکہ ثابت ہو کہ
    releases اب Local digests نہیں نکالتے۔
 
 `torii_address_local8_total{endpoint}` کے ساتھ
@@ -237,7 +237,7 @@ selectors کو disable کرے۔ Alertmanager pack
 
 cutover کے وقت والٹ/ایکسپلورر ریلیز نوٹس میں درج ذیل bullet شامل کریں:
 
-> **Addresses:** `iroha address normalize --only-local --append-domain` helper شامل
+> **Addresses:** `iroha tools address normalize --only-local --append-domain` helper شامل
 > کیا گیا اور اسے CI (`ci/check_address_normalize.sh`) میں وائر کیا گیا تاکہ
 > میں تبدیل کر سکیں، قبل اس کے کہ Local-8/Local-12 mainnet پر بلاک ہوں۔ کسی بھی
 > custom exports کو اپ ڈیٹ کریں تاکہ کمانڈ چلائی جائے اور normalized list کو

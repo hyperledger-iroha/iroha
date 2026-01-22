@@ -518,7 +518,7 @@ reconstruct کیا جا سکے۔
    کے verify کریں کہ production میں Local‑8 strings اب قبول نہیں ہوتیں،
    پھر tombstone تجویز کریں۔
 2. **Canonical digests derive کرنا۔**  
-   `iroha address convert <address-or-account_id> --format json --expect-prefix 753`
+   `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
    چلائیں (یا  
    `fixtures/account/address_vectors.json` کو
    `scripts/account_fixture_helper.py` کے ذریعے consume کریں) تاکہ عین

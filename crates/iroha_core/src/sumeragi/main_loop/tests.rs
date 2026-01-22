@@ -1080,6 +1080,12 @@ fn test_sumeragi_config() -> SumeragiConfig {
         pacemaker_rtt_floor_multiplier: 1,
         pacemaker_max_backoff: Duration::from_secs(0),
         pacemaker_jitter_frac_permille: 0,
+        pacemaker_active_pending_soft_limit:
+            iroha_config::parameters::defaults::sumeragi::PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT,
+        pacemaker_rbc_backlog_session_soft_limit:
+            iroha_config::parameters::defaults::sumeragi::PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT,
+        pacemaker_rbc_backlog_chunk_soft_limit:
+            iroha_config::parameters::defaults::sumeragi::PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
         adaptive_observability: iroha_config::parameters::actual::AdaptiveObservability::default(),
         enable_bls: true,
     }
@@ -29061,6 +29067,70 @@ async fn proposal_backpressure_blocks_commit_qc_pending_after_reschedule() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn proposal_backpressure_allows_pending_with_soft_limit() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.pacemaker_active_pending_soft_limit = 1;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    insert_active_pending_block(actor, 0);
+
+    let backpressure = actor.proposal_backpressure();
+    assert!(
+        !backpressure.active_pending,
+        "soft limit should allow a single blocking pending block"
+    );
+    assert!(
+        !backpressure.should_defer(),
+        "proposal assembly should proceed when only soft-limited pending blocks exist"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_backpressure_allows_rbc_backlog_with_soft_limits() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.pacemaker_rbc_backlog_session_soft_limit = 1;
+    consensus_cfg.pacemaker_rbc_backlog_chunk_soft_limit = 4;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let tip_height = view.height() as u64;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let height = tip_height.saturating_add(1);
+    let block = sample_block(height, 0, parent);
+    let key = Actor::session_key(&block.hash(), height, 0);
+    let mut session = RbcSession::test_new(
+        2,
+        Some(Hash::prehashed([0x11; 32])),
+        Some(Hash::prehashed([0x22; 32])),
+        0,
+    );
+    session.test_set_block_header_and_signature(&block);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let backpressure = actor.proposal_backpressure();
+    assert!(
+        !backpressure.rbc_backlog,
+        "soft limits should allow small RBC backlog"
+    );
+    assert!(
+        !backpressure.should_defer(),
+        "proposal assembly should proceed when backlog is within soft limits"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn should_defer_proposal_when_relay_backpressure_active() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -49032,6 +49102,35 @@ async fn rbc_backlog_counts_pending_stash_for_tip_height() {
         harness.actor.has_unresolved_rbc_backlog(),
         "pending RBC stash for tip height should gate view changes"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_backlog_summary_tracks_missing_chunks() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let tip_height = view.height() as u64;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let height = tip_height.saturating_add(1);
+    let block = sample_block(height, 0, parent);
+    let key = Actor::session_key(&block.hash(), height, 0);
+    let mut session = RbcSession::test_new(
+        4,
+        Some(Hash::prehashed([0x51; 32])),
+        Some(Hash::prehashed([0x52; 32])),
+        0,
+    );
+    session.test_set_block_header_and_signature(&block);
+    session.received_chunks = 1;
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let summary = actor.rbc_backlog_summary();
+    assert_eq!(summary.sessions_pending, 1);
+    assert_eq!(summary.missing_chunks_total, 3);
 
     harness.shutdown.send();
 }

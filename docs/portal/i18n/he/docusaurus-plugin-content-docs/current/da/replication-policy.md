@@ -142,7 +142,7 @@ re-replicate ל-blobs לא תואמים אוטומטית.
    `ReplicationOrderV1` חדש דרך כלי הממשל המתוארים ב-
    [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md)
    והריצו את הביקורת שוב עד שהסט יתכנס. לעקיפות חירום, חברו פלט CLI עם
-   `iroha da prove-availability` כדי ש-SREs יוכלו להתייחס לאותו digest ולעדות PDP.
+   `iroha app da prove-availability` כדי ש-SREs יוכלו להתייחס לאותו digest ולעדות PDP.
 
 כיסוי רגרסיה נמצא ב-`integration_tests/tests/da/replication_policy.rs`; הסוויטה
 שולחת מדיניות שימור לא תואמת ל-`/v1/da/ingest` ומוודאת שה-manifest המוחזר חושף

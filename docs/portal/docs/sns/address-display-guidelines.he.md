@@ -157,7 +157,7 @@ payload bit: │version  │ class  │  norm  │ext │
 מפעילים שממירים קידודים Local מורשתיים ל-IH58 קנוני או למחרוזות דחוסות צריכים
 לעקוב אחרי תהליך CLI שמתועד תחת ADDR-5:
 
-1. `iroha address inspect` מפיק כעת תקציר JSON מובנה עם IH58, דחוס ו-payloads hex
+1. `iroha tools address inspect` מפיק כעת תקציר JSON מובנה עם IH58, דחוס ו-payloads hex
    קנוניים. התקציר כולל גם אובייקט `domain` עם שדות `kind`/`warning` ומחזיר כל
    דומיין שסופק דרך השדה `input_domain`. כאשר `kind` הוא `local12`, ה-CLI מדפיס
    אזהרה ל-stderr והתקציר משקף את אותה הנחיה כך שצינורות CI ו-SDKs יוכלו להציג
@@ -183,7 +183,7 @@ payload bit: │version  │ class  │  norm  │ext │
 4. עדכנו manifests, registries ומסמכים מול לקוח עם הצורה הקנונית והודיעו
    לשותפים שסלקטורים Local יידחו לאחר השלמת ה-cutover.
 5. עבור מערכי נתונים גדולים, הריצו
-   `iroha address audit --input addresses.txt --network-prefix 753`. הפקודה
+   `iroha tools address audit --input addresses.txt --network-prefix 753`. הפקודה
    קוראת literals מופרדים בשורות (תגובות שמתחילות ב-`#` נזנחות, ו-`--input -` או
    ללא דגל משתמש ב-STDIN), מפיקה דוח JSON עם תקצירים קנוניים/IH58/דחוסים לכל
    ערך, וסופרת שגיאות parse ואזהרות דומיין Local. השתמשו ב-`--allow-errors`
@@ -198,8 +198,8 @@ payload bit: │version  │ class  │  norm  │ext │
   dump מכיל literals פגומים.
 7. אוטומציית CI/lint יכולה להריץ `ci/check_address_normalize.sh`, שמחלצת את
    הסלקטורים Local מתוך `fixtures/account/address_vectors.json`, ממירה אותם דרך
-   `iroha address normalize`, ומריצה שוב
-   `iroha address audit --fail-on-warning` כדי להוכיח ששחרורים כבר לא מפיקים
+   `iroha tools address normalize`, ומריצה שוב
+   `iroha tools address audit --fail-on-warning` כדי להוכיח ששחרורים כבר לא מפיקים
    digests Local.
 
 `torii_address_local8_total{endpoint}` יחד עם
@@ -233,7 +233,7 @@ mainnet מבטל את הסלקטורים הישנים. חבילת Alertmanager
 
 כללו את ה-bullet הבא בהערות השחרור של הארנק/מסייר בעת cutover:
 
-> **כתובות:** נוסף העוזר `iroha address normalize --only-local --append-domain`
+> **כתובות:** נוסף העוזר `iroha tools address normalize --only-local --append-domain`
 > וחובר ל-CI (`ci/check_address_normalize.sh`) כך שצינורות ארנק/מסייר יוכלו להמיר
 > סלקטורים Local מורשתיים לצורות IH58/דחוסות קנוניות לפני ש-Local-8/Local-12
 > נחסמים ב-mainnet. עדכנו כל export מותאם להריץ את הפקודה ולצרף את הרשימה

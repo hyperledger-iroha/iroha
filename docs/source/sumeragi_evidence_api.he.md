@@ -36,7 +36,7 @@ translator: manual
   - גוף הבקשה (JSON): `{ "evidence_hex": "<hex string>" }`; מחרוזת ה-hex מייצגת בתים של `ConsensusEvidence` עם framing של Norito ורווחים מותרים.
   - תגובה (JSON): `{ "status": "accepted", "kind": "<variant>" }`.
   - ולידציה בוחנת התאמת חותמים/גובה/תצוגה/אפוק עבור כפלי הצבעה, דורשת payload לא ריק לחתימה בודדת, דורשת קוורום קבלות חתומות (`TransactionSubmissionReceipt`) עבור `Censorship`, ודוחה `InvalidProposal` שאינן מקדמות height או שה-hash של ההורה אינו תואם את ה-commit certificate.
-  - כלי CLI: `iroha sumeragi evidence submit --evidence-hex <hex>` או `--evidence-hex-file <path>`.
+  - כלי CLI: `iroha ops sumeragi evidence submit --evidence-hex <hex>` או `--evidence-hex-file <path>`.
 
 עוד סטטוס קונצנזוס והוכחות ריצה
 

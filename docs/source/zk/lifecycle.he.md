@@ -37,12 +37,12 @@ translator: manual
 
 ### כלי CLI
 
-`iroha_cli zk` מספק עטיפות דקות ששולחות את ה-DTO ב-JSON ש-Torii מצפה לקבל:
+`iroha_cli app zk` מספק עטיפות דקות ששולחות את ה-DTO ב-JSON ש-Torii מצפה לקבל:
 
-- `iroha_cli zk vk register --json path/to/register.json`
-- `iroha_cli zk vk update --json path/to/update.json`
-- `iroha_cli zk vk deprecate --json path/to/deprecate.json`
-- `iroha_cli zk vk get --backend halo2/ipa --name vk_transfer`
+- `iroha_cli app zk vk register --json path/to/register.json`
+- `iroha_cli app zk vk update --json path/to/update.json`
+- `iroha_cli app zk vk deprecate --json path/to/deprecate.json`
+- `iroha_cli app zk vk get --backend halo2/ipa --name vk_transfer`
 
 מבני ה-DTO ב-JSON תואמים בדיוק למטענים של `iroha_data_model::proof`. בייטים של VK אינליין נשמרים בבסיס64, והתחייבויות נשלחות כמחרוזת הקסדצימלית באותיות קטנות.
 
@@ -71,11 +71,11 @@ translator: manual
 
 ### כיסוי CLI
 
-תחת `iroha_cli zk proofs` נוספו פקודות משנה חדשות:
+תחת `iroha_cli app zk proofs` נוספו פקודות משנה חדשות:
 
-- `iroha_cli zk proofs list [--backend halo2/ipa] [--status Verified] [--has-tag PROF] [--limit 20]`
-- `iroha_cli zk proofs count [--backend halo2/ipa] [--has-tag IPAK]`
-- `iroha_cli zk proofs get --backend halo2/ipa --hash 0123...`
+- `iroha_cli app zk proofs list [--backend halo2/ipa] [--status Verified] [--has-tag PROF] [--limit 20]`
+- `iroha_cli app zk proofs count [--backend halo2/ipa] [--has-tag IPAK]`
+- `iroha_cli app zk proofs get --backend halo2/ipa --hash 0123...`
 
 כל הפקודות מחזירות תגובות Norito ב-JSON. הפילטרים תואמים אחד-לאחד לפרמטרי השאילתה של HTTP, כך שקל לסקריפט עימם דפדוף או להזין אותם לכלי ניטור.
 

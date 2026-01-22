@@ -111,7 +111,7 @@ gateway probes ہم آہنگ رہتے ہیں۔【crates/iroha_torii/src/sorafs/a
 ## 2. Pin → Fetch راؤنڈ ٹرپ
 
 1. manifest + payload بنڈل تیار کریں (مثلاً
-   `iroha sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json` کے ذریعے)۔
+   `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json` کے ذریعے)۔
 2. manifest کو base64 encoding کے ساتھ جمع کریں:
 
    ```bash

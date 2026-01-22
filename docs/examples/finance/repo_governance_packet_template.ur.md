@@ -36,7 +36,7 @@ translation_last_reviewed: 2026-01-01
 ## 2. Instruction Payloads
 
 desk کی منظور شدہ staged Norito instructions کو
-`iroha repo ... --output` کے ذریعے ریکارڈ کریں۔ ہر entry میں emitted file کا hash اور
+`iroha app repo ... --output` کے ذریعے ریکارڈ کریں۔ ہر entry میں emitted file کا hash اور
 ایک مختصر description شامل ہو جو vote پاس ہونے پر submit ہوگی۔
 
 | Action | File | SHA-256 | Notes |

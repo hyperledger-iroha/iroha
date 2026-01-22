@@ -152,7 +152,7 @@ reutilizar politicas de token/mTLS.
   `(sibling_hash, position)` para que verificadores reconstruam a raiz. As
   provas tambem incluem o hash do bloco e o header assinado para que clientes
   leves validem a finality.
-- Helpers de CLI (`iroha_cli da prove-commitment`) envolvem o ciclo de
+- Helpers de CLI (`iroha_cli app da prove-commitment`) envolvem o ciclo de
   request/verify e expoem saidas Norito/hex para operadores.
 
 ## 5. Storage e indexacao
@@ -193,7 +193,7 @@ reconstruam o indice rapidamente a partir do block log.
 |------|-----------|-------------------|
 | P0 - Merge do data model | Integrar `DaCommitmentRecord`, atualizacoes de header de bloco e codecs Norito. | `cargo test -p iroha_data_model` verde com novas fixtures. |
 | P1 - Wiring Core/WSV | Encadear logica de fila + block builder, persistir indexes e expor handlers RPC. | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` passam com assertions de bundle proof. |
-| P2 - Tooling de operadores | Entregar helpers CLI, dashboard Grafana e updates de docs de verificacao de proof. | `iroha_cli da prove-commitment` funciona contra devnet; o dashboard mostra dados ao vivo. |
+| P2 - Tooling de operadores | Entregar helpers CLI, dashboard Grafana e updates de docs de verificacao de proof. | `iroha_cli app da prove-commitment` funciona contra devnet; o dashboard mostra dados ao vivo. |
 | P3 - Gate de governanca | Habilitar o validador de blocos que requer compromissos DA nas lanes marcadas em `iroha_config::nexus`. | Entrada de status + update de roadmap marcam DA-3 como COMPLETADO. |
 
 ## Perguntas abertas

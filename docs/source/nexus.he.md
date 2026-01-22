@@ -70,12 +70,12 @@ Manifests של capabilities ו-UAID
 
 פעולות Space Directory זמינות בשתי צורות: CLI מובנה (ל-rollouts סקריפטיים) או שליחות Torii ישירות (ל-CI/CD אוטומטי). שני המסלולים אוכפים את `CanPublishSpaceDirectoryManifest{dataspace}` בתוך executor (`crates/iroha_core/src/smartcontracts/isi/space_directory.rs`) ורושמים אירועי מחזור חיים ב-world state (`iroha_core::state::space_directory_manifests`).
 
-#### זרימת CLI (`iroha space-directory manifest ...`)
+#### זרימת CLI (`iroha app space-directory manifest ...`)
 
 1. **קידוד JSON של מניפסט** — להמיר טיוטות מדיניות ל-Norito bytes ולהפיק hash שחוזר על עצמו לפני סקירה:
 
    ```bash
-   iroha space-directory manifest encode \
+   iroha app space-directory manifest encode \
      --json dataspace/capability.json \
      --out artifacts/capability.manifest.to \
      --hash-out artifacts/capability.manifest.hash
@@ -86,7 +86,7 @@ Manifests של capabilities ו-UAID
 2. **פרסום/החלפת מניפסטים** — לשגר `PublishSpaceDirectoryManifest` ממקורות Norito או JSON:
 
    ```bash
-   iroha space-directory manifest publish \
+   iroha app space-directory manifest publish \
      --manifest artifacts/capability.manifest.to \
      --reason "Retail wave 4 on-boarding"
    ```
@@ -96,12 +96,12 @@ Manifests של capabilities ו-UAID
 3. **Expirer** מניפסטים שהגיעו לסוף חיים או **Revoke** UAIDs לפי צורך. שני הפקודות מקבלות `--uaid uaid:<hex>` או digest hex באורך 64 תווים (LSB=1) ו-id מספרי של dataspace:
 
    ```bash
-   iroha space-directory manifest expire \
+   iroha app space-directory manifest expire \
      --uaid uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11 \
      --dataspace 11 \
      --expired-epoch 4600
 
-   iroha space-directory manifest revoke \
+   iroha app space-directory manifest revoke \
      --uaid uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11 \
      --dataspace 11 \
      --revoked-epoch 9216 \
@@ -111,7 +111,7 @@ Manifests של capabilities ו-UAID
 4. **יצירת bundle לביקורת** — `manifest audit-bundle` כותב את ה-JSON, ה-`.to`, ה-hash, פרופיל dataspace ו-metadata קריא מכונה לתיקיית יציאה:
 
    ```bash
-   iroha space-directory manifest audit-bundle \
+   iroha app space-directory manifest audit-bundle \
      --manifest-json dataspace/capability.json \
      --profile dataspace/profiles/cbdc_profile.json \
      --out-dir artifacts/capability_bundle

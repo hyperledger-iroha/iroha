@@ -206,12 +206,12 @@ Capability manifests (`AssetPermissionManifest` in `crates/iroha_data_model/src/
 
 ### Audit bundle helper
 
-Use the `iroha space-directory manifest audit-bundle` helper from the Space Directory
+Use the `iroha app space-directory manifest audit-bundle` helper from the Space Directory
 playbook to snapshot each capability manifest before filing the evidence packet.
 Provide the manifest JSON (or `.to` payload) and dataspace profile:
 
 ```bash
-iroha space-directory manifest audit-bundle \
+iroha app space-directory manifest audit-bundle \
   --manifest-json fixtures/space_directory/capability/cbdc_wholesale.manifest.json \
   --profile fixtures/space_directory/profile/cbdc_lane_profile.json \
   --out-dir artifacts/nexus/cbdc/2026-02-01T00-00Z/cbdc_wholesale \
@@ -234,7 +234,7 @@ directory so auditors and regulators can replay the exact bytes later.
 ### 2.2 CLI snippets
 
 - Generate UAID + manifest skeleton via `cargo run -p iroha_cli -- manifest cbdc --uaid <hash> --dataspace 11 --template cbdc_wholesale`.
-- Publish capability manifest to Torii (Space Directory) using `iroha space-directory manifest publish --manifest cbdc_wholesale.manifest.to` (or `--manifest-json cbdc_wholesale.manifest.json`); the submitting account must hold `CanPublishSpaceDirectoryManifest` for the CBDC dataspace.
+- Publish capability manifest to Torii (Space Directory) using `iroha app space-directory manifest publish --manifest cbdc_wholesale.manifest.to` (or `--manifest-json cbdc_wholesale.manifest.json`); the submitting account must hold `CanPublishSpaceDirectoryManifest` for the CBDC dataspace.
 - Publish via HTTP if the ops desk is running remote automation:
 
   ```bash

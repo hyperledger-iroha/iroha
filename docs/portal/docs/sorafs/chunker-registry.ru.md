@@ -221,4 +221,4 @@ Gateways выбирают взаимно поддерживаемый профи
   через предоставленные тесты.
 * `chunker_registry::lookup_by_profile` подтверждает, что параметры дескриптора
   совпадают с `ChunkProfile::DEFAULT`, чтобы защититься от случайной дивергенции.
-* Manifests, производимые `iroha sorafs toolkit pack` и `sorafs_manifest_stub`, включают метаданные реестра.
+* Manifests, производимые `iroha app sorafs toolkit pack` и `sorafs_manifest_stub`, включают метаданные реестра.

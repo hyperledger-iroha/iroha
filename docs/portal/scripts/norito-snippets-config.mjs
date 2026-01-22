@@ -16,7 +16,7 @@ export const SNIPPETS = [
     ledgerWalkthrough: [
       'Compile the contract with `koto_compile --abi 1` as shown in [Norito Getting Started](/norito/getting-started#1-compile-a-kotodama-contract) or via `cargo test -p ivm developer_portal_norito_snippets_compile`.',
       'Smoke-test the bytecode locally with `ivm_run` / `developer_portal_norito_snippets_run` to verify the `info!` log and initial syscall before touching a node.',
-      'Deploy the artifact through `iroha_cli contracts deploy` and confirm the manifest using the steps in [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha_cli).'
+      'Deploy the artifact through `iroha_cli app contracts deploy` and confirm the manifest using the steps in [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha_cli).'
     ],
     sdkGuides: SDK_GUIDES
   },
@@ -29,7 +29,7 @@ export const SNIPPETS = [
     ledgerWalkthrough: [
       'Ensure the destination account (e.g., `alice@wonderland`) exists, mirroring the setup phase in each SDK quickstart.',
       'Invoke the `register_and_mint` entrypoint to create the ROSE asset definition and mint 250 units to Alice in one transaction.',
-      'Verify balances through `client.request(FindAccountAssets)` or `iroha_cli assets list --account alice@wonderland` to confirm the mint succeeded.'
+      'Verify balances through `client.request(FindAccountAssets)` or `iroha_cli ledger asset list --account alice@wonderland` to confirm the mint succeeded.'
     ],
     sdkGuides: SDK_GUIDES
   },
@@ -42,7 +42,7 @@ export const SNIPPETS = [
     ledgerWalkthrough: [
       'Fund the contract authority (for example `contract@wonderland`) with the asset it will transfer and grant the authority the `CanTransfer` role or equivalent permission.',
       'Call the `call_transfer_asset` entrypoint to transfer 5 units from the contract account to `bob@wonderland`, mirroring the way on-chain automation can wrap host calls.',
-      'Verify balances via `FindAccountAssets` or `iroha_cli assets list --account bob@wonderland` and inspect events to confirm the metadata guard logged the transfer context.'
+      'Verify balances via `FindAccountAssets` or `iroha_cli ledger asset list --account bob@wonderland` and inspect events to confirm the metadata guard logged the transfer context.'
     ],
     sdkGuides: SDK_GUIDES
   },
@@ -55,7 +55,7 @@ export const SNIPPETS = [
     ledgerWalkthrough: [
       'Pre-fund Alice with the target asset (for example via the “register and mint” snippet or SDK quickstart flows).',
       'Execute the `do_transfer` entrypoint to move 10 units from Alice to Bob, satisfying the `AssetTransferRole` permission.',
-      'Query balances (`FindAccountAssets`, `iroha_cli assets list`) or subscribe to pipeline events to observe the transfer outcome.'
+      'Query balances (`FindAccountAssets`, `iroha_cli ledger asset list`) or subscribe to pipeline events to observe the transfer outcome.'
     ],
     sdkGuides: SDK_GUIDES
   },
@@ -68,7 +68,7 @@ export const SNIPPETS = [
     ledgerWalkthrough: [
       'Ensure the NFT definition (for example `n0#wonderland`) exists alongside the owner/recipient accounts used in the snippet (`alice@wonderland`, `bob@wonderland`).',
       'Invoke the `nft_issue_and_transfer` entrypoint to mint the NFT, transfer it from Alice to Bob, and attach a metadata flag describing the issuance.',
-      'Inspect the NFT ledger state with `iroha_cli nfts list --account <id>` or the SDK equivalents to verify the transfer, then confirm the asset is removed once the burn instruction runs.'
+      'Inspect the NFT ledger state with `iroha_cli ledger nft list --account <id>` or the SDK equivalents to verify the transfer, then confirm the asset is removed once the burn instruction runs.'
     ],
     sdkGuides: SDK_GUIDES
   }

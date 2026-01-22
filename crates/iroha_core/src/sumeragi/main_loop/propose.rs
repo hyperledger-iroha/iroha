@@ -1305,8 +1305,10 @@ impl Actor {
     pub(super) fn proposal_backpressure_at(&mut self, now: Instant) -> ProposalBackpressure {
         self.subsystems.propose.backpressure_gate.refresh();
         let queue_state = self.subsystems.propose.backpressure_gate.state();
-        let active_pending = self.has_blocking_pending_blocks();
-        let mut rbc_backlog = self.has_unresolved_rbc_backlog();
+        let blocking_pending = self.blocking_pending_blocks_len();
+        let active_pending = blocking_pending > self.config.pacemaker_active_pending_soft_limit;
+        let rbc_backlog_summary = self.rbc_backlog_summary();
+        let mut rbc_backlog = self.rbc_backlog_exceeds_pacemaker_soft_limits(rbc_backlog_summary);
         let queue_depths = status::worker_queue_depth_snapshot();
         let consensus_queue_backpressure = consensus_queue_backpressure(
             queue_depths,
@@ -1481,8 +1483,10 @@ impl Actor {
         now: Instant,
         state: BackpressureState,
     ) {
-        let active_pending = self.has_blocking_pending_blocks();
-        let rbc_backlog = self.has_unresolved_rbc_backlog();
+        let blocking_pending = self.blocking_pending_blocks_len();
+        let active_pending = blocking_pending > self.config.pacemaker_active_pending_soft_limit;
+        let rbc_backlog_summary = self.rbc_backlog_summary();
+        let rbc_backlog = self.rbc_backlog_exceeds_pacemaker_soft_limits(rbc_backlog_summary);
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
         super::status::inc_pacemaker_backpressure_deferrals();
         #[cfg(feature = "telemetry")]
@@ -1494,7 +1498,13 @@ impl Actor {
             tx_queue_depth = state.queued(),
             tx_queue_capacity = state.capacity().get(),
             active_pending,
+            blocking_pending,
+            pending_soft_limit = self.config.pacemaker_active_pending_soft_limit,
             rbc_backlog,
+            rbc_sessions = rbc_backlog_summary.sessions_pending,
+            rbc_missing_chunks = rbc_backlog_summary.missing_chunks_total,
+            rbc_session_soft_limit = self.config.pacemaker_rbc_backlog_session_soft_limit,
+            rbc_chunk_soft_limit = self.config.pacemaker_rbc_backlog_chunk_soft_limit,
             relay_backpressure,
             "Pacemaker deferred proposal assembly due to backpressure"
         );

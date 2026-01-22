@@ -85,7 +85,7 @@ For detailed field definitions see
 ## CLI & SDK Flag Reference
 
 `sorafs_cli fetch` (see `crates/sorafs_car/src/bin/sorafs_cli.rs`) and the
-`iroha_cli sorafs fetch` wrapper (`crates/iroha_cli/src/commands/sorafs.rs`)
+`iroha_cli app sorafs fetch` wrapper (`crates/iroha_cli/src/commands/sorafs.rs`)
 share the same orchestrator configuration surface. Use the following flags when
 capturing rollout evidence or replaying the canonical fixtures:
 

@@ -150,7 +150,7 @@ When a scenario breaches its budget:
    witness telemetry, VRF pipeline, DA retry cadence) for the metric-driven
    triage flow.
 2. Inspect `/v1/sumeragi/status` and `/v1/sumeragi/telemetry` using
-   `iroha_cli sumeragi status --summary` for hot-path validation.
+   `iroha_cli --output-format text ops sumeragi status` for hot-path validation.
 3. For DA-specific stalls, pair the logs with
    `docs/source/sumeragi_da.md` so operators can differentiate between RBC
    backlog and witness upload failures.

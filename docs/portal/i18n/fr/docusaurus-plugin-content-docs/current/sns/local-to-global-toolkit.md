@@ -13,7 +13,7 @@ Cette page reflete `docs/source/sns/local_to_global_toolkit.md` du mono-repo. El
 ## Apercu
 
 - `scripts/address_local_toolkit.sh` encapsule la CLI `iroha` pour produire:
-  - `audit.json` -- sortie structuree de `iroha address audit --format json`.
+  - `audit.json` -- sortie structuree de `iroha tools address audit --format json`.
   - `normalized.txt` -- literaux IH58 (prefere) / compressed (`snx1`) (second choix) convertis pour chaque selecteur de domaine Local.
 - Associez le script au dashboard d'ingest d'adresses (`dashboards/grafana/address_ingest.json`)
   et aux regles Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) pour prouver que le cutover Local-8 /
@@ -46,7 +46,7 @@ detections Local-8 et zero collisions Local-12 pendant >=30 jours.
 2. Bloquez les merges quand `audit.json` signale des selecteurs Local (`domain.kind = local12`).
    a sa valeur par defaut `true` (ne passer a `false` que sur les clusters dev/test lors du
    diagnostic de regressions) et ajoutez
-   `iroha address normalize --fail-on-warning --only-local` a CI pour que les regressions
+   `iroha tools address normalize --fail-on-warning --only-local` a CI pour que les regressions
    echouent avant la production.
 
 Voir le document source pour plus de details, des checklists d'evidence et le snippet de

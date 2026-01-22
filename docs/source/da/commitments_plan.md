@@ -155,7 +155,7 @@ policies.
 - `DaCommitmentProof` packages the target record plus a vector of `(sibling_hash,
   position)` entries so verifiers can reconstruct the root. Proofs also include
   the block hash and signed header so light clients can verify finality.
-- CLI helpers (`iroha_cli da prove-commitment`) wrap the proof request/verify
+- CLI helpers (`iroha_cli app da prove-commitment`) wrap the proof request/verify
   cycle and surface Norito/hex outputs for operators.
 
 ## 5. Storage & Indexing
@@ -199,7 +199,7 @@ allowing catch-up nodes to rebuild the index quickly from the block log.
 |-------|-------------|---------------|
 | P0 — Data model merge | Land `DaCommitmentRecord`, block header updates, and Norito codecs. | `cargo test -p iroha_data_model` green with new fixtures. |
 | P1 — Core/WSV wiring | Thread queue + block builder logic, persist indexes, and expose RPC handlers. | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` pass with bundle proof assertions. |
-| P2 — Operator tooling | Ship CLI helpers, Grafana dashboard, and proof verification doc updates. | `iroha_cli da prove-commitment` works against devnet; dashboard displays live data. |
+| P2 — Operator tooling | Ship CLI helpers, Grafana dashboard, and proof verification doc updates. | `iroha_cli app da prove-commitment` works against devnet; dashboard displays live data. |
 | P3 — Governance gate | Enable block validator requiring DA commitments on the lanes flagged in `iroha_config::nexus`. | Status entry + roadmap update mark DA-3 as 🈴. |
 
 ## Open Questions

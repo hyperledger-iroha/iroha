@@ -47,7 +47,7 @@ Torii، SDKs، اور والٹ/ایکسپلورر کلائنٹس پر `ERR_CHECK
 | لاگز | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` | PII ہٹانے کے بعد شیئر کریں۔ |
 | فکسچر ویری فیکیشن | `cargo xtask address-vectors --verify` | جنریٹر اور کمیٹیڈ JSON کی یکسانیت۔ |
 | SDK parity | `python3 scripts/account_fixture_helper.py check ...` | الرٹ میں مذکور ہر SDK کے لیے چلائیں۔ |
-| Clipboard/IME چیک | `iroha address inspect <literal>` | چھپے حروف یا IME تبدیلیوں کی شناخت۔ |
+| Clipboard/IME چیک | `iroha tools address inspect <literal>` | چھپے حروف یا IME تبدیلیوں کی شناخت۔ |
 
 ## فوری ردِعمل
 
@@ -67,7 +67,7 @@ Torii، SDKs، اور والٹ/ایکسپلورر کلائنٹس پر `ERR_CHECK
   چلائیں تاکہ بنڈل canonical JSON سے میچ کرے۔
 
 ### کلائنٹ انکوڈر / IME ریگریشن
-- `iroha address inspect` کے ذریعے زیرو وِد، kana یا truncate شدہ strings پکڑیں۔
+- `iroha tools address inspect` کے ذریعے زیرو وِد، kana یا truncate شدہ strings پکڑیں۔
 - `docs/source/sns/address_display_guidelines.md` کے مطابق UX بہاؤ دوبارہ چیک کریں۔
 
 ### Manifest یا رجسٹری مسائل
@@ -83,7 +83,7 @@ Torii، SDKs، اور والٹ/ایکسپلورر کلائنٹس پر `ERR_CHECK
 | منظر | اقدامات |
 |------|---------|
 | فکسچر ڈرفٹ | `fixtures/account/address_vectors.json` ری جنریٹ کریں، `cargo xtask address-vectors --verify` دوبارہ چلائیں، SDK بنڈلز اپ ڈیٹ کریں، اور `address_fixture.prom` ٹکٹ میں شامل کریں۔ |
-| SDK/کلائنٹ ریگریشن | canonical فکسچر اور `iroha address inspect` آؤٹ پٹ کے ساتھ ایشوز فائل کریں اور ریلیزز کو `ci/check_address_normalize.sh` جیسی parity CI کے پیچھے گیٹ کریں۔ |
+| SDK/کلائنٹ ریگریشن | canonical فکسچر اور `iroha tools address inspect` آؤٹ پٹ کے ساتھ ایشوز فائل کریں اور ریلیزز کو `ci/check_address_normalize.sh` جیسی parity CI کے پیچھے گیٹ کریں۔ |
 | بدنیتی سبمشنز | مسئلہ پیدا کرنے والے principals کو ریٹ لمٹ/بلاک کریں، اور selector tombstone کی ضرورت ہو تو گورننس کو escalate کریں۔ |
 
 اصلاحات کے بعد PromQL دوبارہ چلائیں تاکہ `ERR_CHECKSUM_MISMATCH`

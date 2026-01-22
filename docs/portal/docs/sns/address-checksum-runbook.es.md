@@ -35,7 +35,7 @@ Si el incidente es especificamente sobre colisiones Local-8/Local-12, sigue los 
 | Logs | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` (o agregacion de logs) | Limpia PII antes de compartir. |
 | Verificacion de fixture | `cargo xtask address-vectors --verify` | Confirma que el generador canonico y el JSON comprometido coinciden. |
 | Chequeo de paridad SDK | `python3 scripts/account_fixture_helper.py check --target <path> --metrics-out artifacts/account_fixture/<label>.prom --metrics-label <label>` | Ejecuta para cada SDK reportado en alertas/tickets. |
-| Sanidad de portapapeles/IME | `iroha address inspect <literal>` | Detecta caracteres ocultos o reescrituras IME; cita `address_display_guidelines.md`. |
+| Sanidad de portapapeles/IME | `iroha tools address inspect <literal>` | Detecta caracteres ocultos o reescrituras IME; cita `address_display_guidelines.md`. |
 
 ## Respuesta inmediata
 
@@ -54,7 +54,7 @@ Si el incidente es especificamente sobre colisiones Local-8/Local-12, sigue los 
 
 ### Regresiones de codificadores de cliente / IME
 
-- Inspecciona literales proporcionados por usuarios via `iroha address inspect` para encontrar joins de ancho cero, conversiones kana o payloads truncados.
+- Inspecciona literales proporcionados por usuarios via `iroha tools address inspect` para encontrar joins de ancho cero, conversiones kana o payloads truncados.
 - Cruza flujos de wallet/explorer con `docs/source/sns/address_display_guidelines.md` (objetivos de copia dual, advertencias, helpers QR) para asegurar que siguen la UX aprobada.
 
 ### Problemas de manifest o registro
@@ -71,7 +71,7 @@ Si el incidente es especificamente sobre colisiones Local-8/Local-12, sigue los 
 | Escenario | Acciones |
 |----------|----------|
 | Deriva de fixture | Regenera `fixtures/account/address_vectors.json`, vuelve a ejecutar `cargo xtask address-vectors --verify`, actualiza bundles de SDK, y adjunta snapshots de `address_fixture.prom` al ticket. |
-| Regresion de SDK/cliente | Abre issues referenciando el fixture canonico + salida de `iroha address inspect`, y bloquea releases con la CI de paridad SDK (por ejemplo `ci/check_address_normalize.sh`). |
+| Regresion de SDK/cliente | Abre issues referenciando el fixture canonico + salida de `iroha tools address inspect`, y bloquea releases con la CI de paridad SDK (por ejemplo `ci/check_address_normalize.sh`). |
 | Envios maliciosos | Aplica rate-limit o bloquea principals ofensores, escala a Governance si se requiere tombstone de selectores. |
 
 Una vez que aterricen las mitigaciones, vuelve a ejecutar la consulta PromQL anterior para confirmar que `ERR_CHECKSUM_MISMATCH` se mantiene en cero (excluyendo `/tests/*`) durante al menos 30 minutos antes de bajar el incidente.

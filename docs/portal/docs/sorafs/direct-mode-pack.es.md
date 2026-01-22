@@ -45,7 +45,7 @@ Usa JSON de Norito para persistir una configuración determinista del orquestado
 
 Carga el JSON mediante `sorafs_cli fetch --config` (automatización) o los bindings del SDK (`config_from_json`) antes de exponer la política a los operadores. Persiste la salida del scoreboard (`persist_path`) para las trazas de auditoría.
 
-Los knobs de enforcement del lado del gateway están recogidos en `docs/examples/sorafs_gateway_direct_mode.toml`. La plantilla refleja la salida de `iroha sorafs gateway direct-mode enable`, deshabilitando las comprobaciones de envelope/admission, cableando los valores por defecto de rate-limit y poblando la tabla `direct_mode` con hostnames derivados del plan y digests del manifest. Sustituye los valores de marcador de posición con tu plan de rollout antes de versionar el fragmento en la gestión de configuración.
+Los knobs de enforcement del lado del gateway están recogidos en `docs/examples/sorafs_gateway_direct_mode.toml`. La plantilla refleja la salida de `iroha app sorafs gateway direct-mode enable`, deshabilitando las comprobaciones de envelope/admission, cableando los valores por defecto de rate-limit y poblando la tabla `direct_mode` con hostnames derivados del plan y digests del manifest. Sustituye los valores de marcador de posición con tu plan de rollout antes de versionar el fragmento en la gestión de configuración.
 
 ## 3. Suite de pruebas de cumplimiento
 

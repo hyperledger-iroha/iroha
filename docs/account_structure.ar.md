@@ -506,7 +506,7 @@ Torii رفض حلّ النطاقات المتأثرة.
    `dashboards/grafana/address_ingest.json`) للتأكد من عدم قبول سلاسل
    Local‑8 في بيئات الإنتاج قبل اقتراح سجل tombstone.
 2. **اشتقاق digests الكانونية.** شغّل  
-   `iroha address convert <address-or-account_id> --format json --expect-prefix 753`
+   `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
    (أو استهلك
    `fixtures/account/address_vectors.json` عبر
    `scripts/account_fixture_helper.py`) لالتقاط قيمة `digest_hex` بدقة.

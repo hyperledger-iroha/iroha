@@ -28,7 +28,7 @@ governance council can replay the bytes referenced in the proposal.
 ## 2. Instruction Payloads
 
 Record the staged Norito instructions that desks signed off on via
-`iroha repo ... --output`. Each entry should include the hash of the emitted
+`iroha app repo ... --output`. Each entry should include the hash of the emitted
 file and a short description of the action that will be submitted once the vote
 passes.
 

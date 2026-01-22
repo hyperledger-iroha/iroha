@@ -12,14 +12,14 @@ summary: Quick validation workflow for chunk-range endpoints and orchestrator in
 
 ## Workflow Outline
 
-1. Generate a stream token via the built-in CLI (`iroha sorafs storage token issue`) and export the manifest chunk plan by running `iroha sorafs toolkit pack ./payload.bin --manifest-out manifest.to --json-out manifest_report.json` (the report includes `chunk_fetch_specs`).
-2. Run `iroha sorafs fetch --manifest manifest.to --plan manifest_report.json --manifest-id <manifest_digest_hex> --gateway-provider "name=primary,provider-id=<hex32>,base-url=https://gateway.example,stream-token=<base64>" --max-peers 4 --retry-budget 3`.
+1. Generate a stream token via the built-in CLI (`iroha app sorafs storage token issue`) and export the manifest chunk plan by running `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --json-out manifest_report.json` (the report includes `chunk_fetch_specs`).
+2. Run `iroha app sorafs fetch --manifest manifest.to --plan manifest_report.json --manifest-id <manifest_digest_hex> --gateway-provider "name=primary,provider-id=<hex32>,base-url=https://gateway.example,stream-token=<base64>" --max-peers 4 --retry-budget 3`.
 3. CLI verifies chunks + proofs, records summary metrics and (optionally) writes the assembled payload (`--output`) / JSON report (`--json-out`).
 4. Compare results with expected digest/metrics thresholds.
 
 ### Issuing stream tokens
 
-Use the manifest report from `iroha sorafs toolkit pack` and the provider id from the
+Use the manifest report from `iroha app sorafs toolkit pack` and the provider id from the
 gateway registry/admission record to mint a scoped token for the gateway under test.
 The CLI wraps Torii’s `/v1/sorafs/storage/token` endpoint and takes care of the
 `X-SoraFS-Client`/`X-SoraFS-Nonce` headers for you:
@@ -29,7 +29,7 @@ MANIFEST_REPORT_JSON="manifest_report.json"
 MANIFEST_ID_HEX="$(jq -r '.manifest_digest_hex' "${MANIFEST_REPORT_JSON}")"
 PROVIDER_ID_HEX="<provider-id-hex>"
 
-iroha sorafs storage token issue \
+iroha app sorafs storage token issue \
   --manifest-id "${MANIFEST_ID_HEX}" \
   --provider-id "${PROVIDER_ID_HEX}" \
   --client-id smoke-ci \
@@ -66,7 +66,7 @@ nonce: 4c1f8e9d97c84d61b9d3c8c5
 ```
 
 Use either `token.encoded` or `token_base64` as the `stream-token=<base64>` component in
-`--gateway-provider` when invoking `iroha sorafs fetch`. The provider hex identifier in
+`--gateway-provider` when invoking `iroha app sorafs fetch`. The provider hex identifier in
 that flag must match the `provider_id_hex` you passed to the token issuer or the gateway
 will reject the request.
 

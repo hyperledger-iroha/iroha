@@ -221,12 +221,12 @@ ISI זה idempotent לכל `(lane_id, epoch)` ומהווה בסיס לחשבונ
   `nexus.staking.max_slash_bps`, `nexus.staking.reward_dust_threshold`, וה‑mode switches לעיל. העבירו
   אותם דרך `iroha_config::parameters::actual::Nexus` וחשפו ב‑`status.md` לאחר אישור ערכי GA.
 - **Torii/CLI quickstart:**
-  - `iroha nexus lane-report --summary` מציג רשומות קטלוג lanes, readiness של manifests, ומצבי מאמתים
+  - `iroha app nexus lane-report --summary` מציג רשומות קטלוג lanes, readiness של manifests, ומצבי מאמתים
     (stake-elected לעומת admin-managed) כדי לאשר אם staking admission פעיל עבור lane.
-  - `iroha_cli nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
+  - `iroha_cli app nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
     מציג סמני lifecycle/activation (pending target epoch, `activation_epoch` / `activation_height`,
     exit release, slash id) לצד stake bonded/self.
-    `iroha_cli nexus public-lane stake --lane <id> [--validator account@domain] [--summary]` משקף את
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator account@domain] [--summary]` משקף את
     endpoint `/stake` עם רמזי pending-unbond לכל זוג `(validator, staker)`.
   - Torii snapshots ל‑dashboards ו‑SDKs:
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status

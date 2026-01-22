@@ -33,7 +33,7 @@ fn build_signed_query_find_active_abi(authority: AccountId, kp: &KeyPair) -> Vec
 
 Submitting
 - Raw HTTP: `POST /query` with the encoded bytes as the request body.
-- CLI: base64‑encode the bytes and pipe to `iroha query stdin-raw`.
+- CLI: base64‑encode the bytes and pipe to `iroha ledger query stdin-raw`.
 
 Output
 - On success, the node returns a Norito `QueryResponse::Singular(ActiveAbiVersions)`.

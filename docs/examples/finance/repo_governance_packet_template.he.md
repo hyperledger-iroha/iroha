@@ -35,7 +35,7 @@ translation_last_reviewed: 2026-01-01
 ## 2. Payloads להוראות
 
 תעדו את הוראות Norito ה-staged שעליהן ה-desk אישר via
-`iroha repo ... --output`. כל רשומה צריכה לכלול את hash הקובץ שהופק
+`iroha app repo ... --output`. כל רשומה צריכה לכלול את hash הקובץ שהופק
 ותיאור קצר של הפעולה שתוגש לאחר שההצבעה תאושר.
 
 | פעולה | קובץ | SHA-256 | הערות |

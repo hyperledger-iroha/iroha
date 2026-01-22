@@ -18,7 +18,7 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 - 宛先アカウント（例: `alice@wonderland`）が存在することを確認し、各 SDK クイックスタートのセットアップ段階を反映します。
 - `register_and_mint` エントリポイントを呼び出して ROSE 資産定義を作成し、1 トランザクションで Alice に 250 単位をミントします。
-- `client.request(FindAccountAssets)` または `iroha_cli assets list --account alice@wonderland` で残高を確認し、ミントが成功したことを確かめます。
+- `client.request(FindAccountAssets)` または `iroha_cli ledger assets list --account alice@wonderland` で残高を確認し、ミントが成功したことを確かめます。
 
 ## 関連 SDK ガイド
 

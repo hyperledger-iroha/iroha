@@ -204,7 +204,7 @@ check-sns-annex:
 # Regenerate CLI Markdown help from the live binaries
 docs-cli:
 	@echo "Regenerating iroha CLI Markdown help..."
-	@cargo run -p iroha_cli -- markdown-help > crates/iroha_cli/CommandLineHelp.md
+	@cargo run -p iroha_cli -- tools markdown-help > crates/iroha_cli/CommandLineHelp.md
 	@echo "Done: crates/iroha_cli/CommandLineHelp.md"
 
 docs-kagami-cli:

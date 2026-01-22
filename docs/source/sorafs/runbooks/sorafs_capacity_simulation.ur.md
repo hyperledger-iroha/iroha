@@ -13,7 +13,7 @@ translation_last_reviewed: 2025-12-28
 
 # SoraFS کپیسٹی سمیولیشن رَن بُک
 
-یہ رن بُک وضاحت کرتی ہے کہ SF-2c کپیسٹی مارکیٹ پلیس سمیولیشن ٹول کِٹ کیسے چلائیں اور حاصل شدہ میٹرکس کیسے دیکھیں۔ مقصد یہ ہے کہ `docs/examples/sorafs_capacity_simulation/` کے reproducible fixtures کے ذریعے quota مذاکرات، failover ہینڈلنگ اور slashing remediation کو end‑to‑end ویلیڈیٹ کیا جائے۔ کپیسٹی payloads اب بھی `sorafs_manifest_stub capacity` استعمال کرتے ہیں؛ manifest/CAR پیکجنگ کے لیے `iroha sorafs toolkit pack` استعمال کریں۔
+یہ رن بُک وضاحت کرتی ہے کہ SF-2c کپیسٹی مارکیٹ پلیس سمیولیشن ٹول کِٹ کیسے چلائیں اور حاصل شدہ میٹرکس کیسے دیکھیں۔ مقصد یہ ہے کہ `docs/examples/sorafs_capacity_simulation/` کے reproducible fixtures کے ذریعے quota مذاکرات، failover ہینڈلنگ اور slashing remediation کو end‑to‑end ویلیڈیٹ کیا جائے۔ کپیسٹی payloads اب بھی `sorafs_manifest_stub capacity` استعمال کرتے ہیں؛ manifest/CAR پیکجنگ کے لیے `iroha app sorafs toolkit pack` استعمال کریں۔
 
 ## 1. CLI آرٹی فیکٹس تیار کریں
 

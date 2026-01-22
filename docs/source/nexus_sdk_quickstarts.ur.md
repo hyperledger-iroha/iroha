@@ -181,7 +181,7 @@ runBlocking {
 ## CLI (`iroha_cli`)
 
 ```bash
-iroha_cli nexus quickstart \
+iroha_cli app nexus quickstart \
   --torii-url "${NEXUS_TORII_URL}" \
   --pipeline-url "${NEXUS_PIPELINE_URL}" \
   --chain-id "${NEXUS_CHAIN_ID}" \
@@ -200,7 +200,7 @@ iroha_cli nexus quickstart \
 | JS/TS | `npm run test:nexus` | Jest ٹیسٹ جو Torii اور pipeline URLs کے کام کرنے کی تصدیق کرتا ہے۔ |
 | Swift | `swift test --filter NexusQuickstartTests` | iOS سمیولیٹر اسٹیٹس حاصل کرتا ہے۔ |
 | Android | `./gradlew :iroha-android:nexusQuickstartTest` | مینیجڈ ڈیوائس staging تک رسائی حاصل کرتا ہے۔ |
-| CLI | `iroha_cli nexus quickstart --dry-run` | نیٹ ورک کالز سے پہلے config ویلیڈیٹ کرتا ہے۔ |
+| CLI | `iroha_cli app nexus quickstart --dry-run` | نیٹ ورک کالز سے پہلے config ویلیڈیٹ کرتا ہے۔ |
 
 ## ٹربل شوٹنگ
 

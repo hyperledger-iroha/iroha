@@ -81,7 +81,7 @@ O script produz tres artefatos dentro de `--output-dir` (padrao o diretorio atua
    mais os passos de rollout e o comando exato `cargo xtask space-directory encode`
    (em `space_directory_encode.command`). Anexe este JSON ao ticket de onboarding como evidencia.
 4. `<slug>.manifest.to` - emitido quando `--encode-space-directory` esta ativo; pronto para o fluxo
-   `iroha space-directory manifest publish` do Torii.
+   `iroha app space-directory manifest publish` do Torii.
 
 Use `--dry-run` para previsualizar os JSON/snippets sem escrever arquivos, e `--force` para
 sobrescrever artefatos existentes.
@@ -97,7 +97,7 @@ sobrescrever artefatos existentes.
 3. Codifique (se voce pulou `--encode-space-directory`) e publique o manifest no Space Directory
    usando o comando capturado no summary (`space_directory_encode.command`). Isso produz o payload
    `.manifest.to` esperado pelo Torii e registra evidencia para auditores; envie via
-   `iroha space-directory manifest publish`.
+   `iroha app space-directory manifest publish`.
 4. Execute `irohad --sora --config path/to/config.toml --trace-config` e arquive a saida de trace no
    ticket de rollout. Isso prova que a nova geometria corresponde ao slug/segmentos gerados.
 5. Reinicie os validadores atribuidores a lane quando as mudancas de manifest/catalogo forem

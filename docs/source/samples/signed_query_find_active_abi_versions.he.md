@@ -45,7 +45,7 @@ fn build_signed_query_find_active_abi(authority: AccountId, kp: &KeyPair) -> Vec
 
 שליחה
 - HTTP גולמי: בצעו `POST /query` עם הבייטים המקודדים כגוף הבקשה.
-- CLI: המירו את הבייטים ל־base64 והזינו אל `iroha query stdin-raw`.
+- CLI: המירו את הבייטים ל־base64 והזינו אל `iroha ledger query stdin-raw`.
 
 פלט
 - הצלחה מחזירה מהצומת תגובת Norito מסוג `QueryResponse::Singular(ActiveAbiVersions)`.
