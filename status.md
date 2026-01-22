@@ -3,7 +3,7 @@
 Last update: 2026-01-22
 
 - CLI: normalized JSON/text output and flag behavior across `iroha_cli` commands (da/alias/sns/kaigi/sorafs/taikai/streaming/soracles), added structured summaries, and renamed handshake token encoding flag to `--token-encoding`.
-- Tests: not run (CLI output normalization only).
+- Tests: `cargo test -p iroha_cli` (failed: cli_output assertions, SNS catalog account literals, soracles oracle-id parsing, sorafs denylist/account-resolution tests, multisig/offline/subscriptions CLI tests, and incentives tests requiring Torii account resolution).
 - Sumeragi worker-loop scheduling: rotate to the oldest pending tier after a vote burst to keep RBC/payload draining; added `select_next_tier_picks_oldest_pending_after_vote_burst` coverage and reordered a borrow in `proposal_backpressure_blocks_commit_qc_pending_after_reschedule`.
 - Tests: `cargo test -p iroha_core select_next_tier_picks_oldest_pending_after_vote_burst -- --nocapture` (ok).
 - Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
