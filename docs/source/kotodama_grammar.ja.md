@@ -199,7 +199,7 @@ register_trigger wake {
 - `norito_bytes(bytes|string) -> NoritoBytes*`
 
 プレリュードにはこれらを呼び出すマクロも含まれます。
-- `account!("alice@wonderland")` / `account_id!("alice@wonderland")`
+- `account!("ih58...")` / `account_id!("ih58...")`
 - `asset_definition!("rose#wonderland")` / `asset_id!("rose#wonderland")`
 - `domain!("wonderland")` / `domain_id!("wonderland")`
 - `name!("example")`

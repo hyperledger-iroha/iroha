@@ -28,8 +28,8 @@ iroha --config defaults/client.toml asset definition register --id coffee#wonder
 ```bash
 # raw 32-byte Ed25519 private key in hex (without multicodec prefix)
 export ADMIN_PRIVATE_KEY_RAW="4f94...<64 hex chars>..."
-export ADMIN_ACCOUNT="ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-export RECEIVER_ACCOUNT="ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016@wonderland"
+export ADMIN_ACCOUNT="ih58..."
+export RECEIVER_ACCOUNT="ih58..."
 ```
 
 > Use `iroha_cli tools crypto private-key export --raw --private-key <multihash>` if you
@@ -159,11 +159,6 @@ public final class LedgerFlow {
     }
     final String defName = assetDefinition.substring(0, idx);
     final String defDomain = assetDefinition.substring(idx + 1);
-    final String[] accountParts = accountId.split("@", 2);
-    final String accountDomain = accountParts.length == 2 ? accountParts[1] : "";
-    if (defDomain.equals(accountDomain)) {
-      return defName + "##" + accountId;
-    }
     return defName + "#" + defDomain + "#" + accountId;
   }
 }

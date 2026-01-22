@@ -68,9 +68,10 @@ without re-parsing the canonical payload.
   explorers and wallet dashboards can surface the Sora-only notice during paste/
   validation flows instead of only when they generate the compressed form
   themselves.
-The JavaScript parser also accepts canonical hex literals without the `0x`
-sentinel so explorers that cached bare hex strings during the Local→Global
-transition still round-trip cleanly through Torii and SDK validators.
+The JavaScript parser accepts the same canonical formats as Torii (IH58,
+compressed `snx1`, and canonical `0x…` hex). Bare hex without the `0x` sentinel
+is rejected by Torii, so SDKs must preserve the prefix when emitting hex
+literals.
 
 ## Alphabet reference
 
@@ -111,12 +112,11 @@ asset-holder endpoints, etc.) and JSON envelopes
 `/v1/assets/{definition}/holders/query`). When set to `compressed`, the response
 body renders every account literal (initiator/counterparty/custodian,
 transaction participants, account summaries, telemetry DTOs) using the
-`snx1…@domain` representation while preserving IH58 canonicalisation for the
+`snx1…` representation while preserving IH58 canonicalisation for the
 underlying identifiers. Unknown values (for example `address_format=base64`)
 return `HTTP 400` so misconfigured SDKs fail fast.
 
-Requests always accept IH58 (preferred) and compressed (`snx1`, second-best) selectors, and production clusters
-rejected unless the operator explicitly toggles dev-only overrides. Canonical
+Requests always accept IH58 (preferred) and compressed (`snx1`, second-best) selectors. Canonical
 IH58 strings remain the wire format for manifests, telemetry, and QR payloads,
 so only opt into `address_format=compressed` when rendering UX where the Sora
 alphabet offers material ergonomic wins.
@@ -130,9 +130,9 @@ POST filters happily accept IH58 (preferred) and compressed (`snx1`, second-best
 arrays) without forcing operators to hand-normalize values ahead of time.
 When the selector targets the implicit default domain, clients may omit
 `@<domain>` entirely; Torii canonicalizes those preferred IH58 / second-best compressed (`snx1`) inputs to
-`IH58@<default-domain>` and emits the canonical string in responses + telemetry.
+canonical IH58 (no `@domain`) and emits the canonical string in responses + telemetry.
 Domainless literals for non-default domains still fail with
-`ERR_DEFAULT_DOMAIN_IMPLICIT_ONLY` so dashboards can detect misconfigurations.
+`ERR_DOMAIN_SELECTOR_UNRESOLVED` so dashboards can detect misconfigurations.
 
 ## Accessibility + implicit domain metadata
 
@@ -223,7 +223,7 @@ cross‑check Local vs global selectors without spelunking the RFC every time.
   Invalid values return HTTP 400 so dashboards can catch misconfigurations early.
 - The per-account convenience endpoint `GET /v1/accounts/{account_id}/transactions` also accepts
   `address_format` in the query string. Passing `address_format=compressed` rewrites the
-  `items[*].authority` field to `snx1…@domain` literals, while omitting the parameter (or setting
+  `items[*].authority` field to `snx1…` literals, while omitting the parameter (or setting
   `ih58`) keeps the canonical IH58 output.
 - Explorers can now request share-ready QR payloads directly from Torii via
   `GET /v1/explorer/accounts/{account_id}/qr`. The response includes the canonical IH58 identifier,
@@ -259,7 +259,7 @@ through the migration:
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("snx1...@wonderland");
+   const summary = inspectAccountId("snx1...");
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }

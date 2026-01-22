@@ -1,18 +1,24 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/source/sdk/index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b8bee7c0ad901e15e00d1715b1426aeb51529b492c9decf65fbb7cd8f0a27bfe
-source_last_modified: "2025-11-09T07:09:17.759304+00:00"
-translation_last_reviewed: null
+source_hash: 06b8d1fdc0ce9de560a6cf3bc9fa52d8d3d120f9046ac16e711f9b3897366309
+source_last_modified: "2025-11-14T04:03:47.773484+00:00"
+translation_last_reviewed: 2026-01-21
 ---
 
-# 翻訳作業中
+<!-- 日本語訳: docs/source/sdk/index.md -->
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+# SDK ガイド
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+```{toctree}
+:caption: SDK プラットフォーム
+:maxdepth: 1
+
+android/index
+js/index
+python/index
+swift/index
+```

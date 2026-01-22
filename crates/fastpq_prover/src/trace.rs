@@ -2349,9 +2349,7 @@ mod tests {
                 continue;
             }
             let row_key = transfer::TransferRowKey::from_transition(transition);
-            let proof = proof_index
-                .get(&row_key)
-                .expect("transfer proof for row");
+            let proof = proof_index.get(&row_key).expect("transfer proof for row");
             let path_bit = trace
                 .columns
                 .iter()

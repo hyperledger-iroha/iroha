@@ -30,9 +30,9 @@ Reserve+Rent ポリシー (ロードマップ項目 **SFM-6**) では、`sorafs 
 
    sorafs reserve ledger \
      --quote artifacts/sorafs_reserve/quotes/provider-alpha-apr.json \
-     --provider-account provider@dakini \
-     --treasury-account treasury@sora \
-     --reserve-account sorafs-reserve@sora \
+     --provider-account ih58... \
+     --treasury-account ih58... \
+     --reserve-account ih58... \
      --asset-definition xor#sora \
      --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```

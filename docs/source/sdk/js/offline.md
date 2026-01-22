@@ -26,7 +26,7 @@ import {
 
 const { signedTransaction } = buildTransaction({
   chainId: "offline-demo",
-  authority: "alice@wonderland",
+  authority: "ih58...",
   instructions: [
     buildMintAssetInstruction({
       assetId: "rose#wonderland#alice",

@@ -107,8 +107,8 @@ Reward distributions use `PublicLaneRewardRecord` and `PublicLaneRewardShare`:
   "asset": "xor#wonderland",
   "total_reward": "250.0000",
   "shares": [
-    { "account": "validator@lane", "role": "Validator", "amount": "150" },
-    { "account": "delegator@lane", "role": "Nominator", "amount": "100" }
+    { "account": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS", "role": "Validator", "amount": "150" },
+    { "account": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", "role": "Nominator", "amount": "100" }
   ],
   "metadata": {
     "telemetry_epoch_root": "0x4afe…",
@@ -141,8 +141,8 @@ Registers a validator and bonds an initial stake:
 ```norito
 {
   "lane_id": 1,
-  "validator": "validator@lane",
-  "stake_account": "validator@lane",
+  "validator": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS",
+  "stake_account": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS",
   "initial_stake": "150000",
   "metadata": {
     "commission_bps": 750,
@@ -245,7 +245,7 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
   - `iroha_cli app nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
     surfaces lifecycle/activation markers (pending target epoch, `activation_epoch` /
     `activation_height`, exit release, slash id) alongside bonded/self stake.
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator account@domain] [--summary]`
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator ih58...] [--summary]`
     mirrors the `/stake` endpoint with pending-unbond hints per `(validator, staker)` pair.
   - Torii snapshots for dashboards and SDKs:
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
@@ -255,7 +255,7 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
       (IH58 preferred; compressed (`snx1`) is second-best Sora-only).
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
       `staker`, bonded amount) plus pending unbond timers. Optional
-      `?validator=account@domain` filters the response for dashboards that focus
+      `?validator=ih58...` filters the response for dashboards that focus
       on a single validator; `address_format` applies to all literals.
   - Lifecycle ISIs use the standard transaction path (Torii
     `/v1/transactions` or the CLI instruction pipeline). Example Norito JSON
@@ -263,11 +263,11 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
 
     ```jsonc
     [
-      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "validator@nexus" } },
+      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "ih58..." } },
       {
         "ExitPublicLaneValidator": {
           "lane_id": 1,
-          "validator": "validator@nexus",
+          "validator": "ih58...",
           "release_at_ms": 1730000000000
         }
       }

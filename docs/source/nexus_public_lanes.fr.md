@@ -109,8 +109,8 @@ Les distributions de recompenses utilisent `PublicLaneRewardRecord` et `PublicLa
   "asset": "xor#wonderland",
   "total_reward": "250.0000",
   "shares": [
-    { "account": "validator@lane", "role": "Validator", "amount": "150" },
-    { "account": "delegator@lane", "role": "Nominator", "amount": "100" }
+    { "account": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS", "role": "Validator", "amount": "150" },
+    { "account": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", "role": "Nominator", "amount": "100" }
   ],
   "metadata": {
     "telemetry_epoch_root": "0x4afe...",
@@ -143,8 +143,8 @@ Enregistre un validateur et bond un stake initial :
 ```norito
 {
   "lane_id": 1,
-  "validator": "validator@lane",
-  "stake_account": "validator@lane",
+  "validator": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS",
+  "stake_account": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS",
   "initial_stake": "150000",
   "metadata": {
     "commission_bps": 750,
@@ -233,7 +233,7 @@ Cet ISI est idempotent par `(lane_id, epoch)` et sous-tend la comptabilite noctu
   - `iroha_cli app nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
     expose les marqueurs de cycle de vie/activation (epoch cible pending, `activation_epoch` /
     `activation_height`, release de sortie, slash id) avec le stake bonded/self.
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator account@domain] [--summary]`
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator ih58...] [--summary]`
     reflete le endpoint `/stake` avec des hints pending-unbond par paire `(validator, staker)`.
   - Snapshots Torii pour dashboards et SDKs :
     - `GET /v1/nexus/public_lanes/{lane}/validators` - metadata, statut
@@ -241,7 +241,7 @@ Cet ISI est idempotent par `(lane_id, epoch)` et sous-tend la comptabilite noctu
       timers de release, stake bonded, dernier epoch de reward.
       `address_format=ih58|compressed` controle le rendu des litteraux.
     - `GET /v1/nexus/public_lanes/{lane}/stake` - shares de stake (`validator`,
-      `staker`, montant bonded) plus timers pending unbond. `?validator=account@domain`
+      `staker`, montant bonded) plus timers pending unbond. `?validator=ih58...`
       filtre la reponse pour les dashboards focalises sur un validateur ; `address_format`
       s'applique a tous les litteraux.
   - Les ISIs de cycle de vie utilisent le chemin transaction standard (Torii
@@ -249,11 +249,11 @@ Cet ISI est idempotent par `(lane_id, epoch)` et sous-tend la comptabilite noctu
 
     ```jsonc
     [
-      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "validator@nexus" } },
+      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS" } },
       {
         "ExitPublicLaneValidator": {
           "lane_id": 1,
-          "validator": "validator@nexus",
+          "validator": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS",
           "release_at_ms": 1730000000000
         }
       }

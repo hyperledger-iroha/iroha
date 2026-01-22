@@ -57,7 +57,7 @@ referenciado em sec 2.8 de `docs/source/finance/repo_ops.md`.
 
 | Custodian | Arquivo | SHA-256 | Notas |
 |-----------|------|---------|-------|
-| `<custodian@domain>` | `custodian_ack_<custodian>.md` | `<sha256>` | SLA assinado cobrindo janela de custody, conta de roteamento e contato de drill. |
+| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | SLA assinado cobrindo janela de custody, conta de roteamento e contato de drill. |
 
 > Armazene o acknowledgement ao lado das outras evidencias (`artifacts/finance/repo/<slug>/`)
 > para que `scripts/repo_evidence_manifest.py` registre o arquivo na mesma arvore que

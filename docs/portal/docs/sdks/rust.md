@@ -138,7 +138,7 @@ use iroha::client::{
 fn download_qr() -> eyre::Result<()> {
     let client = Client::new(ClientConfiguration::test())?;
     let snapshot = client.get_explorer_account_qr(
-        "alice@wonderland",
+        "ih58...",
         Some(ExplorerAccountQrOptions {
             address_format: Some(AddressFormat::Compressed),
         }),

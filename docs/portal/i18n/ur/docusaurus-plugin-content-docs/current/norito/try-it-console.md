@@ -75,7 +75,7 @@ TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 4. "Try it" ڈراور میں `application/x-norito` کنٹینٹ ٹائپ منتخب کریں، **Choose File** پر کلک کریں، اور اپنا پے لوڈ منتخب کریں۔ پراکسی درخواست کو `/proxy/v1/pipeline/submit` پر ری رائٹ کرتا ہے اور اسے `X-TryIt-Client=docs-portal-rapidoc` کے ساتھ ٹیگ کرتا ہے۔
 5. Norito ریسپانسز ڈاؤن لوڈ کرنے کے لئے `Accept: application/x-norito` سیٹ کریں۔ Swagger/RapiDoc اسی ڈراور میں ہیڈر سلیکٹر دکھاتے ہیں اور بائنری کو پراکسی کے ذریعے واپس اسٹریم کرتے ہیں۔
 
-صرف JSON روٹس کے لئے ایمبیڈڈ Try it sandbox عموما تیز ہوتا ہے: پاتھ درج کریں (مثلا `/v1/accounts/ih58@wonderland/assets`)، HTTP طریقہ منتخب کریں، ضرورت ہو تو JSON باڈی پیسٹ کریں، اور **Send request** پر کلک کریں تاکہ ہیڈرز، دورانیہ اور پے لوڈز فوری طور پر دیکھ سکیں۔
+صرف JSON روٹس کے لئے ایمبیڈڈ Try it sandbox عموما تیز ہوتا ہے: پاتھ درج کریں (مثلا `/v1/accounts/ih58.../assets`)، HTTP طریقہ منتخب کریں، ضرورت ہو تو JSON باڈی پیسٹ کریں، اور **Send request** پر کلک کریں تاکہ ہیڈرز، دورانیہ اور پے لوڈز فوری طور پر دیکھ سکیں۔
 
 ## خرابیوں کا ازالہ
 

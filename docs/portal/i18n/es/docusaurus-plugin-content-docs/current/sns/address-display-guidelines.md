@@ -187,7 +187,7 @@ cadenas comprimidas deben seguir el flujo CLI documentado en ADDR-5:
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("snx1...@wonderland");
+   const summary = inspectAccountId("snx1...");
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }

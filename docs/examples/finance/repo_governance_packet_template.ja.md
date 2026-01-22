@@ -50,7 +50,7 @@ repo が `--custodian` を使う場合は必ずこのセクションを記入し
 
 | Custodian | File | SHA-256 | Notes |
 |-----------|------|---------|-------|
-| `<custodian@domain>` | `custodian_ack_<custodian>.md` | `<sha256>` | custody window、routing account、drill contact を含む署名済み SLA。 |
+| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | custody window、routing account、drill contact を含む署名済み SLA。 |
 
 > acknowledgement は他の evidence (`artifacts/finance/repo/<slug>/`) と同じ場所に保存し、
 > `scripts/repo_evidence_manifest.py` が staged instructions と config snippets と同じツリーに記録できるようにしてください。詳細は

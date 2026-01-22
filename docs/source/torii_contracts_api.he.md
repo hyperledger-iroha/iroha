@@ -81,7 +81,7 @@ translator: manual
 
 ```jsonc
 {
-  "authority": "alice@wonderland",
+  "authority": "ih58...",
   "private_key": "ed25519:...",
   "manifest": {
     "code_hash": "0123…cdef",
@@ -101,7 +101,7 @@ translator: manual
 
 ```jsonc
 {
-  "authority":   "alice@wonderland", // מזהה חשבון (מחרוזת)
+  "authority":   "ih58...", // מזהה חשבון (מחרוזת)
   "private_key": "ed25519:0123…",    // ExposedPrivateKey (hex רגיל או עם קידומת אלגוריתם)
   "code_b64":    "Base64Payload=="
 }
@@ -124,7 +124,7 @@ translator: manual
 ### קידודי JSON
 
 - `Hash` → Hex באורך 64 תווים (32 בתים, אותיות קטנות).
-- `AccountId` → מחרוזת בפורמט `<name>@<domain>`.
+- `AccountId`: canonical IH58 literal (no `@domain` suffix; optional `@<domain>` hint).
 - `ExposedPrivateKey` מקבל גם hex רגיל וגם גרסה עם קידומת אלגוריתם (למשל `ed25519:…`). תשובות חוזרות כ-hex רגיל.
 
 ### תשובת GET
@@ -139,7 +139,7 @@ translator: manual
 
 ```jsonc
 {
-  "authority": "alice@wonderland",
+  "authority": "ih58...",
   "private_key": "ed25519:…",
   "namespace": "apps",
   "contract_id": "calc.v1",
@@ -148,7 +148,7 @@ translator: manual
     "compiler_fingerprint": "rustc-1.79 llvm-16",
     "features_bitmap": 0,
     "access_set_hints": {
-      "read_keys": ["account:alice@wonderland"],
+      "read_keys": ["account:ih58..."],
       "write_keys": ["asset:usd#wonderland"]
     }
   }
@@ -177,7 +177,7 @@ translator: manual
 
 ```jsonc
 {
-  "authority":   "alice@wonderland",
+  "authority":   "ih58...",
   "private_key": "ed25519:0123…",
   "namespace":   "apps",
   "contract_id": "calc.v1",
@@ -228,7 +228,7 @@ curl -s http://127.0.0.1:8080/v1/contracts/code/<hash>
 curl -s -X POST \
   -H 'Content-Type: application/json' \
   -d '{
-        "authority": "alice@wonderland",
+        "authority": "ih58...",
         "private_key": "ed25519:…",
         "namespace": "apps",
         "contract_id": "calc.v1",
@@ -243,7 +243,7 @@ curl -s -X POST \
 curl -s -X POST \
   -H 'Content-Type: application/json' \
   -d '{
-        "authority": "alice@wonderland",
+        "authority": "ih58...",
         "private_key": "ed25519:…",
         "namespace": "apps",
         "contract_id": "calc.v1",

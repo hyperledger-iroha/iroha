@@ -99,7 +99,7 @@ use iroha_client::client::{
 
 fn share_wallet_qr(client: &Client) -> eyre::Result<()> {
     let snapshot = client.get_explorer_account_qr(
-        "alice@wonderland",
+        "ih58...",
         Some(ExplorerAccountQrOptions {
             address_format: Some(AddressFormat::Compressed),
         }),

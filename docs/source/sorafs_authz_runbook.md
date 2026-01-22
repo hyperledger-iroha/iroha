@@ -43,8 +43,8 @@ burst = 10
 [governance.sorafs_telemetry]
 require_submitter = true
 require_nonce = true
-submitters = ["ed0120...@sora"]
-per_provider_submitters = { "deadbeef..." = ["ed0120...@sora"] }
+submitters = ["ih58..."]
+per_provider_submitters = { "deadbeef..." = ["ih58..."] }
 ```
 
 ## CLI/REST quick reference

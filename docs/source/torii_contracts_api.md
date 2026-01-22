@@ -90,7 +90,7 @@ Represents a request to register a contract manifest by wrapping the instruction
 
 ```jsonc
 {
-  "authority": "alice@wonderland",           // AccountId (string form)
+  "authority": "ih58...",           // AccountId (string form)
   "private_key": "ed25519:...",              // ExposedPrivateKey (bare or prefixed multihash hex)
   "manifest": {
     "code_hash": "0123…cdef",                // 32-byte hex (optional in model, recommended here)
@@ -111,7 +111,7 @@ Upload compiled bytecode and let Torii derive the manifest and hashes.
 
 ```jsonc
 {
-  "authority":   "alice@wonderland", // AccountId (string form)
+  "authority":   "ih58...", // AccountId (string form)
   "private_key": "ed25519:0123…",    // ExposedPrivateKey (bare or prefixed multihash hex)
   "code_b64":    "Base64Payload=="
 }
@@ -135,7 +135,10 @@ Notes:
 ### Type encodings (JSON)
 
 - `Hash` values (e.g., `code_hash`, `abi_hash`) are encoded as 64‑char lowercase hex strings (32 bytes).
-- `AccountId` strings follow the canonical `<name>@<domain>` form.
+- `AccountId` strings use canonical IH58 literals (no `@domain` suffix).
+  Optional `@<domain>` suffixes are accepted as routing hints, and aliases
+  (`<label>@<domain>`) / `<public_key>@<domain>` are accepted via the resolver
+  (`/v1/accounts/resolve`).
 - `ExposedPrivateKey` accepts either a bare multihash hex string or its algorithm-prefixed variant (e.g., `ed25519:…`). Responses normalise to bare multihash hex. Multihash hex is canonical: varint bytes are lowercase, payload bytes are uppercase, and `0x` prefixes are rejected.
 
 ### GET response: ContractCodeRecordDto
@@ -157,7 +160,7 @@ Represents a request to deploy bytecode and immediately bind `(namespace, contra
 
 ```jsonc
 {
-  "authority":   "alice@wonderland",
+  "authority":   "ih58...",
   "private_key": "ed25519:…",
   "namespace":   "apps",
   "contract_id": "calc.v1",
@@ -166,7 +169,7 @@ Represents a request to deploy bytecode and immediately bind `(namespace, contra
     "compiler_fingerprint": "rustc-1.79 llvm-16",
     "features_bitmap": 0,
     "access_set_hints": {
-      "read_keys": ["account:alice@wonderland"],
+      "read_keys": ["account:ih58..."],
       "write_keys": ["asset:usd#wonderland"]
     }
   }
@@ -196,7 +199,7 @@ Bind an existing manifest/code hash to a namespace contract identifier.
 
 ```jsonc
 {
-  "authority":   "alice@wonderland",
+  "authority":   "ih58...",
   "private_key": "ed25519:0123…",
   "namespace":   "apps",
   "contract_id": "calc.v1",
@@ -235,7 +238,7 @@ Register a manifest (wrap into signed tx):
 curl -s -X POST \
   -H 'Content-Type: application/json' \
   -d '{
-        "authority": "alice@wonderland",
+        "authority": "ih58...",
         "private_key": "ed25519:…",  
         "manifest": { "code_hash": "<32-byte-hex>", "abi_hash": null }
       }' \
@@ -253,7 +256,7 @@ Deploy code and then fetch code bytes:
 curl -s -X POST \
   -H 'Content-Type: application/json' \
   -d '{
-        "authority": "alice@wonderland",
+        "authority": "ih58...",
         "private_key": "ed25519:…",
         "code_b64": "…"
       }' \
@@ -268,7 +271,7 @@ Deploy and activate an instance atomically:
 curl -s -X POST \
   -H 'Content-Type: application/json' \
   -d '{
-        "authority": "alice@wonderland",
+        "authority": "ih58...",
         "private_key": "ed25519:…",
         "namespace": "apps",
         "contract_id": "calc.v1",
@@ -283,7 +286,7 @@ Activate an existing instance with previously uploaded artifacts:
 curl -s -X POST \
   -H 'Content-Type: application/json' \
   -d '{
-        "authority": "alice@wonderland",
+        "authority": "ih58...",
         "private_key": "ed25519:…",
         "namespace": "apps",
         "contract_id": "calc.v1",

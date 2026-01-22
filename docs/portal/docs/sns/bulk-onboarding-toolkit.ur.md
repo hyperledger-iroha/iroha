@@ -37,7 +37,7 @@ Parser کو درج ذیل header row درکار ہے (order flexible ہے):
 |--------|----------|-------------|
 | `label` | Yes | Requested label (mixed case accepted; tool Norm v1 اور UTS-46 کے مطابق normalize کرتا ہے). |
 | `suffix_id` | Yes | Numeric suffix identifier (decimal یا `0x` hex). |
-| `owner` | Yes | Registration owner کے لئے AccountId string (IH58@domain). |
+| `owner` | Yes | Registration owner کے لئے AccountId string (IH58 literal; optional @domain hint). |
 | `term_years` | Yes | Integer `1..=255`. |
 | `payment_asset_id` | Yes | Settlement asset (مثال `xor#sora`). |
 | `payment_gross` / `payment_net` | Yes | Unsigned integers جو asset-native units کو represent کریں۔ |
@@ -78,9 +78,9 @@ Key options:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "alice@wonderland",
+      "owner": "ih58...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"alice@wonderland","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -89,7 +89,7 @@ Key options:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"alice@wonderland",
+        "payer":"ih58...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -248,7 +248,7 @@ filter کرتا ہے تاکہ auditors ایک CSV run پر drill کر سکیں۔
   references CSV location کے relative resolve ہوتی ہیں۔ Non-object metadata
   validation error دیتا ہے۔
 - **Controllers:** خالی cells `--default-controllers` کو honour کرتے ہیں۔ non-owner
-  actors کو delegate کرتے وقت explicit controller lists دیں (مثال `owner;ops@dao`)۔
+  actors کو delegate کرتے وقت explicit controller lists دیں (مثال `ih58...;ih58...`)۔
 
 Failures contextual row numbers کے ساتھ report ہوتے ہیں (مثال
 `error: row 12 term_years must be between 1 and 255`). Script validation errors پر

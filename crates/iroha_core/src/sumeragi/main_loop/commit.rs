@@ -1164,10 +1164,25 @@ impl Actor {
                 let missing_local_data =
                     matches!(pending.last_gate, Some(GateReason::MissingLocalData));
                 let quorum_reached = has_quorum_signers || vote_count >= min_votes_for_commit;
+                let (consensus_mode, _, _) = self.consensus_context_for_height(pending_height);
+                let fast_timeout = {
+                    let view = self.state.view();
+                    self.pending_fast_path_timeout(&view, consensus_mode)
+                };
+                let has_votes = pending.precommit_vote_sent
+                    || vote_count > 0
+                    || self.pending_block_has_votes(block_hash, pending_height, pending_view);
+                let has_qc = pending.commit_qc_seen
+                    || self.pending_block_has_qc(block_hash, pending_height, pending_view);
+                let effective_quorum_timeout = if !has_votes && !has_qc {
+                    fast_timeout.min(quorum_timeout)
+                } else {
+                    quorum_timeout
+                };
 
                 if commit_signatures_missing
                     && !has_quorum_signers
-                    && missing_quorum_stale(pending_age, quorum_timeout, quorum_reached)
+                    && missing_quorum_stale(pending_age, effective_quorum_timeout, quorum_reached)
                 {
                     let reschedule_backoff = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
                     if missing_local_data && pending_age < availability_timeout {
@@ -1190,7 +1205,7 @@ impl Actor {
                             view = pending_view,
                             block = ?block_hash,
                             pending_age_ms = pending_age.as_millis(),
-                            quorum_timeout_ms = quorum_timeout.as_millis(),
+                            quorum_timeout_ms = effective_quorum_timeout.as_millis(),
                             "deferring quorum reschedule while RBC availability is unresolved"
                         );
                         pending.block = failed_block;
@@ -1203,7 +1218,7 @@ impl Actor {
                                 view = pending_view,
                                 block = ?block_hash,
                                 pending_age_ms = pending_age.as_millis(),
-                                quorum_timeout_ms = quorum_timeout.as_millis(),
+                                quorum_timeout_ms = effective_quorum_timeout.as_millis(),
                                 vote_rx_depth = queue_depths.vote_rx,
                                 "deferring quorum reschedule while vote queue is backlogged"
                             );

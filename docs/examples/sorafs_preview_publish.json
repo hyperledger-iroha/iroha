@@ -1,6 +1,6 @@
 {
   "torii_url": "https://preview.torii.example/api",
-  "authority": "admin@preview",
+  "authority": "ih58...",
   "private_key": "ed25519:replace_me_with_preview_private_key",
   "submitted_epoch": 0
 }

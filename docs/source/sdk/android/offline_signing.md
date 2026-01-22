@@ -358,7 +358,7 @@ byte[] auditJson = wallet.exportAuditJson();
 
 ```java
 OfflineQueryEnvelope query = OfflineQueryEnvelope.builder()
-    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"merchant@wonderland\"]}")
+    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"ih58...\"]}")
     .setLimit(25L)
     .build();
 
@@ -426,8 +426,8 @@ top-level `transfer` object or alongside the receipt that generated the token:
 {
   "transfer": {
     "bundle_id": "3b6a27bccebfb63b9a...",
-    "receiver": "merchant@nexus",
-    "deposit_account": "merchant@nexus",
+    "receiver": "ih58...",
+    "deposit_account": "ih58...",
     "receipts": [ /* ... */ ],
     "balance_proof": { /* ... */ },
     "platform_snapshot": {
@@ -466,8 +466,8 @@ value:
     "receipts": [
       {
         "tx_id": "00ff...",
-        "from": "merchant@offline",
-        "to": "merchant@offline",
+        "from": "ih58...",
+        "to": "ih58...",
         "issued_at_ms": 1730314876000,
         "platform_proof": { "...": "..." },
         "platform_snapshot": {

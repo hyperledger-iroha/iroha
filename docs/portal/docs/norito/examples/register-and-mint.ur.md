@@ -22,9 +22,9 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 ## لیجر واک تھرو
 
-- یقینی بنائیں کہ منزل اکاؤنٹ (مثلا `alice@wonderland`) موجود ہے، جو ہر SDK quickstart کے سیٹ اپ مرحلے کی عکاسی کرتا ہے۔
+- یقینی بنائیں کہ منزل اکاؤنٹ (مثلا `ih58...`) موجود ہے، جو ہر SDK quickstart کے سیٹ اپ مرحلے کی عکاسی کرتا ہے۔
 - `register_and_mint` انٹری پوائنٹ کال کریں تاکہ ROSE اثاثہ ڈیفینیشن بنے اور ایک ہی ٹرانزیکشن میں Alice کو 250 یونٹس منٹ ہوں۔
-- `client.request(FindAccountAssets)` یا `iroha_cli ledger assets list --account alice@wonderland` کے ذریعے بیلنس چیک کریں تاکہ منٹنگ کی کامیابی کی تصدیق ہو۔
+- `client.request(FindAccountAssets)` یا `iroha_cli ledger assets list --account ih58...` کے ذریعے بیلنس چیک کریں تاکہ منٹنگ کی کامیابی کی تصدیق ہو۔
 
 ## متعلقہ SDK گائیڈز
 
@@ -46,7 +46,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
+    let to = account!("ih58...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }
