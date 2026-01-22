@@ -521,7 +521,7 @@ against duplicate `(certificate_id, counter)` claims.
 
 ## 6. Issuer Workflow (OA1)
 
-1. **Select asset & policy.** Choose the operator-owned asset (e.g., `xor#treasury#mint@sora`),
+1. **Select asset & policy.** Choose the operator-owned asset (e.g., `xor#treasury#ih58...`),
    target controller account, allowance amount, and policy limits (max balance / per-spend cap /
    expiry).
 2. **Produce a commitment.** Sample `r_0` (32 random bytes) and compute
@@ -564,7 +564,7 @@ Key details:
 
 - `--spec` accepts a JSON file with `{ "operator": { "private_key": "ed25519:…" }, "allowances": [...] }`.
   Each allowance entry supplies `label`, `controller`, `allowance_asset`, and policy fields using the
-  canonical `ed0120…@domain` account syntax. Spend keys can be specified as a multihash (`ed0120…`)
+  canonical IH58 account syntax (no `@domain`; append `@domain` only as an explicit routing hint). Spend keys can be specified as a multihash (`ed0120…`)
   or as `algo:hex`, metadata can be provided inline or via `metadata_file`, attestation bytes can be
   embedded with `attestation_report_{hex,base64}` (or loaded from `attestation_report_file`), and an
   optional `blinding_hex` override keeps regression fixtures deterministic.
@@ -763,8 +763,8 @@ POST /v1/offline/transfers/proof
 {
   "transfer": {
     "bundle_id": "11F7...C0DE",
-    "receiver": "merchant@wonderland",
-    "deposit_account": "merchant@wonderland",
+    "receiver": "ih58...",
+    "deposit_account": "ih58...",
     "receipts": [/* OfflineSpendReceipt */],
     "balance_proof": { /* OfflineBalanceProof */ }
   },
@@ -884,7 +884,7 @@ Example GET query filtering allowances by controller:
 ```sh
 FILTER=$(python3 - <<'PY'
 import json, urllib.parse
-expr = {"op": "eq", "args": ["controller_id", "merchant@sora"]}
+expr = {"op": "eq", "args": ["controller_id", "ih58..."]}
 print(urllib.parse.quote(json.dumps(expr)))
 PY
 )
@@ -914,7 +914,7 @@ Sample envelope and invocation:
   "filter": {
     "op": "and",
     "args": [
-      {"op": "eq", "args": ["controller_id", "merchant@sora"]},
+      {"op": "eq", "args": ["controller_id", "ih58..."]},
       {"op": "gte", "args": ["registered_at_ms", 1733500000000]}
     ]
   },

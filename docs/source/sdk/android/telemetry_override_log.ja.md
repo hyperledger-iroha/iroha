@@ -1,18 +1,23 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/source/sdk/android/telemetry_override_log.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 84f02b7266c586c34adb9ee54eb9034eb1622add5af9d5471e4f792f08c0565a
-source_last_modified: "2025-11-15T17:33:52.465383+00:00"
-translation_last_reviewed: null
+source_hash: 31d0c9de16e2b24403bc53950f45a5008c3c15081634049a82c9218f9c054a5a
+source_last_modified: "2026-02-15T09:57:14.582086+00:00"
+translation_last_reviewed: 2026-01-21
 ---
 
-# 翻訳作業中
+<!-- 日本語訳: docs/source/sdk/android/telemetry_override_log.md -->
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+# Android テレメトリ上書き監査ログ
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+承認済みのレダクション上書きをここに記録する。上書き適用後と
+解除後に表を更新すること。
+
+| チケットID | リクエスト時刻 (UTC) | 承認者 | トークンハッシュ (Blake2b) | 期限 (UTC) | 解除 (UTC) | 備考 |
+|-----------|-------------------------|----------|----------------------|--------------|---------------|-------|
+| SUP-OVR-2214 | 2026-02-15T09:25:03Z | Liam O’Connor (SRE on-call) | 65f1a2c8a4c3446c9b6df2c59e1782ad | 2026-02-15T09:55:03Z | 2026-02-15T09:56:30Z | AND7 リハーサル シナリオ C2。CLI 出力は `docs/source/sdk/android/readiness/screenshots/2026-02-15/override-console-2026-02-15.log` に保存。 |
+
+> **保持:** 13 か月保持し、その後 `docs/source/sdk/android/telemetry_override_log_archive/` にアーカイブする。

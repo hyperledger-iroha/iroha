@@ -231,7 +231,7 @@ the shared Norito codecs shipped in `norito-java`:
 
 ```java
 TransactionPayload payload = TransactionPayload.builder()
-    .setAuthority("alice@test")
+    .setAuthority("ih58...")
     .setInstructionBytes(KotodamaCompiler.compile(contract))
     .build();
 

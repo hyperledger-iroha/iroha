@@ -208,12 +208,12 @@ iroha app settlement dvp \
   --settlement-id DVP-FIXTURE-1 \
   --delivery-asset security#equities \
   --delivery-quantity 500 \
-  --delivery-from alice@fi \
-  --delivery-to bob@fi \
+  --delivery-from ih58... \
+  --delivery-to ih58... \
   --payment-asset usd#fi \
   --payment-quantity 1050000 \
-  --payment-from bob@fi \
-  --payment-to alice@fi \
+  --payment-from ih58... \
+  --payment-to ih58... \
   --delivery-instrument-id US0378331005 \
   --place-of-settlement-mic XNAS \
   --partial-indicator npar \

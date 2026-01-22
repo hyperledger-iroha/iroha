@@ -18,7 +18,7 @@ repo (bilateral または tri-party) が `RepoAgreement::custodian` で custodia
 | Field | Value |
 |-------|-------|
 | Agreement identifier | `<repo-yyMMdd-XX>` |
-| Custodian account id | `<custodian@domain>` |
+| Custodian account id | `<ih58...>` |
 | Prepared by / date | `<custodian ops lead>` |
 | Desk contacts acknowledged | `<desk lead + counterparty>` |
 | Evidence directory | ``artifacts/finance/repo/<slug>/`` |

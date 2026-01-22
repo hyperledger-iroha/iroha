@@ -131,13 +131,13 @@ ledger projection that triggered the payment.
 
 1. **Generate the ledger projection JSON.**
    ```bash
-   sorafs reserve ledger \
-     --quote artifacts/sorafs_reserve/quotes/provider-alpha-apr.json \
-     --provider-account provider@dakini \
-     --treasury-account treasury@sora \
-     --reserve-account sorafs-reserve@sora \
-     --asset-definition xor#sora \
-     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
+  sorafs reserve ledger \
+    --quote artifacts/sorafs_reserve/quotes/provider-alpha-apr.json \
+    --provider-account ih58... \
+    --treasury-account ih58... \
+    --reserve-account ih58... \
+    --asset-definition xor#sora \
+    --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
 2. **Normalise the values with the new helper.**
    ```bash

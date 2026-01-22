@@ -163,7 +163,7 @@ Exemplo de corpo JSON:
 
 ```jsonc
 {
-  "authority": "ops@cbdc",
+  "authority": "ih58...",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -220,7 +220,7 @@ Exemplo de corpo JSON:
 
 ```jsonc
 {
-  "authority": "ops@cbdc",
+  "authority": "ih58...",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
   "dataspace": 11,
@@ -240,7 +240,7 @@ idênticas às dos endpoints de leitura.
 Perfis capturam tudo o que um novo validador precisa saber antes de se conectar. O
 fixture `profile/cbdc_lane_profile.json` documenta:
 
-- Emissor/quórum de governança (`parliament@cbdc` + ID do ticket de evidência).
+- Emissor/quórum de governança (`ih58...` + ID do ticket de evidência).
 - Conjunto de validadores + quórum e namespaces protegidos (`cbdc`, `gov`).
 - Perfil de DA (classe A, lista de attestadores, cadência de rotação).
 - ID de grupo de composabilidade e whitelist que liga UAIDs a manifests de capacidade.

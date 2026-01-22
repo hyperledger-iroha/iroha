@@ -32,20 +32,20 @@ feature-gated route builders (`add_app_api_routes`, `add_contracts_and_vk_routes
 - Example snippets:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "alice@wonderland", method: "get", path: "/v1/accounts/alice@wonderland/assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v1/accounts/alice@wonderland/assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "ih58...", method: "get", path: "/v1/accounts/ih58.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/ih58.../assets?limit=5`, { headers });
 ```
 ```swift
-let headers = try CanonicalRequest.signingHeaders(accountId: "alice@wonderland",
+let headers = try CanonicalRequest.signingHeaders(accountId: "ih58...",
                                                   method: "get",
-                                                  path: "/v1/accounts/alice@wonderland/assets",
+                                                  path: "/v1/accounts/ih58.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("alice@wonderland", "get", "/v1/accounts/alice@wonderland/assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("ih58...", "get", "/v1/accounts/ih58.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ### Endpoint Inventory

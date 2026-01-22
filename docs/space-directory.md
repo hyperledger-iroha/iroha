@@ -107,11 +107,11 @@ iroha app space-directory manifest scaffold \
   --deny-program cbdc.kit \
   --deny-method withdraw \
   --deny-reason "Withdrawals disabled for this UAID." \
-  --profile-governance-issuer parliament@cbdc \
+  --profile-governance-issuer ih58... \
   --profile-governance-ticket gov-2026-02-rotation \
-  --profile-validator cbdc-validator-1@cbdc \
-  --profile-validator cbdc-validator-2@cbdc \
-  --profile-da-attester da-attester-1@cbdc
+  --profile-validator ih58... \
+  --profile-validator ih58... \
+  --profile-da-attester ih58...
 ```
 
 The command writes `manifest.json` + `profile.json` (defaults to
@@ -240,7 +240,7 @@ belong to that slice. Downstream components use this ledger-backed view:
   reloading manifest JSON.
 - Torii now exposes `GET /v1/space-directory/uaids/{uaid}` for operators and
   SDKs that need to introspect bindings directly. Append
-  `?address_format=compressed` if you need the `snx1…@domain` literals for QR
+  `?address_format=compressed` if you need the `snx1…` literals for QR
   payloads; IH58 strings remain the default.【docs/source/torii/portfolio_api.md】
 
 ### 5.1 CLI manifest & binding inspectors
@@ -330,7 +330,7 @@ canonical `AssetPermissionManifest` JSON:
         "expired_epoch": null,
         "revocation": null
       },
-      "accounts": ["wholesale@cbdc"],
+      "accounts": ["ih58..."],
       "manifest": {
         "version": 1,
         "uaid": "uaid:0f4d…ab11",
@@ -388,7 +388,7 @@ Sample request body:
 
 ```jsonc
 {
-  "authority": "ops@cbdc",
+  "authority": "ih58...",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -445,7 +445,7 @@ Sample JSON body:
 
 ```jsonc
 {
-  "authority": "ops@cbdc",
+  "authority": "ih58...",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
   "dataspace": 11,
@@ -465,7 +465,7 @@ fee-policy gates match the read endpoints.
 Profiles capture everything a new validator needs before connecting. The
 `profile/cbdc_lane_profile.json` fixture documents:
 
-- Governance issuer/quorum (`parliament@cbdc` + evidence ticket ID).
+- Governance issuer/quorum (`ih58...` + evidence ticket ID).
 - Validator set + quorum and protected namespaces (`cbdc`, `gov`).
 - DA profile (class A, attester roster, rotation cadence).
 - Composability group ID and whitelist linking UAIDs to capability manifests.
@@ -705,8 +705,8 @@ activation_epoch: 4097
 expiry_epoch: 4600
 change_type: activation
 owners:
-  - parliament@cbdc
-  - treasury@cbdc
+  - ih58...
+  - ih58...
 approvals_required: 5
 ---
 

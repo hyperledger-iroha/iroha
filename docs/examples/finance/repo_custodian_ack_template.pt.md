@@ -20,7 +20,7 @@ Use este template quando um repo (bilateral ou tri-party) referencia um custodia
 | Campo | Valor |
 |-------|-------|
 | Identificador do acordo | `<repo-yyMMdd-XX>` |
-| ID da conta do custodiante | `<custodian@domain>` |
+| ID da conta do custodiante | `<ih58...>` |
 | Preparado por / data | `<custodian ops lead>` |
 | Contatos de desk reconhecidos | `<desk lead + counterparty>` |
 | Diretorio de evidencia | ``artifacts/finance/repo/<slug>/`` |

@@ -67,15 +67,15 @@ const mintInstruction = buildMintAssetInstruction({
 
 const transferInstruction = buildTransferAssetInstruction({
   sourceAssetId: "rose#wonderland#alice",
-  destinationAccountId: "alice@wonderland",
+  destinationAccountId: "ih58...",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "alice@wonderland",
+  authority: "ih58...",
   mint: { assetId: "rose#wonderland#alice", quantity: "10" },
-  transfers: [{ destinationAccountId: "bob@wonderland", quantity: "5" }],
+  transfers: [{ destinationAccountId: "ih58...", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -98,16 +98,16 @@ import {
 const registerDomain = noritoEncodeInstruction(
   buildRegisterDomainInstruction({ domainId: "wonderland" }),
 );
-const registerAccount = buildRegisterAccountInstruction({ accountId: "alice@wonderland" });
+const registerAccount = buildRegisterAccountInstruction({ accountId: "ih58..." });
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "rose#wonderland#alice",
-  destinationAccountId: "bob@wonderland",
+  destinationAccountId: "ih58...",
   quantity: "5",
 });
 
 const tx = buildTransaction({
   chainId: "demo-chain",
-  authority: "alice@wonderland",
+  authority: "ih58...",
   instructions: [registerAccount, transfer],
   privateKey: Buffer.alloc(32, 0x42),
 });
@@ -167,7 +167,7 @@ const nftPage = await torii.listNfts({
 });
 console.log("nfts:", nftPage.items.map((it) => it.id));
 
-for await (const holding of torii.iterateAccountAssetsQuery("alice@wonderland", {
+for await (const holding of torii.iterateAccountAssetsQuery("ih58...", {
   requirePermissions: true,
   pageSize: 2,
   filter: { Gte: ["quantity", 1] },
@@ -285,9 +285,9 @@ import { ToriiClient, generateKeyPair } from "@iroha/iroha-js";
 const torii = new ToriiClient("https://torii.nexus.example");
 const { privateKey } = generateKeyPair({ seed: Buffer.alloc(32, 7) });
 
-const { items } = await torii.listAccountAssets("alice@wonderland", {
+const { items } = await torii.listAccountAssets("ih58...", {
   limit: 10,
-  canonicalAuth: { accountId: "alice@wonderland", privateKey },
+  canonicalAuth: { accountId: "ih58...", privateKey },
 });
 ```
 
@@ -321,20 +321,20 @@ const defs = await torii.queryAssetDefinitions({
 });
 console.log("filtered definitions", defs.items);
 
-const perms = await torii.listAccountPermissions("alice@wonderland", {
+const perms = await torii.listAccountPermissions("ih58...", {
   limit: 10,
 });
 console.log("direct permissions", perms.items);
-for await (const perm of torii.iterateAccountPermissions("alice@wonderland", {
+for await (const perm of torii.iterateAccountPermissions("ih58...", {
   pageSize: 5,
 })) {
   console.log("iterated permission", perm.name);
 }
-const holdings = await torii.listAccountAssets("alice@wonderland", { limit: 5 });
+const holdings = await torii.listAccountAssets("ih58...", { limit: 5 });
 console.log("asset holdings", holdings.items);
 const holders = await torii.listAssetHolders("rose#wonderland", { limit: 5 });
 console.log("top holders", holders.items.map((entry) => entry.account_id));
-const txs = await torii.listAccountTransactions("alice@wonderland", { limit: 3 });
+const txs = await torii.listAccountTransactions("ih58...", { limit: 3 });
 console.log("recent hashes", txs.items.map((tx) => tx.entrypoint_hash));
 
 for await (const nft of torii.iterateNfts({
@@ -345,7 +345,7 @@ for await (const nft of torii.iterateNfts({
   console.log("nft:", nft.id);
 }
 
-for await (const holding of torii.iterateAccountAssetsQuery("alice@wonderland", {
+for await (const holding of torii.iterateAccountAssetsQuery("ih58...", {
   pageSize: 8,
   addressFormat: "compressed",
   filter: { Eq: ["asset_id.definition_id", "rose#wonderland"] },
@@ -367,7 +367,7 @@ in UI flows.
 
 ```js
 const assets = [];
-for await (const holding of torii.iterateAccountAssets("alice@wonderland", {
+for await (const holding of torii.iterateAccountAssets("ih58...", {
   pageSize: 2,
   maxItems: 10,
   sort: [{ key: "quantity", order: "desc" }],
@@ -399,7 +399,7 @@ try {
 }
 
 try {
-  await torii.listAccountAssets("alice@wonderland", { limit: 1 });
+  await torii.listAccountAssets("ih58...", { limit: 1 });
 } catch (error) {
   if (error instanceof ToriiHttpError && error.code === "permission_denied") {
     console.warn("missing asset read permission", error.errorMessage);
@@ -408,13 +408,13 @@ try {
   }
 }
 
-const ownedNfts = await torii.listAccountNfts("alice@wonderland", {
+const ownedNfts = await torii.listAccountNfts("ih58...", {
   domainId: "wonderland",
   limit: 5,
 });
 console.log("alice NFTs", ownedNfts.items.map((entry) => entry.id));
 
-for await (const nft of torii.iterateAccountNfts("alice@wonderland", {
+for await (const nft of torii.iterateAccountNfts("ih58...", {
   domainId: "wonderland",
   pageSize: 10,
   maxItems: 20,
@@ -474,7 +474,7 @@ const decoded = noritoDecodeInstruction(encoded); // => normalized JSON object
 // Build and sign a transaction using the native helper (requires `npm run build:native`)
 const { signedTransaction, hash } = buildRegisterDomainTransaction({
   chainId: "sora-mainnet",
-  authority: "alice@wonderland",
+  authority: "ih58...",
   domainId: "docs",
   privateKey: Buffer.alloc(32, 1), // replace with a real seed
 });
@@ -544,7 +544,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("alice@wonderland", {
+const qr = await torii.getExplorerAccountQr("ih58...", {
   addressFormat: "compressed",
 });
 console.log("explorer literal", qr.literal);
@@ -800,7 +800,7 @@ followed by `/v1/contracts/instance` when `CONTRACT_STAGE` includes `instance` (
 
 ```
 TORII_URL=https://torii.devnet.example \
-AUTHORITY=alice@wonderland \
+AUTHORITY=ih58... \
 PRIVATE_KEY_HEX=$(cat ~/.iroha/keys/alice.hex) \
 CONTRACT_CODE_PATH=./artifacts/demo_contract.to \
 CONTRACT_MANIFEST_PATH=./artifacts/demo_manifest.json \

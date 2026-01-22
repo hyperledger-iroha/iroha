@@ -55,7 +55,7 @@ sha256sum artifacts/finance/repo/<slug>/instructions/initiate.json       | tee a
 
 | امين الحفظ | الملف | SHA-256 | ملاحظات |
 |-----------|------|---------|-------|
-| `<custodian@domain>` | `custodian_ack_<custodian>.md` | `<sha256>` | SLA موقع يغطي نافذة الحفظ وحساب التوجيه وجهة اتصال drill. |
+| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | SLA موقع يغطي نافذة الحفظ وحساب التوجيه وجهة اتصال drill. |
 
 > خزّن الاقرار بجوار الادلة الاخرى (`artifacts/finance/repo/<slug>/`) حتى يسجل
 > `scripts/repo_evidence_manifest.py` الملف في نفس الشجرة مع التعليمات المرحلية

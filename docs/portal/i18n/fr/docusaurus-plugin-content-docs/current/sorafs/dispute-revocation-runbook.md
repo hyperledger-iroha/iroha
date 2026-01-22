@@ -63,7 +63,7 @@ Ce runbook guide les opérateurs de gouvernance dans la création de litiges de 
      --base64-out=dispute.b64 \
      --json-out=dispute_summary.json \
      --request-out=dispute_request.json \
-     --authority=council@governance \
+     --authority=ih58... \
      --private-key=ed25519:<key>
    ```
 

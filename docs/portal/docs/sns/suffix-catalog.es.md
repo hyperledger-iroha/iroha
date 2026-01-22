@@ -44,9 +44,9 @@ docs de estado.
 
 | Sufijo | ID (`hex`) | Steward | Fund splitter | Estado | Activo de pago | Limite de referidos (bps) | Termino (min - max anos) | Grace / Redencion (dias) | Tiers de precio (regex -> precio base / subasta) | Etiquetas reservadas | Division de fees (T/S/R/E bps) | Version de politica |
 |--------|------------|---------|---------------|--------|---------------|---------------------------|--------------------------|--------------------------|-------------------------------------------------|---------------------|-------------------------------|--------------------|
-| `.sora` | `0x0001` | `steward@sns` | `steward@sns` | Activo | `xor#sora` | 500 | 1-5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ -> 120 XOR (Vickrey)` | `treasury -> steward@sns` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `steward.nexus@sns` | `treasury@sns` | Pausado | `xor#sora` | 300 | 1-3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ -> 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ -> 4000 XOR (Dutch floor 500)` | `treasury -> treasury@sns`, `guardian -> guardian@sns` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `steward.dao@sns` | `finance@sns` | Revocado | `xor#sora` | 0 | 1-2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ -> 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| `.sora` | `0x0001` | `ih58...` | `ih58...` | Activo | `xor#sora` | 500 | 1-5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ -> 120 XOR (Vickrey)` | `treasury -> ih58...` | `7000 / 3000 / 1000 / 0` | 1 |
+| `.nexus` | `0x0002` | `ih58...` | `ih58...` | Pausado | `xor#sora` | 300 | 1-3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ -> 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ -> 4000 XOR (Dutch floor 500)` | `treasury -> ih58...`, `guardian -> ih58...` | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `ih58...` | `ih58...` | Revocado | `xor#sora` | 0 | 1-2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ -> 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
 ## Extracto JSON
 
@@ -59,7 +59,7 @@ docs de estado.
       "suffix": ".sora",
       "suffix_id": 1,
       "status": "active",
-      "fund_splitter_account": "steward@sns",
+      "fund_splitter_account": "ih58...",
       "payment_asset_id": "xor#sora",
       "referral_cap_bps": 500,
       "pricing": [

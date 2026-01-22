@@ -55,7 +55,7 @@ sha256sum artifacts/finance/repo/<slug>/instructions/initiate.json       | tee a
 
 | Custodian | קובץ | SHA-256 | הערות |
 |-----------|------|---------|-------|
-| `<custodian@domain>` | `custodian_ack_<custodian>.md` | `<sha256>` | SLA חתום המכסה חלון משמורת, חשבון ניתוב ואיש קשר ל-drill. |
+| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | SLA חתום המכסה חלון משמורת, חשבון ניתוב ואיש קשר ל-drill. |
 
 > שמרו את האישור לצד הראיות האחרות (`artifacts/finance/repo/<slug>/`) כדי ש-
 > `scripts/repo_evidence_manifest.py` ירשום את הקובץ באותו עץ עם ההוראות ה-staged

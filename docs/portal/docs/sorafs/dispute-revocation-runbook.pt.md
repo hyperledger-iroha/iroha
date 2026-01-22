@@ -72,7 +72,7 @@ Este runbook guia operadores de governanca na abertura de disputas de capacidade
      --base64-out=dispute.b64 \
      --json-out=dispute_summary.json \
      --request-out=dispute_request.json \
-     --authority=council@governance \
+     --authority=ih58... \
      --private-key=ed25519:<key>
    ```
 

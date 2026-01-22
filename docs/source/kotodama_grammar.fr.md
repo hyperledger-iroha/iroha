@@ -216,7 +216,7 @@ Constructeurs de pointeurs (émettent un TLV Norito dans INPUT et renvoient un p
 - `proof_blob(string|0xhex) -> ProofBlob*`
 
 Les macros du prélude fournissent des alias plus courts et une validation en ligne pour ces constructeurs :
-- `account!("alice@wonderland")`, `account_id!("alice@wonderland")`
+- `account!("ih58...")`, `account_id!("ih58...")`
 - `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`

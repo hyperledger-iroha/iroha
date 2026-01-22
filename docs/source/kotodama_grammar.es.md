@@ -216,7 +216,7 @@ Constructores de punteros (emiten TLV Norito en INPUT y devuelven un puntero tip
 - `proof_blob(string|0xhex) -> ProofBlob*`
 
 Las macros del preludio proporcionan alias más cortos y validación en línea para estos constructores:
-- `account!("alice@wonderland")`, `account_id!("alice@wonderland")`
+- `account!("ih58...")`, `account_id!("ih58...")`
 - `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`

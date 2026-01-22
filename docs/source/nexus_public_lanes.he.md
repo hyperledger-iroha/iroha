@@ -107,8 +107,8 @@ Hooks של מחזור חיים (נאכפים ב‑runtime):
   "asset": "xor#wonderland",
   "total_reward": "250.0000",
   "shares": [
-    { "account": "validator@lane", "role": "Validator", "amount": "150" },
-    { "account": "delegator@lane", "role": "Nominator", "amount": "100" }
+    { "account": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS", "role": "Validator", "amount": "150" },
+    { "account": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", "role": "Nominator", "amount": "100" }
   ],
   "metadata": {
     "telemetry_epoch_root": "0x4afe…",
@@ -141,8 +141,8 @@ Guardrails של runtime:
 ```norito
 {
   "lane_id": 1,
-  "validator": "validator@lane",
-  "stake_account": "validator@lane",
+  "validator": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS",
+  "stake_account": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS",
   "initial_stake": "150000",
   "metadata": {
     "commission_bps": 750,
@@ -226,7 +226,7 @@ ISI זה idempotent לכל `(lane_id, epoch)` ומהווה בסיס לחשבונ
   - `iroha_cli app nexus public-lane validators --lane <id> [--summary] [--address-format {ih58,compressed}]`
     מציג סמני lifecycle/activation (pending target epoch, `activation_epoch` / `activation_height`,
     exit release, slash id) לצד stake bonded/self.
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator account@domain] [--summary]` משקף את
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator ih58...] [--summary]` משקף את
     endpoint `/stake` עם רמזי pending-unbond לכל זוג `(validator, staker)`.
   - Torii snapshots ל‑dashboards ו‑SDKs:
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
@@ -234,18 +234,18 @@ ISI זה idempotent לכל `(lane_id, epoch)` ומהווה בסיס לחשבונ
       release timers, bonded stake, last reward epoch.
       `address_format=ih58|compressed` שולט בהצגת literals (IH58 מועדף; compressed (`snx1`) הוא אפשרות שנייה ל-Sora בלבד).
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
-      `staker`, bonded amount) בתוספת pending unbond timers. `?validator=account@domain`
+      `staker`, bonded amount) בתוספת pending unbond timers. `?validator=ih58...`
       מסנן את התגובה ל‑dashboards שממוקדים במאמת יחיד; `address_format` חל על כל literals.
   - Lifecycle ISIs משתמשים בנתיב טרנזקציה סטנדרטי (Torii `/v1/transactions`
     או CLI instruction pipeline). דוגמאות payloads של Norito JSON:
 
     ```jsonc
     [
-      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "validator@nexus" } },
+      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS" } },
       {
         "ExitPublicLaneValidator": {
           "lane_id": 1,
-          "validator": "validator@nexus",
+          "validator": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS",
           "release_at_ms": 1730000000000
         }
       }

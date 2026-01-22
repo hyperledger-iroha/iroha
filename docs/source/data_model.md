@@ -25,9 +25,9 @@ This document explains the structures, identifiers, traits, and protocols that f
 
 String forms of IDs (round-trippable with `Display`/`FromStr`):
 - `DomainId`: `name` (e.g., `wonderland`).
-- `AccountId`: canonical identifier encoded via `AccountAddress`, which exposes IH58, Sora compressed (`snx1…`), and canonical hex codecs (`AccountAddress::to_ih58`, `to_compressed_sora`, `canonical_hex`, `parse_any`). IH58 is the preferred account format; the `snx1…` form is second-best for Sora-only UX. The human-friendly routing alias `alias@domain` is preserved for UX but is no longer treated as the authoritative identifier. Torii normalises incoming strings through `AccountAddress::parse_any`. Currently limited to single-signatory accounts.
+- `AccountId`: canonical identifier encoded via `AccountAddress`, which exposes IH58, Sora compressed (`snx1…`), and canonical hex codecs (`AccountAddress::to_ih58`, `to_compressed_sora`, `canonical_hex`, `parse_any`). IH58 is the preferred account format; the `snx1…` form is second-best for Sora-only UX. The human-friendly routing alias `alias@domain` is preserved for UX but is no longer treated as the authoritative identifier. Torii normalises incoming strings through `AccountAddress::parse_any`. Account IDs support both single-key and multisig controllers.
 - `AssetDefinitionId`: `asset#domain` (e.g., `xor#soramitsu`).
-- `AssetId`: `asset#domain#account@domain` or shorthand `asset##account@domain` if definition domain equals account domain.
+- `AssetId`: `asset#domain#account` or shorthand `asset##account` if the definition domain equals the account domain, where `account` is the canonical `AccountId` string (IH58 preferred).
 - `NftId`: `nft$domain` (e.g., `rose$garden`).
 - `PeerId`: `public_key` (peer equality is by public key).
 
@@ -39,7 +39,7 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 - Builder: `NewDomain` with `with_logo`, `with_metadata`, then `Registrable::build(authority)` sets `owned_by`.
 
 ### Account
-- `AccountId { domain: DomainId, signatory: PublicKey }`.
+- `AccountId { domain: DomainId, controller: AccountController }` (controller = single key or multisig policy).
 - `Account { id, metadata, label?, uaid? }` — `label` is an optional stable alias used by rekey records, `uaid` carries the optional Nexus-wide [Universal Account ID](./universal_accounts_guide.md).
 - Builder: `NewAccount` via `Account::new(id)`; `HasMetadata` for both builder and entity.
 
@@ -243,7 +243,6 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 
 ## Review Notes / Potential Updates
 
-- Multi-signatory accounts remain future work (tracked under the governance backlog). When the specification lands, update the `AccountId` documentation here to cover the new forms and verification logic.
 - Query DSL: consider documenting a stable user-facing subset and examples for common filters/selectors.
 - Instruction families: expand public docs listing the built-in ISI variants exposed by `mint_burn`, `register`, `transfer`.
 

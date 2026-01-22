@@ -215,7 +215,7 @@ register_trigger wake {
 - `proof_blob(string|0xhex) -> ProofBlob*`
 
 Макросы прелюда дают более короткие алиасы и inline‑валидацию для этих конструкторов:
-- `account!("alice@wonderland")`, `account_id!("alice@wonderland")`
+- `account!("ih58...")`, `account_id!("ih58...")`
 - `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`

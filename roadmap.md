@@ -125,11 +125,11 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Extend the load harness with a deterministic 10k TPS recipe (tx type/size, batch, parallelism, peer count, fixed RNG seed).
  - [x] Add warm-up + steady-state phases and stall detection (no-height-advance timeout) to the harness run flow.
  - [x] Emit standardized throughput/finality metrics from the harness (commit-QC latency p95/p99, view-change rate, queue backpressure, submitted/committed TPS) for comparison runs.
- - [ ] Investigate pending-block backpressure gating (blocking proposals until quorum reschedule) that keeps localnet cadence near commit-quorum timeout; design a safe fast-path to reach sub-1s finality without speculative execution.
+ - [x] Investigate pending-block backpressure gating (blocking proposals until quorum reschedule) that keeps localnet cadence near commit-quorum timeout; design a safe fast-path to reach sub-1s finality without speculative execution (added fast-path unblock when no votes/QCs arrive by `min(block_time, commit_time)`, applied in proposal backpressure + quorum reschedule; unit coverage added and pacemaker docs updated).
  - [ ] Run the ignored 7-peer localnet throughput regression in permissioned mode and capture throughput/commit-time metrics in `status.md` after the oversized BlockSyncUpdate fetch fallback fix (attempts failed: submit queue stalled at ~22k/42k with min_non_empty=1-2; release runs timed out after 20m; latest debug run timed out after 20m with height stuck at 2 and repeated view-change/missing-QC logs; logs in `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_uDjmli`, `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_cO9vgq`, `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_TY25OZ`, `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_hMZDGM`).
  - [ ] Run the ignored 7-peer localnet throughput regression in NPoS mode and capture throughput/commit-time metrics in `status.md` after the above gates and harness outputs are in place.
  - [x] Re-run the NPoS localnet 1 Hz / 100-block check with `/v1/sumeragi/status` sampling after the progress-age quorum timeout change; capture any stalls in `status.md` (2026-01-21 run on `/tmp/iroha-localnet-npos-1hz-run2`: `commit_qc.height` +12 over 118s, `view_change_install_total` +3, pending RBC max 1040 bytes / 1 session).
- - [ ] Re-run the NPoS localnet 1 Hz / 100-block check with `/v1/sumeragi/status` sampling after the progress-age quorum timeout change and commit-pipeline backlog-bypass tweaks; capture any stalls in `status.md`.
+ - [ ] Re-run the NPoS localnet 1 Hz / 100-block check with `/v1/sumeragi/status` sampling after the progress-age quorum timeout change and commit-pipeline backlog-bypass tweaks; capture any stalls in `status.md` (2026-01-22 attempt at `/private/tmp/iroha-localnet-npos-1hz-fastpath` stalled at ping idx 43 with Torii timeout; `commit_qc.height` +5 over 119s and a parking_lot deadlock reported).
 
 4. **DA-TORII-REFACTOR — Decompose Torii DA ingestion + erasure coding** (Torii/DA, Line: Shared, Owner: Torii WG, Priority: High, Status: 🈺 In Progress, target TBD)
  - [x] Split Torii DA into `crates/iroha_torii/src/da/` with `mod.rs`, `ingest.rs`, `persistence.rs`, `taikai.rs`, `rs16.rs`, and `tests.rs`; keep the public API in `mod.rs` and allow internal breakage for the first release.
@@ -409,6 +409,32 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Replace `docs/source/p2p_trust_gossip.*` stubs (he/ja) with translations.
  - [x] Replace `docs/source/compute_lane.*` stubs (he/ja) with translations.
  - [x] Replace `docs/source/soracles.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soradns_ir_playbook.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soranet_gateway_billing.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soranet_gateway_billing_m0.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/mochi/packaging.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/mochi/index.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/mochi/quickstart.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/mochi/troubleshooting.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/benchmarks/history.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/agents.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/agents/missing_docs_inventory.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/agents/env_var_migration.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/android_support_playbook.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/compliance/android/checklists/and8_ga_2027-10_rehearsal.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/android/and7_governance_hotlist.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/android/android_support_playbook.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/android/partner_sla_discovery.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/compliance/android/eu/README.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/compliance/android/jp/README.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/android/norito_fixture_alignment.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/index.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/project_tracker/norito_streaming_post_mvp.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/compliance/android/device_lab_contingency.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/swift/connect_risk_tracker.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/crypto/attachments/sm_openssl_provenance.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/governance_pipeline.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/kagami_profiles.*` stubs (he/ja) with translations.
  - [ ] Replace stub translation files across repo root, `docs/source`, and `docs/portal` (preserve front matter, keep `source_hash`/`translation_last_reviewed` aligned).
  - [x] Complete translations for core policy/docs (CODE_OF_CONDUCT, PATENTS, README, AGENTS, status/roadmap, configuration/runbooks).
  - [ ] Prioritize portal docs: `docs/portal/i18n/*/docusaurus-plugin-content-docs` (especially SoraFS/SoraNet) and mark completion per locale.

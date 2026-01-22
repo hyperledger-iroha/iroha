@@ -57,7 +57,7 @@ sha256sum artifacts/finance/repo/<slug>/instructions/initiate.json       | tee a
 
 | Custodian | File | SHA-256 | Notes |
 |-----------|------|---------|-------|
-| `<custodian@domain>` | `custodian_ack_<custodian>.md` | `<sha256>` | Подписанный SLA с custody window, routing account и drill contact. |
+| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Подписанный SLA с custody window, routing account и drill contact. |
 
 > Сохраните acknowledgement рядом с другими evidence (`artifacts/finance/repo/<slug>/`),
 > чтобы `scripts/repo_evidence_manifest.py` записал файл в том же дереве, что и staged instructions

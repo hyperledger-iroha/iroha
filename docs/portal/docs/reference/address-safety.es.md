@@ -18,10 +18,10 @@ Esta pagina captura el entregable de documentacion ADDR-6c. Aplica estas restric
 
 ## Flujos seguros de comparticion
 
-- Por defecto, cada accion de copiar/compartir debe usar la direccion IH-B32. Muestra el dominio resuelto como contexto de apoyo para que la cadena con checksum permanezca al frente.
+- Por defecto, cada accion de copiar/compartir debe usar la direccion IH58. Muestra el dominio resuelto como contexto de apoyo para que la cadena con checksum permanezca al frente.
 - Ofrece una accion "Compartir" que incluya la direccion en texto plano y un QR derivado del mismo payload. Permite que las personas inspeccionen ambos antes de confirmar.
 - Cuando el espacio obligue a truncar (tarjetas pequenas, notificaciones), conserva el prefijo legible, muestra puntos suspensivos y reten los ultimos 4-6 caracteres para que sobreviva el ancla del checksum. Provee un toque/atajo de teclado para copiar la cadena completa sin truncamiento.
-- Evita la desincronizacion del portapapeles emitiendo un toast de confirmacion que previsualice la cadena IH-B32 exacta que se copio. Donde haya telemetria, cuenta intentos de copia versus acciones de compartir para detectar regresiones de UX rapido.
+- Evita la desincronizacion del portapapeles emitiendo un toast de confirmacion que previsualice la cadena IH58 exacta que se copio. Donde haya telemetria, cuenta intentos de copia versus acciones de compartir para detectar regresiones de UX rapido.
 
 ## IME y salvaguardas de entrada
 
@@ -33,17 +33,17 @@ Esta pagina captura el entregable de documentacion ADDR-6c. Aplica estas restric
 
 - Anota cada bloque de direccion con `aria-label` o `aria-describedby` que deletree el prefijo legible y agrupe el payload en bloques de 4-8 caracteres ("ih dash b three two ..."). Esto evita que los lectores de pantalla produzcan un flujo ininteligible de caracteres.
 - Anuncia los eventos de copia/comparticion exitosos mediante una actualizacion de live region en modo polite. Incluye el destino (portapapeles, hoja de compartir, QR) para que la persona sepa que la accion se completo sin mover el foco.
-- Provee texto `alt` descriptivo para las vistas previas de QR (p. ej., "Direccion IH-B32 para `<alias>@<domain>` en la cadena `0x1234`"). Incluye un fallback "Copiar direccion como texto" junto al canvas de QR para personas con baja vision.
+- Provee texto `alt` descriptivo para las vistas previas de QR (p. ej., "Direccion IH58 para `<account>` en la cadena `0x1234`"). Incluye un fallback "Copiar direccion como texto" junto al canvas de QR para personas con baja vision.
 
 ## Direcciones comprimidas solo Sora
 
 - Gating: oculta la cadena comprimida `snx1...` detras de una confirmacion explicita. La confirmacion debe reiterar que el formato solo funciona en cadenas Sora Nexus.
-- Etiquetado: cada aparicion debe incluir una insignia visible "Solo Sora" y un tooltip que explique por que otras redes requieren la forma IH-B32.
-- Guardrails: si el discriminante de cadena activo no es la asignacion de Nexus, rechaza generar la direccion comprimida y dirige a la persona de vuelta a IH-B32.
+- Etiquetado: cada aparicion debe incluir una insignia visible "Solo Sora" y un tooltip que explique por que otras redes requieren la forma IH58.
+- Guardrails: si el discriminante de cadena activo no es la asignacion de Nexus, rechaza generar la direccion comprimida y dirige a la persona de vuelta a IH58.
 - Telemetria: registra con que frecuencia se solicita y se copia la forma comprimida para que el playbook de incidentes detecte picos de comparticion accidental.
 
 ## Quality gates
 
 - Extiende las pruebas UI automatizadas (o suites de a11y en storybook) para afirmar que los componentes de direcciones exponen la metadata ARIA requerida y que los mensajes de rechazo por IME aparecen.
 - Incluye escenarios de QA manual para entrada IME (kana, pinyin), pase de lector de pantalla (VoiceOver/NVDA) y copia de QR en temas de alto contraste antes del release.
-- Refleja estas comprobaciones en las checklists de release junto a las pruebas de paridad IH-B32 para que las regresiones sigan bloqueadas hasta corregirse.
+- Refleja estas comprobaciones en las checklists de release junto a las pruebas de paridad IH58 para que las regresiones sigan bloqueadas hasta corregirse.

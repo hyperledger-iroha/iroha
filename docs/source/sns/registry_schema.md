@@ -251,7 +251,7 @@ NameRecordV1 {
     name_hash: 0x5f57...9c2a,
     normalized_label: "makoto",
     display_label: "Makoto",
-    owner: "ih58:snx12QG...@default",
+    owner: "ih58...",
     controllers: [
         NameControllerV1 {
             controller_type: Account,
@@ -278,7 +278,7 @@ NameRecordV1 {
 SuffixPolicyV1 {
     suffix_id: 0x0001,
     suffix: "sora",
-    steward: "ih58:snx1kX...@governance",
+    steward: "ih58...",
     status: Active,
     payment_asset_id: "xor#sora",
     pricing: [
@@ -291,10 +291,10 @@ SuffixPolicyV1 {
     max_term_years: 5,
     referral_cap_bps: 500,
     reserved_labels: [
-        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("ih58:snx1...@treasury"), release_at:None, note:"Protocol reserved" }
+        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("ih58..."), release_at:None, note:"Protocol reserved" }
     ],
     fee_split: SuffixFeeSplitV1 { treasury_bps:7000, steward_bps:3000, referral_max_bps:1000, escrow_bps:500 },
-    fund_splitter_account: "ih58:snx15...@finance",
+    fund_splitter_account: "ih58...",
     policy_version: 3,
     metadata: { "kpi_covenant":"bafybeigd..." },
 }

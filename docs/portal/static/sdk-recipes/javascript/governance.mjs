@@ -20,7 +20,7 @@ import {
 
 const TORII_URL = process.env.TORII_URL ?? "http://127.0.0.1:8080";
 const CHAIN_ID = process.env.CHAIN_ID ?? "00000000-0000-0000-0000-000000000000";
-const AUTHORITY = process.env.AUTHORITY ?? "alice@wonderland";
+const AUTHORITY = process.env.AUTHORITY ?? "ih58...";
 const PRIVATE_KEY = process.env.PRIVATE_KEY_HEX
   ? Buffer.from(process.env.PRIVATE_KEY_HEX, "hex")
   : Buffer.alloc(32, 0x11);

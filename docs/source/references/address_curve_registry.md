@@ -21,9 +21,10 @@ fixtures.
 | ID (`curve_id`) | Algorithm | Feature Gate | Status | Public Key Encoding | Notes |
 |-----------------|-----------|--------------|--------|---------------------|-------|
 | `0x01` (1) | `ed25519` | — | Production | 32-byte compressed Ed25519 key | Canonical curve for V1. All SDK builds MUST support this identifier. |
-| `0x02` (2) | `ml-dsa` | `ml-dsa` | Reserved (preview) | 32-byte seed for Dilithium public key (per RFC 9370) | Enabled only in preview toolchains while ML-DSA signing paths are stabilised. |
-| `0x03` (3) | `gost-placeholder` | `gost` | Reserved (preview) | Placeholder entry for TC26 readiness | Use only for capability negotiation and provisioning; production addresses MUST switch to parameter-set specific identifiers (`0x0A`–`0x0F`). |
+| `0x02` (2) | `ml-dsa` | — | Production (config-gated) | Dilithium3 public key (1952 bytes) | Available in all builds. Enable in `crypto.allowed_signing` + `crypto.curves.allowed_curve_ids` before emitting controller payloads. |
+| `0x03` (3) | `bls_normal` | `bls` | Production (feature-gated) | 48-byte compressed G1 public key | Required for consensus validators. Admission allows BLS controllers even when `allowed_signing`/`allowed_curve_ids` omit them. |
 | `0x04` (4) | `secp256k1` | — | Production | 33-byte SEC1-compressed key | Deterministic ECDSA over SHA-256; signatures use the canonical 64-byte `r∥s` layout. |
+| `0x05` (5) | `bls_small` | `bls` | Production (feature-gated) | 96-byte compressed G2 public key | Compact-signature BLS profile (smaller signatures, larger public keys). |
 | `0x0A` (10) | `gost3410-2012-256-paramset-a` | `gost` | Reserved | 64-byte little-endian TC26 param set A point | Unlocks with the `gost` feature once governance approves the rollout. |
 | `0x0B` (11) | `gost3410-2012-256-paramset-b` | `gost` | Reserved | 64-byte little-endian TC26 param set B point | Mirrors the TC26 B parameter set; blocked behind the `gost` feature gate. |
 | `0x0C` (12) | `gost3410-2012-256-paramset-c` | `gost` | Reserved | 64-byte little-endian TC26 param set C point | Reserved for future governance approval. |
@@ -31,27 +32,24 @@ fixtures.
 | `0x0E` (14) | `gost3410-2012-512-paramset-b` | `gost` | Reserved | 128-byte little-endian TC26 param set B point | Reserved pending demand for 512-bit GOST curves. |
 | `0x0F` (15) | `sm2` | `sm` | Reserved | DistID length (u16 BE) + DistID bytes + 65-byte SEC1 uncompressed SM2 key | Becomes available when the `sm` feature graduates from preview. |
 
-> **Placeholder semantics:** Identifier `0x03` exists so provisioning and
-> capability negotiation can advertise upcoming GOST support without leaking a
-> specific TC26 parameter set. Admission and SDKs MUST reject controller
-> payloads that attempt to use the placeholder on-chain and instead require one
-> of the concrete TC26 identifiers once governance enables a given profile.
-
 ### Usage Guidelines
 
 - **Fail closed:** Encoders MUST reject unsupported algorithms with
   `ERR_UNSUPPORTED_ALGORITHM`. Decoders MUST raise `ERR_UNKNOWN_CURVE` for any
   identifier not listed in this registry.
-- **Feature gating:** Preview algorithms remain behind the listed feature gates.
-  Operators must enable matching `iroha_config.crypto.allowed_signing` entries
-  and build-time features before emitting addresses with those curves.
+- **Feature gating:** BLS/GOST/SM2 remain behind the listed build-time feature
+  gates. Operators must enable matching `iroha_config.crypto.allowed_signing`
+  entries and build-time features before emitting addresses with those curves.
+- **Admission exceptions:** BLS controllers are allowed for consensus
+  validators even when `allowed_signing`/`allowed_curve_ids` do not list them.
 - **Config + manifest parity:** Use `iroha_config.crypto.allowed_curve_ids`
   (and the matching `ManifestCrypto.allowed_curve_ids`) to publish which curve
   identifiers the cluster accepts for controllers; admission now enforces this
   list alongside `allowed_signing`.
 - **Deterministic encoding:** Public keys are encoded exactly as returned by
-  the signing implementation (Ed25519 compressed bytes, ML-DSA seed, etc.).
-  SDKs should surface validation errors before submitting malformed payloads.
+  the signing implementation (Ed25519 compressed bytes, ML‑DSA public key
+  bytes, BLS compressed points, etc.). SDKs should surface validation errors
+  before submitting malformed payloads.
 - **Manifest parity:** Genesis manifests and controller manifests MUST use the
   same identifiers so admission can reject controllers that exceed cluster
   capabilities.
@@ -85,27 +83,29 @@ payload. The steps below should be treated as mandatory validation logic:
 1. **Resolve cluster policy:** Parse the leading `curve_id` byte from the
    account payload and reject the controller if the identifier is not present
    in `iroha_config.crypto.allowed_curve_ids` (and the mirrored
-   `ManifestCrypto.allowed_curve_ids`). This prevents clusters from accepting
-   preview curves that operators have not explicitly enabled.
+   `ManifestCrypto.allowed_curve_ids`). BLS controllers are the exception: when
+   compiled in, admission allows them regardless of the allowlists so consensus
+   validator keys keep working. This prevents clusters from accepting preview
+   curves that operators have not explicitly enabled.
 2. **Enforce encoding length:** Compare the payload length against the
    algorithm’s canonical size before attempting to decompress or expand the
    key. Reject any value that fails the length check to eliminate malformed
    inputs early.
 3. **Run algorithm-specific decoding:** Use the same canonical decoders as
-   `iroha_crypto` (`ed25519_dalek`, `pqcrypto_dilithium`, `sm2`, the TC26
-   helpers, etc.) so all implementations share the exact subgroup/point
-   validation behaviour.
+   `iroha_crypto` (`ed25519_dalek`, `pqcrypto_dilithium`, `w3f_bls`/`blstrs`,
+   `sm2`, the TC26 helpers, etc.) so all implementations share the exact
+   subgroup/point validation behaviour.
 4. **Verify signature sizes:** Admission and SDKs must enforce the signature
-   lengths listed below (or the profile-defined sizes for ML‑DSA) and reject
-   any payload with a truncated or overlong signature before running the
-   verifier.
+   lengths listed below and reject any payload with a truncated or overlong
+   signature before running the verifier.
 
 | Algorithm | `curve_id` | Public Key Bytes | Signature Bytes | Critical Checks |
 |-----------|------------|------------------|-----------------|-----------------|
 | `ed25519` | `0x01` | 32 | 64 | Reject non-canonical compressed points, enforce cofactor clearing (no small-order points), and ensure `s < L` when validating signatures. |
-| `ml-dsa` (Dilithium seed) | `0x02` | 32 (seed) | Profile-specific (`pqcrypto_dilithium::<profile>::signature_bytes()`) | Expand the seed with the target ML‑DSA profile (44/65/87), feed the derived public key into the verifier, and reject any payload whose derived key or signature fails decoding. |
-| `gost-placeholder` | `0x03` | — | — | Reject outright; placeholder identifiers never reach chain storage and must be treated the same as `ERR_UNKNOWN_CURVE` until a TC26 profile becomes available. |
+| `ml-dsa` (Dilithium3) | `0x02` | 1952 | 3309 | Reject payloads that are not exactly 1952 bytes before decoding; parse the Dilithium3 public key and verify signatures using pqcrypto-dilithium with canonical byte lengths. |
+| `bls_normal` | `0x03` | 48 | 96 | Accept only canonical compressed G1 public keys and compressed G2 signatures; reject identity points and non-canonical encodings. |
 | `secp256k1` | `0x04` | 33 | 64 | Accept only SEC1-compressed points; decompress and reject non-canonical/invalid points, and verify signatures using the canonical 64-byte `r∥s` encoding (low-`s` normalisation enforced by the signer). |
+| `bls_small` | `0x05` | 96 | 48 | Accept only canonical compressed G2 public keys and compressed G1 signatures; reject identity points and non-canonical encodings. |
 | `gost3410-2012-256-paramset-a` | `0x0A` | 64 | 64 | Interpret the payload as `(x||y)` little-endian coordinates, ensure each coordinate `< p`, reject the identity point, and enforce canonical 32-byte `r`/`s` limbs when verifying signatures. |
 | `gost3410-2012-256-paramset-b` | `0x0B` | 64 | 64 | Same validation as param set A but using the TC26 B domain parameters. |
 | `gost3410-2012-256-paramset-c` | `0x0C` | 64 | 64 | Same validation as param set A but using the TC26 C domain parameters. |
@@ -119,6 +119,7 @@ consumes the JSON export can rely on the `public_key_bytes`,
 `signature_bytes`, and `checks` fields to automate the same validation steps
 described above; variable-length encodings (for example SM2) set
 `public_key_bytes` to null and document the length rule in `checks`.
+
 ## Requesting a New Curve Identifier
 
 1. Draft the algorithm specification (encoding, validation, error handling) and

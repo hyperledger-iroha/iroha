@@ -1,502 +1,571 @@
----
-lang: pt
-direction: ltr
-source: docs/account_structure.md
-status: complete
-translator: manual
-source_hash: 7e6a1321c6f8d71ac4b576a55146767fbc488b29c7e21d82bc2e1c55db89769c
-source_last_modified: "2025-11-12T00:36:40.117854+00:00"
-translation_last_reviewed: 2025-11-14
----
+<!-- TODO: Translation pending; content synced from English for technical accuracy. -->
 
-<!-- Tradução em português de docs/account_structure.md (Account Structure RFC) -->
+# Account Structure RFC
 
-# RFC de Estrutura de Contas
+**Status:** Accepted (ADDR-1)  
+**Audience:** Data model, Torii, Nexus, Wallet, Governance teams  
+**Related issues:** TBD
 
-**Status:** Aceito (ADDR‑1)  
-**Público:** Equipes de modelo de dados, Torii, Nexus, Wallet e Governança  
-**Issues relacionadas:** A definir
+## Summary
 
-## Resumo
+This document describes the shipping account-addressing stack implemented in
+`AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) and the
+companion tooling. It provides:
 
-Este documento propõe uma revisão completa do esquema de endereçamento de
-contas para fornecer:
+- A checksummed, human-facing **Iroha Base58 address (IH58)** produced by
+  `AccountAddress::to_ih58` that binds a chain discriminant to the account
+  controller and offers deterministic interop-friendly textual forms.
+- Domain selectors for implicit default domains and local digests, with a
+  reserved global-registry selector tag for future Nexus-backed routing (the
+  registry lookup is **not yet shipped**).
 
-- Um endereço **Iroha Bech32m (IH‑B32)** legível para humanos e com checksum,
-  que vincula um discriminante de cadeia ao signatário da conta e oferece
-  formas textuais determinísticas, adequadas à interoperabilidade.
-- Identificadores de domínio globalmente exclusivos, respaldados por um
-  registro que possa ser consultado via Nexus para roteamento entre cadeias.
-- Camadas de transicao que mantenham os aliases de roteamento
-  `alias@domain` funcionando enquanto migramos wallets, APIs e contratos para
-  o novo formato.
+## Motivation
 
-## Motivação
+Wallets and off-chain tooling rely on raw `alias@domain` routing aliases today. This
+has two major drawbacks:
 
-Hoje, wallets e ferramentas off‑chain dependem de aliases de roteamento brutos
-`alias@domain`. Isso traz dois problemas principais:
+1. **No network binding.** The string has no checksum or chain prefix, so users
+   can paste an address from the wrong network without immediate feedback. The
+   transaction will eventually be rejected (chain mismatch) or, worse, succeed
+   against an unintended account if the destination exists locally.
+2. **Domain collision.** Domains are namespace-only and can be reused on each
+   chain. Federation of services (custodians, bridges, cross-chain workflows)
+   becomes brittle because `finance` on chain A is unrelated to `finance` on
+   chain B.
 
-1. **Sem vínculo de rede.** A string não possui checksum nem prefixo de
-   cadeia, o que permite que usuários colem um endereço de outra rede sem
-   feedback imediato. A transação acabará rejeitada (desajuste de
-   `chain_id`) ou, pior, poderá ser aplicada em uma conta inesperada se o
-   destino existir localmente.
-2. **Colisão de domínios.** Domínios são apenas namespaces e podem ser
-   reutilizados em cada cadeia. A federação de serviços (custódias, bridges,
-   fluxos cross‑chain) torna‑se frágil porque `finance` na cadeia A não guarda
-   relação com `finance` na cadeia B.
+We need a human-friendly address format that guards against copy/paste errors
+and a deterministic mapping from domain name to the authoritative chain.
 
-Precisamos de um formato de endereço amigável para humanos que proteja contra
-erros de copiar/colar e de um mapeamento determinístico do nome de domínio para
-uma cadeia autorizada.
+## Goals
 
-## Objetivos
+- Describe the IH58 Base58 envelope implemented in the data model and the
+  canonical parsing/alias rules that `AccountId` and `AccountAddress` follow.
+- Encode the configured chain discriminant directly into each address and
+  define its governance/registry process.
+- Describe how to introduce a global domain registry without breaking current
+  deployments and specify normalization/anti-spoofing rules.
 
-- Projetar um envelope de endereço Bech32m inspirado em IH58 para contas de
-  Iroha, publicando aliases textuais canônicos CAIP‑10.
-- Codificar o discriminante de cadeia configurado diretamente em cada endereço
-  e definir seu processo de governança/registro.
-- Descrever como introduzir um registro global de domínios sem quebrar
-  instalações existentes e especificar regras de normalização/anti‑spoofing.
-- Documentar expectativas operacionais, etapas de migração e questões em
-  aberto.
+## Non-goals
 
-## Não‑objetivos
+- Implementing cross-chain asset transfers. The routing layer only returns the
+  target chain.
+- Finalising governance for global domain issuance. This RFC focuses on the data
+  model and transport primitives.
 
-- Implementar transferências de ativos cross‑chain. A camada de roteamento
-  apenas retorna a cadeia de destino.
-- Alterar a estrutura interna de `AccountId` (permanece
-  `DomainId + PublicKey`).
-- Finalizar a governança para emissão de domínios globais. Este RFC foca no
-  modelo de dados e nas primitivas de transporte.
+## Background
 
-## Contexto
+### Current routing alias
 
-### Alias de roteamento atual
-
-```text
+```
 AccountId {
-    domain: DomainId,   // wrapper sobre Name (string em estilo ASCII)
-    signatory: PublicKey // string multihash (por exemplo, ed0120...)
+    domain: DomainId,   // wrapper over Name (ASCII-ish string)
+    controller: AccountController // single PublicKey or multisig policy
 }
 
-Display / Parse: "<signatory multihash>@<domain name>"
+Display: canonical IH58 literal (no `@domain` suffix)
+Parse accepts:
+- IH58 (preferred), `snx1` compressed, or canonical hex (`0x...`) inputs, with
+  optional `@<domain>` suffixes for explicit routing hints.
+- `<label>@<domain>` aliases resolved through the account-alias resolver
+  (Torii installs one; plain data-model parsing requires a resolver to be set).
+- `<public_key>@<domain>` where `public_key` is the canonical multihash string.
+- `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
 
-Esta forma textual passa a ser tratada como um **alias de conta**: uma
-conveniência de roteamento que aponta para o
-[`AccountAddress`](#2-canonical-address-codecs) canônico. Continua útil para
-leitura humana e governança limitada ao domínio, mas deixa de ser o
-identificador autoritativo da conta on‑chain.
+Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
+and `0x` prefixes are not accepted.
+
+This text form is now treated as an **account alias**: a routing convenience
+that points to the canonical [`AccountAddress`](#2-canonical-address-codecs).
+It remains useful for human readability and domain-scoped governance, but it is
+no longer considered the authoritative account identifier on-chain.
 ```
 
-`ChainId` vive fora de `AccountId`. Os nós comparam o `ChainId` de cada
-transação com a configuração durante a admissão
-(`AcceptTransactionFail::ChainIdMismatch`) e rejeitam transações de outras
-redes, mas a string de conta em si não carrega nenhuma dica de rede.
+`ChainId` lives outside of `AccountId`. Nodes check the transaction’s `ChainId`
+against configuration during admission (`AcceptTransactionFail::ChainIdMismatch`)
+and reject foreign transactions, but the account string itself carries no
+network hint.
 
-### Identificadores de domínio
+### Domain identifiers
 
-`DomainId` encapsula um `Name` (string normalizada) e é restrito à cadeia
-local. Cada cadeia pode registrar `wonderland`, `finance` etc. de maneira
-independente.
+`DomainId` wraps a `Name` (normalized string) and is scoped to the local chain.
+Every chain can register `wonderland`, `finance`, etc. independently.
 
-### Contexto Nexus
+### Nexus context
 
-O Nexus é responsável pela coordenação entre componentes (lanes/data‑spaces).
-No momento ele não possui nenhum conceito de roteamento de domínios entre
-cadeias.
+Nexus is responsible for cross-component coordination (lanes/data-spaces). It
+currently has no concept of cross-chain domain routing.
 
-## Design proposto
+## Proposed Design
 
-### 1. Discriminante de cadeia determinístico
+### 1. Deterministic chain discriminant
 
-Amplia‑se `iroha_config::parameters::actual::Common` com:
+`iroha_config::parameters::actual::Common` now exposes:
 
 ```rust
 pub struct Common {
     pub chain: ChainId,
-    pub chain_discriminant: u16, // novo, coordenado globalmente
-    // ... campos existentes
+    pub chain_discriminant: u16, // globally coordinated
+    // ... existing fields
 }
 ```
 
-- **Restrições:**
-  - Único por rede ativa; gerenciado por meio de um registro público assinado
-    com faixas reservadas explícitas (por exemplo `0x0000–0x0FFF` para
-    test/dev, `0x1000–0x7FFF` para alocações da comunidade,
-    `0x8000–0xFFEF` para entradas aprovadas pela governança,
-    `0xFFF0–0xFFFF` reservado).
-  - Imutável para uma cadeia em execução. Alterá‑lo requer hard fork e
-    atualização do registro.
-- **Governança e registro:** um conjunto de governança multi‑assinatura mantém
-  um registro JSON assinado (e fixado em IPFS) que mapeia discriminantes para
-  aliases humanos e identificadores CAIP‑2. Clientes obtêm e armazenam em
-  cache esse registro para validar e exibir metadados de cadeia.
-- **Uso:** o valor é propagado pela admissão de estado, Torii, SDKs e APIs de
-  wallet, de forma que cada componente possa incorporá‑lo ou validá‑lo.
-  Expomos o discriminante como parte de CAIP‑2 (por exemplo `iroha:0x1234`).
+- **Constraints:**
+  - Unique per active network; managed through a signed public registry with
+    explicit reserved ranges (e.g., `0x0000–0x0FFF` test/dev, `0x1000–0x7FFF`
+    community allocations, `0x8000–0xFFEF` governance-approved, `0xFFF0–0xFFFF`
+    reserved).
+  - Immutable for a running chain. Changing it requires a hard fork and a
+    registry update.
+- **Governance & registry (planned):** A multi-signature governance set will
+  maintain a signed JSON registry mapping discriminants to human aliases and
+  CAIP-2 identifiers. This registry is not yet part of the shipped runtime.
+- **Usage:** Threaded through state admission, Torii, SDKs, and wallet APIs so
+  every component can embed or validate it. CAIP-2 exposure remains a future
+  interop task.
 
-<a id="2-canonical-address-codecs"></a>
+### 2. Canonical address codecs
 
-### 2. Codecs de endereço canônico
+The Rust data model exposes a single canonical payload representation
+(`AccountAddress`) that can be emitted as several human-facing formats. IH58 is
+the preferred account format for sharing and canonical output; the compressed
+`snx1` form is a second-best, Sora-only option for UX where the kana alphabet
+adds value. Canonical hex remains a debugging aid.
 
-O modelo de dados em Rust expõe uma única representação binária canônica
-(`AccountAddress`) que pode ser emitida em vários formatos voltados ao
-usuário:
-IH58 é o formato de conta preferido para compartilhamento e saída canônica; a
-forma comprimida `snx1` é a segunda melhor opção, exclusiva da Sora, para UX.
+- **IH58 (Iroha Base58)** – a Base58 envelope that embeds the chain
+  discriminant. Decoders validate the prefix before promoting the payload to
+  the canonical form.
+- **Sora-compressed view** – a Sora-only alphabet of **105 symbols** built by
+  appending the half-width イロハ poem (including ヰ and ヱ) to the 58-character
+  IH58 set. Strings start with the sentinel `snx1`, embed a Bech32m-derived
+  checksum, and omit the network prefix (Sora Nexus is implied by the sentinel).
 
-- **IH58 (Iroha Base58)** – envelope Base58 que inclui o discriminante de
-  cadeia. Decoders validam o prefixo antes de promover a payload à forma
-  canônica.
-- **Vista comprimida Sora:** alfabeto exclusivo de Sora com **105 símbolos**,
-  formado ao anexar o poema イロハ em half‑width (incluindo ヰ و ヱ) ao conjunto
-  IH58 de 58 caracteres. Strings começam com o sentinel `snx1`, incorporam um
-  checksum derivado de Bech32m e omitem o prefixo de rede (Sora Nexus é
-  inferido pelo sentinel).
-
-  ```text
+  ```
   IH58  : 123456789ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
   Iroha : ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ
   ```
-- **Hex canônico:** representação `0x…` amigável para depuração da envelope
-  binária canônica.
+- **Canonical hex** – a debugging-friendly `0x…` encoding of the canonical byte
+  envelope.
 
-`AccountAddress::parse_any` auto‑detecta entradas comprimidas, IH58 ou hex
-canônico e retorna tanto a payload decodificada quanto o
-`AccountAddressFormat` detectado. Torii chama `parse_any` para endereços
-suplementares ISO 20022 e armazena a forma hex canônica, garantindo que os
-metadados permaneçam determinísticos independentemente da representação
-original.
+`AccountAddress::parse_any` auto-detects IH58 (preferred), compressed (`snx1`, second-best), or canonical hex
+(`0x...` only; bare hex is rejected) inputs and returns both the decoded payload and the detected
+`AccountAddressFormat`. Torii now calls `parse_any` for ISO 20022 supplementary
+addresses and stores the canonical hex form so metadata remains deterministic
+regardless of the original representation.
 
-#### 2.1 Layout do byte de cabeçalho (ADDR‑1a)
+#### 2.1 Header byte layout (ADDR-1a)
 
-Cada payload canônica é organizada como `header · domain selector · controller`.
-O `header` é um único byte que indica quais regras de parse são aplicadas aos
-bytes seguintes:
+Every canonical payload is laid out as `header · domain selector · controller`. The
+`header` is a single byte that communicates which parser rules apply to the bytes that
+follow:
 
-```text
+```
 bit index:   7        5 4      3 2      1 0
              ┌─────────┬────────┬────────┬────┐
 payload bit: │version  │ class  │  norm  │ext │
              └─────────┴────────┴────────┴────┘
 ```
 
-Esse primeiro byte empacota a metadata de esquema para os decoders:
+The first byte therefore packs the schema metadata for downstream decoders:
 
-| Bits | Campo         | Valores permitidos | Erro em caso de violação                                  |
-|------|---------------|--------------------|------------------------------------------------------------|
-| 7‑5  | `addr_version` | `0` (v1). Valores `1‑7` reservados para revisões futuras. | Valores fora de `0‑7` disparam `AccountAddressError::InvalidHeaderVersion`; implementações DEVEM tratar valores não zero como não suportados hoje. |
-| 4‑3  | `addr_class`  | `0` = chave única, `1` = multisig. | Outros valores geram `AccountAddressError::UnknownAddressClass`. |
-| 2‑1  | `norm_version` | `1` (Norm v1). Valores `0`, `2`, `3` reservados. | Valores fora de `0‑3` geram `AccountAddressError::InvalidNormVersion`. |
-| 0    | `ext_flag`    | DEVE ser `0`.      | Bit ligado → `AccountAddressError::UnexpectedExtensionFlag`. |
+| Bits | Field | Allowed values | Error on violation |
+|------|-------|----------------|--------------------|
+| 7-5  | `addr_version` | `0` (v1). Values `1-7` are reserved for future revisions. | Values outside `0-7` trigger `AccountAddressError::InvalidHeaderVersion`; implementations MUST treat non-zero versions as unsupported today. |
+| 4-3  | `addr_class` | `0` = single key, `1` = multisig. | Other values raise `AccountAddressError::UnknownAddressClass`. |
+| 2-1  | `norm_version` | `1` (Norm v1). Values `0`, `2`, `3` are reserved. | Values outside `0-3` raise `AccountAddressError::InvalidNormVersion`. |
+| 0    | `ext_flag` | MUST be `0`. | Set bit raises `AccountAddressError::UnexpectedExtensionFlag`. |
 
-O encoder em Rust escreve sempre `0x02` (versão 0, classe single‑key, versão
-de normalização 1, bit de extensão limpo).
+The Rust encoder writes `0x02` for single-key controllers (version 0, class 0,
+norm v1, extension flag cleared) and `0x0A` for multisig controllers (version 0,
+class 1, norm v1, extension flag cleared).
 
-#### 2.2 Codificação do selector de domínio (ADDR‑1a)
+#### 2.2 Domain selector encodings (ADDR-1a)
 
-O selector de domínio vem logo após o cabeçalho e é uma união etiquetada:
+The domain selector immediately follows the header and is a tagged union:
 
-| Tag   | Significado              | Payload   | Notas |
-|-------|--------------------------|-----------|-------|
-| `0x00` | Domínio default implícito | nenhuma  | Corresponde ao `default_domain_name()` configurado. |
-| `0x01` | Digest de domínio local | 12 bytes  | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
-| `0x02` | Entrada de registro global | 4 bytes | `registry_id` em big‑endian; reservado até o registro global estar disponível. |
+| Tag | Meaning | Payload | Notes |
+|-----|---------|---------|-------|
+| `0x00` | Implicit default domain | none | Matches the configured `default_domain_name()`. |
+| `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
+| `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
 
-Rótulos de domínio são canonizados (UTS‑46 + STD3 + NFC) antes do hash. Tags
-desconhecidas resultam em `AccountAddressError::UnknownDomainTag`. Ao validar
-um endereço contra um domínio, selectors incompatíveis geram
-`AccountAddressError::DomainMismatch`.
+Domain labels are canonicalised (UTS-46 + STD3 + NFC) before hashing. Unknown tags raise `AccountAddressError::UnknownDomainTag`. When validating an address against a domain, mismatched selectors raise `AccountAddressError::DomainMismatch`.
 
-```text
+```
 domain selector
 ┌──────────┬──────────────────────────────────────────────┐
 │ tag (u8) │ payload (depends on selector kind, see table)│
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-O selector é adjacente ao payload do controlador, de forma que o decoder pode
-percorrer o formato on‑wire em ordem: lê o byte de tag, lê a payload
-específica desse tag e então avança para os bytes do controlador.
+The selector is immediately adjacent to the controller payload, so a decoder can walk
+the wire format in order: read the tag byte, read the tag-specific payload, then move on
+to the controller bytes.
 
-**Exemplos de selector**
+**Selector examples**
 
-- *Default implícito* (`tag = 0x00`). Sem payload. Exemplo de hex canônico
-  para o domínio default usando a chave de teste determinista:
+- *Implicit default* (`tag = 0x00`). No payload. Example canonical hex for the default
+  domain using the deterministic test key:
   `0x0200000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.
-- *Digest local* (`tag = 0x01`). A payload é o digest de 12 bytes. Exemplo
-  (`treasury`, seed `0x01`):
-  `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8`.
-- *Registro global* (`tag = 0x02`). A payload é um `registry_id:u32`
-  big‑endian. Os bytes subsequentes são idênticos ao caso de domínio default
-  implícito; o selector apenas substitui o rótulo normalizado de domínio por
-  um ponteiro de registro. Exemplo com `registry_id = 0x0000_002A` (42 em
-  decimal) e o controlador determinístico default:
-  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.
+- *Local digest* (`tag = 0x01`). Payload is the 12-byte digest. Example (`treasury` seed
+  `0x01`): `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8`.
+- *Global registry* (`tag = 0x02`). Payload is a big-endian `registry_id:u32`. The bytes
+  that follow the payload are identical to the implicit-default case; the selector simply
+  replaces the normalised domain string with a registry pointer. Example using
+  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
+  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.  
+  Breakdown: `0x02` header, `0x02` selector tag, `00 00 00 2A` registry id, `0x00`
+  controller tag, `0x01` curve id, `0x20` key length, 32-byte Ed25519 key payload.
 
-#### 2.3 Codificação do payload de controlador (ADDR‑1a)
+#### 2.3 Controller payload encodings (ADDR-1a)
 
-O payload do controlador é outra união etiquetada acrescentada após o selector
-de domínio:
+The controller payload is another tagged union appended after the domain selector:
 
-| Tag   | Controlador | Layout | Notas |
-|-------|-------------|--------|-------|
-| `0x00` | Chave única | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id = 0x01` mapeia para Ed25519 hoje. `key_len` é limitado a `u8`; valores maiores geram `AccountAddressError::KeyPayloadTooLong`. |
-| `0x01` | Multisig    | `version:u8` · `threshold:u16` · `member_count:u8` · (`curve_id:u8` · `weight:u16` · `key_len:u16` · `key_bytes`)\* | Suporta até 255 membros (`CONTROLLER_MULTISIG_MEMBER_MAX`). Curvas desconhecidas geram `AccountAddressError::UnknownCurve`; políticas mal formadas sobem como `AccountAddressError::InvalidMultisigPolicy`. |
+| Tag | Controller | Layout | Notes |
+|-----|------------|--------|-------|
+| `0x00` | Single key | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` maps to Ed25519 today. `key_len` is bounded to `u8`; larger values raise `AccountAddressError::KeyPayloadTooLong` (so single-key ML‑DSA public keys, which are >255 bytes, cannot be encoded and must use multisig). |
+| `0x01` | Multisig | `version:u8` · `threshold:u16` · `member_count:u8` · (`curve_id:u8` · `weight:u16` · `key_len:u16` · `key_bytes`)\* | Supports up to 255 members (`CONTROLLER_MULTISIG_MEMBER_MAX`). Unknown curves raise `AccountAddressError::UnknownCurve`; malformed policies bubble up as `AccountAddressError::InvalidMultisigPolicy`. |
 
-Políticas multisig também expõem um mapa CBOR ao estilo CTAP2 e um digest
-canônico, permitindo que hosts e SDKs validem o controlador de forma
-determinística. Veja
-`docs/source/references/address_norm_v1.md` (ADDR‑1c) para o esquema,
-procedimento de hashing e fixtures de referência.
+Multisig policies also expose a CTAP2-style CBOR map and canonical digest so
+hosts and SDKs can verify the controller deterministically. See
+`docs/source/references/multisig_policy_schema.md` (ADDR-1c) for the schema,
+validation rules, hashing procedure, and golden fixtures.
 
-Todos os bytes de chave são codificados exatamente como retornados por
-`PublicKey::to_bytes`; os decoders reconstroem instâncias `PublicKey` e
-retornam `AccountAddressError::InvalidPublicKey` se os bytes não baterem com a
-curva declarada.
+All key bytes are encoded exactly as returned by `PublicKey::to_bytes`; decoders reconstruct `PublicKey` instances and raise `AccountAddressError::InvalidPublicKey` if the bytes do not match the declared curve.
 
-> **Aplicação canônica Ed25519 (ADDR‑3a):** chaves com `curve_id = 0x01` devem
-> decodificar exatamente para a sequência de bytes emitida pelo signatário e
-> não podem cair no subgrupo de ordem pequena. Os nós rejeitam codificações
-> não canônicas (por exemplo, valores reduzidos módulo `2^255‑19`) e pontos
-> fracos como o elemento identidade; SDKs devem refletir esses erros de
-> validação antes de submeter endereços.
+> **Ed25519 canonical enforcement (ADDR-3a):** curve `0x01` keys must decode to the exact byte string emitted by the signer and must not lie in the small-order subgroup. Nodes now reject non-canonical encodings (e.g., values reduced modulo `2^255-19`) and weak points such as the identity element, so SDKs should surface matching validation errors before submitting addresses.
 
-##### 2.3.1 Registro de identificadores de curva (ADDR‑1d)
+##### 2.3.1 Curve identifier registry (ADDR-1d)
 
-| ID (`curve_id`) | Algoritmo | Feature gate | Notas |
+| ID (`curve_id`) | Algorithm | Feature gate | Notes |
 |-----------------|-----------|--------------|-------|
-| `0x00` | Reservado | — | NÃO DEVE ser emitido; decoders retornam `ERR_UNKNOWN_CURVE`. |
-| `0x01` | Ed25519   | Sempre ativo | Algoritmo canônico v1 (`Algorithm::Ed25519`); único id habilitado hoje em builds de produção. |
-| `0x02` | ML‑DSA (preview) | `ml-dsa` | Reservado para o rollout de ADDR‑3; desativado por padrão até que o caminho de assinatura ML‑DSA esteja disponível. |
-| `0x03` | Marcador GOST | `gost` | Reservado para provisionamento/negociação; payloads com esse id DEVEM ser rejeitados até que a governança aprove um perfil TC26 concreto. |
-| `0x0A` | GOST R 34.10‑2012 (256, conjunto A) | `gost` | Reservado; habilitado em conjunto com o feature criptográfico `gost`. |
-| `0x0B` | GOST R 34.10‑2012 (256, conjunto B) | `gost` | Reservado para aprovação futura de governança. |
-| `0x0C` | GOST R 34.10‑2012 (256, conjunto C) | `gost` | Reservado para aprovação futura de governança. |
-| `0x0D` | GOST R 34.10‑2012 (512, conjunto A) | `gost` | Reservado para aprovação futura de governança. |
-| `0x0E` | GOST R 34.10‑2012 (512, conjunto B) | `gost` | Reservado para aprovação futura de governança. |
-| `0x0F` | SM2       | `sm`   | Reservado; estará disponível quando o feature de criptografia SM for estabilizado. |
+| `0x00` | Reserved | — | MUST NOT be emitted; decoders surface `ERR_UNKNOWN_CURVE`. |
+| `0x01` | Ed25519 | — | Canonical v1 algorithm (`Algorithm::Ed25519`); enabled in the default config. |
+| `0x02` | ML‑DSA (Dilithium3) | — | Uses the Dilithium3 public key bytes (1952 bytes). Single‑key addresses cannot encode ML‑DSA because `key_len` is `u8`; multisig uses `u16` lengths. |
+| `0x03` | BLS12‑381 (normal) | `bls` | Public keys in G1 (48 bytes), signatures in G2 (96 bytes). |
+| `0x04` | secp256k1 | — | Deterministic ECDSA over SHA‑256; public keys use the 33‑byte SEC1 compressed form and signatures use the canonical 64‑byte `r∥s` layout. |
+| `0x05` | BLS12‑381 (small) | `bls` | Public keys in G2 (96 bytes), signatures in G1 (48 bytes). |
+| `0x0A` | GOST R 34.10‑2012 (256, set A) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0B` | GOST R 34.10‑2012 (256, set B) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0C` | GOST R 34.10‑2012 (256, set C) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0D` | GOST R 34.10‑2012 (512, set A) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0E` | GOST R 34.10‑2012 (512, set B) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0F` | SM2 | `sm` | DistID length (u16 BE) + DistID bytes + 65‑byte SEC1 uncompressed SM2 key; available only when `sm` is enabled. |
 
-Os slots `0x04–0x09` permanecem livres para curvas adicionais; introduzir um
-novo algoritmo exige atualização do roadmap e cobertura correspondente em
-SDK/host. Encoders DEVEM rejeitar algoritmos não suportados com
-`ERR_UNSUPPORTED_ALGORITHM`, e decoders DEVEM falhar rapidamente em ids
-desconhecidos com `ERR_UNKNOWN_CURVE` para manter comportamento fail‑closed.
+Slots `0x06–0x09` remain unassigned for additional curves; introducing a new
+algorithm requires a roadmap update and matching SDK/host coverage. Encoders
+MUST reject any unsupported algorithm with `ERR_UNSUPPORTED_ALGORITHM`, and
+decoders MUST fail fast on unknown ids with `ERR_UNKNOWN_CURVE` to preserve
+fail-closed behaviour.
 
-O registro canônico (incluindo um export JSON legível por máquinas) está em
+The canonical registry (including a machine-readable JSON export) lives under
 [`docs/source/references/address_curve_registry.md`](source/references/address_curve_registry.md).
-Ferramentas DEVEM consumi‑lo diretamente para manter identificadores de curva
-consistentes entre SDKs e fluxos operacionais.
+Tooling SHOULD consume that dataset directly so curve identifiers remain
+consistent across SDKs and operator workflows.
 
-- **Gating em SDKs:** SDKs vêm por padrão apenas com Ed25519. Swift expõe
-  flags de compilação (`IROHASWIFT_ENABLE_MLDSA`, `IROHASWIFT_ENABLE_GOST`,
-  `IROHASWIFT_ENABLE_SM`); o SDK Java exige
-  `AccountAddress.configureCurveSupport(...)`, e o SDK JavaScript usa
-  `configureCurveSupport({ allowMlDsa: true, allowGost: true, allowSm2: true })`,
-  obrigando integradores a fazer opt‑in explícito antes de emitirem endereços
-  com curvas adicionais.
-- **Gating no host:** `Register<Account>` rejeita controladores cujos
-  signatários usam algoritmos ausentes da lista
-  `crypto.allowed_signing` **ou** cujos `curve_id` não aparecem em
-  `crypto.curves.allowed_curve_ids`; clusters precisam anunciar suporte
-  (configuração + gênese) antes de aceitar controladores ML‑DSA/GOST/SM.
+- **SDK gating:** SDKs default to Ed25519-only validation/encoding. Swift exposes
+  compile-time flags (`IROHASWIFT_ENABLE_MLDSA`, `IROHASWIFT_ENABLE_GOST`,
+  `IROHASWIFT_ENABLE_SM`); the Java/Android SDK requires
+  `AccountAddress.configureCurveSupport(...)`; the JavaScript SDK uses
+  `configureCurveSupport({ allowMlDsa: true, allowGost: true, allowSm2: true })`.
+  secp256k1 support is available but not enabled by default in the JS/Android
+  SDKs; callers must opt in explicitly when emitting non‑Ed25519 controllers.
+- **Host gating:** `Register<Account>` rejects controllers whose signatories use algorithms
+  missing from the node’s `crypto.allowed_signing` list **or** curve identifiers absent from
+  `crypto.curves.allowed_curve_ids`, so clusters must advertise support (configuration +
+  genesis) before ML‑DSA/GOST/SM controllers can be registered. BLS controller
+  algorithms are always allowed when compiled (consensus keys rely on them),
+  and the default configuration enables Ed25519 + secp256k1.【crates/iroha_core/src/smartcontracts/isi/domain.rs:32】
 
-#### 2.4 Regras de falha (ADDR‑1a)
+##### 2.3.2 Multisig controller guidance
 
-- Payloads menores que o cabeçalho + selector obrigatórios, ou com bytes
-  remanescentes, emitem `AccountAddressError::InvalidLength` ou
-  `AccountAddressError::UnexpectedTrailingBytes`.
-- Headers que ligam o `ext_flag` reservado ou anunciam versões/classes
-  não suportadas DEVEM ser rejeitados via `UnexpectedExtensionFlag`,
-  `InvalidHeaderVersion` ou `UnknownAddressClass`.
-- Tags de selector/controlador desconhecidas resultam em
-  `UnknownDomainTag` ou `UnknownControllerTag`.
-- Material de chave grande demais ou malformado gera
-  `KeyPayloadTooLong` ou `InvalidPublicKey`.
-- Controladores multisig com mais de 255 membros produzem
-  `MultisigMemberOverflow`.
-- Conversões IME/NFKC: kana Sora em half‑width podem ser normalizadas para
-  full‑width sem quebrar o decode, mas o sentinel ASCII `snx1` e os dígitos/
-  letras IH58 DEVEM permanecer ASCII. Sentinels em full‑width ou com
-  case‑folding resultam em `ERR_MISSING_COMPRESSED_SENTINEL`; payloads ASCII
-  em full‑width geram `ERR_INVALID_COMPRESSED_CHAR`, e mismatches de checksum
-  se propagam como `ERR_CHECKSUM_MISMATCH`. Property tests em
-  `crates/iroha_data_model/src/account/address.rs` cobrem esses caminhos, de
-  modo que SDKs e wallets possam contar com falhas determinísticas.
-- O parse de aliases `address@domain` em Torii e nos SDKs agora retorna os
-  mesmos códigos `ERR_*` quando entradas IH58/comprimidas falham antes do
-  fallback para o alias (por exemplo, checksum inválido ou digest de domínio
-  conflitante), permitindo que os clientes repassem motivos estruturados em
-  vez de deduzir mensagens textuais.
+`AccountController::Multisig` serialises policies via
+`crates/iroha_data_model/src/account/controller.rs` and enforces the schema
+documented in [`docs/source/references/multisig_policy_schema.md`](source/references/multisig_policy_schema.md).
+Key implementation details:
 
-#### 2.5 Vetores binários normativos
+- Policies are normalised and validated by `MultisigPolicy::validate()` before
+  being embedded. Thresholds must be ≥ 1 and ≤ Σ weight; duplicate members are
+  removed deterministically after sorting by `(algorithm || 0x00 || key_bytes)`.
+- The binary controller payload (`ControllerPayload::Multisig`) encodes
+  `version:u8`, `threshold:u16`, `member_count:u8`, then each member’s
+  `(curve_id, weight:u16, key_len:u16, key_bytes)`. This is exactly what
+  `AccountAddress::canonical_bytes()` writes to IH58 (preferred)/snx1 (second-best) payloads.
+- Hashing (`MultisigPolicy::digest_blake2b256()`) uses Blake2b-256 with the
+  `iroha-ms-policy` personalization string so governance manifests can bind to a
+  deterministic policy ID that matches the controller bytes embedded in IH58.
+- Fixture coverage lives in `fixtures/account/address_vectors.json` (cases
+  `addr-multisig-*`). Wallets and SDKs should assert the canonical IH58 strings
+  below to confirm their encoders match the Rust implementation.
 
-- **Domínio default implícito (`default`, byte seed `0x00`)**  
-  Hex canônico:
-  `0x0200000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.  
-  Decomposição: cabeçalho `0x02`, selector `0x00` (default implícito), tag de
-  controlador `0x00`, id de curva `0x01` (Ed25519), comprimento `0x20` e, em
-  seguida, os 32 bytes da chave.
-- **Digest de domínio local (`treasury`, byte seed `0x01`)**  
-  Hex canônico:
-  `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8`.  
-  Decomposição: cabeçalho `0x02`, tag de selector `0x01` mais o digest
-  `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, seguido do payload de chave única
-  (`0x00` como tag de controlador, `0x01` como id de curva, `0x20` como
-  comprimento e os 32 bytes da chave Ed25519).
+| Case ID | Threshold / members | IH58 literal (prefix `0x02F1`) | Sora compressed (`snx1`) literal | Notes |
+|---------|---------------------|--------------------------------|-------------------------|-------|
+| `addr-multisig-council-threshold3` | `≥3` weight, members `(2,1,1)` | `SRfSHsrH3tEmYaaAYyD248F3vfT1oQ3WEGS22MaD8W9bLefF7rsoKLYGcpbcM9EcSus5ZhCAZU7ztn2BCsyeCAdfRncAVmVsipd4ibk6CBLF3Nrzcw8P7VKJg6mtFgEhWVTjfDkUMoc63oeEmaWyV6cyiphwk8ZgKAJUe4TyVtmKm1WWcg7qZ6i` | `snx13vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnoWﾛYicaUr3ﾔｲﾖ2Ado3TﾘYQﾉJqﾜﾇｳﾑﾐd8dDjRGｦ3Vﾃ9HcﾀMヰR8ﾎﾖgEqGｵEｾDyc5ﾁ1ﾔﾉ31sUﾑﾀﾖaｸxﾘ3ｲｷMEuFｺｿﾉBQSVQnxﾈeJzrXLヰhｿｹ5SEEﾅPﾂﾗｸdヰﾋ1bUGHｲVXBWNNJ6K` | Council-domain governance quorum. |
+| `addr-multisig-wonderland-threshold2` | `≥2`, members `(1,2)` | `3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt` | `snx12ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐmﾊvEﾐCﾏﾎｦ1ﾑHﾋso2GKﾔﾕﾁwﾂﾃP6ﾁｼﾙﾖｺ9ｻｦbﾈ4wFdﾑFヰ3HaﾘｼMｷﾌHWtｷﾋLﾙﾖQ4D3XﾊﾜXmpktﾚｻ5ﾅﾅﾇ1gkﾏsCFQGH9` | Dual-signature wonderland example (weight 1 + 2). |
+| `addr-multisig-default-quorum3` | `≥3`, members `(1,1,1,1)` | `nA2bDNhMqXz7ERkHNoEWbvJGyR1aDRsw32LaUWLgbK3vcpzohmdFCLvdotxUWWDY3aZeX4ptLk4Z6TjF5ossnJm8VrNo6daxmGTkqUyP4MxJxiNyPFxsEE5DLnsoLWUcxaWNpZ76tmkbiGS31Gv8tejKpuiHUMaQ1s5ohWyZvDnpycNkBK8AEfGJqn5yc9zAzfWbVhpDwkPj8ScnzvH1Echr5` | `snx1ﾐ38ﾅｴｸﾜ8ﾃzwBrqﾘｺ4yﾄv6kqJp1ｳｱﾛｿrzﾄﾃﾘﾒRﾗtV9ｼﾔPｽcヱEﾌVVVｼﾘｲZAｦﾓﾅｦeﾒN76vﾈcuｶuﾛL54rzﾙﾏX2zMﾌRLﾃﾋpﾚpｲcHﾑﾅﾃﾔzｵｲVfAﾃﾚﾎﾚCヰﾔｲｽｦw9ﾔﾕ8bGGkﾁ6sNｼaｻRﾖﾜYﾕﾚU18ﾅHヰﾌuMeﾊtﾂrｿj95Ft8ﾜ3fﾄkNiｴuﾈrCﾐQt8ヱｸｸmﾙﾒgUbﾑEKTTCM` | Implicit-default domain quorum used for base governance.
 
-Os testes de unidade (`account::address::tests::parse_any_accepts_all_formats`)
-verificam esses vetores V1 via `AccountAddress::parse_any`, garantindo que o
-tooling possa confiar no mesmo payload canônico em representações hex, IH58 e
-comprimidas. O conjunto estendido de fixtures pode ser regenerado com:
+#### 2.4 Failure rules (ADDR-1a)
 
-```text
+- Payloads shorter than the required header + selector or with leftover bytes emit `AccountAddressError::InvalidLength` or `AccountAddressError::UnexpectedTrailingBytes`.
+- Headers that set the reserved `ext_flag` or advertise unsupported versions/classes MUST be rejected using `UnexpectedExtensionFlag`, `InvalidHeaderVersion`, or `UnknownAddressClass`.
+- Unknown selector/controller tags raise `UnknownDomainTag` or `UnknownControllerTag`.
+- Oversized or malformed key material raises `KeyPayloadTooLong` or `InvalidPublicKey`.
+- Multisig controllers exceeding 255 members raise `MultisigMemberOverflow`.
+- IME/NFKC conversions: half-width Sora kana can be normalised to their full-width forms without breaking decoding, but the ASCII `snx1` sentinel and IH58 digits/letters MUST stay ASCII. Full-width or case-folded sentinels surface `ERR_MISSING_COMPRESSED_SENTINEL`, full-width ASCII payloads raise `ERR_INVALID_COMPRESSED_CHAR`, and checksum mismatches bubble up as `ERR_CHECKSUM_MISMATCH`. Property tests in `crates/iroha_data_model/src/account/address.rs` cover these paths so SDKs and wallets can rely on deterministic failures.
+- Torii and SDK parsing of `address@domain` aliases now emit the same `ERR_*` codes when IH58 (preferred)/snx1 (second-best) inputs fail before alias fallback (e.g., checksum mismatch, domain digest mismatch), so clients can relay structured reasons without guessing from prose strings.
+- Local selector payloads shorter than 12 bytes surface `ERR_LOCAL8_DEPRECATED`, preserving a hard cutover from legacy Local‑8 digests.
+- Domainless IH58 (preferred)/snx1 (second-best) literals resolve the embedded selector via the domain-selector resolver; if none is installed (or the selector cannot be resolved) parsing fails with `ERR_DOMAIN_SELECTOR_UNRESOLVED`. The implicit default selector resolves to the configured default domain label without requiring a resolver.
+
+#### 2.5 Normative binary vectors
+
+- **Implicit default domain (`default`, seed byte `0x00`)**  
+  Canonical hex: `0x0200000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.  
+  Breakdown: `0x02` header, `0x00` selector (implicit default), `0x00` controller tag, `0x01` curve id (Ed25519), `0x20` key length, followed by the 32-byte key payload.
+- **Local domain digest (`treasury`, seed byte `0x01`)**  
+  Canonical hex: `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8`.  
+  Breakdown: `0x02` header, selector tag `0x01` plus digest `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, followed by the single-key payload (`0x00` tag, `0x01` curve id, `0x20` length, 32-byte Ed25519 key).
+
+Unit tests (`account::address::tests::parse_any_accepts_all_formats`) assert the V1 vectors below via `AccountAddress::parse_any`, guaranteeing that tooling can rely on the canonical payload across hex, IH58 (preferred), and compressed (`snx1`, second-best) forms. Regenerate the extended fixture set with `cargo run -p iroha_data_model --example address_vectors`.
+
+| Domain      | Seed byte | Canonical hex                                                                 | Compressed (`snx1`) |
+|-------------|-----------|-------------------------------------------------------------------------------|------------|
+| default     | `0x00`    | `0x0200000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201` | `snx12QGﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5E5` |
+| treasury    | `0x01`    | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8` | `snx15ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾘｻYﾃhﾓMQ9CBEﾅﾊﾈｷﾉVRｺnKRwTﾋｼqﾅWrﾎU7ｼiﾍQt1TPGNJ` |
+| wonderland  | `0x02`    | `0x0201b8ae571b79c5a80f5834da2b000120ad29ac2c12d4daaa4a2415235f2b01730bff1193dd4a6eaee29e945b01a4a212` | `snx15ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓRKSｷﾗﾕneﾀM3Rabvﾂ1JﾚﾉｺｲﾕｹｺﾀFﾔﾇﾖFSXsﾜCHmB59S5KS` |
+| iroha       | `0x03`    | `0x0201de8b36819700c807083608e2000120ce6d4f240893505e112cdc1b83585d8efc271ea6f934c5f6a49217e27e61b9e7` | `snx15ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓsYヰxﾎﾍﾚﾇｺﾊehjyzXGヰaｿSﾔ1kWｺｾJeﾒAWkwﾋﾐRRQQKXYE` |
+| alpha       | `0x04`    | `0x020146be2154ae86826a3fef0ec000012077143459c5b54808313cd57ded18322fc02c4616de930e0e3af578bb509bb5dc` | `snx15ｻ9JヱﾈｿuwU6ｴpﾔﾂﾈRqRSﾗgPﾏrHﾔGﾀqﾂｹfoﾂHwﾉoﾊ4ﾎﾇ74ｼﾕﾎUw8JaU3ﾙJFYHVLUS` |
+| omega       | `0x05`    | `0x0201390d946885bc8416b3d30c9d000120e18cbb31e5249ff9205b72fe50e50dcc78fb80e28028bdc4c47bcf63ee61c6b8` | `snx15ｻ3zrﾌuﾚﾄJﾑXQhｸTyN8qfBﾌﾒaTjQpTxPﾊｦNﾚnヱvorHｷﾎkﾈEヱFﾎｻTUﾗhiVqURKRVM` |
+| governance  | `0x06`    | `0x0201989eb45a80940d187e2c908f0001208a5bd65d39ba61bde2a87ee10d242bd5575cd02bf687c4b5960d4141698dd76a` | `snx15ｻiｵﾁyVﾕｽbFpDHHuﾇﾉdﾗｲﾌbﾜｸeGｵzﾙzｽﾐﾌﾉQﾃw2ﾕLDﾔｽﾙFﾙﾇﾋBTdUXﾎﾙsｽRDJCHS` |
+| validators  | `0x07`    | `0x0201e4ffa58704c69afaeb7cc2d7000120f0f80d8a09aa1276d2e605bc904137f7a52b9c4847b9b5366d4002ca4049daeb` | `snx15ｻﾀLDH6VYﾑNAｾgﾉVﾜtxﾊWTﾂfKｳmU7fWﾍXｱ2JnyﾋE4ﾕghZｱVｶｦﾇaFﾕbr8qﾑR4VEFR` |
+| explorer    | `0x08`    | `0x02013b35422c65c2a83c99c523ad00012033af4073c5815cbe5d0fec37cffe02e542302b60e24d8a7c0819f772ca6886f9` | `snx15ｻ4nmｻaﾚﾚPvNLgｿｱv6MHdPﾓWﾍヱpeﾕFﾕmFﾌﾀKhﾉWｴeﾋbｷXMﾎ2ﾃnQﾐﾗﾑﾎBBｻC8P548` |
+| soranet     | `0x09`    | `0x0201047d9ea7f5d5dbec3f7bfc58000120cd3c119f6c81e28a2747c531f5cbe8dbc44ed8e16751bc4a467445b272db4097` | `snx15ｱｸヱVQﾂcﾁヱRﾓcApｲﾁﾅﾒvwS8JｳEnQaｿHTdﾒXZﾍvﾆazｿgﾔﾙhF9hcsﾘvNﾌヱJ9MGDNBW` |
+| kitsune     | `0x0A`    | `0x0201e91933de397fd7723dc9a76c0001206e4c4188e1b8455ff3369dc163240a5d653f13a6f420fd0edbb23303bad239e7` | `snx15ｻﾚｺヱkfFJfSﾁｼJwﾉLvbpzﾘKmC6ｱSﾇhqｦJB1gﾙwCwﾁﾍeﾉﾔABﾆpqYﾍEﾌｼﾆﾃFNCAT97` |
+| da          | `0x0B`    | `0x02016838cf5bb0ce0f3d4f380e1c00012056f02721c153689b09efafd07d8ef7bed2c4a581dd00faa118aed1d51f7a1ad6` | `snx15ｻNﾒ5SﾐRﾉﾐﾃ62ｿ1ｶｷWFKmgﾁﾃｻ3ｸGLpﾄﾆHnXGﾘﾑDﾃJ6ｸXﾐﾂﾊwhｶtｵｾｴﾃ9PﾖDFC3YQ` |
+
+Reviewed-by: Data Model WG, Cryptography WG — scope approved for ADDR-1a.
+
+##### Sora Nexus reference aliases
+
+Sora Nexus networks default to `chain_discriminant = 0x02F1`
+(`iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT`). The
+`AccountAddress::to_ih58` and `to_compressed_sora` helpers therefore emit
+consistent textual forms for every canonical payload. Selected fixtures from
+`fixtures/account/address_vectors.json` (generated via
+`cargo xtask address-vectors`) are shown below for quick reference:
+
+| Account / selector | IH58 literal (prefix `0x02F1`) | Sora compressed (`snx1`) literal |
+|--------------------|--------------------------------|-------------------------|
+| `default` domain (implicit selector, seed `0x00`) | `RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS` | `snx12QGﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5E5` (optional `@default` suffix when providing explicit routing hints) |
+| `treasury` (local digest selector, seed `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `snx15ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾘｻYﾃhﾓMQ9CBEﾅﾊﾈｷﾉVRｺnKRwTﾋｼqﾅWrﾎU7ｼiﾍQt1TPGNJ` |
+| Global registry pointer (`registry_id = 0x0000_002A`, equivalent to `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `snx1kXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
+
+These strings match the ones emitted by the CLI (`iroha address convert`), Torii
+responses (`address_format=ih58|compressed`), and SDK helpers, so UX copy/paste
+flows can rely on them verbatim. Append `<address>@<domain>` only when you need an explicit routing hint; the suffix is not part of the canonical output.
+
+#### 2.6 Textual aliases for interoperability (planned)
+
+- **Chain-alias style:** `ih:<chain-alias>:<alias@domain>` for logs and human
+  entry. Wallets must parse the prefix, verify the embedded chain, and block
+  mismatches.
+- **CAIP-10 form:** `iroha:<caip-2-id>:<ih58-addr>` for chain-agnostic
+  integrations. This mapping is **not yet implemented** in the shipped
+  toolchains.
+- **Machine helpers:** Publish codecs for Rust, TypeScript/JavaScript, Python,
+  and Kotlin covering IH58 and compressed formats (`AccountAddress::to_ih58`,
+  `AccountAddress::parse_any`, and their SDK equivalents). CAIP-10 helpers are
+  future work.
+
+#### 2.7 Deterministic IH58 alias
+
+- **Prefix mapping:** Reuse the `chain_discriminant` as the IH58 network prefix.
+  `encode_ih58_prefix()` (see `crates/iroha_data_model/src/account/address.rs`)
+  emits a 6‑bit prefix (single byte) for values `<64` and a 14‑bit, two-byte
+  form for larger networks. The authoritative assignments live in
+  [`address_prefix_registry.md`](source/references/address_prefix_registry.md);
+  SDKs MUST keep the matching JSON registry in sync to avoid collisions.
+- **Account material:** IH58 encodes the canonical payload built by
+  `AccountAddress::canonical_bytes()`—header byte, domain selector, and
+  controller payload. There is no additional hashing step; IH58 embeds the
+  binary controller payload (single key or multisig) as produced by the Rust
+  encoder, not the CTAP2 map used for multisig policy digests.
+- **Encoding:** `encode_ih58()` concatenates the prefix bytes with the canonical
+  payload and appends a 16-bit checksum derived from Blake2b-512 with the fixed
+  prefix `IH58PRE` (`b"IH58PRE" || prefix || payload`). The result is Base58-encoded via `bs58`.
+  CLI/SDK helpers expose the same procedure, and `AccountAddress::parse_any`
+  reverses it via `decode_ih58`.
+
+#### 2.8 Normative textual test vectors
+
+`fixtures/account/address_vectors.json` contains full IH58 (preferred) and compressed (`snx1`, second-best)
+literals for every canonical payload. Highlights:
+
+- **`addr-single-default-ed25519` (Sora Nexus, prefix `0x02F1`).**  
+  IH58 `RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS`, compressed (`snx1`)
+  `snx12QG…U4N5E5`. Torii emits these exact strings from `AccountId`’s
+  `Display` implementation (canonical IH58) and `AccountAddress::to_compressed_sora`.
+- **`addr-global-registry-002a` (registry selector → treasury).**  
+  IH58 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`, compressed (`snx1`)
+  `snx1kX…CM6AEP`. Demonstrates that registry selectors still decode to
+  the same canonical payload as the corresponding local digest.
+- **Failure case (`ih58-prefix-mismatch`).**  
+  Parsing an IH58 literal encoded with prefix `NETWORK_PREFIX + 1` on a node
+  expecting the default prefix yields
+  `AccountAddressError::UnexpectedNetworkPrefix { expected: 753, found: 754 }`
+  before domain routing is attempted. The `ih58-checksum-mismatch` fixture
+  exercises tampering detection over the Blake2b checksum.
+
+#### 2.9 Compliance fixtures
+
+ADDR‑2 ships a replayable fixture bundle covering positive and negative
+scenarios across canonical hex, IH58 (preferred), compressed (`snx1`, half-/full-width), implicit
+default selectors, global registry aliases, and multisignature controllers. The
+canonical JSON lives in `fixtures/account/address_vectors.json` and can be
+regenerated with:
+
+```
 cargo xtask address-vectors --out fixtures/account/address_vectors.json
+# verify without writing:
+cargo xtask address-vectors --verify
 ```
 
-### 3. Domínios globalmente únicos e normalização
+For ad-hoc experiments (different paths/formats) the example binary is still
+available:
 
-Veja também
-[`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md)
-para a pipeline Norm v1 canônica usada em Torii, no modelo de dados e nos
-SDKs.
+```
+cargo run -p iroha_data_model --example account_address_vectors > fixtures/account/address_vectors.json
+```
 
-`DomainId` passa a ser uma tupla etiquetada:
+Rust unit tests in `crates/iroha_data_model/tests/account_address_vectors.rs`
+and `crates/iroha_torii/tests/account_address_vectors.rs`, together with the JS,
+Swift, and Android harnesses (`javascript/iroha_js/test/address.test.js`,
+`IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift`,
+`java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`),
+consume the same fixture to guarantee codec parity across SDKs and Torii admission.
 
-```text
+### 3. Globally unique domains & normalization
+
+See also: [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md)
+for the canonical Norm v1 pipeline used across Torii, the data model, and SDKs.
+
+Redefine `DomainId` as a tagged tuple:
+
+```
 DomainId {
     name: Name,
-    authority: GlobalDomainAuthority, // novo enum
+    authority: GlobalDomainAuthority, // new enum
 }
 
 enum GlobalDomainAuthority {
-    LocalChain,                  // padrão para a cadeia local
+    LocalChain,                  // default for the local chain
     External { chain_discriminant: u16 },
 }
 ```
 
-`LocalChain` encapsula o `Name` existente para domínios gerenciados pela
-cadeia atual. Quando um domínio é registrado via registro global, persistimos
-o discriminante da cadeia proprietária. Exibição/parse permanecem inalterados
-por enquanto, mas a estrutura expandida permite decisões de roteamento.
+`LocalChain` wraps the existing Name for domains managed by the current chain.
+When a domain is registered through the global registry, we persist the owning
+chain’s discriminant. Display / parsing stays unchanged for now, but the
+expanded structure allows routing decisions.
 
-#### 3.1 Normalização e defesas contra spoofing
+#### 3.1 Normalization & spoofing defenses
 
-Norm v1 define a pipeline canônica que todo componente deve seguir antes de
-persistir um nome de domínio ou incorporá‑lo em `AccountAddress`. O walkthrough
-completo está em `docs/source/references/address_norm_v1.md`; o resumo abaixo
-captura os passos que wallets, Torii, SDKs e ferramentas de governança devem
-implementar.
+Norm v1 defines the canonical pipeline every component must use before a domain
+name is persisted or embedded into an `AccountAddress`. The full walkthrough
+lives in [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md);
+the summary below captures the steps that wallets, Torii, SDKs, and governance
+tools must implement.
 
-1. **Validação de entrada.** Rejeitar strings vazias, whitespace e delimitadores
-   reservados `@`, `#`, `$`. Isso corresponde às invariantes de
+1. **Input validation.** Reject empty strings, whitespace, and the reserved
+   delimiters `@`, `#`, `$`. This matches the invariants enforced by
    `Name::validate_str`.
-2. **Composição Unicode NFC.** Aplicar normalização NFC (via ICU) para colapsar
-   de forma determinística sequências canonicamente equivalentes
-   (por exemplo `e\u{0301}` → `é`).
-3. **Normalização UTS‑46.** Rodar a saída NFC através de UTS‑46 com
-   `use_std3_ascii_rules = true`, `transitional_processing = false` e
-   verificação de limites DNS ativada. O resultado é uma sequência de
-   A‑labels em minúsculas; entradas que violem STD3 falham aqui.
-4. **Limites de comprimento.** Aplicar os limites estilo DNS: cada label DEVE
-   ter 1–63 bytes e o domínio completo NÃO deve exceder 255 bytes após o
-   passo 3.
-5. **Política opcional de confundíveis.** Checks de script UTS‑39 são
-   acompanhados para Norm v2; operadores podem habilitá‑los antecipadamente,
-   mas uma falha nesse check deve abortar o processamento.
+2. **Unicode NFC composition.** Apply ICU-backed NFC normalisation so canonically
+   equivalent sequences collapse deterministically (e.g., `e\u{0301}` → `é`).
+3. **UTS-46 normalisation.** Run the NFC output through UTS‑46 with
+   `use_std3_ascii_rules = true`, `transitional_processing = false`, and
+   DNS-length enforcement enabled. The result is a lower-case A-label sequence;
+   inputs that violate STD3 rules fail here.
+4. **Length limits.** Enforce the DNS-style bounds: each label MUST be 1–63
+   bytes and the full domain MUST NOT exceed 255 bytes after step 3.
+5. **Optional confusable policy.** UTS‑39 script checks are tracked for
+   Norm v2; operators can enable them early, but failing the check must abort
+   processing.
 
-Se todos os passos forem bem‑sucedidos, a string de A‑labels em minúsculas é
-cacheada e usada para encoding de endereços, configuração, manifests e
-consultas ao registro. Selectors de digest local derivam seu valor de
-12 bytes como
-`blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]` usando a
-saída do passo 3. Outras formas de entrada (case misto, Unicode cru, etc.)
-são rejeitadas com `ParseError`s estruturados na fronteira em que o nome foi
-fornecido.
+If every stage succeeds, the lower-case A-label string is cached and used for
+address encoding, configuration, manifests, and registry lookups. Local digest
+selectors derive their 12-byte value as `blake2s_mac(key = "SORA-LOCAL-K:v1",
+canonical_label)[0..12]` using the step 3 output. All other attempts (mixed
+case, upper-case, raw Unicode input) are rejected with structured
+`ParseError`s at the boundary where the name was supplied.
 
-Fixtures canônicos que demonstram essas regras — incluindo round‑trips de
-punycode e sequências inválidas sob STD3 — estão em
-`docs/source/references/address_norm_v1.md` e são espelhados nos vetores de
-testes de CI dos SDKs acompanhados sob ADDR‑2.
+Canonical fixtures demonstrating these rules — including punycode round-trips
+and invalid STD3 sequences — are listed in
+`docs/source/references/address_norm_v1.md` and are mirrored in the SDK CI
+vector suites tracked under ADDR‑2.
 
-### 4. Registro de domínios no Nexus e roteamento
+### 4. Nexus domain registry & routing
 
-- **Esquema de registro:** o Nexus mantém um mapa assinado
-  `DomainName -> ChainRecord`, em que `ChainRecord` inclui o discriminante de
-  cadeia, metadados opcionais (endpoints RPC) e uma prova de autoridade
-  (por exemplo, multi‑assinatura de governança).
-- **Mecanismo de sincronização:**
-  - Cadeias submetem ao Nexus reivindicações de domínio assinadas (no gênese
-    ou via instruções de governança).
-  - O Nexus publica manifests periódicos (JSON assinado + raiz Merkle
-    opcional) sobre HTTPS e armazenamento endereçado por conteúdo
-    (por exemplo, IPFS). Clientes fazem pin do manifest mais recente e
-    verificam as assinaturas.
-- **Fluxo de consulta:**
-  - Torii recebe uma transação que referencia um `DomainId`.
-  - Se o domínio for desconhecido localmente, Torii consulta o manifest
-    cacheado do Nexus.
-  - Se o manifest indicar que o domínio pertence a outra cadeia, a transação é
-    rejeitada com erro determinístico `ForeignDomain` e informações sobre a
-    cadeia remota.
-  - Se o domínio não aparecer no Nexus, Torii retorna `UnknownDomain`.
-- **Âncoras de confiança e rotação:** chaves de governança assinam os
-  manifests; rotações ou revogações são publicadas como um novo manifest. Os
-  clientes aplicam TTL (por exemplo, 24 h) e recusam dados expirados além
-  dessa janela.
-- **Modos de falha:** se a obtenção do manifest falhar, Torii recorre ao
-  manifest em cache enquanto o TTL estiver válido; passado o TTL ele emite
-  `RegistryUnavailable` e recusa roteamento entre domínios para evitar
-  estados inconsistentes.
+- **Registry schema:** Nexus maintains a signed map `DomainName -> ChainRecord`
+  where `ChainRecord` includes the chain discriminant, optional metadata (RPC
+  endpoints), and a proof of authority (e.g., governance multi-signature).
+- **Sync mechanism:**
+  - Chains submit signed domain claims to Nexus (either during genesis or via
+    governance instruction).
+  - Nexus publishes periodic manifests (signed JSON plus optional Merkle root)
+    over HTTPS and content-addressed storage (e.g., IPFS). Clients pin the
+    latest manifest and verify signatures.
+- **Lookup flow:**
+  - Torii receives a transaction referencing `DomainId`.
+  - If the domain is unknown locally, Torii queries the cached Nexus manifest.
+  - If the manifest indicates a foreign chain, the transaction is rejected with
+    a deterministic `ForeignDomain` error and the remote chain info.
+  - If the domain is missing from Nexus, Torii returns `UnknownDomain`.
+- **Trust anchors & rotation:** Governance keys sign manifests; rotation or
+  revocation is published as a new manifest entry. Clients enforce manifest
+  TTLs (e.g., 24h) and refuse to consult stale data beyond that window.
+- **Failure modes:** If manifest retrieval fails, Torii falls back to cached
+  data within TTL; past TTL it emits `RegistryUnavailable` and refuses
+  cross-domain routing to avoid inconsistent state.
 
-#### 4.1 Imutabilidade do registro, aliases e tombstones (ADDR‑7c)
+### 4.1 Registry immutability, aliases, and tombstones (ADDR-7c)
 
-O Nexus publica um **manifest append‑only**, de modo que cada atribuição de
-domínio/alias possa ser auditada e reproduzida. Operadores devem tratar o
-bundle descrito em
-`docs/source/runbooks/address_manifest_ops.md` como fonte única da verdade:
-se um manifest estiver ausente ou falhar validação, o Torii deve recusar‑se a
-resolver o domínio afetado.
+Nexus publishes an **append-only manifest** so every domain or alias assignment
+can be audited and replayed. Operators must treat the bundle described in the
+[address manifest runbook](source/runbooks/address_manifest_ops.md) as the
+sole source of truth: if a manifest is missing or fails validation, Torii must
+refuse to resolve the affected domain.
 
-Suporte de automação:
-`cargo xtask address-manifest verify --bundle <current_dir> --previous <previous_dir>`
-reexecuta as verificações de checksum, schema e `previous_digest` descritas
-no runbook. Inclua a saída do comando nos tickets de mudança para mostrar que
-o vínculo `sequence` + `previous_digest` foi validado antes de publicar o
-bundle.
+Automation support: `cargo xtask address-manifest verify --bundle <current_dir> --previous <previous_dir>`
+replays the checksum, schema, and previous-digest checks spelled out in the
+runbook. Include the command output in change tickets to show the `sequence`
+and `previous_digest` linkage was validated before publishing the bundle.
 
-##### Cabeçalho de manifest e contrato de assinatura
+#### Manifest header & signature contract
 
-| Campo               | Requisito |
-|---------------------|-----------|
-| `version`           | Atualmente `1`. Só deve ser incrementado junto a uma atualização do spec. |
-| `sequence`          | Deve ser incrementado em **exatamente** 1 a cada publicação. Torii rejeita revisões com saltos ou regressões. |
-| `generated_ms` + `ttl_hours` | Definem a frescura de cache (padrão 24 h). Se o TTL expira antes do próximo manifest, Torii passa a `RegistryUnavailable`. |
-| `previous_digest`   | Digest BLAKE3 (hex) do corpo do manifest anterior. Verificadores o recalculam com `b3sum` para provar imutabilidade. |
-| `signatures`        | Manifests são assinados via Sigstore (`cosign sign-blob`). Operações deve executar `cosign verify-blob --bundle manifest.sigstore manifest.json` e aplicar as restrições de identidade/emissor de governança antes do rollout. |
+| Field | Requirement |
+|-------|-------------|
+| `version` | Currently `1`. Bump only with a matching spec update. |
+| `sequence` | Increment by **exactly** one per publication. Torii caches refuse revisions with gaps or regressions. |
+| `generated_ms` + `ttl_hours` | Establish cache freshness (default 24 h). If the TTL expires before the next publication, Torii flips to `RegistryUnavailable`. |
+| `previous_digest` | BLAKE3 digest (hex) of the prior manifest body. Verifiers recompute it with `b3sum` to prove immutability. |
+| `signatures` | Manifests are signed via Sigstore (`cosign sign-blob`). Ops must run `cosign verify-blob --bundle manifest.sigstore manifest.json` and enforce the governance identity/issuer constraints before rollout. |
 
-A automação de release gera `manifest.sigstore` e `checksums.sha256` ao lado
-do corpo JSON. Esses arquivos devem ser mantidos juntos ao espelhar para
-SoraFS ou endpoints HTTP, para que auditores possam reproduzir os passos de
-verificação literalmente.
+The release automation emits `manifest.sigstore` and `checksums.sha256`
+alongside the JSON body. Keep the files together when mirroring to SoraFS or
+HTTP endpoints so auditors can replay the verification steps verbatim.
 
-##### Tipos de entrada
+#### Entry types
 
-| Tipo           | Propósito | Campos obrigatórios |
-|----------------|-----------|---------------------|
-| `global_domain` | Declara que um domínio está registrado globalmente e deve ser mapeado para um discriminante de cadeia e prefixo IH58. | `{ "domain": "<label>", "chain": "sora:nexus:global", "ih58_prefix": 753, "selector": "global" }` |
-| `local_alias`   | Acompanha selectors alternativos (`Local-12`) que ainda roteiam localmente. Adiciona o digest de 12 bytes e um `alias_label` opcional. | `{ "domain": "<label>", "selector": { "kind": "local", "digest_hex": "<12-byte-hex>" }, "alias_label": "<optional>" }` |
-| `tombstone`     | Retira permanentemente um alias/selector. Obrigatório ao remover digests Local‑8 ou eliminar um domínio. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
+| Type | Purpose | Required fields |
+|------|---------|-----------------|
+| `global_domain` | Declares that a domain is registered globally and should map to a chain discriminant and IH58 prefix. | `{ "domain": "<label>", "chain": "sora:nexus:global", "ih58_prefix": 753, "selector": "global" }` |
+| `tombstone` | Retires an alias/selector permanently. Required when erasing Local‑8 digests or removing a domain. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
 
-Entradas `global_domain` podem opcionalmente incluir `manifest_url` ou
-`sorafs_cid` para apontar para metadados de cadeia assinados, mas a tupla
-canônica permanece `{domain, chain, discriminant/ih58_prefix}`. Registros
-`tombstone` **devem** citar o selector que está sendo retirado e o
-ticket/artefato de governança que autorizou a mudança, de modo que o trilho de
-auditoria possa ser reconstruído offline.
+`global_domain` entries may optionally include a `manifest_url` or `sorafs_cid`
+to point wallets at signed chain metadata, but the canonical tuple remains
+`{domain, chain, discriminant/ih58_prefix}`. `tombstone` records **must** cite
+the selector being retired and the ticket/governance artefact that authorised
+the change so the audit trail is reconstructable offline.
 
-##### Fluxo de alias/tombstone e telemetria
+#### Alias/tombstone workflow & telemetry
 
 1. **Detectar drift.** Use
    `torii_address_local8_total{endpoint}` e

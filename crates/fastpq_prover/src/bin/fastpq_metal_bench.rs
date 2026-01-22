@@ -2956,9 +2956,8 @@ mod harness {
 
     #[test]
     fn enforce_gpu_requirement_errors_when_requested() {
-        let error =
-            self::enforce_gpu_requirement(true, false, false, ExecutionMode::Cpu, "none")
-                .expect_err("missing GPU should error when required");
+        let error = self::enforce_gpu_requirement(true, false, false, ExecutionMode::Cpu, "none")
+            .expect_err("missing GPU should error when required");
         assert!(error.contains("--require-gpu"));
         assert!(error.contains("resolved mode=cpu"));
 
@@ -2970,14 +2969,7 @@ mod harness {
     fn classify_run_marks_missing_queue() {
         let cpu = Summary::from_samples(&[1.0]);
         let gpu = Summary::from_samples(&[0.5]);
-        let operations = vec![self::operation_value(
-            "fft",
-            8,
-            2,
-            &cpu,
-            Some(&gpu),
-            None,
-        )];
+        let operations = vec![self::operation_value("fft", 8, 2, &cpu, Some(&gpu), None)];
         let status = classify_run(
             true,
             "metal",
@@ -3027,14 +3019,7 @@ mod harness {
     fn classify_run_accepts_complete_gpu_capture() {
         let cpu = Summary::from_samples(&[1.0, 1.2]);
         let gpu = Summary::from_samples(&[0.4, 0.5]);
-        let operations = vec![self::operation_value(
-            "fft",
-            8,
-            2,
-            &cpu,
-            Some(&gpu),
-            None,
-        )];
+        let operations = vec![self::operation_value("fft", 8, 2, &cpu, Some(&gpu), None)];
         let queue = QueueDepthStats {
             limit: 4,
             dispatch_count: 3,

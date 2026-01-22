@@ -62,7 +62,7 @@ Example config with required knobs and multiple bindings:
   },
   "tryIt": {
     "proxyUrl": "https://tryit-preview.sora",
-    "samplePath": "/proxy/v1/accounts/wonderland@wonderland/assets?limit=1",
+    "samplePath": "/proxy/v1/accounts/ih58.../assets?limit=1",
     "method": "GET",
     "timeoutMs": 7000,
     "token": "${TRYIT_BEARER}",

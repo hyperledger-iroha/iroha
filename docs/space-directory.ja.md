@@ -120,11 +120,11 @@ iroha app space-directory manifest scaffold \
   --deny-program cbdc.kit \
   --deny-method withdraw \
   --deny-reason "Withdrawals disabled for this UAID." \
-  --profile-governance-issuer parliament@cbdc \
+  --profile-governance-issuer ih58... \
   --profile-governance-ticket gov-2026-02-rotation \
-  --profile-validator cbdc-validator-1@cbdc \
-  --profile-validator cbdc-validator-2@cbdc \
-  --profile-da-attester da-attester-1@cbdc
+  --profile-validator ih58... \
+  --profile-validator ih58... \
+  --profile-da-attester ih58...
 ```
 
 このコマンドは `manifest.json` と `profile.json` を書き出し
