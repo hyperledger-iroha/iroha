@@ -71,6 +71,7 @@ const THROUGHPUT_NPOS_SLO_P99_MS: u64 = 3_000;
 const THROUGHPUT_NPOS_SLO_VIEW_CHANGE_RATE_MAX: f64 = 0.2;
 const THROUGHPUT_NPOS_SLO_BACKPRESSURE_RATE_MAX: f64 = 3.0;
 const THROUGHPUT_NPOS_SLO_QUEUE_SAT_FRAC_MAX: f64 = 0.3;
+const THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_ENV: &str = "IROHA_THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_SECS";
 
 #[allow(unsafe_code)]
 fn set_env_var(key: &str, value: impl AsRef<std::ffi::OsStr>) {
@@ -108,6 +109,12 @@ fn env_or_default_f64(key: &str, default: f64) -> f64 {
         .and_then(|value| value.parse::<f64>().ok())
         .filter(|value| value.is_finite() && *value >= 0.0)
         .unwrap_or(default)
+}
+
+fn queue_progress_timeout() -> Duration {
+    let default_secs = SOAK_QUEUE_PROGRESS_TIMEOUT.as_secs();
+    let secs = env_or_default(THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_ENV, default_secs);
+    Duration::from_secs(secs)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -646,7 +653,9 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
 
         let network_dir = network.env_dir().to_path_buf();
         let http = HttpClient::new();
+        let mut artifacts = ThroughputArtifacts::default();
 
+        let run_result: Result<()> = async {
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
         let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         let baseline_non_empty = baseline_statuses
@@ -698,6 +707,46 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         let warmup_txs = warmup_blocks.saturating_mul(THROUGHPUT_BLOCK_MAX_TXS);
         let steady_txs = steady_blocks.saturating_mul(THROUGHPUT_BLOCK_MAX_TXS);
         let total_txs = warmup_txs.saturating_add(steady_txs);
+
+        artifacts.recipe = Some(ThroughputArtifactRecipe {
+            peers: network.peers().len() as u64,
+            block_time_ms: THROUGHPUT_BLOCK_TIME_MS,
+            commit_time_ms: THROUGHPUT_COMMIT_TIME_MS,
+            block_max_txs: THROUGHPUT_BLOCK_MAX_TXS,
+            warmup_blocks,
+            steady_blocks,
+            total_blocks,
+            warmup_txs,
+            steady_txs,
+            total_txs,
+            submit_batch,
+            submit_parallelism: submit_parallelism as u64,
+            queue_soft_limit,
+            payload_bytes: payload_bytes as u64,
+            rng_seed,
+        });
+
+        let slo_p95_ms = env_or_default("IROHA_THROUGHPUT_SLO_P95_MS", THROUGHPUT_SLO_P95_MS);
+        let slo_p99_ms = env_or_default("IROHA_THROUGHPUT_SLO_P99_MS", THROUGHPUT_SLO_P99_MS);
+        let slo_view_change_rate = env_or_default_f64(
+            "IROHA_THROUGHPUT_SLO_VIEW_CHANGE_RATE",
+            THROUGHPUT_SLO_VIEW_CHANGE_RATE_MAX,
+        );
+        let slo_backpressure_rate = env_or_default_f64(
+            "IROHA_THROUGHPUT_SLO_BACKPRESSURE_RATE",
+            THROUGHPUT_SLO_BACKPRESSURE_RATE_MAX,
+        );
+        let slo_queue_saturation = env_or_default_f64(
+            "IROHA_THROUGHPUT_SLO_QUEUE_SAT_FRAC",
+            THROUGHPUT_SLO_QUEUE_SAT_FRAC_MAX,
+        );
+        artifacts.slo = Some(ThroughputArtifactSlo {
+            commit_p95_ms: slo_p95_ms,
+            commit_p99_ms: slo_p99_ms,
+            view_change_rate_max: slo_view_change_rate,
+            backpressure_rate_max: slo_backpressure_rate,
+            queue_saturation_max: slo_queue_saturation,
+        });
 
         let submit_peer = network
             .peers()
@@ -983,6 +1032,30 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             0.0
         };
 
+        let metrics = ThroughputArtifactMetrics {
+            submitted_tps,
+            committed_tps,
+            commit_p95_ms,
+            commit_p99_ms,
+            commit_hist_count,
+            commit_time_ms_min: min_commit_time_ms,
+            commit_time_ms_avg: avg_commit_time_ms,
+            commit_time_ms_max: max_commit_time_ms,
+            view_change_rate_avg: view_change_avg,
+            view_change_rate_max: view_change_max,
+            backpressure_rate_avg: backpressure_avg,
+            backpressure_rate_max: backpressure_max,
+            queue_saturated_frac,
+            max_queue_depth,
+            steady_elapsed_ms: steady_elapsed.as_millis() as u64,
+            warmup_submit_elapsed_ms: warmup_submit_elapsed.as_millis() as u64,
+            steady_submit_elapsed_ms: steady_submit_elapsed.as_millis() as u64,
+        };
+        artifacts.metrics = Some(metrics);
+        artifacts.samples = samples;
+        artifacts.warmup_metrics = warmup_metrics;
+        artifacts.after_metrics = after_metrics;
+
         eprintln!(
             "localnet throughput metrics: peers={}, warmup_blocks={}, steady_blocks={}, warmup_txs={}, steady_txs={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, payload_bytes={}, warmup_submit_elapsed={:?}, steady_submit_elapsed={:?}, steady_elapsed={:?}, submitted_tps={:.2}, committed_tps={:.2}, commit_hist_count={}, commit_time_ms(min/avg/max/p95/p99)={}/{}/{}/{}/{}, view_change_rate(avg/max)={:.4}/{:.4}, backpressure_rate(avg/max)={:.4}/{:.4}, queue_saturated_frac={:.2}, max_queue_depth={}",
             network.peers().len(),
@@ -1017,21 +1090,6 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             "commit time exceeded target: max_commit_time_ms={max_commit_time_ms}, allowed={max_commit_time_allowed}",
         );
 
-        let slo_p95_ms = env_or_default("IROHA_THROUGHPUT_SLO_P95_MS", THROUGHPUT_SLO_P95_MS);
-        let slo_p99_ms = env_or_default("IROHA_THROUGHPUT_SLO_P99_MS", THROUGHPUT_SLO_P99_MS);
-        let slo_view_change_rate = env_or_default_f64(
-            "IROHA_THROUGHPUT_SLO_VIEW_CHANGE_RATE",
-            THROUGHPUT_SLO_VIEW_CHANGE_RATE_MAX,
-        );
-        let slo_backpressure_rate = env_or_default_f64(
-            "IROHA_THROUGHPUT_SLO_BACKPRESSURE_RATE",
-            THROUGHPUT_SLO_BACKPRESSURE_RATE_MAX,
-        );
-        let slo_queue_saturation = env_or_default_f64(
-            "IROHA_THROUGHPUT_SLO_QUEUE_SAT_FRAC",
-            THROUGHPUT_SLO_QUEUE_SAT_FRAC_MAX,
-        );
-
         if commit_hist_count > 0 {
             ensure!(
                 commit_p95_ms <= slo_p95_ms,
@@ -1061,233 +1119,39 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             );
         }
 
+        Ok(())
+    }
+    .await;
+
+        if let Err(err) = &run_result {
+            artifacts.error = Some(err.to_string());
+        }
         if let Some(artifact_root) = std::env::var_os("IROHA_THROUGHPUT_ARTIFACT_DIR") {
             let root = PathBuf::from(artifact_root);
-            let timestamp_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
-            let run_dir = root.join(format!(
-                "throughput-{}",
-                u64::try_from(timestamp_ms).unwrap_or(u64::MAX)
-            ));
-            fs::create_dir_all(&run_dir).wrap_err("create throughput artifact dir")?;
-
-            let metrics_dir = run_dir.join("metrics");
-            fs::create_dir_all(&metrics_dir).wrap_err("create metrics dir")?;
-
-            for snapshot in &warmup_metrics {
-                let path = metrics_dir.join(format!("{}-warmup.prom", snapshot.peer));
-                fs::write(&path, &snapshot.payload)
-                    .wrap_err_with(|| format!("write warmup metrics {}", path.display()))?;
-            }
-            for snapshot in &after_metrics {
-                let path = metrics_dir.join(format!("{}-steady.prom", snapshot.peer));
-                fs::write(&path, &snapshot.payload)
-                    .wrap_err_with(|| format!("write steady metrics {}", path.display()))?;
-            }
-
-            let status_samples_value = Value::Array(
-                samples
-                    .iter()
-                    .map(|sample| {
-                        let mut map = Map::new();
-                        map.insert(
-                            "timestamp_ms".to_string(),
-                            Value::from(sample.timestamp_ms),
-                        );
-                        map.insert(
-                            "status".to_string(),
-                            Value::Array(
-                                sample
-                                    .statuses
-                                    .iter()
-                                    .map(status_snapshot_value)
-                                    .collect(),
-                            ),
-                        );
-                        map.insert(
-                            "sumeragi".to_string(),
-                            Value::Array(
-                                sample
-                                    .sumeragi
-                                    .iter()
-                                    .map(sumeragi_snapshot_value)
-                                    .collect(),
-                            ),
-                        );
-                        Value::Object(map)
-                    })
-                    .collect(),
-            );
-
-            let status_path = run_dir.join("status_samples.json");
-            let status_json = norito::json::to_json_pretty(&status_samples_value)
-                .map_err(|err| eyre!(err.to_string()))?;
-            fs::write(&status_path, status_json)
-                .wrap_err_with(|| format!("write {}", status_path.display()))?;
-
-            let config_fingerprint = config_fingerprint(&network_dir)?;
-
-            let mut summary = Map::new();
-            summary.insert(
-                "run_id".to_string(),
-                Value::String(
-                    run_dir
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string(),
-                ),
-            );
-            summary.insert(
-                "timestamp_ms".to_string(),
-                Value::from(u64::try_from(timestamp_ms).unwrap_or(u64::MAX)),
-            );
-            summary.insert(
-                "network_dir".to_string(),
-                Value::String(network_dir.to_string_lossy().to_string()),
-            );
-            summary.insert(
-                "config_fingerprint".to_string(),
-                config_fingerprint.map_or(Value::Null, Value::String),
-            );
-
-            let mut recipe = Map::new();
-            recipe.insert("peers".to_string(), Value::from(network.peers().len() as u64));
-            recipe.insert("block_time_ms".to_string(), Value::from(THROUGHPUT_BLOCK_TIME_MS));
-            recipe.insert("commit_time_ms".to_string(), Value::from(THROUGHPUT_COMMIT_TIME_MS));
-            recipe.insert("block_max_txs".to_string(), Value::from(THROUGHPUT_BLOCK_MAX_TXS));
-            recipe.insert("warmup_blocks".to_string(), Value::from(warmup_blocks));
-            recipe.insert("steady_blocks".to_string(), Value::from(steady_blocks));
-            recipe.insert("total_blocks".to_string(), Value::from(total_blocks));
-            recipe.insert("warmup_txs".to_string(), Value::from(warmup_txs));
-            recipe.insert("steady_txs".to_string(), Value::from(steady_txs));
-            recipe.insert("total_txs".to_string(), Value::from(total_txs));
-            recipe.insert("submit_batch".to_string(), Value::from(submit_batch));
-            recipe.insert(
-                "submit_parallelism".to_string(),
-                Value::from(submit_parallelism as u64),
-            );
-            recipe.insert("queue_soft_limit".to_string(), Value::from(queue_soft_limit));
-            recipe.insert("payload_bytes".to_string(), Value::from(payload_bytes as u64));
-            recipe.insert("rng_seed".to_string(), Value::from(rng_seed));
-            summary.insert("recipe".to_string(), Value::Object(recipe));
-
-            let mut slo = Map::new();
-            slo.insert("commit_p95_ms".to_string(), Value::from(slo_p95_ms));
-            slo.insert("commit_p99_ms".to_string(), Value::from(slo_p99_ms));
-            slo.insert(
-                "view_change_rate_max".to_string(),
-                Value::from(slo_view_change_rate),
-            );
-            slo.insert(
-                "backpressure_rate_max".to_string(),
-                Value::from(slo_backpressure_rate),
-            );
-            slo.insert(
-                "queue_saturation_max".to_string(),
-                Value::from(slo_queue_saturation),
-            );
-            summary.insert("slo".to_string(), Value::Object(slo));
-
-            let mut metrics = Map::new();
-            metrics.insert("submitted_tps".to_string(), Value::from(submitted_tps));
-            metrics.insert("committed_tps".to_string(), Value::from(committed_tps));
-            metrics.insert("commit_p95_ms".to_string(), Value::from(commit_p95_ms));
-            metrics.insert("commit_p99_ms".to_string(), Value::from(commit_p99_ms));
-            metrics.insert("commit_hist_count".to_string(), Value::from(commit_hist_count));
-            metrics.insert(
-                "commit_time_ms_min".to_string(),
-                Value::from(min_commit_time_ms),
-            );
-            metrics.insert(
-                "commit_time_ms_avg".to_string(),
-                Value::from(avg_commit_time_ms),
-            );
-            metrics.insert(
-                "commit_time_ms_max".to_string(),
-                Value::from(max_commit_time_ms),
-            );
-            metrics.insert(
-                "view_change_rate_avg".to_string(),
-                Value::from(view_change_avg),
-            );
-            metrics.insert(
-                "view_change_rate_max".to_string(),
-                Value::from(view_change_max),
-            );
-            metrics.insert(
-                "backpressure_rate_avg".to_string(),
-                Value::from(backpressure_avg),
-            );
-            metrics.insert(
-                "backpressure_rate_max".to_string(),
-                Value::from(backpressure_max),
-            );
-            metrics.insert(
-                "queue_saturated_frac".to_string(),
-                Value::from(queue_saturated_frac),
-            );
-            metrics.insert("max_queue_depth".to_string(), Value::from(max_queue_depth));
-            metrics.insert(
-                "steady_elapsed_ms".to_string(),
-                Value::from(steady_elapsed.as_millis() as u64),
-            );
-            metrics.insert(
-                "warmup_submit_elapsed_ms".to_string(),
-                Value::from(warmup_submit_elapsed.as_millis() as u64),
-            );
-            metrics.insert(
-                "steady_submit_elapsed_ms".to_string(),
-                Value::from(steady_submit_elapsed.as_millis() as u64),
-            );
-            summary.insert("metrics".to_string(), Value::Object(metrics));
-
-            let peer_logs: Vec<Value> = network
+            let peer_logs: Vec<PeerLogInfo> = network
                 .peers()
                 .iter()
                 .enumerate()
-                .map(|(index, peer)| {
-                    let mut map = Map::new();
-                    map.insert("index".to_string(), Value::from(index as u64));
-                    map.insert("mnemonic".to_string(), Value::String(peer.mnemonic().to_string()));
-                    let stdout = peer
+                .map(|(index, peer)| PeerLogInfo {
+                    index: index as u64,
+                    mnemonic: peer.mnemonic().to_string(),
+                    stdout_log: peer
                         .latest_stdout_log_path()
-                        .map_or(Value::Null, |path| {
-                            Value::String(path.to_string_lossy().to_string())
-                        });
-                    let stderr = peer
+                        .map(|path| path.to_string_lossy().to_string()),
+                    stderr_log: peer
                         .latest_stderr_log_path()
-                        .map_or(Value::Null, |path| {
-                            Value::String(path.to_string_lossy().to_string())
-                        });
-                    map.insert("stdout_log".to_string(), stdout);
-                    map.insert("stderr_log".to_string(), stderr);
-                    Value::Object(map)
+                        .map(|path| path.to_string_lossy().to_string()),
                 })
                 .collect();
-
-            summary.insert("peer_logs".to_string(), Value::Array(peer_logs));
-            summary.insert(
-                "status_samples_path".to_string(),
-                Value::String(status_path.to_string_lossy().to_string()),
-            );
-            summary.insert(
-                "metrics_dir".to_string(),
-                Value::String(metrics_dir.to_string_lossy().to_string()),
-            );
-
-            let summary_value = Value::Object(summary);
-            let summary_path = run_dir.join("summary.json");
-            let summary_json = norito::json::to_json_pretty(&summary_value)
-                .map_err(|err| eyre!(err.to_string()))?;
-            fs::write(&summary_path, summary_json)
-                .wrap_err_with(|| format!("write {}", summary_path.display()))?;
+            if let Err(err) =
+                write_throughput_artifacts(&root, &network_dir, &peer_logs, &artifacts)
+            {
+                eprintln!("throughput artifact write failed: {err:?}");
+            }
         }
 
         network.shutdown().await;
-        Ok(())
+        run_result
     }
     .await;
 
@@ -1382,7 +1246,9 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
 
         let network_dir = network.env_dir().to_path_buf();
         let http = HttpClient::new();
+        let mut artifacts = ThroughputArtifacts::default();
 
+        let run_result: Result<()> = async {
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
         let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         let baseline_non_empty = baseline_statuses
@@ -1432,6 +1298,47 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         let warmup_txs = warmup_blocks.saturating_mul(THROUGHPUT_BLOCK_MAX_TXS);
         let steady_txs = steady_blocks.saturating_mul(THROUGHPUT_BLOCK_MAX_TXS);
         let total_txs = warmup_txs.saturating_add(steady_txs);
+        artifacts.recipe = Some(ThroughputArtifactRecipe {
+            peers: network.peers().len() as u64,
+            block_time_ms: THROUGHPUT_BLOCK_TIME_MS,
+            commit_time_ms: THROUGHPUT_COMMIT_TIME_MS,
+            block_max_txs: THROUGHPUT_BLOCK_MAX_TXS,
+            warmup_blocks,
+            steady_blocks,
+            total_blocks,
+            warmup_txs,
+            steady_txs,
+            total_txs,
+            submit_batch,
+            submit_parallelism: submit_parallelism as u64,
+            queue_soft_limit,
+            payload_bytes: payload_bytes as u64,
+            rng_seed,
+        });
+
+        let slo_p95_ms =
+            env_or_default("IROHA_THROUGHPUT_SLO_P95_MS", THROUGHPUT_NPOS_SLO_P95_MS);
+        let slo_p99_ms =
+            env_or_default("IROHA_THROUGHPUT_SLO_P99_MS", THROUGHPUT_NPOS_SLO_P99_MS);
+        let slo_view_change_rate = env_or_default_f64(
+            "IROHA_THROUGHPUT_SLO_VIEW_CHANGE_RATE",
+            THROUGHPUT_NPOS_SLO_VIEW_CHANGE_RATE_MAX,
+        );
+        let slo_backpressure_rate = env_or_default_f64(
+            "IROHA_THROUGHPUT_SLO_BACKPRESSURE_RATE",
+            THROUGHPUT_NPOS_SLO_BACKPRESSURE_RATE_MAX,
+        );
+        let slo_queue_saturation = env_or_default_f64(
+            "IROHA_THROUGHPUT_SLO_QUEUE_SAT_FRAC",
+            THROUGHPUT_NPOS_SLO_QUEUE_SAT_FRAC_MAX,
+        );
+        artifacts.slo = Some(ThroughputArtifactSlo {
+            commit_p95_ms: slo_p95_ms,
+            commit_p99_ms: slo_p99_ms,
+            view_change_rate_max: slo_view_change_rate,
+            backpressure_rate_max: slo_backpressure_rate,
+            queue_saturation_max: slo_queue_saturation,
+        });
 
         let submit_peer = network
             .peers()
@@ -1703,6 +1610,30 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             0.0
         };
 
+        let metrics = ThroughputArtifactMetrics {
+            submitted_tps,
+            committed_tps,
+            commit_p95_ms,
+            commit_p99_ms,
+            commit_hist_count,
+            commit_time_ms_min: min_commit_time_ms,
+            commit_time_ms_avg: avg_commit_time_ms,
+            commit_time_ms_max: max_commit_time_ms,
+            view_change_rate_avg: view_change_avg,
+            view_change_rate_max: view_change_max,
+            backpressure_rate_avg: backpressure_avg,
+            backpressure_rate_max: backpressure_max,
+            queue_saturated_frac,
+            max_queue_depth,
+            steady_elapsed_ms: steady_elapsed.as_millis() as u64,
+            warmup_submit_elapsed_ms: warmup_submit_elapsed.as_millis() as u64,
+            steady_submit_elapsed_ms: steady_submit_elapsed.as_millis() as u64,
+        };
+        artifacts.metrics = Some(metrics);
+        artifacts.samples = samples;
+        artifacts.warmup_metrics = warmup_metrics;
+        artifacts.after_metrics = after_metrics;
+
         eprintln!(
             "localnet throughput metrics: peers={}, warmup_blocks={}, steady_blocks={}, warmup_txs={}, steady_txs={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, payload_bytes={}, warmup_submit_elapsed={:?}, steady_submit_elapsed={:?}, steady_elapsed={:?}, submitted_tps={:.2}, committed_tps={:.2}, commit_hist_count={}, commit_time_ms(min/avg/max/p95/p99)={}/{}/{}/{}/{}, view_change_rate(avg/max)={:.4}/{:.4}, backpressure_rate(avg/max)={:.4}/{:.4}, queue_saturated_frac={:.2}, max_queue_depth={}",
             network.peers().len(),
@@ -1737,23 +1668,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             "commit time exceeded target: max_commit_time_ms={max_commit_time_ms}, allowed={max_commit_time_allowed}",
         );
 
-        let slo_p95_ms =
-            env_or_default("IROHA_THROUGHPUT_SLO_P95_MS", THROUGHPUT_NPOS_SLO_P95_MS);
-        let slo_p99_ms =
-            env_or_default("IROHA_THROUGHPUT_SLO_P99_MS", THROUGHPUT_NPOS_SLO_P99_MS);
-        let slo_view_change_rate = env_or_default_f64(
-            "IROHA_THROUGHPUT_SLO_VIEW_CHANGE_RATE",
-            THROUGHPUT_NPOS_SLO_VIEW_CHANGE_RATE_MAX,
-        );
-        let slo_backpressure_rate = env_or_default_f64(
-            "IROHA_THROUGHPUT_SLO_BACKPRESSURE_RATE",
-            THROUGHPUT_NPOS_SLO_BACKPRESSURE_RATE_MAX,
-        );
-        let slo_queue_saturation = env_or_default_f64(
-            "IROHA_THROUGHPUT_SLO_QUEUE_SAT_FRAC",
-            THROUGHPUT_NPOS_SLO_QUEUE_SAT_FRAC_MAX,
-        );
-
         if commit_hist_count > 0 {
             ensure!(
                 commit_p95_ms <= slo_p95_ms,
@@ -1783,233 +1697,39 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             );
         }
 
+        Ok(())
+    }
+    .await;
+
+        if let Err(err) = &run_result {
+            artifacts.error = Some(err.to_string());
+        }
         if let Some(artifact_root) = std::env::var_os("IROHA_THROUGHPUT_ARTIFACT_DIR") {
             let root = PathBuf::from(artifact_root);
-            let timestamp_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis();
-            let run_dir = root.join(format!(
-                "throughput-{}",
-                u64::try_from(timestamp_ms).unwrap_or(u64::MAX)
-            ));
-            fs::create_dir_all(&run_dir).wrap_err("create throughput artifact dir")?;
-
-            let metrics_dir = run_dir.join("metrics");
-            fs::create_dir_all(&metrics_dir).wrap_err("create metrics dir")?;
-
-            for snapshot in &warmup_metrics {
-                let path = metrics_dir.join(format!("{}-warmup.prom", snapshot.peer));
-                fs::write(&path, &snapshot.payload)
-                    .wrap_err_with(|| format!("write warmup metrics {}", path.display()))?;
-            }
-            for snapshot in &after_metrics {
-                let path = metrics_dir.join(format!("{}-steady.prom", snapshot.peer));
-                fs::write(&path, &snapshot.payload)
-                    .wrap_err_with(|| format!("write steady metrics {}", path.display()))?;
-            }
-
-            let status_samples_value = Value::Array(
-                samples
-                    .iter()
-                    .map(|sample| {
-                        let mut map = Map::new();
-                        map.insert(
-                            "timestamp_ms".to_string(),
-                            Value::from(sample.timestamp_ms),
-                        );
-                        map.insert(
-                            "status".to_string(),
-                            Value::Array(
-                                sample
-                                    .statuses
-                                    .iter()
-                                    .map(status_snapshot_value)
-                                    .collect(),
-                            ),
-                        );
-                        map.insert(
-                            "sumeragi".to_string(),
-                            Value::Array(
-                                sample
-                                    .sumeragi
-                                    .iter()
-                                    .map(sumeragi_snapshot_value)
-                                    .collect(),
-                            ),
-                        );
-                        Value::Object(map)
-                    })
-                    .collect(),
-            );
-
-            let status_path = run_dir.join("status_samples.json");
-            let status_json = norito::json::to_json_pretty(&status_samples_value)
-                .map_err(|err| eyre!(err.to_string()))?;
-            fs::write(&status_path, status_json)
-                .wrap_err_with(|| format!("write {}", status_path.display()))?;
-
-            let config_fingerprint = config_fingerprint(&network_dir)?;
-
-            let mut summary = Map::new();
-            summary.insert(
-                "run_id".to_string(),
-                Value::String(
-                    run_dir
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string(),
-                ),
-            );
-            summary.insert(
-                "timestamp_ms".to_string(),
-                Value::from(u64::try_from(timestamp_ms).unwrap_or(u64::MAX)),
-            );
-            summary.insert(
-                "network_dir".to_string(),
-                Value::String(network_dir.to_string_lossy().to_string()),
-            );
-            summary.insert(
-                "config_fingerprint".to_string(),
-                config_fingerprint.map_or(Value::Null, Value::String),
-            );
-
-            let mut recipe = Map::new();
-            recipe.insert("peers".to_string(), Value::from(network.peers().len() as u64));
-            recipe.insert("block_time_ms".to_string(), Value::from(THROUGHPUT_BLOCK_TIME_MS));
-            recipe.insert("commit_time_ms".to_string(), Value::from(THROUGHPUT_COMMIT_TIME_MS));
-            recipe.insert("block_max_txs".to_string(), Value::from(THROUGHPUT_BLOCK_MAX_TXS));
-            recipe.insert("warmup_blocks".to_string(), Value::from(warmup_blocks));
-            recipe.insert("steady_blocks".to_string(), Value::from(steady_blocks));
-            recipe.insert("total_blocks".to_string(), Value::from(total_blocks));
-            recipe.insert("warmup_txs".to_string(), Value::from(warmup_txs));
-            recipe.insert("steady_txs".to_string(), Value::from(steady_txs));
-            recipe.insert("total_txs".to_string(), Value::from(total_txs));
-            recipe.insert("submit_batch".to_string(), Value::from(submit_batch));
-            recipe.insert(
-                "submit_parallelism".to_string(),
-                Value::from(submit_parallelism as u64),
-            );
-            recipe.insert("queue_soft_limit".to_string(), Value::from(queue_soft_limit));
-            recipe.insert("payload_bytes".to_string(), Value::from(payload_bytes as u64));
-            recipe.insert("rng_seed".to_string(), Value::from(rng_seed));
-            summary.insert("recipe".to_string(), Value::Object(recipe));
-
-            let mut slo = Map::new();
-            slo.insert("commit_p95_ms".to_string(), Value::from(slo_p95_ms));
-            slo.insert("commit_p99_ms".to_string(), Value::from(slo_p99_ms));
-            slo.insert(
-                "view_change_rate_max".to_string(),
-                Value::from(slo_view_change_rate),
-            );
-            slo.insert(
-                "backpressure_rate_max".to_string(),
-                Value::from(slo_backpressure_rate),
-            );
-            slo.insert(
-                "queue_saturation_max".to_string(),
-                Value::from(slo_queue_saturation),
-            );
-            summary.insert("slo".to_string(), Value::Object(slo));
-
-            let mut metrics = Map::new();
-            metrics.insert("submitted_tps".to_string(), Value::from(submitted_tps));
-            metrics.insert("committed_tps".to_string(), Value::from(committed_tps));
-            metrics.insert("commit_p95_ms".to_string(), Value::from(commit_p95_ms));
-            metrics.insert("commit_p99_ms".to_string(), Value::from(commit_p99_ms));
-            metrics.insert("commit_hist_count".to_string(), Value::from(commit_hist_count));
-            metrics.insert(
-                "commit_time_ms_min".to_string(),
-                Value::from(min_commit_time_ms),
-            );
-            metrics.insert(
-                "commit_time_ms_avg".to_string(),
-                Value::from(avg_commit_time_ms),
-            );
-            metrics.insert(
-                "commit_time_ms_max".to_string(),
-                Value::from(max_commit_time_ms),
-            );
-            metrics.insert(
-                "view_change_rate_avg".to_string(),
-                Value::from(view_change_avg),
-            );
-            metrics.insert(
-                "view_change_rate_max".to_string(),
-                Value::from(view_change_max),
-            );
-            metrics.insert(
-                "backpressure_rate_avg".to_string(),
-                Value::from(backpressure_avg),
-            );
-            metrics.insert(
-                "backpressure_rate_max".to_string(),
-                Value::from(backpressure_max),
-            );
-            metrics.insert(
-                "queue_saturated_frac".to_string(),
-                Value::from(queue_saturated_frac),
-            );
-            metrics.insert("max_queue_depth".to_string(), Value::from(max_queue_depth));
-            metrics.insert(
-                "steady_elapsed_ms".to_string(),
-                Value::from(steady_elapsed.as_millis() as u64),
-            );
-            metrics.insert(
-                "warmup_submit_elapsed_ms".to_string(),
-                Value::from(warmup_submit_elapsed.as_millis() as u64),
-            );
-            metrics.insert(
-                "steady_submit_elapsed_ms".to_string(),
-                Value::from(steady_submit_elapsed.as_millis() as u64),
-            );
-            summary.insert("metrics".to_string(), Value::Object(metrics));
-
-            let peer_logs: Vec<Value> = network
+            let peer_logs: Vec<PeerLogInfo> = network
                 .peers()
                 .iter()
                 .enumerate()
-                .map(|(index, peer)| {
-                    let mut map = Map::new();
-                    map.insert("index".to_string(), Value::from(index as u64));
-                    map.insert("mnemonic".to_string(), Value::String(peer.mnemonic().to_string()));
-                    let stdout = peer
+                .map(|(index, peer)| PeerLogInfo {
+                    index: index as u64,
+                    mnemonic: peer.mnemonic().to_string(),
+                    stdout_log: peer
                         .latest_stdout_log_path()
-                        .map_or(Value::Null, |path| {
-                            Value::String(path.to_string_lossy().to_string())
-                        });
-                    let stderr = peer
+                        .map(|path| path.to_string_lossy().to_string()),
+                    stderr_log: peer
                         .latest_stderr_log_path()
-                        .map_or(Value::Null, |path| {
-                            Value::String(path.to_string_lossy().to_string())
-                        });
-                    map.insert("stdout_log".to_string(), stdout);
-                    map.insert("stderr_log".to_string(), stderr);
-                    Value::Object(map)
+                        .map(|path| path.to_string_lossy().to_string()),
                 })
                 .collect();
-
-            summary.insert("peer_logs".to_string(), Value::Array(peer_logs));
-            summary.insert(
-                "status_samples_path".to_string(),
-                Value::String(status_path.to_string_lossy().to_string()),
-            );
-            summary.insert(
-                "metrics_dir".to_string(),
-                Value::String(metrics_dir.to_string_lossy().to_string()),
-            );
-
-            let summary_value = Value::Object(summary);
-            let summary_path = run_dir.join("summary.json");
-            let summary_json = norito::json::to_json_pretty(&summary_value)
-                .map_err(|err| eyre!(err.to_string()))?;
-            fs::write(&summary_path, summary_json)
-                .wrap_err_with(|| format!("write {}", summary_path.display()))?;
+            if let Err(err) =
+                write_throughput_artifacts(&root, &network_dir, &peer_logs, &artifacts)
+            {
+                eprintln!("throughput artifact write failed: {err:?}");
+            }
         }
 
         network.shutdown().await;
-        Ok(())
+        run_result
     }
     .await;
 
@@ -2175,6 +1895,7 @@ async fn wait_for_queue_depth(
     max_queue: u64,
     status_timeout: Duration,
 ) -> Result<()> {
+    let progress_timeout = queue_progress_timeout();
     let mut last_progress = Instant::now();
     let mut last_queue: Option<u64> = None;
     let mut last_blocks_non_empty: Option<u64> = None;
@@ -2218,10 +1939,10 @@ async fn wait_for_queue_depth(
             }
         }
 
-        if last_progress.elapsed() >= SOAK_QUEUE_PROGRESS_TIMEOUT {
+        if last_progress.elapsed() >= progress_timeout {
             return Err(eyre!(
                 "submit queue did not drain below {max_queue} within {:?}",
-                SOAK_QUEUE_PROGRESS_TIMEOUT
+                progress_timeout
             ));
         }
 
@@ -2279,6 +2000,48 @@ async fn env_or_default_f64_reads_values() {
     set_env_var(key, "-1.0");
     assert!((env_or_default_f64(key, 0.5) - 0.5).abs() < f64::EPSILON);
     remove_env_var(key);
+}
+
+#[tokio::test]
+async fn queue_progress_timeout_reads_override() {
+    let _guard = LOCALNET_SMOKE_GUARD
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .await;
+    set_env_var(THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_ENV, "12");
+    assert_eq!(queue_progress_timeout(), Duration::from_secs(12));
+    set_env_var(THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_ENV, "0");
+    assert_eq!(queue_progress_timeout(), SOAK_QUEUE_PROGRESS_TIMEOUT);
+    remove_env_var(THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_ENV);
+}
+
+#[test]
+fn write_throughput_artifacts_writes_error_summary() {
+    let dir = tempdir().expect("tempdir");
+    let artifact_root = dir.path().join("artifacts");
+    let network_dir = dir.path().join("network");
+    let artifacts = ThroughputArtifacts {
+        error: Some("boom".to_string()),
+        ..ThroughputArtifacts::default()
+    };
+    let peer_logs = vec![PeerLogInfo {
+        index: 0,
+        mnemonic: "peer0".to_string(),
+        stdout_log: None,
+        stderr_log: None,
+    }];
+
+    let run_dir = write_throughput_artifacts(&artifact_root, &network_dir, &peer_logs, &artifacts)
+        .expect("write artifacts");
+    let summary_path = run_dir.join("summary.json");
+    let summary_json = fs::read_to_string(&summary_path).expect("read summary");
+    let Value::Object(map) =
+        norito::json::from_json::<Value>(&summary_json).expect("parse summary")
+    else {
+        panic!("expected summary object");
+    };
+    assert_eq!(map.get("error"), Some(&Value::String("boom".to_string())));
+    assert!(run_dir.join("status_samples.json").exists());
 }
 
 #[test]
@@ -2657,6 +2420,340 @@ fn sumeragi_snapshot_value(snapshot: &SumeragiStatusSnapshot) -> Value {
         Value::from(snapshot.commit_qc_height),
     );
     Value::Object(map)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PeerLogInfo {
+    index: u64,
+    mnemonic: String,
+    stdout_log: Option<String>,
+    stderr_log: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct ThroughputArtifactRecipe {
+    peers: u64,
+    block_time_ms: u64,
+    commit_time_ms: u64,
+    block_max_txs: u64,
+    warmup_blocks: u64,
+    steady_blocks: u64,
+    total_blocks: u64,
+    warmup_txs: u64,
+    steady_txs: u64,
+    total_txs: u64,
+    submit_batch: u64,
+    submit_parallelism: u64,
+    queue_soft_limit: u64,
+    payload_bytes: u64,
+    rng_seed: u64,
+}
+
+#[derive(Clone, Debug)]
+struct ThroughputArtifactSlo {
+    commit_p95_ms: u64,
+    commit_p99_ms: u64,
+    view_change_rate_max: f64,
+    backpressure_rate_max: f64,
+    queue_saturation_max: f64,
+}
+
+#[derive(Clone, Debug)]
+struct ThroughputArtifactMetrics {
+    submitted_tps: f64,
+    committed_tps: f64,
+    commit_p95_ms: u64,
+    commit_p99_ms: u64,
+    commit_hist_count: u64,
+    commit_time_ms_min: u64,
+    commit_time_ms_avg: u64,
+    commit_time_ms_max: u64,
+    view_change_rate_avg: f64,
+    view_change_rate_max: f64,
+    backpressure_rate_avg: f64,
+    backpressure_rate_max: f64,
+    queue_saturated_frac: f64,
+    max_queue_depth: u64,
+    steady_elapsed_ms: u64,
+    warmup_submit_elapsed_ms: u64,
+    steady_submit_elapsed_ms: u64,
+}
+
+#[derive(Debug, Default)]
+struct ThroughputArtifacts {
+    recipe: Option<ThroughputArtifactRecipe>,
+    slo: Option<ThroughputArtifactSlo>,
+    metrics: Option<ThroughputArtifactMetrics>,
+    warmup_metrics: Vec<PeerMetricsSnapshot>,
+    after_metrics: Vec<PeerMetricsSnapshot>,
+    samples: Vec<ThroughputSample>,
+    error: Option<String>,
+}
+
+fn write_throughput_artifacts(
+    artifact_root: &Path,
+    network_dir: &Path,
+    peer_logs: &[PeerLogInfo],
+    artifacts: &ThroughputArtifacts,
+) -> Result<PathBuf> {
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let run_dir = artifact_root.join(format!(
+        "throughput-{}",
+        u64::try_from(timestamp_ms).unwrap_or(u64::MAX)
+    ));
+    fs::create_dir_all(&run_dir).wrap_err("create throughput artifact dir")?;
+
+    let metrics_dir = run_dir.join("metrics");
+    fs::create_dir_all(&metrics_dir).wrap_err("create metrics dir")?;
+
+    for snapshot in &artifacts.warmup_metrics {
+        let path = metrics_dir.join(format!("{}-warmup.prom", snapshot.peer));
+        fs::write(&path, &snapshot.payload)
+            .wrap_err_with(|| format!("write warmup metrics {}", path.display()))?;
+    }
+    for snapshot in &artifacts.after_metrics {
+        let path = metrics_dir.join(format!("{}-steady.prom", snapshot.peer));
+        fs::write(&path, &snapshot.payload)
+            .wrap_err_with(|| format!("write steady metrics {}", path.display()))?;
+    }
+
+    let status_samples_value = Value::Array(
+        artifacts
+            .samples
+            .iter()
+            .map(|sample| {
+                let mut map = Map::new();
+                map.insert("timestamp_ms".to_string(), Value::from(sample.timestamp_ms));
+                map.insert(
+                    "status".to_string(),
+                    Value::Array(sample.statuses.iter().map(status_snapshot_value).collect()),
+                );
+                map.insert(
+                    "sumeragi".to_string(),
+                    Value::Array(
+                        sample
+                            .sumeragi
+                            .iter()
+                            .map(sumeragi_snapshot_value)
+                            .collect(),
+                    ),
+                );
+                Value::Object(map)
+            })
+            .collect(),
+    );
+
+    let status_path = run_dir.join("status_samples.json");
+    let status_json = norito::json::to_json_pretty(&status_samples_value)
+        .map_err(|err| eyre!(err.to_string()))?;
+    fs::write(&status_path, status_json)
+        .wrap_err_with(|| format!("write {}", status_path.display()))?;
+
+    let config_fingerprint = config_fingerprint(network_dir)?;
+
+    let mut summary = Map::new();
+    summary.insert(
+        "run_id".to_string(),
+        Value::String(
+            run_dir
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
+        ),
+    );
+    summary.insert(
+        "timestamp_ms".to_string(),
+        Value::from(u64::try_from(timestamp_ms).unwrap_or(u64::MAX)),
+    );
+    summary.insert(
+        "network_dir".to_string(),
+        Value::String(network_dir.to_string_lossy().to_string()),
+    );
+    summary.insert(
+        "config_fingerprint".to_string(),
+        config_fingerprint.map_or(Value::Null, Value::String),
+    );
+    if let Some(error) = artifacts.error.as_ref() {
+        summary.insert("error".to_string(), Value::String(error.clone()));
+    }
+
+    if let Some(recipe) = artifacts.recipe.as_ref() {
+        let mut recipe_map = Map::new();
+        recipe_map.insert("peers".to_string(), Value::from(recipe.peers));
+        recipe_map.insert(
+            "block_time_ms".to_string(),
+            Value::from(recipe.block_time_ms),
+        );
+        recipe_map.insert(
+            "commit_time_ms".to_string(),
+            Value::from(recipe.commit_time_ms),
+        );
+        recipe_map.insert(
+            "block_max_txs".to_string(),
+            Value::from(recipe.block_max_txs),
+        );
+        recipe_map.insert(
+            "warmup_blocks".to_string(),
+            Value::from(recipe.warmup_blocks),
+        );
+        recipe_map.insert(
+            "steady_blocks".to_string(),
+            Value::from(recipe.steady_blocks),
+        );
+        recipe_map.insert("total_blocks".to_string(), Value::from(recipe.total_blocks));
+        recipe_map.insert("warmup_txs".to_string(), Value::from(recipe.warmup_txs));
+        recipe_map.insert("steady_txs".to_string(), Value::from(recipe.steady_txs));
+        recipe_map.insert("total_txs".to_string(), Value::from(recipe.total_txs));
+        recipe_map.insert("submit_batch".to_string(), Value::from(recipe.submit_batch));
+        recipe_map.insert(
+            "submit_parallelism".to_string(),
+            Value::from(recipe.submit_parallelism),
+        );
+        recipe_map.insert(
+            "queue_soft_limit".to_string(),
+            Value::from(recipe.queue_soft_limit),
+        );
+        recipe_map.insert(
+            "payload_bytes".to_string(),
+            Value::from(recipe.payload_bytes),
+        );
+        recipe_map.insert("rng_seed".to_string(), Value::from(recipe.rng_seed));
+        summary.insert("recipe".to_string(), Value::Object(recipe_map));
+    }
+
+    if let Some(slo) = artifacts.slo.as_ref() {
+        let mut slo_map = Map::new();
+        slo_map.insert("commit_p95_ms".to_string(), Value::from(slo.commit_p95_ms));
+        slo_map.insert("commit_p99_ms".to_string(), Value::from(slo.commit_p99_ms));
+        slo_map.insert(
+            "view_change_rate_max".to_string(),
+            Value::from(slo.view_change_rate_max),
+        );
+        slo_map.insert(
+            "backpressure_rate_max".to_string(),
+            Value::from(slo.backpressure_rate_max),
+        );
+        slo_map.insert(
+            "queue_saturation_max".to_string(),
+            Value::from(slo.queue_saturation_max),
+        );
+        summary.insert("slo".to_string(), Value::Object(slo_map));
+    }
+
+    if let Some(metrics) = artifacts.metrics.as_ref() {
+        let mut metrics_map = Map::new();
+        metrics_map.insert(
+            "submitted_tps".to_string(),
+            Value::from(metrics.submitted_tps),
+        );
+        metrics_map.insert(
+            "committed_tps".to_string(),
+            Value::from(metrics.committed_tps),
+        );
+        metrics_map.insert(
+            "commit_p95_ms".to_string(),
+            Value::from(metrics.commit_p95_ms),
+        );
+        metrics_map.insert(
+            "commit_p99_ms".to_string(),
+            Value::from(metrics.commit_p99_ms),
+        );
+        metrics_map.insert(
+            "commit_hist_count".to_string(),
+            Value::from(metrics.commit_hist_count),
+        );
+        metrics_map.insert(
+            "commit_time_ms_min".to_string(),
+            Value::from(metrics.commit_time_ms_min),
+        );
+        metrics_map.insert(
+            "commit_time_ms_avg".to_string(),
+            Value::from(metrics.commit_time_ms_avg),
+        );
+        metrics_map.insert(
+            "commit_time_ms_max".to_string(),
+            Value::from(metrics.commit_time_ms_max),
+        );
+        metrics_map.insert(
+            "view_change_rate_avg".to_string(),
+            Value::from(metrics.view_change_rate_avg),
+        );
+        metrics_map.insert(
+            "view_change_rate_max".to_string(),
+            Value::from(metrics.view_change_rate_max),
+        );
+        metrics_map.insert(
+            "backpressure_rate_avg".to_string(),
+            Value::from(metrics.backpressure_rate_avg),
+        );
+        metrics_map.insert(
+            "backpressure_rate_max".to_string(),
+            Value::from(metrics.backpressure_rate_max),
+        );
+        metrics_map.insert(
+            "queue_saturated_frac".to_string(),
+            Value::from(metrics.queue_saturated_frac),
+        );
+        metrics_map.insert(
+            "max_queue_depth".to_string(),
+            Value::from(metrics.max_queue_depth),
+        );
+        metrics_map.insert(
+            "steady_elapsed_ms".to_string(),
+            Value::from(metrics.steady_elapsed_ms),
+        );
+        metrics_map.insert(
+            "warmup_submit_elapsed_ms".to_string(),
+            Value::from(metrics.warmup_submit_elapsed_ms),
+        );
+        metrics_map.insert(
+            "steady_submit_elapsed_ms".to_string(),
+            Value::from(metrics.steady_submit_elapsed_ms),
+        );
+        summary.insert("metrics".to_string(), Value::Object(metrics_map));
+    }
+
+    let peer_logs_value: Vec<Value> = peer_logs
+        .iter()
+        .map(|peer| {
+            let mut map = Map::new();
+            map.insert("index".to_string(), Value::from(peer.index));
+            map.insert("mnemonic".to_string(), Value::String(peer.mnemonic.clone()));
+            let stdout = peer
+                .stdout_log
+                .as_ref()
+                .map_or(Value::Null, |path| Value::String(path.clone()));
+            let stderr = peer
+                .stderr_log
+                .as_ref()
+                .map_or(Value::Null, |path| Value::String(path.clone()));
+            map.insert("stdout_log".to_string(), stdout);
+            map.insert("stderr_log".to_string(), stderr);
+            Value::Object(map)
+        })
+        .collect();
+    summary.insert("peer_logs".to_string(), Value::Array(peer_logs_value));
+    summary.insert(
+        "status_samples_path".to_string(),
+        Value::String(status_path.to_string_lossy().to_string()),
+    );
+    summary.insert(
+        "metrics_dir".to_string(),
+        Value::String(metrics_dir.to_string_lossy().to_string()),
+    );
+
+    let summary_value = Value::Object(summary);
+    let summary_path = run_dir.join("summary.json");
+    let summary_json =
+        norito::json::to_json_pretty(&summary_value).map_err(|err| eyre!(err.to_string()))?;
+    fs::write(&summary_path, summary_json)
+        .wrap_err_with(|| format!("write {}", summary_path.display()))?;
+
+    Ok(run_dir)
 }
 
 #[derive(Clone, Debug, Default)]

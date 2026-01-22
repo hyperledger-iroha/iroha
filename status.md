@@ -1,7 +1,40 @@
 # Status
 
-Last update: 2026-01-21
+Last update: 2026-01-22
 
+- P2P tests: add `connect_startup_delay` to integration test config literals to match Network fields.
+- Tests: not run (config literal updates only).
+- Localnet throughput: artifacts now emit on failure with error in summary; queue drain timeout is overridable via `IROHA_THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_SECS`.
+- Localnet throughput (7 peers, debug): `scripts/run_localnet_throughput.sh` failed with submit queue stuck above 20k for 180s; no artifacts were written before this change.
+- Tests: not run (throughput artifact/timeout updates).
+
+- Sumeragi tick scheduling: `next_tick_deadline` now triggers immediate ticks when the tx queue is non-empty even with pending blocks, plus `actor_next_tick_deadline_prioritizes_queue_with_pending_block` coverage (tests not run).
+- Localnet (NPoS, 7 peers, 753ms block/commit, DA timeout multipliers 1/1, k/r 4/3): `/private/tmp/iroha-localnet-7peer-run127` (24980/25900). 50 tx/s for 100 blocks (8k submit) → avg block interval 4.7s (p50 3.9s, p90 7.5s, p99 8.8s), admitted 13.5 tx/s over 471s, view_changes=0; queue drained by height 256.
+- Merge: resolved conflict markers across status, account literal messaging, SoraFS GC audit metadata, storage refcount updates, and Torii onboarding test height handling.
+- Tests: not run (merge conflict resolution).
+- Android SDK: AccountId authorities now encode as Norito structs (domain + controller) and fixture payloads/manifest/.norito blobs are regenerated with domain-qualified authorities.
+- Tests: `java/iroha_android/gradlew test` (failed: `~/.gradle/wrapper/dists/gradle-8.13-bin/.../gradle-8.13-bin.zip.lck` FileNotFoundException, Operation not permitted).
+- Tests: `GRADLE_USER_HOME=/Users/takemiyamakoto/dev/iroha/.gradle ./gradlew test` (failed: `NativeServices.createSystemInfo()` cannot query machine details, errno 1: Operation not permitted).
+- Tests: `java/iroha_android/gradlew test` (failed: Android SDK not configured; set `ANDROID_HOME` or `local.properties` `sdk.dir`).
+- Tests: `java/iroha_android/gradlew test` (ok).
+- Tests: `python3 scripts/check_android_fixtures.py` (ok).
+- Android SDK signing: `TransactionBuilder` now prehashes payloads with Blake2b-256 + LSB via `IrohaHash` while `Signer` stays raw; `SignedTransactionHasher` shares the same prehash helper.
+- Account parsing: removed the global domain-selector cache and allow explicit `encoded@domain` literals to parse without a resolver; implicit encoded literals still require a resolver or default domain.
+- Tests: `cargo test -p iroha_data_model account_id_parsing_tests::encoded_literals_with_domain_parse_without_resolver -- --nocapture` (timed out after 300s while compiling dependencies).
+- Torii tests: compressed literal expectations now use the raw `snx1` form (no `@domain`); SoraFS helpers build `AccountId` values from public keys + domains.
+- Tests: `cargo test -p iroha_torii address_format::tests::display_literal_and_from_literal_round_trip -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_torii iso20022_bridge::tests::runtime_accepts_raw_signer_account_literal -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_torii sorafs::api::advert_tests::pin_registry_metrics_summary_tracks_counts -- --nocapture` (ok).
+- Torii tests: fixed offline revocations query filter encoded-literal coverage to use canonical, canonical-hex, and compressed account segments (build error fix).
+- Sumeragi commit pipeline: event-driven runs no longer skip on consensus queue backlog; RBC READY triggers the pipeline even with backlog (log-only), and commit processing no longer filters to a fast-path hash.
+- Tests: `cargo test -p iroha_core commit_pipeline_runs_event_when_queue_backlogged -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core commit_pipeline_runs_with_backlog_when_commit_qc_ready -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core commit_pipeline_runs_with_backlog_without_commit_qc -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core handle_rbc_ready_runs_commit_pipeline_when_queue_backlogged -- --nocapture` (ok).
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Core tests: removed unused `mut` in `select_account_for_uaid_uses_index` test helper.
+- Torii onboarding now publishes a default Space Directory manifest for the global dataspace when missing, binding UAIDs immediately; added onboarding integration coverage and updated UAID docs/OpenAPI descriptions.
+- Tests: not run (onboarding binding change + docs/OpenAPI updates).
 - Sumeragi: allow empty BlockCreated payloads when time triggers are due by checking the read-only trigger set (`StateView::time_triggers_due_for_block` now uses shared time-trigger matching).
 - Tests: `cargo test -p iroha_core --lib time_triggers_due_for_block_detects_precommit_trigger` (ok; warnings about unexpected `cfg` values from Norito derives).
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test mod triggers::time_trigger::time_trigger_scenarios -- --nocapture` (ok).
@@ -47,6 +80,7 @@ Last update: 2026-01-21
 - Docs/i18n: replaced `docs/source/soracles_evidence_retention.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
 - Docs/i18n: replaced `docs/source/p2p_trust_gossip.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
 - Docs/i18n: replaced `docs/source/compute_lane.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/soracles.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
 - SoraFS repair governance policy now enforces approval quorum/minimum voters, dispute/appeal windows, tie-break rules, and penalty caps; added approval/policy Norito payloads, capped scheduler draft penalties, updated CLI slash proposals to require approval summaries, and refreshed repair plan + node client protocol docs (portal mirror included).
 - Tests: not run (repair escalation policy + docs updates only).
 - SoraFS retention precedence now resolves effective retention as the minimum of pin policy, deal end, and governance cap metadata, persists `RetentionSourceV1` + access counters in storage metadata/index, and GC capacity sweeps evict expired manifests by LRU; CLI GC output adds `retention_sources`, docs updated (ops playbook, node client protocol, architecture RFC + portal mirror).
@@ -73,6 +107,10 @@ Last update: 2026-01-21
 - Localnet deploy script build failed earlier: `crates/sorafs_node/src/repair.rs:2381` E0282 closure type inference; fixed by annotating `oldest_queued_at`.
 - Localnet (permissioned rerun, 4 peers, 10 tx/s): `/tmp/iroha-localnet-4peer-perm-10tps-rerun` (32480/34637, `--skip-asset-register`); 200s of `transaction ping --msg ping` at 10 tx/s; height 34 (did not reach 100).
 - Localnet (NPoS rerun, 4 peers, 10 tx/s): `/tmp/iroha-localnet-4peer-npos-10tps-rerun` (32580/34737, `--skip-asset-register`); 200s of `transaction ping --msg ping` at 10 tx/s; height 30 (did not reach 100).
+- Localnet (permissioned, release, 10k-permissioned): `/tmp/iroha-localnet-4peer-perm-10tps-perf` (32680/34837, `--skip-asset-register`); 60s of `transaction ping --msg ping` at 10k tx/s submit attempt (600k total, sender rate ~9375 tx/s); header height 1 immediately after load, `/v1/sumeragi/status` commit_qc height 4 and `worker_stage=drain_rbc_chunks` (did not reach 100).
+- Localnet (NPoS, release, 10k-npos): `/tmp/iroha-localnet-4peer-npos-10k-perf` (32780/34937, `--skip-asset-register`); 60s of `transaction ping --msg ping` at 10k tx/s submit attempt (600k total, sender rate ~9836 tx/s); header height 8, commit_qc height 10 (did not reach 100).
+- Localnet (permissioned, root-cause probe, 10k tx/s): `/tmp/iroha-localnet-4peer-perm-10k-root` (32880/35037, `--perf-profile 10k-permissioned`); default CLI `ulimit -n` was 256 so `transaction ping --count 10000` failed with `Too many open files` and only ~303 submits succeeded; raising to `ulimit -n 4096` allowed 10k submits.
+- Localnet (permissioned, post-ulimit): `/v1/sumeragi/status` shows `tx_queue.depth=23346`, `commit_qc.height=29`, but `kura_store.stage_last_height=4` and `missing_block_fetch_last_targets=0` with `missing_block_fetch_total=1015`, plus `pending_rbc` init-missing stashes and `rbc_store` evictions; block height stayed at 4 for 30s, indicating missing BlockCreated/payload recovery (no fetch targets) rather than tx admission.
 - Kagami localnet help now calls out that the default build line is `iroha3`, so leaving `--consensus-mode` unset yields `npos`.
 - DA/RBC: missing-payload view-change deferral now respects backlog/backpressure so `qc_missing_block_defer` will not force view changes while RBC/block-payload queues are congested; READY/DELIVER handlers log missing READY senders and local deferral reasons to pinpoint stalled sessions.
 - DA/RBC: RbcInit/RbcChunk posts now bypass the background post queue so chunk dissemination cannot be starved by background work; tests updated (not run).

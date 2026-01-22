@@ -2589,7 +2589,7 @@ impl Actor {
                 self.persist_rbc_session(key, &session);
             }
             self.publish_rbc_backlog_snapshot();
-            self.process_commit_candidates();
+            self.request_commit_pipeline();
             return Ok(());
         }
         let session = match RbcSession::new(
@@ -2642,7 +2642,7 @@ impl Actor {
             self.persist_rbc_session(key, &session);
         }
         self.publish_rbc_backlog_snapshot();
-        self.process_commit_candidates();
+        self.request_commit_pipeline();
         Ok(())
     }
 
@@ -2905,7 +2905,7 @@ impl Actor {
             .get(&key)
             .map_or(ready_sent_before, |session| session.sent_ready);
         if became_complete || (!ready_sent_before && ready_sent_after) {
-            self.process_commit_candidates();
+            self.request_commit_pipeline();
         }
         Ok(())
     }
@@ -3596,11 +3596,10 @@ impl Actor {
                     block_payload_rx_depth = queue_depths.block_payload_rx,
                     rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                     block_rx_depth = queue_depths.block_rx,
-                    "deferring commit pipeline after RBC READY due to consensus queue backlog"
+                    "consensus queue backlog detected while handling RBC READY"
                 );
-            } else {
-                self.process_commit_candidates();
             }
+            self.request_commit_pipeline();
         }
         Ok(())
     }
@@ -4597,7 +4596,7 @@ impl Actor {
         // the full RBC payload is delivered so validation and votes can proceed.
         self.recover_block_from_rbc_session(key);
         if should_process_commit_after_deliver(first_deliver) {
-            self.process_commit_candidates();
+            self.request_commit_pipeline();
         }
         Ok(())
     }

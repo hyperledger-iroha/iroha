@@ -5,6 +5,13 @@ edition = "2024"
 license = "Apache-2.0"
 description = "SoraFS node integration primitives."
 
+[features]
+# Recognize norito derive macro cfg probes to avoid unexpected-cfg warnings.
+# No behavior change.
+schema-structural = []
+packed-struct = []
+compact-len = []
+
 [dependencies]
 axum = { workspace = true, features = ["http1", "tokio", "json"] }
 clap = { workspace = true, features = ["derive"] }

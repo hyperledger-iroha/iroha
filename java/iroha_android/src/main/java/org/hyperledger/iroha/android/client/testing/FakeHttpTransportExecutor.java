@@ -28,7 +28,7 @@ public final class FakeHttpTransportExecutor implements HttpTransportExecutor {
     globalResponses.add(Objects.requireNonNull(response, "response"));
   }
 
-  /** Enqueue a response for the given request path (e.g., {@code /v1/pipeline/transactions}). */
+  /** Enqueue a response for the given request path (e.g., {@code /transaction}). */
   public void enqueueResponse(final String path, final TransportResponse response) {
     Objects.requireNonNull(path, "path");
     pathResponses

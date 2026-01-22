@@ -42,7 +42,7 @@ public final class TelemetryObserverTests {
 
     final TransportRequest request =
         TransportRequest.builder()
-            .setUri(new URI("https://example.com:443/v1/pipeline/transactions"))
+            .setUri(new URI("https://example.com:443/transaction"))
             .setMethod("POST")
             .build();
     observer.onRequest(request);
@@ -56,7 +56,7 @@ public final class TelemetryObserverTests {
         .equals(record.authorityHash())
         : "hashed authority mismatch";
     assert "2026Q1".equals(record.saltVersion()) : "salt version mismatch";
-    assert "/v1/pipeline/transactions".equals(record.route()) : "route mismatch";
+    assert "/transaction".equals(record.route()) : "route mismatch";
     assert "POST".equals(record.method()) : "method mismatch";
     final long latency =
         record.latencyMillis().orElseThrow(() -> new IllegalStateException("missing latency"));
@@ -78,7 +78,7 @@ public final class TelemetryObserverTests {
     final TelemetryObserver observer = new TelemetryObserver(options, sink);
     final TransportRequest request =
         TransportRequest.builder()
-            .setUri(new URI("https://example.com:443/v1/pipeline/transactions"))
+            .setUri(new URI("https://example.com:443/transaction"))
             .setMethod("POST")
             .build();
     observer.onRequest(request);
@@ -140,7 +140,7 @@ public final class TelemetryObserverTests {
     final TelemetryObserver observer = new TelemetryObserver(options, sink);
     final TransportRequest request =
         TransportRequest.builder()
-            .setUri(new URI("https:///v1/pipeline/transactions"))
+            .setUri(new URI("https:///transaction"))
             .setMethod("GET")
             .build();
     observer.onRequest(request);
@@ -166,7 +166,7 @@ public final class TelemetryObserverTests {
     final TelemetryObserver firstObserver = findTelemetryObserver(initialConfig);
     final TransportRequest request =
         TransportRequest.builder()
-            .setUri(new URI("https://example.com/v1/pipeline/transactions"))
+            .setUri(new URI("https://example.com/transaction"))
             .setMethod("POST")
             .build();
     firstObserver.onRequest(request);

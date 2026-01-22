@@ -1573,7 +1573,7 @@ impl Actor {
                 let _ = self.handle_qc(qc);
             }
         }
-        self.process_commit_candidates();
+        self.request_commit_pipeline();
         Ok(())
     }
     pub(super) fn invalidate_proposal(

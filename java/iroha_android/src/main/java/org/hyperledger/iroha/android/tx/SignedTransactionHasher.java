@@ -1,9 +1,7 @@
 package org.hyperledger.iroha.android.tx;
 
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.Objects;
-import org.hyperledger.iroha.android.crypto.Blake2b;
+import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 
@@ -16,7 +14,7 @@ public final class SignedTransactionHasher {
   public static byte[] hash(final SignedTransaction transaction) {
     Objects.requireNonNull(transaction, "transaction");
     final byte[] canonicalBytes = canonicalBytes(transaction);
-    return blake2bCanonical(canonicalBytes);
+    return IrohaHash.prehash(canonicalBytes);
   }
 
   /** Computes the canonical BLAKE2b-256 hash as a lowercase hex string. */
@@ -27,7 +25,7 @@ public final class SignedTransactionHasher {
   /** Computes the canonical hash for pre-encoded signed transaction bytes. */
   public static byte[] hashCanonicalBytes(final byte[] canonicalSignedTransaction) {
     Objects.requireNonNull(canonicalSignedTransaction, "canonicalSignedTransaction");
-    return blake2bCanonical(canonicalSignedTransaction);
+    return IrohaHash.prehash(canonicalSignedTransaction);
   }
 
   /** Computes the canonical hash hex for pre-encoded signed transaction bytes. */
@@ -42,18 +40,6 @@ public final class SignedTransactionHasher {
     } catch (NoritoException ex) {
       throw new IllegalStateException("Failed to encode signed transaction", ex);
     }
-  }
-
-  private static byte[] blake2bCanonical(final byte[] canonical) {
-    byte[] digest;
-    try {
-      final MessageDigest md = MessageDigest.getInstance("BLAKE2B-256");
-      digest = md.digest(canonical);
-    } catch (NoSuchAlgorithmException ex) {
-      digest = Blake2b.digest(canonical);
-    }
-    digest[digest.length - 1] |= 1;
-    return digest;
   }
 
   private static String toHex(final byte[] data) {

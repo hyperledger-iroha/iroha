@@ -2364,7 +2364,7 @@ impl Actor {
                 super::status::set_locked_qc(lock.height, lock.view, Some(lock.subject_block_hash));
             }
         }
-        self.process_commit_candidates();
+        self.request_commit_pipeline();
         Ok(())
     }
 

@@ -3314,6 +3314,10 @@ impl Actor {
         })
     }
 
+    fn request_commit_pipeline(&mut self) {
+        self.pending.commit_pipeline_wakeup = true;
+    }
+
     fn rbc_rebroadcast_active_with_tip_and_session(
         &self,
         key: super::rbc_store::SessionKey,
@@ -3749,6 +3753,7 @@ struct VoteRosterCacheEntry {
 }
 
 struct ActorSubsystems {
+    validation: ValidationState,
     commit: CommitState,
     propose: ProposeState,
     da_rbc: DaRbcState,
@@ -4143,6 +4148,7 @@ struct PendingBlockState {
     pending_processing: Cell<Option<HashOf<BlockHeader>>>,
     pending_processing_parent: Cell<Option<HashOf<BlockHeader>>>,
     last_commit_pipeline_run: Instant,
+    commit_pipeline_wakeup: bool,
 }
 
 struct CommitInFlight {
@@ -4171,6 +4177,30 @@ impl CommitState {
             work_tx: None,
             result_rx: None,
             inflight: None,
+            next_id: 0,
+        }
+    }
+
+    fn next_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        id
+    }
+}
+
+struct ValidationState {
+    work_tx: Option<mpsc::SyncSender<validation::ValidationWork>>,
+    result_rx: Option<mpsc::Receiver<validation::ValidationResult>>,
+    inflight: BTreeMap<HashOf<BlockHeader>, u64>,
+    next_id: u64,
+}
+
+impl ValidationState {
+    fn new() -> Self {
+        Self {
+            work_tx: None,
+            result_rx: None,
+            inflight: BTreeMap::new(),
             next_id: 0,
         }
     }
@@ -4228,6 +4258,18 @@ impl Actor {
         self.subsystems.commit.work_tx = Some(commit_handle.work_tx);
         self.subsystems.commit.result_rx = Some(commit_handle.result_rx);
         commit_handle.join_handle
+    }
+
+    pub(super) fn attach_validation_worker(&mut self) -> std::thread::JoinHandle<()> {
+        let validation_handle = validation::spawn_validation_worker(
+            Arc::clone(&self.state),
+            self.common_config.chain.clone(),
+            self.genesis_account.clone(),
+            self.wake_tx.clone(),
+        );
+        self.subsystems.validation.work_tx = Some(validation_handle.work_tx);
+        self.subsystems.validation.result_rx = Some(validation_handle.result_rx);
+        validation_handle.join_handle
     }
 }
 
@@ -7239,6 +7281,7 @@ impl Actor {
             propose_attempt_monitor: ProposeAttemptMonitor::new(),
         };
         let subsystems = ActorSubsystems {
+            validation: ValidationState::new(),
             commit: CommitState::new(),
             propose: propose_state,
             da_rbc: DaRbcState {
@@ -7317,6 +7360,7 @@ impl Actor {
                 pending_processing: Cell::new(None),
                 pending_processing_parent: Cell::new(None),
                 last_commit_pipeline_run: initial_commit_pipeline_run,
+                commit_pipeline_wakeup: false,
             },
             voting_block: None,
             pending_roster_activation,
@@ -8045,6 +8089,7 @@ impl Actor {
             commit_time,
             da_enabled,
             self.da_quorum_timeout_multiplier(),
+            self.config.worker_iteration_budget_cap,
         );
         let vote_rx_drain_budget = super::vote_rx_drain_budget(
             block_time,
@@ -8052,11 +8097,24 @@ impl Actor {
             da_enabled,
             self.da_quorum_timeout_multiplier(),
             Duration::from_secs(8),
+            self.config.worker_iteration_budget_cap,
         )
         .max(time_budget);
-        let non_vote_drain_budget = super::cap_drain_budget(block_time / 2, time_budget);
-        let rbc_chunk_drain_budget = super::cap_rbc_drain_budget(block_time / 2, time_budget);
-        let block_rx_drain_budget = super::cap_drain_budget(block_time / 4, time_budget);
+        let non_vote_drain_budget = super::cap_drain_budget(
+            block_time / 2,
+            time_budget,
+            self.config.worker_iteration_budget_cap,
+        );
+        let rbc_chunk_drain_budget = super::cap_rbc_drain_budget(
+            block_time / 2,
+            time_budget,
+            self.config.worker_iteration_budget_cap,
+        );
+        let block_rx_drain_budget = super::cap_drain_budget(
+            block_time / 4,
+            time_budget,
+            self.config.worker_iteration_budget_cap,
+        );
         let starve_max = block_time.max(commit_time).max(time_budget);
         let tick_min_gap = super::idle_tick_gap(block_time, commit_time, time_budget);
 
@@ -8073,8 +8131,10 @@ impl Actor {
 
     pub(super) fn next_tick_deadline(&self, now: Instant) -> Option<Instant> {
         let queue_len = self.queue.active_len();
-        let has_active_pending = self.has_active_pending_blocks();
-        if queue_len > 0 && !has_active_pending {
+        if queue_len > 0 {
+            return Some(now);
+        }
+        if self.pending.commit_pipeline_wakeup {
             return Some(now);
         }
         let mut next_due = Self::merge_deadline(None, self.pending_block_next_due(now));
@@ -8175,9 +8235,12 @@ impl Actor {
             || rbc_rebroadcast_progress
             || rbc_outbound_progress
             || rbc_session_ttl_progress;
+        let commit_wakeup = self.pending.commit_pipeline_wakeup;
         if should_run_commit_pipeline_on_tick(self.active_pending_blocks_len())
             || self.subsystems.commit.inflight.is_some()
+            || commit_wakeup
         {
+            self.pending.commit_pipeline_wakeup = false;
             let pipeline_start = Instant::now();
             self.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick);
             commit_pipeline_cost = pipeline_start.elapsed();
