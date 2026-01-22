@@ -5241,6 +5241,112 @@ mod tests {
     }
 
     #[test]
+    fn run_worker_iteration_caps_drain_at_tick_gap() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        let vote = Vote {
+            phase: Phase::Prepare,
+            block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        vote_tx
+            .send(inbound(BlockMessage::QcVote(vote)))
+            .expect("send prevote");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
+
+        let proposal = Proposal {
+            header: ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::new(b"tx"),
+                state_root: Hash::new(b"state"),
+                proposer: 0,
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: QcHeaderRef {
+                    height: 0,
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: block_hash,
+                    phase: Phase::Prepare,
+                },
+            },
+            payload_hash: Hash::new(b"payload"),
+        };
+        block_payload_tx
+            .send(inbound(BlockMessage::Proposal(proposal)))
+            .expect("send proposal");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_millis(10),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let now = Instant::now();
+        let mut loop_state = WorkerLoopState {
+            last_tick: now,
+            last_served: [now; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = SlowVoteActor {
+            events: Vec::new(),
+            vote_sleep: Duration::from_millis(20),
+        };
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(actor.events, vec!["vote"]);
+        assert_eq!(stats.votes_handled, 1);
+        assert_eq!(stats.block_payloads_handled, 0);
+        assert!(stats.budget_exceeded);
+        assert!(
+            loop_state.mailbox.slots[PriorityTier::BlockPayload.idx()].is_some(),
+            "payload should remain buffered for the next iteration"
+        );
+    }
+
+    #[test]
     fn run_worker_iteration_drains_rbc_when_votes_hit_cap_but_empty() {
         status::reset_worker_loop_snapshot_for_tests();
 
@@ -8093,8 +8199,10 @@ fn drain_mailbox<A: WorkerActor>(
     last_served: &mut [Instant; PRIORITY_TIER_COUNT],
 ) {
     let vote_burst = cfg.vote_rx_drain_max_messages.min(VOTE_BURST_CAP).max(1);
+    // Cap per-iteration draining so ticks cannot be starved by long queue backlogs.
+    let drain_budget = cfg.time_budget.min(cfg.tick_max_gap);
     loop {
-        if iter_start.elapsed() >= cfg.time_budget {
+        if iter_start.elapsed() >= drain_budget {
             stats.budget_exceeded = true;
             break;
         }
@@ -8697,6 +8805,12 @@ impl SumeragiWorker {
             cap_drain_budget(block_time / 4, time_budget, worker_iteration_budget_cap);
         let starve_max = block_time.max(commit_time).max(time_budget);
         let tick_min_gap = idle_tick_gap(block_time, commit_time, time_budget);
+        let mut tick_max_gap = if block_time.is_zero() {
+            time_budget
+        } else {
+            block_time.min(time_budget)
+        };
+        tick_max_gap = tick_max_gap.max(tick_min_gap);
         let loop_config = WorkerLoopConfig {
             time_budget,
             vote_rx_drain_budget,
@@ -8711,7 +8825,7 @@ impl SumeragiWorker {
             lane_relay_rx_drain_max_messages: control_msg_channel_cap.max(1),
             background_rx_drain_max_messages: control_msg_channel_cap.max(1),
             tick_min_gap,
-            tick_max_gap: time_budget,
+            tick_max_gap,
             block_rx_starve_max: starve_max,
             non_vote_starve_max: starve_max,
         };
