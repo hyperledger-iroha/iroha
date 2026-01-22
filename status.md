@@ -2,10 +2,15 @@
 
 Last update: 2026-01-21
 
+- Sumeragi: allow empty BlockCreated payloads when time triggers are due by checking the read-only trigger set (`StateView::time_triggers_due_for_block` now uses shared time-trigger matching).
+- Tests: `cargo test -p iroha_core --lib time_triggers_due_for_block_detects_precommit_trigger` (ok; warnings about unexpected `cfg` values from Norito derives).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test mod triggers::time_trigger::time_trigger_scenarios -- --nocapture` (ok).
+- Tests: `API_ADDRESS=0.0.0.0:1 PUBLIC_KEY=not-a-key CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo test -p integration_tests --test mod -- --nocapture --test-threads=1` (timed out after 2h; last observed running `triggers::by_call_trigger::call_execute_trigger`).
+- Tests: `API_ADDRESS=0.0.0.0:1 PUBLIC_KEY=not-a-key CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo test -p integration_tests --test mod triggers::by_call_trigger::call_execute_trigger -- --nocapture --test-threads=1` (ok; `call_execute_trigger_with_args` also ran).
 - NPoS localnet: added pacemaker backpressure telemetry split by reason (queue saturation, active pending, RBC backlog, relay backpressure, consensus queue backpressure) plus pacemaker eval/propose timing histograms; docs updated.
 - Localnet tuning: tightened NPoS timeouts (propose 300ms, prevote 400ms, precommit 500ms, commit 650ms, DA 600ms, agg 100ms), set DA timeout multipliers to 1/1, and tuned commit inflight timeout to 4–10s (6x multiplier).
-- Localnet: `scripts/deploy_localnet.sh --consensus-mode npos --peers 4 --out-dir /tmp/iroha-localnet-npos-1hz` failed to bind loopback (`Operation not permitted`), so the 1 Hz / 100-block soak did not run; logs in `/tmp/iroha-localnet-npos-1hz/peer0.log`.
-- Tests: `cargo test -p iroha_core pacemaker_backpressure -- --nocapture` failed during compilation (missing `sorafs_repair_escalation` in `crates/iroha_core/src/kiso.rs` initializer).
+- Localnet: NPoS 1 Hz / 100-block soak rerun on `/tmp/iroha-localnet-npos-1hz-run2` (ports 48080/53337); 100x1 Hz `transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `/tmp/iroha-localnet-npos-1hz-run2/status-1hz-20260121T192416Z.jsonl` (ping log `/tmp/iroha-localnet-npos-1hz-run2/ping-1hz-20260121T192416Z.log`). `commit_qc.height` 27->39 (+12 over 118s, ~0.10 blocks/s); `view_change_install_total` +3 (`stake_quorum_timeout_total` +2); pending RBC max 1040 bytes / 1 session (cap 8 MiB / 256), `rbc_store.pressure_level=0`.
+- Tests: `cargo test -p iroha_core pacemaker_backpressure -- --nocapture` (pass; warnings about `unexpected_cfgs` from norito derive macros).
 - Triggers: `submit_instruction_and_wait` now uses `submit_blocking` with the network sync timeout to avoid racing trigger registration/execution.
 - Tests: `IROHA_TEST_NETWORK_PARALLELISM=1 CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target cargo test -p integration_tests --test mod call_execute_trigger -- --nocapture` (ok).
 - Tests: `IROHA_TEST_NETWORK_PARALLELISM=1 CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target cargo test -p integration_tests --test mod -- --nocapture --test-threads=1` (timed out after 2h; last observed running `triggers::time_trigger::time_trigger_scenarios`).
@@ -23,6 +28,25 @@ Last update: 2026-01-21
 - Tests: not run (SoraFS reconciliation updates).
 - SoraFS reconciliation: added a multi-peer integration test that compares per-peer reconciliation reports to detect divergence (`integration_tests/tests/sorafs_reconciliation.rs`).
 - Tests: not run (SoraFS reconciliation integration test).
+- Docs/i18n: replaced repo-root `MAINTAINERS.*` stubs with translations for ar/es/fr/pt/ru/ur; set `translation_last_reviewed` to 2026-01-21.
+- Docs/i18n: replaced repo-root `integrated_test_framework.es.md` stub with a full Spanish translation; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced repo-root `integrated_test_framework.fr.md`, `integrated_test_framework.pt.md`, and `integrated_test_framework.ru.md` stubs with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced repo-root `integrated_test_framework.ar.md` stub with an Arabic translation; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/soranet_gateway_hardening.*` stubs (ar/es/fr/he/ja/pt/ru/ur) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/automation/README.*` stubs (ar/es/fr/he/ja/pt/ru/ur) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/automation/android/README.*` stubs (ar/es/fr/he/ja/pt/ru/ur) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/automation/da/README.*` stubs (ar/es/fr/he/ja/pt/ru/ur) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/bindings/README.*` stubs (ar/es/fr/he/ja/pt/ru/ur) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/devportal/try-it.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/settlement-router.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/space-directory.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/amx.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/governance_playbook.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/taikai_cache_hierarchy.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/soranet_vpn.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/soracles_evidence_retention.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/p2p_trust_gossip.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/compute_lane.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
 - SoraFS repair governance policy now enforces approval quorum/minimum voters, dispute/appeal windows, tie-break rules, and penalty caps; added approval/policy Norito payloads, capped scheduler draft penalties, updated CLI slash proposals to require approval summaries, and refreshed repair plan + node client protocol docs (portal mirror included).
 - Tests: not run (repair escalation policy + docs updates only).
 - SoraFS retention precedence now resolves effective retention as the minimum of pin policy, deal end, and governance cap metadata, persists `RetentionSourceV1` + access counters in storage metadata/index, and GC capacity sweeps evict expired manifests by LRU; CLI GC output adds `retention_sources`, docs updated (ops playbook, node client protocol, architecture RFC + portal mirror).

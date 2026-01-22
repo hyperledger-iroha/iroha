@@ -1,20 +1,44 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: MAINTAINERS.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 42b600496381995ae510fc080cc66c9f00da757f367d2e43f6d08ddab8567528
 source_last_modified: "2025-11-02T04:40:28.020912+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-21
 ---
 
-# ترجمہ جاری ہے
-
 <div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
+<!-- MAINTAINERS.md کا اردو ترجمہ -->
+
+# مینٹینرز
+
+Hyperledger Iroha منصوبے کے مینٹینرز سے توقع کی جاتی ہے کہ وہ شراکت کنندگان کی مدد کریں، مثلاً آرکیٹیکچر، عمل اور موجودہ مسائل کی وضاحت کرکے۔
+
+یہ مینٹینرز کی فہرست ہے، براہِ راست رابطے کے لیے ان کے ای میل پتے سمیت:
+
+| نام                   | GitHub آئی ڈی                                        | ای میل                          | مہارت/کردار                                                          |
+|-----------------------|------------------------------------------------------|---------------------------------|------------------------------------------------------------------------|
+| Makoto Takemiya       | [@takemiyamakoto](https://github.com/takemiyamakoto) | takemiya@soramitsu.co.jp        | پروڈکٹ اونر                                                          |
+| Dmitri Venger         | [@dmitrivenger](https://github.com/dmitrivenger)     | venger@soramitsu.co.jp          | پروجیکٹ مینیجر                                                       |
+| Bogdan Mingela        | [@Mingela](https://github.com/Mingela)               | mingela@soramitsu.co.jp         | پروڈکٹ مینیجر                                                        |
+| Marin Veršić          | [@mversic](https://github.com/mversic)               | versic@soramitsu.co.jp          | ٹیک لیڈ؛ ڈویلپمنٹ: Rust, Java/Kotlin                                 |
+| Sam H. Smith          | [@SamHSmith](https://github.com/SamHSmith)           | smith@soramitsu.co.jp           | ڈویلپمنٹ: Rust, C, Python                                             |
+| Dmitry Balashov       | [@0x009922](https://github.com/0x009922)             | dbalashov@soramitsu.co.jp       | ڈویلپمنٹ: Rust, TypeScript, JavaScript                                |
+| Shunkichi Sato        | [@s8sato](https://github.com/s8sato)                 | s.sato@soramitsu.co.jp          | ڈویلپمنٹ: Rust                                                       |
+| Andrey Kostiuchenko   | [@arndey](https://github.com/arndey)                 | kostiuchenko@soramitsu.co.jp    | ڈویلپمنٹ: Java/Kotlin                                                 |
+| Vasily Zyabkin        | [@BAStos525](https://github.com/BAStos525)           | zyabkin@soramitsu.co.jp         | DevOps                                                                 |
+| Insaf Safin           | [@safinsaf](https://github.com/safinsaf)             | safin@soramitsu.co.jp           | DevOps                                                                 |
+| Ekaterina Mekhnetsova | [@outoftardis](https://github.com/outoftardis)       | mekhnetsova@soramitsu.co.jp     | دستاویزات                                                            |
+| Alexandra Zorina      | [@a-zorina](https://github.com/a-zorina)             | zorina@soramitsu.co.jp          | دستاویزات                                                            |
+| William Richter       | [@WRRicht3r](https://github.com/WRRicht3r)           | richter@soramitsu.co.jp         | دستاویزات                                                            |
+| Mykhailo Lohachov     | [@mikuyako](https://github.com/aoyako)               | lohachov@soramitsu.co.jp        | ڈویلپمنٹ: Rust                                                       |
+| Alexander Strokov     | [@astrokov7](https://github.com/astrokov7)           | strokov@soramitsu.co.jp         | QA؛ Python                                                            |
+| Michael Timofeev      | [@timofeevmd](https://github.com/timofeevmd)         | timofeev@soramitsu.co.jp        | QA                                                                     |
+| Nikita Strygin        | [@DCNick3](https://github.com/DCNick3)               | moslike6@gmail.com              | ڈویلپمنٹ: Rust                                                       |
+| Bogdan Yamkovoy       | [@yamkovoy](https://github.com/yamkovoy)             | yamkovoy@soramitsu.co.jp        | دستاویزات                                                            |
+| Dmitry Murzin         | [@dima74](https://github.com/dima74)                 | murzin@soramitsu.co.jp          | ڈویلپمنٹ: Rust                                                       |
+
 </div>

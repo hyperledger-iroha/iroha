@@ -1578,6 +1578,8 @@ mod tests {
                 alias_teu_minimum: iroha_config::parameters::defaults::governance::alias_teu_minimum(),
                 alias_frontier_telemetry: iroha_config::parameters::defaults::governance::alias_frontier_telemetry(),
                 sorafs_penalty: iroha_config::parameters::actual::SorafsPenaltyPolicy::default(),
+                sorafs_repair_escalation:
+                    iroha_config::parameters::actual::RepairEscalationPolicyV1::default(),
                 sorafs_telemetry: iroha_config::parameters::actual::SorafsTelemetryPolicy::default(),
                 sorafs_provider_owners: std::collections::BTreeMap::new(),
                 conviction_step_blocks: 100,

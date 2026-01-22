@@ -940,41 +940,57 @@ impl Actor {
         }
         if block.is_empty() {
             let queue_len = self.queue.queued_len();
-            iroha_logger::info!(
-                height,
-                view,
-                queue_len,
-                block = %block_hash,
-                "received empty BlockCreated; empty blocks are disallowed"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::BlockCreated,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::InvalidPayload,
-            );
-            self.pending.pending_blocks.remove(&block_hash);
-            let proposal = self
-                .subsystems
-                .propose
-                .proposal_cache
-                .pop_proposal(height, view);
-            self.subsystems
-                .propose
-                .proposal_cache
-                .pop_hint(height, view);
-            if let Some(proposal) = proposal {
-                warn!(height, view, "dropping BlockCreated due to empty payload");
-                let evidence =
-                    invalid_proposal_evidence(proposal, "empty blocks are disallowed".to_string());
-                self.record_and_broadcast_evidence(evidence)?;
+            let time_triggers_due = {
+                let state_view = self.state.view();
+                state_view.time_triggers_due_for_block(&block.header())
+            };
+            if time_triggers_due {
+                iroha_logger::info!(
+                    height,
+                    view,
+                    queue_len,
+                    block = %block_hash,
+                    "accepting empty BlockCreated; time triggers are due"
+                );
+            } else {
+                iroha_logger::info!(
+                    height,
+                    view,
+                    queue_len,
+                    block = %block_hash,
+                    "received empty BlockCreated; empty blocks are disallowed"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::BlockCreated,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::InvalidPayload,
+                );
+                self.pending.pending_blocks.remove(&block_hash);
+                let proposal = self
+                    .subsystems
+                    .propose
+                    .proposal_cache
+                    .pop_proposal(height, view);
+                self.subsystems
+                    .propose
+                    .proposal_cache
+                    .pop_hint(height, view);
+                if let Some(proposal) = proposal {
+                    warn!(height, view, "dropping BlockCreated due to empty payload");
+                    let evidence = invalid_proposal_evidence(
+                        proposal,
+                        "empty blocks are disallowed".to_string(),
+                    );
+                    self.record_and_broadcast_evidence(evidence)?;
+                }
+                self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+                self.clean_rbc_sessions_for_block(block_hash, height);
+                self.qc_cache
+                    .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+                self.qc_signer_tally
+                    .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+                return Ok(());
             }
-            self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
-            self.clean_rbc_sessions_for_block(block_hash, height);
-            self.qc_cache
-                .retain(|(_, hash, _, _, _), _| *hash != block_hash);
-            self.qc_signer_tally
-                .retain(|(_, hash, _, _, _), _| *hash != block_hash);
-            return Ok(());
         }
         let pending_status = self
             .pending

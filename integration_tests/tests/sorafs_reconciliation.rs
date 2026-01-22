@@ -12,8 +12,8 @@ use integration_tests::sandbox::start_network_async_or_skip;
 use iroha_test_network::NetworkBuilder;
 use sorafs_car::{CarBuildPlan, CarWriter};
 use sorafs_manifest::{
-    DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy, SorafsReconciliationReportV1,
-    StorageClass, chunker_registry,
+    DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy,
+    SorafsReconciliationReportV1, StorageClass, chunker_registry,
 };
 
 const REPORT_TIMEOUT: Duration = Duration::from_secs(20);

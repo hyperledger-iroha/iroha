@@ -441,6 +441,37 @@ pub trait SetReadOnly {
         self.ids().iter().map(|(trigger_id, _)| trigger_id)
     }
 
+    /// Returns an iterator over `(TriggerId, LoadedAction)` pairs for a given time event.
+    fn match_time_event(
+        &self,
+        event: TimeEvent,
+        current_block_height: u64,
+        _current_block_time_ms: u64,
+    ) -> impl Iterator<Item = (TriggerId, LoadedAction<TimeEventFilter>)> + '_ {
+        let key_height = "__registered_block_height".parse::<Name>().ok();
+        self.time_triggers()
+            .iter()
+            .filter(|(_, action)| trigger_is_enabled(action.metadata()))
+            .flat_map(move |(id, action)| {
+                let height_key = key_height.clone();
+                let mut count = action.filter.count_matches(&event);
+                if let Repeats::Exactly(repeats) = action.repeats {
+                    count = min(repeats, count);
+                }
+                // Skip firing triggers that were registered in the same block that is being applied now.
+                // Require `__registered_block_height` metadata set during registration.
+                (0..count)
+                    .map(move |_| (id.clone(), action.clone()))
+                    .filter(move |(_, act)| {
+                        let registered_height = height_key
+                            .as_ref()
+                            .and_then(|key| act.metadata().get(key))
+                            .and_then(|json| json.try_into_any_norito::<u64>().ok());
+                        registered_height.is_some_and(|height| height != current_block_height)
+                    })
+            })
+    }
+
     /// Get [`ExecutableRef`] for given [`TriggerId`].
     /// Returns `None` if `id` is not in the set.
     fn get_executable(&self, id: &TriggerId) -> Option<&ExecutableRef> {
@@ -665,30 +696,14 @@ impl<'set> SetBlock<'set> {
         &self,
         event: TimeEvent,
         current_block_height: u64,
-        _current_block_time_ms: u64,
+        current_block_time_ms: u64,
     ) -> impl Iterator<Item = (TriggerId, LoadedAction<TimeEventFilter>)> + '_ {
-        let key_height = "__registered_block_height".parse::<Name>().ok();
-        self.time_triggers
-            .iter()
-            .filter(|(_, action)| trigger_is_enabled(action.metadata()))
-            .flat_map(move |(id, action)| {
-                let height_key = key_height.clone();
-                let mut count = action.filter.count_matches(&event);
-                if let Repeats::Exactly(repeats) = action.repeats {
-                    count = min(repeats, count);
-                }
-                // Skip firing triggers that were registered in the same block that is being applied now.
-                // Require `__registered_block_height` metadata set during registration.
-                (0..count)
-                    .map(move |_| (id.clone(), action.clone()))
-                    .filter(move |(_, act)| {
-                        let registered_height = height_key
-                            .as_ref()
-                            .and_then(|key| act.metadata().get(key))
-                            .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                        registered_height.is_some_and(|height| height != current_block_height)
-                    })
-            })
+        <Self as SetReadOnly>::match_time_event(
+            self,
+            event,
+            current_block_height,
+            current_block_time_ms,
+        )
     }
 }
 
