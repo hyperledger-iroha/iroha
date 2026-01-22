@@ -242,10 +242,11 @@ mod tests {
     fn branch_checked_validates_range() {
         let word =
             encode_beq_checked(1, 2, -4).expect("encode branch within supported displacement");
-        let mut mem = Memory::new(16);
-        mem.load_code(&word.to_le_bytes());
-        let (decoded, _) = decode(&mem, 0).expect("decode");
-        assert_eq!(decoded, word);
+        let (op, rs1, rs2, offset) = encoding::wide::decode_mem(word);
+        assert_eq!(op, instruction::wide::control::BEQ);
+        assert_eq!(rs1, 1);
+        assert_eq!(rs2, 2);
+        assert_eq!(offset, -4);
 
         let err = encode_beq_checked(1, 2, 200).expect_err("offset too large");
         assert!(matches!(
@@ -266,9 +267,16 @@ mod tests {
         assert_eq!(instruction::wide::rs1(store), 4);
         assert_eq!(instruction::wide::rs2(store), 5);
 
-        let mut mem = Memory::new(32);
-        mem.load_code(&load.to_le_bytes());
-        let (decoded, _) = decode(&mem, 0).expect("decode");
-        assert_eq!(decoded, load);
+        let (op, rd_lo, base, rd_hi) = encoding::wide::decode_load128(load);
+        assert_eq!(op, instruction::wide::memory::LOAD128);
+        assert_eq!(rd_lo, 9);
+        assert_eq!(base, 7);
+        assert_eq!(rd_hi, 10);
+
+        let (op, base, rs_lo, rs_hi) = encoding::wide::decode_store128(store);
+        assert_eq!(op, instruction::wide::memory::STORE128);
+        assert_eq!(base, 3);
+        assert_eq!(rs_lo, 4);
+        assert_eq!(rs_hi, 5);
     }
 }

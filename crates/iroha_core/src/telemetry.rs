@@ -5022,6 +5022,28 @@ impl MissingBlockFetchTargetKind {
     }
 }
 
+/// Sumeragi commit pipeline stage classifications used for telemetry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommitStage {
+    /// Block-sync update build + broadcast after a successful commit.
+    BlockSync,
+    /// QC verification + block validation in the commit worker.
+    QcVerify,
+    /// Persistence work (kura + WSV apply/commit).
+    Persist,
+}
+
+impl CommitStage {
+    #[must_use]
+    fn label(self) -> &'static str {
+        match self {
+            CommitStage::BlockSync => "block_sync",
+            CommitStage::QcVerify => "qc_verify",
+            CommitStage::Persist => "persist",
+        }
+    }
+}
+
 /// Outcome classification for the DA manifest guard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ManifestGuardResult {
@@ -5853,6 +5875,26 @@ impl Telemetry {
         }
     }
 
+    /// Update gauges that track pending block pressure and commit inflight depth.
+    pub fn record_pending_block_metrics(
+        &self,
+        pending_total: u64,
+        pending_blocking: u64,
+        commit_inflight_queue_depth: u64,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .sumeragi_pending_blocks_total
+                .set(pending_total);
+            self.metrics
+                .sumeragi_pending_blocks_blocking
+                .set(pending_blocking);
+            self.metrics
+                .sumeragi_commit_inflight_queue_depth
+                .set(commit_inflight_queue_depth);
+        }
+    }
+
     /// Increment post-to-peer counter labeled by peer id (collector routing/backpressure insight)
     pub fn inc_post_to_peer(&self, peer: &iroha_data_model::peer::PeerId) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -6623,6 +6665,18 @@ impl Telemetry {
             .sumeragi_commit_pipeline_tick_total
             .with_label_values(&[mode_tag, outcome])
             .inc();
+    }
+
+    /// Observe commit pipeline stage duration in milliseconds.
+    pub fn observe_commit_stage_ms(&self, stage: CommitStage, ms: u64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            let label = stage.label();
+            let value = u64_to_f64(ms);
+            self.metrics
+                .sumeragi_commit_stage_ms
+                .with_label_values(&[label])
+                .observe(value.max(0.0));
+        }
     }
 
     /// Record a prevote-quorum timeout that triggered a view change.
@@ -7661,6 +7715,13 @@ impl Telemetry {
     pub fn inc_view_change_install(&self) {
         if self.enabled.load(Ordering::Relaxed) {
             self.metrics.sumeragi_view_change_install_total.inc();
+        }
+    }
+
+    /// Increment counter: view-change rotations after proposal gaps.
+    pub fn inc_proposal_gap(&self) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.sumeragi_proposal_gap_total.inc();
         }
     }
 
@@ -11455,6 +11516,20 @@ mod tests {
 
     #[cfg(feature = "telemetry")]
     #[test]
+    fn pending_block_metrics_updated() {
+        use std::sync::Arc;
+
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.record_pending_block_metrics(12, 4, 1);
+        assert_eq!(metrics.sumeragi_pending_blocks_total.get(), 12);
+        assert_eq!(metrics.sumeragi_pending_blocks_blocking.get(), 4);
+        assert_eq!(metrics.sumeragi_commit_inflight_queue_depth.get(), 1);
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[test]
     fn prf_context_updates_metrics() {
         use std::sync::Arc;
 
@@ -12174,6 +12249,36 @@ mod tests {
     }
 
     #[test]
+    fn commit_stage_metrics_recorded() {
+        let metrics = Arc::new(Metrics::default());
+        let tel = Telemetry::new(Arc::clone(&metrics), true);
+        tel.observe_commit_stage_ms(CommitStage::QcVerify, 12);
+        tel.observe_commit_stage_ms(CommitStage::Persist, 34);
+        tel.observe_commit_stage_ms(CommitStage::BlockSync, 56);
+        assert_eq!(
+            metrics
+                .sumeragi_commit_stage_ms
+                .with_label_values(&["qc_verify"])
+                .get_sample_count(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_commit_stage_ms
+                .with_label_values(&["persist"])
+                .get_sample_count(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_commit_stage_ms
+                .with_label_values(&["block_sync"])
+                .get_sample_count(),
+            1
+        );
+    }
+
+    #[test]
     fn view_change_proof_metrics_increment() {
         let metrics = Arc::new(Metrics::default());
         let tel = Telemetry::new(Arc::clone(&metrics), true);
@@ -12201,6 +12306,14 @@ mod tests {
                 .get(),
             1
         );
+    }
+
+    #[test]
+    fn proposal_gap_metrics_increment() {
+        let metrics = Arc::new(Metrics::default());
+        let tel = Telemetry::new(Arc::clone(&metrics), true);
+        tel.inc_proposal_gap();
+        assert_eq!(metrics.sumeragi_proposal_gap_total.get(), 1);
     }
 
     #[tokio::test]

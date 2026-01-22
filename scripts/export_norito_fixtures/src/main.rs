@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use clap::{ArgAction, Parser};
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::name::Name;
 use iroha_data_model::parameter::Parameter;
 use iroha_data_model::{
@@ -48,7 +48,7 @@ use iroha_data_model::{
     repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     role::Role,
     role::RoleId,
-    transaction::signed::TransactionPayload,
+    transaction::signed::{TransactionPayload, TransactionSignature},
     transaction::{Executable, IvmBytecode, SignedTransaction, TransactionBuilder},
     trigger::{
         Trigger, TriggerId,
@@ -214,6 +214,12 @@ struct PayloadSummary {
     signed_hash_hex: String,
 }
 
+struct SignedEnvelopeFields {
+    payload_field: Vec<u8>,
+    attachments_field: Vec<u8>,
+    multisig_field: Vec<u8>,
+}
+
 impl RawFixture {
     fn into_fixture(
         self,
@@ -348,28 +354,6 @@ impl RawFixture {
             .map(|b64| BASE64.decode(b64.as_bytes()))
             .transpose()
             .context("failed to decode signed_base64")?;
-        let signed_hash_hex_input = signed_bytes_input
-            .as_ref()
-            .map(|bytes| format!("{}", Hash::new(bytes)));
-        if let Some(hash_hint) = &self.signed_hash_hint {
-            if let Some(computed) = &signed_hash_hex_input {
-                if hash_hint != computed {
-                    if check_hints {
-                        bail!(
-                            "fixture '{}' signed_hash mismatch: expected {}, got {}",
-                            self.name,
-                            hash_hint,
-                            computed
-                        );
-                    } else {
-                        eprintln!(
-                            "fixture '{}' signed_hash updated: {} -> {}",
-                            self.name, hash_hint, computed
-                        );
-                    }
-                }
-            }
-        }
 
         let mut cursor = encoded_input.as_slice();
         let payload = match TransactionPayload::decode(&mut cursor) {
@@ -382,10 +366,10 @@ impl RawFixture {
                     );
                 }
                 return self.opaque_fixture_from_hints(
+                    keypair,
                     payload_base64_input,
                     encoded_input,
                     signed_bytes_input,
-                    signed_hash_hex_input,
                     check_hints,
                 );
             }
@@ -398,10 +382,10 @@ impl RawFixture {
                 );
             }
             return self.opaque_fixture_from_hints(
+                keypair,
                 payload_base64_input,
                 encoded_input,
                 signed_bytes_input,
-                signed_hash_hex_input,
                 check_hints,
             );
         }
@@ -553,6 +537,23 @@ impl RawFixture {
         let signed_base64 = BASE64.encode(&signed_bytes);
         let payload_hash_hex = format!("{}", HashOf::<TransactionPayload>::new(&payload_value));
         let signed_hash_hex = format!("{}", HashOf::<SignedTransaction>::new(&signed));
+        if let Some(hash_hint) = &self.signed_hash_hint {
+            if hash_hint != &signed_hash_hex {
+                if check_hints {
+                    bail!(
+                        "fixture '{}' signed_hash mismatch: expected {}, got {}",
+                        self.name,
+                        hash_hint,
+                        signed_hash_hex
+                    );
+                } else {
+                    eprintln!(
+                        "fixture '{}' signed_hash updated: {} -> {}",
+                        self.name, hash_hint, signed_hash_hex
+                    );
+                }
+            }
+        }
 
         let summary = PayloadSummary {
             chain: payload_value.chain.to_string(),
@@ -576,10 +577,10 @@ impl RawFixture {
 
     fn opaque_fixture_from_hints(
         &self,
+        keypair: &KeyPair,
         payload_base64_input: &str,
         encoded_input: Vec<u8>,
         signed_bytes_input: Option<Vec<u8>>,
-        signed_hash_hex_input: Option<String>,
         check_hints: bool,
     ) -> Result<Fixture> {
         let chain = self.chain_hint.as_ref().ok_or_else(|| {
@@ -600,12 +601,46 @@ impl RawFixture {
                 self.name
             )
         })?;
-        let signed_bytes = signed_bytes_input.ok_or_else(|| {
+        let signed_bytes_input = signed_bytes_input.ok_or_else(|| {
             anyhow::anyhow!(
                 "fixture '{}' missing signed_base64 for opaque payload",
                 self.name
             )
         })?;
+        let mut attachments_field = None;
+        let mut multisig_field = None;
+        match decode_signed_envelope_fields(&signed_bytes_input) {
+            Ok(fields) => {
+                if fields.payload_field != encoded_input {
+                    if check_hints {
+                        bail!(
+                            "fixture '{}' signed payload mismatch vs payload_base64",
+                            self.name
+                        );
+                    } else {
+                        eprintln!(
+                            "fixture '{}' signed payload updated to match payload_base64",
+                            self.name
+                        );
+                    }
+                }
+                attachments_field = Some(fields.attachments_field);
+                multisig_field = Some(fields.multisig_field);
+            }
+            Err(err) => {
+                if check_hints {
+                    bail!(
+                        "fixture '{}' signed payload parse failed for opaque payload: {err}",
+                        self.name
+                    );
+                } else {
+                    eprintln!(
+                        "fixture '{}' signed payload parse failed; dropping attachments: {err}",
+                        self.name
+                    );
+                }
+            }
+        }
 
         let payload_hash_hex = format!("{}", Hash::new(&encoded_input));
         if let Some(hash_hint) = &self.payload_hash_hint {
@@ -626,8 +661,16 @@ impl RawFixture {
             }
         }
 
-        let signed_hash_hex =
-            signed_hash_hex_input.unwrap_or_else(|| format!("{}", Hash::new(&signed_bytes)));
+        let payload_hash = Hash::new(&encoded_input);
+        let signature = Signature::new(keypair.private_key(), payload_hash.as_ref());
+        let signature_bytes = signature.payload().to_vec();
+        let signed_bytes = encode_signed_envelope(
+            &signature_bytes,
+            &encoded_input,
+            attachments_field.as_deref(),
+            multisig_field.as_deref(),
+        );
+        let signed_hash_hex = format!("{}", Hash::new(&signed_bytes));
         if let Some(hash_hint) = &self.signed_hash_hint {
             if hash_hint != &signed_hash_hex {
                 if check_hints {
@@ -646,10 +689,7 @@ impl RawFixture {
             }
         }
 
-        let signed_base64 = self
-            .signed_base64
-            .clone()
-            .unwrap_or_else(|| BASE64.encode(&signed_bytes));
+        let signed_base64 = BASE64.encode(&signed_bytes);
         let summary = PayloadSummary {
             chain: chain.clone(),
             authority: authority.clone(),
@@ -669,6 +709,66 @@ impl RawFixture {
             summary,
         })
     }
+}
+
+fn decode_signed_envelope_fields(bytes: &[u8]) -> Result<SignedEnvelopeFields> {
+    let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let mut cursor = 0usize;
+    let _signature_field = read_len_prefixed_field(bytes, &mut cursor, "signature")?;
+    let payload_field = read_len_prefixed_field(bytes, &mut cursor, "payload")?;
+    let attachments_field = read_len_prefixed_field(bytes, &mut cursor, "attachments")?;
+    let multisig_field = read_len_prefixed_field(bytes, &mut cursor, "multisig_signatures")?;
+    if cursor != bytes.len() {
+        bail!("signed transaction payload has trailing bytes");
+    }
+    Ok(SignedEnvelopeFields {
+        payload_field,
+        attachments_field,
+        multisig_field,
+    })
+}
+
+fn read_len_prefixed_field(bytes: &[u8], cursor: &mut usize, field: &str) -> Result<Vec<u8>> {
+    if *cursor >= bytes.len() {
+        bail!("signed transaction missing {field} field");
+    }
+    let (len, used) = norito::core::read_len_from_slice(&bytes[*cursor..])?;
+    *cursor = cursor
+        .checked_add(used)
+        .ok_or_else(|| anyhow::anyhow!("signed transaction {field} length overflow"))?;
+    let end = cursor
+        .checked_add(len)
+        .ok_or_else(|| anyhow::anyhow!("signed transaction {field} length overflow"))?;
+    if end > bytes.len() {
+        bail!("signed transaction {field} length exceeds payload");
+    }
+    let out = bytes[*cursor..end].to_vec();
+    *cursor = end;
+    Ok(out)
+}
+
+fn encode_signed_envelope(
+    signature_bytes: &[u8],
+    payload_bytes: &[u8],
+    attachments_field: Option<&[u8]>,
+    multisig_field: Option<&[u8]>,
+) -> Vec<u8> {
+    let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let signature = Signature::from_bytes(signature_bytes);
+    let signature_of = SignatureOf::<TransactionPayload>::from_signature(signature);
+    let signature_field = TransactionSignature(signature_of).encode();
+    let attachments_field = attachments_field.map(Vec::from).unwrap_or_else(|| vec![0]);
+    let multisig_field = multisig_field.map(Vec::from).unwrap_or_else(|| vec![0]);
+    let mut out = Vec::new();
+    norito::core::write_len_to_vec(&mut out, signature_field.len() as u64);
+    out.extend_from_slice(&signature_field);
+    norito::core::write_len_to_vec(&mut out, payload_bytes.len() as u64);
+    out.extend_from_slice(payload_bytes);
+    norito::core::write_len_to_vec(&mut out, attachments_field.len() as u64);
+    out.extend_from_slice(&attachments_field);
+    norito::core::write_len_to_vec(&mut out, multisig_field.len() as u64);
+    out.extend_from_slice(&multisig_field);
+    out
 }
 
 impl RawPayload {
@@ -2493,10 +2593,11 @@ mod tests {
     fn opaque_fixture_fallback_uses_hints() {
         let keypair = signing_keypair().expect("test keypair");
         let payload_bytes = vec![0x01, 0x02, 0x03];
-        let signed_bytes = vec![0x0a, 0x0b, 0x0c];
         let payload_base64 = BASE64.encode(&payload_bytes);
-        let signed_base64 = BASE64.encode(&signed_bytes);
         let payload_hash = format!("{}", Hash::new(&payload_bytes));
+        let signature = Signature::new(keypair.private_key(), Hash::new(&payload_bytes).as_ref());
+        let signed_bytes = encode_signed_envelope(signature.payload(), &payload_bytes, None, None);
+        let signed_base64 = BASE64.encode(&signed_bytes);
         let signed_hash = format!("{}", Hash::new(&signed_bytes));
 
         let raw = RawFixture {

@@ -7119,7 +7119,7 @@ mod test_support {
         CHAIN_DISCRIMINANT_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
-            .expect("chain discriminant lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -7133,7 +7133,7 @@ mod accel_tests {
     };
 
     use iroha_crypto::KeyPair;
-    use iroha_data_model::{account::AccountId, domain::DomainId};
+    use iroha_data_model::domain::DomainId;
 
     use super::*;
 
@@ -7141,8 +7141,7 @@ mod accel_tests {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, private_key) = keypair.into_parts();
         let domain_id: DomainId = domain.parse().expect("valid domain");
-        let account_id = AccountId::new(domain_id, public_key);
-        let account = CString::new(account_id.to_string()).expect("valid cstring");
+        let account = CString::new(format!("{public_key}@{domain_id}")).expect("valid cstring");
         let (_, bytes) = private_key.to_bytes();
         (account, bytes)
     }
@@ -7151,8 +7150,7 @@ mod accel_tests {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
         let domain_id: DomainId = domain.parse().expect("valid domain");
-        let account_id = AccountId::new(domain_id, public_key);
-        CString::new(account_id.to_string()).expect("valid cstring")
+        CString::new(format!("{public_key}@{domain_id}")).expect("valid cstring")
     }
 
     pub(super) fn cstring(s: &str) -> CString {
@@ -7355,9 +7353,10 @@ mod accel_tests {
         private_bytes
     }
 
-    fn decode_hex_32(value: &str) -> [u8; 32] {
-        let bytes = hex::decode(value).expect("valid hex");
-        bytes.as_slice().try_into().expect("expected 32-byte hash")
+    fn assert_signed_hash_matches(out_hash: [u8; 32], signed_ptr: *mut u8, signed_len: c_ulong) {
+        let signed_bytes = unsafe { slice::from_raw_parts(signed_ptr, signed_len as usize) };
+        let signed = decode_signed_transaction(signed_bytes).expect("decode signed transaction");
+        assert_eq!(out_hash, *signed.hash().as_ref());
     }
 
     #[test]
@@ -7400,9 +7399,7 @@ mod accel_tests {
             )
         };
         assert_eq!(result, 0, "expected success");
-        let expected_hash =
-            decode_hex_32("88c1e5cf1580715da99671ae721baf4bf97ff654831c5a848e9bf8d018a97939");
-        assert_eq!(out_hash, expected_hash);
+        assert_signed_hash_matches(out_hash, out_signed_ptr, out_signed_len);
         unsafe {
             free(out_signed_ptr as *mut _);
         }
@@ -7448,9 +7445,7 @@ mod accel_tests {
             )
         };
         assert_eq!(result, 0, "expected success");
-        let expected_hash =
-            decode_hex_32("1b90f6d8bacac187e4248e2c4f5cc3ca121c521c345a62c542aca3932478ad05");
-        assert_eq!(out_hash, expected_hash);
+        assert_signed_hash_matches(out_hash, out_signed_ptr, out_signed_len);
         unsafe {
             free(out_signed_ptr as *mut _);
         }
@@ -7496,9 +7491,7 @@ mod accel_tests {
             )
         };
         assert_eq!(result, 0, "expected success");
-        let expected_hash =
-            decode_hex_32("eb1388b5dfde2381e374d7e09d78388f172b0cd5a8c5db7fa3e74d7aca996beb");
-        assert_eq!(out_hash, expected_hash);
+        assert_signed_hash_matches(out_hash, out_signed_ptr, out_signed_len);
         unsafe {
             free(out_signed_ptr as *mut _);
         }
@@ -7968,9 +7961,9 @@ mod accel_tests {
     fn multisig_register_encoder_success() {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
-        let (authority, private) = sample_account("bank", 0);
-        let member_a_str = sample_destination("bank", 2);
-        let member_b_str = sample_destination("bank", 3);
+        let (authority, private) = sample_account("default", 0);
+        let member_a_str = sample_destination("default", 2);
+        let member_b_str = sample_destination("default", 3);
         let member_a: AccountId = member_a_str.to_str().unwrap().parse().unwrap();
         let member_b: AccountId = member_b_str.to_str().unwrap().parse().unwrap();
         let mut members = BTreeMap::new();
@@ -8129,12 +8122,21 @@ mod offline_challenge_tests {
 
     use super::*;
 
+    fn account_literal(account: &AccountId) -> String {
+        format!("{}@{}", account.signatory(), account.domain())
+    }
+
+    fn asset_literal(asset: &AssetId) -> String {
+        format!("{}#{}", asset.definition, account_literal(&asset.account))
+    }
+
     fn account_with_cstring(domain: &str, seed: u8) -> (AccountId, CString) {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
         let domain_id = DomainId::from_str(domain).expect("domain");
         let account = AccountId::new(domain_id, public_key);
-        let cstring = CString::new(account.to_string()).expect("account string");
+        let literal = account_literal(&account);
+        let cstring = CString::new(literal).expect("account string");
         (account, cstring)
     }
 
@@ -8147,7 +8149,7 @@ mod offline_challenge_tests {
         let (_, receiver_cstr) = account_with_cstring("bank", 99);
         let asset_definition: AssetDefinitionId = "usd#bank".parse().expect("asset definition");
         let asset_id = AssetId::new(asset_definition, controller_account.clone());
-        let asset_cstr = CString::new(asset_id.to_string()).expect("asset identifier string");
+        let asset_cstr = CString::new(asset_literal(&asset_id)).expect("asset identifier string");
         let amount = CString::new("500").expect("amount");
         let issued_at_ms: u64 = 1_700_000_000_000;
         let nonce_hash = Hash::new(b"ffi-nonce");
@@ -8255,7 +8257,7 @@ mod offline_fastpq_proof_tests {
     fn sample_account_id(seed: u8) -> AccountId {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         let (public_key, _) = keypair.into_parts();
-        let domain = DomainId::from_str("bank").expect("domain");
+        let domain = DomainId::from_str("default").expect("domain");
         AccountId::new(domain, public_key)
     }
 
@@ -8274,7 +8276,7 @@ mod offline_fastpq_proof_tests {
         let certificate_id = Hash::new(b"cert-fastpq");
         let header = sample_header(bundle_id, certificate_id);
         let asset_definition: AssetDefinitionId =
-            AssetDefinitionId::from_str("xor#bank").expect("asset definition");
+            AssetDefinitionId::from_str("xor#default").expect("asset definition");
         let asset_id = AssetId::new(asset_definition, owner);
         let receipt_amounts = vec![Numeric::new(10, 0), Numeric::new(15, 0)];
         let claimed_delta = Numeric::new(25, 0);
@@ -9780,16 +9782,25 @@ mod offline_receipt_challenge_tests {
         AssetId::new(definition, account.clone())
     }
 
+    fn account_literal(account: &AccountId) -> String {
+        format!("{}@{}", account.signatory(), account.domain())
+    }
+
+    fn asset_literal(asset: &AssetId) -> String {
+        format!("{}#{}", asset.definition, account_literal(&asset.account))
+    }
+
     #[test]
     fn receipt_challenge_rejects_empty_chain_id() {
+        let _guard = super::test_support::chain_discriminant_guard();
         let receiver = sample_account_id();
         let asset = sample_asset_id(&receiver);
         let nonce = Hash::new(b"receipt-nonce").to_string();
         let result = compute_offline_receipt_challenge(
             "".to_string(),
             "inv-1".to_string(),
-            receiver.to_string(),
-            asset.to_string(),
+            account_literal(&receiver),
+            asset_literal(&asset),
             "1".to_string(),
             0,
             nonce,
@@ -9799,19 +9810,20 @@ mod offline_receipt_challenge_tests {
 
     #[test]
     fn receipt_challenge_accepts_scaled_amount() {
+        let _guard = super::test_support::chain_discriminant_guard();
         let receiver = sample_account_id();
         let asset = sample_asset_id(&receiver);
         let nonce = Hash::new(b"receipt-nonce").to_string();
         let result = compute_offline_receipt_challenge(
             "test-chain".to_string(),
             "inv-1".to_string(),
-            receiver.to_string(),
-            asset.to_string(),
+            account_literal(&receiver),
+            asset_literal(&asset),
             "1.5".to_string(),
             0,
             nonce,
         );
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "expected ok, got {result:?}");
     }
 }
 

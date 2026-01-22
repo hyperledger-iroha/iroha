@@ -396,13 +396,17 @@ mod tests {
 
     use super::*;
 
+    fn account_with_domain(account: &AccountId) -> String {
+        format!("{}@{}", account, account.domain())
+    }
+
     #[test]
     fn parse_asset_literal_splits_definition_and_owner() {
         let keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
         let domain: DomainId = "wonderland".parse().expect("valid domain");
         let owner = AccountId::new(domain.clone(), keypair.public_key().clone());
         let definition: AssetDefinitionId = "rose#wonderland".parse().expect("valid definition");
-        let asset_literal = format!("{definition}#{owner}");
+        let asset_literal = format!("{definition}#{}", account_with_domain(&owner));
         let parsed = parse_asset_literal(&asset_literal).expect("parse asset literal");
         assert_eq!(parsed.definition, definition);
         assert_eq!(parsed.account, owner);
@@ -415,15 +419,15 @@ mod tests {
         let authority = AccountId::new(domain.clone(), keypair.public_key().clone());
         let destination = AccountId::new(domain, keypair.public_key().clone());
         let definition: AssetDefinitionId = "rose#wonderland".parse().expect("valid definition");
-        let asset_literal = format!("{definition}#{authority}");
+        let asset_literal = format!("{definition}#{}", account_with_domain(&authority));
         let mut args = BTreeMap::new();
         args.insert("action".into(), "TransferAsset".into());
         args.insert("asset".into(), asset_literal);
         args.insert("quantity".into(), "1.2500".into());
-        args.insert("destination".into(), destination.to_string());
+        args.insert("destination".into(), account_with_domain(&destination));
         let payload = PayloadSpec {
             chain: "00000042".into(),
-            authority: authority.to_string(),
+            authority: account_with_domain(&authority),
             creation_time_ms: 123,
             executable: {
                 let mut exec = Map::new();

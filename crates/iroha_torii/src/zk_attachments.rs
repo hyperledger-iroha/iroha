@@ -1546,17 +1546,21 @@ fn apply_sanitizer_limits(max_expanded_bytes: u64, timeout: Duration) -> Result<
         let mem_limit = sanitizer_memory_limit_bytes(max_expanded_bytes);
         set_rlimit(libc::RLIMIT_CPU, cpu_limit)?;
         set_rlimit(libc::RLIMIT_AS, mem_limit)?;
-
     }
     Ok(())
 }
 
 #[cfg(unix)]
+#[cfg(any(target_env = "gnu", target_env = "uclibc"))]
+type RlimitResource = libc::__rlimit_resource_t;
+
+#[cfg(unix)]
+#[cfg(not(any(target_env = "gnu", target_env = "uclibc")))]
+type RlimitResource = libc::c_int;
+
+#[cfg(unix)]
 #[allow(unsafe_code)]
-fn set_rlimit(
-    resource: libc::__rlimit_resource_t,
-    value: u64,
-) -> Result<(), SanitizeError> {
+fn set_rlimit(resource: RlimitResource, value: u64) -> Result<(), SanitizeError> {
     let limit = libc::rlimit {
         rlim_cur: value,
         rlim_max: value,
