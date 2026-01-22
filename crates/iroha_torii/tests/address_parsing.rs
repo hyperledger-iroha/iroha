@@ -2370,9 +2370,9 @@ async fn offline_revocations_query_rejects_unknown_address_format() {
 #[tokio::test]
 async fn offline_revocations_query_filter_accepts_encoded_literals() {
     let app = test_router();
-    let (_, canonical_hex, compressed) = account_segments();
+    let (canonical, canonical_hex, compressed) = account_segments();
 
-    for literal in [ih58, compressed] {
+    for literal in [canonical, canonical_hex, compressed] {
         let body = query_envelope_with_account_filter("issuer_id", &literal);
         let resp = app
             .clone()

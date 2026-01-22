@@ -12,6 +12,7 @@ import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.SigningException;
+import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.crypto.KeyProviderMetadata;
 import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
@@ -60,7 +61,8 @@ public final class TransactionBuilderTests {
         new TransactionBuilder(codec, IrohaKeyManager.withSoftwareFallback());
 
     final SignedTransaction signed = builder.encodeAndSign(payload, signer);
-    final byte[] expectedSignature = concat(signed.encodedPayload(), "-signature".getBytes());
+    final byte[] prehashed = IrohaHash.prehash(signed.encodedPayload());
+    final byte[] expectedSignature = concat(prehashed, "-signature".getBytes());
     assert Arrays.equals(expectedSignature, signed.signature())
         : "Fake signer should append signature suffix";
     assert Arrays.equals("fake-public-key".getBytes(), signed.publicKey())
@@ -112,7 +114,7 @@ public final class TransactionBuilderTests {
 
     final Signature verifier = Signature.getInstance("Ed25519");
     verifier.initVerify(keyPair.getPublic());
-    verifier.update(signed.encodedPayload());
+    verifier.update(IrohaHash.prehash(signed.encodedPayload()));
     assert verifier.verify(signed.signature())
         : "Signature produced via key manager must verify";
   }

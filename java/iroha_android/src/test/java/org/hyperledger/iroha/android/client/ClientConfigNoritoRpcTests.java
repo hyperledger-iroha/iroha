@@ -50,7 +50,7 @@ public final class ClientConfigNoritoRpcTests {
           adjusted.toNoritoRpcClient(new UrlConnectionTransportExecutor());
 
       final byte[] response =
-          client.call("/v1/pipeline/transactions", new byte[0]);
+          client.call("/transaction", new byte[0]);
       assert response.length == 0 : "Mock server should return empty body by default";
       assert observer.requestCount.get() == 1 : "Observer should see Norito RPC requests";
       assert observer.responseCount.get() == 1 : "Observer should see Norito RPC responses";
@@ -77,7 +77,7 @@ public final class ClientConfigNoritoRpcTests {
       final ClientConfig adjusted = config.toBuilder().setBaseUri(server.baseUri()).build();
       final NoritoRpcClient client =
           adjusted.toNoritoRpcClient(new UrlConnectionTransportExecutor());
-      final byte[] response = client.call("/v1/pipeline/transactions", new byte[] {0x01});
+      final byte[] response = client.call("/transaction", new byte[] {0x01});
       assert response.length == 0 : "Mock server should return empty body";
       assert flowController.acquireCount() == 1
           : "Flow controller should wrap propagated client";
@@ -97,7 +97,7 @@ public final class ClientConfigNoritoRpcTests {
     executor.setResponse(new TransportResponse(204, new byte[0], "", java.util.Map.of()));
     final NoritoRpcClient client = config.toNoritoRpcClient(executor);
     final byte[] response =
-        client.call("/v1/pipeline/transactions", new byte[0]);
+        client.call("/transaction", new byte[0]);
     assert response.length == 0 : "Stub executor returns empty body";
     assert executor.lastRequest() != null : "Executor should capture RPC request";
     assert observer.requestCount.get() == 1 : "Observers should see executor-backed request";

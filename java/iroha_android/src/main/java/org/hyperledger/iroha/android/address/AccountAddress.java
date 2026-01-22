@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 import org.hyperledger.iroha.android.crypto.Blake2b;
 import org.hyperledger.iroha.android.crypto.Blake2s;
@@ -125,6 +126,16 @@ public final class AccountAddress {
     final String ih58 = toIH58(networkPrefix);
     final String compressed = toCompressedSora();
     return new DisplayFormats(ih58, compressed, networkPrefix, COMPRESSED_WARNING);
+  }
+
+  /**
+   * Returns the single-key controller payload when this address encodes a single-key controller.
+   *
+   * <p>Multisig addresses return {@link Optional#empty()}.
+   */
+  public Optional<SingleKeyPayload> singleKeyPayload() throws AccountAddressException {
+    parseCanonical(canonicalBytes);
+    return extractSingleKeyPayload(canonicalBytes);
   }
 
   public static String compressedWarningMessage() {
@@ -307,6 +318,24 @@ public final class AccountAddress {
     }
   }
 
+  public static final class SingleKeyPayload {
+    private final int curveId;
+    private final byte[] publicKey;
+
+    private SingleKeyPayload(final int curveId, final byte[] publicKey) {
+      this.curveId = curveId;
+      this.publicKey = Arrays.copyOf(publicKey, publicKey.length);
+    }
+
+    public int curveId() {
+      return curveId;
+    }
+
+    public byte[] publicKey() {
+      return Arrays.copyOf(publicKey, publicKey.length);
+    }
+  }
+
   public static final class AccountAddressException extends Exception {
 
     private static final long serialVersionUID = 1L;
@@ -440,6 +469,61 @@ public final class AccountAddress {
         throw new AccountAddressException(
             AccountAddressErrorCode.UNKNOWN_CONTROLLER_TAG, "unknown controller tag: " + controllerTag);
     }
+  }
+
+  private static Optional<SingleKeyPayload> extractSingleKeyPayload(final byte[] canonical)
+      throws AccountAddressException {
+    if (canonical.length < 4) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+    }
+    int cursor = 0;
+    final byte header = canonical[cursor++];
+    decodeHeader(header);
+
+    final byte domainTag = canonical[cursor++];
+    switch (domainTag) {
+      case 0x00:
+        break;
+      case 0x01:
+        if (cursor + 12 > canonical.length) {
+          throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+        }
+        cursor += 12;
+        break;
+      case 0x02:
+        if (cursor + 4 > canonical.length) {
+          throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+        }
+        cursor += 4;
+        break;
+      default:
+        throw new AccountAddressException(
+            AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG, "unknown domain selector tag: " + domainTag);
+    }
+
+    if (cursor >= canonical.length) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+    }
+    final byte controllerTag = canonical[cursor++];
+    if (controllerTag != 0x00) {
+      return Optional.empty();
+    }
+    if (cursor + 2 > canonical.length) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+    }
+    final int curveId = canonical[cursor++] & 0xFF;
+    ensureCurveEnabled(curveId, "curve id " + curveId);
+    final int keyLen = canonical[cursor++] & 0xFF;
+    final int end = cursor + keyLen;
+    if (end > canonical.length) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+    }
+    if (end != canonical.length) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES, "unexpected trailing bytes in canonical payload");
+    }
+    final byte[] key = Arrays.copyOfRange(canonical, cursor, end);
+    return Optional.of(new SingleKeyPayload(curveId, key));
   }
 
   private static byte encodeHeader(final byte version, final byte classId, final byte normVersion)

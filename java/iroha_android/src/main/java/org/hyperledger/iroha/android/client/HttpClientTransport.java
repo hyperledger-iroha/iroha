@@ -51,7 +51,7 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 /**
  * HTTP-based client implementation that will forward transactions to an Iroha Torii endpoint.
  *
- * <p>Serialization and endpoint construction follow the `/v1/pipeline/transactions` Torii route.
+ * <p>Serialization and endpoint construction follow the `/transaction` Torii route.
  * Network execution is delegated to {@link HttpTransportExecutor} so tests can run without making
  * outbound calls.
  */

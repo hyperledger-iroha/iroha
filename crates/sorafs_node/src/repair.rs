@@ -2339,17 +2339,14 @@ impl RepairManager {
 
             task.attempts = task.attempts.saturating_add(1);
             let max_attempts = self.config.max_attempts();
-            let mut event = None;
-            let mut slash_proposal = None;
-            if task.attempts >= max_attempts {
+            let (event, slash_proposal) = if task.attempts >= max_attempts {
                 let rationale = format!(
                     "attempts {}/{} exceeded after failure",
                     task.attempts, max_attempts
                 );
                 let escalation =
                     self.apply_escalation(&mut task, failed_at_unix, rationale, "scheduler")?;
-                event = escalation.event;
-                slash_proposal = Some(escalation.proposal);
+                (escalation.event, Some(escalation.proposal))
             } else {
                 let retry_after = next_attempt_after_unix(
                     failed_at_unix,
@@ -2365,14 +2362,17 @@ impl RepairManager {
                 task.scheduler_notes = Some(reason.clone());
                 task.lease = None;
                 task.next_attempt_after_unix = Some(retry_after);
-                event = task.push_event(
-                    RepairTaskStatusV1::Failed,
-                    failed_at_unix,
-                    Some(worker_id.to_string()),
-                    Some(reason.clone()),
-                    self.event_history_limit,
-                );
-            }
+                (
+                    task.push_event(
+                        RepairTaskStatusV1::Failed,
+                        failed_at_unix,
+                        Some(worker_id.to_string()),
+                        Some(reason.clone()),
+                        self.event_history_limit,
+                    ),
+                    None,
+                )
+            };
 
             let record = task.to_record();
             task.idempotency

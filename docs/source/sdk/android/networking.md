@@ -137,7 +137,7 @@ WAL-format queue shared with Rust/Swift.
 
 `HttpClientTransport`
 (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/HttpClientTransport.java`)
-implements `/v1/pipeline/transactions`, `/v1/pipeline/transactions/status`, and
+implements `/transaction` (alias `/v1/pipeline/transactions`), `/v1/pipeline/transactions/status`, and
 SoraFS gateway helpers on top of `java.net.http.HttpClient`. Core entry points:
 
 ```java

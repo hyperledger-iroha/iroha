@@ -182,7 +182,7 @@ public final class AndroidOkHttpClientRefactorTests {
       okTransport.submitTransaction(tx).get(2, TimeUnit.SECONDS);
 
       final TelemetryRecord okRequest = okSink.awaitRequest();
-      assertRequestFields(okRequest, "/v1/pipeline/transactions", "POST");
+      assertRequestFields(okRequest, "/transaction", "POST");
 
       final TelemetryRecord okResponse = okSink.awaitResponse();
       assertEquals(202, okResponse.statusCode().orElseThrow());

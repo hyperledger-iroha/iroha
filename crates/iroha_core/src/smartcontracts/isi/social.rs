@@ -649,7 +649,7 @@ mod tests {
     fn select_account_for_uaid_uses_index() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query);
+        let state = State::new_for_testing(World::default(), kura, query);
 
         let domain_id: DomainId = "uaid.reward".parse().expect("domain id");
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::reward"));

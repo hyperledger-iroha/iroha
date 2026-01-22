@@ -44,11 +44,10 @@ async fn space_directory_manifest_endpoint_returns_records() {
     let account_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let account_id = AccountId::new("cbdc".parse().unwrap(), account_key.public_key().clone());
     let compressed_literal = {
-        let compressed = account_id
+        account_id
             .to_account_address()
             .and_then(|address| address.to_compressed_sora())
-            .expect("compressed literal");
-        format!("{compressed}@{}", account_id.domain())
+            .expect("compressed literal")
     };
 
     let mut world = World::default();

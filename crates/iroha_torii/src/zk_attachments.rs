@@ -1546,26 +1546,36 @@ fn apply_sanitizer_limits(max_expanded_bytes: u64, timeout: Duration) -> Result<
         let mem_limit = sanitizer_memory_limit_bytes(max_expanded_bytes);
         set_rlimit(libc::RLIMIT_CPU, cpu_limit)?;
         set_rlimit(libc::RLIMIT_AS, mem_limit)?;
+
     }
     Ok(())
 }
 
 #[cfg(unix)]
 #[allow(unsafe_code)]
-fn set_rlimit(resource: libc::c_int, value: u64) -> Result<(), SanitizeError> {
+fn set_rlimit(
+    resource: libc::__rlimit_resource_t,
+    value: u64,
+) -> Result<(), SanitizeError> {
     let limit = libc::rlimit {
-        rlim_cur: value as libc::rlim_t,
-        rlim_max: value as libc::rlim_t,
+        rlim_cur: value,
+        rlim_max: value,
     };
+
     let result = unsafe { libc::setrlimit(resource, &raw const limit) };
-    if result == 0 {
-        return Ok(());
+    if result != 0 {
+        return Err(SanitizeError {
+            reason: SanitizeRejectReason::Sandbox,
+
+            message: format!(
+                "setrlimit failed for resource {:?}: {}",
+                resource,
+                std::io::Error::last_os_error()
+            ),
+        });
     }
-    let err = std::io::Error::last_os_error();
-    Err(SanitizeError::new(
-        SanitizeRejectReason::Sandbox,
-        format!("attachment sanitizer setrlimit failed: {err}"),
-    ))
+
+    Ok(())
 }
 
 fn write_sanitizer_response(response: &SanitizerResponse) -> Result<(), SanitizeError> {

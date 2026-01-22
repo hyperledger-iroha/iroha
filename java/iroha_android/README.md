@@ -731,8 +731,8 @@ through `ClientResponse.hashHex()`. Callers can forward the returned hash to
 reimplementing the hashing logic, and the same canonical value is preserved when
 pending transactions are replayed from `PendingTransactionQueue`.
 
-Torii now returns a Norito-encoded transaction submission receipt (payload +
-signature) on `/v1/pipeline/transactions`. The Android SDK surfaces the raw
+Torii returns a Norito-encoded transaction submission receipt (payload +
+signature) on `/transaction` (alias `/v1/pipeline/transactions`). The Android SDK surfaces the raw
 receipt bytes via `ClientResponse.body()` so callers can decode them with their
 Norito tooling when they need the receipt fields.
 
@@ -961,7 +961,7 @@ transport so applications can rely on a single HTTP stack.
 ### Mock Torii Harness
 
 The test suite now includes a lightweight HTTP harness (`src/test/java/org/hyperledger/iroha/android/client/mock/ToriiMockServer.java`)
-that mirrors Torii's `/v1/pipeline/transactions` submission and status routes. Integration tests such as
+that mirrors Torii's `/transaction` submission and `/v1/pipeline/transactions/status` routes. Integration tests such as
 `HttpClientTransportHarnessTests` spin up the server, interact with it via `HttpClientTransport`, and assert on the recorded
 requests/responses, providing end-to-end coverage for retries, headers, and offline queue replays without depending on a real Torii node.
 

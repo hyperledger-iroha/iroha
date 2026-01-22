@@ -1089,7 +1089,7 @@ impl Actor {
                                     block_height,
                                     block_view,
                                 );
-                                self.process_commit_candidates();
+                                self.request_commit_pipeline();
                             } else {
                                 debug!(
                                     incoming_hash = %block_hash,

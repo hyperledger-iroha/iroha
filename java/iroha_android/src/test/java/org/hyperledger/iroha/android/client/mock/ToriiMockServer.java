@@ -26,7 +26,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Lightweight HTTP server that mimics Torii's `/v1/pipeline/transactions` routes for tests.
+ * Lightweight HTTP server that mimics Torii's `/transaction` routes for tests.
  *
  * <p>The harness records requests for assertions and allows tests to enqueue deterministic responses
  * for both submissions and status polling, enabling end-to-end tests without depending on a real
@@ -64,7 +64,7 @@ public final class ToriiMockServer implements AutoCloseable {
     this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
     this.executor = Executors.newCachedThreadPool();
     server.setExecutor(executor);
-    server.createContext("/v1/pipeline/transactions", this::handleSubmit);
+    server.createContext("/transaction", this::handleSubmit);
     server.createContext("/v1/pipeline/transactions/status", this::handleStatus);
     server.createContext("/v1/events/sse", this::handleEventsSse);
     server.start();

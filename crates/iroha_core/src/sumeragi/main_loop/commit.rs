@@ -1852,6 +1852,7 @@ impl Actor {
         let _ = self.drain_commit_results();
         let now = Instant::now();
         let _ = self.abort_inflight_commit_if_timed_out(now);
+
         if matches!(trigger, CommitPipelineTrigger::Event) {
             let _ = self.reschedule_stale_pending_blocks();
             let queue_depths = super::status::worker_queue_depth_snapshot();
@@ -1865,9 +1866,8 @@ impl Actor {
                     block_payload_rx_depth = queue_depths.block_payload_rx,
                     rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                     block_rx_depth = queue_depths.block_rx,
-                    "skipping commit pipeline on event due to consensus queue backlog"
+                    "consensus queue backlog detected while processing commit pipeline event"
                 );
-                return;
             }
         }
         // Commit certificates remain authoritative, but the QC pipeline is required to

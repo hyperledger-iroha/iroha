@@ -3582,6 +3582,8 @@ pub struct Sumeragi {
     pub msg_channel_cap_blocks: usize,
     /// Capacity for Sumeragi control-message channel.
     pub control_msg_channel_cap: usize,
+    /// Cap on the worker loop's per-iteration time budget.
+    pub worker_iteration_budget_cap: Duration,
     /// Runtime consensus mode selection (permissioned vs npos).
     pub consensus_mode: ConsensusMode,
     /// Whether runtime consensus mode flips triggered by on-chain parameters are applied automatically.

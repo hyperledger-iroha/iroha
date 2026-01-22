@@ -663,6 +663,9 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             msg_channel_cap_rbc_chunks: defaults::sumeragi::MSG_CHANNEL_CAP_RBC_CHUNKS,
             msg_channel_cap_blocks: defaults::sumeragi::MSG_CHANNEL_CAP_BLOCKS,
             control_msg_channel_cap: defaults::sumeragi::CONTROL_MSG_CHANNEL_CAP,
+            worker_iteration_budget_cap: Duration::from_millis(
+                defaults::sumeragi::WORKER_ITERATION_BUDGET_CAP_MS,
+            ),
             consensus_mode: A::ConsensusMode::Permissioned,
             mode_flip_enabled: defaults::sumeragi::MODE_FLIP_ENABLED,
             commit_cert_history_cap: defaults::sumeragi::COMMIT_CERT_HISTORY_CAP,

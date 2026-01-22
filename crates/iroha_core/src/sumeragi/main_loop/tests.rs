@@ -1957,6 +1957,91 @@ async fn actor_next_tick_deadline_tracks_pending_quorum_timeout() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn actor_next_tick_deadline_tracks_commit_pipeline_wakeup() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let now = Instant::now();
+    assert!(
+        actor.next_tick_deadline(now).is_none(),
+        "fresh actor should not schedule ticks"
+    );
+
+    actor.request_commit_pipeline();
+
+    let deadline = actor
+        .next_tick_deadline(now)
+        .expect("commit pipeline wakeup should schedule immediate tick");
+    assert_eq!(deadline, now);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_tick_clears_commit_pipeline_wakeup() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    actor.request_commit_pipeline();
+    assert!(
+        actor.pending.commit_pipeline_wakeup,
+        "commit pipeline wakeup should be set"
+    );
+
+    let progressed = actor.tick();
+    assert!(progressed, "commit pipeline wakeup should trigger progress");
+    assert!(
+        !actor.pending.commit_pipeline_wakeup,
+        "tick should clear commit pipeline wakeup"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_next_tick_deadline_prioritizes_queue_with_pending_block() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let key_pair = KeyPair::random();
+    let (public_key, private_key) = key_pair.clone().into_parts();
+    let authority = AccountId::new("wonderland".parse().expect("domain id"), public_key);
+    let domain_id: DomainId = "queue".parse().expect("domain id");
+    let instruction: InstructionBox = Register::domain(Domain::new(domain_id)).into();
+    let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority)
+        .with_instructions([instruction])
+        .sign(&private_key);
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let now = Instant::now();
+    let (height, tip_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(0).saturating_add(1),
+            view.latest_block_hash(),
+        )
+    };
+    let block = sample_block(height, 0, tip_hash);
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let pending = PendingBlock::new(block, payload_hash, height, 0);
+    let block_hash = pending.block.hash();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let deadline = actor
+        .next_tick_deadline(now)
+        .expect("queue should schedule immediate tick");
+    assert_eq!(deadline, now);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn actor_next_tick_deadline_tracks_aborted_retention() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -14131,10 +14216,13 @@ async fn handle_rbc_ready_requests_missing_block_when_init_missing() {
         0,
     );
     let epoch = harness.actor.epoch_for_height(key.1);
-    let payload = b"payload".to_vec();
-    let payload_hash = Hash::new(&payload);
-    let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
-        .expect("session");
+    let payload_hash = Hash::new(b"payload");
+    let session = RbcSession::test_new(
+        2,
+        Some(payload_hash),
+        Some(Hash::prehashed([0xE4; Hash::LENGTH])),
+        epoch,
+    );
 
     let roster = harness.actor.effective_commit_topology();
     assert!(!roster.is_empty());
@@ -14442,7 +14530,7 @@ async fn maybe_emit_rbc_deliver_allows_init_roster_when_derived_missing_permissi
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn handle_rbc_ready_defers_commit_pipeline_when_queue_backlogged() {
+async fn handle_rbc_ready_runs_commit_pipeline_when_queue_backlogged() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -14488,17 +14576,69 @@ async fn handle_rbc_ready_defers_commit_pipeline_when_queue_backlogged() {
     let preimage = super::rbc_ready_preimage(&actor.chain_id, mode_tag, &ready);
     let signature = Signature::new(signer_kp.private_key(), &preimage);
     ready.signature = signature.payload().to_vec();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    assert!(
+        super::rbc::rbc_ready_signature_valid(&ready, &topology, &actor.chain_id, &mode_tag),
+        "ready signature should validate against roster"
+    );
+
+    let pending_block = {
+        let view = actor.state.view();
+        sample_block(height, 0, view.latest_block_hash())
+    };
+    let pending_hash = pending_block.hash();
+    let pending_payload_hash = Hash::new(super::proposals::block_payload_bytes(&pending_block));
+    actor.pending.pending_blocks.insert(
+        pending_hash,
+        PendingBlock::new(pending_block, pending_payload_hash, height, 0),
+    );
+    {
+        let pending = actor
+            .pending
+            .pending_blocks
+            .get_mut(&pending_hash)
+            .expect("pending block");
+        pending.validation_status = ValidationStatus::Valid;
+        pending.parent_state_root = Some(zero_state_root());
+        pending.post_state_root = Some(zero_state_root());
+    }
+    assert!(
+        actor.active_pending_blocks_len() > 0,
+        "pending block should extend the committed tip"
+    );
 
     let last_run = Instant::now() - Duration::from_secs(10);
     actor.pending.last_commit_pipeline_run = last_run;
     super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
+    let delivered_before = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .is_some_and(|session| session.delivered);
 
+    let ready_sender = ready.sender;
     actor.handle_rbc_ready(ready).expect("ready handled");
 
-    assert_eq!(
-        actor.pending.last_commit_pipeline_run, last_run,
-        "commit pipeline should defer when consensus queues are backlogged"
-    );
+    let session_after = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session retained");
+    let ready_recorded = session_after
+        .ready_signatures
+        .iter()
+        .any(|entry| entry.sender == ready_sender);
+    let delivered_after = session_after.delivered;
+    if ready_recorded && !delivered_before && !delivered_after {
+        assert!(
+            actor.pending.last_commit_pipeline_run > last_run,
+            "commit pipeline should run when READY is recorded without DELIVER"
+        );
+    }
 
     super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Votes, 1);
     super::status::reset_worker_loop_snapshot_for_tests();
@@ -46085,7 +46225,7 @@ async fn commit_pipeline_defers_reschedule_while_vote_queue_backlogged() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_pipeline_skips_event_when_queue_backlogged() {
+async fn commit_pipeline_runs_event_when_queue_backlogged() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     super::status::reset_worker_loop_snapshot_for_tests();
@@ -46120,9 +46260,9 @@ async fn commit_pipeline_skips_event_when_queue_backlogged() {
 
     actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event);
 
-    assert_eq!(
-        actor.pending.last_commit_pipeline_run, last_run,
-        "event-driven commit pipeline should skip when queues are backlogged"
+    assert!(
+        actor.pending.last_commit_pipeline_run > last_run,
+        "event-driven commit pipeline should run when queues are backlogged"
     );
 
     harness.shutdown.send();
@@ -51018,4 +51158,111 @@ fn pending_rbc_ttl_counts_from_first_seen() {
         pending.expired(Duration::from_millis(10), Instant::now()),
         "TTL should be measured from the first pending frame"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_runs_with_backlog_when_commit_qc_ready() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+
+    let mut harness = test_actor_harness_with_config_and_height(1, consensus_cfg, None, 1).await;
+    let actor = &mut harness.actor;
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let (height, tip_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(0).saturating_add(1),
+            view.latest_block_hash(),
+        )
+    };
+    let block = sample_block(height, 0, tip_hash);
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block.clone(), payload_hash, height, 0);
+
+    // Satisfy commit QC ready conditions.
+    pending.commit_qc_seen = true;
+    pending.validation_status = ValidationStatus::Valid;
+    pending.parent_state_root = Some(zero_state_root());
+    pending.post_state_root = Some(zero_state_root());
+    // payload_available check: local payload matches (from sample_block construction)
+
+    let block_hash = pending.block.hash();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    actor.pending.last_commit_pipeline_run = Instant::now() - Duration::from_secs(10);
+    let last_run = actor.pending.last_commit_pipeline_run;
+
+    // Simulate backlog.
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
+    assert!(super::status::worker_queue_depth_snapshot().vote_rx > 0);
+
+    // Provide a dummy lock QC to allow commit
+    actor.locked_qc = Some(sample_qc_ref(1, 0));
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event);
+
+    assert!(
+        actor.pending.last_commit_pipeline_run > last_run,
+        "commit pipeline should run with backlog when a tip-extending commit QC is ready"
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_runs_with_backlog_without_commit_qc() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+
+    let mut harness = test_actor_harness_with_config_and_height(1, consensus_cfg, None, 1).await;
+    let actor = &mut harness.actor;
+    super::status::reset_worker_loop_snapshot_for_tests();
+
+    let (height, tip_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(0).saturating_add(1),
+            view.latest_block_hash(),
+        )
+    };
+    let block = sample_block(height, 0, tip_hash);
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block.clone(), payload_hash, height, 0);
+
+    // No commit QC yet.
+    pending.commit_qc_seen = false;
+    pending.validation_status = ValidationStatus::Valid;
+    pending.parent_state_root = Some(zero_state_root());
+    pending.post_state_root = Some(zero_state_root());
+
+    let block_hash = pending.block.hash();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    actor.pending.last_commit_pipeline_run = Instant::now() - Duration::from_secs(10);
+    let last_run = actor.pending.last_commit_pipeline_run;
+
+    // Simulate backlog.
+    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
+    assert!(super::status::worker_queue_depth_snapshot().vote_rx > 0);
+
+    // Provide a dummy lock QC
+    actor.locked_qc = Some(sample_qc_ref(1, 0));
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event);
+
+    assert!(
+        actor.pending.last_commit_pipeline_run > last_run,
+        "commit pipeline should run with backlog even when no commit QC is available"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "pending block should remain when no commit QC is available"
+    );
+
+    super::status::reset_worker_loop_snapshot_for_tests();
+    harness.shutdown.send();
 }
