@@ -1,18 +1,22 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/source/sdk/android/norito_fixture_alignment.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 50d73e6235895c57778ec6a6327cf48591c9a1c0ec14a65479cd975744b7f683
-source_last_modified: "2025-11-21T19:39:24.791226+00:00"
-translation_last_reviewed: null
+source_hash: cbf4687be65bef40235a55d69713d74ad43d48f098a450edce06148c7e4bd449
+source_last_modified: "2025-12-17T09:45:44.070318+00:00"
+translation_last_reviewed: 2026-01-21
 ---
 
-# 翻訳作業中
+<!-- 日本語訳: docs/source/sdk/android/norito_fixture_alignment.md -->
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+# Norito フィクスチャ整合
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+- 正準: `fixtures/norito_rpc/transaction_fixtures.manifest.json` (fixtures: 27, fingerprint: `43a83550a43f10c33516ddb75477751d`, age_hours: 0.0)
+
+| SDK | Status | Missing | Extra | Mismatched | Age (h) | Fingerprint |
+|-----|--------|---------|-------|------------|---------|-------------|
+| android | ok | — | — | — | 0.0 | `2cf2a5f41e9ed99a6dda7ab9475f8551` |
+| python | ok | — | — | — | 44.43 | `ef39d896eda1eb0b53ebf8a5d4754777` |
+| swift | ok | — | — | — | 44.43 | `ef39d896eda1eb0b53ebf8a5d4754777` |

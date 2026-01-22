@@ -2,11 +2,17 @@
 
 Last update: 2026-01-22
 
+- Merge: resolved status.md conflict markers between doc updates, CLI fixes, and FASTPQ test adjustments.
 - Docs: aligned governance API translations with IH58 account_id responses and `--owner ih58...`, updated JS SDK validation error guidance, and removed `@domain` from `inspectAccountId` examples.
 - Merge: resolved conflicts in Sumeragi pending-block gating + docs/portal CLI examples (app/tools/ledger updates).
 - Tests: not run (merge conflict resolution).
 - Docs: refreshed account ID/identity references to canonical IH58 across Torii/SDK/finance/SoraFS/SNS docs, portal snippets, and OpenAPI relay account descriptions; updated Java recipe code to avoid `@domain` parsing.
 - Tests: not run (docs/sample edits only).
+- CLI: fixed peer list for `FindPeers` (PeerId output), added helper test, and resolved clap arg-id collisions in Space Directory scaffolds + SoraFS token helpers; regenerated `crates/iroha_cli/CommandLineHelp.md`.
+- Docs: `cargo run -p iroha_cli --bin iroha_cli -- tools markdown-help > crates/iroha_cli/CommandLineHelp.md` (ok).
+- Tests: not run (CLI doc regen + clap fixes only).
+- FASTPQ trace tests: validate `path_bit_0`/`sibling_0` columns against indexed transfer proofs instead of assuming non-zero bits.
+- Tests: not run (FASTPQ trace test fix only).
 - Config: added pacemaker backpressure soft-limit defaults to the Kiso and Torii connect-gating Sumeragi config literals.
 - Tests: not run (config literal updates only).
 - CLI: fixed `version` output borrow by precomputing localized strings and added a text-mode unit test with a stubbed server version.
@@ -137,6 +143,21 @@ Last update: 2026-01-22
 - Docs/i18n: replaced `docs/source/agents.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
 - Docs/i18n: replaced `docs/source/agents/missing_docs_inventory.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
 - Docs/i18n: replaced `docs/source/agents/env_var_migration.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/android_support_playbook.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/compliance/android/checklists/and8_ga_2027-10_rehearsal.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/sdk/android/and7_governance_hotlist.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/sdk/android/android_support_playbook.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/sdk/android/partner_sla_discovery.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/compliance/android/eu/README.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/compliance/android/jp/README.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/sdk/android/norito_fixture_alignment.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/sdk/index.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/project_tracker/norito_streaming_post_mvp.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/compliance/android/device_lab_contingency.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/sdk/swift/connect_risk_tracker.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/crypto/attachments/sm_openssl_provenance.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/governance_pipeline.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/kagami_profiles.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
 - SoraFS repair governance policy now enforces approval quorum/minimum voters, dispute/appeal windows, tie-break rules, and penalty caps; added approval/policy Norito payloads, capped scheduler draft penalties, updated CLI slash proposals to require approval summaries, and refreshed repair plan + node client protocol docs (portal mirror included).
 - Tests: not run (repair escalation policy + docs updates only).
 - SoraFS retention precedence now resolves effective retention as the minimum of pin policy, deal end, and governance cap metadata, persists `RetentionSourceV1` + access counters in storage metadata/index, and GC capacity sweeps evict expired manifests by LRU; CLI GC output adds `retention_sources`, docs updated (ops playbook, node client protocol, architecture RFC + portal mirror).
