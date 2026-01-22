@@ -2330,6 +2330,8 @@ pub mod sumeragi {
     pub const MSG_CHANNEL_CAP_BLOCKS: usize = 256;
     /// Default capacity for Sumeragi control/background/lane channels.
     pub const CONTROL_MSG_CHANNEL_CAP: usize = 1_024;
+    /// Cap (ms) on the worker loop's per-iteration time budget.
+    pub const WORKER_ITERATION_BUDGET_CAP_MS: u64 = 2_000;
     /// Default runtime consensus mode: "permissioned".
     pub const CONSENSUS_MODE: &str = "permissioned";
     /// Default: allow runtime consensus mode flips driven by on-chain parameters.

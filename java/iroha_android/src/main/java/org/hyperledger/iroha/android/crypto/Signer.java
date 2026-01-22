@@ -8,8 +8,8 @@ public interface Signer {
   /**
    * Signs the provided message and returns the encoded signature.
    *
-   * <p>The caller must pass the exact bytes to be signed. Iroha transaction helpers
-   * apply the Blake2b-256 prehash before invoking this method.
+   * <p>The caller passes the raw payload bytes. Implementations must apply Iroha's
+   * Blake2b-256 prehash (with the LSB marker) unless explicitly documented otherwise.
    *
    * @param message payload to sign (must not be null)
    * @return encoded signature bytes

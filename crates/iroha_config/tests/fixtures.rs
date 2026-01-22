@@ -991,6 +991,7 @@ fn minimal_config_snapshot() {
                 msg_channel_cap_rbc_chunks: 1024,
                 msg_channel_cap_blocks: 256,
                 control_msg_channel_cap: 1024,
+                worker_iteration_budget_cap: 2s,
                 consensus_mode: Permissioned,
                 mode_flip_enabled: true,
                 da_enabled: true,

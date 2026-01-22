@@ -173,8 +173,10 @@ public final class NoritoCodecAdapterTests {
     assert authorityField.length != expectedStringPayloadLen
         : "AccountId authority should encode as struct, not legacy string";
     final long domainFieldLen = readU64(authorityField, 0, "authority.domain");
-    final long domainStringLen = readU64(authorityField, 8, "authority.domain.string");
-    assert domainFieldLen == 8 + domainStringLen : "Domain field must wrap a single string";
+    final long domainNameFieldLen = readU64(authorityField, 8, "authority.domain.name");
+    final long domainStringLen = readU64(authorityField, 16, "authority.domain.name.string");
+    assert domainNameFieldLen == 8 + domainStringLen : "DomainId name must wrap a single string";
+    assert domainFieldLen == 8 + domainNameFieldLen : "Domain field must wrap a DomainId payload";
     final int controllerFieldOffset = Math.toIntExact(8 + domainFieldLen);
     final long controllerFieldLen = readU64(authorityField, controllerFieldOffset, "authority.controller");
     final int controllerPayloadOffset = controllerFieldOffset + 8;
@@ -205,10 +207,12 @@ public final class NoritoCodecAdapterTests {
     final byte[] encoded = adapter.encodeTransaction(payload);
     final NoritoDecoder decoder = new NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION);
     final byte[] chainField = readField(decoder, "payload.chain_id");
-    final long stringLen = readU64(chainField, 0, "payload.chain_id");
-    assert chainField.length == 8 + stringLen : "ChainId must be a single string field";
+    final long chainInnerLen = readU64(chainField, 0, "payload.chain_id");
+    assert chainField.length == 8 + chainInnerLen : "ChainId must be a sized struct";
+    final long stringLen = readU64(chainField, 8, "payload.chain_id.string");
+    assert chainInnerLen == 8 + stringLen : "ChainId must wrap a single string";
     final String decodedChain =
-        new String(chainField, 8, Math.toIntExact(stringLen), StandardCharsets.UTF_8);
+        new String(chainField, 16, Math.toIntExact(stringLen), StandardCharsets.UTF_8);
     assert chainId.equals(decodedChain) : "ChainId must round-trip via layout inspection";
   }
 
@@ -297,8 +301,12 @@ public final class NoritoCodecAdapterTests {
     final byte[] ivmField = readField(execDecoder, "payload.executable.ivm");
     assert execDecoder.remaining() == 0 : "Executable has trailing bytes";
 
+    final long ivmInnerLen = readU64(ivmField, 0, "payload.executable.ivm");
+    assert ivmField.length == 8 + ivmInnerLen : "IVM bytecode must be sized";
+    final byte[] ivmPayload =
+        Arrays.copyOfRange(ivmField, 8, Math.toIntExact(8 + ivmInnerLen));
     final byte[] decodedIvm =
-        decodeFieldPayload(ivmField, NoritoAdapters.byteVecAdapter(), "payload.executable.ivm.bytes");
+        decodeFieldPayload(ivmPayload, NoritoAdapters.byteVecAdapter(), "payload.executable.ivm.bytes");
     assert Arrays.equals(ivmBytes, decodedIvm) : "IVM bytecode bytes should match";
   }
 

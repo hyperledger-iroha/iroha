@@ -3753,6 +3753,7 @@ struct VoteRosterCacheEntry {
 }
 
 struct ActorSubsystems {
+    validation: ValidationState,
     commit: CommitState,
     propose: ProposeState,
     da_rbc: DaRbcState,
@@ -4187,6 +4188,30 @@ impl CommitState {
     }
 }
 
+struct ValidationState {
+    work_tx: Option<mpsc::SyncSender<validation::ValidationWork>>,
+    result_rx: Option<mpsc::Receiver<validation::ValidationResult>>,
+    inflight: BTreeMap<HashOf<BlockHeader>, u64>,
+    next_id: u64,
+}
+
+impl ValidationState {
+    fn new() -> Self {
+        Self {
+            work_tx: None,
+            result_rx: None,
+            inflight: BTreeMap::new(),
+            next_id: 0,
+        }
+    }
+
+    fn next_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        id
+    }
+}
+
 struct ProposeState {
     backpressure_gate: BackpressureGate,
     pacemaker: Pacemaker,
@@ -4233,6 +4258,18 @@ impl Actor {
         self.subsystems.commit.work_tx = Some(commit_handle.work_tx);
         self.subsystems.commit.result_rx = Some(commit_handle.result_rx);
         commit_handle.join_handle
+    }
+
+    pub(super) fn attach_validation_worker(&mut self) -> std::thread::JoinHandle<()> {
+        let validation_handle = validation::spawn_validation_worker(
+            Arc::clone(&self.state),
+            self.common_config.chain.clone(),
+            self.genesis_account.clone(),
+            self.wake_tx.clone(),
+        );
+        self.subsystems.validation.work_tx = Some(validation_handle.work_tx);
+        self.subsystems.validation.result_rx = Some(validation_handle.result_rx);
+        validation_handle.join_handle
     }
 }
 
@@ -7244,6 +7281,7 @@ impl Actor {
             propose_attempt_monitor: ProposeAttemptMonitor::new(),
         };
         let subsystems = ActorSubsystems {
+            validation: ValidationState::new(),
             commit: CommitState::new(),
             propose: propose_state,
             da_rbc: DaRbcState {
@@ -8051,6 +8089,7 @@ impl Actor {
             commit_time,
             da_enabled,
             self.da_quorum_timeout_multiplier(),
+            self.config.worker_iteration_budget_cap,
         );
         let vote_rx_drain_budget = super::vote_rx_drain_budget(
             block_time,
@@ -8058,11 +8097,24 @@ impl Actor {
             da_enabled,
             self.da_quorum_timeout_multiplier(),
             Duration::from_secs(8),
+            self.config.worker_iteration_budget_cap,
         )
         .max(time_budget);
-        let non_vote_drain_budget = super::cap_drain_budget(block_time / 2, time_budget);
-        let rbc_chunk_drain_budget = super::cap_rbc_drain_budget(block_time / 2, time_budget);
-        let block_rx_drain_budget = super::cap_drain_budget(block_time / 4, time_budget);
+        let non_vote_drain_budget = super::cap_drain_budget(
+            block_time / 2,
+            time_budget,
+            self.config.worker_iteration_budget_cap,
+        );
+        let rbc_chunk_drain_budget = super::cap_rbc_drain_budget(
+            block_time / 2,
+            time_budget,
+            self.config.worker_iteration_budget_cap,
+        );
+        let block_rx_drain_budget = super::cap_drain_budget(
+            block_time / 4,
+            time_budget,
+            self.config.worker_iteration_budget_cap,
+        );
         let starve_max = block_time.max(commit_time).max(time_budget);
         let tick_min_gap = super::idle_tick_gap(block_time, commit_time, time_budget);
 

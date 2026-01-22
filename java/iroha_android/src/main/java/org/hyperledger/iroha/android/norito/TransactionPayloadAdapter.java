@@ -601,7 +601,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final class ChainIdAdapter implements TypeAdapter<String> {
     @Override
     public void encode(final NoritoEncoder encoder, final String value) {
-      STRING_ADAPTER.encode(encoder, value);
+      encodeSizedField(encoder, STRING_ADAPTER, value);
     }
 
     @Override
@@ -613,15 +613,15 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     private static String decodePayload(
         final byte[] payload, final int flags, final int flagsHint) {
       try {
-        final NoritoDecoder direct = new NoritoDecoder(payload, flags, flagsHint);
-        final String value = STRING_ADAPTER.decode(direct);
-        if (direct.remaining() != 0) {
+        final NoritoDecoder sized = new NoritoDecoder(payload, flags, flagsHint);
+        final String value = decodeSizedField(sized, STRING_ADAPTER);
+        if (sized.remaining() != 0) {
           throw new IllegalArgumentException("Trailing bytes after ChainId payload");
         }
         return value;
       } catch (final IllegalArgumentException ex) {
         final NoritoDecoder legacy = new NoritoDecoder(payload, flags, flagsHint);
-        final String value = decodeSizedField(legacy, STRING_ADAPTER);
+        final String value = STRING_ADAPTER.decode(legacy);
         if (legacy.remaining() != 0) {
           throw new IllegalArgumentException("Trailing bytes after ChainId legacy payload");
         }
@@ -633,7 +633,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final class IvmBytecodeAdapter implements TypeAdapter<byte[]> {
     @Override
     public void encode(final NoritoEncoder encoder, final byte[] value) {
-      BYTE_VECTOR_ADAPTER.encode(encoder, value);
+      encodeSizedField(encoder, BYTE_VECTOR_ADAPTER, value);
     }
 
     @Override
@@ -645,15 +645,15 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     private static byte[] decodePayload(
         final byte[] payload, final int flags, final int flagsHint) {
       try {
-        final NoritoDecoder direct = new NoritoDecoder(payload, flags, flagsHint);
-        final byte[] value = BYTE_VECTOR_ADAPTER.decode(direct);
-        if (direct.remaining() != 0) {
+        final NoritoDecoder sized = new NoritoDecoder(payload, flags, flagsHint);
+        final byte[] value = decodeSizedField(sized, BYTE_VECTOR_ADAPTER);
+        if (sized.remaining() != 0) {
           throw new IllegalArgumentException("Trailing bytes after IVM payload");
         }
         return value;
       } catch (final IllegalArgumentException ex) {
         final NoritoDecoder legacy = new NoritoDecoder(payload, flags, flagsHint);
-        final byte[] value = decodeSizedField(legacy, BYTE_VECTOR_ADAPTER);
+        final byte[] value = BYTE_VECTOR_ADAPTER.decode(legacy);
         if (legacy.remaining() != 0) {
           throw new IllegalArgumentException("Trailing bytes after IVM legacy payload");
         }

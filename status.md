@@ -1,6 +1,12 @@
 # Status
 
-Last update: 2026-01-21
+Last update: 2026-01-22
+
+- P2P tests: add `connect_startup_delay` to integration test config literals to match Network fields.
+- Tests: not run (config literal updates only).
+- Localnet throughput: artifacts now emit on failure with error in summary; queue drain timeout is overridable via `IROHA_THROUGHPUT_QUEUE_PROGRESS_TIMEOUT_SECS`.
+- Localnet throughput (7 peers, debug): `scripts/run_localnet_throughput.sh` failed with submit queue stuck above 20k for 180s; no artifacts were written before this change.
+- Tests: not run (throughput artifact/timeout updates).
 
 - Sumeragi tick scheduling: `next_tick_deadline` now triggers immediate ticks when the tx queue is non-empty even with pending blocks, plus `actor_next_tick_deadline_prioritizes_queue_with_pending_block` coverage (tests not run).
 - Localnet (NPoS, 7 peers, 753ms block/commit, DA timeout multipliers 1/1, k/r 4/3): `/private/tmp/iroha-localnet-7peer-run127` (24980/25900). 50 tx/s for 100 blocks (8k submit) → avg block interval 4.7s (p50 3.9s, p90 7.5s, p99 8.8s), admitted 13.5 tx/s over 471s, view_changes=0; queue drained by height 256.
