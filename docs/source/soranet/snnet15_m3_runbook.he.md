@@ -1,20 +1,34 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/source/soranet/snnet15_m3_runbook.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fcad3ef48cca81dfef632ae8724b06a66d9ee6b8f95aa373ef6b59655b059aa6
-source_last_modified: "2025-11-21T15:11:41.542071+00:00"
-translation_last_reviewed: null
+source_hash: e16ecf29a5c6178b63a5e347de748a83e53a550f4a902c4709d9c5dd8be6c65c
+source_last_modified: "2026-01-30T13:33:43.991472+00:00"
+translation_last_reviewed: 2026-01-21
 ---
 
-# בתהליך תרגום
-
 <div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
+<!-- תרגום עברי ל-docs/source/soranet/snnet15_m3_runbook.md -->
+
+# SNNet-15M3 — מוכנות GA לשער
+
+נוהל זה צורך את ראיות הבטא M2 ומפיק את חבילת ה‑GA עבור ממשל:
+תקצירי autoscale/worker, יעד SLA וקישורים להוכחות הבטא.
+
+## צעדים
+- הפקת חבילת GA:
+  - `cargo xtask soranet-gateway-m3 --m2-summary artifacts/soranet/gateway_m2/beta/gateway_m2_summary.json --autoscale-plan <plan.json> --worker-pack <bundle.tgz> --out artifacts/soranet/gateway_m3 --sla-target 99.95%`
+- אימות פלטי GA:
+  - `gateway_m3_summary.json` / `.md` מכילים digests של BLAKE3 עבור תוכנית autoscale וחבילת worker.
+  - השדה `m2_summary` מפנה לשורש הראיות המדויק של הבטא.
+  - `sla_target` מתעד את ה‑SLO לייצור שהוסכם עם SRE.
+
+## רשימת יציאה
+- digests של תוכנית autoscale וחבילת worker מוטמעים בסיכום.
+- סיכום M2 מיוחס וקפוא.
+- יעד SLA מתועד; דשבורדים/שערים עודכנו להתאמה.
+
 </div>
