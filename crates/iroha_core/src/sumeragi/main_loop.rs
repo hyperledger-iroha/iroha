@@ -8269,6 +8269,12 @@ impl Actor {
         );
         let starve_max = block_time.max(commit_time).max(time_budget);
         let tick_min_gap = super::idle_tick_gap(block_time, commit_time, time_budget);
+        let mut tick_max_gap = if block_time.is_zero() {
+            time_budget
+        } else {
+            block_time.min(time_budget)
+        };
+        tick_max_gap = tick_max_gap.max(tick_min_gap);
 
         cfg.time_budget = time_budget;
         cfg.vote_rx_drain_budget = vote_rx_drain_budget;
@@ -8276,7 +8282,7 @@ impl Actor {
         cfg.block_rx_drain_budget = block_rx_drain_budget;
         cfg.rbc_chunk_rx_drain_budget = rbc_chunk_drain_budget;
         cfg.tick_min_gap = tick_min_gap;
-        cfg.tick_max_gap = time_budget;
+        cfg.tick_max_gap = tick_max_gap;
         cfg.block_rx_starve_max = starve_max;
         cfg.non_vote_starve_max = starve_max;
     }
