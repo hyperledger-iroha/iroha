@@ -985,6 +985,9 @@ fn test_sumeragi_config() -> SumeragiConfig {
             iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_BLOCKS,
         control_msg_channel_cap:
             iroha_config::parameters::defaults::sumeragi::CONTROL_MSG_CHANNEL_CAP,
+        worker_iteration_budget_cap: Duration::from_millis(
+            iroha_config::parameters::defaults::sumeragi::WORKER_ITERATION_BUDGET_CAP_MS,
+        ),
         consensus_mode: ConsensusMode::Npos,
         mode_flip_enabled: iroha_config::parameters::defaults::sumeragi::MODE_FLIP_ENABLED,
         da_enabled: true,
@@ -8358,7 +8361,7 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
         persist_required: true,
         events_sender: actor.events_sender.clone(),
     };
-    let outcome = commit::execute_commit_work(
+    let (outcome, timings) = commit::execute_commit_work(
         actor.state.as_ref(),
         actor.kura.as_ref(),
         &actor.common_config.chain,
@@ -8391,6 +8394,7 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
                 pipeline_events,
                 state_events,
             },
+            timings,
         })
         .expect("send commit result");
     assert!(
@@ -8606,7 +8610,11 @@ async fn commit_pipeline_drains_inflight_result_with_empty_pending() {
         pipeline_events: Vec::new(),
     };
     result_tx
-        .send(commit::CommitResult { id: 7, outcome })
+        .send(commit::CommitResult {
+            id: 7,
+            outcome,
+            timings: commit::CommitStageTimings::default(),
+        })
         .expect("send commit result");
 
     harness
@@ -8672,7 +8680,11 @@ async fn commit_rejection_records_invalid_proposal_view() {
         pipeline_events: Vec::new(),
     };
     result_tx
-        .send(commit::CommitResult { id: 12, outcome })
+        .send(commit::CommitResult {
+            id: 12,
+            outcome,
+            timings: commit::CommitStageTimings::default(),
+        })
         .expect("send commit result");
 
     actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick);
@@ -28075,6 +28087,7 @@ async fn apply_commit_outcome_updates_view_change_install() {
                 pipeline_events: Vec::new(),
                 state_events: Vec::new(),
             },
+            timings: commit::CommitStageTimings::default(),
         })
         .expect("send commit result");
     assert!(

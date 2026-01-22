@@ -8324,6 +8324,36 @@ impl Actor {
             progress = true;
         }
         let proposal_backpressure = self.proposal_backpressure_at(now);
+        if let Some(telemetry) = self.telemetry_handle() {
+            let pending_blocks_total = self.pending.pending_blocks.len() as u64;
+            let pending_blocks_blocking = if pending_blocks_total == 0 {
+                0
+            } else {
+                let view = self.state.view();
+                let tip_height = view.height();
+                let tip_hash = view.latest_block_hash();
+                self.pending
+                    .pending_blocks
+                    .values()
+                    .filter(|pending| {
+                        !pending.aborted
+                            && pending_extends_tip(
+                                pending.height,
+                                pending.block.header().prev_block_hash(),
+                                tip_height,
+                                tip_hash,
+                            )
+                            && (pending.commit_qc_seen || pending.last_quorum_reschedule.is_none())
+                    })
+                    .count() as u64
+            };
+            let commit_inflight_queue_depth = u64::from(self.subsystems.commit.inflight.is_some());
+            telemetry.record_pending_block_metrics(
+                pending_blocks_total,
+                pending_blocks_blocking,
+                commit_inflight_queue_depth,
+            );
+        }
         let queue_ready = queue_len > 0 && !proposal_backpressure.active_pending;
         if queue_ready {
             self.subsystems.propose.pacemaker.next_deadline = now;
@@ -11405,6 +11435,11 @@ impl Actor {
         }
 
         let next_view = current_view.saturating_add(1);
+        if !proposal_seen {
+            if let Some(telemetry) = self.telemetry_handle() {
+                telemetry.inc_proposal_gap();
+            }
+        }
         warn!(
             height,
             view = current_view,

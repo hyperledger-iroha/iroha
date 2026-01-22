@@ -2257,6 +2257,7 @@ impl IVMHost for DefaultHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ProgramMetadata;
     use crate::pointer_abi::PointerType;
 
     #[test]
@@ -2269,18 +2270,20 @@ mod tests {
     fn expect_tlv_enforces_pointer_policy() {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
+        let program = ProgramMetadata::default_for(1, 0, 2).encode();
+        vm.load_program(&program).expect("load program");
         let mut tlv = Vec::new();
-        tlv.extend_from_slice(&(PointerType::TestOnly as u16).to_be_bytes());
+        tlv.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
         tlv.push(1);
         tlv.extend_from_slice(&0u32.to_be_bytes());
         let hash: [u8; 32] = iroha_crypto::Hash::new([]).into();
         tlv.extend_from_slice(&hash);
         let ptr = vm.alloc_input_tlv(&tlv).expect("allocate TLV");
         vm.set_register(10, ptr);
-        let err = DefaultHost::expect_tlv(&vm, 10, PointerType::TestOnly).unwrap_err();
+        let err = DefaultHost::expect_tlv(&vm, 10, PointerType::AccountId).unwrap_err();
         assert!(matches!(
             err,
-            VMError::AbiTypeNotAllowed { abi: 1, type_id } if type_id == PointerType::TestOnly as u16
+            VMError::AbiTypeNotAllowed { abi: 2, type_id } if type_id == PointerType::AccountId as u16
         ));
     }
 }

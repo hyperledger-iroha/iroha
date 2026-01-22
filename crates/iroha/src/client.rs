@@ -12138,13 +12138,13 @@ mod tests {
   "svg":"<svg compressed />"
 }}"#
         );
-        let response = json_response(StatusCode::OK, compressed_payload);
+        let response = json_response(StatusCode::OK, &compressed_payload);
         let options = ExplorerAccountQrOptions {
             address_format: Some(AddressFormat::Compressed),
         };
         let snapshot_store = Arc::clone(&snapshots);
         let qr = with_mock_http(respond_with(&snapshot_store, response), || {
-            client.get_explorer_account_qr(account_id, Some(options))
+            client.get_explorer_account_qr(&account_id, Some(options))
         })
         .expect("explorer QR request succeeds");
         assert_eq!(qr.canonical_id, account_id);
@@ -12186,9 +12186,9 @@ mod tests {
   "svg":"<svg ih58 />"
 }}"#
         );
-        let default_response = json_response(StatusCode::OK, default_payload);
+        let default_response = json_response(StatusCode::OK, &default_payload);
         let default_qr = with_mock_http(respond_with(&snapshots_default, default_response), || {
-            client.get_explorer_account_qr(account_id, None)
+            client.get_explorer_account_qr(&account_id, None)
         })
         .expect("default explorer QR request succeeds");
         assert_eq!(default_qr.address_format, AddressFormat::Ih58);
