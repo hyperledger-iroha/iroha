@@ -1,20 +1,51 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/source/crypto/sm_wg_sync_template.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c5fe52a907606a67a09e0ff229adb94f91dda73d809d8a8344166862dc62def9
-source_last_modified: "2025-11-02T04:40:40.092129+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:57.090255+00:00"
+translation_last_reviewed: 2026-01-22
 ---
 
-# בתהליך תרגום
-
 <div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
+<!-- תרגום עברי ל-docs/source/crypto/sm_wg_sync_template.md -->
+
+//! תבנית לתיעוד החלטות פריסת SM במהלך סינקים של Crypto WG.
+
+# פריסת SM — הערות סנכרון WG (תבנית)
+
+- **תאריך:** 2025-__-__
+- **משתתפים:** Crypto WG core, Release Eng, Security Review, SDK leads
+- **מנחה:** ___________________
+
+## סדר יום
+1. אישור רענון נעילה (`sm_lock_refresh_plan.md`)
+2. מדיניות דטרמיניסטית ונובים של קונפיגורציה (משימות SM-1/SM-3)
+3. סטטוס תקציר תאימות (SM-6a הושלם) ועדכוני רשימת בדיקות מפעיל (SM-6b)
+4. סוקרי ביקורת תלות עבור `sm2`, `sm3`, `sm4`, `rfc6979`
+
+## החלטות
+- [ ] רענון נעילה אושר? פרטים:
+- [ ] מדיניות דטרמיניסטית אושרה? הערות:
+- [ ] בעלים לתקציר התאימות + תאריך יעד:
+- [ ] הוקצו סוקרי ביקורת:
+
+## משימות פעולה
+| פריט | בעלים | יעד | סטטוס |
+|------|-------|-----|--------|
+| הכנת PR ל‑Cargo.lock לאחר האישור | Release Eng | ████ | ☐ |
+| אימות בדיקות OpenSSL נספח D | Crypto WG | ████ | ☐ |
+| מעקב אחרי עדכוני תקציר התאימות ותוספות לרשימת בדיקות מפעיל | Docs/Legal | ████ | ☐ |
+
+## הערות / סיכונים
+- _______________________________
+- _______________________________
+
+## המשך
+- תאריך סקירה הבא:
+- ערוץ דיווח חזרה:
+
 </div>

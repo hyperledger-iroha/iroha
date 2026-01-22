@@ -1,20 +1,29 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/source/sdk/swift/readiness/screenshots/2026-03-05/README.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9620fe272254d020f61a34dd77e3688199d5a3dd893ed3ae602637fbb11f21d6
-source_last_modified: "2025-11-13T05:08:44.740450+00:00"
-translation_last_reviewed: null
+source_hash: 34c22822e5a4c8fb7ed5d4e411a80f01ad20f51fdd2310a859bdd7304f0d1bc7
+source_last_modified: "2026-03-06T08:23:12.591006+00:00"
+translation_last_reviewed: 2026-01-21
 ---
 
-# בתהליך תרגום
-
 <div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
+<!-- תרגום עברי ל-docs/source/sdk/swift/readiness/screenshots/2026-03-05/README.md -->
+
+# אינדקס צילומי מסך — סשן מוכנות טלמטריה ב‑Swift (2026-03-05)
+
+הריפו שומר מטא‑נתונים בלבד; הארטיפקטים הבינאריים נמצאים ב‑
+`s3://sora-readiness/swift/telemetry/20260305/`.
+
+| קובץ | מקטע | הערות |
+|------|---------|-------|
+| `s3://sora-readiness/swift/telemetry/20260305/20260305-policy-hash-slide.png` | צלילה למדיניות | קטע שקופית 12 שמציג סמכות מגובבת + קריאה להחלפת salt שנוספה אחרי dry-run. |
+| `s3://sora-readiness/swift/telemetry/20260305/20260305-mobile-parity-dashboard.png` | דשבורדים | צילום בלוק exporter של `mobile_parity.swift` עם מדדים תקינים לפני chaos run. |
+| `s3://sora-readiness/swift/telemetry/20260305/20260305-connect-latency-spike.png` | הדגמת chaos | היסטוגרמה + התראת firing בזמן קפיצת latency בתרחיש E. |
+| `s3://sora-readiness/swift/telemetry/20260305/20260305-connect-alert-clear.png` | הדגמת chaos | ציר זמן התאוששות שמראה מוני exporter חוזרים לקו בסיס. |
+| `s3://sora-readiness/swift/telemetry/20260305/20260305-quiz-summary.png` | בדיקת ידע | צילום סיכום Google Form (ממוצע 96 %, מינימום 92 %). |
+
 </div>

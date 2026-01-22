@@ -2,32 +2,32 @@
   "relays": [
     {
       "relay_id": "1111111111111111111111111111111111111111111111111111111111111111",
-      "beneficiary": "relay_01@soranet",
+      "beneficiary": "ih58...",
       "bond_path": "artifacts/incentives/bonds/relay-1111.to"
     },
     {
       "relay_id": "2222222222222222222222222222222222222222222222222222222222222222",
-      "beneficiary": "relay_02@soranet",
+      "beneficiary": "ih58...",
       "bond_path": "artifacts/incentives/bonds/relay-2222.to"
     },
     {
       "relay_id": "3333333333333333333333333333333333333333333333333333333333333333",
-      "beneficiary": "relay_03@soranet",
+      "beneficiary": "ih58...",
       "bond_path": "artifacts/incentives/bonds/relay-3333.to"
     },
     {
       "relay_id": "4444444444444444444444444444444444444444444444444444444444444444",
-      "beneficiary": "relay_04@soranet",
+      "beneficiary": "ih58...",
       "bond_path": "artifacts/incentives/bonds/relay-4444.to"
     },
     {
       "relay_id": "5555555555555555555555555555555555555555555555555555555555555555",
-      "beneficiary": "relay_05@soranet",
+      "beneficiary": "ih58...",
       "bond_path": "artifacts/incentives/bonds/relay-5555.to"
     },
     {
       "relay_id": "6666666666666666666666666666666666666666666666666666666666666666",
-      "beneficiary": "relay_06@soranet",
+      "beneficiary": "ih58...",
       "bond_path": "artifacts/incentives/bonds/relay-6666.to"
     }
   ]

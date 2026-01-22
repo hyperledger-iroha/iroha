@@ -2,6 +2,11 @@
 
 Last update: 2026-01-22
 
+- Merge: resolved remaining status.md conflict markers from the i23 merge.
+- State: reorder `State::block`/`block_and_revert` lock acquisition to take block hashes before the world (matching `State::view`) to avoid deadlocks; added `state_block_orders_block_hashes_before_world` coverage.
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Tests: `cargo test -p iroha_core state_block_orders_block_hashes_before_world -- --nocapture` (ok).
+- Localnet (NPoS 1 Hz fast-path rerun, 4 peers): `/private/tmp/iroha-localnet-npos-1hz-fastpath2` (ports 48280/53537). 100x1 Hz `ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `/private/tmp/iroha-localnet-npos-1hz-fastpath2/sumeragi_status_1hz_fastpath2.jsonl` (ping log `/private/tmp/iroha-localnet-npos-1hz-fastpath2/ping_1hz_fastpath2.log`). `commit_qc.height` 1->13 (+12 over 123s), `view_change_install_total` +2, pending RBC max 0 bytes / 2 sessions; 0 ping failures.
 - CLI: normalized JSON/text output and flag behavior across `iroha_cli` commands (da/alias/sns/kaigi/sorafs/taikai/streaming/soracles), added structured summaries, and renamed handshake token encoding flag to `--token-encoding`.
 - Tests: `cargo test -p iroha_cli` (failed: cli_output assertions, SNS catalog account literals, soracles oracle-id parsing, sorafs denylist/account-resolution tests, multisig/offline/subscriptions CLI tests, and incentives tests requiring Torii account resolution).
 - Sumeragi worker-loop scheduling: rotate to the oldest pending tier after a vote burst to keep RBC/payload draining; added `select_next_tier_picks_oldest_pending_after_vote_burst` coverage and reordered a borrow in `proposal_backpressure_blocks_commit_qc_pending_after_reschedule`.
@@ -26,6 +31,7 @@ Last update: 2026-01-22
 - Tests: not run (localnet-only focus per request).
 - Merge: resolved status.md conflict markers between doc updates, CLI fixes, and FASTPQ test adjustments.
 - Docs: aligned governance API translations with IH58 account_id responses and `--owner ih58...`, updated JS SDK validation error guidance, and removed `@domain` from `inspectAccountId` examples.
+- Docs: switched Soranet incentive packet beneficiary example to canonical IH58 account ids.
 - Merge: resolved conflicts in Sumeragi pending-block gating + docs/portal CLI examples (app/tools/ledger updates).
 - Tests: not run (merge conflict resolution).
 - Docs: refreshed account ID/identity references to canonical IH58 across Torii/SDK/finance/SoraFS/SNS docs, portal snippets, and OpenAPI relay account descriptions; updated Java recipe code to avoid `@domain` parsing.
@@ -180,6 +186,29 @@ Last update: 2026-01-22
 - Docs/i18n: replaced `docs/source/crypto/attachments/sm_openssl_provenance.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
 - Docs/i18n: replaced `docs/source/governance_pipeline.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
 - Docs/i18n: replaced `docs/source/kagami_profiles.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/sdk/android/telemetry_override_log.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/release_dual_track_schedule.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/sdk/swift/readiness/screenshots/2026-03-05/README.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/sdk/swift/readiness/screenshots/2026-02-28/README.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/soranet/nsc-55-legal.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/soranet/nsc-42-legal.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/soranet/reports/pow_resilience.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/soranet/snnet15_m3_runbook.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/soranet/reports/circuit_stability.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/soranet/snnet15_m2_runbook.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/swift_xcframework_procurement_request.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/project_tracker/sorafs_pin_registry_tracker.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/torii/norito_rpc_tracker.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-21.
+- Docs/i18n: replaced `docs/source/connect_architecture_followups.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
+- Docs/i18n: replaced `docs/source/soranet/gar_cdn_policy_bus.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
+- Docs/i18n: replaced `docs/source/crypto/sm_wg_sync_template.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
+- Docs/i18n: replaced `docs/source/soranet/templates/downgrade_communication_template.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
+- Docs/i18n: replaced `docs/source/sdk/swift/ios5_dx_completion.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
+- Docs/i18n: replaced `docs/source/norito_stage1_cutover.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
+- Docs/i18n: replaced `docs/source/sns/reports/steward_scorecard_2026q1.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
+- Docs/i18n: replaced `docs/source/status/soranet_testnet_weekly_digest.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
+- Docs/i18n: replaced `docs/source/sdk/swift/readiness/reports/202603_and7_quiz.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
+- Docs/i18n: replaced `docs/source/torii/api_versioning.*` stubs (he/ja) with translations; `translation_last_reviewed` set to 2026-01-22.
 - SoraFS repair governance policy now enforces approval quorum/minimum voters, dispute/appeal windows, tie-break rules, and penalty caps; added approval/policy Norito payloads, capped scheduler draft penalties, updated CLI slash proposals to require approval summaries, and refreshed repair plan + node client protocol docs (portal mirror included).
 - Tests: not run (repair escalation policy + docs updates only).
 - SoraFS retention precedence now resolves effective retention as the minimum of pin policy, deal end, and governance cap metadata, persists `RetentionSourceV1` + access counters in storage metadata/index, and GC capacity sweeps evict expired manifests by LRU; CLI GC output adds `retention_sources`, docs updated (ops playbook, node client protocol, architecture RFC + portal mirror).

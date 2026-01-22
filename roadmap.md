@@ -129,7 +129,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [ ] Run the ignored 7-peer localnet throughput regression in permissioned mode and capture throughput/commit-time metrics in `status.md` after the oversized BlockSyncUpdate fetch fallback fix (attempts failed: submit queue stalled at ~22k/42k with min_non_empty=1-2; release runs timed out after 20m; latest debug run timed out after 20m with height stuck at 2 and repeated view-change/missing-QC logs; logs in `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_uDjmli`, `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_cO9vgq`, `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_TY25OZ`, `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_hMZDGM`).
  - [ ] Run the ignored 7-peer localnet throughput regression in NPoS mode and capture throughput/commit-time metrics in `status.md` after the above gates and harness outputs are in place.
  - [x] Re-run the NPoS localnet 1 Hz / 100-block check with `/v1/sumeragi/status` sampling after the progress-age quorum timeout change; capture any stalls in `status.md` (2026-01-21 run on `/tmp/iroha-localnet-npos-1hz-run2`: `commit_qc.height` +12 over 118s, `view_change_install_total` +3, pending RBC max 1040 bytes / 1 session).
- - [ ] Re-run the NPoS localnet 1 Hz / 100-block check with `/v1/sumeragi/status` sampling after the progress-age quorum timeout change and commit-pipeline backlog-bypass tweaks; capture any stalls in `status.md` (2026-01-22 attempt at `/private/tmp/iroha-localnet-npos-1hz-fastpath` stalled at ping idx 43 with Torii timeout; `commit_qc.height` +5 over 119s and a parking_lot deadlock reported).
+ - [ ] Re-run the NPoS localnet 1 Hz / 100-block check with `/v1/sumeragi/status` sampling after the progress-age quorum timeout change and commit-pipeline backlog-bypass tweaks; capture any stalls in `status.md` (2026-01-22 attempt at `/private/tmp/iroha-localnet-npos-1hz-fastpath` stalled at ping idx 43 with Torii timeout; `commit_qc.height` +5 over 119s and a parking_lot deadlock reported; rerun after lock-order fix at `/private/tmp/iroha-localnet-npos-1hz-fastpath2` completed 100 pings with `commit_qc.height` +12 over 123s and `view_change_install_total` +2).
 
 4. **DA-TORII-REFACTOR — Decompose Torii DA ingestion + erasure coding** (Torii/DA, Line: Shared, Owner: Torii WG, Priority: High, Status: 🈺 In Progress, target TBD)
  - [x] Split Torii DA into `crates/iroha_torii/src/da/` with `mod.rs`, `ingest.rs`, `persistence.rs`, `taikai.rs`, `rs16.rs`, and `tests.rs`; keep the public API in `mod.rs` and allow internal breakage for the first release.
@@ -435,6 +435,29 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Replace `docs/source/crypto/attachments/sm_openssl_provenance.*` stubs (he/ja) with translations.
  - [x] Replace `docs/source/governance_pipeline.*` stubs (he/ja) with translations.
  - [x] Replace `docs/source/kagami_profiles.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/android/telemetry_override_log.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/release_dual_track_schedule.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/swift/readiness/screenshots/2026-03-05/README.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/swift/readiness/screenshots/2026-02-28/README.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soranet/nsc-55-legal.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soranet/nsc-42-legal.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soranet/reports/pow_resilience.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soranet/snnet15_m3_runbook.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soranet/reports/circuit_stability.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soranet/snnet15_m2_runbook.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/swift_xcframework_procurement_request.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/project_tracker/sorafs_pin_registry_tracker.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/torii/norito_rpc_tracker.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/connect_architecture_followups.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soranet/gar_cdn_policy_bus.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/crypto/sm_wg_sync_template.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soranet/templates/downgrade_communication_template.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/swift/ios5_dx_completion.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/norito_stage1_cutover.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sns/reports/steward_scorecard_2026q1.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/status/soranet_testnet_weekly_digest.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/sdk/swift/readiness/reports/202603_and7_quiz.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/torii/api_versioning.*` stubs (he/ja) with translations.
  - [ ] Replace stub translation files across repo root, `docs/source`, and `docs/portal` (preserve front matter, keep `source_hash`/`translation_last_reviewed` aligned).
  - [x] Complete translations for core policy/docs (CODE_OF_CONDUCT, PATENTS, README, AGENTS, status/roadmap, configuration/runbooks).
  - [ ] Prioritize portal docs: `docs/portal/i18n/*/docusaurus-plugin-content-docs` (especially SoraFS/SoraNet) and mark completion per locale.
