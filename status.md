@@ -2,6 +2,16 @@
 
 Last update: 2026-01-22
 
+- FASTPQ: added a stage2 CPU/GPU proof parity check and fixed `fastpq_metal_bench` harness visibility/env parsing to compile under `fastpq-gpu`.
+- Tests: `cargo test -p fastpq_prover stage2_artifact_balanced_1k_matches_fixture -- --nocapture` (ok).
+- Tests: `FASTPQ_GPU=gpu cargo test -p fastpq_prover --features fastpq-gpu stage2_artifact_balanced_1k_matches_fixture -- --nocapture` (failed: missing Metal Toolchain; `xcodebuild -downloadComponent MetalToolchain` required).
+- FASTPQ: refreshed stage2 balanced 1k/5k fixture proofs for backend regression coverage.
+- Tests: `FASTPQ_UPDATE_FIXTURES=1 FASTPQ_GPU=cpu cargo test -p fastpq_prover --test backend_regression -- --nocapture` (ok).
+- Tests: `cargo test -p fastpq_prover stage2_artifact_balanced_1k_matches_fixture -- --nocapture` (ok).
+- Build: `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target-localnet23 cargo build --release -p iroha_kagami -p irohad -p iroha_cli` (ok; existing `iroha_cli` unused-import/unused-variable warnings).
+- Localnet (NPoS, 7 peers, 753ms, soft limits 1/2/8, telemetry=extended): `/private/tmp/iroha-localnet-7peer-run153-npos` (24680/25600). 100 TPS for 120s via `iroha_cli ... ping --count 100 --parallel 20 --no-wait` → height 5, peer0 view changes 42 (`missing_qc_total=24`, `stake_quorum_timeout_total=6`), `tx_queue.depth=4796`, `sumeragi_pending_blocks_total` max 5 (`blocking` max 1), `sumeragi_commit_inflight_queue_depth` max 0; commit intervals after initial gap ~3.7s (4 commits). Metrics: `metrics-sumeragi-load3.log`.
+- Localnet (permissioned, 7 peers, 753ms, soft limits 1/2/8, telemetry=extended): `/private/tmp/iroha-localnet-7peer-run154-perm` (24780/25700). 100 TPS for 120s → height 5, peer0 view changes 9 (`missing_qc_total=7`, `quorum_timeout_total=2`), `tx_queue.depth=11522`, `sumeragi_pending_blocks_total` max 0, `sumeragi_commit_inflight_queue_depth` max 0; commit intervals after initial gap ~3.8s (4 commits). Metrics: `metrics-sumeragi-load.log`.
+- Tests: not run (localnet-only focus per request).
 - CLI: fixed peer list for `FindPeers` (PeerId output), added helper test, and resolved clap arg-id collisions in Space Directory scaffolds + SoraFS token helpers; regenerated `crates/iroha_cli/CommandLineHelp.md`.
 - Docs: `cargo run -p iroha_cli --bin iroha_cli -- tools markdown-help > crates/iroha_cli/CommandLineHelp.md` (ok).
 - Tests: not run (CLI doc regen + clap fixes only).

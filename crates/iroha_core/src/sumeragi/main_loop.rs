@@ -3330,6 +3330,41 @@ impl Actor {
             .count()
     }
 
+    fn blocking_pending_blocks_len_with_progress(&self, now: Instant) -> usize {
+        let da_enabled = self.runtime_da_enabled();
+        let quorum_timeout = self.quorum_timeout(da_enabled);
+        if quorum_timeout == Duration::ZERO {
+            return self.blocking_pending_blocks_len();
+        }
+        let view = self.state.view();
+        let tip_height = view.height();
+        let tip_hash = view.latest_block_hash();
+        self.pending
+            .pending_blocks
+            .values()
+            .filter(|pending| {
+                if pending.aborted {
+                    return false;
+                }
+                if !pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    tip_height,
+                    tip_hash,
+                ) {
+                    return false;
+                }
+                if !(pending.commit_qc_seen || pending.last_quorum_reschedule.is_none()) {
+                    return false;
+                }
+                if pending.commit_qc_seen {
+                    return true;
+                }
+                pending.progress_age(now) < quorum_timeout
+            })
+            .count()
+    }
+
     fn has_blocking_pending_blocks(&self) -> bool {
         self.blocking_pending_blocks_len() > 0
     }

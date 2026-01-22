@@ -3,6 +3,8 @@
 use std::fs;
 
 use fastpq_prover::{OperationKind, Prover, PublicInputs, StateTransition, TransitionBatch};
+#[cfg(feature = "fastpq-gpu")]
+use fastpq_prover::ExecutionMode;
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
@@ -136,6 +138,28 @@ fn stage2_artifact_balanced_1k_matches_fixture() {
         return;
     }
     assert_eq!(encoded.as_slice(), expected);
+}
+
+#[cfg(feature = "fastpq-gpu")]
+#[test]
+fn stage2_artifact_balanced_cpu_gpu_parity() {
+    if !matches!(ExecutionMode::Auto.resolve(), ExecutionMode::Gpu) {
+        eprintln!("skipping cpu/gpu parity test; gpu backend unavailable");
+        return;
+    }
+    let batch = synthetic_batch(256);
+    let cpu = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
+        .expect("cpu prover");
+    let gpu = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Gpu)
+        .expect("gpu prover");
+    let cpu_proof = cpu.prove(&batch).expect("cpu proof");
+    let gpu_proof = gpu.prove(&batch).expect("gpu proof");
+    let cpu_encoded = to_bytes(&cpu_proof).expect("encode cpu proof");
+    let gpu_encoded = to_bytes(&gpu_proof).expect("encode gpu proof");
+    assert_eq!(
+        cpu_encoded, gpu_encoded,
+        "stage2 cpu/gpu proofs must match"
+    );
 }
 
 #[test]
