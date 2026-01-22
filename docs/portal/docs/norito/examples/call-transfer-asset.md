@@ -11,9 +11,9 @@ Demonstrates how a Kotodama entrypoint can call the host `transfer_asset` instru
 
 ## Ledger walkthrough
 
-- Fund the contract authority (for example `contract@wonderland`) with the asset it will transfer and grant the authority the `CanTransfer` role or equivalent permission.
-- Call the `call_transfer_asset` entrypoint to transfer 5 units from the contract account to `bob@wonderland`, mirroring the way on-chain automation can wrap host calls.
-- Verify balances via `FindAccountAssets` or `iroha_cli assets list --account bob@wonderland` and inspect events to confirm the metadata guard logged the transfer context.
+- Fund the contract authority (for example `ih58...`) with the asset it will transfer and grant the authority the `CanTransfer` role or equivalent permission.
+- Call the `call_transfer_asset` entrypoint to transfer 5 units from the contract account to `ih58...`, mirroring the way on-chain automation can wrap host calls.
+- Verify balances via `FindAccountAssets` or `iroha_cli assets list --account ih58...` and inspect events to confirm the metadata guard logged the transfer context.
 
 ## Related SDK guides
 
@@ -28,8 +28,8 @@ Demonstrates how a Kotodama entrypoint can call the host `transfer_asset` instru
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
-      account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"),
+      account!("ih58..."),
+      account!("ih58..."),
       asset_definition!("rose#wonderland"),
       10
     );

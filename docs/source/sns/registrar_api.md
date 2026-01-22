@@ -151,7 +151,7 @@ iroha sns renew \
 # Transfer ownership (requires a GovernanceHookV1 JSON file)
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner bob@wonderland \
+  --new-owner ih58... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows (guardian ticket and governance hook respectively)

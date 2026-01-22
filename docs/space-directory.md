@@ -240,7 +240,7 @@ belong to that slice. Downstream components use this ledger-backed view:
   reloading manifest JSON.
 - Torii now exposes `GET /v1/space-directory/uaids/{uaid}` for operators and
   SDKs that need to introspect bindings directly. Append
-  `?address_format=compressed` if you need the `snx1…@domain` literals for QR
+  `?address_format=compressed` if you need the `snx1…` literals for QR
   payloads; IH58 strings remain the default.【docs/source/torii/portfolio_api.md】
 
 ### 5.1 CLI manifest & binding inspectors

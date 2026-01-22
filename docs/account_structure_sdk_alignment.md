@@ -1,26 +1,34 @@
-# IH-B32 Rollout Note for SDK & Codec Owners
+# IH58 Rollout Note for SDK & Codec Owners
 
 Teams: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec tooling
 
-Context: `docs/account_structure.md` is updated with the final IH-B32 address
-design, interoperability mappings, and implementation checklist. Please align
-library behaviour and tests with the canonical spec.
+Context: `docs/account_structure.md` now reflects the shipping IH58 account ID
+implementation. Please align SDK behaviour and tests with the canonical spec.
 
-Key references (line anchors):
-- IH-B32 encoding rules & lowercase requirement — `docs/account_structure.md:120`
-- IH58 alias procedure & normative vectors — `docs/account_structure.md:151`
-- Implementation checklist — `docs/account_structure.md:276`
+Key references:
+- Address codec + header layout — `docs/account_structure.md` §2
+- Curve registry — `docs/source/references/address_curve_registry.md`
+- Norm v1 domain handling — `docs/source/references/address_norm_v1.md`
+- Fixture vectors — `fixtures/account/address_vectors.json`
 
 Action items:
-1. Surface IH-B32 as the default textual form in each SDK and remove
-   `alias@domain` alias parsing so all inputs go through the canonical codec.
-2. Implement CAIP-10 and IH58 conversions exactly as documented.
-3. Add test coverage using the normative vectors (Ed25519 + secp256k1) and the
-   checksum/chain-mismatch failure case.
-4. Mirror the registry lookup contract: expect Nexus manifests to publish the
-   `{discriminant, ih58_prefix, chain_alias}` tuple and enforce TTL semantics.
-5. Coordinate release notes so downstream integrators know IH-B32 support ships
-   consistently across languages.
+1. **Canonical output:** `AccountId::to_string()`/Display MUST emit IH58 only
+   (no `@domain` suffix). Canonical hex is for debugging (`0x...`).
+2. **Accepted inputs:** parsers MUST accept IH58 (preferred), `snx1` compressed,
+   and canonical hex (`0x...` only; bare hex is rejected). Inputs MAY carry an
+   `@<domain>` suffix for routing hints; `<label>@<domain>` aliases require a
+   resolver. Raw `public_key@domain` (multihash hex) remains supported.
+3. **Resolvers:** domainless IH58/snx1 parsing requires a domain-selector
+   resolver unless the selector is implicit default (use the configured default
+   domain label). UAID (`uaid:...`) and opaque (`opaque:...`) literals require
+   resolvers.
+4. **IH58 checksum:** use Blake2b-512 over `IH58PRE || prefix || payload`, take
+   the first 2 bytes. Compressed alphabet base is **105**.
+5. **Curve gating:** SDKs default to Ed25519-only. Provide explicit opt-in for
+   ML‑DSA/GOST/SM (Swift build flags; JS/Android `configureCurveSupport`). Do
+   not assume secp256k1 is enabled by default outside Rust.
+6. **No CAIP-10:** there is no shipped CAIP‑10 mapping yet; do not expose or
+   depend on CAIP‑10 conversions.
 
-Please acknowledge once the codecs/tests are updated; open questions can be
-tracked in the account addressing RFC thread.
+Please confirm once the codecs/tests are updated; open questions can be tracked
+in the account-addressing RFC thread.

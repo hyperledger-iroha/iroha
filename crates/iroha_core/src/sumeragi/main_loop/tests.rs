@@ -29020,6 +29020,111 @@ async fn proposal_backpressure_allows_rescheduled_pending_blocks() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn proposal_backpressure_allows_fast_path_without_votes() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let key = insert_active_pending_block(actor, 0);
+    let now = Instant::now();
+    let fast_timeout = {
+        let pending = actor
+            .pending
+            .pending_blocks
+            .get(&key.0)
+            .expect("pending block exists");
+        let (consensus_mode, _, _) = actor.consensus_context_for_height(pending.height);
+        let view = actor.state.view();
+        actor.pending_fast_path_timeout(&view, consensus_mode)
+    };
+    {
+        let pending = actor
+            .pending
+            .pending_blocks
+            .get_mut(&key.0)
+            .expect("pending block exists");
+        let aged = now
+            .checked_sub(fast_timeout + Duration::from_millis(1))
+            .unwrap_or(now);
+        pending.inserted_at = aged;
+        pending.last_progress = aged;
+    }
+
+    let backpressure = actor.proposal_backpressure();
+    assert!(
+        !backpressure.active_pending,
+        "fast-path pending should not block proposal assembly"
+    );
+    assert!(
+        !backpressure.should_defer(),
+        "fast-path pending should allow proposal assembly"
+    );
+
+    {
+        let pending = actor
+            .pending
+            .pending_blocks
+            .get_mut(&key.0)
+            .expect("pending block exists");
+        pending.precommit_vote_sent = true;
+    }
+    let backpressure = actor.proposal_backpressure();
+    assert!(
+        backpressure.active_pending,
+        "pending votes should keep proposal backpressure active"
+    );
+    assert!(
+        backpressure.should_defer(),
+        "pending votes should keep proposal assembly deferred"
+    );
+
+    {
+        let pending = actor
+            .pending
+            .pending_blocks
+            .get_mut(&key.0)
+            .expect("pending block exists");
+        pending.precommit_vote_sent = false;
+    }
+    let (height, view_idx) = {
+        let pending = actor
+            .pending
+            .pending_blocks
+            .get(&key.0)
+            .expect("pending block exists");
+        (pending.height, pending.view)
+    };
+    let epoch = actor.epoch_for_height(height);
+    let signer = ValidatorIndex::try_from(0).expect("signer fits");
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: key.0,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: view_idx,
+        epoch,
+        highest_qc: None,
+        signer,
+        bls_sig: Vec::new(),
+    };
+    actor
+        .vote_log
+        .insert((Phase::Commit, height, view_idx, epoch, signer), vote);
+
+    let backpressure = actor.proposal_backpressure();
+    assert!(
+        backpressure.active_pending,
+        "recorded votes should block proposal assembly"
+    );
+    assert!(
+        backpressure.should_defer(),
+        "recorded votes should keep proposal assembly deferred"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposal_backpressure_blocks_commit_qc_pending_after_reschedule() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;

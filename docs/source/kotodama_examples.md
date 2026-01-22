@@ -35,8 +35,8 @@ Source: `examples/transfer/transfer.ko`
 seiyaku TransferDemo {
   kotoage fn do_transfer() {
     transfer_asset(
-      account!("alice@wonderland"),
-      account!("bob@wonderland"),
+      account!("ih58..."),
+      account!("ih58..."),
       asset_definition!("rose#wonderland"),
       10
     );
@@ -56,15 +56,15 @@ seiyaku NftDemo {
   kotoage fn create() {
     nft_mint_asset(
       nft_id!("dragon#demo"),
-      account!("alice@wonderland")
+      account!("ih58...")
     );
   }
 
   kotoage fn transfer() {
     nft_transfer_asset(
-      account!("alice@wonderland"),
+      account!("ih58..."),
       nft_id!("dragon#demo"),
-      account!("bob@wonderland")
+      account!("ih58...")
     );
   }
 }
@@ -86,12 +86,12 @@ seiyaku PointerDemo {
   state Owners: Map<int, AccountId>;
 
   fn hajimari() {
-    let alice = account_id("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland");
+    let alice = account_id("ih58...");
     let first = get_or_insert_default(Owners, 7, alice);
     assert(first == alice);
 
     // The second call decodes the stored pointer and re-encodes the input.
-    let bob = account_id("ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245@wonderland");
+    let bob = account_id("ih58...");
     let again = get_or_insert_default(Owners, 7, bob);
     assert(again == alice);
   }

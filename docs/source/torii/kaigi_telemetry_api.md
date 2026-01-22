@@ -21,7 +21,7 @@ the Prometheus metrics emitted by `iroha_telemetry::metrics::Metrics`.
 > **Address formatting (`ADDR-5`):** Both the list and single-relay endpoints
 > accept an optional `address_format` query parameter. The value defaults to
 > the preferred `ih58` and may be set to `compressed` to emit second-best
-> `snx1…@domain` literals in the
+> `snx1…` literals in the
 > `relay_id` and `reported_by` fields, matching the other Torii `address_format`
 > surfaces and the metrics counters that back the Local-8 cutover dashboards.
 

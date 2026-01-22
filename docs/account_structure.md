@@ -13,9 +13,9 @@ companion tooling. It provides:
 - A checksummed, human-facing **Iroha Base58 address (IH58)** produced by
   `AccountAddress::to_ih58` that binds a chain discriminant to the account
   controller and offers deterministic interop-friendly textual forms.
-- Globally unique domain identifiers, backed by a registry that can be queried
-  through Nexus for cross-chain routing.
-  while we migrate wallets, APIs, and contracts to the new format.
+- Domain selectors for implicit default domains and local digests, with a
+  reserved global-registry selector tag for future Nexus-backed routing (the
+  registry lookup is **not yet shipped**).
 
 ## Motivation
 
@@ -36,8 +36,8 @@ and a deterministic mapping from domain name to the authoritative chain.
 
 ## Goals
 
-- Describe the IH58 Base58 envelope implemented in the data model while
-  publishing canonical CAIP-10 textual aliases.
+- Describe the IH58 Base58 envelope implemented in the data model and the
+  canonical parsing/alias rules that `AccountId` and `AccountAddress` follow.
 - Encode the configured chain discriminant directly into each address and
   define its governance/registry process.
 - Describe how to introduce a global domain registry without breaking current
@@ -47,7 +47,6 @@ and a deterministic mapping from domain name to the authoritative chain.
 
 - Implementing cross-chain asset transfers. The routing layer only returns the
   target chain.
-- Changing the internal `AccountId` structure (still `DomainId + PublicKey`).
 - Finalising governance for global domain issuance. This RFC focuses on the data
   model and transport primitives.
 
@@ -58,10 +57,18 @@ and a deterministic mapping from domain name to the authoritative chain.
 ```
 AccountId {
     domain: DomainId,   // wrapper over Name (ASCII-ish string)
-    signatory: PublicKey // multihash string (e.g. ed0120...)
+    controller: AccountController // single PublicKey or multisig policy
 }
 
-Display / Parse: "<signatory multihash>@<domain name>"
+Display: canonical IH58 literal (no `@domain` suffix)
+Parse accepts:
+- IH58 (preferred), `snx1` compressed, or canonical hex (`0x...`) inputs, with
+  optional `@<domain>` suffixes for explicit routing hints.
+- `<label>@<domain>` aliases resolved through the account-alias resolver
+  (Torii installs one; plain data-model parsing requires a resolver to be set).
+- `<public_key>@<domain>` where `public_key` is the canonical multihash string.
+- `uaid:<hex>` / `opaque:<hex>` literals resolved via UAID/opaque resolvers.
+
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
 
@@ -90,12 +97,12 @@ currently has no concept of cross-chain domain routing.
 
 ### 1. Deterministic chain discriminant
 
-Augment `iroha_config::parameters::actual::Common` with:
+`iroha_config::parameters::actual::Common` now exposes:
 
 ```rust
 pub struct Common {
     pub chain: ChainId,
-    pub chain_discriminant: u16, // new, globally coordinated
+    pub chain_discriminant: u16, // globally coordinated
     // ... existing fields
 }
 ```
@@ -107,13 +114,12 @@ pub struct Common {
     reserved).
   - Immutable for a running chain. Changing it requires a hard fork and a
     registry update.
-- **Governance & registry:** A multi-signature governance set maintains a
-  signed JSON (and IPFS-pinned) registry mapping discriminants to human aliases
-  and CAIP-2 identifiers. Clients fetch and cache this registry to validate and
-  display chain metadata.
-- **Usage:** Thread through state admission, Torii, SDKs, and wallet APIs so
-  every component can embed or validate it. Expose the discriminant as part of
-  CAIP-2 (e.g., `iroha:0x1234`).
+- **Governance & registry (planned):** A multi-signature governance set will
+  maintain a signed JSON registry mapping discriminants to human aliases and
+  CAIP-2 identifiers. This registry is not yet part of the shipped runtime.
+- **Usage:** Threaded through state admission, Torii, SDKs, and wallet APIs so
+  every component can embed or validate it. CAIP-2 exposure remains a future
+  interop task.
 
 ### 2. Canonical address codecs
 
@@ -139,7 +145,7 @@ adds value. Canonical hex remains a debugging aid.
   envelope.
 
 `AccountAddress::parse_any` auto-detects IH58 (preferred), compressed (`snx1`, second-best), or canonical hex
-inputs and returns both the decoded payload and the detected
+(`0x...` only; bare hex is rejected) inputs and returns both the decoded payload and the detected
 `AccountAddressFormat`. Torii now calls `parse_any` for ISO 20022 supplementary
 addresses and stores the canonical hex form so metadata remains deterministic
 regardless of the original representation.
@@ -166,7 +172,9 @@ The first byte therefore packs the schema metadata for downstream decoders:
 | 2-1  | `norm_version` | `1` (Norm v1). Values `0`, `2`, `3` are reserved. | Values outside `0-3` raise `AccountAddressError::InvalidNormVersion`. |
 | 0    | `ext_flag` | MUST be `0`. | Set bit raises `AccountAddressError::UnexpectedExtensionFlag`. |
 
-The Rust encoder always writes `0x02` (version 0, single-key class, norm version 1, extension flag cleared).
+The Rust encoder writes `0x02` for single-key controllers (version 0, class 0,
+norm v1, extension flag cleared) and `0x0A` for multisig controllers (version 0,
+class 1, norm v1, extension flag cleared).
 
 #### 2.2 Domain selector encodings (ADDR-1a)
 
@@ -212,7 +220,7 @@ The controller payload is another tagged union appended after the domain selecto
 
 | Tag | Controller | Layout | Notes |
 |-----|------------|--------|-------|
-| `0x00` | Single key | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` maps to Ed25519 today. `key_len` is bounded to `u8`; larger values raise `AccountAddressError::KeyPayloadTooLong`. |
+| `0x00` | Single key | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` maps to Ed25519 today. `key_len` is bounded to `u8`; larger values raise `AccountAddressError::KeyPayloadTooLong` (so single-key ML‑DSA public keys, which are >255 bytes, cannot be encoded and must use multisig). |
 | `0x01` | Multisig | `version:u8` · `threshold:u16` · `member_count:u8` · (`curve_id:u8` · `weight:u16` · `key_len:u16` · `key_bytes`)\* | Supports up to 255 members (`CONTROLLER_MULTISIG_MEMBER_MAX`). Unknown curves raise `AccountAddressError::UnknownCurve`; malformed policies bubble up as `AccountAddressError::InvalidMultisigPolicy`. |
 
 Multisig policies also expose a CTAP2-style CBOR map and canonical digest so
@@ -229,18 +237,19 @@ All key bytes are encoded exactly as returned by `PublicKey::to_bytes`; decoders
 | ID (`curve_id`) | Algorithm | Feature gate | Notes |
 |-----------------|-----------|--------------|-------|
 | `0x00` | Reserved | — | MUST NOT be emitted; decoders surface `ERR_UNKNOWN_CURVE`. |
-| `0x01` | Ed25519 | Always on | Canonical v1 algorithm (`Algorithm::Ed25519`); enabled by default alongside secp256k1. |
-| `0x02` | ML-DSA (preview) | `ml-dsa` | Reserved for ADDR-3 rollout; disabled by default until the ML-DSA signing path ships. |
-| `0x03` | GOST placeholder | `gost` | Reserved for provisioning/capability negotiation. Admission and SDKs MUST reject controller payloads that use the placeholder until a concrete TC26 profile is approved. |
-| `0x04` | secp256k1 | Always on | Deterministic ECDSA over SHA-256; public keys use the 33-byte SEC1 compressed form and signatures use the canonical 64-byte `r∥s` layout. |
-| `0x0A` | GOST R 34.10-2012 (256, set A) | `gost` | Reserved; unlocks alongside the `gost` cryptography feature. |
-| `0x0B` | GOST R 34.10-2012 (256, set B) | `gost` | Reserved for future governance approval. |
-| `0x0C` | GOST R 34.10-2012 (256, set C) | `gost` | Reserved for future governance approval. |
-| `0x0D` | GOST R 34.10-2012 (512, set A) | `gost` | Reserved for future governance approval. |
-| `0x0E` | GOST R 34.10-2012 (512, set B) | `gost` | Reserved for future governance approval. |
-| `0x0F` | SM2 | `sm` | Reserved; becomes available once the SM cryptography feature is stabilised. |
+| `0x01` | Ed25519 | — | Canonical v1 algorithm (`Algorithm::Ed25519`); enabled in the default config. |
+| `0x02` | ML‑DSA (Dilithium3) | — | Uses the Dilithium3 public key bytes (1952 bytes). Single‑key addresses cannot encode ML‑DSA because `key_len` is `u8`; multisig uses `u16` lengths. |
+| `0x03` | BLS12‑381 (normal) | `bls` | Public keys in G1 (48 bytes), signatures in G2 (96 bytes). |
+| `0x04` | secp256k1 | — | Deterministic ECDSA over SHA‑256; public keys use the 33‑byte SEC1 compressed form and signatures use the canonical 64‑byte `r∥s` layout. |
+| `0x05` | BLS12‑381 (small) | `bls` | Public keys in G2 (96 bytes), signatures in G1 (48 bytes). |
+| `0x0A` | GOST R 34.10‑2012 (256, set A) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0B` | GOST R 34.10‑2012 (256, set B) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0C` | GOST R 34.10‑2012 (256, set C) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0D` | GOST R 34.10‑2012 (512, set A) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0E` | GOST R 34.10‑2012 (512, set B) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0F` | SM2 | `sm` | DistID length (u16 BE) + DistID bytes + 65‑byte SEC1 uncompressed SM2 key; available only when `sm` is enabled. |
 
-Slots `0x05–0x09` remain unassigned for additional curves; introducing a new
+Slots `0x06–0x09` remain unassigned for additional curves; introducing a new
 algorithm requires a roadmap update and matching SDK/host coverage. Encoders
 MUST reject any unsupported algorithm with `ERR_UNSUPPORTED_ALGORITHM`, and
 decoders MUST fail fast on unknown ids with `ERR_UNKNOWN_CURVE` to preserve
@@ -251,17 +260,19 @@ The canonical registry (including a machine-readable JSON export) lives under
 Tooling SHOULD consume that dataset directly so curve identifiers remain
 consistent across SDKs and operator workflows.
 
-- **SDK gating:** SDKs default to Ed25519-only. Swift exposes compile-time flags
-  (`IROHASWIFT_ENABLE_MLDSA`, `IROHASWIFT_ENABLE_GOST`, `IROHASWIFT_ENABLE_SM`), the
-  Java SDK requires `AccountAddress.configureCurveSupport(...)`, and the JavaScript SDK
-  uses `configureCurveSupport({ allowMlDsa: true, allowGost: true, allowSm2: true })`
-  so integrators must opt in explicitly before emitting addresses with additional curves. Ed25519
-  and secp256k1 are enabled by default across SDKs.
+- **SDK gating:** SDKs default to Ed25519-only validation/encoding. Swift exposes
+  compile-time flags (`IROHASWIFT_ENABLE_MLDSA`, `IROHASWIFT_ENABLE_GOST`,
+  `IROHASWIFT_ENABLE_SM`); the Java/Android SDK requires
+  `AccountAddress.configureCurveSupport(...)`; the JavaScript SDK uses
+  `configureCurveSupport({ allowMlDsa: true, allowGost: true, allowSm2: true })`.
+  secp256k1 support is available but not enabled by default in the JS/Android
+  SDKs; callers must opt in explicitly when emitting non‑Ed25519 controllers.
 - **Host gating:** `Register<Account>` rejects controllers whose signatories use algorithms
   missing from the node’s `crypto.allowed_signing` list **or** curve identifiers absent from
   `crypto.curves.allowed_curve_ids`, so clusters must advertise support (configuration +
-  genesis) before ML-DSA/GOST/SM controllers can be registered. Ed25519 and secp256k1 remain
-  enabled in the default configuration.【crates/iroha_core/src/smartcontracts/isi/domain.rs:32】
+  genesis) before ML‑DSA/GOST/SM controllers can be registered. BLS controller
+  algorithms are always allowed when compiled (consensus keys rely on them),
+  and the default configuration enables Ed25519 + secp256k1.【crates/iroha_core/src/smartcontracts/isi/domain.rs:32】
 
 ##### 2.3.2 Multisig controller guidance
 
@@ -299,7 +310,8 @@ Key implementation details:
 - Multisig controllers exceeding 255 members raise `MultisigMemberOverflow`.
 - IME/NFKC conversions: half-width Sora kana can be normalised to their full-width forms without breaking decoding, but the ASCII `snx1` sentinel and IH58 digits/letters MUST stay ASCII. Full-width or case-folded sentinels surface `ERR_MISSING_COMPRESSED_SENTINEL`, full-width ASCII payloads raise `ERR_INVALID_COMPRESSED_CHAR`, and checksum mismatches bubble up as `ERR_CHECKSUM_MISMATCH`. Property tests in `crates/iroha_data_model/src/account/address.rs` cover these paths so SDKs and wallets can rely on deterministic failures.
 - Torii and SDK parsing of `address@domain` aliases now emit the same `ERR_*` codes when IH58 (preferred)/snx1 (second-best) inputs fail before alias fallback (e.g., checksum mismatch, domain digest mismatch), so clients can relay structured reasons without guessing from prose strings.
-- Default-domain IH58 (preferred)/snx1 (second-best) literals may omit `@<domain>`; parsers canonicalise them to `IH58@<default-domain>` and surface `ERR_DEFAULT_DOMAIN_IMPLICIT_ONLY` if a non-default selector is supplied without an explicit domain, keeping Local/Global selectors fail-closed.
+- Local selector payloads shorter than 12 bytes surface `ERR_LOCAL8_DEPRECATED`, preserving a hard cutover from legacy Local‑8 digests.
+- Domainless IH58 (preferred)/snx1 (second-best) literals resolve the embedded selector via the domain-selector resolver; if none is installed (or the selector cannot be resolved) parsing fails with `ERR_DOMAIN_SELECTOR_UNRESOLVED`. The implicit default selector resolves to the configured default domain label without requiring a resolver.
 
 #### 2.5 Normative binary vectors
 
@@ -338,27 +350,28 @@ consistent textual forms for every canonical payload. Selected fixtures from
 `fixtures/account/address_vectors.json` (generated via
 `cargo xtask address-vectors`) are shown below for quick reference:
 
-| Account / selector | IH58 literal (prefix `0x02F1`) | Sora compressed (`snx1`) literal | CAIP-10 literal |
-|--------------------|--------------------------------|-------------------------|-----------------|
-| `default` domain (implicit selector, seed `0x00`) | `RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS` | `snx12QGﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5E5@default` (domain suffix optional for the implicit selector) | `iroha:0x02f1:RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS` |
-| `treasury` (local digest selector, seed `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `snx15ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾘｻYﾃhﾓMQ9CBEﾅﾊﾈｷﾉVRｺnKRwTﾋｼqﾅWrﾎU7ｼiﾍQt1TPGNJ@treasury` | `iroha:0x02f1:34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` |
-| Global registry pointer (`registry_id = 0x0000_002A`, equivalent to `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `snx1kXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP@treasury` | `iroha:0x02f1:3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` |
+| Account / selector | IH58 literal (prefix `0x02F1`) | Sora compressed (`snx1`) literal |
+|--------------------|--------------------------------|-------------------------|
+| `default` domain (implicit selector, seed `0x00`) | `RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS` | `snx12QGﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5E5` (optional `@default` suffix when providing explicit routing hints) |
+| `treasury` (local digest selector, seed `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `snx15ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾘｻYﾃhﾓMQ9CBEﾅﾊﾈｷﾉVRｺnKRwTﾋｼqﾅWrﾎU7ｼiﾍQt1TPGNJ` |
+| Global registry pointer (`registry_id = 0x0000_002A`, equivalent to `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `snx1kXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 These strings match the ones emitted by the CLI (`iroha address convert`), Torii
 responses (`address_format=ih58|compressed`), and SDK helpers, so UX copy/paste
-flows can rely on them verbatim.
+flows can rely on them verbatim. Append `<address>@<domain>` only when you need an explicit routing hint; the suffix is not part of the canonical output.
 
-#### 2.6 Textual aliases for interoperability
+#### 2.6 Textual aliases for interoperability (planned)
 
 - **Chain-alias style:** `ih:<chain-alias>:<alias@domain>` for logs and human
   entry. Wallets must parse the prefix, verify the embedded chain, and block
   mismatches.
-- **CAIP-10 form:** `iroha:<caip  -id>:<ih58-addr>` for chain-agnostic
-  integrations. Tooling can derive the CAIP-2 portion from the discriminant
-  registry.
+- **CAIP-10 form:** `iroha:<caip-2-id>:<ih58-addr>` for chain-agnostic
+  integrations. This mapping is **not yet implemented** in the shipped
+  toolchains.
 - **Machine helpers:** Publish codecs for Rust, TypeScript/JavaScript, Python,
-  and Kotlin covering IH58 and CAIP-10 formats (`AccountAddress::to_ih58`,
-  `AccountAddress::parse_any`, and their SDK equivalents).
+  and Kotlin covering IH58 and compressed formats (`AccountAddress::to_ih58`,
+  `AccountAddress::parse_any`, and their SDK equivalents). CAIP-10 helpers are
+  future work.
 
 #### 2.7 Deterministic IH58 alias
 
@@ -370,28 +383,27 @@ flows can rely on them verbatim.
   SDKs MUST keep the matching JSON registry in sync to avoid collisions.
 - **Account material:** IH58 encodes the canonical payload built by
   `AccountAddress::canonical_bytes()`—header byte, domain selector, and
-  controller payload. There is no additional hashing step; multi-sig controllers
-  therefore contribute their full CTAP2-serialised payload to the encoded bytes.
+  controller payload. There is no additional hashing step; IH58 embeds the
+  binary controller payload (single key or multisig) as produced by the Rust
+  encoder, not the CTAP2 map used for multisig policy digests.
 - **Encoding:** `encode_ih58()` concatenates the prefix bytes with the canonical
   payload and appends a 16-bit checksum derived from Blake2b-512 with the fixed
-  personalization string `IH58:v1`. The result is Base58-encoded via `bs58`.
+  prefix `IH58PRE` (`b"IH58PRE" || prefix || payload`). The result is Base58-encoded via `bs58`.
   CLI/SDK helpers expose the same procedure, and `AccountAddress::parse_any`
   reverses it via `decode_ih58`.
 
 #### 2.8 Normative textual test vectors
 
-`fixtures/account/address_vectors.json` contains full IH58 (preferred), compressed (`snx1`, second-best), and
-CAIP-10 literals for every canonical payload. Highlights:
+`fixtures/account/address_vectors.json` contains full IH58 (preferred) and compressed (`snx1`, second-best)
+literals for every canonical payload. Highlights:
 
 - **`addr-single-default-ed25519` (Sora Nexus, prefix `0x02F1`).**  
   IH58 `RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS`, compressed (`snx1`)
-  `snx12QG…U4N5E5@default`, CAIP-10
-  `iroha:0x02f1:RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS`. Torii
-  emits these exact strings from `AccountId::display()` and
-  `AccountAddress::to_ih58`.
+  `snx12QG…U4N5E5`. Torii emits these exact strings from `AccountId`’s
+  `Display` implementation (canonical IH58) and `AccountAddress::to_compressed_sora`.
 - **`addr-global-registry-002a` (registry selector → treasury).**  
   IH58 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`, compressed (`snx1`)
-  `snx1kX…CM6AEP@treasury`. Demonstrates that registry selectors still decode to
+  `snx1kX…CM6AEP`. Demonstrates that registry selectors still decode to
   the same canonical payload as the corresponding local digest.
 - **Failure case (`ih58-prefix-mismatch`).**  
   Parsing an IH58 literal encoded with prefix `NETWORK_PREFIX + 1` on a node
@@ -609,11 +621,11 @@ their change tickets.
   `opaque:…` forms, then canonicalize to IH58 for output. There is no
   strict-mode toggle; raw phone/email identifiers must be kept off-ledger
   via UAID/opaque mappings.
-- **Error prevention:** Wallets parse IH58 and CAIP-10 prefixes.
-  Chain mismatches trigger hard failures with actionable diagnostics.
+- **Error prevention:** Wallets parse IH58 prefixes and enforce chain-discriminant
+  expectations. Chain mismatches trigger hard failures with actionable diagnostics.
 - **Codec libraries:** Official Rust, TypeScript/JavaScript, Python, and Kotlin
-  libraries provide IH58 encoding/decoding and CAIP-10 conversions to avoid
-  fragmented implementations.
+  libraries provide IH58 encoding/decoding plus compressed (`snx1`) support to
+  avoid fragmented implementations. CAIP-10 conversions are not shipped yet.
 
 #### Accessibility & Safe Sharing Guidance
 
@@ -630,7 +642,7 @@ their change tickets.
 - **IH58 envelope:** Prefix encodes the `chain_discriminant` using the compact
   6-/14-bit scheme from `encode_ih58_prefix()`, the body is the canonical bytes
   (`AccountAddress::canonical_bytes()`), and the checksum is the first two bytes
-  of Blake2b-512(`b"IH58:v1"` || prefix || body). The full payload is Base58-
+  of Blake2b-512(`b"IH58PRE"` || prefix || body). The full payload is Base58-
   encoded via `bs58`.
 - **Registry contract:** Signed JSON (and optional Merkle root) publishing
   `{discriminant, ih58_prefix, chain_alias, endpoints}` with 24h TTL and
@@ -638,8 +650,9 @@ their change tickets.
 - **Domain policy:** ASCII `Name` today; if enabling i18n, apply UTS-46 for
   normalization and UTS-39 for confusable checks. Enforce max label (63) and
   total (255) lengths.
-- **Textual helpers:** Ship IH58 ↔ CAIP-10 ↔ compressed (`snx1…`) codecs in Rust,
-  TypeScript/JavaScript, Python, and Kotlin with shared test vectors.
+- **Textual helpers:** Ship IH58 ↔ compressed (`snx1…`) codecs in Rust,
+  TypeScript/JavaScript, Python, and Kotlin with shared test vectors (CAIP-10
+  mappings remain future work).
 - **CLI tooling:** Provide a deterministic operator workflow via `iroha address convert`
   (see `crates/iroha_cli/src/address.rs`), which accepts IH58/`snx1…`/`0x…` literals and
   optional `<address>@<domain>` labels, defaults to IH58 output using the Sora Nexus prefix (`753`),
@@ -688,8 +701,8 @@ messages, plus recommended remediation guidance.
 
 | Code | Failure | Recommended Remediation |
 |------|---------|-------------------------|
-| `ERR_UNSUPPORTED_ALGORITHM` | Encoder received a signing algorithm not supported by the V1 header. | Restrict account construction to the supported curve (currently Ed25519) until new variants ship. |
-| `ERR_KEY_PAYLOAD_TOO_LONG` | Signing key payload length exceeds the supported limit. | Provide a key payload that matches the algorithm specification (e.g., 32 bytes for Ed25519). |
+| `ERR_UNSUPPORTED_ALGORITHM` | Encoder received a signing algorithm not supported by the registry or build features. | Restrict account construction to curves enabled in the registry and configuration. |
+| `ERR_KEY_PAYLOAD_TOO_LONG` | Signing key payload length exceeds the supported limit. | Single-key controllers are limited to `u8` lengths; use multisig for large public keys (e.g., ML‑DSA). |
 | `ERR_INVALID_HEADER_VERSION` | Address header version is outside the supported range. | Emit header version `0` for V1 addresses; upgrade encoders before adopting new versions. |
 | `ERR_INVALID_NORM_VERSION` | Normalisation version flag is not recognised. | Use normalisation version `1` and avoid toggling reserved bits. |
 | `ERR_INVALID_IH58_PREFIX` | Requested IH58 network prefix cannot be encoded. | Pick a prefix within the inclusive `0..=16383` range published in the chain registry. |
@@ -700,15 +713,15 @@ messages, plus recommended remediation guidance.
 | Code | Failure | Recommended Remediation |
 |------|---------|-------------------------|
 | `ERR_INVALID_IH58_ENCODING` | IH58 string contains characters outside the alphabet. | Ensure the address uses the published IH58 alphabet and has not been truncated during copy/paste. |
-| `ERR_INVALID_LENGTH` | Payload length does not match the expected canonical size. | Supply the full canonical payload (34 bytes) when encoding or decoding addresses. |
+| `ERR_INVALID_LENGTH` | Payload length does not match the expected canonical size for the selector/controller. | Supply the full canonical payload for the selected domain selector and controller layout. |
 | `ERR_CHECKSUM_MISMATCH` | IH58 (preferred) or compressed (`snx1`, second-best) checksum validation failed. | Regenerate the address from a trusted source; this typically indicates a copy/paste error. |
 | `ERR_INVALID_IH58_PREFIX_ENCODING` | IH58 prefix bytes are malformed. | Re-encode the address with a compliant encoder; do not alter the leading Base58 bytes manually. |
 | `ERR_INVALID_HEX_ADDRESS` | Canonical hexadecimal form failed to decode. | Provide a `0x`-prefixed, even-length hex string produced by the official encoder. |
 | `ERR_MISSING_COMPRESSED_SENTINEL` | Compressed form does not start with `snx1`. | Prefix compressed Sora addresses with the required sentinel before handing them to decoders. |
 | `ERR_COMPRESSED_TOO_SHORT` | Compressed string lacks sufficient digits for payload and checksum. | Use the full compressed string emitted by the encoder instead of truncated snippets. |
-| `ERR_INVALID_COMPRESSED_CHAR` | Character outside the compressed alphabet encountered. | Replace the character with a valid Base-131 glyph from the published half-width/full-width tables. |
-| `ERR_INVALID_COMPRESSED_BASE` | Encoder attempted to use an unsupported radix. | File a bug against the encoder; the compressed alphabet is fixed to radix 131 in V1. |
-| `ERR_INVALID_COMPRESSED_DIGIT` | Digit value exceeds the compressed alphabet size. | Ensure each digit is within `0..131)`, regenerating the address if necessary. |
+| `ERR_INVALID_COMPRESSED_CHAR` | Character outside the compressed alphabet encountered. | Replace the character with a valid Base‑105 glyph from the published half-width/full-width tables. |
+| `ERR_INVALID_COMPRESSED_BASE` | Encoder attempted to use an unsupported radix. | File a bug against the encoder; the compressed alphabet is fixed to radix 105 in V1. |
+| `ERR_INVALID_COMPRESSED_DIGIT` | Digit value exceeds the compressed alphabet size. | Ensure each digit is within `0..105)`, regenerating the address if necessary. |
 | `ERR_UNSUPPORTED_ADDRESS_FORMAT` | Auto-detection could not recognise the input format. | Provide IH58 (preferred), compressed (`snx1`), or canonical `0x` hex strings when invoking parsers. |
 
 ### Domain and Network Validation
@@ -744,7 +757,8 @@ messages, plus recommended remediation guidance.
 - **Bech32m envelope.** QR-friendly and offers a human-readable prefix, but
   would diverge from the shipping IH58 implementation (`AccountAddress::to_ih58`)
   and require recreating all fixtures/SDKs. The current roadmap keeps IH58 +
-  CAIP-10 while continuing research into future Bech32m/QR layers.
+  compressed (`snx1`) support while continuing research into future
+  Bech32m/QR layers (CAIP-10 mapping is deferred).
 
 ## Open Questions
 
@@ -757,8 +771,8 @@ messages, plus recommended remediation guidance.
 - Determine whether to support domain aliases/redirects for migrations and how
   to surface them without breaking determinism.
 - Specify how Kotodama/IVM contracts access IH58 helpers (`to_address()`,
-  `parse_address()`) and whether on-chain storage should prefer IH58 or
-  CAIP-10 strings.
+  `parse_address()`) and whether on-chain storage should ever expose CAIP-10
+  mappings (today IH58 is canonical).
 - Explore registering Iroha chains in external registries (e.g., IH58 registry,
   CAIP namespace directory) for broader ecosystem alignment.
 

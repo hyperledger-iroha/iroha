@@ -124,7 +124,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Extend the load harness with a deterministic 10k TPS recipe (tx type/size, batch, parallelism, peer count, fixed RNG seed).
  - [x] Add warm-up + steady-state phases and stall detection (no-height-advance timeout) to the harness run flow.
  - [x] Emit standardized throughput/finality metrics from the harness (commit-QC latency p95/p99, view-change rate, queue backpressure, submitted/committed TPS) for comparison runs.
- - [ ] Investigate pending-block backpressure gating (blocking proposals until quorum reschedule) that keeps localnet cadence near commit-quorum timeout; design a safe fast-path to reach sub-1s finality without speculative execution.
+ - [x] Investigate pending-block backpressure gating (blocking proposals until quorum reschedule) that keeps localnet cadence near commit-quorum timeout; design a safe fast-path to reach sub-1s finality without speculative execution (added fast-path unblock when no votes/QCs arrive by `min(block_time, commit_time)`, applied in proposal backpressure + quorum reschedule; unit coverage added and pacemaker docs updated).
  - [ ] Run the ignored 7-peer localnet throughput regression in permissioned mode and capture throughput/commit-time metrics in `status.md` after the oversized BlockSyncUpdate fetch fallback fix (attempts failed: submit queue stalled at ~22k/42k with min_non_empty=1-2; release runs timed out after 20m; latest debug run timed out after 20m with height stuck at 2 and repeated view-change/missing-QC logs; logs in `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_uDjmli`, `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_cO9vgq`, `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_TY25OZ`, `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_hMZDGM`).
  - [ ] Run the ignored 7-peer localnet throughput regression in NPoS mode and capture throughput/commit-time metrics in `status.md` after the above gates and harness outputs are in place.
  - [x] Re-run the NPoS localnet 1 Hz / 100-block check with `/v1/sumeragi/status` sampling after the progress-age quorum timeout change; capture any stalls in `status.md` (2026-01-21 run on `/tmp/iroha-localnet-npos-1hz-run2`: `commit_qc.height` +12 over 118s, `view_change_install_total` +3, pending RBC max 1040 bytes / 1 session).
@@ -408,6 +408,12 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Replace `docs/source/p2p_trust_gossip.*` stubs (he/ja) with translations.
  - [x] Replace `docs/source/compute_lane.*` stubs (he/ja) with translations.
  - [x] Replace `docs/source/soracles.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soradns_ir_playbook.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soranet_gateway_billing.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/soranet_gateway_billing_m0.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/mochi/packaging.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/mochi/index.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/mochi/quickstart.*` stubs (he/ja) with translations.
  - [ ] Replace stub translation files across repo root, `docs/source`, and `docs/portal` (preserve front matter, keep `source_hash`/`translation_last_reviewed` aligned).
  - [x] Complete translations for core policy/docs (CODE_OF_CONDUCT, PATENTS, README, AGENTS, status/roadmap, configuration/runbooks).
  - [ ] Prioritize portal docs: `docs/portal/i18n/*/docusaurus-plugin-content-docs` (especially SoraFS/SoraNet) and mark completion per locale.

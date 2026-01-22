@@ -21,13 +21,13 @@ governance reviewers can audit every billing cycle.
      --gib 250 \
      --quote-out artifacts/sorafs_reserve/quotes/provider-alpha-apr.json
 
-   sorafs reserve ledger \
-     --quote artifacts/sorafs_reserve/quotes/provider-alpha-apr.json \
-     --provider-account provider@dakini \
-     --treasury-account treasury@sora \
-     --reserve-account sorafs-reserve@sora \
-     --asset-definition xor#sora \
-     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
+  sorafs reserve ledger \
+    --quote artifacts/sorafs_reserve/quotes/provider-alpha-apr.json \
+    --provider-account ih58... \
+    --treasury-account ih58... \
+    --reserve-account ih58... \
+    --asset-definition xor#sora \
+    --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
    The ledger helper attaches a `ledger_projection` block (rent due, reserve
    shortfall, top-up delta, underwriting booleans) plus the Norito `Transfer`

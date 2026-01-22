@@ -843,7 +843,7 @@
             "type": "string"
           },
           "relay_id": {
-            "description": "Relay account identifier (`account@domain`).",
+            "description": "Relay account identifier (IH58 preferred; optional `@domain` hint).",
             "type": "string"
           },
           "reported_at_ms": {

@@ -822,8 +822,8 @@ quarterly bundle per book by following the checklist below.
 
 1. **Snapshot balances.** Use the `FindAssets` query that powers
    `iroha query asset list` (`crates/iroha_cli/src/main.rs:1730`) or the
-   `iroha_python` helper to export XOR balances for `treasury@sora`,
-   `sorafs-reserve@sora`, and every desk account involved in the review. Store
+   `iroha_python` helper to export XOR balances for `ih58...`,
+   `ih58...`, and every desk account involved in the review. Store
    the JSON under
    `artifacts/finance/repo/<period>/treasury_assets.json` and record the git
    commit/toolchain in the accompanying `README.md`.

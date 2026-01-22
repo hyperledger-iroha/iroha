@@ -75,7 +75,7 @@ TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 4. בחרו את סוג התוכן `application/x-norito` במגירת "Try it", לחצו **Choose File**, ובחרו את המטען שלכם. הפרוקסי משכתב את הבקשה ל-`/proxy/v1/pipeline/submit` ומסמן אותה עם `X-TryIt-Client=docs-portal-rapidoc`.
 5. כדי להוריד תגובות Norito הגדירו `Accept: application/x-norito`. Swagger/RapiDoc מציגים את בורר הכותרות באותה מגירה ומזרימים את הבינארי בחזרה דרך הפרוקסי.
 
-לנתיבים של JSON בלבד ה-sandbox המובנה של Try it לרוב מהיר יותר: הזינו את הנתיב (לדוגמה `/v1/accounts/ih58@wonderland/assets`), בחרו את שיטת ה-HTTP, הדביקו גוף JSON כשצריך, ולחצו **Send request** כדי לבדוק כותרות, משך זמן ומטענים במקום.
+לנתיבים של JSON בלבד ה-sandbox המובנה של Try it לרוב מהיר יותר: הזינו את הנתיב (לדוגמה `/v1/accounts/ih58.../assets`), בחרו את שיטת ה-HTTP, הדביקו גוף JSON כשצריך, ולחצו **Send request** כדי לבדוק כותרות, משך זמן ומטענים במקום.
 
 ## פתרון תקלות
 

@@ -59,15 +59,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "rose#wonderland#alice",
-  destinationAccountId: "bob@wonderland",
+  destinationAccountId: "ih58...",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "alice@wonderland",
+  authority: "ih58...",
   mint: { assetId: "rose#wonderland#alice", quantity: "10" },
-  transfers: [{ destinationAccountId: "bob@wonderland", quantity: "5" }],
+  transfers: [{ destinationAccountId: "ih58...", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -238,7 +238,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("alice@wonderland", {
+const qr = await torii.getExplorerAccountQr("ih58...", {
   addressFormat: "compressed",
 });
 console.log("explorer literal", qr.literal);
@@ -467,7 +467,7 @@ canonicalise them before submitting requests:
 - `getUaidPortfolio(uaid)` aggregates balances per dataspace, grouping asset
   holdings by canonical account IDs.
 - `getUaidBindings(uaid, { addressFormat })` enumerates every dataspace ↔ account
-  binding (`addressFormat: "compressed"` returns the `snx1…@domain` literals).
+  binding (`addressFormat: "compressed"` returns the `snx1…` literals).
 - `getUaidManifests(uaid, { dataspaceId })` returns each capability manifest,
   lifecycle status, and bound accounts for auditing.
 
@@ -510,7 +510,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "governance@sora",
+    authority: "ih58...",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -520,7 +520,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "governance@sora",
+    authority: "ih58...",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

@@ -93,7 +93,7 @@ PRs are scoped and testable.
 ### Sample publisher snippet
 ```swift
 let cancellable = session
-    .balancePublisher(accountID: "alice@wonderland")
+    .balancePublisher(accountID: "ih58...")
     .retry(ConnectRetryPolicy.default.maxRetries)
     .timeout(.seconds(ConnectRetryPolicy.default.heartbeatTimeout))
     .sink(receiveCompletion: { completion in

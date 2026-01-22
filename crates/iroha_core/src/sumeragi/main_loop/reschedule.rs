@@ -123,11 +123,15 @@ impl Actor {
             ) {
                 continue;
             }
+            let (consensus_mode, _, _) = self.consensus_context_for_height(pending.height);
             let pending_age = pending.age();
-            if pending_age < quorum_timeout {
+            let fast_timeout = {
+                let view = self.state.view();
+                self.pending_fast_path_timeout(&view, consensus_mode)
+            };
+            if pending_age < fast_timeout {
                 continue;
             }
-            let (consensus_mode, _, _) = self.consensus_context_for_height(pending.height);
             let mut commit_roster =
                 self.roster_for_vote_with_mode(*hash, pending.height, pending.view, consensus_mode);
             if commit_roster.is_empty() {
@@ -188,7 +192,15 @@ impl Actor {
                         status.stake_quorum_missing,
                     )
                 };
-            if missing_quorum_stale(pending_age, quorum_timeout, quorum_reached) {
+            let has_votes = pending.precommit_vote_sent
+                || self.pending_block_has_votes(*hash, pending.height, pending.view);
+            let has_qc = pending.commit_qc_seen || commit_qc_cached || qc_any.is_some();
+            let effective_quorum_timeout = if !has_votes && !has_qc {
+                fast_timeout.min(quorum_timeout)
+            } else {
+                quorum_timeout
+            };
+            if missing_quorum_stale(pending_age, effective_quorum_timeout, quorum_reached) {
                 let rbc_key = (*hash, pending.height, pending.view);
                 if queue_depths.vote_rx > 0 {
                     debug!(
@@ -196,7 +208,7 @@ impl Actor {
                         view = pending.view,
                         block = %hash,
                         pending_age_ms = pending_age.as_millis(),
-                        quorum_timeout_ms = quorum_timeout.as_millis(),
+                        quorum_timeout_ms = effective_quorum_timeout.as_millis(),
                         vote_rx_depth = queue_depths.vote_rx,
                         "deferring quorum reschedule while vote queue is backlogged"
                     );
@@ -208,7 +220,7 @@ impl Actor {
                         view = pending.view,
                         block = %hash,
                         pending_age_ms = pending_age.as_millis(),
-                        quorum_timeout_ms = quorum_timeout.as_millis(),
+                        quorum_timeout_ms = effective_quorum_timeout.as_millis(),
                         "deferring quorum reschedule while RBC availability is unresolved"
                     );
                     continue;

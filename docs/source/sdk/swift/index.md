@@ -936,7 +936,7 @@ guard
 else { return }
 
 var register = ToriiVerifyingKeyRegisterRequest(
-    authority: "alice@wonderland",
+    authority: "ih58...",
     privateKey: "ed0120...",
     backend: "halo2/ipa",
     name: "vk_main",

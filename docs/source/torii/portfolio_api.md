@@ -36,11 +36,11 @@ GET /v1/accounts/{uaid}/portfolio
       "dataspace_alias": "universal",
       "accounts": [
         {
-          "account_id": "holder1@portfolio",
+          "account_id": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS",
           "label": null,
           "assets": [
             {
-              "asset_id": "cash#portfolio::holder1@portfolio",
+              "asset_id": "cash#portfolio::RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS",
               "asset_definition_id": "cash#portfolio",
               "quantity": "500"
             }
@@ -53,16 +53,16 @@ GET /v1/accounts/{uaid}/portfolio
       "dataspace_alias": "cbdc",
       "accounts": [
         {
-          "account_id": "holder2@portfolio",
+          "account_id": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
           "label": "primary-cbdc",
           "assets": [
             {
-              "asset_id": "wholesale#cbdc::holder2@portfolio",
+              "asset_id": "wholesale#cbdc::34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
               "asset_definition_id": "wholesale#cbdc",
               "quantity": "250"
             },
             {
-              "asset_id": "fx#cbdc::holder2@portfolio",
+              "asset_id": "fx#cbdc::34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
               "asset_definition_id": "fx#cbdc",
               "quantity": "25"
             }
@@ -136,12 +136,12 @@ Sample response:
     {
       "dataspace_id": 0,
       "dataspace_alias": "universal",
-      "accounts": ["holder1@portfolio"]
+      "accounts": ["RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS"]
     },
     {
       "dataspace_id": 11,
       "dataspace_alias": "cbdc",
-      "accounts": ["holder2@portfolio"]
+      "accounts": ["34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"]
     }
   ]
 }
@@ -193,7 +193,7 @@ Sample response:
         "expired_epoch": null,
         "revocation": null
       },
-      "accounts": ["wholesale@cbdc"],
+      "accounts": ["34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"],
       "manifest": {
         "version": 1,
         "uaid": "uaid:0f4d…ab11",
@@ -218,7 +218,7 @@ Sample response:
   present.
 - `accounts` reuse the `uaid_dataspaces` ledger map so operators can see which
   concrete account IDs are tied to the manifest’s dataspace. Set
-  `address_format=compressed` only when you need the second-best `snx1…@domain` literals for
+  `address_format=compressed` only when you need the second-best `snx1…` literals for
   offline or QR workflows.
 - The `manifest` object is the exact `AssetPermissionManifest` structure
   published to the Space Directory, making it easy for SDKs to replay the
@@ -252,7 +252,7 @@ Example payload:
 
 ```jsonc
 {
-  "authority": "ops@cbdc",
+  "authority": "ih58...",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -304,7 +304,7 @@ Example payload:
 
 ```jsonc
 {
-  "authority": "ops@cbdc",
+  "authority": "ih58...",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d…ab11",
   "dataspace": 11,

@@ -1,20 +1,27 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/source/mochi/index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4d937016be3a2ce90d15edb45a56d73a4609e6777e6be1897781a08d2ae54e29
-source_last_modified: "2025-11-15T07:55:47.614485+00:00"
-translation_last_reviewed: null
+source_hash: 23da789dca2eaa10918928b64d43681f9d1471482e1809d2e9f980265e7fc3ee
+source_last_modified: "2025-11-15T10:38:38.362037+00:00"
+translation_last_reviewed: 2026-01-21
 ---
 
-# בתהליך תרגום
-
 <div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
+<!-- תרגום עברי ל-docs/source/mochi/index.md -->
+
+# תיעוד MOCHI
+
+```{toctree}
+:maxdepth: 1
+
+quickstart
+packaging
+../mochi_architecture_plan
+troubleshooting
+```
+
 </div>

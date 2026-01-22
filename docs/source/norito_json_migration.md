@@ -58,8 +58,9 @@ Serde derives, visitors, JSON DOM helpers, and config loaders.
 > `AssetId`, `DomainId`, `NftId`, `TriggerId`, …) now implement Norito
 > `FastJsonWrite` + `JsonDeserialize` through the shared `string_id!` macro.
 > Downstream callers can rely on `norito::json::to_json` / `from_json` for the
-> canonical `"alias@domain"` formatting while Serde implementations remain
-> temporarily for migration paths.
+> canonical IH58 formatting (no `@domain` suffix). Alias inputs such as
+> `label@domain` remain parseable via resolvers where configured while Serde
+> implementations remain temporarily for migration paths.
 
 > **Status (Nov 7, 2025):** `IpfsPath` gained Norito `FastJsonWrite` and
 > `JsonDeserialize` impls backed by the existing parser, with regression tests

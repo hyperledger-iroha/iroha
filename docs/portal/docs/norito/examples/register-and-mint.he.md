@@ -22,9 +22,9 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 ## סיור בספר החשבונות
 
-- ודאו שחשבון היעד (לדוגמה `alice@wonderland`) קיים, בדומה לשלב ההכנה בכל quickstart של ה-SDK.
+- ודאו שחשבון היעד (לדוגמה `ih58...`) קיים, בדומה לשלב ההכנה בכל quickstart של ה-SDK.
 - הפעילו את נקודת הכניסה `register_and_mint` כדי ליצור את הגדרת הנכס ROSE ולהטביע 250 יחידות עבור Alice בעסקה אחת.
-- אמתו יתרות דרך `client.request(FindAccountAssets)` או `iroha_cli assets list --account alice@wonderland` כדי לוודא שההטבעה הצליחה.
+- אמתו יתרות דרך `client.request(FindAccountAssets)` או `iroha_cli assets list --account ih58...` כדי לוודא שההטבעה הצליחה.
 
 ## מדריכי SDK קשורים
 
@@ -46,7 +46,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
+    let to = account!("ih58...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }
