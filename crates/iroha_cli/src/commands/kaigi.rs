@@ -3,6 +3,7 @@
 //! These subcommands build Kaigi ISIs and submit them through the CLI runtime.
 
 use crate::{Run, RunContext};
+use crate::cli_output::print_with_optional_text;
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr};
 use iroha::data_model::{
@@ -14,8 +15,9 @@ use iroha::data_model::{
 };
 use iroha_crypto::Hash;
 use std::{
+    fmt::Write as _,
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -221,11 +223,8 @@ impl Run for QuickstartArgs {
             join_hint,
             spool_hint: format!("{}/exit-<relay-id>/kaigi-stream/*.norito", self.spool_hint),
         };
-
-        context.println("Kaigi demo call created. Share the summary below with testers:")?;
-        context.print_data(&summary)?;
-
-        if let Some(path) = self.summary_out {
+        let summary_out = self.summary_out;
+        if let Some(path) = summary_out.as_ref() {
             if let Some(parent) = path.parent()
                 && !parent.as_os_str().is_empty()
             {
@@ -237,12 +236,18 @@ impl Run for QuickstartArgs {
             if !payload.ends_with('\n') {
                 payload.push('\n');
             }
-            fs::write(&path, payload)
+            fs::write(path, payload)
                 .wrap_err_with(|| format!("failed to write summary to {}", path.display()))?;
-            context.println(format!("Summary written to {}", path.display()))?;
         }
 
-        Ok(())
+        let output = QuickstartOutput {
+            summary: summary.clone(),
+            summary_out: summary_out
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+        };
+        let text = render_quickstart_text(&summary, summary_out.as_deref());
+        print_with_optional_text(context, Some(text), &output)
     }
 }
 
@@ -289,6 +294,30 @@ struct QuickstartSummary {
     privacy_mode: String,
     join_hint: String,
     spool_hint: String,
+}
+
+#[derive(Debug, Clone, norito::json::JsonSerialize)]
+struct QuickstartOutput {
+    summary: QuickstartSummary,
+    summary_out: Option<String>,
+}
+
+fn render_quickstart_text(summary: &QuickstartSummary, summary_out: Option<&Path>) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "Kaigi demo call created. Share the summary below:");
+    let _ = writeln!(out, "call_id: {}", summary.call_id);
+    let _ = writeln!(out, "domain: {}", summary.domain);
+    let _ = writeln!(out, "call_name: {}", summary.call_name);
+    let _ = writeln!(out, "host: {}", summary.host);
+    let _ = writeln!(out, "torii_url: {}", summary.torii_url);
+    let _ = writeln!(out, "room_policy: {}", summary.room_policy);
+    let _ = writeln!(out, "privacy_mode: {}", summary.privacy_mode);
+    let _ = writeln!(out, "join_hint: {}", summary.join_hint);
+    let _ = writeln!(out, "spool_hint: {}", summary.spool_hint);
+    if let Some(path) = summary_out {
+        let _ = writeln!(out, "summary_out: {}", path.display());
+    }
+    out
 }
 
 fn resolve_call_label(value: Option<String>) -> Result<String> {
@@ -650,6 +679,7 @@ fn read_metadata(path: &str) -> Result<Metadata> {
 mod tests {
     use super::*;
     use clap::Parser;
+    use std::path::Path;
 
     #[derive(Parser, Debug)]
     struct TestCli {
@@ -853,5 +883,23 @@ mod tests {
             result.is_err(),
             "metadata reader should reject non-object JSON"
         );
+    }
+
+    #[test]
+    fn render_quickstart_text_includes_summary_out() {
+        let summary = QuickstartSummary {
+            call_id: "call-1".to_string(),
+            domain: "kaigi".to_string(),
+            call_name: "daily".to_string(),
+            host: "alice@kaigi".to_string(),
+            torii_url: "http://localhost:8080".to_string(),
+            room_policy: "Public".to_string(),
+            privacy_mode: "Transparent".to_string(),
+            join_hint: "iroha kaigi join ...".to_string(),
+            spool_hint: "/tmp/spool".to_string(),
+        };
+        let text = render_quickstart_text(&summary, Some(Path::new("/tmp/summary.json")));
+        assert!(text.contains("call_id: call-1"));
+        assert!(text.contains("summary_out: /tmp/summary.json"));
     }
 }
