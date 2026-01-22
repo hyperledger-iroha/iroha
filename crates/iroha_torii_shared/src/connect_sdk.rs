@@ -279,7 +279,7 @@ mod approve_preimage_tests {
             issued_at: "2025-01-01T00:00:00Z".into(),
             nonce: "abc".into(),
         };
-        let img = build_approve_preimage(&sid, &app, &wal, acc, Some(&perms), Some(&proof));
+        let img = build_approve_preimage(&sid, &app, &wal, &acc, Some(&perms), Some(&proof));
         assert!(img.starts_with(b"iroha-connect|approve|"));
         assert!(img.windows(32).any(|w| w == sid));
         assert!(img.windows(32).any(|w| w == app));

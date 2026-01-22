@@ -705,6 +705,9 @@ mod tests {
                 iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_BLOCKS,
             control_msg_channel_cap:
                 iroha_config::parameters::defaults::sumeragi::CONTROL_MSG_CHANNEL_CAP,
+            worker_iteration_budget_cap: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::WORKER_ITERATION_BUDGET_CAP_MS,
+            ),
             consensus_mode: ConsensusMode::Npos,
             mode_flip_enabled: iroha_config::parameters::defaults::sumeragi::MODE_FLIP_ENABLED,
             da_enabled: false,

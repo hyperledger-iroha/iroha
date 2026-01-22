@@ -1254,12 +1254,6 @@ mod register {
     pub fn account(id: AccountId) -> Register<Account> {
         Register::account(Account::new(id))
     }
-
-    pub fn asset_definition_numeric(id: &str) -> Register<AssetDefinition> {
-        Register::asset_definition(AssetDefinition::numeric(
-            id.parse().expect("should parse to AssetDefinitionId"),
-        ))
-    }
 }
 
 #[cfg(test)]

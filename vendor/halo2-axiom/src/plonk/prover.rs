@@ -4,7 +4,6 @@ use ff::{Field, WithSmallOrderMulGroup};
 use group::Curve;
 use rand_core::RngCore;
 
-use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::RangeTo;
 
@@ -59,7 +58,7 @@ pub fn create_proof<
     mut transcript: &'a mut T,
 ) -> Result<(), Error>
 where
-    Scheme::Scalar: Hash + WithSmallOrderMulGroup<3>,
+    Scheme::Scalar: WithSmallOrderMulGroup<3>,
     <Scheme as CommitmentScheme>::ParamsProver: Sync,
 {
     if circuits.len() != instances.len() {

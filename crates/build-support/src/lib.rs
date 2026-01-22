@@ -8,7 +8,8 @@ use std::error::Error;
 /// # Errors
 /// Fails if `vergen` cannot extract the required metadata.
 pub fn emit_git_info() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-    use vergen_git2::{CargoBuilder, Emitter, Git2Builder};
+    use vergen::{CargoBuilder, Emitter as CargoEmitter};
+    use vergen_git2::{Emitter as GitEmitter, Git2Builder};
 
     // Emit only the metadata the workspace exposes today.
     let git_instructions = Git2Builder::default().sha(false).build()?;
@@ -17,8 +18,10 @@ pub fn emit_git_info() -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
         .features(true)
         .build()?;
 
-    Emitter::default()
+    GitEmitter::default()
         .add_instructions(&git_instructions)?
+        .emit()?;
+    CargoEmitter::default()
         .add_instructions(&cargo_instructions)?
         .emit()?;
     Ok(())

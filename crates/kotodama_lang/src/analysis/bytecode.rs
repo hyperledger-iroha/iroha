@@ -1,8 +1,6 @@
 use std::{collections::HashSet, error::Error, fmt};
 
-use norito::json as norito_json_mod;
-
-use super::{AnalysisCategory, AnalysisFinding, SimpleRng};
+use super::{AnalysisCategory, AnalysisFinding};
 use crate::{VMError, instruction::wide, metadata::ProgramMetadata};
 
 /// Result of analysing a Kotodama bytecode artifact.
@@ -156,44 +154,46 @@ fn opcode_name(opcode: u8) -> &'static str {
     }
 }
 
-fn build_metadata_payload(
-    meta: &ProgramMetadata,
-    iteration: usize,
-    rng: &mut SimpleRng,
-) -> Vec<u8> {
-    let seed = rng.next_u64();
-    let mut object = norito_json_mod::Map::new();
-    object.insert(
-        "abi_version".to_owned(),
-        norito_json_mod::to_value(&meta.abi_version).unwrap_or(norito_json_mod::Value::Null),
-    );
-    object.insert(
-        "mode".to_owned(),
-        norito_json_mod::to_value(&meta.mode).unwrap_or(norito_json_mod::Value::Null),
-    );
-    object.insert(
-        "vector_length_hint".to_owned(),
-        norito_json_mod::to_value(&meta.vector_length).unwrap_or(norito_json_mod::Value::Null),
-    );
-    object.insert(
-        "max_cycles".to_owned(),
-        norito_json_mod::to_value(&meta.max_cycles).unwrap_or(norito_json_mod::Value::Null),
-    );
-    object.insert(
-        "iteration".to_owned(),
-        norito_json_mod::to_value(&iteration).unwrap_or(norito_json_mod::Value::Null),
-    );
-    object.insert(
-        "seed".to_owned(),
-        norito_json_mod::to_value(&seed).unwrap_or(norito_json_mod::Value::Null),
-    );
-    norito_json_mod::to_vec(&norito_json_mod::Value::Object(object)).unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::SimpleRng;
     use super::*;
     use crate::compiler::Compiler as KotodamaCompiler;
+    use norito::json as norito_json_mod;
+
+    fn build_metadata_payload(
+        meta: &ProgramMetadata,
+        iteration: usize,
+        rng: &mut SimpleRng,
+    ) -> Vec<u8> {
+        let seed = rng.next_u64();
+        let mut object = norito_json_mod::Map::new();
+        object.insert(
+            "abi_version".to_owned(),
+            norito_json_mod::to_value(&meta.abi_version).unwrap_or(norito_json_mod::Value::Null),
+        );
+        object.insert(
+            "mode".to_owned(),
+            norito_json_mod::to_value(&meta.mode).unwrap_or(norito_json_mod::Value::Null),
+        );
+        object.insert(
+            "vector_length_hint".to_owned(),
+            norito_json_mod::to_value(&meta.vector_length).unwrap_or(norito_json_mod::Value::Null),
+        );
+        object.insert(
+            "max_cycles".to_owned(),
+            norito_json_mod::to_value(&meta.max_cycles).unwrap_or(norito_json_mod::Value::Null),
+        );
+        object.insert(
+            "iteration".to_owned(),
+            norito_json_mod::to_value(&iteration).unwrap_or(norito_json_mod::Value::Null),
+        );
+        object.insert(
+            "seed".to_owned(),
+            norito_json_mod::to_value(&seed).unwrap_or(norito_json_mod::Value::Null),
+        );
+        norito_json_mod::to_vec(&norito_json_mod::Value::Object(object)).unwrap_or_default()
+    }
 
     #[test]
     fn analyze_detects_arithmetic_instruction() {

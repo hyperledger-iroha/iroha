@@ -20,7 +20,7 @@ use crate::{
 };
 #[cfg(feature = "profile")]
 use ark_std::{end_timer, start_timer};
-use ff::WithSmallOrderMulGroup;
+use ff::{PrimeField, WithSmallOrderMulGroup};
 use group::{
     ff::{BatchInvert, Field},
     Curve,
@@ -34,6 +34,15 @@ use std::{
     iter,
     ops::{Mul, MulAssign},
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ScalarKey<F: PrimeField>(F);
+
+impl<F: PrimeField> Hash for ScalarKey<F> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_repr().as_ref().hash(state);
+    }
+}
 
 #[derive(Debug)]
 pub(in crate::plonk) struct Permuted<C: CurveAffine> {
@@ -94,7 +103,6 @@ impl<F: WithSmallOrderMulGroup<3>> Argument<F> {
         transcript: &mut T,
     ) -> Result<Permuted<C>, Error>
     where
-        F: Hash,
         C: CurveAffine<ScalarExt = F>,
         C::Curve: Mul<F, Output = C::Curve> + MulAssign<F>,
     {
@@ -407,10 +415,7 @@ fn permute_expression_pair<'params, C: CurveAffine, P: Params<'params, C>, R: Rn
     mut rng: R,
     input_expression: &Polynomial<C::Scalar, LagrangeCoeff>,
     table_expression: &Polynomial<C::Scalar, LagrangeCoeff>,
-) -> Result<ExpressionPair<C::Scalar>, Error>
-where
-    C::Scalar: Hash,
-{
+) -> Result<ExpressionPair<C::Scalar>, Error> {
     let num_threads = multicore::current_num_threads();
     // heuristic on when multi-threading isn't worth it
     // for now it seems like multi-threading is often worth it
@@ -435,28 +440,28 @@ where
     let capacity = usable_rows / num_threads + 1;
 
     #[cfg(feature = "multicore")]
-    let input_uniques: HashMap<C::Scalar, usize> = input_expression
+    let input_uniques: HashMap<ScalarKey<C::Scalar>, usize> = input_expression
         .par_iter()
         .fold(
             || HashMap::with_capacity(capacity),
             |mut acc, coeff| {
-                *acc.entry(*coeff).or_insert(0) += 1;
+                *acc.entry(ScalarKey(*coeff)).or_insert(0) += 1;
                 acc
             },
         )
         .reduce_with(|mut m1, m2| {
-            m2.into_iter().for_each(|(k, v)| {
-                *m1.entry(k).or_insert(0) += v;
+            m2.into_iter().for_each(|(key, v)| {
+                *m1.entry(key).or_insert(0) += v;
             });
             m1
         })
         .unwrap();
     #[cfg(not(feature = "multicore"))]
-    let input_uniques: HashMap<C::Scalar, usize> =
+    let input_uniques: HashMap<ScalarKey<C::Scalar>, usize> =
         input_expression
             .iter()
             .fold(HashMap::with_capacity(capacity), |mut acc, coeff| {
-                *acc.entry(*coeff).or_insert(0) += 1;
+                *acc.entry(ScalarKey(*coeff)).or_insert(0) += 1;
                 acc
             });
     #[cfg(feature = "profile")]
@@ -470,7 +475,7 @@ where
         .par_iter()
         .fold(
             || Vec::with_capacity(capacity),
-            |mut input_ranges, (&coeff, &count)| {
+            |mut input_ranges, (&ScalarKey(coeff), &count)| {
                 if input_ranges.is_empty() {
                     input_ranges.push((coeff, 0..count));
                 } else {
@@ -492,7 +497,7 @@ where
     #[cfg(not(feature = "multicore"))]
     let input_unique_ranges = input_uniques.iter().fold(
         Vec::with_capacity(capacity),
-        |mut input_ranges, (&coeff, &count)| {
+        |mut input_ranges, (&ScalarKey(coeff), &count)| {
             if input_ranges.is_empty() {
                 input_ranges.push((coeff, 0..count));
             } else {
@@ -527,7 +532,8 @@ where
         .into_par_iter()
         .enumerate()
         .filter_map(|(i, coeff)| {
-            ((i != 0 && coeff == &sorted_table_coeffs[i - 1]) || !input_uniques.contains_key(coeff))
+            ((i != 0 && coeff == &sorted_table_coeffs[i - 1])
+                || !input_uniques.contains_key(&ScalarKey(*coeff)))
                 .then_some(*coeff)
         })
         .collect();

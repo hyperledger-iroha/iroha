@@ -6190,6 +6190,12 @@ pub struct Metrics {
     pub sumeragi_tx_queue_capacity: GenericGauge<AtomicU64>,
     /// Queue saturation flag observed by consensus (0 = healthy, 1 = saturated).
     pub sumeragi_tx_queue_saturated: GenericGauge<AtomicU64>,
+    /// Total pending blocks tracked by consensus.
+    pub sumeragi_pending_blocks_total: GenericGauge<AtomicU64>,
+    /// Pending blocks that currently gate proposals/view changes.
+    pub sumeragi_pending_blocks_blocking: GenericGauge<AtomicU64>,
+    /// Commit inflight queue depth (inflight + queued commit work).
+    pub sumeragi_commit_inflight_queue_depth: GenericGauge<AtomicU64>,
     /// Outstanding missing-block requests observed locally.
     pub sumeragi_missing_block_requests: GenericGauge<AtomicU64>,
     /// Age in milliseconds of the oldest missing-block request.
@@ -6443,6 +6449,8 @@ pub struct Metrics {
     pub sumeragi_view_change_suggest_total: IntCounter,
     /// Sumeragi: view-change installs observed (cumulative)
     pub sumeragi_view_change_install_total: IntCounter,
+    /// Sumeragi: view-change rotations after no proposal observed before cutoff (cumulative).
+    pub sumeragi_proposal_gap_total: IntCounter,
     /// Sumeragi: view-change proof counters grouped by outcome (accepted|stale|rejected)
     pub sumeragi_view_change_proof_total: GenericGaugeVec<AtomicU64>,
     /// Sumeragi: Witness-availability QC assembled (cumulative)
@@ -6673,6 +6681,8 @@ pub struct Metrics {
     pub sumeragi_pacemaker_eval_ms: Histogram,
     /// Sumeragi pacemaker: proposal attempt duration in the tick loop (ms)
     pub sumeragi_pacemaker_propose_ms: Histogram,
+    /// Sumeragi commit pipeline stage durations (ms) labeled by stage.
+    pub sumeragi_commit_stage_ms: HistogramVec,
     /// Sumeragi pacemaker: commit pipeline executions triggered by timer tick (cumulative, labeled by mode/outcome)
     pub sumeragi_commit_pipeline_tick_total: IntCounterVec,
     /// Sumeragi pacemaker: prevote-quorum timeouts (cumulative, labeled by mode)
@@ -8344,6 +8354,21 @@ impl Default for Metrics {
             "Transaction queue saturation flag observed by consensus (0 = healthy, 1 = saturated)",
         )
         .expect("Infallible");
+        let sumeragi_pending_blocks_total = GenericGauge::new(
+            "sumeragi_pending_blocks_total",
+            "Total pending blocks tracked by consensus",
+        )
+        .expect("Infallible");
+        let sumeragi_pending_blocks_blocking = GenericGauge::new(
+            "sumeragi_pending_blocks_blocking",
+            "Pending blocks currently gating proposals/view changes",
+        )
+        .expect("Infallible");
+        let sumeragi_commit_inflight_queue_depth = GenericGauge::new(
+            "sumeragi_commit_inflight_queue_depth",
+            "Commit inflight queue depth (inflight + queued commit work)",
+        )
+        .expect("Infallible");
         let missing_block_dwell_buckets = vec![
             50.0, 100.0, 250.0, 500.0, 1_000.0, 2_500.0, 5_000.0, 10_000.0, 20_000.0, 60_000.0,
         ];
@@ -9906,6 +9931,18 @@ impl Default for Metrics {
             ]),
         )
         .expect("Infallible");
+        let sumeragi_commit_stage_ms = HistogramVec::new(
+            HistogramOpts::new(
+                "sumeragi_commit_stage_ms",
+                "Sumeragi commit pipeline stage duration histogram (ms) labeled by stage",
+            )
+            .buckets(vec![
+                1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2000.0, 5000.0,
+                10000.0, 20000.0,
+            ]),
+            &["stage"],
+        )
+        .expect("Infallible");
         let sumeragi_commit_pipeline_tick_total = IntCounterVec::new(
             Opts::new(
                 "sumeragi_commit_pipeline_tick_total",
@@ -10356,6 +10393,11 @@ impl Default for Metrics {
         let sumeragi_view_change_install_total = IntCounter::new(
             "sumeragi_view_change_install_total",
             "View-change installs observed",
+        )
+        .expect("Infallible");
+        let sumeragi_proposal_gap_total = IntCounter::new(
+            "sumeragi_proposal_gap_total",
+            "View-change rotations after no proposal observed before cutoff",
         )
         .expect("Infallible");
         let sumeragi_view_change_proof_total = GenericGaugeVec::new(
@@ -13051,6 +13093,9 @@ impl Default for Metrics {
             sumeragi_tx_queue_depth,
             sumeragi_tx_queue_capacity,
             sumeragi_tx_queue_saturated,
+            sumeragi_pending_blocks_total,
+            sumeragi_pending_blocks_blocking,
+            sumeragi_commit_inflight_queue_depth,
             sumeragi_missing_block_requests,
             sumeragi_missing_block_oldest_ms,
             sumeragi_missing_block_retry_window_ms,
@@ -13173,6 +13218,7 @@ impl Default for Metrics {
             sumeragi_widen_before_rotate_total,
             sumeragi_view_change_suggest_total,
             sumeragi_view_change_install_total,
+            sumeragi_proposal_gap_total,
             sumeragi_view_change_proof_total,
             sumeragi_cert_size,
             sumeragi_commit_signatures_present,
@@ -13375,8 +13421,15 @@ impl Default for Metrics {
             sumeragi_pacemaker_backpressure_deferral_age_ms,
             sumeragi_pacemaker_eval_ms,
             sumeragi_pacemaker_propose_ms,
+            sumeragi_commit_stage_ms,
             sumeragi_commit_pipeline_tick_total,
             sumeragi_prevote_timeout_total,
+            sumeragi_tx_queue_depth,
+            sumeragi_tx_queue_capacity,
+            sumeragi_tx_queue_saturated,
+            sumeragi_pending_blocks_total,
+            sumeragi_pending_blocks_blocking,
+            sumeragi_commit_inflight_queue_depth,
             sumeragi_rbc_backlog_chunks_total,
             sumeragi_rbc_backlog_chunks_max,
             sumeragi_rbc_backlog_sessions_pending,
@@ -13551,6 +13604,9 @@ impl Default for Metrics {
             sumeragi_tx_queue_depth,
             sumeragi_tx_queue_capacity,
             sumeragi_tx_queue_saturated,
+            sumeragi_pending_blocks_total,
+            sumeragi_pending_blocks_blocking,
+            sumeragi_commit_inflight_queue_depth,
             sumeragi_missing_block_requests,
             sumeragi_missing_block_oldest_ms,
             sumeragi_missing_block_retry_window_ms,
@@ -13733,6 +13789,7 @@ impl Default for Metrics {
             sumeragi_widen_before_rotate_total,
             sumeragi_view_change_suggest_total,
             sumeragi_view_change_install_total,
+            sumeragi_proposal_gap_total,
             sumeragi_view_change_proof_total,
             sumeragi_wa_qc_assembled_total,
             sumeragi_cert_size,
@@ -13838,6 +13895,7 @@ impl Default for Metrics {
             sumeragi_pacemaker_backpressure_deferral_age_ms,
             sumeragi_pacemaker_eval_ms,
             sumeragi_pacemaker_propose_ms,
+            sumeragi_commit_stage_ms,
             sumeragi_commit_pipeline_tick_total,
             sumeragi_prevote_timeout_total,
             sumeragi_rbc_backlog_chunks_total,
