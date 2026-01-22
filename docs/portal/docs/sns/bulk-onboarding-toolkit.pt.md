@@ -37,7 +37,7 @@ O parser exige a seguinte linha de cabecalho (a ordem e flexivel):
 |--------|-------------|-----------|
 | `label` | Sim | Label solicitada (mixed case aceita; a ferramenta normaliza conforme Norm v1 e UTS-46). |
 | `suffix_id` | Sim | Identificador numerico de sufixo (decimal ou `0x` hex). |
-| `owner` | Sim | String AccountId (IH58@domain) do owner do registro. |
+| `owner` | Sim | String AccountId (IH58 literal; optional @domain hint) do owner do registro. |
 | `term_years` | Sim | Inteiro `1..=255`. |
 | `payment_asset_id` | Sim | Ativo de settlement (por exemplo `xor#sora`). |
 | `payment_gross` / `payment_net` | Sim | Inteiros sem sinal representando unidades nativas do ativo. |
@@ -78,9 +78,9 @@ Em caso de sucesso o script grava um manifesto agregado:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "alice@wonderland",
+      "owner": "ih58...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"alice@wonderland","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -89,7 +89,7 @@ Em caso de sucesso o script grava um manifesto agregado:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"alice@wonderland",
+        "payer":"ih58...",
         "signature":"alpha-signature"
       },
       "governance": null,

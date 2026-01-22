@@ -1,29 +1,36 @@
-<!-- Japanese translation of docs/account_structure_sdk_alignment.md -->
+<!-- TODO: Translation pending; content synced from English for technical accuracy. -->
 
----
-lang: ja
-direction: ltr
-source: docs/account_structure_sdk_alignment.md
-status: complete
-translator: manual
----
+# IH58 Rollout Note for SDK & Codec Owners
 
-# SDK とコーデック担当者向け IH-B32 ロールアウトノート
+Teams: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec tooling
 
-対象チーム: Rust SDK、TypeScript/JavaScript SDK、Python SDK、Kotlin SDK、コーデックツール
+Context: `docs/account_structure.md` now reflects the shipping IH58 account ID
+implementation. Please align SDK behaviour and tests with the canonical spec.
 
-背景: `docs/account_structure.md` が更新され、IH-B32 アドレスの最終設計、相互運用のマッピング、実装チェックリストが確定しました。各ライブラリの挙動とテストを正規仕様に合わせてください。
+Key references:
+- Address codec + header layout — `docs/account_structure.md` §2
+- Curve registry — `docs/source/references/address_curve_registry.md`
+- Norm v1 domain handling — `docs/source/references/address_norm_v1.md`
+- Fixture vectors — `fixtures/account/address_vectors.json`
 
-主要な参照（行アンカー）:
-- IH-B32 のエンコード規則と小文字限定ルール — `docs/account_structure.md:120`
-- IH58 エイリアス手順と規範ベクトル — `docs/account_structure.md:151`
-- 実装チェックリスト — `docs/account_structure.md:276`
+Action items:
+1. **Canonical output:** `AccountId::to_string()`/Display MUST emit IH58 only
+   (no `@domain` suffix). Canonical hex is for debugging (`0x...`).
+2. **Accepted inputs:** parsers MUST accept IH58 (preferred), `snx1` compressed,
+   and canonical hex (`0x...` only; bare hex is rejected). Inputs MAY carry an
+   `@<domain>` suffix for routing hints; `<label>@<domain>` aliases require a
+   resolver. Raw `public_key@domain` (multihash hex) remains supported.
+3. **Resolvers:** domainless IH58/snx1 parsing requires a domain-selector
+   resolver unless the selector is implicit default (use the configured default
+   domain label). UAID (`uaid:...`) and opaque (`opaque:...`) literals require
+   resolvers.
+4. **IH58 checksum:** use Blake2b-512 over `IH58PRE || prefix || payload`, take
+   the first 2 bytes. Compressed alphabet base is **105**.
+5. **Curve gating:** SDKs default to Ed25519-only. Provide explicit opt-in for
+   ML‑DSA/GOST/SM (Swift build flags; JS/Android `configureCurveSupport`). Do
+   not assume secp256k1 is enabled by default outside Rust.
+6. **No CAIP-10:** there is no shipped CAIP‑10 mapping yet; do not expose or
+   depend on CAIP‑10 conversions.
 
-アクションアイテム:
-1. 各 SDK で IH-B32 を既定のテキスト形式として提示し、すべての入力が正規コーデックを通過するよう `alias@domain` のパースを廃止する。
-2. 文書化された通りに CAIP-10、IH58 の変換を実装する。
-3. 規範ベクトル（Ed25519 と secp256k1）およびチェックサム／チェーン不一致時の失敗ケースをテストに追加する。
-4. レジストリ参照契約をミラーする: Nexus マニフェストが `{discriminant, ih58_prefix, chain_alias}` タプルを公開し、TTL セマンティクスを強制することを前提にする。
-5. リリースノートを調整し、ダウンストリームの統合先に IH-B32 サポートが各言語で同時期に出荷されることを周知する。
-
-コーデック／テストの更新が完了したら受領連絡をお願いします。未解決の質問はアカウントアドレッシング RFC のスレッドで追跡してください。
+Please confirm once the codecs/tests are updated; open questions can be tracked
+in the account-addressing RFC thread.

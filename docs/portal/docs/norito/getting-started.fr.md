@@ -72,7 +72,7 @@ Lorsque vous etes satisfait du contrat, deployez-le sur un nud via le CLI. Fourn
 
 ```sh
 iroha_cli contracts deploy \
-  --authority alice@wonderland \
+  --authority ih58... \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

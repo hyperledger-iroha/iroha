@@ -227,7 +227,7 @@ cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
   --chunk-plan artifacts/chunk_plan.json \
   --torii-url https://localhost:8080 \
   --submitted-epoch=42 \
-  --authority=alice@wonderland \
+  --authority=ih58... \
   --private-key=ed25519:0123...cafe \
   --summary-out artifacts/manifest.submit.json \
   --response-out artifacts/manifest.submit.body
@@ -601,12 +601,12 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --deposit=420 \
   --outcome=withdrawn_before_panel \
   --panel-size=7 \
-  --refund-account=appellant@panel \
-  --treasury-account=treasury@panel \
-  --escrow-account=escrow@panel \
-  --juror=juror0@panel --juror=juror1@panel --juror=juror2@panel \
-  --juror=juror3@panel --juror=juror4@panel --juror=juror5@panel --juror=juror6@panel \
-  --no-show=juror0@panel --no-show=juror1@panel \
+  --refund-account=ih58... \
+  --treasury-account=ih58... \
+  --escrow-account=ih58... \
+  --juror=ih58... --juror=ih58... --juror=ih58... \
+  --juror=ih58... --juror=ih58... --juror=ih58... --juror=ih58... \
+  --no-show=ih58... --no-show=ih58... \
   --format=json
 ```
 

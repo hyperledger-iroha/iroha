@@ -366,7 +366,7 @@ Content-Type: application/json
 POST /governance/referenda/{id}/vote
 Content-Type: application/json
 
-{ "voter": "alice@wonderland", "conviction": 2, "choice": "Aye" }
+{ "voter": "ih58...", "conviction": 2, "choice": "Aye" }
 ```
 
 - Query enactments (shows execution windows)

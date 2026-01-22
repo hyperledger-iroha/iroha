@@ -1,10 +1,10 @@
 import React, {useState} from 'react';
 
 const SAMPLE_ADDRESS = {
-  ih58: 'snx1tbi91zEgr5Xm@wonderland',
-  compressed: 'ｲﾛﾊsnx1@wonderland',
+  ih58: 'RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS',
+  compressed: 'snx12QGﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5E5',
   warning: 'Compressed addresses are Sora-only and second-best; prefer IH58.',
-  domain: 'wonderland',
+  domain: 'default',
   implicitDefault: true,
 };
 

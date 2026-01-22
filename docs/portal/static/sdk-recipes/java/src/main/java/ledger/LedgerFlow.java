@@ -110,11 +110,6 @@ public final class LedgerFlow {
     }
     final String defName = assetDefinition.substring(0, idx);
     final String defDomain = assetDefinition.substring(idx + 1);
-    final String[] accountParts = accountId.split("@", 2);
-    final String accountDomain = accountParts.length == 2 ? accountParts[1] : "";
-    if (defDomain.equals(accountDomain)) {
-      return defName + "##" + accountId;
-    }
     return defName + "#" + defDomain + "#" + accountId;
   }
 }

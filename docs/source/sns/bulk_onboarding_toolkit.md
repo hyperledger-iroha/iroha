@@ -27,7 +27,7 @@ The parser requires the following header row (order is flexible):
 |--------|----------|-------------|
 | `label` | ✅ | Requested label (mixed case accepted; tool normalises per Norm v1/UTS‑46). |
 | `suffix_id` | ✅ | Numeric suffix identifier (decimal or `0x` hex). |
-| `owner` | ✅ | AccountId string (IH58@domain) for the registration owner. |
+| `owner` | ✅ | AccountId string (IH58 literal; optional `@domain` hint) for the registration owner. |
 | `term_years` | ✅ | Integer `1..=255`. |
 | `payment_asset_id` | ✅ | Settlement asset (e.g., `xor#sora`). |
 | `payment_gross` / `payment_net` | ✅ | Unsigned integers representing asset-native units. |
@@ -68,9 +68,9 @@ On success the script writes an aggregated manifest:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "alice@wonderland",
+      "owner": "ih58...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"alice@wonderland","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -79,7 +79,7 @@ On success the script writes an aggregated manifest:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"alice@wonderland",
+        "payer":"ih58...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -239,7 +239,7 @@ The board filters by `release` so auditors can drill into a single CSV run.
   references are resolved relative to the CSV location. Non-object metadata
   produces a validation error.
 - **Controllers:** blank cells honour `--default-controllers`. Provide explicit
-  controller lists (e.g., `owner;ops@dao`) when delegating to non-owner actors.
+  controller lists (e.g., `ih58...;ih58...`) when delegating to non-owner actors.
 
 Failures are reported with contextual row numbers, e.g. `error: row 12
 term_years must be between 1 and 255`. The script exits with code `1` on

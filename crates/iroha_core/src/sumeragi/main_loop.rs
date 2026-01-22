@@ -3263,6 +3263,77 @@ fn is_peer_admin_instruction(instr: &iroha_data_model::isi::InstructionBox) -> b
     clippy::assigning_clones
 )]
 impl Actor {
+    fn pending_fast_path_timeout(&self, view: &StateView<'_>, mode: ConsensusMode) -> Duration {
+        let block_time = self.block_time_for_mode(view, mode);
+        let commit_time = self.commit_timeout_for_mode(view, mode);
+        let base = if commit_time == Duration::ZERO {
+            block_time
+        } else {
+            block_time.min(commit_time)
+        };
+        base.max(Duration::from_millis(1))
+    }
+
+    fn pending_block_has_votes(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        self.vote_log
+            .values()
+            .any(|vote| vote.block_hash == block_hash && vote.height == height && vote.view == view)
+    }
+
+    fn pending_block_has_qc(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        let expected_epoch = self.epoch_for_height(height);
+        cached_qc_for(
+            &self.qc_cache,
+            crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            height,
+            view,
+            expected_epoch,
+        )
+        .is_some()
+            || cached_qc_for(
+                &self.qc_cache,
+                crate::sumeragi::consensus::Phase::Prepare,
+                block_hash,
+                height,
+                view,
+                expected_epoch,
+            )
+            .is_some()
+    }
+
+    fn pending_fast_unblock_due(
+        &self,
+        pending: &PendingBlock,
+        now: Instant,
+        fast_timeout: Duration,
+    ) -> bool {
+        if fast_timeout == Duration::ZERO {
+            return false;
+        }
+        if pending.precommit_vote_sent || pending.commit_qc_seen {
+            return false;
+        }
+        let block_hash = pending.block.hash();
+        if self.pending_block_has_votes(block_hash, pending.height, pending.view) {
+            return false;
+        }
+        if self.pending_block_has_qc(block_hash, pending.height, pending.view) {
+            return false;
+        }
+        pending.progress_age(now) >= fast_timeout
+    }
+
     fn active_pending_blocks_len(&self) -> usize {
         let view = self.state.view();
         let tip_height = view.height();
@@ -3299,9 +3370,13 @@ impl Actor {
     }
 
     fn has_blocking_pending_blocks(&self) -> bool {
+        let now = Instant::now();
         let view = self.state.view();
         let tip_height = view.height();
         let tip_hash = view.latest_block_hash();
+        let pending_height = u64::try_from(tip_height.saturating_add(1)).unwrap_or(u64::MAX);
+        let (consensus_mode, _, _) = self.consensus_context_for_height(pending_height);
+        let fast_timeout = self.pending_fast_path_timeout(&view, consensus_mode);
         self.pending.pending_blocks.values().any(|pending| {
             !pending.aborted
                 && pending_extends_tip(
@@ -3310,7 +3385,9 @@ impl Actor {
                     tip_height,
                     tip_hash,
                 )
-                && (pending.commit_qc_seen || pending.last_quorum_reschedule.is_none())
+                && (pending.commit_qc_seen
+                    || (pending.last_quorum_reschedule.is_none()
+                        && !self.pending_fast_unblock_due(pending, now, fast_timeout)))
         })
     }
 

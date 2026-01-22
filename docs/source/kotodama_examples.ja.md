@@ -45,8 +45,8 @@ seiyaku Hello {
 seiyaku TransferDemo {
   kotoage fn do_transfer() {
     transfer_asset(
-      account!("alice@wonderland"),
-      account!("bob@wonderland"),
+      account!("ih58..."),
+      account!("ih58..."),
       asset_definition!("rose#wonderland"),
       10
     );
@@ -66,15 +66,15 @@ seiyaku NftDemo {
   kotoage fn create() {
     nft_mint_asset(
       nft_id!("dragon#demo"),
-      account!("alice@wonderland")
+      account!("ih58...")
     );
   }
 
   kotoage fn transfer() {
     nft_transfer_asset(
-      account!("alice@wonderland"),
+      account!("ih58..."),
       nft_id!("dragon#demo"),
-      account!("bob@wonderland")
+      account!("ih58...")
     );
   }
 }

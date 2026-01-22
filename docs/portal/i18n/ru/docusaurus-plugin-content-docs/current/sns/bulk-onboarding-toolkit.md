@@ -34,7 +34,7 @@ payloads автоматически, записывая структуриров
 |---------|-------------|----------|
 | `label` | Да | Запрошенная метка (допускается mixed case; инструмент нормализует по Norm v1 и UTS-46). |
 | `suffix_id` | Да | Числовой идентификатор суффикса (десятичный или `0x` hex). |
-| `owner` | Да | Строка AccountId (IH58@domain) владельца регистрации. |
+| `owner` | Да | Строка AccountId (IH58 literal; optional @domain hint) владельца регистрации. |
 | `term_years` | Да | Целое число `1..=255`. |
 | `payment_asset_id` | Да | Актив settlement (например `xor#sora`). |
 | `payment_gross` / `payment_net` | Да | Беззнаковые целые, представляющие единицы актива. |
@@ -75,9 +75,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "alice@wonderland",
+      "owner": "ih58...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"alice@wonderland","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -86,7 +86,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"alice@wonderland",
+        "payer":"ih58...",
         "signature":"alpha-signature"
       },
       "governance": null,

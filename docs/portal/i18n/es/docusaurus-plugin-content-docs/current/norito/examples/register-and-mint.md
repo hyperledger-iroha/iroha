@@ -16,9 +16,9 @@ Demuestra la creación de dominios con permisos, el registro de activos y la acu
 
 ## Recorrido del libro mayor
 
-- Asegúrate de que exista la cuenta de destino (por ejemplo `alice@wonderland`), reflejando la fase de configuración en cada quickstart del SDK.
+- Asegúrate de que exista la cuenta de destino (por ejemplo `ih58...`), reflejando la fase de configuración en cada quickstart del SDK.
 - Invoca el entrypoint `register_and_mint` para crear la definición de activo ROSE y acuñar 250 unidades para Alice en una sola transacción.
-- Verifica los balances mediante `client.request(FindAccountAssets)` o `iroha_cli assets list --account alice@wonderland` para confirmar que la acuñación tuvo éxito.
+- Verifica los balances mediante `client.request(FindAccountAssets)` o `iroha_cli assets list --account ih58...` para confirmar que la acuñación tuvo éxito.
 
 ## Guías de SDK relacionadas
 
@@ -40,7 +40,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
+    let to = account!("ih58...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }

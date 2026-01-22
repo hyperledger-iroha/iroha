@@ -81,7 +81,7 @@ TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 4. اختر نوع المحتوى `application/x-norito` في درج "Try it"، واضغط **Choose File**، وحدد الحمولة الخاصة بك. يعيد الوكيل كتابة الطلب إلى `/proxy/v1/pipeline/submit` ويضع وسم `X-TryIt-Client=docs-portal-rapidoc`.
 5. لتنزيل استجابات Norito اضبط `Accept: application/x-norito`. تعرض Swagger/RapiDoc محدد الرؤوس في الدرج نفسه وتعيد الباينري عبر الوكيل.
 
-بالنسبة للمسارات التي تستخدم JSON فقط، يكون sandbox Try it المضمّن غالبا أسرع: أدخل المسار (على سبيل المثال `/v1/accounts/ih58@wonderland/assets`)، اختر طريقة HTTP، الصق جسم JSON عند الحاجة، واضغط **Send request** لفحص الرؤوس والمدة والحمولات مباشرة.
+بالنسبة للمسارات التي تستخدم JSON فقط، يكون sandbox Try it المضمّن غالبا أسرع: أدخل المسار (على سبيل المثال `/v1/accounts/ih58.../assets`)، اختر طريقة HTTP، الصق جسم JSON عند الحاجة، واضغط **Send request** لفحص الرؤوس والمدة والحمولات مباشرة.
 
 ## استكشاف الأخطاء وإصلاحها
 

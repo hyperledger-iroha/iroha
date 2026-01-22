@@ -35,7 +35,7 @@ The parser requires the following header row (order is flexible):
 |--------|----------|-------------|
 | `label` | Yes | Requested label (mixed case accepted; tool normalises per Norm v1 and UTS-46). |
 | `suffix_id` | Yes | Numeric suffix identifier (decimal or `0x` hex). |
-| `owner` | Yes | AccountId string (IH58@domain) for the registration owner. |
+| `owner` | Yes | AccountId string (IH58 literal; optional @domain hint) for the registration owner. |
 | `term_years` | Yes | Integer `1..=255`. |
 | `payment_asset_id` | Yes | Settlement asset (for example `xor#sora`). |
 | `payment_gross` / `payment_net` | Yes | Unsigned integers representing asset-native units. |
@@ -76,9 +76,9 @@ On success the script writes an aggregated manifest:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "alice@wonderland",
+      "owner": "ih58...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"alice@wonderland","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"ih58...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -87,7 +87,7 @@ On success the script writes an aggregated manifest:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"alice@wonderland",
+        "payer":"ih58...",
         "signature":"alpha-signature"
       },
       "governance": null,

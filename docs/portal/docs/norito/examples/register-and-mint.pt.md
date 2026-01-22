@@ -22,9 +22,9 @@ Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem
 
 ## Roteiro do livro razao
 
-- Garanta que a conta de destino (por exemplo `alice@wonderland`) exista, espelhando a fase de configuracao em cada quickstart do SDK.
+- Garanta que a conta de destino (por exemplo `ih58...`) exista, espelhando a fase de configuracao em cada quickstart do SDK.
 - Invoque o entrypoint `register_and_mint` para criar a definicao do ativo ROSE e cunhar 250 unidades para Alice em uma unica transacao.
-- Verifique os saldos via `client.request(FindAccountAssets)` ou `iroha_cli assets list --account alice@wonderland` para confirmar que a cunhagem foi bem-sucedida.
+- Verifique os saldos via `client.request(FindAccountAssets)` ou `iroha_cli assets list --account ih58...` para confirmar que a cunhagem foi bem-sucedida.
 
 ## Guias de SDK relacionados
 
@@ -46,7 +46,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
+    let to = account!("ih58...");
     let asset = asset_definition!("rose#wonderland");
     mint_asset(to, asset, 250);
   }
