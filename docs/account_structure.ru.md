@@ -567,230 +567,33 @@ the change so the audit trail is reconstructable offline.
 
 #### Alias/tombstone workflow & telemetry
 
-1. **Detect drift.** Use `torii_address_local8_total{endpoint}`,
-   `torii_address_local8_domain_total{endpoint,domain}`,
-   `torii_address_collision_total{endpoint,kind="local12_digest"}`,
-   `torii_address_collision_domain_total{endpoint,domain}`,
-   `torii_address_domain_total{endpoint,domain_kind}`, and
-   `torii_address_invalid_total{endpoint,reason}` (rendered in
-   `dashboards/grafana/address_ingest.json`) to confirm Local submissions and
-   Local-12 collisions stay at zero before proposing a tombstone. The
-   per-domain counters let owners prove that only dev/test domains emit Local‑8
-   traffic (and that Local‑12 collisions map to known staging domains) while
-   includes the **Domain Kind Mix (5m)** panel so SREs can graph how much
-   `domain_kind="local12"` traffic remains, and the `AddressLocal12Traffic`
-   alert fires whenever production still sees Local-12 selectors despite the
-   retirement gate.
-2. **Derive canonical digests.** Run
-   `iroha address convert <address> --format json --expect-prefix 753`
-   (or consume `fixtures/account/address_vectors.json` via
-   `scripts/account_fixture_helper.py`) to capture the exact `digest_hex`.
-   The CLI accepts IH58, `snx1…`, and canonical `0x…` literals; append
-   `@<domain>` only when you need to preserve a label for manifests.
-   The JSON summary surfaces that domain via the `input_domain` field, and
-   `--append-domain` replays the converted encoding as `<address>@<domain>` for
-   manifest diffs (this suffix is metadata, not a canonical account id).
-   For newline-oriented exports use
-   `iroha address normalize --input <file> --only-local` to mass-convert Local
-   selectors into canonical IH58 (preferred), compressed (`snx1`, second-best), hex, or JSON forms while skipping
-   non-local rows. When auditors need spreadsheet-friendly evidence, run
-   `iroha address audit --input <file> --format csv` to emit a CSV summary
-   (`input,status,format,domain_kind,…`) that highlights Local selectors,
-   canonical encodings, and parse failures in the same file.
-3. **Append manifest entries.** Draft the `tombstone` record (and the follow-up
-   `global_domain` record when migrating to the global registry) and validate
-   the manifest with `cargo xtask address-vectors` before requesting signatures.
-4. **Verify & publish.** Follow the runbook checklist (hashes, Sigstore,
-   sequence monotonicity) before mirroring the bundle to SoraFS. Torii now
-   canonicalizes IH58 (preferred)/snx1 (second-best) literals immediately after the bundle lands.
-5. **Monitor & rollback.** Keep the Local‑8 and Local‑12 collision panels at
-   zero for 30 days; if regressions appear, republish the previous manifest
-   only in the affected non-production environment until telemetry stabilises.
-
-All of the steps above are mandatory evidence for ADDR‑7c: manifests without
-the `cosign` signature bundle or without matching `previous_digest` values must
-be rejected automatically, and operators must attach the verification logs to
-their change tickets.
-
-### 5. Wallet & API ergonomics
-
-- **Display defaults:** Wallets show the IH58 address (short, checksummed)
-  plus the resolved domain as a label fetched from the registry. Domains are
-  clearly marked as descriptive metadata that may change, while IH58 is the
-  stable address.
-- **Input canonicalization:** Torii and SDKs accept IH58 (preferred)/snx1 (second-best)/0x
-  addresses plus `alias@domain`, `public_key@domain`, `uaid:…`, and
-  `opaque:…` forms, then canonicalize to IH58 for output. There is no
-  strict-mode toggle; raw phone/email identifiers must be kept off-ledger
-  via UAID/opaque mappings.
-- **Error prevention:** Wallets parse IH58 prefixes and enforce chain-discriminant
-  expectations. Chain mismatches trigger hard failures with actionable diagnostics.
-- **Codec libraries:** Official Rust, TypeScript/JavaScript, Python, and Kotlin
-  libraries provide IH58 encoding/decoding plus compressed (`snx1`) support to
-  avoid fragmented implementations. CAIP-10 conversions are not shipped yet.
-
-#### Accessibility & Safe Sharing Guidance
-
-- Implementation guidance for product surfaces is tracked live in
-  `docs/portal/docs/reference/address-safety.md`; reference that checklist when
-  adapting these requirements to wallet or explorer UX.
-- **Safe sharing flows:** Surfaces that copy or display addresses default to the IH58 form and expose an adjacent “share” action that presents both the full string and a QR code derived from the same payload so users can verify the checksum visually or by scanning. When truncation is unavoidable (e.g., small screens), retain the start and end of the string, add clear ellipses, and keep the full address accessible via copy-to-clipboard to prevent accidental clipping.
-- **IME safeguards:** Address inputs MUST reject composition artefacts from IME/IME-style keyboards. Enforce ASCII-only entry, present an inline warning when full-width or Kana characters are detected, and offer a plain-text paste zone that strips combining marks before validation so Japanese and Chinese users can disable their IME without losing progress.
-- **Screen-reader support:** Provide visually hidden labels (`aria-label`/`aria-describedby`) that describe the leading Base58 prefix digits and chunk the IH58 payload into 4- or 8-character groups, so assistive technology reads grouped characters instead of a run-on string. Announce copy/share success via polite live regions and ensure QR previews include descriptive alt text (“IH58 address for <alias> on chain 0x02F1”).
-- **Sora-only compressed usage:** Always label the `snx1…` compressed view as “Sora-only” and gate it behind an explicit confirmation before copying. SDKs and wallets must refuse to display compressed output when the chain discriminant is not the Sora Nexus value and should direct users back to IH58 for inter-network transfers to avoid misrouting funds.
-
-## Implementation Checklist
-
-- **IH58 envelope:** Prefix encodes the `chain_discriminant` using the compact
-  6-/14-bit scheme from `encode_ih58_prefix()`, the body is the canonical bytes
-  (`AccountAddress::canonical_bytes()`), and the checksum is the first two bytes
-  of Blake2b-512(`b"IH58PRE"` || prefix || body). The full payload is Base58-
-  encoded via `bs58`.
-- **Registry contract:** Signed JSON (and optional Merkle root) publishing
-  `{discriminant, ih58_prefix, chain_alias, endpoints}` with 24h TTL and
-  rotation keys.
-- **Domain policy:** ASCII `Name` today; if enabling i18n, apply UTS-46 for
-  normalization and UTS-39 for confusable checks. Enforce max label (63) and
-  total (255) lengths.
-- **Textual helpers:** Ship IH58 ↔ compressed (`snx1…`) codecs in Rust,
-  TypeScript/JavaScript, Python, and Kotlin with shared test vectors (CAIP-10
-  mappings remain future work).
-- **CLI tooling:** Provide a deterministic operator workflow via `iroha address convert`
-  (see `crates/iroha_cli/src/address.rs`), which accepts IH58/`snx1…`/`0x…` literals and
-  optional `<address>@<domain>` labels, defaults to IH58 output using the Sora Nexus prefix (`753`),
-  and only emits the Sora-only compressed alphabet when operators explicitly request it with
-  `--format compressed` or the JSON summary mode. The command enforces prefix expectations on
-  parse, records the provided domain (`input_domain` in JSON), and the `--append-domain` flag
-  replays the converted encoding as `<address>@<domain>` so manifest diffs remain ergonomic.
-- **Wallet/explorer UX:** Follow the [address display guidelines](source/sns/address_display_guidelines.md)
-  shipped with ADDR-6—offer dual copy buttons, keep IH58 as the QR payload, and warn
-  users that the compressed `snx1…` form is Sora-only and susceptible to IME rewrites.
-- **Torii integration:** Cache Nexus manifests respecting TTL, emit
-  `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministically, and
-  expose `POST /v1/accounts/resolve` to canonicalize `alias@domain`,
-  `public_key@domain`, `uaid:`/`opaque:` literals, or encoded addresses into
-  IH58 while returning the resolved domain and source.
-
-### Torii response formats
-
-- `GET /v1/accounts` accepts an optional `address_format` query parameter and
-  `POST /v1/accounts/query` accepts the same field inside the JSON envelope.
-  Supported values are:
-  - `ih58` (default) — responses emit canonical IH58 Base58 payloads (e.g.,
-    `RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS`).
-  - `compressed` — responses emit the Sora-only `snx1…` compressed view while
-    keeping filters/path parameters canonical.
-- Invalid values return `400` (`QueryExecutionFail::Conversion`). This allows
-  wallets and explorers to request compressed strings for Sora-only UX while
-  keeping IH58 as the interoperable default.
-- Asset holder listings (`GET /v1/assets/{definition_id}/holders`) and their JSON
-  envelope counterpart (`POST …/holders/query`) also honour `address_format`.
-  The `items[*].account_id` field emits compressed literals whenever the
-  parameter/envelope field is set to `compressed`, mirroring the accounts
-  endpoints so explorers can present consistent output across directories.
-- **Testing:** Add unit tests for encoder/decoder round-trips, wrong-chain
-  failures, and manifest lookups; add integration coverage in Torii and SDKs
-  for IH58 flows end to end.
-
-## Error Code Registry
-
-Address encoders and decoders expose failures through
-`AccountAddressError::code_str()`. The following tables provide the stable codes
-that SDKs, wallets, and Torii surfaces should surface alongside human-readable
-messages, plus recommended remediation guidance.
-
-### Canonical Construction
-
-| Code | Failure | Recommended Remediation |
-|------|---------|-------------------------|
-| `ERR_UNSUPPORTED_ALGORITHM` | Encoder received a signing algorithm not supported by the registry or build features. | Restrict account construction to curves enabled in the registry and configuration. |
-| `ERR_KEY_PAYLOAD_TOO_LONG` | Signing key payload length exceeds the supported limit. | Single-key controllers are limited to `u8` lengths; use multisig for large public keys (e.g., ML‑DSA). |
-| `ERR_INVALID_HEADER_VERSION` | Address header version is outside the supported range. | Emit header version `0` for V1 addresses; upgrade encoders before adopting new versions. |
-| `ERR_INVALID_NORM_VERSION` | Normalisation version flag is not recognised. | Use normalisation version `1` and avoid toggling reserved bits. |
-| `ERR_INVALID_IH58_PREFIX` | Requested IH58 network prefix cannot be encoded. | Pick a prefix within the inclusive `0..=16383` range published in the chain registry. |
-| `ERR_CANONICAL_HASH_FAILURE` | Canonical payload hashing failed. | Retry the operation; if the error persists, treat it as an internal bug in the hashing stack. |
-
-### Format Decoding and Auto Detection
-
-| Code | Failure | Recommended Remediation |
-|------|---------|-------------------------|
-| `ERR_INVALID_IH58_ENCODING` | IH58 string contains characters outside the alphabet. | Ensure the address uses the published IH58 alphabet and has not been truncated during copy/paste. |
-| `ERR_INVALID_LENGTH` | Payload length does not match the expected canonical size for the selector/controller. | Supply the full canonical payload for the selected domain selector and controller layout. |
-| `ERR_CHECKSUM_MISMATCH` | IH58 (preferred) or compressed (`snx1`, second-best) checksum validation failed. | Regenerate the address from a trusted source; this typically indicates a copy/paste error. |
-| `ERR_INVALID_IH58_PREFIX_ENCODING` | IH58 prefix bytes are malformed. | Re-encode the address with a compliant encoder; do not alter the leading Base58 bytes manually. |
-| `ERR_INVALID_HEX_ADDRESS` | Canonical hexadecimal form failed to decode. | Provide a `0x`-prefixed, even-length hex string produced by the official encoder. |
-| `ERR_MISSING_COMPRESSED_SENTINEL` | Compressed form does not start with `snx1`. | Prefix compressed Sora addresses with the required sentinel before handing them to decoders. |
-| `ERR_COMPRESSED_TOO_SHORT` | Compressed string lacks sufficient digits for payload and checksum. | Use the full compressed string emitted by the encoder instead of truncated snippets. |
-| `ERR_INVALID_COMPRESSED_CHAR` | Character outside the compressed alphabet encountered. | Replace the character with a valid Base‑105 glyph from the published half-width/full-width tables. |
-| `ERR_INVALID_COMPRESSED_BASE` | Encoder attempted to use an unsupported radix. | File a bug against the encoder; the compressed alphabet is fixed to radix 105 in V1. |
-| `ERR_INVALID_COMPRESSED_DIGIT` | Digit value exceeds the compressed alphabet size. | Ensure each digit is within `0..105)`, regenerating the address if necessary. |
-| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | Auto-detection could not recognise the input format. | Provide IH58 (preferred), compressed (`snx1`), or canonical `0x` hex strings when invoking parsers. |
-
-### Domain and Network Validation
-
-| Code | Failure | Recommended Remediation |
-|------|---------|-------------------------|
-| `ERR_DOMAIN_MISMATCH` | Domain selector does not match the expected domain. | Use an address issued for the intended domain or update the expectation. |
-| `ERR_INVALID_DOMAIN_LABEL` | Domain label failed normalisation checks. | Canonicalise the domain using UTS-46 non-transitional processing before encoding. |
-| `ERR_UNEXPECTED_NETWORK_PREFIX` | Decoded IH58 network prefix differs from the configured value. | Switch to an address from the target chain or adjust the expected discriminant/prefix. |
-| `ERR_UNKNOWN_ADDRESS_CLASS` | Address class bits are not recognised. | Upgrade the decoder to a release that understands the new class, or avoid tampering with the header bits. |
-| `ERR_UNKNOWN_DOMAIN_TAG` | Domain selector tag is unknown. | Update to a release that supports the new selector type, or avoid using experimental payloads on V1 nodes. |
-| `ERR_UNEXPECTED_EXTENSION_FLAG` | Reserved extension bit was set. | Clear reserved bits; they remain gated until a future ABI introduces them. |
-| `ERR_UNKNOWN_CONTROLLER_TAG` | Controller payload tag not recognised. | Upgrade the decoder to recognise new controller types before parsing them. |
-| `ERR_UNEXPECTED_TRAILING_BYTES` | Canonical payload contained trailing bytes after decoding. | Regenerate the canonical payload; only the documented length should be present. |
-
-### Controller Payload Validation
-
-| Code | Failure | Recommended Remediation |
-|------|---------|-------------------------|
-| `ERR_INVALID_PUBLIC_KEY` | Key bytes do not match the declared curve. | Ensure the key bytes are encoded exactly as required for the selected curve (e.g., 32-byte Ed25519). |
-| `ERR_UNKNOWN_CURVE` | Curve identifier is not registered. | Use curve ID `1` (Ed25519) until additional curves are approved and published in the registry. |
-| `ERR_MULTISIG_MEMBER_OVERFLOW` | Multisig controller declares more members than supported. | Reduce the multisig membership to the documented limit before encoding. |
-| `ERR_INVALID_MULTISIG_POLICY` | Multisig policy payload failed validation (threshold/weights/schema). | Rebuild the policy so that it satisfies the CTAP2 schema, weight bounds, and threshold constraints. |
-
-## Alternatives Considered
-
-- **Pure Base58Check (Bitcoin-style).** Simpler checksum but weaker error detection
-  than the Blake2b-derived IH58 checksum (`encode_ih58` truncates a 512-bit hash)
-  and lacks explicit prefix semantics for 16-bit discriminants.
-- **Embedding chain name in the domain string (e.g., `finance@chain`).** Breaks
-- **Rely solely on Nexus routing without changing addresses.** Users would still
-  copy/paste ambiguous strings; we want the address itself to carry context.
-- **Bech32m envelope.** QR-friendly and offers a human-readable prefix, but
-  would diverge from the shipping IH58 implementation (`AccountAddress::to_ih58`)
-  and require recreating all fixtures/SDKs. The current roadmap keeps IH58 +
-  compressed (`snx1`) support while continuing research into future
-  Bech32m/QR layers (CAIP-10 mapping is deferred).
-
-## Open Questions
-
-- Confirm that `u16` discriminants plus reserved ranges cover long-term demand;
-  otherwise evaluate `u32` with varint encoding.
-- Finalize the multi-signature governance process for registry updates and how
-  revocations/expired allocations are handled.
-- Define the exact manifest signature scheme (e.g., Ed25519 multi-sig) and
-  transport security (HTTPS pinning, IPFS hash format) for Nexus distribution.
-- Determine whether to support domain aliases/redirects for migrations and how
-  to surface them without breaking determinism.
-- Specify how Kotodama/IVM contracts access IH58 helpers (`to_address()`,
-  `parse_address()`) and whether on-chain storage should ever expose CAIP-10
-  mappings (today IH58 is canonical).
-- Explore registering Iroha chains in external registries (e.g., IH58 registry,
-  CAIP namespace directory) for broader ecosystem alignment.
-
-## Next Steps
-
-1. IH58 encoding landed in `iroha_data_model` (`AccountAddress::to_ih58`,
-   `parse_any`); continue porting fixtures/tests to every SDK and purge any
-   Bech32m placeholders.
-2. Extend configuration schema with `chain_discriminant` and derive sensible
-  defaults for existing test/dev setups. **(Done: `common.chain_discriminant`
-  now ships in `iroha_config`, defaulting to `0x02F1` with per-network
-  overrides.)**
-3. Draft the Nexus registry schema and proof-of-concept manifest publisher.
-4. Collect feedback from wallet providers and custodians on human-factor aspects
-   (HRP naming, display formatting).
-5. Update documentation (`docs/source/data_model.md`, Torii API docs) once the
-   implementation path is committed.
-6. Ship official codec libraries (Rust/TS/Python/Kotlin) with normative test
-   vectors covering success and failure cases.
+1. **Обнаружить дрейф.** Используйте
+   `torii_address_local8_total{endpoint}` и
+   `torii_address_invalid_total{endpoint,reason}`
+   (панели в `dashboards/grafana/address_ingest.json`), чтобы убедиться, что
+   Local‑8‑строки больше не принимаются в продакшене перед тем, как
+   предлагать tombstone.
+2. **Вывести канонические digest’ы.** Запустите
+   `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
+   (или используйте `fixtures/account/address_vectors.json` через
+   `scripts/account_fixture_helper.py`), чтобы получить точное значение
+   `digest_hex`. CLI принимает ввод вида `snx1...@wonderland`; JSON‑сводка
+   содержит домен в поле `input_domain`, а флаг `--append-domain` формирует
+   `<ih58>@wonderland` для обновления manifest’а. Для построчных экспортов
+   используйте
+   чтобы массово перевести Local‑селекторы в каноническую IH58‑форму (или
+   compressed/hex/JSON), пропуская нелокальные строки. Для доказательной
+   выгрузки под таблицы пригодится
+   формирующая CSV (`input,status,format,domain_kind,…`) с пометкой
+   Local‑селекторов, канонических кодировок и ошибок парсинга.
+3. **Добавить записи в manifest.** Подготовьте запись `tombstone` (и
+   последующую `global_domain` при миграции в глобальный реестр) и
+   провалидируйте manifest с помощью
+   `cargo xtask address-manifest verify` до запроса подписей.
+4. **Проверить и опубликовать.** Следуйте чек‑листу из runbook’а (hash’и,
+   Sigstore, монотонность `sequence`) до зеркалирования bundle на SoraFS.
+   что продакшен‑кластеры сразу начинают требовать канонические IH58/
+   compressed‑литералы после публикации bundle.
+5. **Мониторить и при необходимости откатить.** Держите панели Local‑8 на
+   нуле 30 дней; при регрессиях переиздайте предыдущий manifest‑bundle и,
+   только в непроизводственных окружениях, временно выставьте

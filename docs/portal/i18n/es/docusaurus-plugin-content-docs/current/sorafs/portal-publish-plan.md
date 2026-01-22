@@ -70,7 +70,7 @@ Configura `${SUBMITTED_EPOCH}` con la epoca mas reciente de consenso (desde
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
 TORII_URL="https://torii.stg.sora.net/"
-AUTHORITY="docs-admin@sora"
+AUTHORITY="ih58..."
 KEY_FILE="secrets/docs-admin.key"
 ALIAS_PROOF="secrets/docs.alias.proof"
 SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v1/status | jq '.sumeragi.epoch')"
@@ -92,10 +92,10 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 
 - Repite para `openapi.manifest.to` y los manifests de SBOM (omite flags de alias para bundles SBOM
   salvo que gobernanza asigne un namespace).
-- Alternativa: `iroha sorafs pin register` funciona con el digest del resumen de submit si el
+- Alternativa: `iroha app sorafs pin register` funciona con el digest del resumen de submit si el
   binario ya esta instalado.
 - Verifica el estado del registry con
-  `iroha sorafs pin list --alias docs:portal --format json | jq`.
+  `iroha app sorafs pin list --alias docs:portal --format json | jq`.
 - Dashboards a seguir: `sorafs_pin_registry.json` (metricas `torii_sorafs_replication_*`).
 
 ## 3. Headers y proofs de gateway
@@ -103,7 +103,7 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 Genera el bloque de headers HTTP + metadata de binding:
 
 ```bash
-iroha sorafs gateway route-plan \
+iroha app sorafs gateway route-plan \
   --manifest-json "${OUT}/portal.manifest.json" \
   --hostname docs.sora \
   --alias docs:portal \

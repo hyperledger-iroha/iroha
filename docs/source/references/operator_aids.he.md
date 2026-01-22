@@ -45,7 +45,7 @@ translator: manual
   - מוני שידור אמין במצטבר: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
 - `GET /v1/sumeragi/rbc/sessions`
   - צילום מצב לפי סשן (hash בלוק, גובה/תצוגה, מספר והתקדמות chunks, דגלי `ready`, `delivered`, `invalid`, hash מטען, שדה `recovered`) כדי לזהות עיכובים או שחזור לאחר אתחול.
-  - קיצור CLI: ‏`iroha sumeragi rbc sessions --summary` מדפיס `hash`, ‏`height/view`, התקדמות chunks, מוני ready ודגלי invalid/delivered.
+  - קיצור CLI: ‏`iroha --output-format text ops sumeragi rbc sessions` מדפיס `hash`, ‏`height/view`, התקדמות chunks, מוני ready ודגלי invalid/delivered.
 
 ## ראיות (ביקורת; מחוץ לקונצנזוס)
 
@@ -57,9 +57,9 @@ translator: manual
     - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`
 - `POST /v1/sumeragi/evidence` → ‏`{ "status": "accepted", "kind": "<variant>" }`
   - מסייעי CLI:
-    - `iroha sumeragi evidence list --summary`
-    - `iroha sumeragi evidence count --summary`
-    - `iroha sumeragi evidence submit --evidence-hex <hex>` (או `--evidence-hex-file <path>`)
+    - `iroha --output-format text ops sumeragi evidence list`
+    - `iroha --output-format text ops sumeragi evidence count`
+    - `iroha ops sumeragi evidence submit --evidence-hex <hex>` (או `--evidence-hex-file <path>`)
 
 ## אימות מפעיל (WebAuthn/mTLS)
 

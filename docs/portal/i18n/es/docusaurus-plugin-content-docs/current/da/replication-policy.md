@@ -150,7 +150,7 @@ fuera de cumplimiento de forma automatica.
    nueva `ReplicationOrderV1` via las herramientas de gobernanza descritas en
    [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md)
    y vuelva a ejecutar la auditoria hasta que el set de replicas converja. Para
-   overrides de emergencia, empareje la salida de la CLI con `iroha da prove-availability`
+   overrides de emergencia, empareje la salida de la CLI con `iroha app da prove-availability`
    para que SREs puedan referenciar el mismo digest y evidencia PDP.
 
 La cobertura de regresion vive en

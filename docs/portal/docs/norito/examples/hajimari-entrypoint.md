@@ -13,7 +13,7 @@ Minimal Kotodama contract scaffold with a single public entrypoint and state han
 
 - Compile the contract with `koto_compile --abi 1` as shown in [Norito Getting Started](/norito/getting-started#1-compile-a-kotodama-contract) or via `cargo test -p ivm developer_portal_norito_snippets_compile`.
 - Smoke-test the bytecode locally with `ivm_run` / `developer_portal_norito_snippets_run` to verify the `info!` log and initial syscall before touching a node.
-- Deploy the artifact through `iroha_cli contracts deploy` and confirm the manifest using the steps in [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha_cli).
+- Deploy the artifact through `iroha_cli app contracts deploy` and confirm the manifest using the steps in [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha_cli).
 
 ## Related SDK guides
 

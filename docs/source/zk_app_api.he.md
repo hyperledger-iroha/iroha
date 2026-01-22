@@ -64,7 +64,7 @@ translator: manual
 
 ## CLI
 
-`iroha zk` מספק עטיפות.
+`iroha app zk` מספק עטיפות.
 - קבצים: `attach`, ‏`list-attachments`, ‏`download-attachment`, ‏`delete-attachment`.
 - דוחות: `list-reports`, ‏`delete-reports`.
 - פרובר: `prover start/stop/status`.
@@ -107,7 +107,7 @@ translator: manual
 ```
 
 כאשר `ids_only=true` נקבל רק `{ "backend": "...", "name": "..." }`.
-CLI: `iroha zk vk register/update/deprecate/get`.
+CLI: `iroha app zk vk register/update/deprecate/get`.
 
 הערות:
 - Commits הם hash מופרד (backend||bytes). נבדקים בעת שליחה.

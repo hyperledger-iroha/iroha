@@ -17,8 +17,8 @@ and the data-model definitions in `crates/iroha_data_model/src/taikai.rs`.
 2. Seal each CMAF fragment into a CARv2 archive plus `TaikaiSegmentEnvelopeV1`
    so gateways, SDKs, and DA tooling can prove availability without reprocessing
    video assets.
-3. Provide CLI/SDK helpers (`iroha taikai bundle`, `sorafs_cli taikai bundle`,
-   `iroha taikai ingest --watch`)
+3. Provide CLI/SDK helpers (`iroha app taikai bundle`, `sorafs_cli taikai bundle`,
+   `iroha app taikai ingest --watch`)
    that automate drift correction, metadata emission, and Norito encoding.
 4. Expose ingest/encoder telemetry (latency, live-edge drift, rebuffer
    forecasts) via the `taikai_viewer`/`taikai_cache` Grafana bundles and alert
@@ -56,8 +56,8 @@ Each stage emits deterministic manifests:
   verifying replication policy tags (`da.taikai.live`, `da.taikai.archive`) per
   `docs/source/da/replication_policy.md`.
 - **Bundler.** Uses `sorafs_car::taikai::bundle_segment` (invoked via
-  `iroha taikai bundle`) to produce CARv2 archives, envelope `.to` files, and
-  index manifests. The CLI now ships `iroha taikai ingest --watch`, which watches
+  `iroha app taikai bundle`) to produce CARv2 archives, envelope `.to` files, and
+  index manifests. The CLI now ships `iroha app taikai ingest --watch`, which watches
   CMAF fragment directories, derives manifest/storage-ticket digests, emits
   ladder metadata (backed by `fixtures/taikai/ladder_presets.json`), writes
   artifacts under `artifacts/taikai/ingest_run_<timestamp>/`, and generates
@@ -96,7 +96,7 @@ Each stage emits deterministic manifests:
 
 ### 3.4 CAR/TSE Bundler
 
-- CLI: `iroha taikai bundle` / `sorafs_cli taikai bundle` (already available).
+- CLI: `iroha app taikai bundle` / `sorafs_cli taikai bundle` (already available).
 - Outputs:
   - `.car` archive (CARv2) with deterministic ordering.
   - `.to` Norito envelope referencing CAR digest and storage ticket.
@@ -124,9 +124,9 @@ Each stage emits deterministic manifests:
 
 | Tool | Purpose | Notes |
 |------|---------|-------|
-| `iroha taikai bundle` / `sorafs_cli taikai bundle` | Offline bundling of CMAF fragments into CAR + TSE. | Available today; referenced by `docs/source/taikai_segment_envelope.md`. |
-| `iroha taikai ingest edge --payload fixtures/taikai/segments/ingest_edge_sample.m4s` | Prototype SRT/RTMP receiver that emits CMAF fragments, drift samples, and an NDJSON log so the watcher path can be rehearsed deterministically. | Writes fragments to `artifacts/taikai/ingest_edge_run_<stamp>/fragments/` plus `logs/ingest_edge.ndjson` and `logs/drift_monitor.json`; pass `--segments`, `--segment-interval-ms`, and `--drift-*` to shape the run. |
-| `iroha taikai ingest --watch <dir>` | Watches a fragment directory, derives manifest/storage-ticket digests, emits `/v1/da/ingest` metadata, and invokes the bundler per segment. | Emits CAR archives, envelopes, indexes, ingest metadata, and Norito DA requests under `artifacts/taikai/ingest_run_<timestamp>/`. The new `--publish-da` flag streams those requests directly to Torii (`/v1/da/ingest`) using the CLI config, while `--da-*` knobs expose lane/codec/retention overrides. Pass `--summary-out ingest_summary.ndjson` to capture a replayable NDJSON log (payload path, CAR/envelope outputs, manifest/storage-ticket digests, DA request receipts) so regulators and operators can regenerate bundles from the recorded evidence. |
+| `iroha app taikai bundle` / `sorafs_cli taikai bundle` | Offline bundling of CMAF fragments into CAR + TSE. | Available today; referenced by `docs/source/taikai_segment_envelope.md`. |
+| `iroha app taikai ingest edge --payload fixtures/taikai/segments/ingest_edge_sample.m4s` | Prototype SRT/RTMP receiver that emits CMAF fragments, drift samples, and an NDJSON log so the watcher path can be rehearsed deterministically. | Writes fragments to `artifacts/taikai/ingest_edge_run_<stamp>/fragments/` plus `logs/ingest_edge.ndjson` and `logs/drift_monitor.json`; pass `--segments`, `--segment-interval-ms`, and `--drift-*` to shape the run. |
+| `iroha app taikai ingest --watch <dir>` | Watches a fragment directory, derives manifest/storage-ticket digests, emits `/v1/da/ingest` metadata, and invokes the bundler per segment. | Emits CAR archives, envelopes, indexes, ingest metadata, and Norito DA requests under `artifacts/taikai/ingest_run_<timestamp>/`. The new `--publish-da` flag streams those requests directly to Torii (`/v1/da/ingest`) using the CLI config, while `--da-*` knobs expose lane/codec/retention overrides. Pass `--summary-out ingest_summary.ndjson` to capture a replayable NDJSON log (payload path, CAR/envelope outputs, manifest/storage-ticket digests, DA request receipts) so regulators and operators can regenerate bundles from the recorded evidence. |
 | `scripts/taikai_ingest_smoke.sh` | Smoke harness that replays `fixtures/taikai/segments/*.json` via `taikai_car`, validates CAR/index/ingest outputs, and fails fast on digest or metadata drift. | Emits artefacts under `artifacts/taikai/ingest_smoke/<label>` with CLI stdout, CAR, Norito, index, and ingest-metadata snapshots for evidence bundles. |
 | `integration_tests/tests/taikai_da.rs` | End-to-end ingest + DA fetch/regeneration tests. | Ensures manifest commitments match envelopes and caches. |
 
@@ -189,7 +189,7 @@ the resulting directory as an artefact.
 
 ## 8. Completion Notes
 
-- `iroha taikai ingest edge` now seeds CMAF fragments and drift samples from a
+- `iroha app taikai ingest edge` now seeds CMAF fragments and drift samples from a
   single payload (see `fixtures/taikai/segments/ingest_edge_sample.m4s`), writing
   evidence under `artifacts/taikai/ingest_edge_run_<stamp>/` so the watcher path
   can be rehearsed without live SRT/RTMP traffic.

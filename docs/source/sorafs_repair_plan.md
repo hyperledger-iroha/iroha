@@ -22,7 +22,7 @@ This document completes roadmap item **SF-8b — Repair automation & auditor API
 | Proof Verifier | Validates PoR/PoTR evidence before enqueuing tasks or slashing proposals. | Reuses `sorafs_manifest::proof_stream` helpers and PoR coordinator fixtures. |
 | SLA & Telemetry | Metrics, logs, and alerts for backlog, latency, and outcomes. | Instrumented via `iroha_telemetry`, exported to OTLP + Prometheus. |
 | Persistence | Durable recording of tasks, events, and outcomes. | Norito snapshot (`repair_state.to`) in `sorafs.repair.state_dir`; Governance DAG receives summaries. |
-| CLI Tooling | Operator-facing commands for queue inspection, manual escalation, and GC inspection/dry-run. | `iroha sorafs repair *` and `iroha sorafs gc *` commands with JSON output + Norito envelopes. |
+| CLI Tooling | Operator-facing commands for queue inspection, manual escalation, and GC inspection/dry-run. | `iroha app sorafs repair *` and `iroha app sorafs gc *` commands with JSON output + Norito envelopes. |
 
 ## Norito Data Model
 All payloads are Norito-native. The scheduler and Torii share the structures implemented in `sorafs_manifest::repair`:
@@ -259,14 +259,14 @@ The escalation policy is sourced from `governance.sorafs_repair_escalation` in `
 - Retention is enforced by capping `RepairTaskEventV1` history per ticket; governance audit events remain append-only in the DAG for immutable history.
 
 ## CLI & Torii Integration
-- `iroha sorafs repair list --manifest-digest <hex>`: shows tasks, statuses, and deadlines.
-- `iroha sorafs repair claim --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a worker claim.
-- `iroha sorafs repair complete --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a completion update.
-- `iroha sorafs repair fail --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a failure update.
-- `iroha sorafs repair escalate --ticket-id <id> --manifest-digest <hex> --provider-id <hex> --penalty-nano <n> --rationale <text>`: submits a slash proposal for governance review (approval summary optional).
-- `iroha sorafs repair escalate ... --approve-votes <n> --approved-at <ts> --finalized-at <ts> [--reject-votes <n>] [--abstain-votes <n>]`: attaches a governance approval summary when a decision is already recorded.
-- `iroha sorafs gc inspect`: reports retained manifests and retention deadlines (read-only).
-- `iroha sorafs gc dry-run`: reports only expired manifests that GC would evict (read-only).
+- `iroha app sorafs repair list --manifest-digest <hex>`: shows tasks, statuses, and deadlines.
+- `iroha app sorafs repair claim --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a worker claim.
+- `iroha app sorafs repair complete --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a completion update.
+- `iroha app sorafs repair fail --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a failure update.
+- `iroha app sorafs repair escalate --ticket-id <id> --manifest-digest <hex> --provider-id <hex> --penalty-nano <n> --rationale <text>`: submits a slash proposal for governance review (approval summary optional).
+- `iroha app sorafs repair escalate ... --approve-votes <n> --approved-at <ts> --finalized-at <ts> [--reject-votes <n>] [--abstain-votes <n>]`: attaches a governance approval summary when a decision is already recorded.
+- `iroha app sorafs gc inspect`: reports retained manifests and retention deadlines (read-only).
+- `iroha app sorafs gc dry-run`: reports only expired manifests that GC would evict (read-only).
 - CLI commands return JSON payloads from Torii (Norito-encoded values rendered as JSON).
 - Repair status listings include ordered `RepairTaskEventV1` logs for auditability, capped to the most recent transitions to bound payload size.
 - Torii exposes WebSocket stream `wss://.../sorafs/repair/events` broadcasting `RepairTaskEventV1` for dashboards and integrations.

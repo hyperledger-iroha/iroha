@@ -185,7 +185,7 @@ hashing, chunking, and verifying optional manifests.
 
 ## CLI & SDK Tooling (DA-8)
 
-- `iroha da submit` (new CLI entrypoint) now wraps the shared ingest builder/publisher so operators
+- `iroha app da submit` (new CLI entrypoint) now wraps the shared ingest builder/publisher so operators
   can ingest arbitrary blobs outside of the Taikai bundle flow. The command lives in
   `crates/iroha_cli/src/commands/da.rs:1` and consumes a payload, erasure/retention profile, and
   optional metadata/manifest files before signing the canonical `DaIngestRequest` with the CLI
@@ -197,8 +197,8 @@ hashing, chunking, and verifying optional manifests.
   (`--manifest`), and supports `--no-submit` for offline preparation plus `--endpoint` for custom
   Torii hosts. Receipt JSON is printed to stdout in addition to being written to disk, closing the
   DA-8 “submit_blob” tooling requirement and unblocking SDK parity work.
-- `iroha da get` adds a DA-focused alias for the multi-source orchestrator that already powers
-  `iroha sorafs fetch`. Operators can point it at manifest + chunk-plan artefacts (`--manifest`,
+- `iroha app da get` adds a DA-focused alias for the multi-source orchestrator that already powers
+  `iroha app sorafs fetch`. Operators can point it at manifest + chunk-plan artefacts (`--manifest`,
   `--plan`, `--manifest-id`) **or** pass a Torii storage ticket via `--storage-ticket`. When the ticket
   path is used the CLI pulls the manifest from `/v1/da/manifests/<ticket>`, persists the bundle under
   `artifacts/da/fetch_<timestamp>/` (override with `--manifest-cache-dir`), derives the blob hash for
@@ -207,10 +207,10 @@ hashing, chunking, and verifying optional manifests.
   anonymity transport overrides, scoreboard export, and `--output` paths), and the manifest endpoint can
   be overridden via `--manifest-endpoint` for custom Torii hosts, so end-to-end availability checks live
   entirely under the `da` namespace without duplicating orchestrator logic.
-- `iroha da get-blob` pulls canonical manifests straight from Torii via `GET /v1/da/manifests/{storage_ticket}`.
+- `iroha app da get-blob` pulls canonical manifests straight from Torii via `GET /v1/da/manifests/{storage_ticket}`.
   The command writes `manifest_{ticket}.norito`, `manifest_{ticket}.json`, and `chunk_plan_{ticket}.json`
   under `artifacts/da/fetch_<timestamp>/` (or a user-supplied `--output-dir`) while echoing the exact
-  `iroha da get` invocation (including `--manifest-id`) required for the follow-up orchestrator fetch.
+  `iroha app da get` invocation (including `--manifest-id`) required for the follow-up orchestrator fetch.
   This keeps operators out of the manifest spool directories and guarantees the fetcher always uses the
   signed artefacts emitted by Torii. The JavaScript Torii client mirrors this flow via
   `ToriiClient.getDaManifest(storageTicketHex)`, returning the decoded Norito bytes, manifest JSON,
@@ -219,7 +219,7 @@ hashing, chunking, and verifying optional manifests.
   `fetchDaPayloadViaGateway(...)`), piping bundles into the native SoraFS orchestrator wrapper so
   iOS clients can download manifests, execute multi-source fetches, and capture proofs without
   invoking the CLI.【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240】【IrohaSwift/Sources/IrohaSwift/SorafsOrchestratorClient.swift:12】
-- `iroha da rent-quote` computes deterministic rent and incentive breakdowns for a supplied storage size
+- `iroha app da rent-quote` computes deterministic rent and incentive breakdowns for a supplied storage size
   and retention window. The helper consumes either the active `DaRentPolicyV1` (JSON or Norito bytes) or
   the built-in default, validates the policy, and prints a JSON summary (`gib`, `months`, policy metadata,
   and the `DaRentQuote` fields) so auditors can cite exact XOR charges inside governance minutes without
@@ -229,11 +229,11 @@ hashing, chunking, and verifying optional manifests.
   or config bundle; the CLI trims the custom label and refuses blank strings so `policy_source` values
   remain actionable across treasury dashboards. See `crates/iroha_cli/src/commands/da.rs` for the subcommand
   and `docs/source/da/rent_policy.md` for the policy schema.【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- `iroha da prove-availability` chains all of the above: it takes a storage ticket, downloads the
-  canonical manifest bundle, runs the multi-source orchestrator (`iroha sorafs fetch`) against the
+- `iroha app da prove-availability` chains all of the above: it takes a storage ticket, downloads the
+  canonical manifest bundle, runs the multi-source orchestrator (`iroha app sorafs fetch`) against the
   supplied `--gateway-provider` list, persists the downloaded payload + scoreboard under
   `artifacts/da/prove_availability_<timestamp>/`, and immediately invokes the existing PoR helper
-  (`iroha da prove`) using the fetched bytes. Operators can tweak the orchestrator knobs
+  (`iroha app da prove`) using the fetched bytes. Operators can tweak the orchestrator knobs
   (`--max-peers`, `--scoreboard-out`, manifest endpoint overrides) and the proof sampler
   (`--sample-count`, `--leaf-index`, `--sample-seed`) while a single command produces the artefacts
   expected by DA-5/DA-9 audits: payload copy, scoreboard evidence, and JSON proof summaries.

@@ -73,7 +73,7 @@ CLI وSDKs والأتمتة حتى تتبع كل عقدة سياسة جلب حت
 ## مرجع أعلام CLI وSDK
 
 `sorafs_cli fetch` (راجع `crates/sorafs_car/src/bin/sorafs_cli.rs`) وواجهة
-`iroha_cli sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) تشترك في
+`iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) تشترك في
 سطح إعداد المُنسِّق نفسه. استخدم الأعلام التالية عند التقاط أدلة الإطلاق أو
 إعادة تشغيل الـ fixtures القياسية:
 

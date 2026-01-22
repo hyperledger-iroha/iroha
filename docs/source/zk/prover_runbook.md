@@ -10,7 +10,7 @@ profile that exposes Prometheus metrics (`telemetry_profile = "extended"` or
 - **Attachment API** – `POST /v1/zk/attachments` stores opaque payloads (proofs,
   transcripts). Stored entries are scanned by the background prover when
   enabled. Operators can list, download, and delete attachments through the API
-  or `iroha_cli zk attachments *`.
+  or `iroha_cli app zk attachments *`.
 - **Background prover** – Controlled by
   `torii.zk_prover_enabled=true`. The worker drains the attachment queue,
   verifies `ProofAttachment` payloads, and produces JSON reports
@@ -115,7 +115,7 @@ source UID if necessary.
 
 ## Integration with CLI & SDKs
 
-- `iroha_cli zk attachments` mirrors the Torii endpoints; ensure the CLI is built
+- `iroha_cli app zk attachments` mirrors the Torii endpoints; ensure the CLI is built
   from the same commit as the node to keep DTOs in sync.
 - Swift and Python SDK helpers under `ToriiClient` provide `upload_attachment`,
   `list_attachments`, `get_attachment`, and `delete_attachment` wrappers. Use the

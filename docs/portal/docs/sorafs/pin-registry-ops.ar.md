@@ -127,10 +127,10 @@ groups:
    - اذا زادت اخفاقات SLA بينما بقي التراكم منخفضا، ركز على اداء providers (فشل PoR، الاكتمال المتاخر).
    - اذا زاد التراكم مع اخفاقات مستقرة، افحص القبول (`/v1/sorafs/pin/*`) لتاكيد manifests التي تنتظر موافقة المجلس.
 2. **التحقق من حالة providers**
-   - شغّل `iroha sorafs providers list` وتاكد ان القدرات المعلن عنها تطابق متطلبات التكرار.
+   - شغّل `iroha app sorafs providers list` وتاكد ان القدرات المعلن عنها تطابق متطلبات التكرار.
    - راجع gauges `torii_sorafs_capacity_*` لتاكيد GiB المجهزة ونجاح PoR.
 3. **اعادة اسناد التكرار**
-   - اصدر اوامر جديدة عبر `sorafs_manifest_stub capacity replication-order` عندما ينخفض هامش التراكم (`stat="avg"`) عن 5 ايبوكات (تغليف manifest/CAR يستخدم `iroha sorafs toolkit pack`).
+   - اصدر اوامر جديدة عبر `sorafs_manifest_stub capacity replication-order` عندما ينخفض هامش التراكم (`stat="avg"`) عن 5 ايبوكات (تغليف manifest/CAR يستخدم `iroha app sorafs toolkit pack`).
    - اخطر الحوكمة اذا كانت aliases تفتقر لربط manifest نشط (انخفاض غير متوقع في `torii_sorafs_registry_aliases_total`).
 4. **توثيق النتيجة**
    - سجل ملاحظات الحادث في سجل عمليات SoraFS مع الطوابع الزمنية وdigests المتاثرة.

@@ -5,7 +5,7 @@ use std::fs;
 use eyre::{Result, eyre};
 use norito::json::Value;
 
-use crate::RunContext;
+use crate::{CliOutputFormat, RunContext};
 
 use super::commands::{EvidenceCountArgs, EvidenceKindArg, EvidenceListArgs, EvidenceSubmitArgs};
 
@@ -18,7 +18,7 @@ pub(crate) fn list<C: RunContext>(context: &mut C, args: EvidenceListArgs) -> Re
         kind,
     };
     let value = client.get_sumeragi_evidence_list_json(&filter)?;
-    if args.summary || args.summary_only {
+    if matches!(context.output_format(), CliOutputFormat::Text) {
         let total = value
             .get("total")
             .and_then(Value::as_u64)
@@ -29,24 +29,22 @@ pub(crate) fn list<C: RunContext>(context: &mut C, args: EvidenceListArgs) -> Re
                 context.println(format_evidence_summary(idx, item))?;
             }
         }
-    }
-    if !args.summary_only {
+    } else {
         context.print_data(&value)?;
     }
     Ok(())
 }
 
-pub(crate) fn count<C: RunContext>(context: &mut C, args: EvidenceCountArgs) -> Result<()> {
+pub(crate) fn count<C: RunContext>(context: &mut C, _args: EvidenceCountArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_evidence_count_json()?;
-    if args.summary || args.summary_only {
+    if matches!(context.output_format(), CliOutputFormat::Text) {
         let count = value
             .get("count")
             .and_then(Value::as_u64)
             .unwrap_or_default();
         context.println(format!("count={count}"))?;
-    }
-    if !args.summary_only {
+    } else {
         context.print_data(&value)?;
     }
     Ok(())
@@ -56,15 +54,14 @@ pub(crate) fn submit<C: RunContext>(context: &mut C, args: EvidenceSubmitArgs) -
     let hex = load_evidence_hex(&args)?;
     let client = context.client_from_config();
     let value = client.post_sumeragi_evidence_hex(&hex)?;
-    if args.summary || args.summary_only {
+    if matches!(context.output_format(), CliOutputFormat::Text) {
         let status = value
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or("accepted");
         let kind = value.get("kind").and_then(Value::as_str).unwrap_or("-");
         context.println(format!("submitted kind={kind} status={status}"))?;
-    }
-    if !args.summary_only {
+    } else {
         context.print_data(&value)?;
     }
     Ok(())
@@ -163,8 +160,6 @@ mod tests {
         let args = EvidenceSubmitArgs {
             evidence_hex: Some(" 0xABCDEF ".to_string()),
             evidence_hex_file: None,
-            summary: false,
-            summary_only: false,
         };
         let loaded = load_evidence_hex(&args).expect("inline hex");
         assert_eq!(loaded, "0xABCDEF");
@@ -177,8 +172,6 @@ mod tests {
         let args = EvidenceSubmitArgs {
             evidence_hex: None,
             evidence_hex_file: Some(path.clone()),
-            summary: false,
-            summary_only: false,
         };
         let loaded = load_evidence_hex(&args).expect("file hex");
         assert_eq!(loaded, "aabbcc");

@@ -169,7 +169,7 @@ seletor/estado e `docs/account_structure.md` para o diagrama completo de bytes.
 Operadores que convertem codificacoes Local alternativas para IH58 canonico ou
 strings comprimidas devem seguir o workflow CLI documentado em ADDR-5:
 
-1. `iroha address inspect` agora emite um resumo JSON estruturado com IH58,
+1. `iroha tools address inspect` agora emite um resumo JSON estruturado com IH58,
    comprimido e payloads hex canonicos. O resumo tambem inclui um objeto
    `domain` com campos `kind`/`warning` e ecoa qualquer dominio fornecido via o
    campo `input_domain`. Quando `kind` e `local12`, a CLI imprime um aviso em
@@ -181,7 +181,7 @@ strings comprimidas devem seguir o workflow CLI documentado em ADDR-5:
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("snx1...@wonderland");
+   const summary = inspectAccountId("snx1...");
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
@@ -198,7 +198,7 @@ strings comprimidas devem seguir o workflow CLI documentado em ADDR-5:
    canonica e notifique as contrapartes de que seletores Local serao rejeitados
    quando o cutover for concluido.
 5. Para conjuntos de dados em massa, execute
-   `iroha address audit --input addresses.txt --network-prefix 753`. O comando
+   `iroha tools address audit --input addresses.txt --network-prefix 753`. O comando
    le literais separados por nova linha (comentarios iniciados com `#` sao
    ignorados, e `--input -` ou nenhum flag usa STDIN), emite um relatorio JSON
    com resumos canonicos/IH58/comprimidos para cada entrada e conta erros de
@@ -215,8 +215,8 @@ strings comprimidas devem seguir o workflow CLI documentado em ADDR-5:
    para continuar a varredura mesmo quando um dump contem literais malformados.
 7. A automacao CI/lint pode executar `ci/check_address_normalize.sh`, que extrai
    seletores Local de `fixtures/account/address_vectors.json`, converte via
-   `iroha address normalize`, e reexecuta
-   `iroha address audit --fail-on-warning` para provar que releases nao emitem
+   `iroha tools address normalize`, e reexecuta
+   `iroha tools address audit --fail-on-warning` para provar que releases nao emitem
    mais digests Local.
 
 `torii_address_local8_total{endpoint}` junto com
@@ -254,7 +254,7 @@ prove que `domain_kind="local12"` permaneceu em zero na janela requerida de 30
 Inclua o seguinte bullet nas notas de release de carteira/explorador ao enviar o
 cutover:
 
-> **Enderecos:** Adicionado o helper `iroha address normalize --only-local --append-domain`
+> **Enderecos:** Adicionado o helper `iroha tools address normalize --only-local --append-domain`
 > e conectado no CI (`ci/check_address_normalize.sh`) para que pipelines de
 > carteira/explorador possam converter seletores Local alternativos para formas
 > canonicas IH58/comprimidas antes de Local-8/Local-12 serem bloqueados na

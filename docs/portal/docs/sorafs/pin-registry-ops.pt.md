@@ -127,10 +127,10 @@ groups:
    - Se os misses de SLA aumentarem enquanto o backlog permanece baixo, foque no desempenho dos providers (falhas de PoR, conclusoes tardias).
    - Se o backlog crescer com misses estaveis, inspecione a admissao (`/v1/sorafs/pin/*`) para confirmar manifests aguardando aprovacao do conselho.
 2. **Validar status dos providers**
-   - Execute `iroha sorafs providers list` e verifique se as capacidades anunciadas atendem aos requisitos de replicacao.
+   - Execute `iroha app sorafs providers list` e verifique se as capacidades anunciadas atendem aos requisitos de replicacao.
    - Verifique os gauges `torii_sorafs_capacity_*` para confirmar GiB provisionados e sucesso de PoR.
 3. **Reatribuir replicacao**
-   - Emita novas ordens via `sorafs_manifest_stub capacity replication-order` quando a folga do backlog (`stat="avg"`) cair abaixo de 5 epocas (o empacotamento de manifest/CAR usa `iroha sorafs toolkit pack`).
+   - Emita novas ordens via `sorafs_manifest_stub capacity replication-order` quando a folga do backlog (`stat="avg"`) cair abaixo de 5 epocas (o empacotamento de manifest/CAR usa `iroha app sorafs toolkit pack`).
    - Notifique a governanca se os aliases nao tiverem bindings ativos de manifest (quedas inesperadas em `torii_sorafs_registry_aliases_total`).
 4. **Documentar resultado**
    - Registre notas do incidente no log de operacoes do SoraFS com timestamps e digests de manifest afetados.

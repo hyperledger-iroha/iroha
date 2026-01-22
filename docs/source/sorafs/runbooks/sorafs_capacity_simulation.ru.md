@@ -13,7 +13,7 @@ translation_last_reviewed: 2025-12-28
 
 # Ранбук симуляции емкости SoraFS
 
-Этот ранбук объясняет, как упражнять набор симуляции рынка емкости SF-2c и визуализировать полученные метрики. Цель — проверить переговоры по квотам, обработку failover и ремедиацию slashing end-to-end с использованием воспроизводимых фикстур в `docs/examples/sorafs_capacity_simulation/`. Payloads емкости по-прежнему используют `sorafs_manifest_stub capacity`; используйте `iroha sorafs toolkit pack` для потоков упаковки manifest/CAR.
+Этот ранбук объясняет, как упражнять набор симуляции рынка емкости SF-2c и визуализировать полученные метрики. Цель — проверить переговоры по квотам, обработку failover и ремедиацию slashing end-to-end с использованием воспроизводимых фикстур в `docs/examples/sorafs_capacity_simulation/`. Payloads емкости по-прежнему используют `sorafs_manifest_stub capacity`; используйте `iroha app sorafs toolkit pack` для потоков упаковки manifest/CAR.
 
 ## 1. Сгенерировать CLI-артефакты
 

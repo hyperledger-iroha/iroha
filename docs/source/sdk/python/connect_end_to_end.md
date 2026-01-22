@@ -401,7 +401,7 @@ from iroha_python import create_torii_client
 
 client = create_torii_client("http://127.0.0.1:8080", auth_token="admin-token")
 snapshot = client.get_explorer_account_qr_typed(
-    "makoto@sora",
+    "ih58...",
     address_format="compressed",  # omit to use preferred IH58 output; compressed (`snx1`) is second-best for Sora-only UX
 )
 

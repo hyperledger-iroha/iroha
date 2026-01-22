@@ -76,7 +76,7 @@ Key flags:
 1. `<slug>.manifest.json` - lane manifest جس میں validator quorum، protected namespaces، اور runtime-upgrade hook metadata شامل ہو سکتا ہے۔
 2. `<slug>.catalog.toml` - ایک TOML snippet جس میں `[[nexus.lane_catalog]]`, `[[nexus.dataspace_catalog]]`, اور مطلوبہ routing rules ہوتے ہیں۔ dataspace entry میں `fault_tolerance` لازمی طور پر set کریں تاکہ lane-relay committee (`3f+1`) درست سائز ہو۔
 3. `<slug>.summary.json` - audit summary جو geometry (slug, segments, metadata) کے ساتھ required rollout steps اور `cargo xtask space-directory encode` کا exact command ( `space_directory_encode.command` کے تحت) بیان کرتا ہے۔ اسے onboarding ticket کے ساتھ evidence کے طور پر attach کریں۔
-4. `<slug>.manifest.to` - `--encode-space-directory` فعال ہونے پر بنتا ہے؛ Torii کے `iroha space-directory manifest publish` flow کے لئے ready ہے۔
+4. `<slug>.manifest.to` - `--encode-space-directory` فعال ہونے پر بنتا ہے؛ Torii کے `iroha app space-directory manifest publish` flow کے لئے ready ہے۔
 
 `--dry-run` سے JSON/snippets کو بغیر فائل لکھے preview کریں، اور `--force` سے موجودہ artefacts overwrite کریں۔
 
@@ -84,7 +84,7 @@ Key flags:
 
 1. manifest JSON کو configured `nexus.registry.manifest_directory` میں کاپی کریں (اور cache directory میں بھی اگر registry remote bundles mirror کرتا ہے). اگر manifests configuration repo میں versioned ہوں تو فائل commit کریں۔
 2. catalog snippet کو `config/config.toml` (یا مناسب `config.d/*.toml`) میں append کریں۔ `nexus.lane_count` کم از کم `lane_id + 1` ہونا چاہیے اور نئے lane کے لئے `nexus.routing_policy.rules` اپ ڈیٹ کریں۔
-3. Encode کریں (اگر `--encode-space-directory` چھوڑا تھا) اور Space Directory میں manifest publish کریں۔ summary میں موجود command (`space_directory_encode.command`) استعمال کریں۔ اس سے `.manifest.to` payload بنتا ہے اور auditors کے لئے evidence ریکارڈ ہوتا ہے؛ `iroha space-directory manifest publish` کے ذریعے submit کریں۔
+3. Encode کریں (اگر `--encode-space-directory` چھوڑا تھا) اور Space Directory میں manifest publish کریں۔ summary میں موجود command (`space_directory_encode.command`) استعمال کریں۔ اس سے `.manifest.to` payload بنتا ہے اور auditors کے لئے evidence ریکارڈ ہوتا ہے؛ `iroha app space-directory manifest publish` کے ذریعے submit کریں۔
 4. `irohad --sora --config path/to/config.toml --trace-config` چلائیں اور trace output کو rollout ticket میں archive کریں۔ یہ ثابت کرتا ہے کہ نئی geometry generated slug/Kura segments کے مطابق ہے۔
 5. manifest/catalog تبدیلیاں deploy ہونے کے بعد lane کے لئے assigned validators کو restart کریں۔ future audits کے لئے summary JSON کو ticket میں رکھیں۔
 

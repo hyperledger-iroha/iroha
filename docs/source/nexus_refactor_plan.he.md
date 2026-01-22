@@ -52,7 +52,7 @@ translator: manual
    - העברת לוגיקת pagination/cursor לרכיבים ב-`iroha_core/src/query/`; יישור ייצוג Norito ב-`iroha_data_model`.
    - להוסיף שאילתות snapshot לטריגרים, נכסים ותפקידים עם סדר דטרמיניסטי (מנוטר באמצעות `crates/iroha_core/tests/snapshot_iterable.rs`).
 3. **עקביות Snapshot**
-   - CLI `iroha query` משתמש באותה דרך snapshot כמו Sumeragi.
+   - CLI `iroha ledger query` משתמש באותה דרך snapshot כמו Sumeragi.
    - בדיקות רגרסיה ל-CLI (snapshots) נמצאות בקובץ `tests/cli/state_snapshot.rs` ומוגנות ב-feature עבור הרצה איטית.
 
 ### שלב C — פייפליין Sumeragi

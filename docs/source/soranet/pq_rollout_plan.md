@@ -60,7 +60,7 @@ rollout_phase = "default"
 ```
 
 `iroha::Client` now records the parsed phase (`crates/iroha/src/client.rs:2315`)
-so helper commands (e.g., `iroha_cli sorafs fetch`) can report the current phase
+so helper commands (e.g., `iroha_cli app sorafs fetch`) can report the current phase
 alongside the default anonymity policy.
 
 ## Automation

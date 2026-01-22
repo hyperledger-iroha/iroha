@@ -229,7 +229,7 @@ Ledgers confidenciais devem reter historico suficiente para provar frescor de no
 - **Retencao de nullifiers:** manter nullifiers gastos por um *minimo* de `730` dias (24 meses) apos a altura de gasto, ou a janela regulatoria obrigatoria se for maior. Operadores podem estender a janela via `confidential.retention.nullifier_days`. Nullifiers mais novos que a janela DEVEM permanecer consultaveis via Torii para que auditores provem ausencia de double-spend.
 - **Pruning de reveals:** reveals transparentes (`RevealConfidential`) podam commitments associados imediatamente apos o bloco finalizar, mas o nullifier consumido continua sujeito a regra de retencao acima. Eventos `ConfidentialEvent::Unshielded` registram o montante publico, recipient e hash de proof para que reconstruir reveals historicos nao exija o ciphertext podado.
 - **Frontier checkpoints:** frontiers de commitment mantem checkpoints rolling cobrindo o maior entre `max_anchor_age_blocks` e a janela de retencao. Nodes compactam checkpoints antigos apenas depois que todos os nullifiers no intervalo expiram.
-- **Remediacao de digest stale:** se `HandshakeConfidentialMismatch` ocorrer por drift de digest, operadores devem (1) verificar que as janelas de retencao de nullifiers estao alinhadas no cluster, (2) rodar `iroha_cli confidential verify-ledger` para regenerar o digest contra o conjunto de nullifiers retidos, e (3) redeployar o manifest atualizado. Nullifiers podados prematuramente devem ser restaurados do cold storage antes de reingressar na rede.
+- **Remediacao de digest stale:** se `HandshakeConfidentialMismatch` ocorrer por drift de digest, operadores devem (1) verificar que as janelas de retencao de nullifiers estao alinhadas no cluster, (2) rodar `iroha_cli app confidential verify-ledger` para regenerar o digest contra o conjunto de nullifiers retidos, e (3) redeployar o manifest atualizado. Nullifiers podados prematuramente devem ser restaurados do cold storage antes de reingressar na rede.
 
 Documente overrides locais no runbook de operacoes; politicas de governance que estendem a janela de retencao devem atualizar configuracao de node e planos de storage de arquivo em lockstep.
 
@@ -252,7 +252,7 @@ Documente overrides locais no runbook de operacoes; politicas de governance que 
 - Hierarquia de derivacao por account:
   - `sk_spend` -> `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
 - Payloads de notes encriptadas usam AEAD com shared keys derivadas por ECDH; view keys de auditor opcionais podem ser anexadas a outputs conforme a politica do asset.
-- Adicoes ao CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling de auditor para descriptografar memos, e o helper `iroha zk envelope` para produzir/inspecionar envelopes Norito offline. Torii expoe o mesmo fluxo de derivacao via `POST /v1/confidential/derive-keyset`, retornando formas hex e base64 para que wallets busquem hierarquias de chave programaticamente.
+- Adicoes ao CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling de auditor para descriptografar memos, e o helper `iroha app zk envelope` para produzir/inspecionar envelopes Norito offline. Torii expoe o mesmo fluxo de derivacao via `POST /v1/confidential/derive-keyset`, retornando formas hex e base64 para que wallets busquem hierarquias de chave programaticamente.
 
 ## Gas, limites e controles DoS
 - Schedule de gas determinista:

@@ -117,7 +117,7 @@ irohad --sora --config "${IROHA_CONFIG}"
 После того как нода онлайн, используйте CLI helper, чтобы убедиться, что default lane запечатана (manifest загружен) и готова к трафику. Сводный вид выводит по одной строке на lane:
 
 ```bash
-iroha_cli nexus lane-report --summary
+iroha_cli app nexus lane-report --summary
 ```
 
 Example output:

@@ -526,7 +526,7 @@ See `IrohaSwift/Sources/IrohaSwift/SorafsOrchestratorClient.swift` and the parit
 
 `ToriiClient.getDaManifestBundle(storageTicketHex:)` calls `/v1/da/manifests/{ticket}` and returns the
 canonical manifest bytes, decoded Norito JSON, and chunk plan (`ToriiDaManifestBundle`). Pair it with
-`ToriiClient.fetchDaPayloadViaGateway(...)` to mirror the `iroha da prove-availability` flow inside Swift:
+`ToriiClient.fetchDaPayloadViaGateway(...)` to mirror the `iroha app da prove-availability` flow inside Swift:
 
 ```swift
 let torii = ToriiClient(baseURL: toriiURL)
@@ -560,7 +560,7 @@ bundle as the CLI. See `ToriiClientTests` for regression coverage.
 
 When `proofSummaryOptions` are supplied the client invokes the native bridge’s
 `connect_norito_da_proof_summary` helper and decodes the JSON into a typed `ToriiDaProofSummary` /
-`ToriiDaProofRecord` structure. This mirrors the `iroha da prove-availability` output (hashes, offsets,
+`ToriiDaProofRecord` structure. This mirrors the `iroha app da prove-availability` output (hashes, offsets,
 per-proof Merkle paths) without forcing apps to parse raw JSON. Options control sampling (`sampleCount`,
 `sampleSeed`) and can force specific leaf indexes for deterministic tests. The proof engine is provided by
 `NativeDaProofSummaryGenerator` by default, but a custom `DaProofSummaryGenerating` implementation can be
@@ -583,7 +583,7 @@ if let summary = session.proofSummary {
 
 `ToriiDaProofSummaryArtifact` converts a `ToriiDaProofSummary` (from `fetchDaPayloadViaGateway` or a
 direct `NativeDaProofSummaryGenerator` call) into the Norito JSON bundle emitted by
-`iroha da prove-availability`. Pair it with `DaProofSummaryArtifactEmitter.emit(...)` to optionally write
+`iroha app da prove-availability`. Pair it with `DaProofSummaryArtifactEmitter.emit(...)` to optionally write
 the artefact to disk while still receiving the parsed struct for post-processing:
 
 ```swift
@@ -620,7 +620,7 @@ the CLI.
 
 ### DA ingest submission
 
-`ToriiClient.submitDaBlob(_:)` mirrors `iroha da submit`, building the Norito request body, signing it,
+`ToriiClient.submitDaBlob(_:)` mirrors `iroha app da submit`, building the Norito request body, signing it,
 posting to `/v1/da/ingest`, and decoding the receipt. Use `ToriiDaBlobSubmission` to describe the payload,
 erasure profile, retention policy, optional metadata, and signing material:
 

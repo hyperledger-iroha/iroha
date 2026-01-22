@@ -110,7 +110,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 ## 2. Цикл Pin → Fetch
 
 1. Сформируйте пакет manifest + payload (например, с помощью
-   `iroha sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
+   `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
 2. Отправьте manifest в кодировке base64:
 
    ```bash

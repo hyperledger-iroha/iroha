@@ -250,7 +250,7 @@ corrida de CSV.
   referencias a archivos se resuelven relativo a la ubicacion del CSV. Metadata
   que no sea objeto produce un error de validacion.
 - **Controllers:** celdas en blanco respetan `--default-controllers`. Proporcione
-  listas de controller explicitas (por ejemplo `owner;ops@dao`) al delegar a
+  listas de controller explicitas (por ejemplo `ih58...;ih58...`) al delegar a
   actores no owner.
 
 Los fallos se reportan con numeros de fila contextuales (por ejemplo

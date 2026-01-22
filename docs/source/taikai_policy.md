@@ -7,7 +7,7 @@
 _Status: Completed_ — Owners: Governance Council / Security Engineering / Media Platform WG  
 Roadmap item: **SN13-E — Policy/crypto (GAR v2, CEK rotation, RPT)** — GAR v2
 payloads (licensing/moderation/metrics + RPT digests) are live in
-`iroha_data_model`/`sorafs_manifest`, `iroha taikai cek-rotate` +
+`iroha_data_model`/`sorafs_manifest`, `iroha app taikai cek-rotate` +
 `rpt-attest` emit deterministic receipts/attestations (covered by
 `crates/iroha_cli/tests/taikai_policy.rs`), and `cargo xtask taikai-rpt-verify`
 verifies bundles for rollout gates.
@@ -102,7 +102,7 @@ exact KMS lineage without revealing secrets.
 
 ### Automation & CLI
 
-- New command: `iroha taikai cek-rotate --event <event> --stream <stream> \
+- New command: `iroha app taikai cek-rotate --event <event> --stream <stream> \
   --effective-segment <seq> --kms-profile <profile>` which:
   1. Requests a fresh GCK wrap key from the configured KMS profile.
   2. Emits a Norito `CekRotationReceiptV1` containing the old/new key labels,
@@ -145,7 +145,7 @@ consistency or zone publication.
 
 ### Workflow
 
-1. Operators run `iroha taikai rpt-attest --event <event> --stream <stream> \
+1. Operators run `iroha app taikai rpt-attest --event <event> --stream <stream> \
    --manifest <gar.json> --cek-receipt <path> --bundle <dir> --out <path>`.
 2. CLI validates each input (GAR signature, CEK receipt signature, bundle hash)
    and writes:
@@ -160,7 +160,7 @@ consistency or zone publication.
 
 ### CLI integration
 
-- `iroha taikai status` gains `--show-rpt` to fetch and display the live digest
+- `iroha app taikai status` gains `--show-rpt` to fetch and display the live digest
   plus attestation window.
 - `sorafs_orchestrator` exposes `taikai.rpt_digest()` for health checks.
 

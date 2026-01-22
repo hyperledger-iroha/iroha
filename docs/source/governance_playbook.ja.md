@@ -59,7 +59,7 @@ Infrastructure Panel は `docs/examples/da_manifest_review_template.md` の
 議会エンベロープと SoraFS アーティファクトに一致することを証明する必要がある。
 既存ツールで証跡を収集する。
 
-1. Torii から manifest バンドルを取得する（`iroha da get-blob --storage-ticket <hex>`
+1. Torii から manifest バンドルを取得する（`iroha app da get-blob --storage-ticket <hex>`
    もしくは同等の SDK helper）。全員がゲートウェイに到達した同一 bytes をハッシュ
    するため。
 2. 署名済みエンベロープで manifest stub 検証を実行する:

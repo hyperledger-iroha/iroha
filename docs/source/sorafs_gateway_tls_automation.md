@@ -231,11 +231,11 @@ call the probe directly without bolting on custom logging or PagerDuty glue.
 
 Run the new route planner once the release manifest has been built so the
 cutover ticket carries a deterministic `Sora-*` header block and explicit
-rollback metadata. The helper now ships inside the CLI (`iroha sorafs gateway
+rollback metadata. The helper now ships inside the CLI (`iroha app sorafs gateway
 wrapper when you need to automate from CI:
 
 ```bash
-iroha sorafs gateway route-plan \
+iroha app sorafs gateway route-plan \
   --manifest-json artifacts/sorafs_cli/portal.manifest.json \
   --hostname docs.sora.link \
   --alias sora:docs \

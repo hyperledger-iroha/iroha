@@ -236,7 +236,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
 - **تحليل metadata او governance:** يتم تحليل JSON inline مباشرة؛ ويتم حل
   مراجع الملفات نسبة الى موقع CSV. metadata غير الكائن ينتج خطا تحقق.
 - **Controllers:** الخلايا الفارغة تلتزم بـ `--default-controllers`. قدم قوائم
-  controller صريحة (مثل `owner;ops@dao`) عند التفويض لجهات غير المالك.
+  controller صريحة (مثل `ih58...;ih58...`) عند التفويض لجهات غير المالك.
 
 يتم الابلاغ عن الاخطاء مع ارقام صفوف سياقية (مثلا
 `error: row 12 term_years must be between 1 and 255`). يخرج السكربت بالكود `1`

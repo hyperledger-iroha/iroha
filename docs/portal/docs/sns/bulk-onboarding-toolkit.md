@@ -246,7 +246,7 @@ The board filters by `release` so auditors can drill into a single CSV run.
   references are resolved relative to the CSV location. Non-object metadata
   produces a validation error.
 - **Controllers:** blank cells honour `--default-controllers`. Provide explicit
-  controller lists (for example `owner;ops@dao`) when delegating to non-owner
+  controller lists (for example `ih58...;ih58...`) when delegating to non-owner
   actors.
 
 Failures are reported with contextual row numbers (for example

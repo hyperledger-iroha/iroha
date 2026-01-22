@@ -217,6 +217,7 @@ fn incentives_init_fails_without_budget_id() {
 
     let output = command()
         .args([
+            "app",
             "sorafs",
             "incentives",
             "service",
@@ -457,36 +458,46 @@ fn expect_subcommand_help(args: &[&str], expected_snippet: &str) {
 
 #[test]
 fn multisig_help_is_accessible() {
-    expect_subcommand_help(&["multisig", "--help"], "Register a multisig account");
+    expect_subcommand_help(
+        &["ledger", "multisig", "--help"],
+        "Register a multisig account",
+    );
 }
 
 #[test]
 fn gov_help_lists_commands() {
-    expect_subcommand_help(&["gov", "--help"], "Propose deployment of IVM bytecode");
+    expect_subcommand_help(
+        &["app", "gov", "--help"],
+        "Propose deployment of IVM bytecode",
+    );
 }
 
 #[test]
 fn sorafs_fetch_help_is_accessible() {
     expect_subcommand_help(
-        &["sorafs", "fetch", "--help"],
+        &["app", "sorafs", "fetch", "--help"],
         "Orchestrate multi-provider chunk fetches",
     );
 }
 
 #[test]
 fn sorafs_repair_help_is_accessible() {
-    expect_subcommand_help(&["sorafs", "repair", "--help"], "Repair queue helpers");
+    expect_subcommand_help(
+        &["app", "sorafs", "repair", "--help"],
+        "Repair queue helpers",
+    );
 }
 
 #[test]
 fn sorafs_gc_help_is_accessible() {
-    expect_subcommand_help(&["sorafs", "gc", "--help"], "GC inspection helpers");
+    expect_subcommand_help(&["app", "sorafs", "gc", "--help"], "GC inspection helpers");
 }
 
 #[test]
 fn sorafs_reserve_quote_outputs_breakdown() {
     let output = command()
         .args([
+            "app",
             "sorafs",
             "reserve",
             "quote",
@@ -535,6 +546,7 @@ fn sorafs_reserve_ledger_emits_instructions() {
 
     let quote_status = command()
         .args([
+            "app",
             "sorafs",
             "reserve",
             "quote",
@@ -561,6 +573,7 @@ fn sorafs_reserve_ledger_emits_instructions() {
 
     let output = command()
         .args([
+            "app",
             "sorafs",
             "reserve",
             "ledger",
@@ -626,7 +639,7 @@ fn sorafs_reserve_ledger_emits_instructions() {
 #[test]
 fn da_get_help_is_accessible() {
     expect_subcommand_help(
-        &["da", "get", "--help"],
+        &["app", "da", "get", "--help"],
         "Fetch blobs via the multi-source orchestrator",
     );
 }
@@ -642,23 +655,17 @@ fn gov_protected_set_produces_instruction_skeleton() {
     let output = command()
         .arg("--config")
         .arg(&config_path)
-        .args([
-            "gov",
-            "protected-set",
-            "--namespaces",
-            "apps",
-            "--no-summary",
-        ])
+        .args(["app", "gov", "protected", "set", "--namespaces", "apps"])
         .output()
-        .expect("failed to execute iroha gov protected-set");
+        .expect("failed to execute iroha app gov protected set");
     assert!(
         output.status.success(),
-        "protected-set failed: {}",
+        "protected set failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let value: norito::json::Value =
-        norito::json::from_str(stdout.trim()).expect("parse protected-set output");
+        norito::json::from_str(stdout.trim()).expect("parse protected set output");
     let instructions = value
         .get("tx_instructions")
         .and_then(|v| v.as_array())
@@ -685,23 +692,25 @@ fn gov_deploy_meta_outputs_metadata_stub() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "gov",
-            "deploy-meta",
+            "deploy",
+            "meta",
             "--namespace",
             "apps",
             "--contract-id",
             "calc.v1",
         ])
         .output()
-        .expect("failed to execute iroha gov deploy-meta");
+        .expect("failed to execute iroha app gov deploy meta");
     assert!(
         output.status.success(),
-        "deploy-meta failed: {}",
+        "deploy meta failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let value: norito::json::Value =
-        norito::json::from_str(stdout.trim()).expect("parse deploy-meta output");
+        norito::json::from_str(stdout.trim()).expect("parse deploy meta output");
     assert_eq!(
         value.get("gov_namespace").and_then(|v| v.as_str()),
         Some("apps")
@@ -728,8 +737,10 @@ fn gov_deploy_meta_accepts_manifest_approvers() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "gov",
-            "deploy-meta",
+            "deploy",
+            "meta",
             "--namespace",
             "apps",
             "--contract-id",
@@ -740,15 +751,15 @@ fn gov_deploy_meta_accepts_manifest_approvers() {
             "bob@wonderland",
         ])
         .output()
-        .expect("failed to execute iroha gov deploy-meta");
+        .expect("failed to execute iroha app gov deploy meta");
     assert!(
         output.status.success(),
-        "deploy-meta failed: {}",
+        "deploy meta failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let value: norito::json::Value =
-        norito::json::from_str(stdout.trim()).expect("parse deploy-meta output");
+        norito::json::from_str(stdout.trim()).expect("parse deploy meta output");
     let approvers = value
         .get("gov_manifest_approvers")
         .and_then(|v| v.as_array())
@@ -802,9 +813,13 @@ fn gov_propose_deploy_against_mock() {
     let summary = command()
         .arg("--config")
         .arg(&config_path)
+        .arg("--output-format")
+        .arg("text")
         .args([
+            "app",
             "gov",
-            "propose-deploy",
+            "deploy",
+            "propose",
             "--namespace",
             "apps",
             "--contract-id",
@@ -813,27 +828,28 @@ fn gov_propose_deploy_against_mock() {
             code_hash.as_str(),
             "--abi-hash",
             abi_hash.as_str(),
-            "--summary-only",
         ])
         .output()
-        .expect("invoke iroha gov propose-deploy --summary-only");
+        .expect("invoke iroha app gov deploy propose --output-format text");
     assert!(
         summary.status.success(),
-        "expected propose-deploy summary to succeed, stderr: {}",
+        "expected deploy propose summary to succeed, stderr: {}",
         String::from_utf8_lossy(&summary.stderr)
     );
     let summary_out = String::from_utf8_lossy(&summary.stdout);
     assert_eq!(
         summary_out.trim_end(),
-        format!("propose-deploy: ok=true proposal_id={proposal_id}")
+        format!("deploy propose: ok=true proposal_id={proposal_id}")
     );
 
     let json_output = command()
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "gov",
-            "propose-deploy",
+            "deploy",
+            "propose",
             "--namespace",
             "apps",
             "--contract-id",
@@ -842,17 +858,16 @@ fn gov_propose_deploy_against_mock() {
             code_hash.as_str(),
             "--abi-hash",
             abi_hash.as_str(),
-            "--no-summary",
         ])
         .output()
-        .expect("invoke iroha gov propose-deploy --no-summary");
+        .expect("invoke iroha app gov deploy propose");
     assert!(
         json_output.status.success(),
-        "expected propose-deploy JSON to succeed, stderr: {}",
+        "expected deploy propose JSON to succeed, stderr: {}",
         String::from_utf8_lossy(&json_output.stderr)
     );
     let value: norito::json::Value =
-        norito::json::from_slice(&json_output.stdout).expect("parse propose-deploy JSON");
+        norito::json::from_slice(&json_output.stdout).expect("parse deploy propose JSON");
     assert_eq!(
         value.get("ok").and_then(norito::json::Value::as_bool),
         Some(true)
@@ -904,17 +919,19 @@ fn gov_finalize_against_mock() {
     let summary = command()
         .arg("--config")
         .arg(&config_path)
+        .arg("--output-format")
+        .arg("text")
         .args([
+            "app",
             "gov",
             "finalize",
             "--referendum-id",
             referendum_id,
             "--proposal-id",
             proposal_id.as_str(),
-            "--summary-only",
         ])
         .output()
-        .expect("invoke iroha gov finalize --summary-only");
+        .expect("invoke iroha app gov finalize --output-format text");
     assert!(
         summary.status.success(),
         "expected finalize summary to succeed, stderr: {}",
@@ -930,16 +947,16 @@ fn gov_finalize_against_mock() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "gov",
             "finalize",
             "--referendum-id",
             referendum_id,
             "--proposal-id",
             proposal_id.as_str(),
-            "--no-summary",
         ])
         .output()
-        .expect("invoke iroha gov finalize --no-summary");
+        .expect("invoke iroha app gov finalize");
     assert!(
         json_output.status.success(),
         "expected finalize JSON to succeed, stderr: {}",
@@ -998,15 +1015,11 @@ fn gov_enact_against_mock() {
     let summary = command()
         .arg("--config")
         .arg(&config_path)
-        .args([
-            "gov",
-            "enact",
-            "--proposal-id",
-            proposal_id.as_str(),
-            "--summary-only",
-        ])
+        .arg("--output-format")
+        .arg("text")
+        .args(["app", "gov", "enact", "--proposal-id", proposal_id.as_str()])
         .output()
-        .expect("invoke iroha gov enact --summary-only");
+        .expect("invoke iroha app gov enact --output-format text");
     assert!(
         summary.status.success(),
         "expected enact summary to succeed, stderr: {}",
@@ -1021,15 +1034,9 @@ fn gov_enact_against_mock() {
     let json_output = command()
         .arg("--config")
         .arg(&config_path)
-        .args([
-            "gov",
-            "enact",
-            "--proposal-id",
-            proposal_id.as_str(),
-            "--no-summary",
-        ])
+        .args(["app", "gov", "enact", "--proposal-id", proposal_id.as_str()])
         .output()
-        .expect("invoke iroha gov enact --no-summary");
+        .expect("invoke iroha app gov enact");
     assert!(
         json_output.status.success(),
         "expected enact JSON to succeed, stderr: {}",
@@ -1082,16 +1089,16 @@ fn gov_protected_namespaces_flow_against_mock() {
     let initial = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["gov", "protected-get", "--no-summary"])
+        .args(["app", "gov", "protected", "get"])
         .output()
-        .expect("invoke iroha gov protected-get");
+        .expect("invoke iroha app gov protected get");
     assert!(
         initial.status.success(),
-        "expected protected-get to succeed, stderr: {}",
+        "expected protected get to succeed, stderr: {}",
         String::from_utf8_lossy(&initial.stderr)
     );
     let initial_value: norito::json::Value =
-        norito::json::from_slice(&initial.stdout).expect("parse protected-get");
+        norito::json::from_slice(&initial.stdout).expect("parse protected get");
     assert_eq!(
         initial_value
             .get("namespaces")
@@ -1104,21 +1111,22 @@ fn gov_protected_namespaces_flow_against_mock() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "gov",
-            "protected-apply",
+            "protected",
+            "apply",
             "--namespaces",
             "apps,system",
-            "--no-summary",
         ])
         .output()
-        .expect("invoke iroha gov protected-apply");
+        .expect("invoke iroha app gov protected apply");
     assert!(
         apply.status.success(),
-        "expected protected-apply to succeed, stderr: {}",
+        "expected protected apply to succeed, stderr: {}",
         String::from_utf8_lossy(&apply.stderr)
     );
     let apply_value: norito::json::Value =
-        norito::json::from_slice(&apply.stdout).expect("parse protected-apply JSON");
+        norito::json::from_slice(&apply.stdout).expect("parse protected apply JSON");
     assert_eq!(
         apply_value
             .get("applied")
@@ -1129,16 +1137,16 @@ fn gov_protected_namespaces_flow_against_mock() {
     let after = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["gov", "protected-get", "--no-summary"])
+        .args(["app", "gov", "protected", "get"])
         .output()
-        .expect("invoke iroha gov protected-get after apply");
+        .expect("invoke iroha app gov protected get after apply");
     assert!(
         after.status.success(),
-        "expected protected-get after apply to succeed, stderr: {}",
+        "expected protected get after apply to succeed, stderr: {}",
         String::from_utf8_lossy(&after.stderr)
     );
     let after_value: norito::json::Value =
-        norito::json::from_slice(&after.stdout).expect("parse protected-get JSON");
+        norito::json::from_slice(&after.stdout).expect("parse protected get JSON");
     let namespaces = after_value
         .get("namespaces")
         .and_then(norito::json::Value::as_array)
@@ -1189,16 +1197,16 @@ fn gov_instances_list_against_mock() {
     let output = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["gov", "instances", "--namespace", "apps", "--no-summary"])
+        .args(["app", "gov", "instance", "list", "--namespace", "apps"])
         .output()
-        .expect("invoke iroha gov instances");
+        .expect("invoke iroha app gov instance list");
     assert!(
         output.status.success(),
-        "expected gov instances to succeed, stderr: {}",
+        "expected gov instance list to succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let value: norito::json::Value =
-        norito::json::from_slice(&output.stdout).expect("parse gov instances JSON");
+        norito::json::from_slice(&output.stdout).expect("parse gov instance list JSON");
     assert_eq!(
         value.get("total").and_then(norito::json::Value::as_u64),
         Some(2)
@@ -1304,21 +1312,22 @@ fn gov_governance_queries_against_mock() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "gov",
-            "proposal-get",
+            "proposal",
+            "get",
             "--id",
             proposal_id.as_str(),
-            "--no-summary",
         ])
         .output()
-        .expect("invoke iroha gov proposal-get");
+        .expect("invoke iroha app gov proposal get");
     assert!(
         proposal.status.success(),
-        "expected proposal-get to succeed, stderr: {}",
+        "expected proposal get to succeed, stderr: {}",
         String::from_utf8_lossy(&proposal.stderr)
     );
     let proposal_value: norito::json::Value =
-        norito::json::from_slice(&proposal.stdout).expect("parse proposal-get JSON");
+        norito::json::from_slice(&proposal.stdout).expect("parse proposal get JSON");
     assert_eq!(
         proposal_value
             .get("found")
@@ -1329,22 +1338,16 @@ fn gov_governance_queries_against_mock() {
     let locks = command()
         .arg("--config")
         .arg(&config_path)
-        .args([
-            "gov",
-            "locks-get",
-            "--referendum-id",
-            "ref-plain",
-            "--no-summary",
-        ])
+        .args(["app", "gov", "locks", "get", "--referendum-id", "ref-plain"])
         .output()
-        .expect("invoke iroha gov locks-get");
+        .expect("invoke iroha app gov locks get");
     assert!(
         locks.status.success(),
-        "expected locks-get to succeed, stderr: {}",
+        "expected locks get to succeed, stderr: {}",
         String::from_utf8_lossy(&locks.stderr)
     );
     let locks_value: norito::json::Value =
-        norito::json::from_slice(&locks.stdout).expect("parse locks-get JSON");
+        norito::json::from_slice(&locks.stdout).expect("parse locks get JSON");
     assert_eq!(
         locks_value
             .get("referendum_id")
@@ -1356,39 +1359,34 @@ fn gov_governance_queries_against_mock() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "gov",
-            "referendum-get",
+            "referendum",
+            "get",
             "--referendum-id",
             "ref-plain",
-            "--no-summary",
         ])
         .output()
-        .expect("invoke iroha gov referendum-get");
+        .expect("invoke iroha app gov referendum get");
     assert!(
         referendum.status.success(),
-        "expected referendum-get to succeed, stderr: {}",
+        "expected referendum get to succeed, stderr: {}",
         String::from_utf8_lossy(&referendum.stderr)
     );
 
     let tally = command()
         .arg("--config")
         .arg(&config_path)
-        .args([
-            "gov",
-            "tally-get",
-            "--referendum-id",
-            "ref-plain",
-            "--no-summary",
-        ])
+        .args(["app", "gov", "tally", "get", "--referendum-id", "ref-plain"])
         .output()
-        .expect("invoke iroha gov tally-get");
+        .expect("invoke iroha app gov tally get");
     assert!(
         tally.status.success(),
-        "expected tally-get to succeed, stderr: {}",
+        "expected tally get to succeed, stderr: {}",
         String::from_utf8_lossy(&tally.stderr)
     );
     let tally_value: norito::json::Value =
-        norito::json::from_slice(&tally.stdout).expect("parse tally-get JSON");
+        norito::json::from_slice(&tally.stdout).expect("parse tally get JSON");
     assert_eq!(
         tally_value
             .get("approve")
@@ -1399,16 +1397,16 @@ fn gov_governance_queries_against_mock() {
     let unlocks = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["gov", "unlock-stats", "--no-summary"])
+        .args(["app", "gov", "unlock", "stats"])
         .output()
-        .expect("invoke iroha gov unlock-stats");
+        .expect("invoke iroha app gov unlock stats");
     assert!(
         unlocks.status.success(),
-        "expected unlock-stats to succeed, stderr: {}",
+        "expected unlock stats to succeed, stderr: {}",
         String::from_utf8_lossy(&unlocks.stderr)
     );
     let unlock_value: norito::json::Value =
-        norito::json::from_slice(&unlocks.stdout).expect("parse unlock-stats JSON");
+        norito::json::from_slice(&unlocks.stdout).expect("parse unlock stats JSON");
     assert_eq!(
         unlock_value
             .get("height_current")
@@ -1473,7 +1471,10 @@ fn gov_council_vrf_commands_against_mock() {
     let derive = command()
         .arg("--config")
         .arg(&config_path)
+        .arg("--output-format")
+        .arg("text")
         .args([
+            "app",
             "gov",
             "council",
             "derive-vrf",
@@ -1481,10 +1482,9 @@ fn gov_council_vrf_commands_against_mock() {
             "1",
             "--candidates-file",
             candidates_path.to_str().expect("utf8 path"),
-            "--summary-only",
         ])
         .output()
-        .expect("invoke iroha gov council derive-vrf");
+        .expect("invoke iroha app gov council derive-vrf");
     assert!(
         derive.status.success(),
         "expected council derive-vrf to succeed, stderr: {}",
@@ -1499,7 +1499,10 @@ fn gov_council_vrf_commands_against_mock() {
     let persist = command()
         .arg("--config")
         .arg(&config_path)
+        .arg("--output-format")
+        .arg("text")
         .args([
+            "app",
             "gov",
             "council",
             "persist",
@@ -1511,10 +1514,9 @@ fn gov_council_vrf_commands_against_mock() {
             "guardian-0@wonderland",
             "--private-key",
             "deadbeef",
-            "--summary-only",
         ])
         .output()
-        .expect("invoke iroha gov council persist");
+        .expect("invoke iroha app gov council persist");
     assert!(
         persist.status.success(),
         "expected council persist to succeed, stderr: {}",
@@ -1530,6 +1532,7 @@ fn gov_council_vrf_commands_against_mock() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "gov",
             "council",
             "derive-and-persist",
@@ -1541,10 +1544,9 @@ fn gov_council_vrf_commands_against_mock() {
             "guardian-0@wonderland",
             "--private-key",
             "cafebabe",
-            "--no-summary",
         ])
         .output()
-        .expect("invoke iroha gov council derive-and-persist");
+        .expect("invoke iroha app gov council derive-and-persist");
     assert!(
         combined.status.success(),
         "expected council derive-and-persist to succeed, stderr: {}",
@@ -1608,6 +1610,7 @@ fn gov_council_gen_vrf_outputs_expected_candidate() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "gov",
             "council",
             "gen-vrf",
@@ -1623,7 +1626,7 @@ fn gov_council_gen_vrf_outputs_expected_candidate() {
             "wonderland",
         ])
         .output()
-        .expect("invoke iroha gov council gen-vrf");
+        .expect("invoke iroha app gov council gen-vrf");
     assert!(
         output.status.success(),
         "expected council gen-vrf to succeed, stderr: {}",
@@ -1672,8 +1675,10 @@ fn gov_activate_instance_emits_skeleton() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "gov",
-            "activate-instance",
+            "instance",
+            "activate",
             "--namespace",
             "apps",
             "--contract-id",
@@ -1682,14 +1687,14 @@ fn gov_activate_instance_emits_skeleton() {
             code_hash.as_str(),
         ])
         .output()
-        .expect("invoke iroha gov activate-instance");
+        .expect("invoke iroha app gov instance activate");
     assert!(
         output.status.success(),
-        "expected activate-instance to succeed, stderr: {}",
+        "expected instance activate to succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let value: norito::json::Value =
-        norito::json::from_slice(&output.stdout).expect("parse activate-instance JSON");
+        norito::json::from_slice(&output.stdout).expect("parse instance activate JSON");
     assert_eq!(
         value.get("action").and_then(norito::json::Value::as_str),
         Some("ActivateContractInstance")
@@ -1765,10 +1770,13 @@ fn gov_vote_plain_against_mock() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "gov",
             "vote",
             "--referendum-id",
             "ref-plain",
+            "--mode",
+            "plain",
             "--owner",
             &owner_str,
             "--amount",
@@ -1777,10 +1785,9 @@ fn gov_vote_plain_against_mock() {
             "128",
             "--direction",
             "Aye",
-            "--no-summary",
         ])
         .output()
-        .expect("failed to execute iroha gov vote (plain)");
+        .expect("failed to execute iroha app gov vote (plain)");
 
     assert!(
         output.status.success(),
@@ -1823,7 +1830,7 @@ fn gov_vote_plain_against_mock() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn gov_vote_plain_subcommand_emits_summary_and_json() {
+fn gov_vote_plain_emits_summary_and_json() {
     use std::str::FromStr;
 
     use iroha::data_model::{
@@ -1837,9 +1844,7 @@ fn gov_vote_plain_subcommand_emits_summary_and_json() {
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
-            eprintln!(
-                "skipping gov_vote_plain_subcommand_emits_summary_and_json: mock server unavailable"
-            );
+            eprintln!("skipping gov_vote_plain_emits_summary_and_json: mock server unavailable");
             return;
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
@@ -1882,18 +1887,23 @@ fn gov_vote_plain_subcommand_emits_summary_and_json() {
     configure_governance(mock.base_url(), &config_payload)
         .expect("configure governance responses in mock");
 
-    let temp_dir = TempDir::new("gov_vote_plain_subcommand").expect("temp dir");
+    let temp_dir = TempDir::new("gov_vote_plain_summary").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
 
     let summary = command()
         .arg("--config")
         .arg(&config_path)
+        .arg("--output-format")
+        .arg("text")
         .args([
+            "app",
             "gov",
-            "vote-plain",
+            "vote",
             "--referendum-id",
             "ref-plain",
+            "--mode",
+            "plain",
             "--owner",
             &owner_str,
             "--amount",
@@ -1902,18 +1912,17 @@ fn gov_vote_plain_subcommand_emits_summary_and_json() {
             "128",
             "--direction",
             "Aye",
-            "--summary-only",
         ])
         .output()
-        .expect("failed to execute iroha gov vote-plain --summary-only");
+        .expect("failed to execute iroha app gov vote --output-format text");
     assert!(
         summary.status.success(),
-        "expected gov vote-plain summary to succeed, stderr: {}",
+        "expected gov vote plain summary to succeed, stderr: {}",
         String::from_utf8_lossy(&summary.stderr)
     );
     let summary_text = String::from_utf8_lossy(&summary.stdout);
     let expected_summary = format!(
-        "vote-plain: referendum_id=ref-plain ok=true accepted=true instrs=1 fingerprint={fingerprint} owner={owner_str} amount=500 duration_blocks=128 direction=Aye"
+        "vote plain: referendum_id=ref-plain ok=true accepted=true instrs=1 fingerprint={fingerprint} owner={owner_str} amount=500 duration_blocks=128 direction=Aye"
     );
     assert_eq!(summary_text.trim_end(), expected_summary);
 
@@ -1921,10 +1930,13 @@ fn gov_vote_plain_subcommand_emits_summary_and_json() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "gov",
-            "vote-plain",
+            "vote",
             "--referendum-id",
             "ref-plain",
+            "--mode",
+            "plain",
             "--owner",
             &owner_str,
             "--amount",
@@ -1933,17 +1945,16 @@ fn gov_vote_plain_subcommand_emits_summary_and_json() {
             "128",
             "--direction",
             "Aye",
-            "--no-summary",
         ])
         .output()
-        .expect("failed to execute iroha gov vote-plain --no-summary");
+        .expect("failed to execute iroha app gov vote");
     assert!(
         output.status.success(),
-        "expected gov vote-plain to succeed, stderr: {}",
+        "expected gov vote plain to succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let value: norito::json::Value =
-        norito::json::from_slice(&output.stdout).expect("vote-plain output JSON");
+        norito::json::from_slice(&output.stdout).expect("vote plain output JSON");
     assert_eq!(
         value.get("ok").and_then(norito::json::Value::as_bool),
         Some(true)
@@ -1995,6 +2006,7 @@ fn sorafs_incentives_service_cli_roundtrip() {
 
     let output = command()
         .args([
+            "app",
             "sorafs",
             "incentives",
             "service",
@@ -2032,6 +2044,7 @@ fn sorafs_incentives_service_cli_roundtrip() {
 
     let output = command()
         .args([
+            "app",
             "sorafs",
             "incentives",
             "service",
@@ -2072,6 +2085,7 @@ fn sorafs_incentives_service_cli_roundtrip() {
     let operator_literal = account_literal_for("operator");
     let output = command()
         .args([
+            "app",
             "sorafs",
             "incentives",
             "service",
@@ -2111,6 +2125,7 @@ fn sorafs_incentives_service_cli_roundtrip() {
     let transfer_path = temp_dir.path().join("credit_transfer.to");
     let output = command()
         .args([
+            "app",
             "sorafs",
             "incentives",
             "service",
@@ -2169,6 +2184,7 @@ fn sorafs_incentives_service_cli_roundtrip() {
 
     let output = command()
         .args([
+            "app",
             "sorafs",
             "incentives",
             "service",
@@ -2203,6 +2219,7 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
 
     let output = command()
         .args([
+            "app",
             "sorafs",
             "incentives",
             "service",
@@ -2235,6 +2252,7 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
 
     let output = command()
         .args([
+            "app",
             "sorafs",
             "incentives",
             "service",
@@ -2315,6 +2333,7 @@ fn sorafs_incentives_service_cli_process_batch_and_reconcile() {
 
     let output = command()
         .args([
+            "app",
             "sorafs",
             "incentives",
             "service",
@@ -2419,10 +2438,13 @@ fn gov_vote_zk_against_mock() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "gov",
             "vote",
             "--referendum-id",
             "ref-zk",
+            "--mode",
+            "zk",
             "--proof-b64",
             "AAA=",
             "--owner",
@@ -2435,10 +2457,9 @@ fn gov_vote_zk_against_mock() {
             "Nay",
             "--nullifier",
             &nullifier,
-            "--no-summary",
         ])
         .output()
-        .expect("failed to execute iroha gov vote (zk)");
+        .expect("failed to execute iroha app gov vote (zk)");
 
     assert!(
         output.status.success(),
@@ -2486,7 +2507,7 @@ fn gov_vote_zk_against_mock() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn gov_vote_zk_subcommand_emits_summary_and_json() {
+fn gov_vote_zk_emits_summary_and_json() {
     use std::str::FromStr;
 
     use iroha::data_model::{
@@ -2500,9 +2521,7 @@ fn gov_vote_zk_subcommand_emits_summary_and_json() {
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
-            eprintln!(
-                "skipping gov_vote_zk_subcommand_emits_summary_and_json: mock server unavailable"
-            );
+            eprintln!("skipping gov_vote_zk_emits_summary_and_json: mock server unavailable");
             return;
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
@@ -2558,18 +2577,23 @@ fn gov_vote_zk_subcommand_emits_summary_and_json() {
     configure_governance(mock.base_url(), &config_payload)
         .expect("configure governance responses in mock");
 
-    let temp_dir = TempDir::new("gov_vote_zk_subcommand").expect("temp dir");
+    let temp_dir = TempDir::new("gov_vote_zk_summary").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
     write_client_config(&config_path, mock.base_url()).expect("write config");
 
     let summary = command()
         .arg("--config")
         .arg(&config_path)
+        .arg("--output-format")
+        .arg("text")
         .args([
+            "app",
             "gov",
-            "vote-zk",
-            "--election-id",
+            "vote",
+            "--referendum-id",
             "ref-zk",
+            "--mode",
+            "zk",
             "--proof-b64",
             "BBB=",
             "--owner",
@@ -2582,18 +2606,17 @@ fn gov_vote_zk_subcommand_emits_summary_and_json() {
             direction,
             "--nullifier",
             &nullifier,
-            "--summary-only",
         ])
         .output()
-        .expect("failed to execute iroha gov vote-zk --summary-only");
+        .expect("failed to execute iroha app gov vote --output-format text");
     assert!(
         summary.status.success(),
-        "expected gov vote-zk summary to succeed, stderr: {}",
+        "expected gov vote zk summary to succeed, stderr: {}",
         String::from_utf8_lossy(&summary.stderr)
     );
     let summary_text = String::from_utf8_lossy(&summary.stdout);
     let expected_summary = format!(
-        "vote-zk: election_id=ref-zk ok=true accepted=true instrs=1 fingerprint={fingerprint} owner={owner_str} amount={amount} duration_blocks={duration_blocks} direction={direction} nullifier={nullifier}"
+        "vote zk: election_id=ref-zk ok=true accepted=true instrs=1 fingerprint={fingerprint} owner={owner_str} amount={amount} duration_blocks={duration_blocks} direction={direction} nullifier={nullifier}"
     );
     assert_eq!(summary_text.trim_end(), expected_summary);
 
@@ -2601,10 +2624,13 @@ fn gov_vote_zk_subcommand_emits_summary_and_json() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "gov",
-            "vote-zk",
-            "--election-id",
+            "vote",
+            "--referendum-id",
             "ref-zk",
+            "--mode",
+            "zk",
             "--proof-b64",
             "BBB=",
             "--owner",
@@ -2617,17 +2643,16 @@ fn gov_vote_zk_subcommand_emits_summary_and_json() {
             direction,
             "--nullifier",
             &nullifier,
-            "--no-summary",
         ])
         .output()
-        .expect("failed to execute iroha gov vote-zk --no-summary");
+        .expect("failed to execute iroha app gov vote");
     assert!(
         output.status.success(),
-        "expected gov vote-zk to succeed, stderr: {}",
+        "expected gov vote zk to succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let value: norito::json::Value =
-        norito::json::from_slice(&output.stdout).expect("vote-zk output JSON");
+        norito::json::from_slice(&output.stdout).expect("vote zk output JSON");
     assert_eq!(
         value.get("ok").and_then(norito::json::Value::as_bool),
         Some(true)
@@ -2716,9 +2741,11 @@ fn gov_council_summary_against_mock() {
     let summary = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["gov", "council", "--summary-only"])
+        .arg("--output-format")
+        .arg("text")
+        .args(["app", "gov", "council"])
         .output()
-        .expect("invoke iroha gov council --summary-only");
+        .expect("invoke iroha app gov council --output-format text");
     assert!(
         summary.status.success(),
         "expected gov council summary to succeed, stderr: {}",
@@ -2733,9 +2760,9 @@ fn gov_council_summary_against_mock() {
     let json_output = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["gov", "council", "--no-summary"])
+        .args(["app", "gov", "council"])
         .output()
-        .expect("invoke iroha gov council --no-summary");
+        .expect("invoke iroha app gov council");
     assert!(
         json_output.status.success(),
         "expected gov council JSON to succeed, stderr: {}",
@@ -2892,22 +2919,16 @@ fn gov_audit_deploy_reports_results_against_mock() {
     let output = command()
         .arg("--config")
         .arg(&config_path)
-        .args([
-            "gov",
-            "audit-deploy",
-            "--namespace",
-            namespace,
-            "--no-summary",
-        ])
+        .args(["app", "gov", "deploy", "audit", "--namespace", namespace])
         .output()
-        .expect("invoke iroha gov audit-deploy");
+        .expect("invoke iroha app gov deploy audit");
     assert!(
         output.status.success(),
-        "expected audit-deploy to succeed, stderr: {}",
+        "expected deploy audit to succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let value: norito::json::Value =
-        norito::json::from_slice(&output.stdout).expect("parse audit-deploy JSON");
+        norito::json::from_slice(&output.stdout).expect("parse deploy audit JSON");
     assert_eq!(
         value.get("namespace").and_then(norito::json::Value::as_str),
         Some(namespace)
@@ -2990,6 +3011,7 @@ fn repo_initiate_emits_instruction_payload() {
         .arg(&config_path)
         .arg("--output")
         .args([
+            "app",
             "repo",
             "initiate",
             "--agreement-id",
@@ -3067,6 +3089,7 @@ fn da_submit_no_submit_emits_request_artifacts() {
     let mut cmd = command();
     cmd.arg("--config")
         .arg(&config_path)
+        .arg("app")
         .arg("da")
         .arg("submit")
         .arg("--payload")
@@ -3109,10 +3132,10 @@ fn da_submit_no_submit_emits_request_artifacts() {
         .arg(&artifact_dir)
         .arg("--no-submit");
 
-    let output = cmd.output().expect("failed to execute iroha da submit");
+    let output = cmd.output().expect("failed to execute iroha app da submit");
     assert!(
         output.status.success(),
-        "iroha da submit failed: {}",
+        "iroha app da submit failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -3330,6 +3353,7 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "da",
             "submit",
             "--payload",
@@ -3398,6 +3422,7 @@ fn da_rent_quote_outputs_summary_and_json() {
 
     let output = command()
         .args([
+            "app",
             "da",
             "rent-quote",
             "--gib",
@@ -3507,6 +3532,7 @@ fn da_rent_ledger_emits_transfer_plan() {
 
     let quote_output = command()
         .args([
+            "app",
             "da",
             "rent-quote",
             "--gib",
@@ -3540,6 +3566,7 @@ fn da_rent_ledger_emits_transfer_plan() {
 
     let ledger_output = command()
         .args([
+            "app",
             "da",
             "rent-ledger",
             "--quote",
@@ -3665,6 +3692,7 @@ fn repo_unwind_emits_instruction_payload() {
         .arg(&config_path)
         .arg("--output")
         .args([
+            "app",
             "repo",
             "unwind",
             "--agreement-id",
@@ -3721,6 +3749,7 @@ fn settlement_dvp_emits_instruction_payload() {
         .arg(&config_path)
         .arg("--output")
         .args([
+            "app",
             "settlement",
             "dvp",
             "--settlement-id",
@@ -3784,6 +3813,7 @@ fn settlement_pvp_emits_instruction_payload() {
         .arg(&config_path)
         .arg("--output")
         .args([
+            "app",
             "settlement",
             "pvp",
             "--settlement-id",
@@ -3844,6 +3874,7 @@ fn settlement_accepts_commit_atomicity() {
         .arg(&config_path)
         .arg("--output")
         .args([
+            "app",
             "settlement",
             "dvp",
             "--settlement-id",
@@ -3903,20 +3934,26 @@ fn settlement_accepts_commit_atomicity() {
 
 #[test]
 fn query_help_documents_stdin_flow() {
-    expect_subcommand_help(&["query", "--help"], "Query using JSON input from stdin");
+    expect_subcommand_help(
+        &["ledger", "query", "--help"],
+        "Query using JSON input from stdin",
+    );
 }
 
 #[test]
 fn role_help_mentions_register() {
     expect_subcommand_help(
-        &["role", "--help"],
+        &["ledger", "role", "--help"],
         "Register a role and grant it to the registrant",
     );
 }
 
 #[test]
 fn zk_help_mentions_attachments() {
-    expect_subcommand_help(&["zk", "--help"], "Manage ZK attachments in the app API");
+    expect_subcommand_help(
+        &["app", "zk", "--help"],
+        "Manage ZK attachments in the app API",
+    );
 }
 
 #[test]
@@ -3944,6 +3981,7 @@ fn crypto_sm2_import_accepts_pem_files() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "tools",
             "crypto",
             "sm2",
             "import",
@@ -4012,6 +4050,7 @@ fn incentives_daemon_processes_metrics_spool() {
 
     let init_output = command()
         .args([
+            "app",
             "sorafs",
             "incentives",
             "service",
@@ -4043,6 +4082,7 @@ fn incentives_daemon_processes_metrics_spool() {
 
     let daemon_output = command()
         .args([
+            "app",
             "sorafs",
             "incentives",
             "service",
@@ -4161,6 +4201,7 @@ fn incentives_daemon_processes_metrics_spool() {
 
     let reconcile_output = command()
         .args([
+            "app",
             "sorafs",
             "incentives",
             "service",
@@ -4222,6 +4263,8 @@ fn sumeragi_summary_commands_against_torii_mock() {
         let output = command()
             .arg("--config")
             .arg(&config_path)
+            .arg("--output-format")
+            .arg("text")
             .args(args)
             .output()
             .unwrap_or_else(|err| panic!("failed to execute iroha {args:?}: {err}"));
@@ -4239,23 +4282,23 @@ fn sumeragi_summary_commands_against_torii_mock() {
     };
 
     assert_summary(
-        &["sumeragi", "status", "--summary"],
+        &["ops", "sumeragi", "status"],
         "leader=2 hqc=12/4 subj=abcdef12 lqc=10/3 subj=deadbeef gossip=1 drop=2 hint=3 proposal=4 da_resched=0 da_gate=none(last=none;missing=0) epoch_len=3600 epoch_commit=120 epoch_reveal=160 vrf_epoch=7 vrf_late=8 vrf_non_reveal=5 vrf_no_part=6 membership=0/0/0 hash=- rbc_sessions=9 rbc_bytes=1000 rbc_evictions=10 rbc_pressure=11 rbc_last=01234567@13/5 sealed=0 aliases=[-] dvp=none pvp=none",
     );
     assert_summary(
-        &["sumeragi", "leader", "--summary"],
+        &["ops", "sumeragi", "leader"],
         "leader=3 prf_h=20 prf_v=2 seed=feedface",
     );
     assert_summary(
-        &["sumeragi", "telemetry", "--summary"],
+        &["ops", "sumeragi", "telemetry"],
         "availability_votes=123 collectors=3 rbc_pending_sessions=4 vrf_epoch=5 vrf_finalized=true reveals=6 late_reveals=7 committed_no_reveal=8 no_participation=9",
     );
     assert_summary(
-        &["sumeragi", "rbc", "status", "--summary"],
+        &["ops", "sumeragi", "rbc", "status"],
         "active=3 pruned=2 ready=5 deliver=7 bytes=99",
     );
     assert_summary(
-        &["sumeragi", "rbc", "sessions", "--summary"],
+        &["ops", "sumeragi", "rbc", "sessions"],
         "active=2 first=[hash:feedface h:42 v:8 chunks=9/10 ready=3 delivered=true invalid=false] items=2",
     );
 }
@@ -4287,7 +4330,7 @@ fn zk_attachments_flow_against_torii_mock() {
     let upload = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["zk", "attachments", "upload", "--file"])
+        .args(["app", "zk", "attachments", "upload", "--file"])
         .arg(&payload_path)
         .args(["--content-type", "application/json"])
         .output()
@@ -4315,7 +4358,7 @@ fn zk_attachments_flow_against_torii_mock() {
     let list = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["zk", "attachments", "list"])
+        .args(["app", "zk", "attachments", "list"])
         .output()
         .expect("failed to run iroha zk attachments list");
     assert!(
@@ -4345,6 +4388,7 @@ fn zk_attachments_flow_against_torii_mock() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "zk",
             "attachments",
             "get",
@@ -4367,6 +4411,7 @@ fn zk_attachments_flow_against_torii_mock() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "zk",
             "attachments",
             "delete",
@@ -4384,7 +4429,7 @@ fn zk_attachments_flow_against_torii_mock() {
     let list_after = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["zk", "attachments", "list"])
+        .args(["app", "zk", "attachments", "list"])
         .output()
         .expect("failed to run iroha zk attachments list after delete");
     assert!(
@@ -4433,7 +4478,7 @@ fn zk_prover_reports_flow_against_torii_mock() {
     let list = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["zk", "prover", "reports", "list"])
+        .args(["app", "zk", "prover", "reports", "list"])
         .output()
         .expect("failed to run iroha zk prover reports list");
     assert!(
@@ -4456,7 +4501,7 @@ fn zk_prover_reports_flow_against_torii_mock() {
     let count_before = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["zk", "prover", "reports", "count"])
+        .args(["app", "zk", "prover", "reports", "count"])
         .output()
         .expect("failed to run iroha zk prover reports count");
     assert!(
@@ -4473,7 +4518,15 @@ fn zk_prover_reports_flow_against_torii_mock() {
     let get = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["zk", "prover", "reports", "get", "--id", first_id.as_str()])
+        .args([
+            "app",
+            "zk",
+            "prover",
+            "reports",
+            "get",
+            "--id",
+            first_id.as_str(),
+        ])
         .output()
         .expect("failed to run iroha zk prover reports get");
     assert!(
@@ -4491,6 +4544,7 @@ fn zk_prover_reports_flow_against_torii_mock() {
         .arg("--config")
         .arg(&config_path)
         .args([
+            "app",
             "zk",
             "prover",
             "reports",
@@ -4509,7 +4563,7 @@ fn zk_prover_reports_flow_against_torii_mock() {
     let count_after = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["zk", "prover", "reports", "count"])
+        .args(["app", "zk", "prover", "reports", "count"])
         .output()
         .expect("failed to run iroha zk prover reports count after delete");
     assert!(
@@ -4538,7 +4592,7 @@ fn address_convert_outputs_ih58_by_default() {
     let expected_ih58 = encode_account_id_to_ih58(&account, 753).expect("ih58 string");
 
     let output = Command::new(cli_binary())
-        .args(["address", "convert", &canonical])
+        .args(["tools", "address", "convert", &canonical])
         .output()
         .expect("run address convert");
     assert!(
@@ -4565,6 +4619,7 @@ fn address_convert_json_summary_contains_all_formats() {
 
     let output = Command::new(cli_binary())
         .args([
+            "tools",
             "address",
             "convert",
             &ih58,
@@ -4639,6 +4694,7 @@ fn address_convert_handles_account_id_and_append_domain() {
         .args([
             "--config",
             "defaults/client.toml",
+            "tools",
             "address",
             "convert",
             &literal,
@@ -4673,6 +4729,7 @@ fn address_convert_json_summary_includes_domain() {
         .args([
             "--config",
             "defaults/client.toml",
+            "tools",
             "address",
             "convert",
             &literal,
@@ -4720,6 +4777,7 @@ fn address_audit_reports_warnings_and_errors() {
         .args([
             "--config",
             "defaults/client.toml",
+            "tools",
             "address",
             "audit",
             "--input",
@@ -4768,6 +4826,7 @@ fn address_audit_honours_fail_on_warning_flag() {
         .args([
             "--config",
             "defaults/client.toml",
+            "tools",
             "address",
             "audit",
             "--input",
@@ -4787,6 +4846,7 @@ fn address_audit_honours_fail_on_warning_flag() {
         .args([
             "--config",
             "defaults/client.toml",
+            "tools",
             "address",
             "audit",
             "--input",
@@ -4822,6 +4882,7 @@ fn address_audit_summary_includes_input_domain() {
         .args([
             "--config",
             "defaults/client.toml",
+            "tools",
             "address",
             "audit",
             "--input",
@@ -4874,6 +4935,7 @@ fn address_audit_supports_csv_output() {
         .args([
             "--config",
             "defaults/client.toml",
+            "tools",
             "address",
             "audit",
             "--input",
@@ -5056,6 +5118,7 @@ fn space_directory_manifest_audit_bundle_cli() {
 
     let status = Command::new(cli_binary())
         .args([
+            "app",
             "space-directory",
             "manifest",
             "audit-bundle",

@@ -32,7 +32,7 @@ export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-> Use `iroha_cli crypto private-key export --raw --private-key <multihash>` if you
+> Use `iroha_cli tools crypto private-key export --raw --private-key <multihash>` if you
 > need to strip the multihash prefix from the default config.
 
 ## 3. Add dependencies

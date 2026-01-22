@@ -1,6 +1,6 @@
 //! Coverage for the Taikai policy/crypto CLI helpers.
 //!
-//! These tests prove that `iroha taikai cek-rotate` and `iroha taikai rpt-attest`
+//! These tests prove that `iroha app taikai cek-rotate` and `iroha app taikai rpt-attest`
 //! emit deterministic Norito artefacts with the expected digests and metadata.
 
 use std::{
@@ -34,6 +34,7 @@ fn taikai_cli_emits_cek_receipt_and_rpt() {
     let hkdf_salt_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let receipt_status = Command::new(cli_binary())
         .args([
+            "app",
             "taikai",
             "cek-rotate",
             "--event-id",
@@ -90,6 +91,7 @@ fn taikai_cli_emits_cek_receipt_and_rpt() {
     let rpt_json = dir.path().join("rpt.json");
     let rpt_status = Command::new(cli_binary())
         .args([
+            "app",
             "taikai",
             "rpt-attest",
             "--event-id",

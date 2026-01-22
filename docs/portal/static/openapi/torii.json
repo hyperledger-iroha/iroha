@@ -6249,7 +6249,7 @@
         "operationId": "kaigiRelayDetail",
         "parameters": [
           {
-            "description": "Relay account identifier (e.g., `relay@kaigi`).",
+            "description": "Relay account identifier (IH58 preferred; `relay@kaigi` accepted as routing alias).",
             "in": "path",
             "name": "relay_id",
             "required": true,

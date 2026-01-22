@@ -144,7 +144,7 @@ that SoraFS can automatically re-replicate out-of-compliance blobs.
    `ReplicationOrderV1` via the governance tooling described in
    [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md) and re-run the audit
    until the replica set converges. For emergency overrides, pair the CLI output
-   with `iroha da prove-availability` so that SREs can reference the same digest
+   with `iroha app da prove-availability` so that SREs can reference the same digest
    and PDP evidence.
 
 Regression coverage lives in `integration_tests/tests/da/replication_policy.rs`;

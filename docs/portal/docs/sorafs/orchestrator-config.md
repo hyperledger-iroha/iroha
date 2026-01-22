@@ -475,7 +475,7 @@ usual brownout fallback: if the requested PQ tier cannot be satisfied, the
 fetch fails with `no providers` instead of quietly downgrading. Rollback to the
 default behaviour is as simple as clearing the override fields.
 
-The standard `iroha_cli sorafs fetch` command exposes the same override flags,
+The standard `iroha_cli app sorafs fetch` command exposes the same override flags,
 forwarding them to the gateway client so ad-hoc fetches and automation scripts
 share the identical stage pinning behaviour.
 

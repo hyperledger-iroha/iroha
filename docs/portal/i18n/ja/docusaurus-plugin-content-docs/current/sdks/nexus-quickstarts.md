@@ -59,7 +59,7 @@ Nexusのステージングエンドポイントに向けたマネージドデバ
 ## CLI
 
 ```bash
-iroha_cli nexus quickstart \
+iroha_cli app nexus quickstart \
   --torii-url "${NEXUS_TORII_URL}" \
   --pipeline-url "${NEXUS_PIPELINE_URL}" \
   --chain-id "${NEXUS_CHAIN_ID}"

@@ -144,6 +144,6 @@ description: خطة تنفيذ SF-4 التي تغطي آلة الحالات لل
 - `GET /v1/sorafs/aliases` و `GET /v1/sorafs/replication` تكشفان كتالوج alias
   النشط وتراكم اوامر التكرار بترقيم ثابت ومرشحات حالة.
 
-تغلف CLI هذه الاستدعاءات (`iroha sorafs pin list`, `pin show`, `alias list`,
+تغلف CLI هذه الاستدعاءات (`iroha app sorafs pin list`, `pin show`, `alias list`,
 `replication list`) حتى يتمكن المشغلون من اتمتة تدقيقات registry بدون لمس
 واجهات API منخفضة المستوى.

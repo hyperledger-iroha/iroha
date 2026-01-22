@@ -32,7 +32,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | לוגים | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` (או אגרגצית לוגים) | נקו PII לפני שיתוף. |
 | אימות fixture | `cargo xtask address-vectors --verify` | מאשר שהמחולל הקנוני וה-JSON המחויב תואמים. |
 | בדיקת תאימות SDK | `python3 scripts/account_fixture_helper.py check --target <path> --metrics-out artifacts/account_fixture/<label>.prom --metrics-label <label>` | הריצו לכל SDK שדווח בהתראות/כרטיסים. |
-| תקינות לוח גזירה/IME | `iroha address inspect <literal>` | מזהה תווים חבויים או שכתובים של IME; ציינו `address_display_guidelines.md`. |
+| תקינות לוח גזירה/IME | `iroha tools address inspect <literal>` | מזהה תווים חבויים או שכתובים של IME; ציינו `address_display_guidelines.md`. |
 
 ## תגובה מיידית
 
@@ -51,7 +51,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ### רגרסיות מקודדים בלקוח / IME
 
-- בדקו literals שסופקו על ידי משתמשים דרך `iroha address inspect` כדי למצוא joins ברוחב אפס, המרות kana או payloads קטועים.
+- בדקו literals שסופקו על ידי משתמשים דרך `iroha tools address inspect` כדי למצוא joins ברוחב אפס, המרות kana או payloads קטועים.
 - השוו זרימות wallet/explorer מול `docs/source/sns/address_display_guidelines.md` (יעדי העתקה כפולה, אזהרות, עזרי QR) כדי לוודא שהן עוקבות אחר ה-UX המאושר.
 
 ### בעיות manifest או registry
@@ -68,7 +68,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | תרחיש | פעולות |
 |-------|--------|
 | סטיה של fixture | צרו מחדש `fixtures/account/address_vectors.json`, הריצו שוב `cargo xtask address-vectors --verify`, עדכנו חבילות SDK, וצירפו snapshots של `address_fixture.prom` לכרטיס. |
-| רגרסיה ב-SDK/לקוח | פתחו issues שמפנות ל-fixture הקנוני + פלט `iroha address inspect`, וחסמו releases באמצעות CI לפריטי SDK (למשל `ci/check_address_normalize.sh`). |
+| רגרסיה ב-SDK/לקוח | פתחו issues שמפנות ל-fixture הקנוני + פלט `iroha tools address inspect`, וחסמו releases באמצעות CI לפריטי SDK (למשל `ci/check_address_normalize.sh`). |
 | שליחות זדוניות | הגבילו בקצב או חסמו principals פוגעניים, והסלימו ל-Governance אם נדרש tombstone למסננים. |
 
 לאחר שההקלות הוטמעו, הריצו שוב את שאילתת ה-PromQL שלמעלה כדי לוודא ש-`ERR_CHECKSUM_MISMATCH` נשאר באפס (למעט `/tests/*`) במשך לפחות 30 דקות לפני הורדת האירוע.

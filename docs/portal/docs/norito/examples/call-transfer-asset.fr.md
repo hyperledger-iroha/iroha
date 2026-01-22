@@ -24,7 +24,7 @@ Démontre comment un point d'entrée Kotodama peut appeler l'instruction hôte `
 
 - Approvisionnez l'autorité du contrat (par exemple `ih58...`) avec l'actif qu'elle transférera et accordez-lui le rôle `CanTransfer` ou une permission équivalente.
 - Appelez le point d'entrée `call_transfer_asset` pour transférer 5 unités du compte du contrat vers `ih58...`, en reflétant la manière dont l'automatisation on-chain peut encapsuler des appels hôte.
-- Vérifiez les soldes via `FindAccountAssets` ou `iroha_cli assets list --account ih58...` et inspectez les événements pour confirmer que le garde de métadonnées a journalisé le contexte du transfert.
+- Vérifiez les soldes via `FindAccountAssets` ou `iroha_cli ledger assets list --account ih58...` et inspectez les événements pour confirmer que le garde de métadonnées a journalisé le contexte du transfert.
 
 ## Guides SDK associés
 

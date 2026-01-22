@@ -112,7 +112,7 @@ O node registra a politica de roteamento derivada durante o startup. Quaisquer e
 Assim que o node estiver online, use o helper do CLI para verificar se o lane padrao esta selado (manifest carregado) e pronto para trafego. A visao de resumo imprime uma linha por lane:
 
 ```bash
-iroha_cli nexus lane-report --summary
+iroha_cli app nexus lane-report --summary
 ```
 
 Example output:

@@ -13,7 +13,7 @@ translation_last_reviewed: 2025-12-28
 
 # Runbook de simulation de capacité SoraFS
 
-Ce runbook explique comment exercer le kit de simulation du marketplace de capacité SF-2c et visualiser les métriques résultantes. L'objectif est de valider la négociation de quotas, la gestion du failover et la remédiation du slashing de bout en bout à l'aide des fixtures reproductibles dans `docs/examples/sorafs_capacity_simulation/`. Les payloads de capacité utilisent toujours `sorafs_manifest_stub capacity`; utilisez `iroha sorafs toolkit pack` pour les flux d'empaquetage manifest/CAR.
+Ce runbook explique comment exercer le kit de simulation du marketplace de capacité SF-2c et visualiser les métriques résultantes. L'objectif est de valider la négociation de quotas, la gestion du failover et la remédiation du slashing de bout en bout à l'aide des fixtures reproductibles dans `docs/examples/sorafs_capacity_simulation/`. Les payloads de capacité utilisent toujours `sorafs_manifest_stub capacity`; utilisez `iroha app sorafs toolkit pack` pour les flux d'empaquetage manifest/CAR.
 
 ## 1. Générer les artefacts CLI
 

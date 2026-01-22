@@ -96,7 +96,7 @@ Campos de encabezado de `manifest.json`:
 6. **Sanidad de entradas.**
    - Las entradas `global_domain` DEBEN incluir `{ "domain": "example", "chain": "sora:nexus:global", "selector": "global" }`.
    - Las entradas `local_alias` DEBEN incorporar el digest de 12 bytes producido
-     por Norm v1 (use `iroha address convert <address-or-account_id> --format json --expect-prefix 753`
+     por Norm v1 (use `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`
      para confirmar; el resumen JSON refleja el dominio provisto vía `input_domain` y
      `--append-domain` reproduce la codificación convertida como `<ih58>@<domain>` para manifiestos).
    - Las entradas `tombstone` DEBEN referenciar el selector exacto a retirar e
@@ -133,7 +133,7 @@ Campos de encabezado de `manifest.json`:
 2. **Derivar payloads canónicos.** Para cada alias a actualizar, ejecute:
 
    ```bash
-   iroha address convert snx1...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
+   iroha tools address convert snx1...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
    jq '.canonical_hex, .input_domain' /tmp/alias.json
    ```
 

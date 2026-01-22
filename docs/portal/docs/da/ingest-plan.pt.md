@@ -209,7 +209,7 @@ chunking e verificacao de manifests opcionais.
 
 ## Tooling de CLI & SDK (DA-8)
 
-- `iroha da submit` (novo entrypoint CLI) agora envolve o builder/publisher de
+- `iroha app da submit` (novo entrypoint CLI) agora envolve o builder/publisher de
   ingestao compartilhado para que operadores possam ingerir blobs arbitrarios
   fora do fluxo de Taikai bundle. O comando vive em
   `crates/iroha_cli/src/commands/da.rs:1` e consome um payload, perfil de
@@ -225,8 +225,8 @@ chunking e verificacao de manifests opcionais.
   offline mais `--endpoint` para hosts Torii personalizados. O receipt JSON e
   impresso no stdout alem de ser escrito no disco, fechando o requisito de
   tooling "submit_blob" da DA-8 e destravando o trabalho de paridade do SDK.
-- `iroha da get` adiciona um alias focado em DA para o orquestrador multi-source
-  que ja alimenta `iroha sorafs fetch`. Operadores podem apontar para artefatos
+- `iroha app da get` adiciona um alias focado em DA para o orquestrador multi-source
+  que ja alimenta `iroha app sorafs fetch`. Operadores podem apontar para artefatos
   de manifest + chunk-plan (`--manifest`, `--plan`, `--manifest-id`) **ou**
   passar um storage ticket Torii via `--storage-ticket`. Quando o caminho do
   ticket e usado, a CLI baixa o manifest de `/v1/da/manifests/<ticket>`,
@@ -239,12 +239,12 @@ chunking e verificacao de manifests opcionais.
   via `--manifest-endpoint` para hosts Torii personalizados, entao os checks
   end-to-end de availability vivem totalmente sob o namespace `da` sem duplicar
   logica do orquestrador.
-- `iroha da get-blob` baixa manifests canonicos direto de Torii via
+- `iroha app da get-blob` baixa manifests canonicos direto de Torii via
   `GET /v1/da/manifests/{storage_ticket}`. O comando escreve
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` e
   `chunk_plan_{ticket}.json` sob `artifacts/da/fetch_<timestamp>/` (ou um
   `--output-dir` fornecido pelo usuario) enquanto imprime o comando exato de
-  `iroha da get` (incluindo `--manifest-id`) necessario para o fetch do
+  `iroha app da get` (incluindo `--manifest-id`) necessario para o fetch do
   orquestrador. Isso mantem operadores fora dos diretorios spool de manifests e
   garante que o fetcher sempre use os artefatos assinados emitidos por Torii. O
   cliente Torii JavaScript espelha o mesmo fluxo via
@@ -256,7 +256,7 @@ chunking e verificacao de manifests opcionais.
   orquestrador SoraFS para que clientes iOS possam baixar manifests, executar
   fetches multi-source e capturar provas sem invocar a CLI.
   [IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240][IrohaSwift/Sources/IrohaSwift/SorafsOrchestratorClient.swift:12]
-- `iroha da rent-quote` calcula rentas deterministicas e o detalhamento de
+- `iroha app da rent-quote` calcula rentas deterministicas e o detalhamento de
   incentivos para um tamanho de storage e janela de retencao fornecidos. O helper
   consome a `DaRentPolicyV1` ativa (JSON ou bytes Norito) ou o default embutido,
   valida a politica e imprime um resumo JSON (`gib`, `months`, metadata de
@@ -272,11 +272,11 @@ chunking e verificacao de manifests opcionais.
   `crates/iroha_cli/src/commands/da.rs` para o subcomando e
   `docs/source/da/rent_policy.md` para o schema de politica.
   [crates/iroha_cli/src/commands/da.rs:1][docs/source/da/rent_policy.md:1]
-- `iroha da prove-availability` encadeia tudo acima: recebe um storage ticket,
+- `iroha app da prove-availability` encadeia tudo acima: recebe um storage ticket,
   baixa o bundle canonico de manifest, executa o orquestrador multi-source
-  (`iroha sorafs fetch`) contra a lista `--gateway-provider` fornecida, persiste
+  (`iroha app sorafs fetch`) contra a lista `--gateway-provider` fornecida, persiste
   o payload baixado + scoreboard sob `artifacts/da/prove_availability_<timestamp>/`,
-  e invoca imediatamente o helper PoR existente (`iroha da prove`) usando os
+  e invoca imediatamente o helper PoR existente (`iroha app da prove`) usando os
   bytes baixados. Operadores podem ajustar os knobs do orquestrador
   (`--max-peers`, `--scoreboard-out`, overrides de endpoint de manifest) e o
   sampler de proof (`--sample-count`, `--leaf-index`, `--sample-seed`) enquanto um

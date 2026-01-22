@@ -24,7 +24,7 @@ Demuestra la creación de dominios con permisos, el registro de activos y la acu
 
 - Asegúrate de que exista la cuenta de destino (por ejemplo `ih58...`), reflejando la fase de configuración en cada quickstart del SDK.
 - Invoca el entrypoint `register_and_mint` para crear la definición de activo ROSE y acuñar 250 unidades para Alice en una sola transacción.
-- Verifica los balances mediante `client.request(FindAccountAssets)` o `iroha_cli assets list --account ih58...` para confirmar que la acuñación tuvo éxito.
+- Verifica los balances mediante `client.request(FindAccountAssets)` o `iroha_cli ledger assets list --account ih58...` para confirmar que la acuñación tuvo éxito.
 
 ## Guías de SDK relacionadas
 

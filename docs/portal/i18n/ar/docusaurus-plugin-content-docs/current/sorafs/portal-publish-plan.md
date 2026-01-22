@@ -70,7 +70,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
 TORII_URL="https://torii.stg.sora.net/"
-AUTHORITY="docs-admin@sora"
+AUTHORITY="ih58..."
 KEY_FILE="secrets/docs-admin.key"
 ALIAS_PROOF="secrets/docs.alias.proof"
 SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v1/status | jq '.sumeragi.epoch')"
@@ -92,10 +92,10 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 
 - كرر ذلك لـ `openapi.manifest.to` و manifests الخاصة بـ SBOM (احذف اعلام alias لحزم SBOM
   الا اذا خصصت الحوكمة namespace).
-- بديل: `iroha sorafs pin register` يعمل باستخدام digest من ملخص الارسال اذا كان
+- بديل: `iroha app sorafs pin register` يعمل باستخدام digest من ملخص الارسال اذا كان
   الثنائي مثبتا بالفعل.
 - تحقق من حالة registry عبر
-  `iroha sorafs pin list --alias docs:portal --format json | jq`.
+  `iroha app sorafs pin list --alias docs:portal --format json | jq`.
 - لوحات المتابعة: `sorafs_pin_registry.json` (مقاييس `torii_sorafs_replication_*`).
 
 ## 3. رؤوس البوابة والـ proofs
@@ -103,7 +103,7 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 ولّد كتلة رؤوس HTTP + بيانات الربط:
 
 ```bash
-iroha sorafs gateway route-plan \
+iroha app sorafs gateway route-plan \
   --manifest-json "${OUT}/portal.manifest.json" \
   --hostname docs.sora \
   --alias docs:portal \

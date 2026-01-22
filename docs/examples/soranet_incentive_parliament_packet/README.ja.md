@@ -13,7 +13,7 @@ translation_last_reviewed: 2026-01-01
 
 このバンドルは、Sora Parliament が自動 relay 支払い (SNNet-7) を承認するために必要な artefacts をまとめたものです:
 
-- `reward_config.json` - Norito でシリアライズ可能な報酬エンジン設定で、`iroha sorafs incentives service init` により取り込める状態。`budget_approval_id` はガバナンス議事録に記載された hash と一致します。
+- `reward_config.json` - Norito でシリアライズ可能な報酬エンジン設定で、`iroha app sorafs incentives service init` により取り込める状態。`budget_approval_id` はガバナンス議事録に記載された hash と一致します。
 - `shadow_daemon.json` - replay harness (`shadow-run`) と本番 daemon が使用する受益者および bond のマッピング。
 - `economic_analysis.md` - 2025-10 -> 2025-11 shadow シミュレーションの公平性サマリ。
 - `rollback_plan.md` - 自動支払いを無効化するための運用 playbook。

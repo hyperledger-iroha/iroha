@@ -64,9 +64,9 @@ let filter = SpaceDirectoryEventFilter::new()
 |---------|-----------|---------|--------|
 | Draft | مالك الـ dataspace | استنساخ fixture، تعديل صلاحيات/حوكمة، تشغيل `cargo test -p iroha_data_model nexus::manifest`. | فرق Git، سجل الاختبارات. |
 | Review | مجموعة الحوكمة | التحقق من JSON الخاص بالـ manifest + بايتات Norito، وتوقيع سجل القرار. | محضر موقَّع، هاش manifest (BLAKE3 + Norito `.to`). |
-| Publish | مشغلو الـ lane | الإرسال عبر CLI (`iroha space-directory manifest publish`) باستخدام payload Norito `.to` أو JSON خام **أو** إرسال POST إلى `/v1/space-directory/manifests` مع JSON للـ manifest + سبب اختياري، ثم التحقق من استجابة Torii والتقاط `SpaceDirectoryEvent`. | إيصال CLI/Torii، سجل الأحداث. |
-| Expire | مشغلو الـ lane / الحوكمة | تشغيل `iroha space-directory manifest expire` (UAID، dataspace، epoch) عندما يصل manifest لنهاية عمره، التحقق من `SpaceDirectoryEvent::ManifestExpired`، وأرشفة دلائل تنظيف الـ bindings. | مخرجات CLI، سجل الأحداث. |
-| Revoke | الحوكمة + مشغلو الـ lane | تشغيل `iroha space-directory manifest revoke` (UAID، dataspace، epoch، reason) **أو** إرسال POST إلى `/v1/space-directory/manifests/revoke` بالـ payload نفسه إلى Torii، التحقق من `SpaceDirectoryEvent::ManifestRevoked` وتحديث حزمة الأدلة. | إيصال CLI/Torii، سجل الأحداث، ملاحظة في التذكرة. |
+| Publish | مشغلو الـ lane | الإرسال عبر CLI (`iroha app space-directory manifest publish`) باستخدام payload Norito `.to` أو JSON خام **أو** إرسال POST إلى `/v1/space-directory/manifests` مع JSON للـ manifest + سبب اختياري، ثم التحقق من استجابة Torii والتقاط `SpaceDirectoryEvent`. | إيصال CLI/Torii، سجل الأحداث. |
+| Expire | مشغلو الـ lane / الحوكمة | تشغيل `iroha app space-directory manifest expire` (UAID، dataspace، epoch) عندما يصل manifest لنهاية عمره، التحقق من `SpaceDirectoryEvent::ManifestExpired`، وأرشفة دلائل تنظيف الـ bindings. | مخرجات CLI، سجل الأحداث. |
+| Revoke | الحوكمة + مشغلو الـ lane | تشغيل `iroha app space-directory manifest revoke` (UAID، dataspace، epoch، reason) **أو** إرسال POST إلى `/v1/space-directory/manifests/revoke` بالـ payload نفسه إلى Torii، التحقق من `SpaceDirectoryEvent::ManifestRevoked` وتحديث حزمة الأدلة. | إيصال CLI/Torii، سجل الأحداث، ملاحظة في التذكرة. |
 | Monitor | SRE/الامتثال | مراقبة الـ telemetry + سجلات التدقيق، وضبط تنبيهات لحالات revocation/expiry. | لقطة شاشة من Grafana، سجلات مؤرشفة. |
 | Rotate/Revoke | مشغلو الـ lane + الحوكمة | تجهيز manifest بديل (epoch جديد)، إجراء تمرين tabletop، فتح incident (في حالة revoke). | تذكرة روتेशन، تقرير post‑mortem. |
 
@@ -163,7 +163,7 @@ POST /v1/space-directory/manifests
 
 ```jsonc
 {
-  "authority": "ops@cbdc",
+  "authority": "ih58...",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -219,7 +219,7 @@ POST /v1/space-directory/manifests/revoke
 
 ```jsonc
 {
-  "authority": "ops@cbdc",
+  "authority": "ih58...",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
   "dataspace": 11,
@@ -238,7 +238,7 @@ POST /v1/space-directory/manifests/revoke
 تجمع الـ profiles كل ما يحتاجه validator جديد قبل الاتصال. Fixture
 `profile/cbdc_lane_profile.json` يوضح:
 
-- مصدر الحوكمة/الكورم (`parliament@cbdc` + معرف تذكرة الأدلة).
+- مصدر الحوكمة/الكورم (`ih58...` + معرف تذكرة الأدلة).
 - مجموعة الـ validators + الكورم والمساحات المحمية (`cbdc`, `gov`).
 - ملف DA (الفئة A، قائمة الشهود (attesters)، وتيرة التدوير).
 - معرف مجموعة composability والـ whitelist التي تربط UAIDs مع capability manifests.
@@ -271,7 +271,7 @@ POST /v1/space-directory/manifests/revoke
    BLAKE3‑256):
 
    ```bash
-   iroha space-directory manifest encode \
+   iroha app space-directory manifest encode \
      --json fixtures/space_directory/capability/cbdc_wholesale.manifest.json \
      --out artifacts/nexus/cbdc/manifest/cbdc_wholesale.manifest.to
    ```
@@ -280,7 +280,7 @@ POST /v1/space-directory/manifests/revoke
 
    ```bash
    # إذا كنت قد شفّرت manifest مسبقًا إلى Norito:
-   iroha space-directory manifest publish \
+   iroha app space-directory manifest publish \
      --uaid uaid:0f4d…ab11 \
      --dataspace 11 \
      --payload artifacts/nexus/cbdc/manifest/cbdc_wholesale.manifest.to

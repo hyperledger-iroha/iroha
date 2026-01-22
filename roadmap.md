@@ -105,7 +105,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 - [x] Resolve build-directory lock timeouts so full-workspace test runs complete reliably (standardize `CARGO_TARGET_DIR` or serialize builds).
 
 4. **LOCALNET-10K-TPS — 7-peer localnet throughput + stall resilience** (Consensus/Performance/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈺 In Progress, target TBD)
-- [ ] Use the new pending-block/commit-inflight metrics to isolate pacemaker backpressure during 100 TPS localnet runs (recent 7-peer release runs still show 3.6–5.7s slots with 8–12 view changes); identify the proposal-gap root cause and re-test.
+- [ ] Use the new pending-block/commit-inflight metrics to isolate pacemaker backpressure during 100 TPS localnet runs (run151 NPoS: avg slot 5.68s, view changes 11, proposal_gap 1, pending/inflight <=4/1; run152 permissioned + commit_time_ms=300: avg slot 10.69s, view changes 18, pending/inflight <=4/1); identify the proposal-gap root cause and re-test.
  - [x] NPoS roster selection now appends active validators missing from the commit topology so the full validator set participates; unit coverage added.
  - [x] Seed commit topology from the checkpoint topology when world peers are incomplete (prevents genesis roster shrink/QC stalls); unit coverage added.
  - [x] Add a Kagami/localnet regression that asserts validator count + commit QC validator-set length match the peer count on startup.
@@ -415,6 +415,11 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Replace `docs/source/mochi/packaging.*` stubs (he/ja) with translations.
  - [x] Replace `docs/source/mochi/index.*` stubs (he/ja) with translations.
  - [x] Replace `docs/source/mochi/quickstart.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/mochi/troubleshooting.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/benchmarks/history.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/agents.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/agents/missing_docs_inventory.*` stubs (he/ja) with translations.
+ - [x] Replace `docs/source/agents/env_var_migration.*` stubs (he/ja) with translations.
  - [ ] Replace stub translation files across repo root, `docs/source`, and `docs/portal` (preserve front matter, keep `source_hash`/`translation_last_reviewed` aligned).
  - [x] Complete translations for core policy/docs (CODE_OF_CONDUCT, PATENTS, README, AGENTS, status/roadmap, configuration/runbooks).
  - [ ] Prioritize portal docs: `docs/portal/i18n/*/docusaurus-plugin-content-docs` (especially SoraFS/SoraNet) and mark completion per locale.

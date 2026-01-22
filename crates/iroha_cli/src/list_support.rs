@@ -60,7 +60,7 @@ impl From<CliOrder> for SortOrder {
 /// Arguments for "list all" invocations.
 #[derive(clap::Args, Debug, Clone)]
 pub struct AllArgs {
-    /// Display detailed entry information instead of just IDs
+    /// Display detailed entry information instead of just IDs (when supported)
     #[arg(short, long)]
     pub verbose: bool,
     #[command(flatten)]

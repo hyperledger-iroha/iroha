@@ -179,13 +179,13 @@ When the worker exhausts the byte or time budget, it stops scheduling new attach
 Use the CLI to interact with the app API (requires Torii URL and any API token if configured):
 
 - Attachments:
-  - `iroha zk attachments upload --file <PATH> [--content-type <MIME>]`
-  - `iroha zk attachments list`
-  - `iroha zk attachments get --id <ID> --out <PATH>`
-  - `iroha zk attachments delete --id <ID>`
+  - `iroha app zk attachments upload --file <PATH> [--content-type <MIME>]`
+  - `iroha app zk attachments list`
+  - `iroha app zk attachments get --id <ID> --out <PATH>`
+  - `iroha app zk attachments delete --id <ID>`
 - Verification stubs:
-  - `iroha zk verify --json <PATH>` or `--norito <PATH>`
-  - `iroha zk submit-proof --json <PATH>` or `--norito <PATH>`
+  - `iroha app zk verify --json <PATH>` or `--norito <PATH>`
+  - `iroha app zk submit-proof --json <PATH>` or `--norito <PATH>`
 
 ## Verifying Key Registry (App API)
 
@@ -230,10 +230,10 @@ DTOs (POST bodies, JSON):
   - `commitment_hex` (hex, 64) — commitment only; when bytes are omitted you must supply `vk_len` so the record captures verifier size metadata.
 
 CLI wrappers:
-- Register: `iroha zk vk register --json ./vk_register.json`
-- Update: `iroha zk vk update --json ./vk_update.json`
-- Deprecate: `iroha zk vk deprecate --json ./vk_deprecate.json`
-- Get: `iroha zk vk get --backend <backend> --name <name>`
+- Register: `iroha app zk vk register --json ./vk_register.json`
+- Update: `iroha app zk vk update --json ./vk_update.json`
+- Deprecate: `iroha app zk vk deprecate --json ./vk_deprecate.json`
+- Get: `iroha app zk vk get --backend <backend> --name <name>`
 
 Example `vk_register.json`:
 ```json
@@ -279,7 +279,7 @@ Examples:
 1) Listen to all events for a proof id:
 
 ```
-iroha trigger register \
+iroha ledger trigger register \
   --id proof_watch \
   --filter data \
   --data-proof halo2/ipa:0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd0123abcd \
@@ -289,7 +289,7 @@ iroha trigger register \
 2) Only successes (Verified) for that proof:
 
 ```
-iroha trigger register \
+iroha ledger trigger register \
   --id proof_successes \
   --filter data \
   --data-proof halo2/ipa:0123abcd... \

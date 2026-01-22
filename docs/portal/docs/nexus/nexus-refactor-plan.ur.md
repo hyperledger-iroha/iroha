@@ -61,7 +61,7 @@ description: `docs/source/nexus_refactor_plan.md` کا آئینہ، جو Iroha 3
    - pagination/cursor logic کو `crates/iroha_core/src/query/` کے تحت reusable components میں منتقل کریں۔ `iroha_data_model` میں Norito representations کو align کریں۔
    - triggers، assets اور roles کے لئے deterministic ordering کے ساتھ snapshot queries شامل کریں (موجودہ coverage `crates/iroha_core/tests/snapshot_iterable.rs` میں ٹریک ہے)۔
 3. **Snapshot Consistency**
-   - یقینی بنائیں کہ `iroha query` CLI وہی snapshot path استعمال کرے جو Sumeragi/fetchers استعمال کرتے ہیں۔
+   - یقینی بنائیں کہ `iroha ledger query` CLI وہی snapshot path استعمال کرے جو Sumeragi/fetchers استعمال کرتے ہیں۔
    - CLI snapshot regression tests `tests/cli/state_snapshot.rs` میں ہیں (slow runs کے لئے feature-gated)۔
 
 ### Phase C - Sumeragi Pipeline

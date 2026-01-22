@@ -95,7 +95,7 @@ address-manifest-<REVISION>/
 6. **Проверка записей.**
    - Записи `global_domain` ДОЛЖНЫ включать `{ "domain": "example", "chain": "sora:nexus:global", "selector": "global" }`.
    - Записи `local_alias` ДОЛЖНЫ содержать 12‑байтный digest, сформированный Norm v1
-     (проверьте `iroha address convert <address-or-account_id> --format json --expect-prefix 753`;
+     (проверьте `iroha tools address convert <address-or-account_id> --format json --expect-prefix 753`;
      JSON‑сводка отражает домен через `input_domain`, а `--append-domain` воспроизводит кодировку как `<ih58>@<domain>` для манифестов).
    - Записи `tombstone` ДОЛЖНЫ ссылаться на точный selector, подлежащий выводу,
      и содержать поля `reason_code`, `ticket`, `replaces_sequence`.
@@ -131,7 +131,7 @@ address-manifest-<REVISION>/
 2. **Вывести канонические payload.** Для каждого alias выполните:
 
    ```bash
-   iroha address convert snx1...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
+   iroha tools address convert snx1...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
    jq '.canonical_hex, .input_domain' /tmp/alias.json
    ```
 

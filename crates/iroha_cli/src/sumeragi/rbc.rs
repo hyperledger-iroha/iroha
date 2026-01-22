@@ -3,7 +3,7 @@
 use eyre::Result;
 use norito::json::Value;
 
-use crate::RunContext;
+use crate::{CliOutputFormat, RunContext};
 
 use super::commands::{RbcCommand, RbcSessionsArgs, RbcStatusArgs};
 
@@ -14,23 +14,21 @@ pub(crate) fn run<C: RunContext>(context: &mut C, cmd: RbcCommand) -> Result<()>
     }
 }
 
-fn status<C: RunContext>(context: &mut C, args: RbcStatusArgs) -> Result<()> {
+fn status<C: RunContext>(context: &mut C, _args: RbcStatusArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_rbc_status_json()?;
-    if args.summary {
-        context.println(summarize_rbc_status(&value))
-    } else {
-        context.print_data(&value)
+    match context.output_format() {
+        CliOutputFormat::Text => context.println(summarize_rbc_status(&value)),
+        CliOutputFormat::Json => context.print_data(&value),
     }
 }
 
-fn sessions<C: RunContext>(context: &mut C, args: RbcSessionsArgs) -> Result<()> {
+fn sessions<C: RunContext>(context: &mut C, _args: RbcSessionsArgs) -> Result<()> {
     let client = context.client_from_config();
     let value = client.get_sumeragi_rbc_sessions_json()?;
-    if args.summary {
-        context.println(summarize_rbc_sessions(&value))
-    } else {
-        context.print_data(&value)
+    match context.output_format() {
+        CliOutputFormat::Text => context.println(summarize_rbc_sessions(&value)),
+        CliOutputFormat::Json => context.print_data(&value),
     }
 }
 

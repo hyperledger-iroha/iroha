@@ -89,7 +89,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 | المكون | الحالة | ملاحظات |
 |--------|--------|---------|
 | `sorafs_manifest_chunk_store` | ✅ مدعوم | يتحقق من المقبض المعتمد + البدائل، ويبث التقارير عبر `--json-out=-`، ويفرض ميثاق السجل عبر `ensure_charter_compliance()`. |
-| `sorafs_manifest_stub` | ⚠️ قديم | مُنشئ manifest قديم؛ استخدم `iroha sorafs toolkit pack` لتغليف CAR/manifest وأبقِ `--plan=-` لإعادة التحقق الحتمية. |
+| `sorafs_manifest_stub` | ⚠️ قديم | مُنشئ manifest قديم؛ استخدم `iroha app sorafs toolkit pack` لتغليف CAR/manifest وأبقِ `--plan=-` لإعادة التحقق الحتمية. |
 | `sorafs_provider_advert_stub` | ⚠️ قديم | مساعد تحقق offline فقط؛ يجب إنتاج provider adverts عبر خط أنابيب النشر والتحقق منها عبر `/v1/sorafs/providers`. |
 | `sorafs_fetch` (developer orchestrator) | ✅ مدعوم | يقرأ `chunk_fetch_specs` ويفهم حمولة قدرة `range` ويجمع إخراج CARv2. |
 | Fixtures للـ SDK (Rust/Go/TS) | ✅ مدعوم | يُعاد توليدها عبر `export_vectors`؛ المقبض المعتمد يظهر أولاً في كل قائمة بدائل ويُوقَّع بواسطة أظرف المجلس. |
@@ -213,4 +213,4 @@ ProviderAdvertBodyV1 {
   `fixtures/sorafs_chunker` والمجموعات المسجلة تحت
   `fuzz/sorafs_chunker`. يتم اختبار التكافؤ الطرفي في Rust وGo وNode عبر الاختبارات المتاحة.
 * تؤكد `chunker_registry::lookup_by_profile` أن معلمات الوصف تطابق `ChunkProfile::DEFAULT` للحماية من الانحرافات العرضية.
-* تتضمن manifests الناتجة عن `iroha sorafs toolkit pack` و `sorafs_manifest_stub` بيانات السجل.
+* تتضمن manifests الناتجة عن `iroha app sorafs toolkit pack` و `sorafs_manifest_stub` بيانات السجل.

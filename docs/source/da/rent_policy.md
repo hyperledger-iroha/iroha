@@ -37,14 +37,14 @@ potr_bonus_bps = 250                          # 2.5% PoTR bonus
 egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
 ```
 
-CLI tooling (`iroha da rent-quote`) accepts the same Norito/JSON policy inputs
+CLI tooling (`iroha app da rent-quote`) accepts the same Norito/JSON policy inputs
 and emits artefacts that mirror the active `DaRentPolicyV1` without reaching
 back into Torii state. Supply the policy snapshot used for an ingest run so the
 quote remains reproducible.
 
 ### Persisting rent quote artefacts
 
-Run `iroha da rent-quote --gib <size> --months <months> --quote-out <path>` to
+Run `iroha app da rent-quote --gib <size> --months <months> --quote-out <path>` to
 emit both the on-screen summary and a pretty-printed JSON artefact. The file
 records `policy_source`, the inlined `DaRentPolicyV1` snapshot, the computed
 `DaRentQuote`, and a derived `ledger_projection` (serialized via
@@ -84,7 +84,7 @@ the per-proof bonus pools without requiring bespoke orchestration code.
 
 ### Generating rent ledger plans
 
-Run `iroha da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
+Run `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
 to convert a persisted rent quote into executable ledger transfers. The command
 parses the embedded `ledger_projection`, emits Norito `Transfer` instructions
 that collect the base rent into the treasury, routes the reserve/provider
@@ -146,7 +146,7 @@ audits to prove which parameters were in force for any given blob.
   payout derived from `base_rent × bonus_bps`. When the DA scheduler emits proof
   receipts it includes the basis-point tags so incentives can be replayed.
 - **Egress credit:** Providers record GiB served per manifest, multiply by
-  `egress_credit_per_gib`, and submit the receipts via `iroha da prove-availability`.
+  `egress_credit_per_gib`, and submit the receipts via `iroha app da prove-availability`.
   The rent policy keeps the per-GiB amount in sync with governance.
 
 ## Operational flow

@@ -178,7 +178,7 @@ runBlocking {
 ## CLI (`iroha_cli`)
 
 ```bash
-iroha_cli nexus quickstart \
+iroha_cli app nexus quickstart \
   --torii-url "${NEXUS_TORII_URL}" \
   --pipeline-url "${NEXUS_PIPELINE_URL}" \
   --chain-id "${NEXUS_CHAIN_ID}" \
@@ -197,7 +197,7 @@ passe argumentos `--lane-id`/`--dataspace-id` que correspondam ao catalogo de la
 | JS/TS | `npm run test:nexus` | Teste Jest que garante que as URLs do Torii + pipeline funcionam. |
 | Swift | `swift test --filter NexusQuickstartTests` | Simulador iOS busca o status. |
 | Android | `./gradlew :iroha-android:nexusQuickstartTest` | Dispositivo gerenciado acessa staging. |
-| CLI | `iroha_cli nexus quickstart --dry-run` | Valida a config antes de enviar chamadas de rede. |
+| CLI | `iroha_cli app nexus quickstart --dry-run` | Valida a config antes de enviar chamadas de rede. |
 
 ## Solucao de problemas
 

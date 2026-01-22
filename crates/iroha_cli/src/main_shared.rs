@@ -70,6 +70,15 @@ pub mod json_macros {
     pub use norito::derive::{FastJsonWrite, JsonDeserialize, JsonSerialize};
 }
 
+/// Output format for CLI responses.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CliOutputFormat {
+    /// Emit JSON only.
+    Json,
+    /// Emit human-readable text when available.
+    Text,
+}
+
 /// Iroha Client CLI provides a simple way to interact with the Iroha Web API.
 #[derive(clap::Parser, Debug)]
 #[command(name = env!("CARGO_BIN_NAME"), version = env!("CARGO_PKG_VERSION"), author)]
@@ -99,6 +108,9 @@ struct Args {
     /// `iroha -o domain register --id "domain" | iroha -io asset definition register --id "asset#domain" -t Numeric | iroha transaction stdin`
     #[arg(short, long)]
     output: bool,
+    /// Output format for command responses.
+    #[arg(long = "output-format", value_enum, default_value_t = CliOutputFormat::Json)]
+    output_format: CliOutputFormat,
     /// Language code for messages, overrides system language
     #[arg(long, value_name("LANG"))]
     language: Option<String>,
@@ -109,149 +121,18 @@ struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 enum Command {
-    /// Read and write domains
+    /// Ledger data and transaction helpers
     #[command(subcommand)]
-    Domain(domain::Command),
-    /// Read and write accounts
+    Ledger(ledger::Command),
+    /// Node and operator helpers
     #[command(subcommand)]
-    Account(account::Command),
-    /// Account address helpers (IH58 (preferred)/snx1 (second-best) conversions)
+    Ops(ops::Command),
+    /// App API helpers and product tooling
     #[command(subcommand)]
-    Address(address::Command),
-    /// Read and write assets
+    App(app::Command),
+    /// Developer utilities and diagnostics
     #[command(subcommand)]
-    Asset(asset::Command),
-    /// Read and write NFTs
-    #[command(subcommand)]
-    Nft(nft::Command),
-    /// Read and write peers
-    #[command(subcommand)]
-    Peer(peer::Command),
-    /// Subscribe to events: state changes, transaction/block/trigger progress
-    Events(events::Args),
-    /// Subscribe to blocks
-    Blocks(blocks::Args),
-    /// Read and write multi-signature accounts and transactions.
-    ///
-    /// See the [usage guide](./docs/multisig.md) for details
-    #[command(subcommand)]
-    Multisig(multisig::Command),
-    /// Read various data
-    #[command(subcommand)]
-    Query(query::Command),
-    /// Read transactions and write various data
-    #[command(subcommand)]
-    Transaction(transaction::Command),
-    /// Read and write roles
-    #[command(subcommand)]
-    Role(role::Command),
-    /// Read and write system parameters
-    #[command(subcommand)]
-    Parameter(parameter::Command),
-    /// Read and write triggers
-    #[command(subcommand)]
-    Trigger(trigger::Command),
-    /// Inspect offline allowances and offline-to-online bundles
-    #[command(subcommand)]
-    Offline(offline::Command),
-    /// Read and write the executor
-    #[command(subcommand)]
-    Executor(executor::Command),
-    /// Output CLI documentation in Markdown format
-    MarkdownHelp(MarkdownHelp),
-    /// Show versions and git SHA of client and server
-    Version(Version),
-    /// Zero-knowledge helpers (roots, etc.)
-    #[command(subcommand)]
-    Zk(zk::Command),
-    /// Cryptography helpers (SM2/SM3/SM4)
-    #[command(subcommand)]
-    Crypto(crypto::Command),
-    /// Confidential asset tooling helpers
-    #[command(subcommand)]
-    Confidential(confidential::Command),
-    /// IVM/ABI helpers (e.g., compute ABI hash)
-    #[command(subcommand)]
-    Ivm(ivm_cli::Command),
-    /// Governance helpers (app API convenience)
-    #[command(subcommand)]
-    Gov(gov::Command),
-    /// Sumeragi helpers (status)
-    #[command(subcommand)]
-    Sumeragi(sumeragi::Command),
-    /// Taikai publisher tooling (CAR bundler, envelopes)
-    #[command(subcommand)]
-    Taikai(commands::taikai::Command),
-    /// Content hosting helpers
-    #[command(subcommand)]
-    Content(content::Command),
-    /// Data availability helpers (ingest tooling)
-    #[command(subcommand)]
-    Da(commands::da::Command),
-    /// Streaming helpers (HPKE fingerprints, suite listings)
-    #[command(subcommand)]
-    Streaming(commands::streaming::Command),
-    /// Nexus helpers (lanes, governance)
-    #[command(subcommand)]
-    Nexus(nexus::Command),
-    /// Public-lane staking helpers (register/activate/exit)
-    #[command(subcommand)]
-    Staking(staking::Command),
-    /// Subscription plan and billing helpers
-    #[command(subcommand)]
-    Subscriptions(subscriptions::Command),
-    /// Domain endorsement helpers (committees, policies, submissions)
-    #[command(subcommand)]
-    Endorsement(endorsement::Command),
-    /// Jurisdiction Data Guardian helpers (attestations and SDN registries)
-    #[command(subcommand)]
-    Jurisdiction(jurisdiction::Command),
-    /// Contracts helpers (code storage)
-    #[command(subcommand)]
-    Contracts(contracts::Command),
-    /// Runtime ABI/upgrades
-    #[command(subcommand)]
-    Runtime(runtime::Command),
-    /// Compute lane simulation helpers
-    #[command(subcommand)]
-    Compute(compute::Command),
-    /// Social incentive helpers (viral follow rewards and escrows)
-    #[command(subcommand)]
-    Social(commands::social::Command),
-    /// Space Directory helpers (UAID capability manifests)
-    #[command(subcommand)]
-    SpaceDirectory(space_directory::Command),
-    /// Connect diagnostics helpers (queue inspection, evidence export)
-    #[command(subcommand)]
-    Connect(commands::connect::Command),
-    /// Bridge tools (feature: bridge)
-    #[cfg(feature = "bridge")]
-    #[command(subcommand)]
-    Bridge(crate::bridge::Command),
-    /// Audit helpers (debug endpoints)
-    #[command(subcommand)]
-    Audit(audit::Command),
-    /// Kaigi session helpers
-    #[command(subcommand)]
-    Kaigi(commands::kaigi::Command),
-    /// `SoraFS` helpers (pin registry, aliases, replication orders, storage)
-    #[command(subcommand)]
-    Sorafs(commands::sorafs::Command),
-    /// Soracles helpers (evidence bundling)
-    #[command(subcommand)]
-    Soracles(commands::soracles::Command),
-    /// Sora Name Service helpers (registrar + policy tooling)
-    #[command(subcommand)]
-    Sns(commands::sns::Command),
-    /// Alias helpers (placeholder pipeline)
-    #[command(subcommand)]
-    Alias(commands::alias::Command),
-    /// Repo settlement helpers
-    #[command(subcommand)]
-    Repo(repo::Command),
-    /// Delivery-versus-payment and payment-versus-payment helpers
-    #[command(subcommand)]
-    Settlement(settlement::Command),
+    Tools(tools::Command),
 }
 
 /// Context inside which commands run
@@ -266,6 +147,10 @@ trait RunContext {
 
     fn i18n(&self) -> &Localizer;
 
+    fn output_format(&self) -> CliOutputFormat {
+        CliOutputFormat::Json
+    }
+
     fn print_data<T>(&mut self, data: &T) -> Result<()>
     where
         T: JsonSerialize + ?Sized;
@@ -274,6 +159,10 @@ trait RunContext {
 
     fn client_from_config(&self) -> Client {
         Client::new(self.config().clone())
+    }
+
+    fn server_version(&self) -> Result<String> {
+        self.client_from_config().get_server_version()
     }
 
     /// Submit instructions or dump them to stdout depending on the flag
@@ -381,10 +270,20 @@ trait RunContext {
             (hash, i18n.t("info.tx_submitted_no_confirmation"))
         };
 
-        self.println(confirmation_msg)?;
-        self.print_data(&transaction)?;
-        self.println(i18n.t("label.hash"))?;
-        self.print_data(&hash)
+        match self.output_format() {
+            CliOutputFormat::Json => {
+                let result = json_utils::json_object(vec![
+                    ("hash", json_utils::json_value(&hash)?),
+                    ("transaction", json_utils::json_value(&transaction)?),
+                ])?;
+                self.print_data(&result)
+            }
+            CliOutputFormat::Text => {
+                self.println(confirmation_msg)?;
+                self.println(format!("{}: {}", i18n.t("label.hash"), hash))?;
+                Ok(())
+            }
+        }
     }
 }
 
@@ -394,6 +293,7 @@ struct PrintJsonContext<W> {
     transaction_metadata: Option<Metadata>,
     input_instructions: bool,
     output_instructions: bool,
+    output_format: CliOutputFormat,
     i18n: Localizer,
 }
 
@@ -416,6 +316,10 @@ impl<W: std::io::Write> RunContext for PrintJsonContext<W> {
 
     fn i18n(&self) -> &Localizer {
         &self.i18n
+    }
+
+    fn output_format(&self) -> CliOutputFormat {
+        self.output_format
     }
 
     /// Serialize and print data
@@ -456,55 +360,264 @@ impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         use Command::*;
         match self {
-            Domain(variant) => Run::run(variant, context),
-            Account(variant) => Run::run(variant, context),
-            Address(variant) => Run::run(variant, context),
-            Asset(variant) => Run::run(variant, context),
-            Nft(variant) => Run::run(variant, context),
-            Peer(variant) => Run::run(variant, context),
-            Events(variant) => Run::run(variant, context),
-            Blocks(variant) => Run::run(variant, context),
-            Multisig(variant) => Run::run(variant, context),
-            Query(variant) => Run::run(variant, context),
-            Transaction(variant) => Run::run(variant, context),
-            Role(variant) => Run::run(variant, context),
-            Parameter(variant) => Run::run(variant, context),
-            Trigger(variant) => Run::run(variant, context),
-            Offline(variant) => Run::run(variant, context),
-            Executor(variant) => Run::run(variant, context),
-            MarkdownHelp(variant) => Run::run(variant, context),
-            Version(variant) => Run::run(variant, context),
-            Zk(variant) => Run::run(variant, context),
-            Crypto(variant) => Run::run(variant, context),
-            Confidential(variant) => Run::run(variant, context),
-            Ivm(variant) => Run::run(variant, context),
-            Gov(variant) => Run::run(variant, context),
-            Contracts(variant) => Run::run(variant, context),
-            Runtime(variant) => Run::run(variant, context),
-            Compute(variant) => Run::run(variant, context),
-            SpaceDirectory(variant) => Run::run(variant, context),
-            Connect(variant) => Run::run(variant, context),
-            Sumeragi(variant) => Run::run(variant, context),
-            Taikai(variant) => Run::run(variant, context),
-            Da(variant) => Run::run(variant, context),
-            Streaming(variant) => Run::run(variant, context),
-            Nexus(variant) => Run::run(variant, context),
-            Staking(variant) => Run::run(variant, context),
-            Subscriptions(variant) => Run::run(variant, context),
-            Endorsement(variant) => Run::run(variant, context),
-            Jurisdiction(variant) => Run::run(variant, context),
-            #[cfg(feature = "bridge")]
-            Bridge(variant) => Run::run(variant, context),
-            Audit(variant) => Run::run(variant, context),
-            Kaigi(variant) => Run::run(variant, context),
-            Sorafs(variant) => Run::run(variant, context),
-            Soracles(variant) => Run::run(variant, context),
-            Sns(variant) => Run::run(variant, context),
-            Alias(variant) => Run::run(variant, context),
-            Repo(variant) => Run::run(variant, context),
-            Settlement(variant) => Run::run(variant, context),
-            Content(variant) => Run::run(variant, context),
-            Social(variant) => Run::run(variant, context),
+            Ledger(variant) => Run::run(variant, context),
+            Ops(variant) => Run::run(variant, context),
+            App(variant) => Run::run(variant, context),
+            Tools(variant) => Run::run(variant, context),
+        }
+    }
+}
+
+mod ledger {
+    use super::*;
+
+    #[derive(clap::Subcommand, Debug)]
+    pub enum Command {
+        /// Read and write domains
+        #[command(subcommand)]
+        Domain(crate::domain::Command),
+        /// Read and write accounts
+        #[command(subcommand)]
+        Account(crate::account::Command),
+        /// Read and write assets
+        #[command(subcommand)]
+        Asset(crate::asset::Command),
+        /// Read and write NFTs
+        #[command(subcommand)]
+        Nft(crate::nft::Command),
+        /// Read and write peers
+        #[command(subcommand)]
+        Peer(crate::peer::Command),
+        /// Read and write roles
+        #[command(subcommand)]
+        Role(crate::role::Command),
+        /// Read and write system parameters
+        #[command(subcommand)]
+        Parameter(crate::parameter::Command),
+        /// Read and write triggers
+        #[command(subcommand)]
+        Trigger(crate::trigger::Command),
+        /// Read various data
+        #[command(subcommand)]
+        Query(crate::query::Command),
+        /// Read transactions and write various data
+        #[command(subcommand)]
+        Transaction(crate::transaction::Command),
+        /// Read and write multi-signature accounts and transactions
+        #[command(subcommand)]
+        Multisig(crate::multisig::Command),
+        /// Subscribe to events: state changes, transaction/block/trigger progress
+        Events(crate::events::Args),
+        /// Subscribe to blocks
+        Blocks(crate::blocks::Args),
+    }
+
+    impl Run for Command {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            use self::Command::*;
+            match self {
+                Domain(variant) => Run::run(variant, context),
+                Account(variant) => Run::run(variant, context),
+                Asset(variant) => Run::run(variant, context),
+                Nft(variant) => Run::run(variant, context),
+                Peer(variant) => Run::run(variant, context),
+                Role(variant) => Run::run(variant, context),
+                Parameter(variant) => Run::run(variant, context),
+                Trigger(variant) => Run::run(variant, context),
+                Query(variant) => Run::run(variant, context),
+                Transaction(variant) => Run::run(variant, context),
+                Multisig(variant) => Run::run(variant, context),
+                Events(variant) => Run::run(variant, context),
+                Blocks(variant) => Run::run(variant, context),
+            }
+        }
+    }
+}
+
+mod ops {
+    use super::*;
+
+    #[derive(clap::Subcommand, Debug)]
+    pub enum Command {
+        /// Inspect offline allowances and offline-to-online bundles
+        #[command(subcommand)]
+        Offline(crate::offline::Command),
+        /// Read and write the executor
+        #[command(subcommand)]
+        Executor(crate::executor::Command),
+        /// Runtime ABI/upgrades
+        #[command(subcommand)]
+        Runtime(crate::runtime::Command),
+        /// Sumeragi helpers (status)
+        #[command(subcommand)]
+        Sumeragi(crate::sumeragi::Command),
+        /// Audit helpers (debug endpoints)
+        #[command(subcommand)]
+        Audit(crate::audit::Command),
+        /// Connect diagnostics helpers (queue inspection, evidence export)
+        #[command(subcommand)]
+        Connect(crate::commands::connect::Command),
+        /// Bridge tools (feature: bridge)
+        #[cfg(feature = "bridge")]
+        #[command(subcommand)]
+        Bridge(crate::bridge::Command),
+    }
+
+    impl Run for Command {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            use self::Command::*;
+            match self {
+                Offline(variant) => Run::run(variant, context),
+                Executor(variant) => Run::run(variant, context),
+                Runtime(variant) => Run::run(variant, context),
+                Sumeragi(variant) => Run::run(variant, context),
+                Audit(variant) => Run::run(variant, context),
+                Connect(variant) => Run::run(variant, context),
+                #[cfg(feature = "bridge")]
+                Bridge(variant) => Run::run(variant, context),
+            }
+        }
+    }
+}
+
+mod app {
+    use super::*;
+
+    #[derive(clap::Subcommand, Debug)]
+    pub enum Command {
+        /// Governance helpers (app API convenience)
+        #[command(subcommand)]
+        Gov(crate::gov::Command),
+        /// Contracts helpers (code storage)
+        #[command(subcommand)]
+        Contracts(crate::contracts::Command),
+        /// Zero-knowledge helpers (roots, etc.)
+        #[command(subcommand)]
+        Zk(crate::zk::Command),
+        /// Confidential asset tooling helpers
+        #[command(subcommand)]
+        Confidential(crate::confidential::Command),
+        /// Taikai publisher tooling (CAR bundler, envelopes)
+        #[command(subcommand)]
+        Taikai(crate::commands::taikai::Command),
+        /// Content hosting helpers
+        #[command(subcommand)]
+        Content(crate::content::Command),
+        /// Data availability helpers (ingest tooling)
+        #[command(subcommand)]
+        Da(crate::commands::da::Command),
+        /// Streaming helpers (HPKE fingerprints, suite listings)
+        #[command(subcommand)]
+        Streaming(crate::commands::streaming::Command),
+        /// Nexus helpers (lanes, governance)
+        #[command(subcommand)]
+        Nexus(crate::nexus::Command),
+        /// Public-lane staking helpers (register/activate/exit)
+        #[command(subcommand)]
+        Staking(crate::staking::Command),
+        /// Subscription plan and billing helpers
+        #[command(subcommand)]
+        Subscriptions(crate::subscriptions::Command),
+        /// Domain endorsement helpers (committees, policies, submissions)
+        #[command(subcommand)]
+        Endorsement(crate::endorsement::Command),
+        /// Jurisdiction Data Guardian helpers (attestations and SDN registries)
+        #[command(subcommand)]
+        Jurisdiction(crate::jurisdiction::Command),
+        /// Compute lane simulation helpers
+        #[command(subcommand)]
+        Compute(crate::compute::Command),
+        /// Social incentive helpers (viral follow rewards and escrows)
+        #[command(subcommand)]
+        Social(crate::commands::social::Command),
+        /// Space Directory helpers (UAID capability manifests)
+        #[command(subcommand)]
+        SpaceDirectory(crate::space_directory::Command),
+        /// Kaigi session helpers
+        #[command(subcommand)]
+        Kaigi(crate::commands::kaigi::Command),
+        /// SoraFS helpers (pin registry, aliases, replication orders, storage)
+        #[command(subcommand)]
+        Sorafs(crate::commands::sorafs::Command),
+        /// Soracles helpers (evidence bundling)
+        #[command(subcommand)]
+        Soracles(crate::commands::soracles::Command),
+        /// Sora Name Service helpers (registrar + policy tooling)
+        #[command(subcommand)]
+        Sns(crate::commands::sns::Command),
+        /// Alias helpers (placeholder pipeline)
+        #[command(subcommand)]
+        Alias(crate::commands::alias::Command),
+        /// Repo settlement helpers
+        #[command(subcommand)]
+        Repo(crate::repo::Command),
+        /// Delivery-versus-payment and payment-versus-payment helpers
+        #[command(subcommand)]
+        Settlement(crate::settlement::Command),
+    }
+
+    impl Run for Command {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            use self::Command::*;
+            match self {
+                Gov(variant) => Run::run(variant, context),
+                Contracts(variant) => Run::run(variant, context),
+                Zk(variant) => Run::run(variant, context),
+                Confidential(variant) => Run::run(variant, context),
+                Taikai(variant) => Run::run(variant, context),
+                Content(variant) => Run::run(variant, context),
+                Da(variant) => Run::run(variant, context),
+                Streaming(variant) => Run::run(variant, context),
+                Nexus(variant) => Run::run(variant, context),
+                Staking(variant) => Run::run(variant, context),
+                Subscriptions(variant) => Run::run(variant, context),
+                Endorsement(variant) => Run::run(variant, context),
+                Jurisdiction(variant) => Run::run(variant, context),
+                Compute(variant) => Run::run(variant, context),
+                Social(variant) => Run::run(variant, context),
+                SpaceDirectory(variant) => Run::run(variant, context),
+                Kaigi(variant) => Run::run(variant, context),
+                Sorafs(variant) => Run::run(variant, context),
+                Soracles(variant) => Run::run(variant, context),
+                Sns(variant) => Run::run(variant, context),
+                Alias(variant) => Run::run(variant, context),
+                Repo(variant) => Run::run(variant, context),
+                Settlement(variant) => Run::run(variant, context),
+            }
+        }
+    }
+}
+
+mod tools {
+    use super::*;
+
+    #[derive(clap::Subcommand, Debug)]
+    pub enum Command {
+        /// Account address helpers (IH58 (preferred)/snx1 (second-best) conversions)
+        #[command(subcommand)]
+        Address(crate::address::Command),
+        /// Cryptography helpers (SM2/SM3/SM4)
+        #[command(subcommand)]
+        Crypto(crate::crypto::Command),
+        /// IVM/ABI helpers (e.g., compute ABI hash)
+        #[command(subcommand)]
+        Ivm(crate::ivm_cli::Command),
+        /// Output CLI documentation in Markdown format
+        MarkdownHelp(crate::MarkdownHelp),
+        /// Show versions and git SHA of client and server
+        Version(crate::Version),
+    }
+
+    impl Run for Command {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            use self::Command::*;
+            match self {
+                Address(variant) => Run::run(variant, context),
+                Crypto(variant) => Run::run(variant, context),
+                Ivm(variant) => Run::run(variant, context),
+                MarkdownHelp(variant) => Run::run(variant, context),
+                Version(variant) => Run::run(variant, context),
+            }
         }
     }
 }
@@ -535,26 +648,32 @@ struct Version;
 
 impl Run for Version {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let i18n = context.i18n();
-        println!(
-            "{}",
-            i18n.t_with("info.client_git_sha", &[("sha", VERGEN_GIT_SHA)])
-        );
         let client_version = env!("CARGO_PKG_VERSION");
-        println!(
-            "{}",
-            i18n.t_with("info.client_version", &[("version", client_version)])
-        );
-        let client = context.client_from_config();
-        let response = client.get_server_version()?;
-        println!(
-            "{}",
-            i18n.t_with(
-                "info.server_version",
-                &[("version", response.as_str())]
-            )
-        );
-        Ok(())
+        let response = context.server_version()?;
+        match context.output_format() {
+            CliOutputFormat::Text => {
+                let (client_git_sha, client_version_msg, server_version_msg) = {
+                    let i18n = context.i18n();
+                    (
+                        i18n.t_with("info.client_git_sha", &[("sha", VERGEN_GIT_SHA)]),
+                        i18n.t_with("info.client_version", &[("version", client_version)]),
+                        i18n.t_with("info.server_version", &[("version", response.as_str())]),
+                    )
+                };
+                context.println(client_git_sha)?;
+                context.println(client_version_msg)?;
+                context.println(server_version_msg)?;
+                Ok(())
+            }
+            CliOutputFormat::Json => {
+                let value = json_utils::json_object(vec![
+                    ("client_git_sha", json_utils::json_value(&VERGEN_GIT_SHA)?),
+                    ("client_version", json_utils::json_value(&client_version)?),
+                    ("server_version", json_utils::json_value(&response)?),
+                ])?;
+                context.print_data(&value)
+            }
+        }
     }
 }
 
@@ -602,7 +721,7 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
         i18n.t_with("info.build_line", &[("build_line", build_line_value.as_str())])
     );
 
-    if let Command::MarkdownHelp(_md) = args.command {
+    if let Command::Tools(tools::Command::MarkdownHelp(_md)) = args.command {
         clap_markdown::print_help_markdown::<Args>();
         return Ok(());
     }
@@ -677,6 +796,7 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
         transaction_metadata: None,
         input_instructions: args.input,
         output_instructions: args.output,
+        output_format: args.output_format,
         i18n: i18n.clone(),
     };
     if let Some(path) = args.metadata {
@@ -2450,15 +2570,9 @@ mod nft {
         Unregister(Id),
         /// Transfer ownership of NFT
         Transfer(Transfer),
-        /// Get a value from NFT
-        #[command(name = "getkv")]
-        GetKeyValue(IdKey),
-        /// Create or update a key-value entry of NFT using JSON input from stdin
-        #[command(name = "setkv")]
-        SetKeyValue(IdKey),
-        /// Remove a key-value entry from NFT
-        #[command(name = "removekv")]
-        RemoveKeyValue(IdKey),
+        /// Read and write metadata
+        #[command(subcommand)]
+        Meta(metadata::nft::Command),
     }
 
     impl Run for Command {
@@ -2503,34 +2617,7 @@ mod nft {
                         .finish([instruction])
                         .wrap_err("Failed to transfer NFT")
                 }
-                GetKeyValue(args) => {
-                    let client = context.client_from_config();
-                    let entries = client
-                        .query(FindNfts)
-                        .execute_all()
-                        .wrap_err("Failed to get value")?;
-                    let nft = entries
-                        .into_iter()
-                        .find(|e| e.id() == &args.id)
-                        .ok_or_else(|| eyre!("NFT not found"))?;
-                    let value = nft
-                        .content()
-                        .get(&args.key)
-                        .cloned()
-                        .ok_or_else(|| eyre!("Key not found"))?;
-                    context.print_data(&value)
-                }
-                SetKeyValue(args) => {
-                    let value: Json = parse_json_stdin(context)?;
-                    let instruction =
-                        iroha::data_model::isi::SetKeyValue::nft(args.id, args.key, value);
-                    context.finish([instruction])
-                }
-                RemoveKeyValue(args) => {
-                    let instruction =
-                        iroha::data_model::isi::RemoveKeyValue::nft(args.id, args.key);
-                    context.finish([instruction])
-                }
+                Meta(cmd) => cmd.run(context),
             }
         }
     }
@@ -2553,15 +2640,6 @@ mod nft {
         /// NFT in the format "name$domain"
         #[arg(short, long)]
         pub id: NftId,
-    }
-
-    #[derive(clap::Args, Debug)]
-    pub struct IdKey {
-        /// NFT in the format "name$domain"
-        #[arg(short, long)]
-        pub id: NftId,
-        #[arg(short, long)]
-        pub key: Name,
     }
 
     #[derive(clap::Subcommand, Debug)]
@@ -2692,45 +2770,58 @@ mod peer {
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
         /// List all registered peers
-        All {
-            /// Maximum number of items to return (server-side limit)
-            #[arg(long)]
-            limit: Option<u64>,
-            /// Offset into the result set (server-side offset)
-            #[arg(long, default_value_t = 0)]
-            offset: u64,
-            /// Batch fetch size for iterable queries
-            #[arg(long)]
-            fetch_size: Option<u64>,
-        },
+        All(crate::list_support::AllArgs),
     }
 
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
             match self {
-                List::All {
-                    limit,
-                    offset,
-                    fetch_size,
-                } => {
-                    let mut builder = client.query(FindPeers);
-                    if limit.is_some() || offset > 0 {
-                        let pagination = iroha::data_model::query::parameters::Pagination::new(
-                            limit.and_then(NonZeroU64::new),
-                            offset,
-                        );
-                        builder = builder.with_pagination(pagination);
-                    }
-                    if let Some(n) = fetch_size.and_then(NonZeroU64::new) {
-                        let fs = iroha::data_model::query::parameters::FetchSize::new(Some(n));
-                        builder = builder.with_fetch_size(fs);
-                    }
-                    let entries = builder.execute_all()?;
-                    context.print_data(&entries)
-                }
+                List::All(args) => list_all(context, client.query(FindPeers), &args),
             }
         }
+    }
+
+    fn list_all<C: RunContext>(
+        context: &mut C,
+        builder: iroha::data_model::query::builder::QueryBuilder<'_, Client, FindPeers, PeerId>,
+        args: &crate::list_support::AllArgs,
+    ) -> Result<()> {
+        let builder = apply_common_args(builder, &args.common)?;
+        let entries = builder.execute_all()?;
+        if args.verbose {
+            context.print_data(&entries)
+        } else {
+            let ids: Vec<_> = entries.iter().map(ToString::to_string).collect();
+            context.print_data(&ids)
+        }
+    }
+
+    fn apply_common_args<'a>(
+        builder: iroha::data_model::query::builder::QueryBuilder<'a, Client, FindPeers, PeerId>,
+        common: &'a crate::list_support::CommonArgs,
+    ) -> Result<iroha::data_model::query::builder::QueryBuilder<'a, Client, FindPeers, PeerId>> {
+        use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
+        use std::num::NonZeroU64;
+
+        let mut builder = builder;
+        if let Some(key) = common.sort_by_metadata_key.clone() {
+            let sorting = Sorting::new(Some(key), common.order.map(Into::into));
+            builder = builder.with_sorting(sorting);
+        }
+        if common.limit.is_some() || common.offset > 0 {
+            let pagination = Pagination::new(common.limit.and_then(NonZeroU64::new), common.offset);
+            builder = builder.with_pagination(pagination);
+        }
+        if let Some(n) = common.fetch_size.and_then(NonZeroU64::new) {
+            let fs = FetchSize::new(Some(n));
+            builder = builder.with_fetch_size(fs);
+        }
+        if let Some(sel) = common.select.as_deref() {
+            let tuple = crate::list_support::parse_selector_tuple::<PeerId>(sel)?;
+            builder = builder.with_selector_tuple(tuple);
+        }
+        Ok(builder)
     }
 
     #[derive(clap::Args, Debug)]
@@ -4942,6 +5033,64 @@ mod metadata {
         }
     }
 
+    pub mod nft {
+        use super::*;
+
+        #[derive(clap::Subcommand, Debug)]
+        pub enum Command {
+            /// Retrieve a value from the key-value store
+            Get(IdKey),
+            /// Create or update an entry in the key-value store using JSON input from stdin
+            Set(IdKey),
+            /// Delete an entry from the key-value store
+            Remove(IdKey),
+        }
+
+        #[derive(clap::Args, Debug)]
+        pub struct IdKey {
+            #[arg(short, long)]
+            pub id: NftId,
+            #[arg(short, long)]
+            pub key: Name,
+        }
+
+        impl Run for Command {
+            fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+                use self::Command::*;
+                match self {
+                    Get(args) => {
+                        let client = context.client_from_config();
+                        let entries: Vec<Nft> = client
+                            .query(FindNfts)
+                            .execute_all()
+                            .wrap_err("Failed to get value")?;
+                        let entry = entries
+                            .into_iter()
+                            .find(|e| e.id() == &args.id)
+                            .ok_or_else(|| eyre!("NFT not found"))?;
+                        let value = entry
+                            .content()
+                            .get(&args.key)
+                            .cloned()
+                            .ok_or_else(|| eyre!("Key not found"))?;
+                        context.print_data(&value)
+                    }
+                    Set(args) => {
+                        let value: Json = parse_json_stdin(context)?;
+                        let instruction =
+                            iroha::data_model::isi::SetKeyValue::nft(args.id, args.key, value);
+                        context.finish([instruction])
+                    }
+                    Remove(args) => {
+                        let instruction =
+                            iroha::data_model::isi::RemoveKeyValue::nft(args.id, args.key);
+                        context.finish([instruction])
+                    }
+                }
+            }
+        }
+    }
+
     pub mod trigger {
         use super::*;
 
@@ -6424,6 +6573,86 @@ mod tests {
         let message = account_admission_rejected_message("hint text", &i18n);
         assert!(message.contains("Account admission rejected"));
         assert!(message.contains("hint text"));
+    }
+
+    struct VersionContext {
+        config: Config,
+        i18n: Localizer,
+        output_format: CliOutputFormat,
+        lines: Vec<String>,
+        server_version: String,
+    }
+
+    impl VersionContext {
+        fn new(output_format: CliOutputFormat, server_version: &str) -> Self {
+            Self {
+                config: fallback_config(),
+                i18n: Localizer::new(Bundle::Cli, Language::English),
+                output_format,
+                lines: Vec::new(),
+                server_version: server_version.to_string(),
+            }
+        }
+    }
+
+    impl RunContext for VersionContext {
+        fn config(&self) -> &Config {
+            &self.config
+        }
+
+        fn transaction_metadata(&self) -> Option<&Metadata> {
+            None
+        }
+
+        fn input_instructions(&self) -> bool {
+            false
+        }
+
+        fn output_instructions(&self) -> bool {
+            false
+        }
+
+        fn i18n(&self) -> &Localizer {
+            &self.i18n
+        }
+
+        fn output_format(&self) -> CliOutputFormat {
+            self.output_format
+        }
+
+        fn print_data<T>(&mut self, _data: &T) -> Result<()>
+        where
+            T: JsonSerialize + ?Sized,
+        {
+            Ok(())
+        }
+
+        fn println(&mut self, data: impl std::fmt::Display) -> Result<()> {
+            self.lines.push(data.to_string());
+            Ok(())
+        }
+
+        fn server_version(&self) -> Result<String> {
+            Ok(self.server_version.clone())
+        }
+    }
+
+    #[test]
+    fn version_run_prints_localized_lines_in_text_mode() {
+        let mut ctx = VersionContext::new(CliOutputFormat::Text, "1.2.3");
+        Version.run(&mut ctx).expect("version run");
+
+        let i18n = Localizer::new(Bundle::Cli, Language::English);
+        let expected = vec![
+            i18n.t_with("info.client_git_sha", &[("sha", VERGEN_GIT_SHA)]),
+            i18n.t_with(
+                "info.client_version",
+                &[("version", env!("CARGO_PKG_VERSION"))],
+            ),
+            i18n.t_with("info.server_version", &[("version", "1.2.3")]),
+        ];
+
+        assert_eq!(ctx.lines, expected);
     }
 
     #[test]

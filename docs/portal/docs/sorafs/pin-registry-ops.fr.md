@@ -127,10 +127,10 @@ groups:
    - Si les échecs SLA augmentent alors que le backlog reste faible, concentrer l'analyse sur la performance des providers (échecs PoR, complétions tardives).
    - Si le backlog augmente avec des échecs stables, inspecter l'admission (`/v1/sorafs/pin/*`) pour confirmer des manifests en attente d'approbation du conseil.
 2. **Valider l'état des providers**
-   - Exécuter `iroha sorafs providers list` et vérifier que les capacités annoncées correspondent aux exigences de réplication.
+   - Exécuter `iroha app sorafs providers list` et vérifier que les capacités annoncées correspondent aux exigences de réplication.
    - Vérifier les gauges `torii_sorafs_capacity_*` pour confirmer les GiB provisionnés et le succès PoR.
 3. **Réassigner la réplication**
-   - Émettre de nouveaux ordres via `sorafs_manifest_stub capacity replication-order` lorsque la marge du backlog (`stat="avg"`) descend sous 5 époques (l'empaquetage manifest/CAR utilise `iroha sorafs toolkit pack`).
+   - Émettre de nouveaux ordres via `sorafs_manifest_stub capacity replication-order` lorsque la marge du backlog (`stat="avg"`) descend sous 5 époques (l'empaquetage manifest/CAR utilise `iroha app sorafs toolkit pack`).
    - Notifier la gouvernance si les aliases n'ont pas de bindings de manifest actifs (baisse inattendue de `torii_sorafs_registry_aliases_total`).
 4. **Documenter le résultat**
    - Consigner les notes d'incident dans le journal d'opérations SoraFS avec timestamps et digests de manifest concernés.

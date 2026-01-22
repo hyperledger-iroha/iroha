@@ -64,9 +64,9 @@ let filter = SpaceDirectoryEventFilter::new()
 |-------|----------|-------|----------|
 | Draft | בעל dataspace | לשכפל fixture, לערוך הרשאות/ממשל, להריץ `cargo test -p iroha_data_model nexus::manifest`. | diff ב-git, לוג בדיקות. |
 | Review | Governance WG | לאמת JSON של manifest + Norito bytes, לחתום על יומן החלטות. | פרוטוקולים חתומים, hash של manifest (BLAKE3 + Norito `.to`). |
-| Publish | מפעילי lane | לפרסם באמצעות CLI (`iroha space-directory manifest publish`) תוך שימוש ב-Norito `.to` או JSON גולמי **או** POST `/v1/space-directory/manifests` עם JSON של manifest + סיבה אופציונלית, לאמת תגובת Torii, וללכוד `SpaceDirectoryEvent`. | קבלה מ-CLI/Torii, לוג אירועים. |
-| Expire | מפעילי lane / Governance | להריץ `iroha space-directory manifest expire` (UAID, dataspace, epoch) כאשר manifest מגיע לסוף החיים המתוכנן, לוודא `SpaceDirectoryEvent::ManifestExpired`, ולארכב ראיות ניקוי binding. | פלט CLI, לוג אירועים. |
-| Revoke | Governance + מפעילי lane | להריץ `iroha space-directory manifest revoke` (UAID, dataspace, epoch, reason) **או** POST `/v1/space-directory/manifests/revoke` עם אותו payload ל-Torii, לוודא `SpaceDirectoryEvent::ManifestRevoked`, ולעדכן חבילת ראיות. | קבלה מ-CLI/Torii, לוג אירועים, הערת כרטיס. |
+| Publish | מפעילי lane | לפרסם באמצעות CLI (`iroha app space-directory manifest publish`) תוך שימוש ב-Norito `.to` או JSON גולמי **או** POST `/v1/space-directory/manifests` עם JSON של manifest + סיבה אופציונלית, לאמת תגובת Torii, וללכוד `SpaceDirectoryEvent`. | קבלה מ-CLI/Torii, לוג אירועים. |
+| Expire | מפעילי lane / Governance | להריץ `iroha app space-directory manifest expire` (UAID, dataspace, epoch) כאשר manifest מגיע לסוף החיים המתוכנן, לוודא `SpaceDirectoryEvent::ManifestExpired`, ולארכב ראיות ניקוי binding. | פלט CLI, לוג אירועים. |
+| Revoke | Governance + מפעילי lane | להריץ `iroha app space-directory manifest revoke` (UAID, dataspace, epoch, reason) **או** POST `/v1/space-directory/manifests/revoke` עם אותו payload ל-Torii, לוודא `SpaceDirectoryEvent::ManifestRevoked`, ולעדכן חבילת ראיות. | קבלה מ-CLI/Torii, לוג אירועים, הערת כרטיס. |
 | Monitor | SRE/Compliance | לנטר טלמטריה ולוגים של ביקורת, להגדיר התראות ל-revocation/expiry. | צילום Grafana, לוגים מאוחסנים. |
 | Rotate/Revoke | מפעילי lane + Governance | להכין manifest חלופי (epoch חדש), לבצע tabletop, לתעד incident (אם בוטל). | כרטיס רוטציה, פוסטמורטם. |
 
@@ -75,12 +75,12 @@ let filter = SpaceDirectoryEventFilter::new()
 
 ### 3.1 אוטומציית Audit bundle
 
-השתמשו ב-`iroha space-directory manifest audit-bundle` כדי להרכיב חבילת ראיות
+השתמשו ב-`iroha app space-directory manifest audit-bundle` כדי להרכיב חבילת ראיות
 עבור כל capability manifest. הכלי מקבל JSON או payload של Norito, יחד עם JSON
 של פרופיל dataspace, ומוציא חבילה עצמאית:
 
 ```bash
-iroha space-directory manifest audit-bundle \
+iroha app space-directory manifest audit-bundle \
   --manifest-json fixtures/space_directory/capability/cbdc_wholesale.manifest.json \
   --profile fixtures/space_directory/profile/cbdc_lane_profile.json \
   --out-dir artifacts/nexus/cbdc/2026-02-01T00-00Z \
@@ -101,12 +101,12 @@ iroha space-directory manifest audit-bundle \
 
 פריט NX-16 ברודמאפ דורש שלדים דטרמיניסטיים ל-manifest/profile כדי שאופרטורים
 ואוטומציית SDK יוכלו לאתחל חבילות יכולות UAID ללא עריכת fixtures ידנית. השתמשו
-ב-`iroha space-directory manifest scaffold` כדי להפיק זוג תבניות JSON (manifest
+ב-`iroha app space-directory manifest scaffold` כדי להפיק זוג תבניות JSON (manifest
 ו-dataspace profile) שכבר עומדות בסכמת Space Directory ונרשמות ל-audit hooks
 הנדרשים:
 
 ```bash
-iroha space-directory manifest scaffold \
+iroha app space-directory manifest scaffold \
   --uaid uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11 \
   --dataspace 11 \
   --activation-epoch 4097 \
@@ -121,11 +121,11 @@ iroha space-directory manifest scaffold \
   --deny-program cbdc.kit \
   --deny-method withdraw \
   --deny-reason "Withdrawals disabled for this UAID." \
-  --profile-governance-issuer parliament@cbdc \
+  --profile-governance-issuer ih58... \
   --profile-governance-ticket gov-2026-02-rotation \
-  --profile-validator cbdc-validator-1@cbdc \
-  --profile-validator cbdc-validator-2@cbdc \
-  --profile-da-attester da-attester-1@cbdc
+  --profile-validator ih58... \
+  --profile-validator ih58... \
+  --profile-da-attester ih58...
 ```
 
 הפקודה כותבת `manifest.json` ו-`profile.json` (ברירת מחדל:

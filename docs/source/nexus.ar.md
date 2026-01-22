@@ -70,12 +70,12 @@ Manifests القدرات وUAID
 
 عمليات Space Directory تقدم بطريقتين: CLI مدمج (للتشغيل المؤتمت بالسكربت) او ارسال مباشر عبر Torii (لـ CI/CD). كلا المسارين يفرضان صلاحية `CanPublishSpaceDirectoryManifest{dataspace}` في المنفذ (`crates/iroha_core/src/smartcontracts/isi/space_directory.rs`) ويسجلان احداث دورة الحياة في world state (`iroha_core::state::space_directory_manifests`).
 
-#### مسار CLI (`iroha space-directory manifest ...`)
+#### مسار CLI (`iroha app space-directory manifest ...`)
 
 1. **ترميز JSON للبيان** — تحويل المسودات الى Norito bytes مع انتاج hash قابل لاعادة الانتاج قبل المراجعة:
 
    ```bash
-   iroha space-directory manifest encode \
+   iroha app space-directory manifest encode \
      --json dataspace/capability.json \
      --out artifacts/capability.manifest.to \
      --hash-out artifacts/capability.manifest.hash
@@ -86,7 +86,7 @@ Manifests القدرات وUAID
 2. **نشر/استبدال المانيفست** — ادراج تعليمات `PublishSpaceDirectoryManifest` من مصادر Norito او JSON:
 
    ```bash
-   iroha space-directory manifest publish \
+   iroha app space-directory manifest publish \
      --manifest artifacts/capability.manifest.to \
      --reason "Retail wave 4 on-boarding"
    ```
@@ -96,12 +96,12 @@ Manifests القدرات وUAID
 3. **انتهاء** المانيفستات او **الغاء** UAIDs عند الطلب. كلا الامرين يقبل `--uaid uaid:<hex>` او digest hex مكون من 64 خانة (LSB=1) وid عددي للـ dataspace:
 
    ```bash
-   iroha space-directory manifest expire \
+   iroha app space-directory manifest expire \
      --uaid uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11 \
      --dataspace 11 \
      --expired-epoch 4600
 
-   iroha space-directory manifest revoke \
+   iroha app space-directory manifest revoke \
      --uaid uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11 \
      --dataspace 11 \
      --revoked-epoch 9216 \
@@ -111,7 +111,7 @@ Manifests القدرات وUAID
 4. **انشاء حزمة تدقيق** — `manifest audit-bundle` يكتب JSON والـ `.to` والـ hash وبروفايل dataspace وmetadata مقروءة آليا الى مجلد مخرجات:
 
    ```bash
-   iroha space-directory manifest audit-bundle \
+   iroha app space-directory manifest audit-bundle \
      --manifest-json dataspace/capability.json \
      --profile dataspace/profiles/cbdc_profile.json \
      --out-dir artifacts/capability_bundle

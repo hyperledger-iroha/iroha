@@ -24,7 +24,7 @@ source: examples/transfer/transfer.ko
 
 - Предварительно пополните Alice целевым активом (например через сниппет `register and mint` или потоки quickstart SDK).
 - Выполните точку входа `do_transfer`, чтобы перевести 10 единиц от Alice к Bob, удовлетворяя разрешению `AssetTransferRole`.
-- Проверьте балансы (`FindAccountAssets`, `iroha_cli assets list`) или подпишитесь на события pipeline, чтобы наблюдать результат перевода.
+- Проверьте балансы (`FindAccountAssets`, `iroha_cli ledger assets list`) или подпишитесь на события pipeline, чтобы наблюдать результат перевода.
 
 ## Связанные руководства SDK
 

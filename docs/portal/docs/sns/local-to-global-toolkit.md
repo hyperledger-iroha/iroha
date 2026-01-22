@@ -8,7 +8,7 @@ from the mono-repo. It packages the CLI helpers and runbooks required by roadmap
 ## Overview
 
 - `scripts/address_local_toolkit.sh` wraps the `iroha` CLI to produce:
-  - `audit.json` — structured output from `iroha address audit --format json`.
+  - `audit.json` — structured output from `iroha tools address audit --format json`.
   - `normalized.txt` — converted preferred IH58 / second-best compressed (`snx1`) literals for every Local-domain selector.
 - Pair the script with the address ingest dashboard (`dashboards/grafana/address_ingest.json`)
   and Alertmanager rules (`dashboards/alerts/address_ingest_rules.yml`) to prove the Local-8 /
@@ -45,7 +45,7 @@ Local-8 detections and zero Local-12 collisions for ≥30 days.
 2. Block merges when `audit.json` reports Local selectors (`domain.kind = local12`).
    at its default `true` value (only override to `false` on dev/test clusters when
    diagnosing regressions) and add
-   `iroha address normalize --fail-on-warning --only-local` to CI so regression
+   `iroha tools address normalize --fail-on-warning --only-local` to CI so regression
    attempts fail before hitting production.
 
 See the source document for more details, sample evidence checklists, and the release-note snippet you can reuse when announcing the cutover to customers.

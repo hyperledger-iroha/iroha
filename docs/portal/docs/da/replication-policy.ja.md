@@ -151,7 +151,7 @@ retention enforcement は第一歩にすぎません。オペレーターは、l
    [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md)
    で説明されているガバナンスツールを使って新しい `ReplicationOrderV1`
    を発行し、レプリカが収束するまで監査を再実行します。緊急 override
-   の場合は CLI 出力を `iroha da prove-availability` と組み合わせ、SRE が
+   の場合は CLI 出力を `iroha app da prove-availability` と組み合わせ、SRE が
    同じ digest と PDP 証跡を参照できるようにします。
 
 回帰カバレッジは `integration_tests/tests/da/replication_policy.rs` にあり、

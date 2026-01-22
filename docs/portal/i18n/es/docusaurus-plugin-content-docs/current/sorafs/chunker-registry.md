@@ -87,7 +87,7 @@ que requiere negociación explícita del cliente (`Accept-Chunker` + `Accept-Dig
 | Componente | Estado | Notas |
 |-----------|--------|-------|
 | `sorafs_manifest_chunk_store` | ✅ Soportado | Valida el handle canónico + alias, transmite reportes vía `--json-out=-` y aplica la carta del registro con `ensure_charter_compliance()`. |
-| `sorafs_manifest_stub` | ⚠️ Retirado | Constructor de manifest fuera de soporte; usa `iroha sorafs toolkit pack` para empaquetado CAR/manifest y mantén `--plan=-` para revalidación determinista. |
+| `sorafs_manifest_stub` | ⚠️ Retirado | Constructor de manifest fuera de soporte; usa `iroha app sorafs toolkit pack` para empaquetado CAR/manifest y mantén `--plan=-` para revalidación determinista. |
 | `sorafs_provider_advert_stub` | ⚠️ Retirado | Helper de validación offline únicamente; los provider adverts deben producirse por el pipeline de publicación y validarse vía `/v1/sorafs/providers`. |
 | `sorafs_fetch` (developer orchestrator) | ✅ Soportado | Lee `chunk_fetch_specs`, entiende payloads de capacidad `range` y ensambla salida CARv2. |
 | Fixtures de SDK (Rust/Go/TS) | ✅ Soportado | Regeneradas vía `export_vectors`; el handle canónico aparece primero en cada lista de alias y está firmado por sobres del consejo. |
@@ -217,4 +217,4 @@ adicionales para transición pero no deben reemplazar el digest canónico.
   mediante las pruebas provistas.
 * `chunker_registry::lookup_by_profile` afirma que los parámetros del descriptor
   coinciden con `ChunkProfile::DEFAULT` para evitar divergencias accidentales.
-* Los manifests producidos por `iroha sorafs toolkit pack` y `sorafs_manifest_stub` incluyen la metadata del registro.
+* Los manifests producidos por `iroha app sorafs toolkit pack` y `sorafs_manifest_stub` incluyen la metadata del registro.

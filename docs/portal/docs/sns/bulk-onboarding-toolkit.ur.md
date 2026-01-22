@@ -248,7 +248,7 @@ filter کرتا ہے تاکہ auditors ایک CSV run پر drill کر سکیں۔
   references CSV location کے relative resolve ہوتی ہیں۔ Non-object metadata
   validation error دیتا ہے۔
 - **Controllers:** خالی cells `--default-controllers` کو honour کرتے ہیں۔ non-owner
-  actors کو delegate کرتے وقت explicit controller lists دیں (مثال `owner;ops@dao`)۔
+  actors کو delegate کرتے وقت explicit controller lists دیں (مثال `ih58...;ih58...`)۔
 
 Failures contextual row numbers کے ساتھ report ہوتے ہیں (مثال
 `error: row 12 term_years must be between 1 and 255`). Script validation errors پر

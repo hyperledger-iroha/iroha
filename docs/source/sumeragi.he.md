@@ -56,9 +56,9 @@ translator: manual
 - `Topology::role_at(index)` מספק את תפקיד העמית, ו-`is_validator(idx)` מאשר חברות לגובה הנוכחי.
 
 ### ממשק API
-- `iroha_cli sumeragi status --summary` / `GET /v1/sumeragi/status/summary` מציגים טופולוגיה, חלוקת תפקידים, מצב commit certificate, שימוש ב-RBC ואינפורמציה על האפוק (`epoch_len`,‏ `epoch_commit`,‏ `epoch_reveal`).
-- `iroha_cli sumeragi params --summary` / `GET /v1/sumeragi/params` מחזירים את פרמטרי הקונצנזוס: ‏`collectors_k`,‏ `collectors_redundant_send_r`, טיימרים, מוד.
-- `iroha_cli sumeragi status` / `GET /v1/sumeragi/status` מספקים רשומת Norito מלאה עם היסטוריית תפקידים, View עכשווי, Locked/Highest QC ובלוקים ממתינים.
+- `iroha_cli --output-format text ops sumeragi status` / `GET /v1/sumeragi/status/summary` מציגים טופולוגיה, חלוקת תפקידים, מצב commit certificate, שימוש ב-RBC ואינפורמציה על האפוק (`epoch_len`,‏ `epoch_commit`,‏ `epoch_reveal`).
+- `iroha_cli --output-format text ops sumeragi params` / `GET /v1/sumeragi/params` מחזירים את פרמטרי הקונצנזוס: ‏`collectors_k`,‏ `collectors_redundant_send_r`, טיימרים, מוד.
+- `iroha_cli ops sumeragi status` / `GET /v1/sumeragi/status` מספקים רשומת Norito מלאה עם היסטוריית תפקידים, View עכשווי, Locked/Highest QC ובלוקים ממתינים.
 
 ### עיקרי המימוש
 - `sumeragi::main_loop` הוא הלולאה המרכזית שמנהלת עדכוני commit certificate, טיפוס הצעות וקומיט.
@@ -75,9 +75,9 @@ translator: manual
 - תרחישים של ≥10 MiB נבחנים בסוויטת האינטגרציה ומודדים זמני RBC, קומיט, סף סינון תורים וזרימות P2P. הפרת SLO נכשלת במבחן ומפעילה התרעה.
 
 ### דוגמאות CLI לטופולוגיה ותפקידים
-- `iroha_cli sumeragi topology --summary` מציג את הרשימה הסדורה והתפקידים.
-- `iroha_cli sumeragi collectors --height <h>` מחזיר את אספני הגובה `h`.
-- `iroha_cli sumeragi roles --peer <account>` מדווח על התפקיד הנוכחי של עמית מסוים.
+- `iroha_cli --output-format text ops sumeragi topology` מציג את הרשימה הסדורה והתפקידים.
+- `iroha_cli ops sumeragi collectors --height <h>` מחזיר את אספני הגובה `h`.
+- `iroha_cli ops sumeragi roles --peer <account>` מדווח על התפקיד הנוכחי של עמית מסוים.
 
 ### ראיות ו-Slashing
 - ראיות הכפלה (`double_vote`, ‏`double_propose`), commit certificate/הצעה לא תקינים ואי-פעילות נשמרות כ-`Evidence`. הן מנוהלות ב-WSV עם אופק גיזום, מופצות ב-Prometheus ומחושבות עבור CLI.
@@ -92,9 +92,9 @@ translator: manual
 - מסלול Permissioned: סינגל-צינור עם בחירת אספנים מבוססת PRF, Viewchange קלאסי וקומיט על בסיס commit certificate.
 
 ### CLI / API צ'יטשיט
-- `iroha_cli sumeragi params --summary` – בדיקת טיימרים ופרמטרים.
-- `iroha_cli sumeragi status --summary` – צילום מצב קצר עם locked/highest view, תור RBC, תור פייסמייקר.
-- `iroha_cli sumeragi status` – פלט Norito מלא.
+- `iroha_cli --output-format text ops sumeragi params` – בדיקת טיימרים ופרמטרים.
+- `iroha_cli --output-format text ops sumeragi status` – צילום מצב קצר עם locked/highest view, תור RBC, תור פייסמייקר.
+- `iroha_cli ops sumeragi status` – פלט Norito מלא.
 - `GET /v1/sumeragi/status/summary` – גרסת JSON/ Norito.
 - `GET /v1/sumeragi/status` – נתוני מצב מלאים כולל בלוקים ממתינים ואינדיקטורים לא evidence.
 - `GET /v1/sumeragi/params` – פרמטרים פעילים.
@@ -148,9 +148,9 @@ translator: manual
 4. אופק הגיזום מסיר ראיות ישנות (`evidence_horizon`).
 
 ### הערות תפעול CLI
-- `iroha_cli sumeragi status --summary` מציג `<role, view, locked_qc_height, highest_qc_height, pending_blocks>` יחד עם RBC/פייסמייקר.
-- `iroha_cli sumeragi params` מחזיר Norito JSON מלא של הפרמטרים, כולל מצבים, טיימרים ופרמטרי DA.
-- שימוש ב-`--summary-only` מספק פלט תמציתי לחדרי בקרה.
+- `iroha_cli --output-format text ops sumeragi status` מציג `<role, view, locked_qc_height, highest_qc_height, pending_blocks>` יחד עם RBC/פייסמייקר.
+- `iroha_cli ops sumeragi params` מחזיר Norito JSON מלא של הפרמטרים, כולל מצבים, טיימרים ופרמטרי DA.
+- שימוש ב-`--output-format text` מספק פלט תמציתי לחדרי בקרה.
 
 ### מדריך טלמטריה לאספנים
 
@@ -162,9 +162,9 @@ translator: manual
 - `sumeragi_phase_latency_ms{phase="collect_da"}` ו-`{phase="collect_precommit"}` (P95 על פני 5 דק') — זמן לאיסוף קולות זמינות ו-precommit QCs.
 - `sumeragi_phase_latency_ms{phase="collect_aggregator"}` — פיזור אספנים; קשרו ל-`sumeragi_gossip_fallback_total`, `block_created_dropped_by_lock_total`, `block_created_hint_mismatch_total`, `block_created_proposal_mismatch_total`, `pacemaker_backpressure_deferrals_total`.
 - `sumeragi_phase_latency_ema_ms{phase=…}` — ממוצע נע (EMA) לכל פאזת צינור. סטייה בין EMA למדידות גולמיות תחייב בדיקה.
-- `/v1/sumeragi/telemetry` / `iroha_cli sumeragi status --summary` — צילום מצב עם קולות פר אספן, זמני commit certificate, backlog של RBC ו-H/L commit certificate.
+- `/v1/sumeragi/telemetry` / `iroha_cli --output-format text ops sumeragi status` — צילום מצב עם קולות פר אספן, זמני commit certificate, backlog של RBC ו-H/L commit certificate.
 - `/v1/sumeragi/status/sse` — זרם SSE בקצב ≈1 שנייה לתצוגות חיות.
-- `/v1/sumeragi/phases` / `iroha_cli sumeragi phases --summary` — `{propose_ms,…,commit_ms,pipeline_total_ms}` ו-`ema_ms`.
+- `/v1/sumeragi/phases` / `iroha_cli --output-format text ops sumeragi phases` — `{propose_ms,…,commit_ms,pipeline_total_ms}` ו-`ema_ms`.
 - `docs/source/grafana_sumeragi_overview.json` — דשבורד Grafana מוכן המציג סטיות בגובה commit certificate, מוני דרופ ונתוני VRF.
 
 **ספי התרעה**
@@ -176,11 +176,11 @@ translator: manual
 מדדי השליחה העודפת (`sumeragi_redundant_sends_total`) עולים כאשר DA משדר מחדש מטעני RBC. הבדיקה `npos_redundant_send_retries_update_metrics` מבטיחה שדשבורדים תואמים לציפיות.
 
 **תהליך תחקור**
-1. בדקו עם `iroha_cli sumeragi collectors --summary` שהאספן התקוע עדיין מוקצה.
+1. בדקו עם `iroha_cli --output-format text ops sumeragi collectors` שהאספן התקוע עדיין מוקצה.
 2. נתחו `/v1/sumeragi/telemetry` כדי לאתר אינדקס ללא `votes_ingested`. אם רק אספן יחיד נפגע, ניתן להגדיל זמנית את `collectors_redundant_send_r`.
 3. בדקו `sumeragi_bg_post_queue_depth` ו-`p2p_*_throttled_total` לזיהוי עומסי תורים או מגבלות רשת.
 4. בעיות FASTPQ/prover: עיינו ב-`/v1/torii/zk/prover/reports` ובלוגים כדי לאתר כשלים בפרוברים.
-5. כאשר שני האספנים אינם מגיבים, יש לבדוק backlog של RBC, `sumeragi_rbc_store_evictions_total`, `sumeragi_rbc_persist_drops_total` ו-`rbc_store.recent_evictions` כדי לזהות עומס דיסק או TTL. בנוסף, `iroha_cli sumeragi status --summary` כולל את המונים `lane_governance_sealed_total` / `lane_governance_sealed_aliases`, כך שניתן לאתר מסילות שעדיין חסומות בלי לפענח את כל ה-JSON. בתהליכי שחרור ו-CI מומלץ להריץ גם `iroha_cli nexus lane-report --only-missing --fail-on-sealed` כדי לעצור אוטומטית כאשר יש מסילות שלא שוחררו.
+5. כאשר שני האספנים אינם מגיבים, יש לבדוק backlog של RBC, `sumeragi_rbc_store_evictions_total`, `sumeragi_rbc_persist_drops_total` ו-`rbc_store.recent_evictions` כדי לזהות עומס דיסק או TTL. בנוסף, `iroha_cli --output-format text ops sumeragi status` כולל את המונים `lane_governance_sealed_total` / `lane_governance_sealed_aliases`, כך שניתן לאתר מסילות שעדיין חסומות בלי לפענח את כל ה-JSON. בתהליכי שחרור ו-CI מומלץ להריץ גם `iroha_cli app nexus lane-report --only-missing --fail-on-sealed` כדי לעצור אוטומטית כאשר יש מסילות שלא שוחררו.
 6. לאחר התאוששות, תעדו את האירוע והשיבו פרמטרים לערכי הבסיס.
 
 ### צינור האקראיות (VRF)
@@ -203,9 +203,9 @@ translator: manual
 הזרע מזין את `deterministic_collectors`, ו-`/v1/sumeragi/collectors` מציג את התכנון עם `(height, view)`.
 
 #### CLI ותפעול
-- `iroha_cli sumeragi vrf-epoch --epoch <n>` מציג seed, השתתפות, קנסות ו-offsetים (`--summary` לשורה אחת).
-- `iroha_cli sumeragi telemetry --summary` מסכם `reveals_total`, ‏`late_reveals_total`, ‏`committed_no_reveal`. הסרת `--summary` תחזיר JSON מלא.
-- `iroha_cli sumeragi params --summary` מאפשר לוודא ערכים כגון `evidence_horizon_blocks`,‏ `activation_lag_blocks`, `slashing_delay_blocks`.
+- `iroha_cli --output-format text ops sumeragi vrf-epoch --epoch <n>` מציג seed, השתתפות, קנסות ו-offsetים; הסרת `--output-format text` תחזיר JSON מלא.
+- `iroha_cli --output-format text ops sumeragi telemetry` מסכם `reveals_total`, ‏`late_reveals_total`, ‏`committed_no_reveal`. הסרת `--output-format text` תחזיר JSON מלא.
+- `iroha_cli --output-format text ops sumeragi params` מאפשר לוודא ערכים כגון `evidence_horizon_blocks`,‏ `activation_lag_blocks`, `slashing_delay_blocks`.
 - לשליחות ידניות:
 
   ```bash
@@ -220,7 +220,7 @@ translator: manual
   `/v1/sumeragi/collectors` ו-`/v1/sumeragi/status` מאפשרים לאמת `collectors[*].peer_id`, ‏`prf_epoch_seed`, ‏`vrf_late_reveals_total`.
 
 **רשימת בדיקה**
-- בדקו את `sumeragi status --summary`; אם `vrf_penalty_epoch` או `committed_no_reveal` עולים – הריצו `sumeragi vrf-epoch --epoch <n>`.
+- בדקו את `iroha_cli --output-format text ops sumeragi status`; אם `vrf_penalty_epoch` או `committed_no_reveal` עולים – הריצו `iroha_cli --output-format text ops sumeragi vrf-epoch --epoch <n>`.
 - במהלך חלון ה-commit ודאו שכל ולידטור הגיש קובץ (`commitments_total` ו-`vrf.commitments`).
 - לפני הדד-ליין לגילוי עקבו אחרי `vrf.reveals_total` ו-`vrf_late_reveals_total`; אם חסר – פנו לוולידטור או פרסמו ידנית.
 - ודאו שה-offsetים המתועדים תואמים לתקנון; חריגות מעידות על סטייה.
@@ -235,7 +235,7 @@ translator: manual
 - `sumeragi_vrf_non_reveal_total` / `sumeragi_vrf_no_participation_total` — קנסות אפוק.
 - `sumeragi_prf_epoch_seed` — ה-seed המשויך (מוצג בהקס בסטטוס).
 - `sumeragi_prf_context_height` / `_view` — `(height, view)` שנבחרו לסידור.
-- `/v1/sumeragi/vrf/epoch/{epoch}` — כולל `seed_hex`, טבלאות השתתפות וקנסות; `sumeragi vrf-epoch --summary` מציג שורה בודדת.
+- `/v1/sumeragi/vrf/epoch/{epoch}` — כולל `seed_hex`, טבלאות השתתפות וקנסות; `iroha_cli --output-format text ops sumeragi vrf-epoch` מציג שורה בודדת.
 - `/v1/sumeragi/telemetry` מחזיר את השדה `vrf` עם `{found, epoch, finalized, seed_hex, roster_len, participants_total, commitments_total, reveals_total, late_reveals_total, committed_no_reveal[], no_participation[], late_reveals[]}`.
 - `/v1/sumeragi/status` מספק `vrf_penalty_epoch`, `vrf_committed_no_reveal_total`, `vrf_no_participation_total`, `vrf_late_reveals_total`; גילויים מאוחרים נרשמים ב-`sumeragi_vrf_reveals_late_total` וב-`world.vrf_epochs[*].late_reveals` אך לא משנים את ה-seed.
 

@@ -152,7 +152,7 @@ Torii предоставляет три endpoint:
 - `DaCommitmentProof` упаковывает целевой record и вектор `(sibling_hash,
   position)` чтобы верификаторы смогли восстановить корень. Proof включает hash
   блока и подписанный header, чтобы light clients могли проверить finality.
-- CLI helpers (`iroha_cli da prove-commitment`) оборачивают цикл proof request/
+- CLI helpers (`iroha_cli app da prove-commitment`) оборачивают цикл proof request/
   verify и показывают Norito/hex вывод для операторов.
 
 ## 5. Storage и индексирование
@@ -192,7 +192,7 @@ WSV хранит commitments в отдельной column family с ключом
 |-------|-------------|---------------|
 | P0 - Data model merge | Принять `DaCommitmentRecord`, обновления block header и Norito codecs. | `cargo test -p iroha_data_model` зеленый с новыми fixtures. |
 | P1 - Core/WSV wiring | Протянуть queue + block builder логику, сохранить индексы и открыть RPC handlers. | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` проходят с проверками bundle proof. |
-| P2 - Operator tooling | Поставить CLI helpers, Grafana dashboard и обновления docs по proof verification. | `iroha_cli da prove-commitment` работает на devnet; dashboard показывает live данные. |
+| P2 - Operator tooling | Поставить CLI helpers, Grafana dashboard и обновления docs по proof verification. | `iroha_cli app da prove-commitment` работает на devnet; dashboard показывает live данные. |
 | P3 - Governance gate | Включить block validator, требующий DA commitments на lanes, отмеченных в `iroha_config::nexus`. | Status entry + roadmap update помечают DA-3 как завершенный. |
 
 ## Открытые вопросы

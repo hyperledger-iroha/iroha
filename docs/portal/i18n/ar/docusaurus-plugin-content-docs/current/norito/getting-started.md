@@ -68,7 +68,7 @@ ivm_run target/examples/hello.to --args '{}'
 عندما تكون راضيا عن العقد، انشره على عقدة باستخدام CLI. وفر حساب صلاحية ومفتاح توقيعه واما ملف `.to` او payload بصيغة Base64:
 
 ```sh
-iroha_cli contracts deploy \
+iroha_cli app contracts deploy \
   --authority ih58... \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -77,19 +77,19 @@ iroha_cli contracts deploy \
 يرسل الامر bundle من manifest Norito + bytecode عبر Torii ويطبع حالة المعاملة الناتجة. بعد التزام المعاملة يمكن استخدام hash الكود المعروض في الاستجابة لاسترجاع manifests او سرد instances:
 
 ```sh
-iroha_cli contracts manifest --code-hash 0x<hash>
-iroha_cli contracts instances --namespace apps --table
+iroha_cli app contracts manifest get --code-hash 0x<hash>
+iroha_cli app contracts instances --namespace apps --table
 ```
 
 ## 5. التشغيل عبر Torii
 
-مع تسجيل bytecode يمكنك استدعاؤه عبر ارسال تعليمات تشير الى الكود المخزن (مثلا عبر `iroha_cli transaction submit` او عميل التطبيق). تاكد من ان صلاحيات الحساب تسمح بالـ syscalls المطلوبة (`set_account_detail`, `transfer_asset`, الخ).
+مع تسجيل bytecode يمكنك استدعاؤه عبر ارسال تعليمات تشير الى الكود المخزن (مثلا عبر `iroha_cli ledger transaction submit` او عميل التطبيق). تاكد من ان صلاحيات الحساب تسمح بالـ syscalls المطلوبة (`set_account_detail`, `transfer_asset`, الخ).
 
 ## نصائح واستكشاف الاعطال
 
 - استخدم `make examples-run` لتجميع وتنفيذ الامثلة دفعة واحدة. قم بتجاوز متغيرات البيئة `KOTO`/`IVM` اذا لم تكن الثنائيات على `PATH`.
 - اذا رفض `koto_compile` نسخة ABI، تحقق من ان المترجم والعقدة يستهدفان ABI v1 (شغّل `koto_compile --abi` بدون معاملات لعرض الدعم).
-- يقبل CLI مفاتيح توقيع بصيغة hex او Base64. للاختبار يمكنك استخدام المفاتيح الصادرة من `iroha_cli crypto keypair`.
+- يقبل CLI مفاتيح توقيع بصيغة hex او Base64. للاختبار يمكنك استخدام المفاتيح الصادرة من `iroha_cli tools crypto keypair`.
 - عند تصحيح payloads Norito، يساعد امر `ivm_tool disassemble` على ربط التعليمات بمصدر Kotodama.
 
 يعكس هذا التدفق الخطوات المستخدمة في CI واختبارات التكامل. للمزيد حول قواعد Kotodama وربط syscalls وداخل Norito، راجع:

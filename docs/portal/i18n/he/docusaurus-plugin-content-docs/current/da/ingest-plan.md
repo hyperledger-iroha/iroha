@@ -191,7 +191,7 @@ pub struct DaIngestReceipt {
 
 ## כלי CLI ו-SDK (DA-8)
 
-- `iroha da submit` (כניסת CLI חדשה) עוטף כעת את builder/publisher המשותף של
+- `iroha app da submit` (כניסת CLI חדשה) עוטף כעת את builder/publisher המשותף של
   ingest כך שמפעילים יכולים להגיש blobs שרירותיים מחוץ לזרימת Taikai bundle.
   הפקודה נמצאת ב-`crates/iroha_cli/src/commands/da.rs:1` וצורכת payload,
   פרופיל erasure/retention וקבצי metadata/manifest אופציונליים לפני חתימה על
@@ -205,8 +205,8 @@ pub struct DaIngestReceipt {
   `--endpoint` למארחי Torii מותאמים. ה-receipt JSON מודפס ל-stdout בנוסף
   לכתיבה לדיסק, סוגר את דרישת tooling "submit_blob" של DA-8 ומאפשר עבודת
   פריטי SDK.
-- `iroha da get` מוסיף alias ממוקד DA לאורקסטרטור multi-source שמפעיל כבר את
-  `iroha sorafs fetch`. מפעילים יכולים לכוון אותו ל-artefacts של manifest +
+- `iroha app da get` מוסיף alias ממוקד DA לאורקסטרטור multi-source שמפעיל כבר את
+  `iroha app sorafs fetch`. מפעילים יכולים לכוון אותו ל-artefacts של manifest +
   chunk-plan (`--manifest`, `--plan`, `--manifest-id`) **או** להעביר storage
   ticket של Torii דרך `--storage-ticket`. כאשר משתמשים במסלול ticket, ה-CLI
   מוריד manifest מ-`/v1/da/manifests/<ticket>`, שומר את החבילה תחת
@@ -218,11 +218,11 @@ pub struct DaIngestReceipt {
   להחלפה באמצעות `--manifest-endpoint` עבור מארחי Torii מותאמים, כך שבדיקות
   availability מקצה לקצה חיות כולן תחת namespace `da` בלי לשכפל לוגיקת
   orchestrator.
-- `iroha da get-blob` מושך manifests קנוניים ישירות מ-Torii דרך
+- `iroha app da get-blob` מושך manifests קנוניים ישירות מ-Torii דרך
   `GET /v1/da/manifests/{storage_ticket}`. הפקודה כותבת
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` ו-
   `chunk_plan_{ticket}.json` תחת `artifacts/da/fetch_<timestamp>/` (או
-  `--output-dir` שמספק המשתמש) תוך הדפסה של פקודת `iroha da get` המדויקת
+  `--output-dir` שמספק המשתמש) תוך הדפסה של פקודת `iroha app da get` המדויקת
   (כולל `--manifest-id`) הנדרשת למשיכת orchestrator. זה משאיר את המפעילים מחוץ
   לספריות spool של manifest ומבטיח שה-fetcher תמיד משתמש ב-artefacts חתומים
   שנפלטים מ-Torii. לקוח Torii ב-JavaScript משקף את הזרימה דרך
@@ -233,7 +233,7 @@ pub struct DaIngestReceipt {
   ומנתב bundles ל-wrapper הטבעי של orchestrator SoraFS כך שלקוחות iOS יוכלו
   להוריד manifests, להריץ fetches multi-source, ולאסוף הוכחות ללא CLI.
   [IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240][IrohaSwift/Sources/IrohaSwift/SorafsOrchestratorClient.swift:12]
-- `iroha da rent-quote` מחשב rent דטרמיניסטי ופירוט תמריצים לגודל storage נתון
+- `iroha app da rent-quote` מחשב rent דטרמיניסטי ופירוט תמריצים לגודל storage נתון
   וחלון retention. ה-helper צורך את `DaRentPolicyV1` הפעילה (JSON או bytes Norito)
   או את ברירת המחדל המובנית, מאמת את המדיניות ומדפיס סיכום JSON (`gib`,
   `months`, מטא-דטה של מדיניות ושדות `DaRentQuote`) כדי שאודיטורים יוכלו לצטט
@@ -246,11 +246,11 @@ pub struct DaIngestReceipt {
   `crates/iroha_cli/src/commands/da.rs` עבור תת-הפקודה ו-
   `docs/source/da/rent_policy.md` עבור סכמה המדיניות.
   [crates/iroha_cli/src/commands/da.rs:1][docs/source/da/rent_policy.md:1]
-- `iroha da prove-availability` קושר הכל יחד: הוא לוקח storage ticket, מוריד
-  את bundle ה-manifest הקנוני, מריץ orchestrator multi-source (`iroha sorafs fetch`)
+- `iroha app da prove-availability` קושר הכל יחד: הוא לוקח storage ticket, מוריד
+  את bundle ה-manifest הקנוני, מריץ orchestrator multi-source (`iroha app sorafs fetch`)
   מול רשימת `--gateway-provider` שסופקה, שומר את ה-payload שהורד + scoreboard תחת
   `artifacts/da/prove_availability_<timestamp>/`, ומיד מפעיל את helper PoR הקיים
-  (`iroha da prove`) עם ה-bytes שהורדו. מפעילים יכולים לכוונן את knobs של
+  (`iroha app da prove`) עם ה-bytes שהורדו. מפעילים יכולים לכוונן את knobs של
   orchestrator (`--max-peers`, `--scoreboard-out`, overrides של manifest endpoint)
   ואת sampler ה-proof (`--sample-count`, `--leaf-index`, `--sample-seed`) תוך
   שפועל פקודה אחת שמייצרת את ה-artefacts הנדרשים לביקורות DA-5/DA-9: עותק

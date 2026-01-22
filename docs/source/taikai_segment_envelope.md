@@ -134,7 +134,7 @@ continues to track absolute magnitudes for latency bucketing.
 `iroha_cli` now ships a deterministic bundler for Taikai segments:
 
 ```shell
-iroha taikai bundle \
+iroha app taikai bundle \
   --payload segment_0042.m4s \
   --car-out segment_0042.car \
   --envelope-out segment_0042.to \

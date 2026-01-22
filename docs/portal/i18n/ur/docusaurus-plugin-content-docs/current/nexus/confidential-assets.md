@@ -203,7 +203,7 @@ Confidential ledgers کو note freshness ثابت کرنے اور governance-dri
 - **Nullifier retention:** spent nullifiers کم از کم `730` دن (24 مہینے) spend height کے بعد رکھیں، یا اگر regulator زیادہ مدت مانگے تو وہ۔ Operators `confidential.retention.nullifier_days` کے ذریعے window extend کر سکتے ہیں۔ retention window کے اندر nullifiers Torii کے ذریعے queryable رہیں تاکہ auditors double-spend absence ثابت کر سکیں۔
 - **Reveal pruning:** transparent reveals (`RevealConfidential`) متعلقہ note commitments کو block finalisation کے فوراً بعد prune کرتے ہیں، مگر consumed nullifier اوپر والی retention rule کے تابع رہتا ہے۔ Reveal-related events (`ConfidentialEvent::Unshielded`) public amount، recipient اور proof hash record کرتے ہیں تاکہ historical reveals reconstruct کرنے کیلئے pruned ciphertext کی ضرورت نہ ہو۔
 - **Frontier checkpoints:** commitment frontiers rolling checkpoints رکھتے ہیں جو `max_anchor_age_blocks` اور retention window میں سے بڑے کو cover کرتے ہیں۔ Nodes پرانے checkpoints صرف تب compact کرتے ہیں جب interval کے تمام nullifiers expire ہو جائیں۔
-- **Stale digest remediation:** اگر digest drift کی وجہ سے `HandshakeConfidentialMismatch` آئے تو operators کو (1) cluster میں nullifier retention windows align ہونے کی تصدیق کرنی چاہئے، (2) `iroha_cli confidential verify-ledger` چلا کر retained nullifier set کے خلاف digest regenerate کرنا چاہئے، اور (3) refreshed manifest redeploy کرنا چاہئے۔ Prematurely pruned nullifiers کو network join سے پہلے cold storage سے restore کرنا ہوگا۔
+- **Stale digest remediation:** اگر digest drift کی وجہ سے `HandshakeConfidentialMismatch` آئے تو operators کو (1) cluster میں nullifier retention windows align ہونے کی تصدیق کرنی چاہئے، (2) `iroha_cli app confidential verify-ledger` چلا کر retained nullifier set کے خلاف digest regenerate کرنا چاہئے، اور (3) refreshed manifest redeploy کرنا چاہئے۔ Prematurely pruned nullifiers کو network join سے پہلے cold storage سے restore کرنا ہوگا۔
 
 Local overrides کو operations runbook میں document کریں؛ retention window بڑھانے والی governance policies کو node configuration اور archival storage plans کے ساتھ lockstep میں update کرنا ضروری ہے۔
 
@@ -226,7 +226,7 @@ Local overrides کو operations runbook میں document کریں؛ retention win
 - Per-account key derivation hierarchy:
   - `sk_spend` → `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
 - Encrypted note payloads AEAD استعمال کرتے ہیں جو ECDH-derived shared keys سے بنے ہوتے ہیں؛ optional auditor view keys asset policy کے مطابق outputs کے ساتھ attach کئے جا سکتے ہیں۔
-- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, memos decrypt کرنے کیلئے auditor tooling، اور `iroha zk envelope` helper جو Norito memo envelopes offline produce/inspect کرتا ہے۔ Torii `POST /v1/confidential/derive-keyset` کے ذریعے وہی derivation flow فراہم کرتا ہے اور hex/base64 دونوں forms واپس دیتا ہے تاکہ wallets programmatically key hierarchies fetch کر سکیں۔
+- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, memos decrypt کرنے کیلئے auditor tooling، اور `iroha app zk envelope` helper جو Norito memo envelopes offline produce/inspect کرتا ہے۔ Torii `POST /v1/confidential/derive-keyset` کے ذریعے وہی derivation flow فراہم کرتا ہے اور hex/base64 دونوں forms واپس دیتا ہے تاکہ wallets programmatically key hierarchies fetch کر سکیں۔
 
 ## Gas, Limits & DoS Controls
 - Deterministic gas schedule:

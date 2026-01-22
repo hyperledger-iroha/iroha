@@ -18,7 +18,7 @@ source: examples/transfer/transfer.ko
 
 - ממן את Alice בנכס היעד מראש (לדוגמה דרך הסניפט `register and mint` או הזרימות של quickstart SDK).
 - הפעילו את נקודת הכניסה `do_transfer` כדי להעביר 10 יחידות מ-Alice ל-Bob, תוך עמידה בהרשאת `AssetTransferRole`.
-- בדקו יתרות (`FindAccountAssets`, `iroha_cli assets list`) או הירשמו לאירועי pipeline כדי לראות את תוצאת ההעברה.
+- בדקו יתרות (`FindAccountAssets`, `iroha_cli ledger assets list`) או הירשמו לאירועי pipeline כדי לראות את תוצאת ההעברה.
 
 ## מדריכי SDK קשורים
 

@@ -8,7 +8,7 @@ checklists, evidence capture, and fraud/rollback procedures see
 
 ## CLI commands
 
-The `iroha repo` command groups repo-specific helpers:
+The `iroha app repo` command groups repo-specific helpers:
 
 ```bash
 # Stage an initiation instruction without submitting
@@ -106,7 +106,7 @@ next_margin = record.next_margin_check_after(at_timestamp_ms=now_ms)
 
 ## DvP / PvP settlements
 
-The `iroha settlement` command stages delivery-versus-payment and payment-versus-payment instructions:
+The `iroha app settlement` command stages delivery-versus-payment and payment-versus-payment instructions:
 
 ```bash
 # Delivery leg first, then payment

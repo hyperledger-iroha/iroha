@@ -2,7 +2,7 @@
 
 use eyre::Result;
 
-use crate::RunContext;
+use crate::{CliOutputFormat, RunContext};
 
 use super::commands::{VrfEpochArgs, VrfPenaltiesArgs};
 
@@ -10,7 +10,7 @@ pub(crate) fn penalties<C: RunContext>(context: &mut C, args: VrfPenaltiesArgs) 
     let client = context.client_from_config();
     let epoch = parse_epoch(&args.epoch);
     let value = client.get_sumeragi_vrf_penalties_json(epoch)?;
-    if args.summary {
+    if matches!(context.output_format(), CliOutputFormat::Text) {
         let ep = value
             .get("epoch")
             .and_then(norito::json::Value::as_u64)
@@ -40,7 +40,7 @@ pub(crate) fn epoch<C: RunContext>(context: &mut C, args: VrfEpochArgs) -> Resul
     let client = context.client_from_config();
     let epoch = parse_epoch(&args.epoch);
     let value = client.get_sumeragi_vrf_epoch_json(epoch)?;
-    if args.summary {
+    if matches!(context.output_format(), CliOutputFormat::Text) {
         let found = value
             .get("found")
             .and_then(norito::json::Value::as_bool)

@@ -133,10 +133,10 @@ Errores comunes que llegan a operadores/SDKs:
 
 ## Ayudas de CLI y REST
 
-- `iroha sorafs pin list|show`, `alias list` y `replication list` envuelven los
+- `iroha app sorafs pin list|show`, `alias list` y `replication list` envuelven los
   endpoints REST del pin-registry e imprimen Norito JSON crudo con bloques de
   attestation para evidencia de auditoría.
-- `iroha sorafs storage pin` y `torii /v1/sorafs/pin/register` aceptan manifests
+- `iroha app sorafs storage pin` y `torii /v1/sorafs/pin/register` aceptan manifests
   Norito o JSON más proofs de alias opcionales y successors; proofs malformados
   elevan `400`, proofs obsoletos exponen `503` con `Warning: 110`, y proofs
   expirados devuelven `412`.

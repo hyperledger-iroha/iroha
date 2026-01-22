@@ -44,7 +44,7 @@ do_check_swarm() {
 
 cmd_genesis="${bin_kagami[@]} genesis generate --ivm-dir . --genesis-public-key ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
 cmd_schema="${bin_kagami[@]} schema"
-cmd_iroha_help="${bin_iroha[@]} markdown-help"
+cmd_iroha_help="${bin_iroha[@]} tools markdown-help"
 cmd_kagami_help="${bin_kagami[@]} markdown-help"
 
 tasks=()

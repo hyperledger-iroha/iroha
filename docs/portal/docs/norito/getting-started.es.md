@@ -71,7 +71,7 @@ El ejemplo `hello` registra un saludo y emite un syscall `SET_ACCOUNT_DETAIL`. E
 Cuando estes satisfecho con el contrato, despliega en un nodo usando el CLI. Proporciona una cuenta de autoridad, su clave de firma y un archivo `.to` o payload Base64:
 
 ```sh
-iroha_cli contracts deploy \
+iroha_cli app contracts deploy \
   --authority ih58... \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -80,19 +80,19 @@ iroha_cli contracts deploy \
 El comando envia un bundle de manifiesto Norito + bytecode por Torii y muestra el estado de la transaccion resultante. Una vez confirmada, el hash de codigo mostrado en la respuesta puede usarse para recuperar manifiestos o listar instancias:
 
 ```sh
-iroha_cli contracts manifest --code-hash 0x<hash>
-iroha_cli contracts instances --namespace apps --table
+iroha_cli app contracts manifest get --code-hash 0x<hash>
+iroha_cli app contracts instances --namespace apps --table
 ```
 
 ## 5. Ejecuta contra Torii
 
-Con el bytecode registrado, puedes invocarlo enviando una instruccion que haga referencia al codigo almacenado (p. ej., mediante `iroha_cli transaction submit` o tu cliente de aplicacion). Asegurate de que los permisos de la cuenta permitan los syscalls deseados (`set_account_detail`, `transfer_asset`, etc.).
+Con el bytecode registrado, puedes invocarlo enviando una instruccion que haga referencia al codigo almacenado (p. ej., mediante `iroha_cli ledger transaction submit` o tu cliente de aplicacion). Asegurate de que los permisos de la cuenta permitan los syscalls deseados (`set_account_detail`, `transfer_asset`, etc.).
 
 ## Consejos y solucion de problemas
 
 - Usa `make examples-run` para compilar y ejecutar los ejemplos en un solo paso. Sobrescribe las variables de entorno `KOTO`/`IVM` si los binarios no estan en `PATH`.
 - Si `koto_compile` rechaza la version ABI, verifica que el compilador y el nodo apunten a ABI v1 (ejecuta `koto_compile --abi` sin argumentos para listar soporte).
-- El CLI acepta claves de firma en hex o Base64. Para pruebas, puedes usar las claves emitidas por `iroha_cli crypto keypair`.
+- El CLI acepta claves de firma en hex o Base64. Para pruebas, puedes usar las claves emitidas por `iroha_cli tools crypto keypair`.
 - Al depurar payloads Norito, el subcomando `ivm_tool disassemble` ayuda a correlacionar instrucciones con el codigo fuente Kotodama.
 
 Este flujo refleja los pasos usados en CI y en las pruebas de integracion. Para un analisis mas profundo de la gramatica de Kotodama, los mapeos de syscalls y los internals de Norito, consulta:

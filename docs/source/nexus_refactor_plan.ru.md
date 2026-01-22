@@ -71,7 +71,7 @@ Sumeragi, триггерах smart-contract, запросах snapshot, прив
    - Добавить snapshot queries для triggers, assets и roles с детерминированной сортировкой
      (трек через `crates/iroha_core/tests/snapshot_iterable.rs` для текущего покрытия).
 3. **Консистентность snapshot**
-   - Убедиться, что CLI `iroha query` использует тот же путь snapshot, что и Sumeragi/fetchers.
+   - Убедиться, что CLI `iroha ledger query` использует тот же путь snapshot, что и Sumeragi/fetchers.
    - Регрессионные snapshot тесты CLI находятся в `tests/cli/state_snapshot.rs` (feature-gated для
      медленных прогонов).
 

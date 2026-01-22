@@ -21,11 +21,11 @@ translation_last_reviewed: 2026-01-01
 1. **הקפאת אוטומציה.** עצרו את daemon התמריצים בכל host של orchestrator
    (`systemctl stop soranet-incentives.service` או פריסת container שקולה) ואשרו שהתהליך אינו רץ.
 2. **ריקון הוראות ממתינות.** הריצו
-   `iroha sorafs incentives service daemon --state <state.json> --config <daemon.json> --metrics-dir <spool> --once`
+   `iroha app sorafs incentives service daemon --state <state.json> --config <daemon.json> --metrics-dir <spool> --once`
    כדי לוודא שאין הוראות payout ממתינות. ארכבו את ה-payloads של Norito לביקורת.
 3. **ביטול אישור ממשל.** ערכו את `reward_config.json`, הגדירו
    `"budget_approval_id": null`, ופרסו מחדש את התצורה עם
-   `iroha sorafs incentives service init` (או `update-config` אם daemon ארוך טווח פועל). מנוע התשלומים נכשל כעת סגור עם
+   `iroha app sorafs incentives service init` (או `update-config` אם daemon ארוך טווח פועל). מנוע התשלומים נכשל כעת סגור עם
    `MissingBudgetApprovalId`, ולכן ה-daemon מסרב להטביע תשלומים עד שחוזר hash אישור חדש. רשמו את commit ה-git ואת SHA-256
    של התצורה המותאמת ביומן התקרית.
 4. **הודעה לפרלמנט Sora.** צרפו את ledger התשלומים שנוקז, את דוח ה-shadow-run, וסיכום תקרית קצר. פרוטוקולי הפרלמנט חייבים לציין את hash התצורה שבוטלה ואת שעת עצירת ה-daemon.

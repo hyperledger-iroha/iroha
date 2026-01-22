@@ -21,7 +21,7 @@ These values are read from `iroha_config` (user → actual → defaults).
   backend when provided) using the same policy. Use the CLI helper:
 
   ```bash
-  iroha zk proofs prune --backend halo2/ipa
+  iroha app zk proofs prune --backend halo2/ipa
   ```
 
 Both paths emit `ProofEvent::Pruned` with the backend, removed ids (bounded by
@@ -32,7 +32,7 @@ Both paths emit `ProofEvent::Pruned` with the backend, removed ids (bounded by
 
 - Status endpoint: `GET /v1/proofs/retention` returns caps, grace, prune_batch,
   total records, total prunable, and per-backend counts.
-- CLI: `iroha zk proofs retention` (status) and `iroha zk proofs prune` (manual
+- CLI: `iroha app zk proofs retention` (status) and `iroha app zk proofs prune` (manual
   enforcement).
 - Events: subscribe to `DataEvent::Proof(ProofEvent::Pruned)` via SSE/WS filters
   to watch pruning activity.

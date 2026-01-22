@@ -94,7 +94,7 @@ Ambos endpoints son servidos por el worker de almacenamiento embebido, así que 
 
 ## 2. Recorrido Pin → Fetch
 
-1. Genera un paquete de manifiesto + payload (por ejemplo con `iroha sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
+1. Genera un paquete de manifiesto + payload (por ejemplo con `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
 2. Envía el manifiesto con codificación base64:
 
    ```bash

@@ -60,11 +60,11 @@ Servicio de alias
   - Errores: HTTP `400` en input hex mal formado. Torii devuelve un envelope Norito `ValidationFail::QueryFailed::Conversion` con el mensaje de error del decoder.
 - POST `/v1/aliases/resolve`
   - Solicitud: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - Respuesta: { "alias": "GB82WEST12345698765432", "account_id": "...@...", "index": 0, "source": "iso_bridge" }
+  - Respuesta: { "alias": "GB82WEST12345698765432", "account_id": "ih58...", "index": 0, "source": "iso_bridge" }
   - Notas: requiere el runtime ISO bridge staging (`[iso_bridge.account_aliases]` en `iroha_config`). Torii normaliza alias eliminando espacios y pasando a mayusculas antes del lookup. Devuelve 404 cuando el alias no existe y 503 cuando el runtime ISO bridge esta deshabilitado.
 - POST `/v1/aliases/resolve_index`
   - Solicitud: { "index": 0 }
-  - Respuesta: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "...@...", "source": "iso_bridge" }
+  - Respuesta: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "ih58...", "source": "iso_bridge" }
   - Notas: los indices de alias se asignan de forma determinista segun el orden de configuracion (0-based). Los clientes pueden cachear respuestas offline para construir trazas de auditoria de eventos de atestacion de alias.
 
 Tope de tamano de codigo
@@ -193,24 +193,24 @@ Endpoint de conveniencia
   - Notas: pensado para admin/testing; requiere token API si esta configurado. Para produccion, prefiera enviar una transaccion firmada con `SetParameter(Custom)`.
 
 Helpers CLI
-- `iroha gov audit-deploy --namespace apps [--contains calc --hash-prefix deadbeef --summary-only]`
+- `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - Obtiene instancias de contrato para el namespace y verifica que:
     - Torii almacena bytecode para cada `code_hash`, y su digest Blake2b-32 coincide con el `code_hash`.
     - El manifiesto almacenado bajo `/v1/contracts/code/{code_hash}` reporta valores `code_hash` y `abi_hash` coincidentes.
     - Existe una propuesta de gobernanza enacted para `(namespace, contract_id, code_hash, abi_hash)` derivada por el mismo hashing de proposal-id que usa el nodo.
   - Emite un reporte JSON con `results[]` por contrato (issues, resumenes de manifest/code/proposal) mas un resumen de una linea salvo que se suprima (`--no-summary`).
   - Util para auditar namespaces protegidos o verificar flujos de deploy controlados por gobernanza.
-- `iroha gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
+- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver ih58... --approver ih58...]`
   - Emite el esqueleto JSON de metadata usado al enviar deployments a namespaces protegidos, incluyendo `gov_manifest_approvers` opcionales para satisfacer reglas de quorum del manifiesto.
-- `iroha gov vote-zk --election-id <id> --proof-b64 <b64> [--owner <account> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — los lock hints son obligatorios cuando `min_bond_amount > 0`, y cualquier conjunto de hints proporcionado debe incluir `owner`, `amount` y `duration_blocks`.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner ih58... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — los lock hints son obligatorios cuando `min_bond_amount > 0`, y cualquier conjunto de hints proporcionado debe incluir `owner`, `amount` y `duration_blocks`.
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - El resumen de una linea ahora expone un `fingerprint=<hex>` determinista derivado del `CastZkBallot` codificado junto con hints decodificados (`owner`, `amount`, `duration_blocks`, `direction` cuando se proporcionan).
   - Las respuestas CLI anotan `tx_instructions[]` con `payload_fingerprint_hex` mas campos decodificados para que herramientas downstream verifiquen el esqueleto sin reimplementar decodificacion Norito.
   - Proveer los hints de bloqueo permite que el nodo emita eventos `LockCreated`/`LockExtended` para ballots ZK una vez que el circuito exponga los mismos valores.
-- `iroha gov vote-plain --referendum-id <id> --owner <account> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner ih58... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - Los alias `--lock-amount`/`--lock-duration-blocks` reflejan los nombres de flags de ZK para paridad en scripts.
-  - La salida de resumen refleja `vote-zk` al incluir el fingerprint de la instruccion codificada y campos de ballot legibles (`owner`, `amount`, `duration_blocks`, `direction`), ofreciendo confirmacion rapida antes de firmar el esqueleto.
+  - La salida de resumen refleja `vote --mode zk` al incluir el fingerprint de la instruccion codificada y campos de ballot legibles (`owner`, `amount`, `duration_blocks`, `direction`), ofreciendo confirmacion rapida antes de firmar el esqueleto.
 
 Listado de instancias
 - GET `/v1/gov/instances/{ns}` - lista instancias de contrato activas para un namespace.
@@ -312,7 +312,7 @@ for (expected, kind) in offences.iter().enumerate() {
 Operadores y tooling pueden inspeccionar y re-broadcast payloads a traves de:
 
 - Torii: `GET /v1/sumeragi/evidence` y `GET /v1/sumeragi/evidence/count`.
-- CLI: `iroha sumeragi evidence list`, `... count`, y `... submit --evidence-hex <payload>`.
+- CLI: `iroha ops sumeragi evidence list`, `... count`, y `... submit --evidence-hex <payload>`.
 
 La gobernanza debe tratar los bytes de evidence como prueba canonica:
 
@@ -334,7 +334,7 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- El runtime y la CLI exponen parametros staged via `/v1/sumeragi/params` y `iroha sumeragi params --summary`, para que operadores confirmen alturas de activacion y rosters de validadores.
+- El runtime y la CLI exponen parametros staged via `/v1/sumeragi/params` y `iroha --output-format text ops sumeragi params`, para que operadores confirmen alturas de activacion y rosters de validadores.
 - La automatizacion de gobernanza siempre debe:
   1. Finalizar la decision de remocion (o reinstalacion) respaldada por evidence.
   2. Encolar una reconfiguracion de seguimiento con `mode_activation_height = h_current + activation_lag_blocks`.

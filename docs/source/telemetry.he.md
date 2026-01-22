@@ -34,7 +34,7 @@ Iroha חושפת מדדים תואמי Prometheus ותמצית סטטוס בפו
 - `/v1/sumeragi/params` (JSON): צילום פרמטרי Sumeragi on-chain `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
 - `/v1/sumeragi/new_view/json` (JSON): צילום NEW_VIEW `{ ts_ms, items: [{ height, view, count }] }` עם `locked_qc { height, view }` (חלון זיכרון מוגבל; רשומות ישנות נזרקות).
 
-השדות המצטברים `lane_governance_sealed_total` ו-`lane_governance_sealed_aliases` מאפשרים לבדוק מיידית אם קיימות מסילות שעדיין חסומות בגלל חוסר במניפסט ממשל. הן זמינות גם ב-`/v1/sumeragi/status` וגם ב-`iroha_cli sumeragi status --summary`, וה-CLI מציג את רשימת הכינויים כפי שהם. לצורך בדיקות והרצות CI מומלץ לשלב את `iroha_cli nexus lane-report --only-missing --fail-on-sealed` כך שתהליכים ייעצרו אוטומטית כשעדיין קיימות מסילות חסומות.
+השדות המצטברים `lane_governance_sealed_total` ו-`lane_governance_sealed_aliases` מאפשרים לבדוק מיידית אם קיימות מסילות שעדיין חסומות בגלל חוסר במניפסט ממשל. הן זמינות גם ב-`/v1/sumeragi/status` וגם ב-`iroha_cli --output-format text ops sumeragi status`, וה-CLI מציג את רשימת הכינויים כפי שהם. לצורך בדיקות והרצות CI מומלץ לשלב את `iroha_cli app nexus lane-report --only-missing --fail-on-sealed` כך שתהליכים ייעצרו אוטומטית כשעדיין קיימות מסילות חסומות.
 
 ## תצורה
 
@@ -233,7 +233,7 @@ torii_tx_queue_depth / torii_tx_queue_capacity
 - לנטר `increase(governance_manifest_admission_total{result!="allowed"}[5m])` כדי לזהות דחיות מתמשכות (manifest חסר, quorum חסר, או מדיניות שנחסמה).
 
 בדיקת תקלות:
-1. להריץ `iroha_cli gov audit-deploy --namespace <ns>` ולוודא `code_hash`/`abi_hash`.
+1. להריץ `iroha_cli app gov deploy audit --namespace <ns>` ולוודא `code_hash`/`abi_hash`.
 2. לבדוק `governance.recent_manifest_activations` ב-`/status`.
 3. לנטר `increase(governance_protected_namespace_total{outcome="rejected"}[5m])`
    ו-`increase(governance_manifest_quorum_total{outcome="rejected"}[5m])`.
@@ -342,7 +342,7 @@ nexus_lane_configured_total != EXPECTED_LANE_COUNT
 1. לבדוק `torii_zk_prover_pending`, ‏`torii_zk_prover_inflight`, ‏`torii_zk_prover_last_scan_ms`.
 2. לעיין בלוגי Torii (היעד `torii::zk_prover`).
 3. לאשר ערכים ב-`iroha_config` תחת `[torii]`.
-4. להסיר/להריץ מחדש מצורפים בעייתיים עם `iroha_cli zk attachments delete`.
+4. להסיר/להריץ מחדש מצורפים בעייתיים עם `iroha_cli app zk attachments delete`.
 5. לתעד שינויי סף במחברת האופרטיבית ולעדכן הערות בפאנלים.
 
 ### תוצאות ביקורת TRACE

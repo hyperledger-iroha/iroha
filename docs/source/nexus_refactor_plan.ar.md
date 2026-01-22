@@ -72,7 +72,7 @@ translation_last_reviewed: 2026-01-01
    - اضافة snapshot queries لـ triggers وassets وroles بترتيب حتمي (متابعة عبر
      `crates/iroha_core/tests/snapshot_iterable.rs` للتغطية الحالية).
 3. **اتساق snapshots**
-   - ضمان ان CLI `iroha query` يستخدم نفس مسار snapshot مثل Sumeragi/fetchers.
+   - ضمان ان CLI `iroha ledger query` يستخدم نفس مسار snapshot مثل Sumeragi/fetchers.
    - اختبارات انحدار snapshot للـ CLI موجودة في `tests/cli/state_snapshot.rs` (feature-gated
      للجولات البطيئة).
 

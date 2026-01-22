@@ -20,7 +20,7 @@
 ### M1 Status
 
 - ✅ Swift SDK exposes `ShieldRequest`/`UnshieldRequest` builders plus async submitters so wallets can originate encrypted payloads without bespoke glue (`IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:389`, `IrohaSwift/Sources/IrohaSwift/TxBuilder.swift:1006`).
-- ✅ CLI ergonomics landed via the `iroha zk envelope` helper, which encodes/prints confidential memo envelopes directly from hex/base64 inputs (`crates/iroha_cli/src/zk.rs:1256`).
+- ✅ CLI ergonomics landed via the `iroha app zk envelope` helper, which encodes/prints confidential memo envelopes directly from hex/base64 inputs (`crates/iroha_cli/src/zk.rs:1256`).
 - ✅ Deterministic encrypted-payload fixtures feed both Rust and Swift parity suites to keep Norito bytes in sync (`fixtures/confidential/encrypted_payload_v1.json:1`, `crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs:1`, `IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift:73`).
 - ✅ SDK Council rollout vote recorded in `docs/source/confidential_assets/approvals/payload_v1_rollout.md`; `status.md` logs the decision link so production flip now has auditable backing.
 

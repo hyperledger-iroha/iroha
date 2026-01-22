@@ -164,7 +164,7 @@ UIとSDKはセレクタ種別の表示に備えるべきです:
 レガシーなLocalエンコードを正規IH58または圧縮文字列に変換する
 オペレータは、ADDR-5で文書化されたCLIフローに従ってください:
 
-1. `iroha address inspect` はIH58、圧縮、正規hexペイロードを含む構造化
+1. `iroha tools address inspect` はIH58、圧縮、正規hexペイロードを含む構造化
    JSONサマリを出力します。サマリには `kind`/`warning` を持つ `domain`
    オブジェクトが含まれ、`input_domain` を通じて提供されたドメインも
    反映されます。`kind` が `local12` の場合、CLIはstderrに警告を出し、
@@ -176,7 +176,7 @@ UIとSDKはセレクタ種別の表示に備えるべきです:
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("snx1...@wonderland");
+   const summary = inspectAccountId("snx1...");
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
@@ -192,7 +192,7 @@ UIとSDKはセレクタ種別の表示に備えるべきです:
 4. マニフェスト、レジストリ、顧客向け文書を正規形式で更新し、
    cutover完了後にLocalセレクタが拒否されることを関係者へ通知します。
 5. 大量データセットでは
-   `iroha address audit --input addresses.txt --network-prefix 753` を実行します。
+   `iroha tools address audit --input addresses.txt --network-prefix 753` を実行します。
    コマンドは改行区切りリテラル(先頭が `#` のコメントは無視、`--input -`
    またはフラグ無しでSTDINを使用)を読み、各エントリの正規/IH58/圧縮
    サマリを含むJSONレポートを生成し、パースエラーとLocalドメイン警告を
@@ -209,8 +209,8 @@ UIとSDKはセレクタ種別の表示に備えるべきです:
   続行してください。
 7. CI/lint自動化は `ci/check_address_normalize.sh` を実行できます。これは
    `fixtures/account/address_vectors.json` からLocalセレクタを抽出し、
-   `iroha address normalize` で変換し、
-   `iroha address audit --fail-on-warning` を再実行して、リリースがLocal
+   `iroha tools address normalize` で変換し、
+   `iroha tools address audit --fail-on-warning` を再実行して、リリースがLocal
    digestを出さなくなったことを証明します。
 
 `torii_address_local8_total{endpoint}` に加えて
@@ -246,7 +246,7 @@ Alertmanagerパック(`dashboards/alerts/address_ingest_rules.yml`)は3つの
 cutover時のウォレット/エクスプローラリリースノートに次の箇条書きを
 含めてください:
 
-> **Addresses:** `iroha address normalize --only-local --append-domain` ヘルパーを
+> **Addresses:** `iroha tools address normalize --only-local --append-domain` ヘルパーを
 > 追加し、CI (`ci/check_address_normalize.sh`) に接続しました。これにより、
 > ウォレット/エクスプローラのパイプラインがLocal-8/Local-12がmainnetで
 > ブロックされる前に、レガシーLocalセレクタを正規IH58/圧縮形式へ

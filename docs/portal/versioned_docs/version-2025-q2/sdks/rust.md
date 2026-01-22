@@ -106,7 +106,7 @@ fn submit_da_blob() -> eyre::Result<()> {
 
 When you need to inspect or persist the Norito payload without sending it to
 Torii, call `client.build_da_ingest_request(...)` to obtain the signed request
-and render it as JSON/bytes, mirroring `iroha da submit --no-submit`.
+and render it as JSON/bytes, mirroring `iroha app da submit --no-submit`.
 
 ## 5. Query data
 

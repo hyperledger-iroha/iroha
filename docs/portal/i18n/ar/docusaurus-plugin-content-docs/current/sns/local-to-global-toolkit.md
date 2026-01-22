@@ -13,7 +13,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## نظرة عامة
 
 - `scripts/address_local_toolkit.sh` يلف CLI الخاص بـ `iroha` لانتاج:
-  - `audit.json` -- خرج منظم من `iroha address audit --format json`.
+  - `audit.json` -- خرج منظم من `iroha tools address audit --format json`.
   - `normalized.txt` -- literals IH58 (المفضل) / compressed (`snx1`) (الخيار الثاني) محولة لكل selector من نطاق Local.
 - استخدم السكربت مع لوحة ingest للعناوين (`dashboards/grafana/address_ingest.json`)
   وقواعد Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) لاثبات ان cutover Local-8 /
@@ -46,7 +46,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 2. احظر عمليات الدمج عندما يبلغ `audit.json` عن Local selectors (`domain.kind = local12`).
    على القيمة الافتراضية `true` (قم بالتحويل الى `false` فقط على بيئات dev/test عند
    تشخيص التراجعات) واضف
-   `iroha address normalize --fail-on-warning --only-local` الى CI حتى تفشل
+   `iroha tools address normalize --fail-on-warning --only-local` الى CI حتى تفشل
    محاولات التراجع قبل الوصول الى production.
 
 راجع المستند المصدر لمزيد من التفاصيل وقوائم الادلة و release-note snippet

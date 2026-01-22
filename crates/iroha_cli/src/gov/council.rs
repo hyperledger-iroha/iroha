@@ -1,6 +1,6 @@
 //! Council and VRF-related governance helpers.
 
-use super::shared::{print_with_summary, validate_summary_flags};
+use super::shared::print_with_summary;
 use crate::{
     Run, RunContext,
     json_utils::{json_array, json_object, json_value},
@@ -51,12 +51,6 @@ pub struct PersistCouncilArgs {
     /// Private key (hex) for signing
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
-    /// Print only a summary line
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress summary (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for PersistCouncilArgs {
@@ -96,7 +90,7 @@ impl Run for PersistCouncilArgs {
         let summary = Some(format!(
             "council persist: epoch={epoch} members={members} alternates={alternates} verified={verified}"
         ));
-        print_with_summary(context, summary, &value, self.summary_only, self.no_summary)
+        print_with_summary(context, summary, &value)
     }
 }
 
@@ -384,12 +378,6 @@ pub struct DeriveAndPersistArgs {
     /// Private key (hex) for signing
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
-    /// Print only a summary line
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress summary (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
     /// Wait for `CouncilPersisted` event and verify via /v1/gov/council/current
     #[arg(long, default_value_t = false)]
     pub wait: bool,
@@ -409,13 +397,7 @@ impl Run for DeriveAndPersistArgs {
             ("derived", derive.value.clone()),
             ("persisted", persisted),
         ])?;
-        print_with_summary(
-            context,
-            summary,
-            &combined,
-            self.summary_only,
-            self.no_summary,
-        )?;
+        print_with_summary(context, summary, &combined)?;
         if self.wait {
             Self::verify_persist(context, &client, derive.epoch)?;
         }
@@ -555,67 +537,58 @@ struct DeriveOutcome {
 
 #[derive(clap::Args, Debug)]
 pub struct CouncilArgs {
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for CouncilArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_summary_flags(self.summary_only, self.no_summary)?;
         let client: Client = context.client_from_config();
         let value = client.get_gov_council_json()?;
-        let summary = (!self.no_summary).then(|| {
-            let epoch = value
-                .get("epoch")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or(0);
-            let members_list =
-                value
-                    .get("members")
-                    .and_then(|v| v.as_array())
-                    .map_or_else(Vec::new, |arr| {
-                        arr.iter()
-                            .filter_map(|m| {
-                                m.get("account_id")
-                                    .and_then(|v| v.as_str())
-                                    .map(ToString::to_string)
-                            })
-                            .collect()
-                    });
-            let member_count = members_list.len();
-            let alternates_list =
-                value
-                    .get("alternates")
-                    .and_then(|v| v.as_array())
-                    .map_or_else(Vec::new, |arr| {
-                        arr.iter()
-                            .filter_map(|m| {
-                                m.get("account_id")
-                                    .and_then(|v| v.as_str())
-                                    .map(ToString::to_string)
-                            })
-                            .collect()
-                    });
-            let alternate_count = alternates_list.len();
-            let members_joined = members_list.join(", ");
-            let alternates_joined = alternates_list.join(", ");
-            let verified = value
-                .get("verified")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or(0);
-            let derived_by = value
-                .get("derived_by")
-                .and_then(norito::json::Value::as_str)
-                .unwrap_or("unknown");
-            format!(
-                "council: epoch={epoch} members_count={member_count} alternates_count={alternate_count} verified={verified} derived_by={derived_by} members=[{members_joined}] alternates=[{alternates_joined}]"
-            )
-        });
-        print_with_summary(context, summary, &value, self.summary_only, self.no_summary)
+        let epoch = value
+            .get("epoch")
+            .and_then(norito::json::Value::as_u64)
+            .unwrap_or(0);
+        let members_list =
+            value
+                .get("members")
+                .and_then(|v| v.as_array())
+                .map_or_else(Vec::new, |arr| {
+                    arr.iter()
+                        .filter_map(|m| {
+                            m.get("account_id")
+                                .and_then(|v| v.as_str())
+                                .map(ToString::to_string)
+                        })
+                        .collect()
+                });
+        let member_count = members_list.len();
+        let alternates_list =
+            value
+                .get("alternates")
+                .and_then(|v| v.as_array())
+                .map_or_else(Vec::new, |arr| {
+                    arr.iter()
+                        .filter_map(|m| {
+                            m.get("account_id")
+                                .and_then(|v| v.as_str())
+                                .map(ToString::to_string)
+                        })
+                        .collect()
+                });
+        let alternate_count = alternates_list.len();
+        let members_joined = members_list.join(", ");
+        let alternates_joined = alternates_list.join(", ");
+        let verified = value
+            .get("verified")
+            .and_then(norito::json::Value::as_u64)
+            .unwrap_or(0);
+        let derived_by = value
+            .get("derived_by")
+            .and_then(norito::json::Value::as_str)
+            .unwrap_or("unknown");
+        let summary = Some(format!(
+            "council: epoch={epoch} members_count={member_count} alternates_count={alternate_count} verified={verified} derived_by={derived_by} members=[{members_joined}] alternates=[{alternates_joined}]"
+        ));
+        print_with_summary(context, summary, &value)
     }
 }
 
@@ -633,17 +606,10 @@ pub struct ReplaceCouncilArgs {
     /// Private key (hex) for signing
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
-    /// Print only a summary line
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress summary (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for ReplaceCouncilArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_summary_flags(self.summary_only, self.no_summary)?;
         let client: Client = context.client_from_config();
         let body = json_object(vec![
             ("missing", json_value(&self.missing)?),
@@ -671,7 +637,7 @@ impl Run for ReplaceCouncilArgs {
         let summary = Some(format!(
             "council replace: epoch={epoch} members={members} alternates={alternates} replaced={replaced}"
         ));
-        print_with_summary(context, summary, &value, self.summary_only, self.no_summary)
+        print_with_summary(context, summary, &value)
     }
 }
 
@@ -725,29 +691,15 @@ pub struct DeriveVrfArgs {
     /// Path to a JSON file with an array of candidates ({`account_id`, variant, `pk_b64`, `proof_b64`})
     #[arg(long, value_name = "PATH")]
     pub candidates_file: Option<std::path::PathBuf>,
-    /// Print only the compact summary line (suppresses raw JSON)
-    #[arg(long, default_value_t = false)]
-    pub summary_only: bool,
-    /// Suppress the compact summary line (print raw JSON only)
-    #[arg(long, default_value_t = false)]
-    pub no_summary: bool,
 }
 
 impl Run for DeriveVrfArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        validate_summary_flags(self.summary_only, self.no_summary)?;
         let client: Client = context.client_from_config();
         let candidates = self.collect_candidates()?;
         let response = self.invoke_derive(&client, &candidates)?;
-        if !self.no_summary
-            && let Some(summary) = Self::derive_summary(&response)
-        {
-            context.println(summary)?;
-        }
-        if !self.summary_only {
-            context.print_data(&response)?;
-        }
-        Ok(())
+        let summary = Self::derive_summary(&response);
+        print_with_summary(context, summary, &response)
     }
 }
 

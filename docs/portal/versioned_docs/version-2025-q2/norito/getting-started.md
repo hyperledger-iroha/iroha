@@ -75,7 +75,7 @@ Provide an authority account, its signing key, and either a `.to` file or
 Base64 payload:
 
 ```sh
-iroha_cli contracts deploy \
+iroha_cli app contracts deploy \
   --authority ih58... \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -86,14 +86,14 @@ the resulting transaction status. Once the transaction is committed, the code
 hash shown in the response can be used to retrieve manifests or list instances:
 
 ```sh
-iroha_cli contracts manifest --code-hash 0x<hash>
-iroha_cli contracts instances --namespace apps --table
+iroha_cli app contracts manifest get --code-hash 0x<hash>
+iroha_cli app contracts instances --namespace apps --table
 ```
 
 ## 5. Run against Torii
 
 With the bytecode registered, you can invoke it by submitting an instruction
-that references the stored code (e.g., through `iroha_cli transaction submit`
+that references the stored code (e.g., through `iroha_cli ledger transaction submit`
 or your application client). Ensure the account permissions allow the desired
 syscalls (`set_account_detail`, `transfer_asset`, etc.).
 
@@ -106,7 +106,7 @@ syscalls (`set_account_detail`, `transfer_asset`, etc.).
   both target ABI v1 (run `koto_compile --abi` without arguments to list
   support).
 - The CLI accepts either hex or Base64 signing keys. For testing, you can use
-  keys emitted by `iroha_cli crypto keypair`.
+  keys emitted by `iroha_cli tools crypto keypair`.
 - When debugging Norito payloads, the `ivm_tool disassemble` subcommand helps
   correlate instructions with Kotodama source.
 

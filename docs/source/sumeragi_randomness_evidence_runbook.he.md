@@ -33,15 +33,15 @@ Note: For the v1 release, VRF penalties jail offenders after the activation lag,
 
 ## 1. אימות בחירת מצב והקשר epoch
 
-1. הריצו `iroha sumeragi params --summary` כדי לוודא שהבינארי טען
+1. הריצו `iroha --output-format text ops sumeragi params` כדי לוודא שהבינארי טען
    `sumeragi.consensus_mode="npos"` ולתעד `k_aggregators`,
    `redundant_send_r`, אורך epoch והיסטי VRF commit/reveal.
 2. בדקו את תצוגת ה-runtime:
 
    ```bash
-   iroha sumeragi status --summary
-   iroha sumeragi collectors --summary
-   iroha sumeragi rbc status --summary
+   iroha --output-format text ops sumeragi status
+   iroha --output-format text ops sumeragi collectors
+   iroha --output-format text ops sumeragi rbc status
    ```
 
    שורת `status` מדפיסה tuple leader/view, backlog של RBC, נסיונות DA,
@@ -62,11 +62,11 @@ Note: For the v1 release, VRF penalties jail offenders after the activation lag,
 ולידטור:
 
 ```bash
-iroha sumeragi vrf-epoch --epoch "$EPOCH" --summary
-iroha sumeragi vrf-epoch --epoch "$EPOCH" > artifacts/vrf_epoch_${EPOCH}.json
+iroha --output-format text ops sumeragi vrf-epoch --epoch "$EPOCH"
+iroha ops sumeragi vrf-epoch --epoch "$EPOCH" > artifacts/vrf_epoch_${EPOCH}.json
 
-iroha sumeragi vrf-penalties --epoch "$EPOCH" --summary
-iroha sumeragi vrf-penalties --epoch "$EPOCH" > artifacts/vrf_penalties_${EPOCH}.json
+iroha --output-format text ops sumeragi vrf-penalties --epoch "$EPOCH"
+iroha ops sumeragi vrf-penalties --epoch "$EPOCH" > artifacts/vrf_penalties_${EPOCH}.json
 ```
 
 הסיכומים מציגים האם ה-epoch סופי, כמה משתתפים שלחו commits/reveals, את אורך
@@ -115,11 +115,11 @@ helpers כדי להראות התאמה ל-HTTP endpoints המתועדים ב-
 
 ```bash
 # Count and list persisted evidence
-iroha sumeragi evidence count --summary
-iroha sumeragi evidence list --summary --limit 5
+iroha --output-format text ops sumeragi evidence count
+iroha --output-format text ops sumeragi evidence list --limit 5
 
 # Show JSON for audits
-iroha sumeragi evidence list --limit 100 > artifacts/evidence_snapshot.json
+iroha ops sumeragi evidence list --limit 100 > artifacts/evidence_snapshot.json
 ```
 
 ודאו שה-`total` המדווח תואם ל-widget Grafana שמוזן מ-
@@ -128,7 +128,7 @@ iroha sumeragi evidence list --limit 100 > artifacts/evidence_snapshot.json
 הנפילה). בעת בדיקות alerting, שלחו payload מוכר ותקין באמצעות:
 
 ```bash
-iroha sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prevote.hex --summary
+iroha --output-format text ops sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prevote.hex
 ```
 
 נטרו `/v1/events/sse` באמצעות stream מסונן כדי להוכיח שה-SDKs רואים את אותם
@@ -155,7 +155,7 @@ iroha sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prev
 
 ## 6. אותות troubleshooting
 
-- **Mode selection mismatch** — אם `iroha sumeragi params --summary` מציג
+- **Mode selection mismatch** — אם `iroha --output-format text ops sumeragi params` מציג
   `consensus_mode="permissioned"` או `k_aggregators` שונה מה-manifest,
   מחקו את artifacts שנלכדו, תקנו את `iroha_config`, אתחלו את הוולידטור,
   והריצו מחדש את זרימת האימות המתוארת ב-{doc}`sumeragi`.
@@ -169,7 +169,7 @@ iroha sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prev
   של הוולידטור או על replay protection של Torii; תקנו את ה-peer הבעייתי לפני
   הרצה חוזרת של הבדיקה.
 - **Evidence ingestion stalls** — כאשר `sumeragi_evidence_records_total` נתקע
-  בזמן ש-chaos tests פולטים תקלות, הריצו `iroha sumeragi evidence count`
+  בזמן ש-chaos tests פולטים תקלות, הריצו `iroha ops sumeragi evidence count`
   על מספר ולידטורים ואשרו ש-`/v1/sumeragi/evidence/count` תואם ל-CLI. כל סטיה
   פירושה שצרכני SSE/webhook עשויים להיות stale, לכן שלחו מחדש fixture מוכר
   והסלימו לצוות Torii אם המונה לא גדל.

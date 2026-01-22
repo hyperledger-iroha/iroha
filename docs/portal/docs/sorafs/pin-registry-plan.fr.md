@@ -147,6 +147,6 @@ La façade REST livre désormais des endpoints de listing attestés :
   d'alias actif et le backlog des ordres de réplication avec une pagination cohérente
   et des filtres de statut.
 
-La CLI encapsule ces appels (`iroha sorafs pin list`, `pin show`, `alias list`,
+La CLI encapsule ces appels (`iroha app sorafs pin list`, `pin show`, `alias list`,
 `replication list`) pour permettre aux opérateurs d'automatiser les audits du
 registry sans toucher aux APIs bas niveau.

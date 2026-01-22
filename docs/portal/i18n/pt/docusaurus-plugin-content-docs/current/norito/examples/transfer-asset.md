@@ -18,7 +18,7 @@ Fluxo direto de transferencia de ativos que espelha os quickstarts do SDK e os r
 
 - Pre-financie Alice com o ativo alvo (por exemplo via o trecho `register and mint` ou os fluxos de quickstart do SDK).
 - Execute o entrypoint `do_transfer` para mover 10 unidades de Alice para Bob, atendendo a permissao `AssetTransferRole`.
-- Consulte saldos (`FindAccountAssets`, `iroha_cli assets list`) ou assine eventos do pipeline para observar o resultado da transferencia.
+- Consulte saldos (`FindAccountAssets`, `iroha_cli ledger assets list`) ou assine eventos do pipeline para observar o resultado da transferencia.
 
 ## Guias de SDK relacionados
 
