@@ -493,11 +493,10 @@ const BASE_RECIPES_STABLE: &[RecipeKind] = &[
     RecipeKind::RegisterPipelineTrigger,
     RecipeKind::SetTriggerKeyValue,
     RecipeKind::RemoveTriggerKeyValue,
-    RecipeKind::MintTriggerRepetitions,
-    RecipeKind::BurnTriggerRepetitions,
+    // TODO: Re-enable trigger repetition recipes once repeatable trigger tracking is concurrency-safe.
     RecipeKind::ExecuteTrigger,
     RecipeKind::DeployIvmContract,
-    RecipeKind::DeployKotodamaContract,
+    // TODO: Re-enable DeployKotodamaContract once Kotodama samples only use ABI v1 syscalls.
 ];
 
 const BASE_RECIPES_CHAOS: &[RecipeKind] = &[
@@ -977,24 +976,15 @@ impl ChaosState {
 
     fn plan_remove_key(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
         let target = self.random_user(rng)?.clone();
-        if let Some(keys) = self.account_metadata.get_mut(&target.id)
-            && let Some(key) = keys.iter().next().cloned()
-        {
-            keys.remove(&key);
+        if let Some(keys) = self.account_metadata.get_mut(&target.id) {
+            if let Some(existing) = keys.iter().next().cloned() {
+                keys.remove(&existing);
+            }
             if keys.is_empty() {
                 self.account_metadata.remove(&target.id);
             }
-            return Ok(TransactionPlan {
-                label: "remove_account_kv",
-                instructions: vec![InstructionBox::from(RemoveKeyValue::account(
-                    target.id.clone(),
-                    key,
-                ))],
-                signer: target,
-                expect_success: true,
-            });
         }
-        let key: Name = "ephemeral"
+        let key: Name = format!("ephemeral_{}", self.bump_metadata())
             .parse()
             .map_err(|_| eyre!("failed to parse key name"))?;
         let instructions = vec![
@@ -1083,19 +1073,13 @@ impl ChaosState {
 
     fn plan_remove_domain_key(&mut self) -> Result<TransactionPlan> {
         let domain = self.base_domain.clone();
-        if let Some(keys) = self.domain_metadata.get_mut(&domain)
-            && let Some(key) = keys.iter().next().cloned()
-        {
-            keys.remove(&key);
+        if let Some(keys) = self.domain_metadata.get_mut(&domain) {
+            if let Some(existing) = keys.iter().next().cloned() {
+                keys.remove(&existing);
+            }
             if keys.is_empty() {
                 self.domain_metadata.remove(&domain);
             }
-            return Ok(TransactionPlan {
-                label: "remove_domain_kv",
-                instructions: vec![InstructionBox::from(RemoveKeyValue::domain(domain, key))],
-                signer: self.treasury.clone(),
-                expect_success: true,
-            });
         }
         let key: Name = format!("domain_flag_{}", self.bump_metadata())
             .parse()
@@ -1139,21 +1123,13 @@ impl ChaosState {
 
     fn plan_remove_asset_definition_key(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
         let definition = self.random_asset_definition(rng)?;
-        if let Some(keys) = self.asset_definition_metadata.get_mut(&definition)
-            && let Some(key) = keys.iter().next().cloned()
-        {
-            keys.remove(&key);
+        if let Some(keys) = self.asset_definition_metadata.get_mut(&definition) {
+            if let Some(existing) = keys.iter().next().cloned() {
+                keys.remove(&existing);
+            }
             if keys.is_empty() {
                 self.asset_definition_metadata.remove(&definition);
             }
-            return Ok(TransactionPlan {
-                label: "remove_asset_definition_kv",
-                instructions: vec![InstructionBox::from(RemoveKeyValue::asset_definition(
-                    definition, key,
-                ))],
-                signer: self.treasury.clone(),
-                expect_success: true,
-            });
         }
         let key: Name = format!("asset_def_flag_{}", self.bump_metadata())
             .parse()
@@ -1175,7 +1151,9 @@ impl ChaosState {
     }
 
     fn plan_set_asset_metadata(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let asset = self.random_asset_instance(rng)?;
+        let asset = self.random_asset_instance(rng).unwrap_or_else(|_| {
+            AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone())
+        });
         let key: Name = format!("asset_flag_{}", self.bump_metadata())
             .parse()
             .map_err(|_| eyre!("failed to parse asset metadata key"))?;
@@ -1183,38 +1161,40 @@ impl ChaosState {
             .entry(asset.clone())
             .or_default()
             .insert(key.clone());
+        let amount: Numeric = 1_u32.into();
         Ok(TransactionPlan {
             label: "set_asset_kv",
-            instructions: vec![InstructionBox::from(SetAssetKeyValue::new(
-                asset,
-                key,
-                json_pair("asset", "chaos"),
-            ))],
+            instructions: vec![
+                InstructionBox::from(Mint::asset_numeric(amount, asset.clone())),
+                InstructionBox::from(SetAssetKeyValue::new(
+                    asset,
+                    key,
+                    json_pair("asset", "chaos"),
+                )),
+            ],
             signer: self.treasury.clone(),
             expect_success: true,
         })
     }
 
     fn plan_remove_asset_metadata(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let asset = self.random_asset_instance(rng)?;
-        if let Some(keys) = self.asset_metadata.get_mut(&asset)
-            && let Some(key) = keys.iter().next().cloned()
-        {
-            keys.remove(&key);
+        let asset = self.random_asset_instance(rng).unwrap_or_else(|_| {
+            AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone())
+        });
+        if let Some(keys) = self.asset_metadata.get_mut(&asset) {
+            if let Some(existing) = keys.iter().next().cloned() {
+                keys.remove(&existing);
+            }
             if keys.is_empty() {
                 self.asset_metadata.remove(&asset);
             }
-            return Ok(TransactionPlan {
-                label: "remove_asset_kv",
-                instructions: vec![InstructionBox::from(RemoveAssetKeyValue::new(asset, key))],
-                signer: self.treasury.clone(),
-                expect_success: true,
-            });
         }
         let key: Name = format!("asset_flag_{}", self.bump_metadata())
             .parse()
             .map_err(|_| eyre!("failed to parse fallback asset key"))?;
+        let amount: Numeric = 1_u32.into();
         let instructions = vec![
+            InstructionBox::from(Mint::asset_numeric(amount, asset.clone())),
             InstructionBox::from(SetAssetKeyValue::new(
                 asset.clone(),
                 key.clone(),
@@ -1342,22 +1322,13 @@ impl ChaosState {
             trigger_id
         };
 
-        if let Some(keys) = self.trigger_metadata.get_mut(&trigger_id)
-            && let Some(key) = keys.iter().next().cloned()
-        {
-            keys.remove(&key);
+        if let Some(keys) = self.trigger_metadata.get_mut(&trigger_id) {
+            if let Some(existing) = keys.iter().next().cloned() {
+                keys.remove(&existing);
+            }
             if keys.is_empty() {
                 self.trigger_metadata.remove(&trigger_id);
             }
-            instructions.push(InstructionBox::from(RemoveKeyValue::trigger(
-                trigger_id, key,
-            )));
-            return Ok(TransactionPlan {
-                label: "remove_trigger_kv",
-                instructions,
-                signer: self.treasury.clone(),
-                expect_success: true,
-            });
         }
 
         let key: Name = format!("trigger_flag_{}", self.bump_metadata())
@@ -1677,24 +1648,7 @@ impl ChaosState {
         })
     }
 
-    fn plan_execute_trigger(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        if self.call_triggers.is_empty() {
-            return self.plan_register_call_trigger();
-        }
-        let trigger = self
-            .call_triggers
-            .choose(rng)
-            .expect("non-empty trigger registry")
-            .clone();
-        Ok(TransactionPlan {
-            label: "execute_trigger",
-            instructions: vec![InstructionBox::from(ExecuteTrigger::new(trigger))],
-            signer: self.treasury.clone(),
-            expect_success: true,
-        })
-    }
-
-    fn plan_register_call_trigger(&mut self) -> Result<TransactionPlan> {
+    fn plan_execute_trigger(&mut self, _rng: &mut StdRng) -> Result<TransactionPlan> {
         let trigger_id: TriggerId = format!("call_trigger_{}", self.bump_trigger())
             .parse()
             .map_err(|_| eyre!("failed to parse call trigger id"))?;
@@ -1707,13 +1661,15 @@ impl ChaosState {
                 ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
             ),
         );
+        let trigger = Trigger::new(trigger_id.clone(), action);
         self.registered_triggers.push(trigger_id.clone());
         self.call_triggers.push(trigger_id.clone());
         Ok(TransactionPlan {
-            label: "register_call_trigger",
-            instructions: vec![InstructionBox::from(Register::trigger(Trigger::new(
-                trigger_id, action,
-            )))],
+            label: "execute_trigger",
+            instructions: vec![
+                InstructionBox::from(Register::trigger(trigger)),
+                InstructionBox::from(ExecuteTrigger::new(trigger_id)),
+            ],
             signer: self.treasury.clone(),
             expect_success: true,
         })
@@ -2547,6 +2503,16 @@ mod tests {
                 .iter()
                 .any(|kind| matches!(kind, RecipeKind::RemoveAssetInstanceKeyValue))
         );
+        assert!(
+            !BASE_RECIPES_STABLE
+                .iter()
+                .any(|kind| matches!(kind, RecipeKind::DeployKotodamaContract))
+        );
+        assert!(
+            BASE_RECIPES_CHAOS
+                .iter()
+                .any(|kind| matches!(kind, RecipeKind::DeployKotodamaContract))
+        );
     }
 
     #[test]
@@ -3058,31 +3024,37 @@ mod tests {
     }
 
     #[test]
-    fn execute_trigger_registers_by_call_trigger() {
+    fn execute_trigger_registers_and_executes_call_trigger() {
         let PreparedChaos { mut state, .. } =
             prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(103);
-        let register_plan = state
-            .plan_execute_trigger(&mut rng)
-            .expect("register call trigger");
-        assert_eq!(register_plan.label, "register_call_trigger");
-        let call_id = state
-            .call_triggers
-            .first()
-            .cloned()
-            .expect("call trigger tracked");
-        let execute_plan = state
+        let plan = state
             .plan_execute_trigger(&mut rng)
             .expect("execute trigger");
-        assert_eq!(execute_plan.label, "execute_trigger");
-        let execute = execute_plan
+        assert_eq!(plan.label, "execute_trigger");
+        let registered = plan
             .instructions
-            .first()
-            .expect("execute trigger instruction")
-            .as_any()
-            .downcast_ref::<ExecuteTrigger>()
-            .expect("execute trigger payload");
-        assert_eq!(execute.trigger, call_id);
+            .iter()
+            .find_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterBox>()
+                    .and_then(|register| match register {
+                        RegisterBox::Trigger(registration) => Some(registration.object.clone()),
+                        _ => None,
+                    })
+            })
+            .expect("call trigger registration");
+        let execute = plan
+            .instructions
+            .iter()
+            .find_map(|instruction| instruction.as_any().downcast_ref::<ExecuteTrigger>())
+            .expect("execute trigger instruction");
+        assert_eq!(execute.trigger, *registered.id());
+        assert!(
+            state.call_triggers.contains(registered.id()),
+            "call trigger should be tracked"
+        );
     }
 
     #[test]
