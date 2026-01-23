@@ -2,7 +2,27 @@
 
 Last update: 2026-01-22
 
+- Localnet throughput (NPoS, 7 peers, release, telemetry profile Extended): `TELEMETRY_PROFILE=Extended TELEMETRY_ENABLED=true IROHA_THROUGHPUT_ARTIFACT_DIR=/private/tmp/iroha-throughput-npos-20260123a IROHA_TEST_NETWORK_KEEP_DIRS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-throughput cargo test -p integration_tests --release --test sumeragi_localnet_smoke npos_localnet_throughput_10k_tps -- --ignored --nocapture` (failed: submit queue did not drain below 20000 within 180s; queue_size ~20458, min_non_empty=3). Artifacts: `/private/tmp/iroha-throughput-npos-20260123a/throughput-1769116348574` (summary.json + status_npos.jsonl; metrics_npos.prom empty; network dir `/private/tmp/iroha-throughput-npos-tmp/irohad_test_network_0PlwjN`).
+- Throughput snapshot (NPoS rerun): `/private/tmp/iroha-throughput-npos-20260123a/status_npos.jsonl` shows `tx_queue.depth` 0→295 (capacity 0→65536) and `pacemaker_backpressure_deferrals_total` 0→181; tick logs show `pending_blocks` max 3 (last observed 1) with `queue_len` max 20480. `/metrics` scrape remained empty (expensive metrics still gated in test-network configs).
+- NEW_VIEW quorum correlation (NPoS throughput rerun `irohad_test_network_0PlwjN`): required 5, max `new_view_slots` 4 (`3:1`/`3:2`); NEW_VIEW vote sends per peer: creative_flamingo 29, blameless_groundhog 5, promising_salamander 4, sinewy_bongo 3, tasty_chiffchaff 3, pure_crane 2, national_lizard 1.
+- StateView hold tracing: Sumeragi tick now tags `StateView` hold context; permissioned run `irohad_test_network_P4eF53` shows long holds dominated by `sumeragi.tick.cull_expired` (held_ms up to ~17s) with occasional `sumeragi.tick.pacemaker_propose_ready`, plus `state view lock contended; returning unlocked view` warnings.
+- NEW_VIEW quorum correlation (permissioned throughput rerun `irohad_test_network_P4eF53`): required 5, max `new_view_slots` 2; NEW_VIEW vote sends per peer: heartfelt_scorpionfish 13, aspiring_cuckoo 2, assured_murrelet 2, carefree_doberman 2, jesting_butterfly 2, marketable_waterbear 1, quick_katydid 1.
+- Roadmap: added OFFLINE-QR-STREAM animated QR transport breakdown (spec + fixtures + SDK/CLI work).
+- Roadmap: refined OFFLINE-QR-STREAM breakdown (spec scheduling + parity details + assembler caps + SDK scan sessions + sakura animation variants).
+- Offline QR stream SDKs: added Swift/Android/JS encoder/decoder + parity recovery + ScanSession core, sakura theme helpers, and unit tests.
 - Docs/i18n: translated Japanese stubs for `docs/source/sorafs_gateway_dns_design_attendance.md`, `docs/source/sorafs_orchestrator_telemetry_plan.md`, and `docs/source/sorafs_proof_streaming_plan.md`; `translation_last_reviewed` set to 2026-01-22.
+- Docs/i18n: translated Japanese stubs for `docs/source/sorafs_gateway_dns_design_agenda.md`, `docs/source/sorafs_chunk_range_smoketest.md`, and `docs/source/sorafs_chaos_plan.md`; `translation_last_reviewed` set to 2026-01-22.
+- Sumeragi pacemaker: reuse the existing state snapshot when gating proposals to avoid nested `State::view` reads under writer pressure; added `active_pending_blocks_len_for_tip` and updated coverage.
+- Tests: `cargo test -p iroha_core active_pending_blocks_len_ignores_aborted_and_nonextending -- --nocapture` (ok).
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Offline allowance fixtures: install domain-selector resolvers for `wonderland`/`treasury` in test fixture decode paths (integration tests + iroha_test_network).
+- Tests: `cargo test -p integration_tests --test address_canonicalisation offline_allowances_listing_respects_address_format_hint -- --nocapture` (ok; network startup skipped due to loopback sandbox restriction).
+- Torii: enforce account-scoped filtering for `/v1/accounts/{account_id}/transactions/query` and align query tests to the account path semantics.
+- Tests: not run (not requested).
+- Integration tests: submit an Alice-authored transaction before validating account transactions address_format responses.
+- Tests: not run (integration test update only).
+- Integration tests: wait for all peers to reach the post-registration block height before querying alias/compressed account literals in `accounts_query_accepts_alias_and_compressed_filter_literals`.
+- Tests: not run (test-only sync guard update).
 - Merge: resolved remaining status.md conflict markers from the i23 merge.
 - State: reorder `State::block`/`block_and_revert` lock acquisition to take block hashes before the world (matching `State::view`) to avoid deadlocks; added `state_block_orders_block_hashes_before_world` coverage.
 - Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
@@ -13,6 +33,7 @@ Last update: 2026-01-22
 - Localnet (NPoS 1 Hz fast-path rerun, 4 peers): `/private/tmp/iroha-localnet-npos-1hz-fastpath2` (ports 48280/53537). 100x1 Hz `ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `/private/tmp/iroha-localnet-npos-1hz-fastpath2/sumeragi_status_1hz_fastpath2.jsonl` (ping log `/private/tmp/iroha-localnet-npos-1hz-fastpath2/ping_1hz_fastpath2.log`). `commit_qc.height` 1->13 (+12 over 123s), `view_change_install_total` +2, pending RBC max 0 bytes / 2 sessions; 0 ping failures.
 - CLI: normalized JSON/text output and flag behavior across `iroha_cli` commands (da/alias/sns/kaigi/sorafs/taikai/streaming/soracles), added structured summaries, and renamed handshake token encoding flag to `--token-encoding`.
 - Tests: `cargo test -p iroha_cli` (failed: cli_output assertions, SNS catalog account literals, soracles oracle-id parsing, sorafs denylist/account-resolution tests, multisig/offline/subscriptions CLI tests, and incentives tests requiring Torii account resolution).
+- Docs: `cargo run -p iroha_cli --bin iroha_cli -- tools markdown-help > crates/iroha_cli/CommandLineHelp.md` (ok).
 - Sumeragi worker-loop scheduling: rotate to the oldest pending tier after a vote burst to keep RBC/payload draining; added `select_next_tier_picks_oldest_pending_after_vote_burst` coverage and reordered a borrow in `proposal_backpressure_blocks_commit_qc_pending_after_reschedule`.
 - Tests: `cargo test -p iroha_core select_next_tier_picks_oldest_pending_after_vote_burst -- --nocapture` (ok).
 - Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).

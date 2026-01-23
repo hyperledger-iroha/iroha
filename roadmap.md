@@ -106,6 +106,8 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 4. **LOCALNET-10K-TPS — 7-peer localnet throughput + stall resilience** (Consensus/Performance/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈺 In Progress, target TBD)
 - [ ] Use the new pending-block/commit-inflight metrics to isolate pacemaker backpressure during 100 TPS localnet runs (run151 NPoS: avg slot 5.68s, view changes 11, proposal_gap 1, pending/inflight <=4/1; run152 permissioned + commit_time_ms=300: avg slot 10.69s, view changes 18, pending/inflight <=4/1; run153 NPoS 7-peer 753ms soft limits: height 5, view changes 42, tx_queue depth 4796, pending max 5/inflight 0, missing_qc/stake_quorum timeouts; run154 permissioned 7-peer 753ms: height 5, view changes 9, tx_queue depth 11522, pending/inflight 0, missing_qc/quorum timeouts). Identify the proposal-gap root cause and re-test.
+- [ ] Enable expensive-metrics capture for throughput runs (telemetry profile/config) or surface pending-block + commit-inflight gauges in `/v1/sumeragi/status`; current `/metrics` scrapes are empty under the test-network defaults.
+- [ ] Investigate skewed NEW_VIEW participation during throughput stalls (recent NPoS/permissioned runs show `new_view_slots` max < quorum with per-peer NEW_VIEW vote traffic heavily skewed).
  - [x] NPoS roster selection now appends active validators missing from the commit topology so the full validator set participates; unit coverage added.
  - [x] Seed commit topology from the checkpoint topology when world peers are incomplete (prevents genesis roster shrink/QC stalls); unit coverage added.
  - [x] Add a Kagami/localnet regression that asserts validator count + commit QC validator-set length match the peer count on startup.
@@ -129,7 +131,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [ ] Run the ignored 7-peer localnet throughput regression in permissioned mode and capture throughput/commit-time metrics in `status.md` after the oversized BlockSyncUpdate fetch fallback fix (attempts failed: submit queue stalled at ~22k/42k with min_non_empty=1-2; release runs timed out after 20m; latest debug run timed out after 20m with height stuck at 2 and repeated view-change/missing-QC logs; logs in `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_uDjmli`, `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_cO9vgq`, `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_TY25OZ`, `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_hMZDGM`; 2026-01-22 release run failed with submit queue not draining below 20000 within 180s, artifacts in `/private/tmp/iroha-throughput-permissioned-20260122b/throughput-1769106279251`, network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_gIn3el`).
  - [ ] Run the ignored 7-peer localnet throughput regression in NPoS mode and capture throughput/commit-time metrics in `status.md` after the above gates and harness outputs are in place (2026-01-22 release run failed with submit queue not draining below 20000 within 180s; artifacts in `/private/tmp/iroha-throughput-npos-20260122/throughput-1769107672300`, network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_Xq0l0o`).
  - [x] Re-run the NPoS localnet 1 Hz / 100-block check with `/v1/sumeragi/status` sampling after the progress-age quorum timeout change; capture any stalls in `status.md` (2026-01-21 run on `/tmp/iroha-localnet-npos-1hz-run2`: `commit_qc.height` +12 over 118s, `view_change_install_total` +3, pending RBC max 1040 bytes / 1 session).
- - [ ] Re-run the NPoS localnet 1 Hz / 100-block check with `/v1/sumeragi/status` sampling after the progress-age quorum timeout change and commit-pipeline backlog-bypass tweaks; capture any stalls in `status.md` (2026-01-22 attempt at `/private/tmp/iroha-localnet-npos-1hz-fastpath` stalled at ping idx 43 with Torii timeout; `commit_qc.height` +5 over 119s and a parking_lot deadlock reported; rerun after lock-order fix at `/private/tmp/iroha-localnet-npos-1hz-fastpath2` completed 100 pings with `commit_qc.height` +12 over 123s and `view_change_install_total` +2).
+- [ ] Re-run the NPoS localnet 1 Hz / 100-block check with `/v1/sumeragi/status` sampling after the progress-age quorum timeout change and commit-pipeline backlog-bypass tweaks; capture any stalls in `status.md` (2026-01-22 attempt at `/private/tmp/iroha-localnet-npos-1hz-fastpath` stalled at ping idx 43 with Torii timeout; `commit_qc.height` +5 over 119s and a parking_lot deadlock reported; fix now avoids nested `State::view` during pacemaker gating, rerun still needed).
 
 4. **DA-TORII-REFACTOR — Decompose Torii DA ingestion + erasure coding** (Torii/DA, Line: Shared, Owner: Torii WG, Priority: High, Status: 🈺 In Progress, target TBD)
  - [x] Split Torii DA into `crates/iroha_torii/src/da/` with `mod.rs`, `ingest.rs`, `persistence.rs`, `taikai.rs`, `rs16.rs`, and `tests.rs`; keep the public API in `mod.rs` and allow internal breakage for the first release.
@@ -198,6 +200,26 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Persist governance proposals/ballots/enactments in WSV and model full state transitions.
  - [x] Add end-to-end tests for proposal/ballot/enactment flows, authorization gates, and rejection paths.
  - [x] Update governance docs and Torii OpenAPI to reflect the real API surface.
+
+10. **OFFLINE-QR-STREAM — Animated QR transport for offline payloads** (Core/SDK/CLI, Line: Shared, Owner: Offline WG, Priority: High, Status: 🈺 In Progress, target TBD)
+ - [ ] Spec: define `QrStreamEnvelope` + `QrStreamFrame` wire format (Norito), payload kinds, CRC32 rules, chunking, replay guards, and size caps; include deterministic hashing + schema binding in `docs/source/qr_stream.md`.
+ - [ ] Spec: define frame scheduling (header cadence, data/parity frames), binary QR requirements, and capacity profile (ECC level + chunk size bounds) with a compatibility matrix for iOS/Android/JS scanners.
+ - [ ] Parity frames: select a deterministic erasure scheme (reuse `iroha_primitives::rs16` if possible) and define parameters/seed derivation + target drop tolerance.
+ - [ ] Parity frames: implement encode/decode + recovery tests (out-of-order, dropped frames, duplicates) in Rust helpers.
+ - [ ] Fixtures: generate deterministic fixtures under `fixtures/qr_stream/` (receipt + transfer payloads, envelope bytes, frame bytes, parity frames) and document regeneration flow.
+ - [ ] Data model: add `qr_stream` types + helpers to `iroha_data_model` (encode/decode, CRC32, assembler state machine) with unit coverage.
+ - [ ] Data model: add assembler caps (max payload bytes/frames, timeout policy) and tests for rejection paths.
+ - [ ] CLI tooling: add `iroha offline qr encode` (binary QR mode, chunk sizing, ECC/fps controls, SVG/PNG + animated GIF/APNG export) with tests.
+ - [ ] CLI tooling: add `iroha offline qr decode` (frames/dir input, hash verification, Norito/JSON output) with tests.
+ - [x] Swift SDK: add QrStream encoder/decoder + ScanSession core with unit tests.
+ - [ ] Swift SDK: integrate Vision/AVFoundation scan pipeline to feed raw bytes into ScanSession + fixture tests.
+ - [x] Android SDK: add QrStream encoder/decoder + ScanSession core with unit tests.
+ - [ ] Android SDK: integrate CameraX/ZXing scan pipeline to feed raw bytes into ScanSession + fixture tests.
+ - [x] JS SDK: add QrStream encoder/decoder + ScanSession core with unit tests.
+ - [ ] JS SDK: add scan-loop integration (browser/Node) + fixture tests.
+ - [x] SDK theme palette + frame-style helpers for sakura animation (colors, pulse, petal phase).
+ - [ ] Streaming animation: ship on-brand playback skins (petal drift, warm gradient, progress overlay), plus reduced-motion and low-power variants for accessibility/perf.
+ - [ ] UX guidance: add scan timing + progress UI guidelines and fallback flows to `docs/source/offline_allowance.md` + SDK guides.
 
 10. **ZK-VERIFY-COMPLETE — Full ZK verification + prover** (ZK/Core/Torii, Line: Shared, Owner: ZK WG, Priority: High, Status: 🈴 Completed, target TBD)
  - [x] Route `halo2/ipa` OpenVerifyEnvelope decoding into the IPA verifier, remove placeholder acceptance, and refresh tiny-add fixtures/tests to use real proofs + VK bytes.
