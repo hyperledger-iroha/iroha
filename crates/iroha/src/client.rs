@@ -4547,6 +4547,98 @@ mod evidence_http_tests {
             Some(super::TxConfirmationStatus::Rejected(Some(reason)))
         );
     }
+
+    #[test]
+    fn transaction_committed_limits_query_params() {
+        use iroha_data_model::query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
+            QueryResponse, SignedQuery,
+        };
+        use iroha_version::codec::DecodeVersioned;
+
+        use crate::{
+            crypto::{MerkleProof, PrivateKey, PublicKey},
+            data_model::{
+                prelude::{AccountId, ChainId, DomainId, TransactionBuilder},
+                query::CommittedTransaction,
+                transaction::{DataTriggerSequence, TransactionEntrypoint, TransactionResult},
+            },
+        };
+
+        let chain: ChainId = "hash-chain".parse().unwrap();
+        let domain: DomainId = "wonderland".parse().unwrap();
+        let public_key: PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .unwrap();
+        let authority = AccountId::new(domain, public_key);
+        let private_key: PrivateKey =
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .unwrap();
+        let tx = TransactionBuilder::new(chain, authority).sign(&private_key);
+        let hash = tx.hash();
+        let entry = TransactionEntrypoint::External(tx);
+        let entry_hash = entry.hash();
+        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let committed = CommittedTransaction {
+            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH])),
+            entrypoint_hash: entry_hash,
+            entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            entrypoint: entry,
+            result_hash: result.hash(),
+            result_proof: MerkleProof::from_audit_path(0, Vec::new()),
+            result,
+        };
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_string();
+                store.lock().expect("lock snapshot store").push(snapshot);
+                match path.as_str() {
+                    "/query" => {
+                        let response = QueryResponse::Iterable(QueryOutput {
+                            batch: QueryOutputBatchBoxTuple {
+                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(vec![
+                                    committed.clone(),
+                                ])],
+                            },
+                            remaining_items: 0,
+                            continue_cursor: None,
+                        });
+                        Ok(norito_response(StatusCode::OK, &response))
+                    }
+                    path => Err(eyre::eyre!("unexpected request path: {path}")),
+                }
+            }
+        };
+
+        let result = with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            client.transaction_committed(hash, entry_hash)
+        });
+
+        assert_eq!(
+            result.expect("committed query"),
+            Some(super::TxConfirmationStatus::Applied)
+        );
+
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 1);
+        let signed =
+            SignedQuery::decode_all_versioned(&snapshots[0].body).expect("decode signed query");
+        match signed.payload.request {
+            QueryRequest::Start(start) => {
+                let one = NonZeroU64::new(1).expect("nonzero");
+                assert_eq!(start.params.pagination.limit_value(), Some(one));
+                assert_eq!(start.params.pagination.offset_value(), 0);
+                assert_eq!(start.params.fetch_size.fetch_size, Some(one));
+            }
+            _ => panic!("expected start query"),
+        }
+    }
 }
 
 /// Private structure to incapsulate error reporting for HTTP response.
@@ -5499,9 +5591,24 @@ impl Client {
         hash: HashOf<SignedTransaction>,
         entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<Option<TxConfirmationStatus>> {
-        use crate::data_model::query::transaction::prelude::FindTransactions;
+        use crate::data_model::query::{
+            CommittedTxFilters,
+            dsl::CompoundPredicate,
+            parameters::{FetchSize, Pagination},
+            transaction::prelude::FindTransactions,
+        };
 
-        let snapshot = self.query(FindTransactions::new()).execute_all()?;
+        let one = NonZeroU64::new(1).expect("nonzero");
+        let filters = CommittedTxFilters {
+            entry_eq: Some(entry_hash),
+            ..Default::default()
+        };
+        let snapshot = self
+            .query(FindTransactions::new())
+            .filter(CompoundPredicate::from_filters(filters))
+            .with_pagination(Pagination::new(Some(one), 0))
+            .with_fetch_size(FetchSize::new(Some(one)))
+            .execute_all()?;
         let outcome = snapshot
             .iter()
             .find(|tx| Self::committed_transaction_matches_hash(tx, hash, entry_hash))
