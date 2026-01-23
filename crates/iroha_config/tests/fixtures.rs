@@ -992,7 +992,7 @@ fn minimal_config_snapshot() {
                 worker: SumeragiWorker {
                     iteration_budget_cap: 2s,
                     iteration_drain_budget_cap: 2s,
-                    tick_work_budget_cap: 0ms,
+                    tick_work_budget_cap: 0ns,
                     validation_worker_threads: 1,
                     validation_work_queue_cap: 4,
                     validation_result_queue_cap: 4,

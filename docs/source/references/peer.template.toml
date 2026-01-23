@@ -157,6 +157,29 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # availability_timeout_multiplier = 2    # availability timeout scaling for DA logging/rebroadcasts
 # availability_timeout_floor_ms = 2000   # floor for availability timeouts (0 disables floor)
 
+[sumeragi.npos]
+# block_time_ms = 1000                 # target block time in milliseconds
+# epoch_length_blocks = 3600           # validator set epoch length
+# use_stake_snapshot_roster = true     # hydrate roster from stake snapshots
+# timeouts.*_ms derive from block_time_ms when omitted
+# vrf.* windows/deadlines derive from epoch_length_blocks when omitted
+
+#[sumeragi.npos.timeouts]
+# propose_ms = 350
+# prevote_ms = 450
+# precommit_ms = 550
+# exec_ms = 150
+# witness_ms = 150
+# commit_ms = 750
+# da_ms = 650
+# aggregator_ms = 120
+
+#[sumeragi.npos.vrf]
+# commit_window_blocks = 100
+# reveal_window_blocks = 40
+# commit_deadline_offset_blocks = 100
+# reveal_deadline_offset_blocks = 140
+
 [sumeragi.rbc]
 # chunk_fanout = null               # RBC chunk fanout cap (null = full roster minus local)
 # chunk_max_bytes = 262144          # RBC chunk size cap (bytes)

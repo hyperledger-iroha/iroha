@@ -7,3 +7,6 @@ padding_budget_ms = 42
 access_kind = "read-only"
 channel_salt = "custom.seed.v1"
 provision_spool_dir = "./storage/streaming/soranet_routes_override"
+provision_spool_max_bytes = 0
+provision_window_segments = 4
+provision_queue_capacity = 256
