@@ -9792,6 +9792,16 @@ impl Actor {
             let view = self.state.view();
             view.height() as u64
         };
+        if height <= committed_height {
+            let committed_hash = usize::try_from(height)
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .and_then(|nz_height| self.kura.get_block(nz_height))
+                .map(|block| block.hash());
+            if committed_hash.is_some_and(|hash| hash != *block_hash) {
+                return true;
+            }
+        }
         let present_in_kura = self
             .kura
             .get_block_height_by_hash(*block_hash)

@@ -1252,30 +1252,25 @@ impl ChaosState {
         })
     }
 
-    fn plan_set_trigger_key(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
+    fn plan_set_trigger_key(&mut self, _rng: &mut StdRng) -> Result<TransactionPlan> {
         let mut instructions = Vec::new();
-        let trigger_id = if let Some(existing) = self.random_registered_trigger(rng) {
-            existing
-        } else {
-            let trigger_id: TriggerId = format!("metadata_trigger_{}", self.bump_trigger())
-                .parse()
-                .map_err(|_| eyre!("failed to parse metadata trigger id"))?;
-            let log_instruction = Log::new(Level::INFO, "trigger metadata bootstrap".to_string());
-            let action = Action::new(
-                vec![InstructionBox::from(log_instruction)],
-                Repeats::Indefinitely,
-                self.treasury.id.clone(),
-                EventFilterBox::ExecuteTrigger(
-                    ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
-                ),
-            );
-            instructions.push(InstructionBox::from(Register::trigger(Trigger::new(
-                trigger_id.clone(),
-                action,
-            ))));
-            self.registered_triggers.push(trigger_id.clone());
-            trigger_id
-        };
+        let trigger_id: TriggerId = format!("metadata_trigger_{}", self.bump_trigger())
+            .parse()
+            .map_err(|_| eyre!("failed to parse metadata trigger id"))?;
+        let log_instruction = Log::new(Level::INFO, "trigger metadata bootstrap".to_string());
+        let action = Action::new(
+            vec![InstructionBox::from(log_instruction)],
+            Repeats::Indefinitely,
+            self.treasury.id.clone(),
+            EventFilterBox::ExecuteTrigger(
+                ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+            ),
+        );
+        instructions.push(InstructionBox::from(Register::trigger(Trigger::new(
+            trigger_id.clone(),
+            action,
+        ))));
+        self.registered_triggers.push(trigger_id.clone());
 
         let key: Name = format!("trigger_flag_{}", self.bump_metadata())
             .parse()
@@ -1297,51 +1292,43 @@ impl ChaosState {
         })
     }
 
-    fn plan_remove_trigger_key(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
+    fn plan_remove_trigger_key(&mut self, _rng: &mut StdRng) -> Result<TransactionPlan> {
         let mut instructions = Vec::new();
-        let trigger_id = if let Some(existing) = self.random_registered_trigger(rng) {
-            existing
-        } else {
-            let trigger_id: TriggerId = format!("metadata_trigger_{}", self.bump_trigger())
-                .parse()
-                .map_err(|_| eyre!("failed to parse metadata trigger id"))?;
-            let log_instruction = Log::new(Level::INFO, "trigger metadata bootstrap".to_string());
-            let action = Action::new(
-                vec![InstructionBox::from(log_instruction)],
-                Repeats::Indefinitely,
-                self.treasury.id.clone(),
-                EventFilterBox::ExecuteTrigger(
-                    ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
-                ),
-            );
-            instructions.push(InstructionBox::from(Register::trigger(Trigger::new(
-                trigger_id.clone(),
-                action,
-            ))));
-            self.registered_triggers.push(trigger_id.clone());
-            trigger_id
-        };
-
-        if let Some(keys) = self.trigger_metadata.get_mut(&trigger_id) {
-            if let Some(existing) = keys.iter().next().cloned() {
-                keys.remove(&existing);
-            }
-            if keys.is_empty() {
-                self.trigger_metadata.remove(&trigger_id);
-            }
-        }
+        let trigger_id: TriggerId = format!("metadata_trigger_{}", self.bump_trigger())
+            .parse()
+            .map_err(|_| eyre!("failed to parse metadata trigger id"))?;
+        let log_instruction = Log::new(Level::INFO, "trigger metadata bootstrap".to_string());
+        let action = Action::new(
+            vec![InstructionBox::from(log_instruction)],
+            Repeats::Indefinitely,
+            self.treasury.id.clone(),
+            EventFilterBox::ExecuteTrigger(
+                ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+            ),
+        );
+        instructions.push(InstructionBox::from(Register::trigger(Trigger::new(
+            trigger_id.clone(),
+            action,
+        ))));
+        self.registered_triggers.push(trigger_id.clone());
 
         let key: Name = format!("trigger_flag_{}", self.bump_metadata())
             .parse()
             .map_err(|_| eyre!("failed to parse fallback trigger key"))?;
+        self.trigger_metadata
+            .entry(trigger_id.clone())
+            .or_default()
+            .insert(key.clone());
         instructions.push(InstructionBox::from(SetKeyValue::trigger(
             trigger_id.clone(),
             key.clone(),
             json_pair("ephemeral", true),
         )));
         instructions.push(InstructionBox::from(RemoveKeyValue::trigger(
-            trigger_id, key,
+            trigger_id.clone(),
+            key,
         )));
+        self.trigger_metadata.remove(&trigger_id);
         Ok(TransactionPlan {
             label: "remove_trigger_kv",
             instructions,
@@ -2325,10 +2312,6 @@ impl ChaosState {
             .choose(rng)
             .cloned()
             .ok_or_else(|| eyre!("no asset instances available"))
-    }
-
-    fn random_registered_trigger(&self, rng: &mut StdRng) -> Option<TriggerId> {
-        self.registered_triggers.choose(rng).cloned()
     }
 
     fn random_repeatable_trigger(&self, rng: &mut StdRng) -> Option<TriggerId> {
