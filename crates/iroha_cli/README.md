@@ -26,7 +26,7 @@ Refer to [Iroha Special Instructions](https://docs.iroha.tech/blockchain/instruc
 ### Sumeragi parameters (K/r) — operator note
 
 Consensus collector settings are controlled both by node config and on‑chain parameters:
-- Config keys: `sumeragi.collectors_k` (K) and `sumeragi.collectors_redundant_send_r` (r)
+- Config keys: `sumeragi.collectors.k` (K) and `sumeragi.collectors.redundant_send_r` (r)
 - On‑chain: `SumeragiParameters { collectors_k, collectors_redundant_send_r }`
 
 At startup, nodes adopt the on‑chain values and log a mismatch if config differs. Invalid combinations (e.g., `k == 0`, `r == 0`, `r > k`, or `k` larger than available collectors for the current topology) are rejected at startup. This keeps pacing behavior consistent across validators.

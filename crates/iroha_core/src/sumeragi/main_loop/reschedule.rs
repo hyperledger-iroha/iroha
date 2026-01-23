@@ -55,6 +55,7 @@ impl Actor {
         // Keep aborted payloads long enough for missing-block fetches after reschedule drops.
         let retention_factor = self
             .config
+            .recovery
             .missing_block_signer_fallback_attempts
             .saturating_add(2)
             .max(4);

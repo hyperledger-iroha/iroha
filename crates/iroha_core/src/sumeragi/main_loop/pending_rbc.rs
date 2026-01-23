@@ -351,8 +351,8 @@ impl Actor {
 
     pub(super) fn pending_rbc_slot(&mut self, key: SessionKey) -> Option<&mut PendingRbcMessages> {
         let now = Instant::now();
-        let ttl = self.config.rbc_pending_ttl;
-        let session_cap = self.config.rbc_pending_session_limit;
+        let ttl = self.config.rbc.pending_ttl;
+        let session_cap = self.config.rbc.pending_session_limit;
         let evictions = Self::apply_pending_rbc_housekeeping(
             &mut self.subsystems.da_rbc.rbc.pending,
             Some(&self.subsystems.da_rbc.rbc.sessions),

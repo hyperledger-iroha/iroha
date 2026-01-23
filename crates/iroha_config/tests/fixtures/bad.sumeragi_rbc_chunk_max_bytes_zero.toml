@@ -1,4 +1,4 @@
 extends = ["minimal_with_trusted_peers.toml"]
 
-[sumeragi]
-rbc_chunk_max_bytes = 0
+[sumeragi.rbc]
+chunk_max_bytes = 0

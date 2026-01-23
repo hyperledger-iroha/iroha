@@ -43,7 +43,7 @@ translator: manual
 - v1 ではビュー 0 における観測ピアの投票猶予が削除され、観測ピアはビュー 0 で投票しません。ビュー 0 でローカルタイムアウトした際は（ローテーション前の広げる処理なしで）ビュー変更を提案します。タイミングはオンチェーンのパラメータで制御され、permissioned では `SumeragiParameters`（`BlockTimeMs`/`CommitTimeMs`）、NPoS では `sumeragi_npos_parameters`（`block_time_ms` と `timeouts.timeout_commit_ms`）を使います。リーダー提案はパイプライン時間の約 1/3、期待コミットは約 2/3 です。
 
 ### K / r パラメータ
-- 設定キー: `sumeragi.collectors_k: usize`（高さごとのコレクター数、既定 1）、`sumeragi.collectors_redundant_send_r: u8`（冗長送信ファンアウト、既定 1）。
+- 設定キー: `sumeragi.collectors.k: usize`（高さごとのコレクター数、既定 1）、`sumeragi.collectors.redundant_send_r: u8`（冗長送信ファンアウト、既定 1）。
 - オンチェーン: K と r は `SumeragiParameters` に保存され、コレクタ計画と `ConsensusParams` 広告の正となります。設定値はジェネシスの初期値を与えます。ピア間で K/r の広告が異なる場合でも、ミスマッチを記録してオンチェーン値を維持します。
 - フォールバック: `k` でコレクタが選べない場合、投票はコミットトポロジ全体にフォールバックします。`redundant_send_r` は最小 1 として扱われます。
 
@@ -66,9 +66,9 @@ translator: manual
 
 ### RBC／DA（データ可用性）
 - RBC はトポロジから導出された Collector 集合を使用してブロック本体を配布します。ブロックヘッダーには RBC セッション ID とパケットメタデータが含まれます。
-- `sumeragi.da_enabled` を有効にすると、可用性証跡（`availability evidence`）を追跡しますがコミットは待機しません（ローカルの RBC `DELIVER` は条件になりません）。可用性証跡が不足している間は `sumeragi_da_gate_block_total{reason="missing_local_data"}` が増加し、`da_reschedule_total` はレガシーのため通常 0 のままです。
+- `sumeragi.da.enabled` を有効にすると、可用性証跡（`availability evidence`）を追跡しますがコミットは待機しません（ローカルの RBC `DELIVER` は条件になりません）。可用性証跡が不足している間は `sumeragi_da_gate_block_total{reason="missing_local_data"}` が増加し、`da_reschedule_total` はレガシーのため通常 0 のままです。
 - INIT 前に READY/DELIVER/チャンクが届いた場合、ノードはスタッシュし、欠落した `BlockCreated` を即時にリクエストします（欠落ブロックのバックオフを尊重）。
-- `sumeragi.rbc_rebroadcast_sessions_per_tick` が tick あたりの RBC 再送セッション数を制限し、バックログ時の再送嵐を抑制します。復旧速度を上げたい場合は増やし、P2P キューが詰まる場合は下げます。
+- `sumeragi.rbc.rebroadcast_sessions_per_tick` が tick あたりの RBC 再送セッション数を制限し、バックログ時の再送嵐を抑制します。復旧速度を上げたい場合は増やし、P2P キューが詰まる場合は下げます。
 - 大規模ペイロード（≥10 MiB）を扱うシナリオでは RBC デリバリー時間、コミット時間、スループット、キュー深さをテレメトリで監視し、SLO 違反をアラートします。
 
 ### トポロジ／役割取得の CLI 例
@@ -140,7 +140,7 @@ translator: manual
 ### RBC
 - RBC セッションは `RbcSessionId` で識別され、メタデータにはブロック高さ・ハッシュ・収集に必要な閾値が含まれます。
 - RBC は Gossip でブロック断片を流通させ、全ピアが復元できるようにすることで DA を実現します。
-- `sumeragi.da_enabled` を有効にすると、コミット前に `availability evidence` が必要になります。RBC は同じ設定で有効になり、ペイロード配布と欠落回復に使われます（コミットはローカルの `RbcDeliver` を待ちません）。
+- `sumeragi.da.enabled` を有効にすると、コミット前に `availability evidence` が必要になります。RBC は同じ設定で有効になり、ペイロード配布と欠落回復に使われます（コミットはローカルの `RbcDeliver` を待ちません）。
 - INIT に含まれるロースターは未検証スナップショットとして保持し、コミットトポロジから導出したロースターを READY/DELIVER 検証とローカル署名の権威ソースとします。導出ロースターと競合する INIT ロースターは拒否されます。
 - READY/DELIVER は権威ロースターが確定するまで一時保留し、欠落している `BlockCreated` はコミットトポロジにフォールバックしてリクエストします。権威化後に `roster_hash` が不一致な READY/DELIVER は破棄されます。
 - READY 再送信は決定論的な f+1 サブセット（リーダーを常に含む）に限定し、メッセージ嵐を抑制します。
@@ -184,13 +184,13 @@ translator: manual
 - Availability evidence レイテンシ: `sumeragi_qc_last_latency_ms{kind="availability"}` が `0.6 * commit_time_ms` を 2 連続で超過、またはヒストグラム P95 が `0.7 * commit_time_ms` を超えたら要警告（permissioned は `CommitTimeMs`、NPoS は `timeouts.timeout_commit_ms`）。
 - 投票取り込みの停滞: `sum(rate(sumeragi_da_votes_ingested_total[2m])) == 0` かつ `sumeragi_rbc_backlog_sessions_pending > 0`（RBC は動いているのに票が集まらない）。
 - コミット遅延: `commit_ms` または `sumeragi_phase_latency_ms{phase="commit"}` の P95 が `0.75 * commit_time_ms` を超過、あるいは新しいブロックが届いているのに 3 ラウンド以上 0 のまま（permissioned は `CommitTimeMs`、NPoS は `timeouts.timeout_commit_ms`）。
-- コレクターファンアウト: `collect_aggregator_ms` が `0.5 * sumeragi.npos.timeouts.aggregator_ms` を 3 ラウンド連続で上回る、`sumeragi_redundant_sends_total` が一つの View で `redundant_send_r` を超える、`rate(sumeragi_gossip_fallback_total[5m]) > 0`、`increase(block_created_dropped_by_lock_total[5m]) > 0`、`increase(block_created_hint_mismatch_total[5m]) > 0`、`increase(block_created_proposal_mismatch_total[5m]) > 0`、または `increase(pacemaker_backpressure_deferrals_total[5m]) > 0` のいずれかが持続。
+- コレクターファンアウト: `collect_aggregator_ms` が `0.5 * sumeragi.npos.timeouts.aggregator_ms` を 3 ラウンド連続で上回る、`sumeragi_redundant_sends_total` が一つの View で `sumeragi.collectors.redundant_send_r` を超える、`rate(sumeragi_gossip_fallback_total[5m]) > 0`、`increase(block_created_dropped_by_lock_total[5m]) > 0`、`increase(block_created_hint_mismatch_total[5m]) > 0`、`increase(block_created_proposal_mismatch_total[5m]) > 0`、または `increase(pacemaker_backpressure_deferrals_total[5m]) > 0` のいずれかが持続。
 
 冗長送信カウンタは DA リトライが追加コレクターへキャッシュ済み RBC ペイロードを再送したときに増えます。`npos_redundant_send_retries_update_metrics` テストでこの経路をカバーし、ダッシュボードと契約の乖離を検出します。
 
 **トリアージ手順**
 1. `iroha_cli --output-format text ops sumeragi collectors` で担当コレクターが現行の担当に残っているか確認。
-2. `/v1/sumeragi/telemetry` を見て `votes_ingested` が伸びていないコレクター index を特定。単一コレクターだけ停滞しているなら一時的に `collectors_redundant_send_r` を増やし、票を次順位へ回す。
+2. `/v1/sumeragi/telemetry` を見て `votes_ingested` が伸びていないコレクター index を特定。単一コレクターだけ停滞しているなら一時的に `sumeragi.collectors.redundant_send_r` を増やし、票を次順位へ回す。
 3. `sumeragi_bg_post_queue_depth` と `p2p_*_throttled_total` でキューやトランスポートの逼迫を診断。
 4. FASTPQ プローバ遅延が疑われる場合は `/v1/torii/zk/prover/reports` と Torii ログでプローバの失敗を調べ、必要に応じて再起動。
 5. 両コレクターが停止しているなら RBC backlog を確認。`sumeragi_rbc_store_evictions_total` と `sumeragi_rbc_persist_drops_total` のスパイク、または `/v1/sumeragi/status` の `rbc_store.recent_evictions` を手掛かりにボトルネックとなるペイロードやエポックを特定。
@@ -201,7 +201,7 @@ translator: manual
 
 ## RBC / DA ロードマップ
 
-1. **DA/RBC 有効化**: `sumeragi.da_enabled = true` を既定とし、コミット前に `availability evidence` を要求。RBC は同じ設定で有効になり、ペイロード配布と欠落回復に使われます（コミットはローカルの `RbcDeliver` を待ちません）。
+1. **DA/RBC 有効化**: `sumeragi.da.enabled = true` を既定とし、コミット前に `availability evidence` を要求。RBC は同じ設定で有効になり、ペイロード配布と欠落回復に使われます（コミットはローカルの `RbcDeliver` を待ちません）。
 2. **前処理**: リーダーはブロック提案と同時に RBC セッションを起動し、Collectors が投票を集約するまでに全ピアへブロック断片を配布します。
 3. **Fallback**: RBC 完了前に View 変更が発生した場合、次リーダーが同一ブロックを提案する必要性を評価し、未完セッションを踏まえて処理します。
 4. **監視**: `sumeragi_da_summary::*` と `/v1/sumeragi/rbc/sessions` を定期取得し、遅延や失敗を早期検知します。

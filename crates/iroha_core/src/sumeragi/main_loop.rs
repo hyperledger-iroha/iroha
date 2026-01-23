@@ -183,6 +183,10 @@ const NON_RBC_FRAME_HEADROOM_BYTES: usize = 8 * 1024;
 const REBROADCAST_COOLDOWN_FLOOR: Duration = Duration::from_millis(200);
 /// Base multiplier for consensus rebroadcasts (votes/block sync/READY).
 const REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 2;
+/// Multiplier for consensus rebroadcasts when block times are sub-second.
+const REBROADCAST_COOLDOWN_MULTIPLIER_FAST: u32 = 1;
+/// Block-time threshold (ms) for tightening rebroadcast cadence.
+const REBROADCAST_COOLDOWN_FAST_THRESHOLD_MS: u64 = 1_000;
 /// Payload rebroadcasts (block payloads/RBC chunks) are heavier, so keep them slower.
 const PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 2;
 /// Cap the number of missing READY senders logged per deferral.
@@ -210,7 +214,13 @@ fn rebroadcast_cooldown_from_block_time(block_time: Duration) -> Duration {
     } else {
         block_time.max(REBROADCAST_COOLDOWN_FLOOR)
     };
-    saturating_mul_duration(base, REBROADCAST_COOLDOWN_MULTIPLIER)
+    let fast_threshold = Duration::from_millis(REBROADCAST_COOLDOWN_FAST_THRESHOLD_MS);
+    let multiplier = if block_time != Duration::ZERO && block_time < fast_threshold {
+        REBROADCAST_COOLDOWN_MULTIPLIER_FAST
+    } else {
+        REBROADCAST_COOLDOWN_MULTIPLIER
+    };
+    saturating_mul_duration(base, multiplier)
 }
 
 /// Align payload rebroadcast cadence to the block time while keeping a larger buffer.
@@ -777,9 +787,9 @@ struct InvalidSigPenalty {
 impl InvalidSigPenalty {
     fn new(config: &SumeragiConfig) -> Self {
         Self {
-            threshold: config.invalid_sig_penalty_threshold,
-            window: config.invalid_sig_penalty_window,
-            cooldown: config.invalid_sig_penalty_cooldown,
+            threshold: config.gating.invalid_sig_penalty_threshold,
+            window: config.gating.invalid_sig_penalty_window,
+            cooldown: config.gating.invalid_sig_penalty_cooldown,
             entries: BTreeMap::new(),
         }
     }
@@ -2772,7 +2782,7 @@ impl Actor {
             now,
             retry_window,
             view_change_window,
-            self.config.missing_block_signer_fallback_attempts,
+            self.config.recovery.missing_block_signer_fallback_attempts,
         );
         self.pending.missing_block_requests = requests;
         let dwell = self
@@ -3422,7 +3432,8 @@ impl Actor {
         }
         let stall_grace = self
             .config
-            .pacemaker_pending_stall_grace
+            .pacemaker
+            .pending_stall_grace
             .min(quorum_timeout);
         let view = self.state.view();
         let tip_height = view.height();
@@ -3649,8 +3660,8 @@ impl Actor {
         if !summary.has_backlog() {
             return false;
         }
-        summary.sessions_pending > self.config.pacemaker_rbc_backlog_session_soft_limit
-            || summary.missing_chunks_total > self.config.pacemaker_rbc_backlog_chunk_soft_limit
+        summary.sessions_pending > self.config.pacemaker.rbc_backlog_session_soft_limit
+            || summary.missing_chunks_total > self.config.pacemaker.rbc_backlog_chunk_soft_limit
     }
 
     fn is_peer_admin_transaction(tx: &AcceptedTransaction<'_>) -> bool {
@@ -4353,19 +4364,21 @@ impl CommitState {
 }
 
 struct ValidationState {
-    work_tx: Option<mpsc::SyncSender<validation::ValidationWork>>,
+    work_txs: Vec<mpsc::SyncSender<validation::ValidationWork>>,
     result_rx: Option<mpsc::Receiver<validation::ValidationResult>>,
     inflight: BTreeMap<HashOf<BlockHeader>, u64>,
     next_id: u64,
+    next_worker: usize,
 }
 
 impl ValidationState {
     fn new() -> Self {
         Self {
-            work_tx: None,
+            work_txs: Vec::new(),
             result_rx: None,
             inflight: BTreeMap::new(),
             next_id: 0,
+            next_worker: 0,
         }
     }
 
@@ -4418,22 +4431,27 @@ impl Actor {
             self.common_config.chain.clone(),
             self.genesis_account.clone(),
             self.wake_tx.clone(),
+            self.config.persistence.commit_work_queue_cap,
+            self.config.persistence.commit_result_queue_cap,
         );
         self.subsystems.commit.work_tx = Some(commit_handle.work_tx);
         self.subsystems.commit.result_rx = Some(commit_handle.result_rx);
         commit_handle.join_handle
     }
 
-    pub(super) fn attach_validation_worker(&mut self) -> std::thread::JoinHandle<()> {
-        let validation_handle = validation::spawn_validation_worker(
+    pub(super) fn attach_validation_worker(&mut self) -> Vec<std::thread::JoinHandle<()>> {
+        let validation_handle = validation::spawn_validation_workers(
             Arc::clone(&self.state),
             self.common_config.chain.clone(),
             self.genesis_account.clone(),
             self.wake_tx.clone(),
+            self.config.worker.validation_worker_threads,
+            self.config.worker.validation_work_queue_cap,
+            self.config.worker.validation_result_queue_cap,
         );
-        self.subsystems.validation.work_tx = Some(validation_handle.work_tx);
+        self.subsystems.validation.work_txs = validation_handle.work_txs;
         self.subsystems.validation.result_rx = Some(validation_handle.result_rx);
-        validation_handle.join_handle
+        validation_handle.join_handles
     }
 }
 
@@ -6171,16 +6189,18 @@ impl Actor {
         let now = Instant::now();
         let outcome = self.invalid_sig_log.record(kind, height, view, signer, now);
         if self.invalid_sig_penalty.record(kind, signer, now) {
-            let cooldown_ms = u64::try_from(self.config.invalid_sig_penalty_cooldown.as_millis())
-                .unwrap_or(u64::MAX);
+            let cooldown_ms =
+                u64::try_from(self.config.gating.invalid_sig_penalty_cooldown.as_millis())
+                    .unwrap_or(u64::MAX);
             warn!(
                 height,
                 view,
                 signer,
                 kind = kind.as_str(),
-                threshold = self.config.invalid_sig_penalty_threshold,
-                window_ms = u64::try_from(self.config.invalid_sig_penalty_window.as_millis())
-                    .unwrap_or(u64::MAX),
+                threshold = self.config.gating.invalid_sig_penalty_threshold,
+                window_ms =
+                    u64::try_from(self.config.gating.invalid_sig_penalty_window.as_millis(),)
+                        .unwrap_or(u64::MAX),
                 cooldown_ms,
                 "suppressing signer after repeated invalid signatures"
             );
@@ -6383,7 +6403,7 @@ impl Actor {
         }
         let schedule = super::EpochScheduleSnapshot::from_world_with_fallback(
             view.world(),
-            self.config.epoch_length_blocks,
+            self.config.npos.epoch_length_blocks,
         );
         let schedule_epoch = schedule.epoch_for_height(height);
         if height <= schedule.last_finalized_end() {
@@ -7065,14 +7085,14 @@ impl Actor {
                 "consensus payload frame cap {consensus_payload_frame_cap} is too small to encode RBC chunk headers"
             ));
         }
-        if config.rbc_chunk_max_bytes > rbc_chunk_cap {
+        if config.rbc.chunk_max_bytes > rbc_chunk_cap {
             warn!(
-                configured = config.rbc_chunk_max_bytes,
+                configured = config.rbc.chunk_max_bytes,
                 capped = rbc_chunk_cap,
                 consensus_payload_frame_cap,
                 "clamping rbc_chunk_max_bytes to fit consensus payload frame cap"
             );
-            config.rbc_chunk_max_bytes = rbc_chunk_cap;
+            config.rbc.chunk_max_bytes = rbc_chunk_cap;
         }
 
         let chain_id = common_config.chain.clone();
@@ -7165,8 +7185,8 @@ impl Actor {
                 } else {
                     collectors = Some(NposCollectorConfig {
                         seed,
-                        k: config.npos.k_aggregators,
-                        redundant_send_r: config.npos.redundant_send_r,
+                        k: config.collectors.k,
+                        redundant_send_r: config.collectors.redundant_send_r,
                     });
                 }
             }
@@ -7324,20 +7344,21 @@ impl Actor {
         let telemetry_option: Option<&crate::telemetry::Telemetry> = None;
         let pending_caps = {
             let hard_chunk_cap = usize::try_from(RBC_MAX_TOTAL_CHUNKS).unwrap_or(usize::MAX);
-            let max_chunks = config.rbc_pending_max_chunks.min(hard_chunk_cap).max(1);
-            let hard_bytes = config.rbc_chunk_max_bytes.saturating_mul(hard_chunk_cap);
+            let max_chunks = config.rbc.pending_max_chunks.min(hard_chunk_cap).max(1);
+            let hard_bytes = config.rbc.chunk_max_bytes.saturating_mul(hard_chunk_cap);
             let max_bytes = config
-                .rbc_pending_max_bytes
+                .rbc
+                .pending_max_bytes
                 .min(hard_bytes)
-                .max(config.rbc_chunk_max_bytes);
+                .max(config.rbc.chunk_max_bytes);
             (max_chunks, max_bytes)
         };
         Self::update_rbc_backlog_snapshot(
             &rbc_sessions,
             &BTreeMap::new(),
             pending_caps,
-            config.rbc_pending_ttl,
-            config.rbc_pending_session_limit,
+            config.rbc.pending_ttl,
+            config.rbc.pending_session_limit,
             telemetry_option,
         );
 
@@ -7371,7 +7392,7 @@ impl Actor {
                         drop(view);
                         cfg.map(|cfg| cfg.redundant_send_r)
                     })
-                    .unwrap_or(config.npos.redundant_send_r);
+                    .unwrap_or(config.collectors.redundant_send_r);
                 redundant.max(1)
             }
         };
@@ -7386,10 +7407,10 @@ impl Actor {
         #[cfg(feature = "telemetry")]
         {
             let max_backoff_ms =
-                u64::try_from(config.npos.pacemaker_max_backoff.as_millis()).unwrap_or(u64::MAX);
-            let backoff_mul = u64::from(config.npos.pacemaker_backoff_multiplier);
-            let rtt_floor_mul = u64::from(config.npos.pacemaker_rtt_floor_multiplier);
-            let jitter_frac = u64::from(config.npos.pacemaker_jitter_frac_permille);
+                u64::try_from(config.pacemaker.max_backoff.as_millis()).unwrap_or(u64::MAX);
+            let backoff_mul = u64::from(config.pacemaker.backoff_multiplier);
+            let rtt_floor_mul = u64::from(config.pacemaker.rtt_floor_multiplier);
+            let jitter_frac = u64::from(config.pacemaker.jitter_frac_permille);
             let jitter_ms = max_backoff_ms.saturating_mul(jitter_frac) / 1000;
             let view_target_ms =
                 u64::try_from(pacemaker_base_interval.as_millis()).unwrap_or(u64::MAX);
@@ -7466,7 +7487,7 @@ impl Actor {
             let trusted_pops = &common_config.trusted_peers.value().pops;
             let cache = RosterValidationCache::from_world(
                 &world,
-                config.epoch_length_blocks,
+                config.npos.epoch_length_blocks,
                 Some(trusted_pops),
             );
             drop(world);
@@ -7667,8 +7688,8 @@ impl Actor {
                     let view = self.state.view();
                     super::load_npos_collector_config(&view).map_or(
                         (
-                            self.config.npos.k_aggregators,
-                            self.config.npos.redundant_send_r,
+                            self.config.collectors.k,
+                            self.config.collectors.redundant_send_r,
                         ),
                         |cfg| (cfg.k, cfg.redundant_send_r),
                     )
@@ -7838,15 +7859,15 @@ impl Actor {
             collectors_k: u16::try_from(collectors_k).unwrap_or(u16::MAX),
             redundant_send_r,
             da_enabled,
-            rbc_chunk_max_bytes: u64::try_from(sumeragi.rbc_chunk_max_bytes).unwrap_or(u64::MAX),
-            rbc_session_ttl_ms: u64::try_from(sumeragi.rbc_session_ttl.as_millis())
+            rbc_chunk_max_bytes: u64::try_from(sumeragi.rbc.chunk_max_bytes).unwrap_or(u64::MAX),
+            rbc_session_ttl_ms: u64::try_from(sumeragi.rbc.session_ttl.as_millis())
                 .unwrap_or(u64::MAX),
-            rbc_store_max_sessions: u32::try_from(sumeragi.rbc_store_max_sessions)
+            rbc_store_max_sessions: u32::try_from(sumeragi.rbc.store_max_sessions)
                 .unwrap_or(u32::MAX),
-            rbc_store_soft_sessions: u32::try_from(sumeragi.rbc_store_soft_sessions)
+            rbc_store_soft_sessions: u32::try_from(sumeragi.rbc.store_soft_sessions)
                 .unwrap_or(u32::MAX),
-            rbc_store_max_bytes: u64::try_from(sumeragi.rbc_store_max_bytes).unwrap_or(u64::MAX),
-            rbc_store_soft_bytes: u64::try_from(sumeragi.rbc_store_soft_bytes).unwrap_or(u64::MAX),
+            rbc_store_max_bytes: u64::try_from(sumeragi.rbc.store_max_bytes).unwrap_or(u64::MAX),
+            rbc_store_soft_bytes: u64::try_from(sumeragi.rbc.store_soft_bytes).unwrap_or(u64::MAX),
         };
         super::status::set_consensus_caps(&config_caps);
         config_caps
@@ -7917,7 +7938,7 @@ impl Actor {
             staged_mode_activation_height,
         );
         super::status::set_mode_activation_lag(mode_activation_lag_blocks);
-        super::status::set_mode_flip_kill_switch(self.config.mode_flip_enabled);
+        super::status::set_mode_flip_kill_switch(self.config.mode_flip.enabled);
         #[cfg(feature = "telemetry")]
         self.telemetry.set_mode_tags(
             self.mode_tag(),
@@ -7929,7 +7950,7 @@ impl Actor {
             .set_mode_activation_lag(mode_activation_lag_blocks);
         #[cfg(feature = "telemetry")]
         self.telemetry
-            .set_mode_flip_kill_switch(self.config.mode_flip_enabled);
+            .set_mode_flip_kill_switch(self.config.mode_flip.enabled);
         if let Some(target_mode) = update_pending_mode_flip(
             self.consensus_mode,
             effective_mode,
@@ -7941,7 +7962,7 @@ impl Actor {
                 "pending consensus mode flip detected"
             );
         }
-        let flip_blocked = !self.config.mode_flip_enabled && effective_mode != self.consensus_mode;
+        let flip_blocked = !self.config.mode_flip.enabled && effective_mode != self.consensus_mode;
         if flip_blocked && !super::status::mode_flip_blocked() {
             let now_ms = SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -7951,10 +7972,10 @@ impl Actor {
             #[cfg(feature = "telemetry")]
             self.telemetry
                 .inc_mode_flip_blocked(self.mode_tag(), now_ms);
-        } else if self.config.mode_flip_enabled {
+        } else if self.config.mode_flip.enabled {
             super::status::clear_mode_flip_blocked();
         }
-        if self.config.mode_flip_enabled {
+        if self.config.mode_flip.enabled {
             if let Some(target_mode) = self.pending_mode_flip
                 && target_mode == effective_mode
             {
@@ -8032,6 +8053,7 @@ impl Actor {
         let quorum_reschedule_cooldown = quorum_timeout.max(QUORUM_RESCHEDULE_COOLDOWN);
         let retention_factor = self
             .config
+            .recovery
             .missing_block_signer_fallback_attempts
             .saturating_add(2)
             .max(4);
@@ -8227,7 +8249,7 @@ impl Actor {
             next_due = Self::merge_deadline(next_due, Some(now));
         }
 
-        let ttl = self.config.rbc_session_ttl;
+        let ttl = self.config.rbc.session_ttl;
         if ttl != Duration::ZERO {
             let now_system = SystemTime::now();
             if let Some(due_in) = rbc.status_handle.next_stale_due(ttl, now_system) {
@@ -8253,7 +8275,7 @@ impl Actor {
             commit_time,
             da_enabled,
             self.da_quorum_timeout_multiplier(),
-            self.config.worker_iteration_budget_cap,
+            self.config.worker.iteration_budget_cap,
         );
         let vote_rx_drain_budget = super::vote_rx_drain_budget(
             block_time,
@@ -8261,23 +8283,23 @@ impl Actor {
             da_enabled,
             self.da_quorum_timeout_multiplier(),
             Duration::from_secs(8),
-            self.config.worker_iteration_budget_cap,
+            self.config.worker.iteration_budget_cap,
         )
         .max(time_budget);
         let non_vote_drain_budget = super::cap_drain_budget(
             block_time / 2,
             time_budget,
-            self.config.worker_iteration_budget_cap,
+            self.config.worker.iteration_budget_cap,
         );
         let rbc_chunk_drain_budget = super::cap_rbc_drain_budget(
             block_time / 2,
             time_budget,
-            self.config.worker_iteration_budget_cap,
+            self.config.worker.iteration_budget_cap,
         );
         let block_rx_drain_budget = super::cap_drain_budget(
             block_time / 4,
             time_budget,
-            self.config.worker_iteration_budget_cap,
+            self.config.worker.iteration_budget_cap,
         );
         let starve_max = block_time.max(commit_time).max(time_budget);
         let tick_min_gap = super::idle_tick_gap(block_time, commit_time, time_budget);
@@ -8289,7 +8311,7 @@ impl Actor {
         tick_max_gap = tick_max_gap.max(tick_min_gap);
 
         cfg.time_budget = time_budget;
-        cfg.drain_budget_cap = self.config.worker_iteration_drain_budget_cap;
+        cfg.drain_budget_cap = self.config.worker.iteration_drain_budget_cap;
         cfg.vote_rx_drain_budget = vote_rx_drain_budget;
         cfg.block_payload_rx_drain_budget = non_vote_drain_budget;
         cfg.block_rx_drain_budget = block_rx_drain_budget;
@@ -8317,7 +8339,7 @@ impl Actor {
         next_due = Self::merge_deadline(next_due, self.rbc_next_due(now));
 
         if let Some(inflight) = self.subsystems.commit.inflight.as_ref() {
-            let timeout = self.config.commit_inflight_timeout;
+            let timeout = self.config.persistence.commit_inflight_timeout;
             if !timeout.is_zero() {
                 let deadline = inflight.enqueue_time.checked_add(timeout).unwrap_or(now);
                 next_due = Self::merge_deadline(next_due, Some(deadline.max(now)));
@@ -8332,6 +8354,19 @@ impl Actor {
 
     pub(super) fn should_tick(&self) -> bool {
         self.next_tick_deadline(Instant::now()).is_some()
+    }
+
+    fn tick_work_budget_deadline(&self, tick_start: Instant) -> Option<Instant> {
+        let cap = self.config.worker.tick_work_budget_cap;
+        if cap.is_zero() {
+            None
+        } else {
+            Some(tick_start.checked_add(cap).unwrap_or(tick_start))
+        }
+    }
+
+    fn tick_budget_exhausted(tick_deadline: Option<Instant>, now: Instant) -> bool {
+        matches!(tick_deadline, Some(deadline) if now >= deadline)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -8361,6 +8396,7 @@ impl Actor {
         }
         let rbc_persist_progress = self.poll_rbc_persist_results_inner();
         let now = tick_start;
+        let tick_deadline = self.tick_work_budget_deadline(tick_start);
         let queue_len = self.queue.active_len();
         let adaptive_progress = self.apply_adaptive_observability(now);
         let (refresh_progress, refresh_cost) = {
@@ -8426,7 +8462,7 @@ impl Actor {
             self.pending.commit_pipeline_wakeup = false;
             let pipeline_start = Instant::now();
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.commit_pipeline");
-            self.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick);
+            self.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, tick_deadline);
             commit_pipeline_cost = pipeline_start.elapsed();
             progress = true;
         }
@@ -8458,8 +8494,12 @@ impl Actor {
         {
             let propose_start = Instant::now();
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.pacemaker_propose_ready");
-            if self.on_pacemaker_propose_ready(now) {
-                progress = true;
+            if Self::tick_budget_exhausted(tick_deadline, propose_start) {
+                self.subsystems.propose.pacemaker.next_deadline = propose_start;
+            } else {
+                if self.on_pacemaker_propose_ready(now) {
+                    progress = true;
+                }
             }
             propose_cost = propose_cost.saturating_add(propose_start.elapsed());
         }
@@ -8485,8 +8525,12 @@ impl Actor {
         if should_attempt_proposal && self.subsystems.commit.inflight.is_none() {
             let propose_start = Instant::now();
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.pacemaker_attempt");
-            if self.on_pacemaker_propose_ready(now) {
-                progress = true;
+            if Self::tick_budget_exhausted(tick_deadline, propose_start) {
+                self.subsystems.propose.pacemaker.next_deadline = propose_start;
+            } else {
+                if self.on_pacemaker_propose_ready(now) {
+                    progress = true;
+                }
             }
             propose_cost = propose_cost.saturating_add(propose_start.elapsed());
         }
@@ -9374,7 +9418,7 @@ impl Actor {
             }
         );
         if bypass_queue {
-            if !self.config.debug_disable_background_worker {
+            if !self.config.debug.disable_background_worker {
                 self.dispatch_background_fallback(request);
             }
             return;
@@ -9394,7 +9438,7 @@ impl Actor {
             }
         };
         if let Err(request) = dispatched {
-            if !self.config.debug_disable_background_worker {
+            if !self.config.debug.disable_background_worker {
                 self.dispatch_background_fallback(*request);
             }
         }
@@ -9642,7 +9686,7 @@ impl Actor {
     fn rbc_deliver_quorum(&self, topology: &super::network_topology::Topology) -> usize {
         Self::rbc_deliver_quorum_with_debug(
             topology,
-            self.config.debug_rbc_force_deliver_quorum_one,
+            self.config.debug.rbc.force_deliver_quorum_one,
         )
     }
 
@@ -9652,8 +9696,8 @@ impl Actor {
         view: u64,
         kind: &'static str,
     ) -> bool {
-        let height_window = self.config.consensus_future_height_window;
-        let view_window = self.config.consensus_future_view_window;
+        let height_window = self.config.gating.future_height_window;
+        let view_window = self.config.gating.future_view_window;
         if height_window == 0 && view_window == 0 {
             return false;
         }
@@ -9724,14 +9768,16 @@ impl Actor {
         let hard_chunk_cap = usize::try_from(RBC_MAX_TOTAL_CHUNKS).unwrap_or(usize::MAX);
         let max_chunks = self
             .config
-            .rbc_pending_max_chunks
+            .rbc
+            .pending_max_chunks
             .min(hard_chunk_cap)
             .max(1);
-        let chunk_max_bytes = self.config.rbc_chunk_max_bytes.max(1);
+        let chunk_max_bytes = self.config.rbc.chunk_max_bytes.max(1);
         let hard_byte_cap = chunk_max_bytes.saturating_mul(hard_chunk_cap);
         let max_bytes = self
             .config
-            .rbc_pending_max_bytes
+            .rbc
+            .pending_max_bytes
             .min(hard_byte_cap)
             .max(chunk_max_bytes);
         (max_chunks, max_bytes)
@@ -9822,7 +9868,7 @@ impl Actor {
         let session = match Self::build_rbc_session_from_payload(
             &payload_bytes,
             payload_hash,
-            self.config.rbc_chunk_max_bytes,
+            self.config.rbc.chunk_max_bytes,
             epoch,
         ) {
             Ok(session) => session,
@@ -10442,7 +10488,7 @@ impl Actor {
         if chunks.is_empty() || roster.is_empty() {
             return false;
         }
-        let target_count = rbc::rbc_chunk_target_count(roster.len(), self.config.rbc_chunk_fanout);
+        let target_count = rbc::rbc_chunk_target_count(roster.len(), self.config.rbc.chunk_fanout);
         if target_count == 0 {
             return false;
         }
@@ -10656,7 +10702,7 @@ impl Actor {
         drop(view);
         // Rotate through sessions with a per-tick budget so large backlogs do not trigger storms.
         let total_sessions = self.subsystems.da_rbc.rbc.sessions.len();
-        let session_budget = self.config.rbc_rebroadcast_sessions_per_tick.max(1);
+        let session_budget = self.config.rbc.rebroadcast_sessions_per_tick.max(1);
         let limit = session_budget.min(total_sessions);
         let cursor = self.subsystems.da_rbc.rbc.rebroadcast_cursor;
         let mut keys = Vec::with_capacity(limit);
@@ -10831,7 +10877,7 @@ impl Actor {
             return false;
         }
 
-        let mut remaining = self.config.rbc_payload_chunks_per_tick.max(1);
+        let mut remaining = self.config.rbc.payload_chunks_per_tick.max(1);
         let total_sessions = self.subsystems.da_rbc.rbc.outbound_chunks.len();
         let cursor = self.subsystems.da_rbc.rbc.outbound_cursor;
         let mut keys = Vec::with_capacity(total_sessions);
@@ -11347,15 +11393,15 @@ impl Actor {
     }
 
     fn da_quorum_timeout_multiplier(&self) -> u32 {
-        self.config.da_quorum_timeout_multiplier.max(1)
+        self.config.da.quorum_timeout_multiplier.max(1)
     }
 
     fn availability_timeout(&self, quorum_timeout: Duration, da_enabled: bool) -> Duration {
         availability_timeout_from_quorum(
             quorum_timeout,
             da_enabled,
-            self.config.da_availability_timeout_multiplier.max(1),
-            self.config.da_availability_timeout_floor,
+            self.config.da.availability_timeout_multiplier.max(1),
+            self.config.da.availability_timeout_floor,
         )
     }
 
@@ -11411,9 +11457,8 @@ impl Actor {
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
         let queue_depths = super::status::worker_queue_depth_snapshot();
         let block_payload_cap =
-            u64::try_from(self.config.msg_channel_cap_block_payload.max(1)).unwrap_or(u64::MAX);
-        let rbc_chunk_cap =
-            u64::try_from(self.config.msg_channel_cap_rbc_chunks.max(1)).unwrap_or(u64::MAX);
+            u64::try_from(self.config.queues.block_payload.max(1)).unwrap_or(u64::MAX);
+        let rbc_chunk_cap = u64::try_from(self.config.queues.rbc_chunks.max(1)).unwrap_or(u64::MAX);
         let consensus_queue_backpressure = queue_depths.block_payload_rx >= block_payload_cap
             || queue_depths.rbc_chunk_rx >= rbc_chunk_cap;
         let consensus_queue_backlog = queue_depths.vote_rx > 0
@@ -11797,7 +11842,7 @@ impl Actor {
             &mut self.subsystems.propose.new_view_tracker,
             height,
             base_view,
-            self.config.consensus_future_view_window,
+            self.config.gating.future_view_window,
             now,
         );
         super::status::set_view_change_index(next_view);
@@ -12008,8 +12053,8 @@ fn commit_quorum_timeout_for_config(config: &SumeragiConfig) -> Duration {
     commit_quorum_timeout_from_durations(
         config.npos.block_time,
         config.npos.timeouts.commit,
-        config.da_enabled,
-        config.da_quorum_timeout_multiplier,
+        config.da.enabled,
+        config.da.quorum_timeout_multiplier,
     )
 }
 
@@ -12087,9 +12132,9 @@ fn pacemaker_base_interval_with_propose_timeout(
     config: &SumeragiConfig,
 ) -> Duration {
     let propose_seed = propose_timeout;
-    let rtt_mul = config.npos.pacemaker_rtt_floor_multiplier.max(1);
+    let rtt_mul = config.pacemaker.rtt_floor_multiplier.max(1);
     let propose_floor = saturating_mul_duration(propose_seed, rtt_mul);
-    let max_backoff = config.npos.pacemaker_max_backoff;
+    let max_backoff = config.pacemaker.max_backoff;
     block_time.max(propose_floor).min(max_backoff)
 }
 

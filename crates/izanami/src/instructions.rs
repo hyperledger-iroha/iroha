@@ -485,8 +485,6 @@ const BASE_RECIPES_STABLE: &[RecipeKind] = &[
     RecipeKind::RemoveDomainKeyValue,
     RecipeKind::SetAssetDefinitionKeyValue,
     RecipeKind::RemoveAssetDefinitionKeyValue,
-    RecipeKind::SetAssetInstanceKeyValue,
-    RecipeKind::RemoveAssetInstanceKeyValue,
     RecipeKind::RegisterRole,
     RecipeKind::RegisterTimeTrigger,
     RecipeKind::RegisterDataTrigger,
@@ -516,8 +514,6 @@ const BASE_RECIPES_CHAOS: &[RecipeKind] = &[
     RecipeKind::RemoveDomainKeyValue,
     RecipeKind::SetAssetDefinitionKeyValue,
     RecipeKind::RemoveAssetDefinitionKeyValue,
-    RecipeKind::SetAssetInstanceKeyValue,
-    RecipeKind::RemoveAssetInstanceKeyValue,
     RecipeKind::RegisterRole,
     RecipeKind::GrantRole,
     RecipeKind::RevokeRole,
@@ -2522,6 +2518,30 @@ mod tests {
                 .iter()
                 .any(|kind| matches!(kind, RecipeKind::RegisterPublicLaneValidator)),
             "nexus recipes should include staking paths"
+        );
+    }
+
+    #[test]
+    fn base_recipes_skip_asset_instance_metadata() {
+        assert!(
+            !BASE_RECIPES_STABLE
+                .iter()
+                .any(|kind| matches!(kind, RecipeKind::SetAssetInstanceKeyValue))
+        );
+        assert!(
+            !BASE_RECIPES_STABLE
+                .iter()
+                .any(|kind| matches!(kind, RecipeKind::RemoveAssetInstanceKeyValue))
+        );
+        assert!(
+            !BASE_RECIPES_CHAOS
+                .iter()
+                .any(|kind| matches!(kind, RecipeKind::SetAssetInstanceKeyValue))
+        );
+        assert!(
+            !BASE_RECIPES_CHAOS
+                .iter()
+                .any(|kind| matches!(kind, RecipeKind::RemoveAssetInstanceKeyValue))
         );
     }
 
