@@ -167,6 +167,7 @@ mod model {
         ///
         /// A block is created if this limit or [`BlockParameters::max_transactions`] limit is reached,
         /// whichever comes first. Regardless of the limits, an empty block is never created.
+        /// This value is authoritative for both permissioned and NPoS pacemaker timing.
         #[norito(default = "defaults::sumeragi::block_time_ms")]
         pub block_time_ms: u64,
         /// Time (in milliseconds) a peer will wait for a block to be committed.
@@ -189,9 +190,9 @@ mod model {
         pub collectors_redundant_send_r: u8,
         /// Enable data availability for Sumeragi.
         ///
-        /// When enabled, block payload distribution uses Reliable Broadcast (RBC) and nodes
-        /// track payload/manifest availability, but consensus never gates on DA evidence.
-        /// When disabled, RBC payload dissemination is off and nodes rely on direct payloads.
+        /// When enabled, block payload distribution uses Reliable Broadcast (RBC) and consensus
+        /// gates finalization on availability evidence. When disabled, RBC payload dissemination
+        /// is off and nodes rely on direct payloads.
         #[norito(default = "defaults::sumeragi::da_enabled")]
         pub da_enabled: bool,
         /// If set, indicates the next consensus mode to switch to at `mode_activation_height`.
@@ -242,6 +243,9 @@ mod model {
         #[norito(default)]
         pub epoch_seed: [u8; 32],
         /// Target block time for `NPoS` mode (ms).
+        ///
+        /// Deprecated: nodes ignore this in favor of `SumeragiParameters.block_time_ms`.
+        /// Keep the values aligned for backward compatibility.
         pub block_time_ms: u64,
         /// Proposal timeout window (ms).
         pub timeout_propose_ms: u64,
@@ -518,7 +522,7 @@ mod model {
         CollectorsK(u16),
         /// Redundant send fanout (r). Must be >= 1.
         RedundantSendR(u8),
-        /// Enable/disable data availability (RBC payload dissemination and advisory tracking).
+        /// Enable/disable data availability (RBC payload dissemination and availability gating).
         DaEnabled(bool),
         /// Set the next consensus mode for future activation.
         NextMode(SumeragiConsensusMode),
@@ -863,7 +867,7 @@ impl SumeragiParameters {
         self.collectors_redundant_send_r
     }
 
-    /// Whether data availability (RBC payload dissemination and advisory tracking) is enabled.
+    /// Whether data availability (RBC payload dissemination and availability gating) is enabled.
     #[must_use]
     pub fn da_enabled(&self) -> bool {
         self.da_enabled
@@ -894,6 +898,7 @@ impl SumeragiParameters {
     ///
     /// A block is created if this limit or [`BlockParameters::max_transactions`] limit is reached,
     /// whichever comes first. Regardless of the limits, an empty block is never created.
+    /// This value is authoritative for both permissioned and NPoS pacemaker timing.
     pub fn block_time(&self) -> Duration {
         Duration::from_millis(self.block_time_ms)
     }

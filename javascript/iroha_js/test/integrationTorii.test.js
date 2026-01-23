@@ -656,6 +656,10 @@ test(
       capabilities.defaultCompileTarget,
       "node capabilities defaultCompileTarget",
     );
+    assertNonNegativeInteger(
+      capabilities.dataModelVersion,
+      "node capabilities dataModelVersion",
+    );
     assert.equal(typeof capabilities.crypto, "object", "crypto capabilities must exist");
     assert.equal(
       typeof capabilities.crypto.sm.enabled,

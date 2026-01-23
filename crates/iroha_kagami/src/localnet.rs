@@ -1540,7 +1540,8 @@ fn apply_localnet_npos_overrides(
     let default_block_ms = LOCALNET_NPOS_DEFAULT_BLOCK_TIME_MS.max(1);
     let scale_timeout = |base_ms: u64, default_ms: u64| -> u64 {
         let scaled = (u128::from(base_ms) * u128::from(default_ms)) / u128::from(default_block_ms);
-        u64::try_from(scaled).unwrap_or(u64::MAX).max(1)
+        let scaled = u64::try_from(scaled).unwrap_or(u64::MAX).max(1);
+        scaled.max(default_ms)
     };
 
     let mut npos = parameters
@@ -2751,6 +2752,7 @@ mod tests {
         let params = genesis_parameters(&manifest);
         assert_eq!(params.sumeragi().collectors_k(), 3);
         assert_eq!(params.sumeragi().collectors_redundant_send_r(), 2);
+        assert_eq!(params.sumeragi().block_time_ms(), 1_000);
 
         let npos = params
             .custom()
@@ -3268,6 +3270,8 @@ mod tests {
         let manifest = genesis_json_from_path(&genesis_path);
 
         let params = genesis_parameters(&manifest);
+        assert_eq!(params.sumeragi().block_time_ms(), 1_200);
+        assert_eq!(params.sumeragi().commit_time_ms(), 1_600);
         let npos = params
             .custom()
             .get(&SumeragiNposParameters::parameter_id())
@@ -3281,6 +3285,55 @@ mod tests {
         assert_eq!(npos.timeout_da_ms(), 720);
         assert_eq!(npos.timeout_aggregator_ms(), 120);
         assert_eq!(npos.redundant_send_r(), 3);
+    }
+
+    #[test]
+    fn npos_localnet_clamps_timeouts_for_fast_block_time() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(2).expect("non-zero"),
+            seed: Some("npos-fast-timeouts".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 38180,
+            base_p2p_port: 38437,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: Some(333),
+            commit_time_ms: Some(667),
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+
+        let genesis_path = temp.path().join("genesis.json");
+        let manifest = genesis_json_from_path(&genesis_path);
+        let params = genesis_parameters(&manifest);
+        assert_eq!(params.sumeragi().block_time_ms(), 333);
+        assert_eq!(params.sumeragi().commit_time_ms(), 667);
+        let npos = params
+            .custom()
+            .get(&SumeragiNposParameters::parameter_id())
+            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .expect("npos parameters must be present");
+
+        assert_eq!(npos.block_time_ms(), 333);
+        assert_eq!(npos.timeout_propose_ms(), LOCALNET_NPOS_TIMEOUT_PROPOSE_MS);
+        assert_eq!(npos.timeout_prevote_ms(), LOCALNET_NPOS_TIMEOUT_PREVOTE_MS);
+        assert_eq!(
+            npos.timeout_precommit_ms(),
+            LOCALNET_NPOS_TIMEOUT_PRECOMMIT_MS
+        );
+        assert_eq!(npos.timeout_commit_ms(), LOCALNET_NPOS_TIMEOUT_COMMIT_MS);
+        assert_eq!(npos.timeout_da_ms(), LOCALNET_NPOS_TIMEOUT_DA_MS);
+        assert_eq!(npos.timeout_aggregator_ms(), LOCALNET_NPOS_TIMEOUT_AGG_MS);
     }
 
     #[test]

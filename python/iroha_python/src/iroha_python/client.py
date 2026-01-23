@@ -122,6 +122,8 @@ def _encode_sort_arg(sort_value: Optional[Any]) -> Optional[str]:
     return str(sort_value)
 
 DEFAULT_IH58_PREFIX = 0x02F1
+# Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
+DATA_MODEL_VERSION = 1
 
 
 def _reject_alias_keys(source: Mapping[str, Any],
@@ -2535,6 +2537,7 @@ class NodeCapabilities:
 
     supported_abi_versions: List[int]
     default_compile_target: int
+    data_model_version: int
     crypto: Optional[NodeCryptoCapabilities]
 
     @classmethod
@@ -2554,6 +2557,12 @@ class NodeCapabilities:
             default = int(payload["default_compile_target"])
         except (KeyError, TypeError, ValueError) as exc:
             raise TypeError("node capabilities missing numeric `default_compile_target` field") from exc
+        try:
+            data_model_version = int(payload["data_model_version"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise TypeError("node capabilities missing numeric `data_model_version` field") from exc
+        if data_model_version <= 0:
+            raise TypeError("node capabilities `data_model_version` must be positive")
         crypto_payload = payload.get("crypto")
         crypto_caps: Optional[NodeCryptoCapabilities]
         if crypto_payload is None:
@@ -2565,6 +2574,7 @@ class NodeCapabilities:
         return cls(
             supported_abi_versions=supported,
             default_compile_target=default,
+            data_model_version=data_model_version,
             crypto=crypto_caps,
         )
 
@@ -6729,6 +6739,7 @@ __all__ = [
     "ToriiClient",
     "create_torii_client",
     "TransactionStatusError",
+    "DataModelCompatibilityError",
     "signed_transaction_envelope_from_json",
     "resolve_torii_client_config",
     "ResolvedToriiClientConfig",
@@ -6850,6 +6861,18 @@ class TransactionStatusError(RuntimeError):
         super().__init__(f"transaction {hash_hex} reported failure status {status_repr}")
 
 
+class DataModelCompatibilityError(RuntimeError):
+    """Raised when the node data model version does not match the SDK."""
+
+    def __init__(self, expected: int, actual: Optional[int]) -> None:
+        actual_label = "missing" if actual is None else str(actual)
+        super().__init__(
+            f"Torii data model version mismatch (expected {expected}, got {actual_label})"
+        )
+        self.expected = expected
+        self.actual = actual
+
+
 class ToriiClient(_BaseToriiClient):
     """Convenience wrapper that exposes Torii attachment/prover APIs under `iroha_python`.
 
@@ -6920,6 +6943,8 @@ class ToriiClient(_BaseToriiClient):
         )
         self._sorafs_alias_metrics: Dict[str, int] = {}
         self._last_sorafs_alias_evaluation: Optional[SorafsAliasEvaluation] = None
+        self._data_model_compatibility = "unknown"
+        self._data_model_actual: Optional[int] = None
 
     @property
     def sorafs_alias_policy(self) -> SorafsAliasPolicy:
@@ -6954,9 +6979,25 @@ class ToriiClient(_BaseToriiClient):
 
         return self._last_sorafs_alias_evaluation
 
+    def _ensure_data_model_compatibility(self) -> None:
+        if self._data_model_compatibility == "compatible":
+            return
+        if self._data_model_compatibility == "incompatible":
+            raise DataModelCompatibilityError(DATA_MODEL_VERSION, self._data_model_actual)
+
+        capabilities = self.get_node_capabilities()
+        actual = capabilities.data_model_version
+        if actual != DATA_MODEL_VERSION:
+            self._data_model_compatibility = "incompatible"
+            self._data_model_actual = actual
+            raise DataModelCompatibilityError(DATA_MODEL_VERSION, actual)
+        self._data_model_compatibility = "compatible"
+        self._data_model_actual = actual
+
     def submit_transaction(self, payload: bytes) -> Optional[Any]:
         """Submit a Norito-encoded transaction payload to `/v1/pipeline/transactions`."""
 
+        self._ensure_data_model_compatibility()
         response = self._request(
             "POST",
             "/v1/pipeline/transactions",

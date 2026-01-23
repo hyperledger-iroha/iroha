@@ -8118,7 +8118,7 @@ impl Client {
     }
 
     /// GET `/v1/node/capabilities`
-    /// Returns `{ supported_abi_versions: [..], default_compile_target: n }`.
+    /// Returns `{ supported_abi_versions: [..], default_compile_target: n, data_model_version: n, crypto: { ... } }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_node_capabilities_json(&self) -> Result<norito::json::Value> {

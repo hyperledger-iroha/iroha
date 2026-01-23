@@ -891,6 +891,7 @@ class NodeCapabilities:
 
     supported_abi_versions: List[int]
     default_compile_target: int
+    data_model_version: int
     crypto: NodeCryptoCapabilities
 
 
@@ -6714,6 +6715,12 @@ class ToriiClient:
         )
         if default_target == 0:
             raise RuntimeError(f"{context}.default_compile_target must be greater than zero")
+        data_model_version = ToriiClient._coerce_unsigned(
+            record.get("data_model_version"),
+            f"{context}.data_model_version",
+        )
+        if data_model_version == 0:
+            raise RuntimeError(f"{context}.data_model_version must be greater than zero")
         crypto_record = ToriiClient._ensure_mapping(record.get("crypto", {}), f"{context}.crypto")
         sm = ToriiClient._parse_node_sm_capabilities(
             crypto_record.get("sm"),
@@ -6726,6 +6733,7 @@ class ToriiClient:
         return NodeCapabilities(
             supported_abi_versions=supported,
             default_compile_target=default_target,
+            data_model_version=data_model_version,
             crypto=NodeCryptoCapabilities(sm=sm, curves=curves),
         )
 

@@ -195,7 +195,7 @@ pub fn compute_consensus_handshake_caps_from_view(
                 };
                 (
                     Some(NposGenesisParams {
-                        block_time_ms: duration_ms(npos_cfg.block_time),
+                        block_time_ms: sumeragi.block_time_ms,
                         timeout_propose_ms: duration_ms(npos_cfg.timeouts.propose),
                         timeout_prevote_ms: duration_ms(npos_cfg.timeouts.prevote),
                         timeout_precommit_ms: duration_ms(npos_cfg.timeouts.precommit),
@@ -227,7 +227,7 @@ pub fn compute_consensus_handshake_caps_from_view(
             |npos| {
                 (
                     Some(NposGenesisParams {
-                        block_time_ms: npos.block_time_ms(),
+                        block_time_ms: sumeragi.block_time_ms,
                         timeout_propose_ms: npos.timeout_propose_ms(),
                         timeout_prevote_ms: npos.timeout_prevote_ms(),
                         timeout_precommit_ms: npos.timeout_precommit_ms(),

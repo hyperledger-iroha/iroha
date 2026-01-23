@@ -2157,6 +2157,7 @@ export const Crypto: typeof import("./src/crypto.js");
 export const Offline: typeof import("./src/offlineEnvelope.js");
 export const OfflineCounters: typeof import("./src/offlineCounterJournal.js");
 export const OfflineQrStream: typeof import("./src/offlineQrStream.js");
+export const OfflinePetalStream: typeof import("./src/offlinePetalStream.js");
 
 export interface SoranetPuzzleParamsSnapshot {
   memoryKib: number;
@@ -3468,6 +3469,7 @@ export interface ToriiNetworkTimeStatus {
 export interface ToriiNodeCapabilities {
   supportedAbiVersions: ReadonlyArray<number>;
   defaultCompileTarget: number;
+  dataModelVersion: number;
   crypto: {
     sm: ToriiNodeSmCapabilities;
     curves: ToriiNodeCurveCapabilities;
@@ -5880,6 +5882,13 @@ export declare class IsoMessageTimeoutError extends Error {
   readonly lastStatus: IsoMessageStatusResponse | null;
 }
 
+export declare class ToriiDataModelCompatibilityError extends Error {
+  constructor(expected: number, actual?: number | null, cause?: unknown);
+  readonly expected: number;
+  readonly actual: number | null;
+  readonly cause?: unknown;
+}
+
 export declare function extractPipelineStatusKind(payload: unknown): string | null;
 export declare function decodePdpCommitmentHeader(
   headers?:
@@ -7271,6 +7280,112 @@ export function scanQrStreamFrames(
   progress: number;
   isComplete: boolean;
 } | null>;
+
+export const PETAL_STREAM_GRID_SIZES: ReadonlyArray<number>;
+
+export class OfflinePetalStreamOptions {
+  gridSize: number;
+  border: number;
+  anchorSize: number;
+  constructor(options?: { gridSize?: number; border?: number; anchorSize?: number });
+}
+
+export class OfflinePetalStreamGrid {
+  readonly gridSize: number;
+  readonly cells: boolean[];
+  constructor(input: { gridSize: number; cells: boolean[] });
+  get(x: number, y: number): boolean | null;
+}
+
+export class OfflinePetalStreamSampleGrid {
+  readonly gridSize: number;
+  readonly samples: number[];
+  constructor(input: { gridSize: number; samples: number[] });
+}
+
+export class OfflinePetalStreamEncoder {
+  static encodeGrid(
+    payload: ArrayBufferView | ArrayBuffer | Buffer,
+    options?: { gridSize?: number; border?: number; anchorSize?: number },
+  ): OfflinePetalStreamGrid;
+  static encodeGrids(
+    payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
+    options?: { gridSize?: number; border?: number; anchorSize?: number },
+  ): { gridSize: number; grids: OfflinePetalStreamGrid[] };
+}
+
+export class OfflinePetalStreamDecoder {
+  static decodeGrid(
+    grid: OfflinePetalStreamGrid,
+    options?: { gridSize?: number; border?: number; anchorSize?: number },
+  ): Buffer;
+  static decodeSamples(
+    sampleGrid: OfflinePetalStreamSampleGrid,
+    options?: { gridSize?: number; border?: number; anchorSize?: number },
+  ): Buffer;
+}
+
+export function samplePetalStreamGridFromRgba(
+  image: {
+    data: ArrayBufferView | ArrayBuffer | Buffer;
+    width: number;
+    height: number;
+  },
+  gridSize: number,
+): OfflinePetalStreamSampleGrid;
+
+export function decodePetalStreamFrameAuto(
+  image: {
+    data: ArrayBufferView | ArrayBuffer | Buffer;
+    width: number;
+    height: number;
+  },
+  options?: { gridSize?: number; border?: number; anchorSize?: number },
+): { gridSize: number; payload: Buffer };
+
+export class OfflinePetalStreamScanSession {
+  readonly qrSession: OfflineQrStreamScanSession;
+  gridSize: number | null;
+  constructor(options?: {
+    qrSession?: OfflineQrStreamScanSession;
+    petalOptions?: { gridSize?: number; border?: number; anchorSize?: number };
+  });
+  ingestSampleGrid(sampleGrid: OfflinePetalStreamSampleGrid): {
+    payload: Buffer | null;
+    receivedChunks: number;
+    totalChunks: number;
+    recoveredChunks: number;
+    progress: number;
+    isComplete: boolean;
+  };
+  ingestRgba(
+    image: {
+      data: ArrayBufferView | ArrayBuffer | Buffer;
+      width: number;
+      height: number;
+    },
+    gridSize?: number | null,
+  ): {
+    payload: Buffer | null;
+    receivedChunks: number;
+    totalChunks: number;
+    recoveredChunks: number;
+    progress: number;
+    isComplete: boolean;
+  };
+  ingestRgbaAuto(image: {
+    data: ArrayBufferView | ArrayBuffer | Buffer;
+    width: number;
+    height: number;
+  }): {
+    payload: Buffer | null;
+    receivedChunks: number;
+    totalChunks: number;
+    recoveredChunks: number;
+    progress: number;
+    isComplete: boolean;
+  };
+}
 
 export function buildRegisterDomainTransaction(
   input: RegisterDomainInput,

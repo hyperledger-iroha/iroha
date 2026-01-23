@@ -3723,7 +3723,7 @@ impl NetworkBuilder {
             Some(npos) => (
                 npos.epoch_length_blocks(),
                 Some(NposGenesisParams {
-                    block_time_ms: npos.block_time_ms(),
+                    block_time_ms: parameter_state.sumeragi().block_time_ms(),
                     timeout_propose_ms: npos.timeout_propose_ms(),
                     timeout_prevote_ms: npos.timeout_prevote_ms(),
                     timeout_precommit_ms: npos.timeout_precommit_ms(),
@@ -3752,7 +3752,7 @@ impl NetworkBuilder {
                 (
                     npos.epoch_length_blocks(),
                     Some(NposGenesisParams {
-                        block_time_ms: npos.block_time_ms(),
+                        block_time_ms: parameter_state.sumeragi().block_time_ms(),
                         timeout_propose_ms: npos.timeout_propose_ms(),
                         timeout_prevote_ms: npos.timeout_prevote_ms(),
                         timeout_precommit_ms: npos.timeout_precommit_ms(),

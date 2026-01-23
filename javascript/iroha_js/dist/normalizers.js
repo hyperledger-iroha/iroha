@@ -355,6 +355,18 @@ function isAliasFormatError(error) {
   );
 }
 
+function isEncodedAddressLiteral(value) {
+  try {
+    AccountAddress.parseAny(value);
+    return true;
+  } catch (error) {
+    if (error instanceof AccountAddressError) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 function canonicalizeSignatory(signatory, domain, name) {
   const trimmed = signatory.trim();
   if (trimmed.length === 0) {
@@ -496,6 +508,17 @@ export function normalizeAccountId(value, name) {
         name,
       );
     } catch (error) {
+      if (
+        error instanceof AccountAddressError &&
+        error.code === AccountAddressErrorCode.DOMAIN_MISMATCH &&
+        isEncodedAddressLiteral(identifier)
+      ) {
+        fail(
+          ValidationErrorCode.INVALID_ACCOUNT_ID,
+          `${name} must not append '@domain' to encoded addresses`,
+          name,
+        );
+      }
       if (error instanceof AccountAddressError && !isAliasFormatError(error)) {
         throw createValidationError(
           ValidationErrorCode.INVALID_ACCOUNT_ID,

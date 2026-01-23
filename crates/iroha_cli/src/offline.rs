@@ -1,5 +1,6 @@
 use super::*;
 
+mod petal;
 mod qr;
 
 use clap::ValueEnum;
@@ -61,6 +62,9 @@ pub enum Command {
     /// Encode/decode QR stream frames for offline payloads
     #[command(subcommand)]
     Qr(qr::QrCommand),
+    /// Encode/decode petal stream frames for offline payloads
+    #[command(subcommand)]
+    Petal(petal::PetalCommand),
 }
 
 impl Run for Command {
@@ -73,6 +77,7 @@ impl Run for Command {
             Command::Revocation(cmd) => cmd.run(context),
             Command::Rejection(cmd) => cmd.run(context),
             Command::Qr(cmd) => cmd.run(context),
+            Command::Petal(cmd) => cmd.run(context),
         }
     }
 }

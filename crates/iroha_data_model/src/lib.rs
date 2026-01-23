@@ -32,6 +32,9 @@ pub use norito_derive::{
 
 use crate::name::Name;
 
+/// Data model compatibility version for SDK and node handshakes.
+pub const DATA_MODEL_VERSION: u32 = 1;
+
 #[macro_use]
 mod id_macros;
 
@@ -108,6 +111,8 @@ pub mod nft;
 pub mod offline;
 /// Oracle feed schemas and deterministic committee helpers.
 pub mod oracle;
+/// Petal stream framing for offline payload handoff.
+pub mod petal_stream;
 /// Runtime parameter definitions and schema.
 pub mod parameter;
 /// Peer and network-topology types.

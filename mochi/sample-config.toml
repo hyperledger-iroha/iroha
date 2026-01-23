@@ -81,9 +81,9 @@ kagami = ""
 # alias = "universal"
 # id = 0
 
-[sumeragi]
+[sumeragi.da]
 # Enable/disable data availability gating (RBC + availability QC).
-# da_enabled = true
+# enabled = true # on-chain SumeragiParameters.da_enabled is authoritative after genesis
 
 [torii]
 # Optional overrides for DA ingest spool roots (used when DA is enabled).

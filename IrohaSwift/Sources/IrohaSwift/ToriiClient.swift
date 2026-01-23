@@ -2897,13 +2897,17 @@ public struct ToriiConfidentialAssetPolicy: Decodable, Sendable {
 }
 
 public struct ToriiNodeCapabilities: Decodable, Sendable {
+    /// Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
+    public static let expectedDataModelVersion = 1
     public let supportedAbiVersions: [Int]
     public let defaultCompileTarget: Int
+    public let dataModelVersion: Int?
     public let crypto: ToriiNodeCryptoCapabilities?
 
     private enum CodingKeys: String, CodingKey {
         case supportedAbiVersions = "supported_abi_versions"
         case defaultCompileTarget = "default_compile_target"
+        case dataModelVersion = "data_model_version"
         case crypto
     }
 }
@@ -5600,6 +5604,12 @@ struct ToriiStatusState {
     }
 }
 
+private enum ToriiDataModelCompatibility {
+    case unknown
+    case compatible(version: Int)
+    case incompatible(expected: Int, actual: Int?)
+}
+
 public struct ToriiGovernanceInstruction: Codable, Sendable {
     public let wireId: String
     public let payloadHex: String
@@ -6770,6 +6780,7 @@ public enum ToriiClientError: Error, Sendable {
     case httpStatus(code: Int, message: String?, rejectCode: String?)
     case decoding(Swift.Error)
     case invalidPayload(String)
+    case incompatibleDataModel(expected: Int, actual: Int?)
 }
 
 extension ToriiClientError: LocalizedError {
@@ -6793,6 +6804,11 @@ extension ToriiClientError: LocalizedError {
             return "Failed to decode Torii response: \(error.localizedDescription)"
         case .invalidPayload(let reason):
             return "Torii response payload was invalid: \(reason)"
+        case let .incompatibleDataModel(expected, actual):
+            if let actual {
+                return "Torii data model version mismatch (expected \(expected), got \(actual))."
+            }
+            return "Torii data model version mismatch (expected \(expected), missing on node)."
         }
     }
 }
@@ -6841,6 +6857,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public let baseURL: URL
     private let session: URLSession
     private var statusState = ToriiStatusState()
+    private var dataModelCompatibility = ToriiDataModelCompatibility.unknown
+    private let dataModelLock = NSLock()
     private static let defaultListPageSize = 100
 
     public init(baseURL: URL, session: URLSession = .shared) {
@@ -8785,9 +8803,37 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         }
     }
 
+    private func ensureDataModelCompatibility() async throws {
+        let expected = ToriiNodeCapabilities.expectedDataModelVersion
+        dataModelLock.lock()
+        let cached = dataModelCompatibility
+        dataModelLock.unlock()
+        switch cached {
+        case .compatible:
+            return
+        case let .incompatible(expected, actual):
+            throw ToriiClientError.incompatibleDataModel(expected: expected, actual: actual)
+        case .unknown:
+            break
+        }
+
+        let capabilities = try await getNodeCapabilities()
+        let actual = capabilities.dataModelVersion
+        guard actual == expected else {
+            dataModelLock.lock()
+            dataModelCompatibility = .incompatible(expected: expected, actual: actual)
+            dataModelLock.unlock()
+            throw ToriiClientError.incompatibleDataModel(expected: expected, actual: actual)
+        }
+        dataModelLock.lock()
+        dataModelCompatibility = .compatible(version: expected)
+        dataModelLock.unlock()
+    }
+
     public func submitTransaction(data: Data,
                                   mode: PipelineEndpointMode,
                                   idempotencyKey: String? = nil) async throws -> ToriiSubmitTransactionResponse? {
+        try await ensureDataModelCompatibility()
         let paths = pipelineEndpoints(for: mode)
         var headers: [String: String] = [
             "Content-Type": "application/x-norito",

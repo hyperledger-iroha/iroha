@@ -81,3 +81,14 @@ Use `OfflineQrStreamEncoder` to split receipts/bundles into frames and animate t
   `iroha:qr1:<base64(frame_bytes)>` via `OfflineQrStreamTextCodec`.
 - **Playback skins:** use `OfflineQrStreamPlaybackSkin.sakura` for default animation,
   `sakuraReducedMotion` for accessibility, and `sakuraLowPower` for battery-friendly playback.
+
+## Petal stream handoff (custom scanner)
+Petal stream renders the same QR stream frames as a sakura petal field and requires a custom
+scanner.
+
+- **Encode grids:** use `OfflinePetalStreamEncoder.encodeGrids` to pick a consistent grid size
+  for a frame set.
+- **Scan pipeline:** `OfflinePetalStreamCameraSession` samples luminance from camera frames and
+  feeds results into `OfflinePetalStreamScanSession`.
+- **Manual sampling:** if you render your own frames, use
+  `OfflinePetalStreamSampler.sampleGridFromRGBA` and call `OfflinePetalStreamScanSession.ingest`.

@@ -630,8 +630,9 @@ pub fn generate_default(
         parameters.sumeragi.collectors_redundant_send_r = defaults.collectors_redundant_send_r;
     }
     apply_da_rbc_policy_for_line(&mut parameters, da_rbc_line);
-    let wants_npos_defaults = matches!(consensus_mode, SumeragiConsensusMode::Npos)
-        || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
+    let active_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos);
+    let wants_npos_defaults =
+        active_npos || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
     if wants_npos_defaults {
         if profile_defaults.is_none() {
             parameters.sumeragi.collectors_k = 3;
@@ -640,6 +641,9 @@ pub fn generate_default(
         let defaults = profile_vrf_seed.map_or_else(SumeragiNposParameters::default, |seed| {
             SumeragiNposParameters::default().with_epoch_seed(seed)
         });
+        if active_npos {
+            parameters.sumeragi.block_time_ms = defaults.block_time_ms();
+        }
         parameters.set_parameter(Parameter::Custom(defaults.into()));
     }
     // Pin block-level gas limit for IVM across peers via a custom parameter.

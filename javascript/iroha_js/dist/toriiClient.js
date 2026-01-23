@@ -17,6 +17,7 @@ import { looksLikeIban, normalizeIban } from "./identifiers.js";
 import {
   createValidationError,
   ValidationErrorCode,
+  ValidationError,
 } from "./validationError.js";
 import { buildCanonicalRequestHeaders } from "./canonicalRequest.js";
 
@@ -28,6 +29,7 @@ const DEFAULT_TX_STATUS_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_TX_STATUS_TIMEOUT_MS = 30_000;
 const DEFAULT_ISO_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_ISO_POLL_ATTEMPTS = 12;
+const EXPECTED_DATA_MODEL_VERSION = 1;
 const MIN_ISO_POLL_INTERVAL_MS = 10;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
@@ -426,6 +428,19 @@ export class IsoMessageTimeoutError extends Error {
   }
 }
 
+export class ToriiDataModelCompatibilityError extends Error {
+  constructor(expected, actual, cause) {
+    const actualLabel = actual == null ? "missing" : String(actual);
+    super(`Torii data model version mismatch (expected ${expected}, got ${actualLabel}).`);
+    this.name = "ToriiDataModelCompatibilityError";
+    this.expected = expected;
+    this.actual = actual ?? null;
+    if (cause !== undefined) {
+      this.cause = cause;
+    }
+  }
+}
+
 export class ToriiHttpError extends Error {
   constructor({
     status,
@@ -765,6 +780,8 @@ export class ToriiClient {
     this._sorafsAliasWarningHook =
       typeof opts.onSorafsAliasWarning === "function" ? opts.onSorafsAliasWarning : null;
     this._statusState = createStatusSnapshotState();
+    this._dataModelCompatibility = { status: "unknown", actual: null };
+    this._dataModelCompatibilityPromise = null;
     const parsedBase = new URL(this._baseUrl.endsWith("/") ? this._baseUrl : `${this._baseUrl}/`);
     this._baseOrigin = `${parsedBase.protocol}//${parsedBase.host}`;
     this._baseHost = parsedBase.host;
@@ -2797,6 +2814,7 @@ export class ToriiClient {
    * @returns {Promise<any>} Submission receipt (decoded from Norito) or JSON when present; otherwise null.
    */
   async submitTransaction(payload) {
+    await this._ensureDataModelCompatibility();
     const response = await this._request("POST", "/v1/pipeline/transactions", {
       headers: {
         "Content-Type": "application/x-norito",
@@ -2815,6 +2833,44 @@ export class ToriiClient {
       return decodeTransactionReceiptPayload(body);
     }
     return this._maybeJson(response);
+  }
+
+  async _ensureDataModelCompatibility() {
+    const expected = EXPECTED_DATA_MODEL_VERSION;
+    if (this._dataModelCompatibility.status === "compatible") {
+      return;
+    }
+    if (this._dataModelCompatibility.status === "incompatible") {
+      throw new ToriiDataModelCompatibilityError(expected, this._dataModelCompatibility.actual);
+    }
+    if (this._dataModelCompatibilityPromise) {
+      return this._dataModelCompatibilityPromise;
+    }
+    const promise = (async () => {
+      let capabilities;
+      try {
+        capabilities = await this.getNodeCapabilities();
+      } catch (error) {
+        if (error instanceof ValidationError) {
+          this._dataModelCompatibility = { status: "incompatible", actual: null };
+          throw new ToriiDataModelCompatibilityError(expected, null, error);
+        }
+        throw error;
+      }
+      const actual = capabilities.dataModelVersion;
+      if (actual !== expected) {
+        this._dataModelCompatibility = { status: "incompatible", actual };
+        throw new ToriiDataModelCompatibilityError(expected, actual);
+      }
+      this._dataModelCompatibility = { status: "compatible", actual };
+    })();
+    this._dataModelCompatibilityPromise = promise;
+    promise.finally(() => {
+      if (this._dataModelCompatibilityPromise === promise) {
+        this._dataModelCompatibilityPromise = null;
+      }
+    });
+    return promise;
   }
 
   /**
@@ -11656,6 +11712,11 @@ function normalizeNodeCapabilitiesResponse(payload) {
     defaultCompileTarget: ToriiClient._normalizeUnsignedInteger(
       record.default_compile_target,
       "node capabilities response.default_compile_target",
+      { allowZero: false },
+    ),
+    dataModelVersion: ToriiClient._normalizeUnsignedInteger(
+      record.data_model_version,
+      "node capabilities response.data_model_version",
       { allowZero: false },
     ),
     crypto: {

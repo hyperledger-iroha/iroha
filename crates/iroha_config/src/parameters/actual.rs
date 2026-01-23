@@ -3816,9 +3816,14 @@ pub struct Sumeragi {
 /// NPoS configuration bundle.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiNpos {
-    /// Target block time.
+    /// Target block time (fallback only).
+    ///
+    /// On-chain `SumeragiParameters.block_time_ms` is authoritative for both permissioned and
+    /// NPoS modes. This value is used only when on-chain parameters are missing or invalid.
     pub block_time: Duration,
-    /// Pacemaker per-phase timeouts.
+    /// Pacemaker per-phase timeouts (fallback only).
+    ///
+    /// On-chain `sumeragi_npos_parameters` overrides these values when present.
     pub timeouts: SumeragiNposTimeouts,
     /// VRF commit/reveal windows.
     pub vrf: SumeragiNposVrf,
@@ -3851,6 +3856,41 @@ pub struct SumeragiNposTimeouts {
     pub da: Duration,
     /// Timeout before validators widen redundant collector fanout.
     pub aggregator: Duration,
+}
+
+fn scale_ratio_at_least_one(value: u64, numerator: u64, denominator: u64) -> u64 {
+    let scaled =
+        (value as u128 * numerator as u128 + (denominator as u128 / 2)) / denominator as u128;
+    let scaled = u64::try_from(scaled).unwrap_or(u64::MAX);
+    scaled.max(1)
+}
+
+impl SumeragiNposTimeouts {
+    /// Derive per-phase timeouts from the provided block time using safe ratios.
+    #[must_use]
+    pub fn from_block_time(block_time: Duration) -> Self {
+        let mut block_time_ms = u64::try_from(block_time.as_millis()).unwrap_or(u64::MAX);
+        if block_time_ms == 0 {
+            block_time_ms = defaults::sumeragi::npos::BLOCK_TIME_MS;
+        }
+        let derive = |default_timeout_ms| {
+            Duration::from_millis(scale_ratio_at_least_one(
+                block_time_ms,
+                default_timeout_ms,
+                defaults::sumeragi::npos::BLOCK_TIME_MS,
+            ))
+        };
+        Self {
+            propose: derive(defaults::sumeragi::npos::TIMEOUT_PROPOSE_MS),
+            prevote: derive(defaults::sumeragi::npos::TIMEOUT_PREVOTE_MS),
+            precommit: derive(defaults::sumeragi::npos::TIMEOUT_PRECOMMIT_MS),
+            exec: derive(defaults::sumeragi::npos::TIMEOUT_EXEC_MS),
+            witness: derive(defaults::sumeragi::npos::TIMEOUT_WITNESS_MS),
+            commit: derive(defaults::sumeragi::npos::TIMEOUT_COMMIT_MS),
+            da: derive(defaults::sumeragi::npos::TIMEOUT_DA_MS),
+            aggregator: derive(defaults::sumeragi::npos::TIMEOUT_AGG_MS),
+        }
+    }
 }
 
 /// VRF window configuration.
@@ -7294,5 +7334,69 @@ impl Default for FraudMonitoring {
             required_minimum_band: None,
             attesters: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn npos_timeouts_from_block_time_defaults() {
+        let defaults_ms = defaults::sumeragi::npos::BLOCK_TIME_MS;
+        let timeouts =
+            SumeragiNposTimeouts::from_block_time(Duration::from_millis(defaults_ms));
+        assert_eq!(
+            timeouts.propose,
+            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_PROPOSE_MS)
+        );
+        assert_eq!(
+            timeouts.prevote,
+            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_PREVOTE_MS)
+        );
+        assert_eq!(
+            timeouts.precommit,
+            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_PRECOMMIT_MS)
+        );
+        assert_eq!(
+            timeouts.exec,
+            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_EXEC_MS)
+        );
+        assert_eq!(
+            timeouts.witness,
+            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_WITNESS_MS)
+        );
+        assert_eq!(
+            timeouts.commit,
+            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_COMMIT_MS)
+        );
+        assert_eq!(
+            timeouts.da,
+            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_DA_MS)
+        );
+        assert_eq!(
+            timeouts.aggregator,
+            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_AGG_MS)
+        );
+    }
+
+    #[test]
+    fn npos_timeouts_scale_with_block_time() {
+        let base_ms = defaults::sumeragi::npos::BLOCK_TIME_MS;
+        let scaled_ms = base_ms.saturating_mul(2);
+        let timeouts =
+            SumeragiNposTimeouts::from_block_time(Duration::from_millis(scaled_ms));
+        assert_eq!(
+            timeouts.propose,
+            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_PROPOSE_MS * 2)
+        );
+        assert_eq!(
+            timeouts.commit,
+            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_COMMIT_MS * 2)
+        );
+        assert_eq!(
+            timeouts.da,
+            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_DA_MS * 2)
+        );
     }
 }

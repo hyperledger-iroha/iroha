@@ -451,6 +451,18 @@ Use the QR stream helpers when passing offline receipts or bundles between devic
   `SAKURA_REDUCED_MOTION_SKIN` for accessibility, and `SAKURA_LOW_POWER_SKIN` for battery-friendly
   animations.
 
+## Petal stream handoff (custom scanner)
+
+Petal stream renders the same QR stream frames as a sakura petal field and requires a custom
+scanner:
+
+- **Encode grids:** `OfflinePetalStream.Encoder.encodeGrids(...)` selects a consistent grid size
+  for a frame set.
+- **CameraX scanner:** `OfflinePetalStreamCameraXScanner` samples luminance and feeds decoded
+  frames into `OfflineQrStream.Decoder`.
+- **Manual sampling:** use `OfflinePetalStream.Sampler.sampleGridFromLuma(...)` or
+  `sampleGridFromRgba(...)` with your own rendering pipeline.
+
 `OfflineTransferPayloads.attachPlatformSnapshot(...)` wires this JSON snippet into either the
 in-memory map passed to the Norito encoder or a staged envelope pulled from disk:
 
