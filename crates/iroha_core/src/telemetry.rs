@@ -3613,7 +3613,7 @@ impl StateTelemetry {
 
     /// Set DAG vertices/edges for the latest validated block.
     pub fn set_pipeline_dag(&self, lane_id: LaneId, vertices: u64, edges: u64) {
-        if self.nexus_lane_metrics_enabled() {
+        if self.is_enabled() {
             self.record_lane_placeholders(lane_id);
             self.metrics.pipeline_dag_vertices.set(vertices);
             self.metrics.pipeline_dag_edges.set(edges);
@@ -11187,6 +11187,18 @@ mod tests {
         assert_eq!(metrics.pipeline_detached_prepared.get(), 3);
         assert_eq!(metrics.pipeline_detached_merged.get(), 2);
         assert_eq!(metrics.pipeline_detached_fallback.get(), 1);
+    }
+
+    #[test]
+    fn state_telemetry_pipeline_dag_emits_without_nexus() {
+        let metrics = Arc::new(Metrics::default());
+        let st = StateTelemetry::new(metrics.clone(), true);
+        st.set_nexus_enabled(false);
+
+        st.set_pipeline_dag(LaneId::SINGLE, 7, 3);
+
+        assert_eq!(metrics.pipeline_dag_vertices.get(), 7);
+        assert_eq!(metrics.pipeline_dag_edges.get(), 3);
     }
 
     #[test]
