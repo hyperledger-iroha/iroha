@@ -349,6 +349,7 @@ fn minimal_config_snapshot() {
                 require_sm_handshake_match: true,
                 require_sm_openssl_preview_match: true,
                 idle_timeout: 300s,
+                connect_startup_delay: 0ns,
                 peer_gossip_period: 1s,
                 peer_gossip_max_period: 30s,
                 trust_gossip: true,
@@ -776,7 +777,7 @@ fn minimal_config_snapshot() {
                     worker_concurrency: 4,
                     backoff_initial_secs: 5,
                     backoff_max_secs: 60,
-                    default_slash_penalty_nano: 1_000_000_000,
+                    default_slash_penalty_nano: 1000000000,
                 },
                 sorafs_gc: SorafsGc {
                     enabled: false,
@@ -1077,7 +1078,7 @@ fn minimal_config_snapshot() {
                     reconfig: SumeragiNposReconfig {
                         evidence_horizon_blocks: 7200,
                         activation_lag_blocks: 1,
-                        slashing_delay_blocks: 259_200,
+                        slashing_delay_blocks: 259200,
                     },
                 },
                 use_stake_snapshot_roster: false,
@@ -1999,13 +2000,17 @@ fn minimal_config_snapshot() {
                     access_kind: Authenticated,
                     channel_salt: "iroha.soranet.channel.seed.v1",
                     provision_spool_dir: "./storage/streaming/soranet_routes",
-                    provision_spool_max_bytes: Bytes(0),
+                    provision_spool_max_bytes: Bytes(
+                        13743895347,
+                    ),
                     provision_window_segments: 4,
                     provision_queue_capacity: 256,
                 },
                 soravpn: StreamingSoravpn {
                     provision_spool_dir: "./storage/streaming/soravpn_routes",
-                    provision_spool_max_bytes: Bytes(0),
+                    provision_spool_max_bytes: Bytes(
+                        13743895347,
+                    ),
                 },
                 sync: StreamingSync {
                     enabled: false,

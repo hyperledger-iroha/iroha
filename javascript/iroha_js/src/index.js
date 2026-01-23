@@ -136,6 +136,18 @@ export {
   writeOfflineEnvelopeFile,
 } from "./offlineEnvelope.js";
 export {
+  OfflineQrPayloadKind,
+  OfflineQrStreamDecoder,
+  OfflineQrStreamEncoder,
+  OfflineQrStreamFrame,
+  OfflineQrStreamFrameKind,
+  OfflineQrStreamScanSession,
+  OfflineQrStreamOptions,
+  OfflineQrStreamEnvelope,
+  OfflineQrStreamTheme,
+  sakuraQrStreamTheme,
+} from "./offlineQrStream.js";
+export {
   OfflineCounterJournal,
   OfflineCounterJournalError,
   OfflineCounterPlatform,
@@ -220,12 +232,14 @@ import * as noritoNamespace from "./norito.js";
 import * as cryptoNamespace from "./crypto.js";
 import * as offlineNamespace from "./offlineEnvelope.js";
 import * as offlineCounterNamespace from "./offlineCounterJournal.js";
+import * as offlineQrStreamNamespace from "./offlineQrStream.js";
 
 export const Torii = toriiNamespace;
 export const Norito = noritoNamespace;
 export const Crypto = cryptoNamespace;
 export const Offline = offlineNamespace;
 export const OfflineCounters = offlineCounterNamespace;
+export const OfflineQrStream = offlineQrStreamNamespace;
 export {
   ConnectError,
   ConnectErrorCategory,

@@ -13,6 +13,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use crate::state::StateViewContextGuard;
 use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use eyre::{Result, eyre};
 use iroha_config::parameters::actual::{
@@ -3419,6 +3420,10 @@ impl Actor {
         if quorum_timeout == Duration::ZERO {
             return self.blocking_pending_blocks_len();
         }
+        let stall_grace = self
+            .config
+            .pacemaker_pending_stall_grace
+            .min(quorum_timeout);
         let view = self.state.view();
         let tip_height = view.height();
         let tip_hash = view.latest_block_hash();
@@ -3443,7 +3448,8 @@ impl Actor {
                 if pending.commit_qc_seen {
                     return true;
                 }
-                pending.progress_age(now) < quorum_timeout
+                let progress_age = pending.progress_age(now);
+                progress_age >= stall_grace && progress_age < quorum_timeout
             })
             .count()
     }
@@ -8333,6 +8339,7 @@ impl Actor {
         let tick_start = Instant::now();
         self.tick_counter = self.tick_counter.saturating_add(1);
         if self.tick_counter.is_multiple_of(50) {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.heartbeat");
             let view = self.state.view();
             let backpressure = self.queue_backpressure_state();
             iroha_logger::info!(
@@ -8346,6 +8353,7 @@ impl Actor {
         }
         let mut progress = self.tick_mode_management();
         let expired_culled = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.cull_expired");
             let view = self.state.view();
             self.queue.cull_expired_entries_if_due(&view)
         };
@@ -8357,28 +8365,39 @@ impl Actor {
         let queue_len = self.queue.active_len();
         let adaptive_progress = self.apply_adaptive_observability(now);
         let (refresh_progress, refresh_cost) = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.refresh_backpressure_state");
             let step_start = Instant::now();
             let progress = self.refresh_backpressure_state();
             (progress, step_start.elapsed())
         };
         let (committed_progress, committed_poll_cost) = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.poll_committed_blocks");
             let step_start = Instant::now();
             let progress = self.poll_committed_blocks();
             (progress, step_start.elapsed())
         };
-        let deferred_qc_progress = self.try_replay_deferred_qcs();
-        let deferred_vote_progress = self.try_replay_deferred_votes();
+        let deferred_qc_progress = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.replay_deferred_qcs");
+            self.try_replay_deferred_qcs()
+        };
+        let deferred_vote_progress = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.replay_deferred_votes");
+            self.try_replay_deferred_votes()
+        };
         let (missing_block_progress, missing_block_cost) = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.retry_missing_block");
             let step_start = Instant::now();
             let progress = self.retry_missing_block_requests(now);
             (progress, step_start.elapsed())
         };
         let (reschedule_progress, reschedule_cost) = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.reschedule_pending");
             let step_start = Instant::now();
             let progress = self.reschedule_stale_pending_blocks();
             (progress, step_start.elapsed())
         };
         let (idle_view_progress, idle_view_cost) = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.force_view_change_if_idle");
             let step_start = Instant::now();
             let progress = self.force_view_change_if_idle(now);
             (progress, step_start.elapsed())
@@ -8407,11 +8426,15 @@ impl Actor {
         {
             self.pending.commit_pipeline_wakeup = false;
             let pipeline_start = Instant::now();
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.commit_pipeline");
             self.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick);
             commit_pipeline_cost = pipeline_start.elapsed();
             progress = true;
         }
-        let proposal_backpressure = self.proposal_backpressure_at(now);
+        let proposal_backpressure = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.proposal_backpressure");
+            self.proposal_backpressure_at(now)
+        };
         if let Some(telemetry) = self.telemetry_handle() {
             let pending_blocks_total = self.pending.pending_blocks.len() as u64;
             let pending_blocks_blocking = if pending_blocks_total == 0 {
@@ -8435,6 +8458,7 @@ impl Actor {
             && self.subsystems.commit.inflight.is_none()
         {
             let propose_start = Instant::now();
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.pacemaker_propose_ready");
             if self.on_pacemaker_propose_ready(now) {
                 progress = true;
             }
@@ -8461,6 +8485,7 @@ impl Actor {
         }
         if should_attempt_proposal && self.subsystems.commit.inflight.is_none() {
             let propose_start = Instant::now();
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.pacemaker_attempt");
             if self.on_pacemaker_propose_ready(now) {
                 progress = true;
             }
