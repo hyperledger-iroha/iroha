@@ -68,6 +68,8 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<TransferBox>,
     dispatch_instruction::<SetKeyValueBox>,
     dispatch_instruction::<RemoveKeyValueBox>,
+    dispatch_instruction::<SetAssetKeyValue>,
+    dispatch_instruction::<RemoveAssetKeyValue>,
     dispatch_instruction::<AddSignatory>,
     dispatch_instruction::<RemoveSignatory>,
     dispatch_instruction::<SetAccountQuorum>,
@@ -771,6 +773,37 @@ mod tests {
             .get(&key)
             .cloned();
         assert_eq!(value, Some(vec![1_u32, 2_u32, 3_u32,].into()));
+        Ok(())
+    }
+
+    #[test]
+    async fn instruction_box_handles_asset_metadata() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_test_domains(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut state_transaction = state_block.transaction();
+        let account_id = ALICE_ID.clone();
+        let asset_definition_id = "rose#wonderland".parse::<AssetDefinitionId>()?;
+        let asset_id = AssetId::new(asset_definition_id, account_id.clone());
+        Mint::asset_numeric(numeric!(1), asset_id.clone())
+            .execute(&account_id, &mut state_transaction)?;
+
+        let key = "note".parse::<Name>()?;
+        let value = Json::from(norito::json!("demo"));
+        InstructionBox::from(SetAssetKeyValue::new(asset_id.clone(), key.clone(), value))
+            .execute(&account_id, &mut state_transaction)?;
+        InstructionBox::from(RemoveAssetKeyValue::new(asset_id.clone(), key))
+            .execute(&account_id, &mut state_transaction)?;
+
+        state_transaction.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        let metadata = view.world.asset_metadata().get(&asset_id);
+        assert!(metadata.is_none(), "asset metadata should be cleared");
         Ok(())
     }
 
