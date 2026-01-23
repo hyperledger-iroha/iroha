@@ -2,8 +2,14 @@
 
 Last update: 2026-01-23
 
+- Integration tests: wait for all peers to reach the post-registration block height before querying alias/compressed account literals in `accounts_query_accepts_alias_and_compressed_filter_literals`.
+- Tests: `cargo test -p integration_tests --test address_canonicalisation accounts_query_accepts_alias_and_compressed_filter_literals -- --nocapture` (skipped: sandboxed network restriction).
 - Integration tests: register alias-domain accounts in separate blocking transactions so `accounts_query_accepts_alias_and_compressed_filter_literals` avoids permission gating.
 - Tests: not run (not requested).
+- Sumeragi NPoS config: derive optional timeouts/VRF windows from `block_time_ms` and `epoch_length_blocks`; updated docs and unit tests.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Tests: `cargo test -p iroha_config sumeragi_npos -- --nocapture` (ok).
+- Tests: `cargo test --workspace` (aborted by user request; full workspace tests not run).
 - Consensus ingress: treat `BlockCreated` as critical traffic (no bulk drops) so non-leader peers receive payloads; updated ingress tests and guardrail docs/config template.
 - Tests: not run (not requested).
 - Android SDK: preserve canonical instruction fixtures, fix QR stream envelope sizing, and align signer prehash expectations in tests; JS SDK: normalize encoded `@domain` error handling, relax canonical-account-id assertions, and use fixture authority hints in parity checks.
