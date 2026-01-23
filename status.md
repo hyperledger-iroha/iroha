@@ -2,6 +2,16 @@
 
 Last update: 2026-01-23
 
+- Client: limit transaction-committed fallback query to a single entrypoint-hash match with pagination/fetch-size caps to avoid timeout-prone full-history scans.
+- Tests: `cargo test -p iroha transaction_committed_limits_query_params` (ok).
+- Build: `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target-localnet31 cargo build --release -p iroha_kagami -p iroha_cli -p irohad` (ok).
+- Localnet (permissioned, 7 peers, 753ms, telemetry=extended, tick_work_budget_cap_ms=150, validation workers=2, commit queues=2/2): `/private/tmp/iroha-localnet-7peer-run170-perm` (25180/26100). 50 TPS for 100-block target (25k tx, 1s `/metrics` sampling) → `blocks_non_empty` +109 over 513.39s (avg block interval 4.71s), admitted 48.1 TPS, `view_change_install_total=2` (`view_change_suggest_total=1`). Logs: `metrics_peer0_50tps_100blocks.log`, `load_50tps_100blocks.log`; view-change logs show "no proposal observed before cutoff".
+- Localnet (permissioned, same run). 12 min 50 TPS (36k tx, 1s `/metrics` sampling) → `blocks_non_empty` +118 over 728.74s (avg block interval 6.18s), admitted 49.0 TPS, `view_change_install_total=19` (`view_change_suggest_total=11`). Logs: `metrics_peer0_50tps_12min.log`, `load_50tps_12min.log`.
+- Localnet (NPoS, 7 peers, 753ms, telemetry=extended, tick_work_budget_cap_ms=150, validation workers=2, commit queues=2/2): `/private/tmp/iroha-localnet-7peer-run171-npos` (25280/26200). 50 TPS for 100-block target (25k tx, 1s `/metrics` sampling) → `blocks_non_empty` +89 over 506.14s (avg block interval 5.69s), admitted 49.0 TPS, committed estimate 49.4 TPS, `view_change_install_total=5` (`view_change_suggest_total=2`). Logs: `metrics_peer0_50tps_100blocks.log`, `load_50tps_100blocks.log`; view-change logs show "no proposal observed before cutoff".
+- Localnet (NPoS, same run). 12 min 50 TPS (36k tx, 1s `/metrics` sampling) → `blocks_non_empty` +132 over 740.07s (avg block interval 5.61s), admitted 48.4 TPS, committed estimate 48.9 TPS, `view_change_install_total=7` (`view_change_suggest_total=3`). Logs: `metrics_peer0_50tps_12min.log`, `load_50tps_12min.log`.
+- Sumeragi tests: ensure all `sumeragi/main_loop` tests that spin up a harness send shutdown signals so background network/gossiper tasks exit cleanly; prevents `cargo test -p iroha_core` from hanging.
+- Tests: not run (not requested).
+
 - Integration tests: wait for all peers to reach the post-registration block height before querying alias/compressed account literals in `accounts_query_accepts_alias_and_compressed_filter_literals`.
 - Tests: `cargo test -p integration_tests --test address_canonicalisation accounts_query_accepts_alias_and_compressed_filter_literals -- --nocapture` (skipped: sandboxed network restriction).
 - Integration tests: register alias-domain accounts in separate blocking transactions so `accounts_query_accepts_alias_and_compressed_filter_literals` avoids permission gating.

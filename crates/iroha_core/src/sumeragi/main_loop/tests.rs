@@ -1810,6 +1810,7 @@ async fn actor_initializes_mode_tag_in_telemetry_snapshot() {
         metrics.sumeragi_mode_tag(),
         crate::sumeragi::consensus::NPOS_TAG.to_string()
     );
+    harness.shutdown.send();
 }
 
 fn on_chain_permissioned_collector_params(actor: &Actor) -> (usize, u8) {
@@ -2611,6 +2612,7 @@ async fn merge_committee_signatures_commit_merge_entry() {
     let candidate = crate::merge::MergeLedgerCandidate::from(entry.as_ref());
     let expected = crate::merge::merge_qc_message_digest(&actor.chain_id, &candidate);
     assert_eq!(entry.merge_qc.message_digest, expected);
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2682,6 +2684,7 @@ async fn merge_committee_accepts_remote_signature() {
     assert_eq!(entry.epoch_id, candidate.epoch_id);
     assert_eq!(entry.merge_qc.signers_bitmap, vec![0x03]);
     assert!(!entry.merge_qc.aggregate_signature.is_empty());
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2722,6 +2725,7 @@ async fn latest_committed_qc_uses_epoch_for_height() {
         .expect("latest committed qc");
     assert_eq!(qc.height, 2);
     assert_eq!(qc.epoch, 0);
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2740,6 +2744,7 @@ async fn epoch_for_height_from_view_matches_epoch_for_height() {
     };
 
     assert_eq!(actual, expected);
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -28382,6 +28387,7 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
     assert_eq!(snapshot.last_cause.as_deref(), Some("missing_qc"));
 
     super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -33113,6 +33119,7 @@ async fn handle_evidence_uses_subject_height_prf_seed() {
     let key = crate::sumeragi::evidence::evidence_key(&evidence);
     let view = actor.state.world.consensus_evidence.view();
     assert!(view.get(&key).is_some(), "evidence should be recorded");
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -33202,6 +33209,7 @@ async fn handle_evidence_uses_subject_height_mode_tag() {
     let key = crate::sumeragi::evidence::evidence_key(&evidence);
     let view = actor.state.world.consensus_evidence.view();
     assert!(view.get(&key).is_some(), "evidence should be recorded");
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -33249,6 +33257,7 @@ async fn censorship_evidence_triggers_view_change() {
 
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.censorship_evidence_total, 1);
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -33305,6 +33314,7 @@ async fn handle_vote_uses_height_prf_seed() {
     actor.handle_vote(vote);
     let key = (Phase::Prepare, height, view, epoch, signer);
     assert!(actor.vote_log.contains_key(&key), "vote should be recorded");
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -33578,6 +33588,7 @@ async fn handle_qc_uses_height_prf_seed() {
         qc.epoch,
     );
     assert!(actor.qc_cache.contains_key(&key), "QC should be cached");
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -33828,6 +33839,7 @@ async fn leader_index_for_uses_height_prf_seed() {
         Some(&expected_peer),
         "leader should match height-based seed selection"
     );
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -34623,6 +34635,7 @@ async fn on_block_commit_persists_new_epoch_seed_record() {
         .expect("new epoch record should exist");
     assert_eq!(record.seed, current_seed);
     assert!(!record.finalized, "new epoch record should be in-progress");
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -34954,6 +34967,7 @@ async fn pacemaker_keeps_new_view_entries_with_pending_txs() {
         count_after >= count_before,
         "NEW_VIEW tracker entries should survive pending tx proposals"
     );
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -36241,6 +36255,7 @@ async fn pacemaker_does_not_fallback_to_view_zero_after_view_change() {
             .is_none(),
         "view 0 proposal must not be assembled after the view advances"
     );
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -36329,6 +36344,7 @@ async fn pacemaker_ignores_stale_new_view_entries() {
         0,
         "stale NEW_VIEW entries should be pruned"
     );
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -36401,6 +36417,7 @@ async fn pacemaker_retains_new_view_entries_when_parent_missing() {
         2,
         "NEW_VIEW votes should remain recorded when assembly defers"
     );
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -36718,6 +36735,7 @@ async fn stale_block_created_keeps_committed_qcs() {
         actor.qc_cache.contains_key(&key),
         "committed QCs should survive stale BlockCreated drops"
     );
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -47174,6 +47192,7 @@ async fn parent_hash_for_uses_inflight_block() {
         .actor
         .parent_hash_for(child.hash(), child.header().height().get());
     assert_eq!(got, Some(parent.hash()));
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -47198,6 +47217,7 @@ async fn parent_hash_for_uses_pending_processing_parent() {
         .actor
         .parent_hash_for(block_hash, child.header().height().get());
     assert_eq!(got, Some(parent.hash()));
+    harness.shutdown.send();
 }
 
 #[test]
@@ -49175,6 +49195,7 @@ async fn rbc_stale_view_accepts_when_da_enabled() {
         !drop,
         "DA-enabled nodes must accept stale-view RBC messages for active pending blocks"
     );
+    harness.shutdown.send();
 }
 
 #[tokio::test]
@@ -49232,6 +49253,7 @@ async fn rbc_stale_view_drops_without_active_block() {
         drop,
         "stale-view RBC messages should drop without an active block"
     );
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -51477,6 +51499,7 @@ async fn vrf_snapshot_uses_epoch_manager_params() {
     assert_eq!(record.epoch_length, 12);
     assert_eq!(record.commit_deadline_offset, 4);
     assert_eq!(record.reveal_deadline_offset, 9);
+    harness.shutdown.send();
 }
 
 #[test]
