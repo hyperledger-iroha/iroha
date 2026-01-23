@@ -332,7 +332,7 @@ pub enum QrPayloadKindArg {
 }
 
 impl QrPayloadKindArg {
-    fn label(&self) -> &'static str {
+    pub(super) fn label(&self) -> &'static str {
         match self {
             Self::Unspecified => "unspecified",
             Self::OfflineToOnlineTransfer => "offline_to_online_transfer",
@@ -924,6 +924,23 @@ mod tests {
         let encoded = encode_frame_bytes(payload, QrFrameEncoding::Base64).expect("encode");
         let decoded = decode_frame_bytes(&encoded, QrFrameEncoding::Base64).expect("decode");
         assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn qr_payload_kind_labels() {
+        let cases = [
+            (QrPayloadKindArg::Unspecified, "unspecified"),
+            (
+                QrPayloadKindArg::OfflineToOnlineTransfer,
+                "offline_to_online_transfer",
+            ),
+            (QrPayloadKindArg::OfflineSpendReceipt, "offline_spend_receipt"),
+            (QrPayloadKindArg::OfflineEnvelope, "offline_envelope"),
+        ];
+
+        for (kind, expected) in cases {
+            assert_eq!(kind.label(), expected);
+        }
     }
 
     #[test]

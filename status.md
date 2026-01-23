@@ -2,6 +2,8 @@
 
 Last update: 2026-01-24
 
+- CLI offline petal: expose QR payload-kind labels for petal manifests and add unit coverage.
+- Tests: not run (not requested).
 - Sumeragi config: pacemaker block time now resolves from on-chain `SumeragiParameters.block_time_ms` (fallback to `sumeragi.npos.block_time_ms` pre-genesis), NPoS timeouts derive from that value, and deprecated `sumeragi_npos_parameters.block_time_ms` is warned/ignored; DA docs/templates now call availability evidence advisory (commit does not gate).
 - Tests: not run (not requested).
 - Torii node capabilities now advertise `data_model_version`; Swift `ToriiClient` enforces it on transaction submission and surfaces `ToriiClientError.incompatibleDataModel`; JS + Python SDKs enforce it for submissions with `ToriiDataModelCompatibilityError`/`DataModelCompatibilityError`, with tests/docs updated.

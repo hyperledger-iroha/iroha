@@ -17258,8 +17258,38 @@ test("http errors expose structured fields", async () => {
 });
 
 test("http errors surface reject header codes", async () => {
-  const fetchImpl = async () =>
-    createResponse({
+  const fetchImpl = async (url) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          supported_abi_versions: [1],
+          default_compile_target: 1,
+          data_model_version: 1,
+          crypto: {
+            sm: {
+              enabled: false,
+              default_hash: "sha2_256",
+              allowed_signing: ["ed25519"],
+              sm2_distid_default: "",
+              openssl_preview: false,
+              acceleration: {
+                scalar: true,
+                neon_sm3: false,
+                neon_sm4: false,
+                policy: "scalar-only",
+              },
+            },
+            curves: {
+              registry_version: 1,
+              allowed_curve_ids: [1],
+            },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return createResponse({
       status: 400,
       jsonData: { message: "failed to accept transaction" },
       headers: {
@@ -17267,6 +17297,7 @@ test("http errors surface reject header codes", async () => {
         "x-iroha-reject-code": "PRTRY:TX_SIGNATURE_MISSING",
       },
     });
+  };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
     () => client.submitTransaction(new Uint8Array([0x01, 0x02])),
