@@ -112,10 +112,12 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # rbc_pending_session_limit = 256       # max pending RBC sessions before INIT
 # msg_channel_cap_blocks = 256          # block message capacity (block sync updates, params, etc.)
 # control_msg_channel_cap = 1024        # control/background/lane channel capacity
-# worker_iteration_budget_cap_ms = 2000 # cap worker drain budget per iteration
-# pacemaker_active_pending_soft_limit = 0    # allow proposals with <= N blocking pending blocks (0 = strict)
-# pacemaker_rbc_backlog_session_soft_limit = 0 # allow proposals with <= N backlog sessions (0 = strict)
-# pacemaker_rbc_backlog_chunk_soft_limit = 0   # allow proposals with <= N missing chunks (0 = strict)
+# worker_iteration_budget_cap_ms = 2000       # cap worker loop time budget per iteration
+# worker_iteration_drain_budget_cap_ms = 2000 # cap mailbox drain per iteration
+# pacemaker_pending_stall_grace_ms = 250       # grace before pending progress counts as stalled
+# pacemaker_active_pending_soft_limit = 1      # allow proposals with <= N blocking pending blocks (0 = strict)
+# pacemaker_rbc_backlog_session_soft_limit = 2 # allow proposals with <= N backlog sessions (0 = strict)
+# pacemaker_rbc_backlog_chunk_soft_limit = 16  # allow proposals with <= N missing chunks (0 = strict)
 # msg_channel_cap = 100                 # fallback when per-queue caps are omitted
 # commit_inflight_timeout_ms = 30000
 # missing_block_signer_fallback_attempts = 1 # fetch from commit certificate signers before falling back to full topology

@@ -8283,6 +8283,7 @@ impl Actor {
         tick_max_gap = tick_max_gap.max(tick_min_gap);
 
         cfg.time_budget = time_budget;
+        cfg.drain_budget_cap = self.config.worker_iteration_drain_budget_cap;
         cfg.vote_rx_drain_budget = vote_rx_drain_budget;
         cfg.block_payload_rx_drain_budget = non_vote_drain_budget;
         cfg.block_rx_drain_budget = block_rx_drain_budget;
