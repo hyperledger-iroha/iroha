@@ -5648,6 +5648,7 @@ async fn fetch_pending_block_attaches_cached_qc() {
 
     // BlockCreated bypasses the background queue; verify no BlockSyncUpdate leaked in.
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    eprintln!("background posts: {posts:#?}");
     let mut found = false;
     for post in posts {
         if let BackgroundPost::Post {
@@ -27830,6 +27831,7 @@ async fn trigger_view_change_uses_commit_qc_roster_for_new_view_vote() {
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
     consensus_cfg.rbc.chunk_max_bytes = 1024;
+    consensus_cfg.debug.disable_background_worker = true;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let _guard = status::view_change_proof_test_guard();
     status::reset_commit_certs_for_tests();
@@ -34071,12 +34073,27 @@ async fn assemble_proposal_schedules_rbc_after_proposal_messages() {
         .expect("push tx");
 
     let height = 1u64;
-    let view = 0u64;
     let highest_qc = sample_qc_ref(0, 0);
     let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, _, prf_seed) = actor.consensus_context_for_height(height);
+    let seed = prf_seed.expect("PRF seed available");
+    topology.canonicalize_order();
+    topology.shuffle_prf(seed, height);
+    let local_pos = topology
+        .position(actor.common_config.peer.id().public_key())
+        .expect("local peer in topology");
+    let view = u64::try_from(local_pos).expect("view fits u64");
+    let leader_index = actor
+        .leader_index_for(&mut topology, height, view)
+        .expect("leader index");
     let local_idx = actor
-        .local_validator_index(&actor.state.view())
+        .local_validator_index_for_topology(&topology)
         .expect("local validator index");
+    let leader_index_u32 = u32::try_from(leader_index).expect("leader index fits u32");
+    assert_eq!(
+        leader_index_u32, local_idx,
+        "local peer must be leader for proposal assembly"
+    );
 
     let _ = harness.background_rx.try_iter().count();
     let assembled = actor
@@ -34085,7 +34102,7 @@ async fn assemble_proposal_schedules_rbc_after_proposal_messages() {
             view,
             highest_qc,
             &mut topology,
-            /*leader_index*/ 0,
+            /*leader_index*/ leader_index,
             /*local_validator_index*/ local_idx,
             Instant::now(),
         )
@@ -41642,7 +41659,7 @@ fn qc_extends_locked_rejects_conflicting_block_hash() {
 
 #[test]
 fn bitmap_count_matches_min_votes_for_commit() {
-    // Roster len 5 → f=1 → min_votes=3; bitmap with bits 0,1,2 set counts to 3.
+    // Bitmap with min_votes_for_commit signers should satisfy quorum.
     let chain: ChainId = "qc-bitmap-count".parse().expect("chain id parses");
     let peer_keys: Vec<_> = (0..5)
         .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
@@ -41652,6 +41669,14 @@ fn bitmap_count_matches_min_votes_for_commit() {
         .map(|kp| PeerId::new(kp.public_key().clone()))
         .collect();
     let topology = super::network_topology::Topology::new(peers);
+    let required = topology.min_votes_for_commit();
+    let signer_indices: Vec<u32> = (0..required as u32).collect();
+    let signers: BTreeSet<ValidatorIndex> = signer_indices
+        .iter()
+        .copied()
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index parses"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x62; Hash::LENGTH]));
     let qc = qc_with_bitmap(
@@ -41660,14 +41685,14 @@ fn bitmap_count_matches_min_votes_for_commit() {
         4,
         1,
         0,
-        vec![0b0000_0111], // signers 0,1,2 present
+        signers_bitmap,
         crate::sumeragi::consensus::Phase::Commit,
         &topology,
         &peer_keys,
     );
 
     let mut vote_log = BTreeMap::new();
-    for signer in [0u32, 1u32, 2u32] {
+    for signer in signer_indices {
         let mut vote = crate::sumeragi::consensus::Vote {
             phase: crate::sumeragi::consensus::Phase::Commit,
             block_hash,

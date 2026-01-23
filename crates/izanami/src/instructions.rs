@@ -1151,9 +1151,9 @@ impl ChaosState {
     }
 
     fn plan_set_asset_metadata(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let asset = self.random_asset_instance(rng).unwrap_or_else(|_| {
-            AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone())
-        });
+        let asset = self
+            .random_asset_instance(rng)
+            .unwrap_or_else(|_| AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone()));
         let key: Name = format!("asset_flag_{}", self.bump_metadata())
             .parse()
             .map_err(|_| eyre!("failed to parse asset metadata key"))?;
@@ -1178,9 +1178,9 @@ impl ChaosState {
     }
 
     fn plan_remove_asset_metadata(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let asset = self.random_asset_instance(rng).unwrap_or_else(|_| {
-            AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone())
-        });
+        let asset = self
+            .random_asset_instance(rng)
+            .unwrap_or_else(|_| AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone()));
         if let Some(keys) = self.asset_metadata.get_mut(&asset) {
             if let Some(existing) = keys.iter().next().cloned() {
                 keys.remove(&existing);

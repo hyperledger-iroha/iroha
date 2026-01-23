@@ -6574,8 +6574,7 @@ impl SumeragiNposTimeouts {
     ) -> Option<actual::SumeragiNposTimeouts> {
         let mut valid = true;
 
-        let mut resolve_timeout =
-            |value: Option<u64>, field: &'static str, derived: u64| -> u64 {
+        let mut resolve_timeout = |value: Option<u64>, field: &'static str, derived: u64| -> u64 {
             match value {
                 Some(value) => {
                     if value == 0 {
