@@ -221,7 +221,7 @@ handle_era/sub_nonce 最小値、missing dataspace の拒否を検証する。
 
 | 症状 | 最初の確認 | 推奨対処 |
 |------|------------|----------|
-| `iroha_slot_duration_ms` の p95 が 1 000 ms を超える | `/telemetry/metrics` の Prometheus エクスポートと最新 `/v1/sumeragi/rbc` で DA ディファーを確認し、`ci/acceptance/slot_1s.yml` の直近アーティファクトと比較。 | AMX バッチサイズを下げる、または追加の RBC collectors（`sumeragi.npos.k_aggregators`）を有効化し、acceptance harness を再実行して証跡を取得。 |
+| `iroha_slot_duration_ms` の p95 が 1 000 ms を超える | `/telemetry/metrics` の Prometheus エクスポートと最新 `/v1/sumeragi/rbc` で DA ディファーを確認し、`ci/acceptance/slot_1s.yml` の直近アーティファクトと比較。 | AMX バッチサイズを下げる、または追加の RBC collectors（`sumeragi.collectors.k`）を有効化し、acceptance harness を再実行して証跡を取得。 |
 | missing availability の急増 | `/v1/sumeragi/rbc/sessions` の backlog と attester の健全性ダッシュボード。 | 不健全な attesters を外し、`redundant_send_r` を一時的に上げて配信を速め、`status.md` に記録。 |
 | `PVO_MISSING_OR_EXPIRED` が頻発 | Proof service のキャッシュメトリクスとスケジューラログ。 | 古い PVO を再生成し、ローテーション周期を短縮し、SDK が `expiry_slot` 前に handle を更新するようにする。 |
 | `AMX_LOCK_CONFLICT` または `AMX_TIMEOUT` が頻発 | `iroha_amx_lock_conflicts_total`, `iroha_amx_prepare_ms`, 該当 manifest。 | Norito static analyzer を再実行し、read/write selectors を修正（またはバッチ分割）、更新済み manifest fixtures を公開。 |

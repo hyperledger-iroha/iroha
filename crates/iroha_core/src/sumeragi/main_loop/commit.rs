@@ -21,9 +21,6 @@ pub(super) enum EpochRefreshPhase {
     PostCommit,
 }
 
-const COMMIT_WORK_QUEUE_CAP: usize = 1;
-const COMMIT_RESULT_QUEUE_CAP: usize = 1;
-
 #[derive(Debug)]
 pub(super) struct CommitWork {
     pub(super) id: u64,
@@ -92,9 +89,13 @@ pub(super) fn spawn_commit_worker(
     chain_id: ChainId,
     genesis_account: AccountId,
     wake_tx: Option<mpsc::SyncSender<()>>,
+    work_queue_cap: usize,
+    result_queue_cap: usize,
 ) -> CommitWorkerHandle {
-    let (work_tx, work_rx) = mpsc::sync_channel::<CommitWork>(COMMIT_WORK_QUEUE_CAP);
-    let (result_tx, result_rx) = mpsc::sync_channel::<CommitResult>(COMMIT_RESULT_QUEUE_CAP);
+    let work_queue_cap = work_queue_cap.max(1);
+    let result_queue_cap = result_queue_cap.max(1);
+    let (work_tx, work_rx) = mpsc::sync_channel::<CommitWork>(work_queue_cap);
+    let (result_tx, result_rx) = mpsc::sync_channel::<CommitResult>(result_queue_cap);
     let join_handle = std::thread::Builder::new()
         .name("sumeragi-commit".to_owned())
         .spawn(move || {
@@ -1068,8 +1069,8 @@ impl Actor {
                     pending_height,
                     pending_view,
                     now,
-                    self.config.kura_store_retry_interval,
-                    self.config.kura_store_retry_max_attempts,
+                    self.config.persistence.kura_retry_interval,
+                    self.config.persistence.kura_retry_max_attempts,
                     self.queue.as_ref(),
                     self.state.as_ref(),
                     self.telemetry_handle(),
@@ -1802,7 +1803,7 @@ impl Actor {
 
 impl Actor {
     pub(super) fn process_commit_candidates(&mut self) {
-        self.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event);
+        self.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event, None);
     }
 
     pub(in crate::sumeragi) fn poll_commit_results(&mut self) -> bool {
@@ -1810,7 +1811,7 @@ impl Actor {
     }
 
     fn abort_inflight_commit_if_timed_out(&mut self, now: Instant) -> bool {
-        let timeout = self.config.commit_inflight_timeout;
+        let timeout = self.config.persistence.commit_inflight_timeout;
         if timeout.is_zero() {
             return false;
         }
@@ -1892,6 +1893,21 @@ impl Actor {
         true
     }
 
+    fn commit_pipeline_budget_exhausted(
+        &mut self,
+        tick_deadline: Option<Instant>,
+        now: Instant,
+    ) -> bool {
+        let Some(deadline) = tick_deadline else {
+            return false;
+        };
+        if now < deadline {
+            return false;
+        }
+        self.pending.commit_pipeline_wakeup = true;
+        true
+    }
+
     #[allow(clippy::needless_pass_by_value)]
     fn handle_validation_reject(
         &mut self,
@@ -1944,10 +1960,14 @@ impl Actor {
     pub(super) fn process_commit_candidates_with_trigger(
         &mut self,
         trigger: CommitPipelineTrigger,
+        tick_deadline: Option<Instant>,
     ) {
         let _ = self.drain_commit_results();
         let now = Instant::now();
         let _ = self.abort_inflight_commit_if_timed_out(now);
+        if self.commit_pipeline_budget_exhausted(tick_deadline, now) {
+            return;
+        }
 
         if matches!(trigger, CommitPipelineTrigger::Event) {
             let _ = self.reschedule_stale_pending_blocks();
@@ -1990,6 +2010,9 @@ impl Actor {
             self.telemetry
                 .note_commit_pipeline_tick(self.mode_tag(), true);
         }
+        if self.commit_pipeline_budget_exhausted(tick_deadline, Instant::now()) {
+            return;
+        }
 
         let block_time = {
             let view = self.state.view();
@@ -2014,6 +2037,9 @@ impl Actor {
         pending_hashes
             .sort_by(|(h1, v1, hash1), (h2, v2, hash2)| (h1, v1, hash1).cmp(&(h2, v2, hash2)));
         for (pending_height, pending_view, hash) in pending_hashes {
+            if self.commit_pipeline_budget_exhausted(tick_deadline, Instant::now()) {
+                break;
+            }
             let block_start = Instant::now();
             let validation_start = Instant::now();
             let (consensus_mode, _, _) = self.consensus_context_for_height(pending_height);
@@ -2314,6 +2340,9 @@ impl Actor {
             }
             self.pending.pending_processing.set(None);
             self.pending.pending_processing_parent.set(None);
+            if self.commit_pipeline_budget_exhausted(tick_deadline, Instant::now()) {
+                break;
+            }
         }
     }
 
@@ -4117,8 +4146,8 @@ impl Actor {
                         .or(self.npos_collectors)
                         .unwrap_or(NposCollectorConfig {
                             seed,
-                            k: self.config.npos.k_aggregators,
-                            redundant_send_r: self.config.npos.redundant_send_r,
+                            k: self.config.collectors.k,
+                            redundant_send_r: self.config.collectors.redundant_send_r,
                         }),
                 )
             } else {
@@ -4651,7 +4680,7 @@ impl Actor {
         let world = self.state.world.view();
         self.roster_validation_cache.refresh_from_world(
             &world,
-            self.config.epoch_length_blocks,
+            self.config.npos.epoch_length_blocks,
             Some(&self.common_config.trusted_peers.value().pops),
         );
         drop(world);
@@ -5095,6 +5124,8 @@ mod tests {
             chain_id.clone(),
             genesis_account_id.clone(),
             Some(wake_tx),
+            1,
+            1,
         );
 
         let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
@@ -5161,6 +5192,8 @@ mod tests {
             chain_id.clone(),
             genesis_account_id.clone(),
             Some(wake_tx),
+            1,
+            1,
         );
 
         let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())

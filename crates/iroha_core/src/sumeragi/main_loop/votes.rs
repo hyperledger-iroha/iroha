@@ -616,7 +616,7 @@ impl Actor {
             now,
             retry_window,
             None,
-            self.config.missing_block_signer_fallback_attempts,
+            self.config.recovery.missing_block_signer_fallback_attempts,
         );
         let dwell = self
             .pending
@@ -1197,7 +1197,7 @@ impl Actor {
             now,
             retry_window,
             None,
-            self.config.missing_block_signer_fallback_attempts,
+            self.config.recovery.missing_block_signer_fallback_attempts,
         );
         let dwell = self
             .pending

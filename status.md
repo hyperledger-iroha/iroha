@@ -4,6 +4,8 @@ Last update: 2026-01-23
 
 - Consensus ingress: treat `BlockCreated` as critical traffic (no bulk drops) so non-leader peers receive payloads; updated ingress tests and guardrail docs/config template.
 - Tests: not run (not requested).
+- Android SDK: preserve canonical instruction fixtures, fix QR stream envelope sizing, and align signer prehash expectations in tests; JS SDK: normalize encoded `@domain` error handling, relax canonical-account-id assertions, and use fixture authority hints in parity checks.
+- Tests: `ANDROID_HOME=/Users/mtakemiya/Library/Android/sdk JAVA_HOME=/Library/Java/JavaVirtualMachines/openjdk-21.jdk/Contents/Home ./gradlew test -Pandroid.useAndroidX=true` (ok); `npm test` in `javascript/iroha_js` (ok).
 - Swift offline receipts: align test receipt amounts to allowance scale (2dp) and update scale-mismatch expectation in `OfflineReceiptBuilderTests`/`OfflineWalletReceiptTests`.
 - Tests: `swift test` (ok).
 - Test network: build `iroha3d` with `--features expensive-telemetry` so `/metrics` is populated during throughput runs; added a unit test for the build args.
@@ -18,6 +20,12 @@ Last update: 2026-01-23
 - OFFLINE-QR-STREAM: added `iroha offline qr encode/decode` with SVG/PNG/GIF/APNG export; added Swift/Android/JS QrStream codecs + scan pipelines + playback skins; updated QR stream spec and SDK/offline docs.
 - OFFLINE-QR-STREAM: fixed payload-kind tag fallback and CLI QR manifest JSON construction.
 - Tests: `cargo test -p iroha_data_model qr_stream -- --nocapture` (ok); `cargo test -p iroha_cli qr_ -- --nocapture` (ok).
+- Sumeragi config: update core config access paths (recovery/gating/debug/rbc) to match nested config keys; fix compile errors after nesting.
+- Tests: not run (config path updates only).
+- Client API: fix consensus JSON serialization to use `mode_flip_enabled` field.
+- Tests: not run (not requested).
+- Sumeragi config rationalization: nested config keys applied across docs/templates/translations (collectors/block/queues/pacemaker/da/persistence/recovery/gating/rbc); legacy flat-key mentions removed.
+- Tests: not run (docs/config-template updates only).
 - Integration tests: update `iroha_cli` command paths for executor upgrade and domain listing (`ops executor`, `ledger domain`).
 - Tests: `cargo test -p integration_tests --test iroha_cli can_upgrade_executor -- --nocapture` (ok); `cargo test -p integration_tests --test iroha_cli reads_client_toml_by_default -- --nocapture` (ok).
 - Sumeragi worker loop: added `worker_iteration_drain_budget_cap_ms` to cap per-iteration mailbox drain time; config/docs updated; new unit coverage.

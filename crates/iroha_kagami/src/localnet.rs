@@ -1123,43 +1123,50 @@ fn render_peer_config(
     // Align runtime toggles with the build line: iroha3 requires DA (RBC + availability tracking);
     // other lines keep the generator defaults (currently disabled for iroha2, but can be flipped
     // manually if desired).
-    sumeragi.insert("da_enabled".into(), Value::Boolean(da_rbc_enabled));
-    sumeragi.insert(
-        "da_quorum_timeout_multiplier".into(),
+    let mut da = Table::new();
+    da.insert("enabled".into(), Value::Boolean(da_rbc_enabled));
+    da.insert(
+        "quorum_timeout_multiplier".into(),
         Value::Integer(i64::from(LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER)),
     );
-    sumeragi.insert(
-        "da_availability_timeout_multiplier".into(),
+    da.insert(
+        "availability_timeout_multiplier".into(),
         Value::Integer(i64::from(LOCALNET_DA_AVAILABILITY_TIMEOUT_MULTIPLIER)),
     );
-    sumeragi.insert(
-        "da_availability_timeout_floor_ms".into(),
+    da.insert(
+        "availability_timeout_floor_ms".into(),
         Value::Integer(
             i64::try_from(LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS)
                 .expect("LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS fits i64"),
         ),
     );
-    sumeragi.insert(
-        "rbc_chunk_max_bytes".into(),
+    sumeragi.insert("da".into(), Value::Table(da));
+
+    let mut rbc = Table::new();
+    rbc.insert(
+        "chunk_max_bytes".into(),
         Value::Integer(
             i64::try_from(LOCALNET_RBC_CHUNK_MAX_BYTES)
                 .expect("LOCALNET_RBC_CHUNK_MAX_BYTES fits i64"),
         ),
     );
-    sumeragi.insert(
-        "rbc_payload_chunks_per_tick".into(),
+    rbc.insert(
+        "payload_chunks_per_tick".into(),
         Value::Integer(
             i64::try_from(LOCALNET_RBC_PAYLOAD_CHUNKS_PER_TICK)
                 .expect("LOCALNET_RBC_PAYLOAD_CHUNKS_PER_TICK fits i64"),
         ),
     );
-    sumeragi.insert("enable_bls".into(), Value::Boolean(true));
-    sumeragi.insert(
+    sumeragi.insert("rbc".into(), Value::Table(rbc));
+
+    let mut persistence = Table::new();
+    persistence.insert(
         "commit_inflight_timeout_ms".into(),
         Value::Integer(
             i64::try_from(commit_inflight_timeout_ms).expect("commit_inflight_timeout_ms fits i64"),
         ),
     );
+    sumeragi.insert("persistence".into(), Value::Table(persistence));
 
     let mut nexus = Table::new();
     nexus.insert("enabled".into(), Value::Boolean(nexus_enabled));
@@ -1212,45 +1219,43 @@ fn render_peer_config(
         .expect("LOCALNET_MSG_CHANNEL_CAP_BLOCKS fits i64");
     let control_msg_channel_cap = i64::try_from(LOCALNET_CONTROL_MSG_CHANNEL_CAP)
         .expect("LOCALNET_CONTROL_MSG_CHANNEL_CAP fits i64");
-    sumeragi.insert(
-        "msg_channel_cap_votes".into(),
-        Value::Integer(msg_channel_cap_votes),
-    );
-    sumeragi.insert(
-        "msg_channel_cap_block_payload".into(),
+    let mut queues = Table::new();
+    queues.insert("votes".into(), Value::Integer(msg_channel_cap_votes));
+    queues.insert(
+        "block_payload".into(),
         Value::Integer(msg_channel_cap_block_payload),
     );
-    sumeragi.insert(
-        "msg_channel_cap_rbc_chunks".into(),
+    queues.insert(
+        "rbc_chunks".into(),
         Value::Integer(msg_channel_cap_rbc_chunks),
     );
-    sumeragi.insert(
-        "msg_channel_cap_blocks".into(),
-        Value::Integer(msg_channel_cap_blocks),
-    );
-    sumeragi.insert(
-        "control_msg_channel_cap".into(),
-        Value::Integer(control_msg_channel_cap),
-    );
+    queues.insert("blocks".into(), Value::Integer(msg_channel_cap_blocks));
+    queues.insert("control".into(), Value::Integer(control_msg_channel_cap));
+    sumeragi.insert("queues".into(), Value::Table(queues));
+
+    let mut collectors = Table::new();
     if let Some(collectors_k) = collectors_k {
-        sumeragi.insert(
-            "collectors_k".into(),
-            Value::Integer(i64::from(collectors_k)),
-        );
+        collectors.insert("k".into(), Value::Integer(i64::from(collectors_k)));
     }
     if let Some(redundant_send_r) = redundant_send_r {
-        sumeragi.insert(
-            "collectors_redundant_send_r".into(),
+        collectors.insert(
+            "redundant_send_r".into(),
             Value::Integer(i64::from(redundant_send_r)),
         );
     }
-    sumeragi.insert(
+    if !collectors.is_empty() {
+        sumeragi.insert("collectors".into(), Value::Table(collectors));
+    }
+
+    let mut block = Table::new();
+    block.insert(
         "proposal_queue_scan_multiplier".into(),
         Value::Integer(
             i64::try_from(LOCALNET_PROPOSAL_QUEUE_SCAN_MULTIPLIER)
                 .expect("LOCALNET_PROPOSAL_QUEUE_SCAN_MULTIPLIER fits i64"),
         ),
     );
+    sumeragi.insert("block".into(), Value::Table(block));
     root.insert("sumeragi".into(), Value::Table(sumeragi));
 
     let mut pipeline = Table::new();
@@ -2469,45 +2474,45 @@ mod tests {
             "localnet should delay outbound dials to reduce startup connect errors"
         );
         assert_eq!(
-            parsed.sumeragi.msg_channel_cap_votes, LOCALNET_MSG_CHANNEL_CAP_VOTES,
+            parsed.sumeragi.queues.votes, LOCALNET_MSG_CHANNEL_CAP_VOTES,
             "localnet should raise vote channel caps to avoid RBC stalls"
         );
         assert_eq!(
-            parsed.sumeragi.msg_channel_cap_block_payload, LOCALNET_MSG_CHANNEL_CAP_BLOCK_PAYLOAD,
+            parsed.sumeragi.queues.block_payload, LOCALNET_MSG_CHANNEL_CAP_BLOCK_PAYLOAD,
             "localnet should raise block payload caps to avoid RBC stalls"
         );
         assert_eq!(
-            parsed.sumeragi.msg_channel_cap_rbc_chunks, LOCALNET_MSG_CHANNEL_CAP_RBC_CHUNKS,
+            parsed.sumeragi.queues.rbc_chunks, LOCALNET_MSG_CHANNEL_CAP_RBC_CHUNKS,
             "localnet should raise RBC chunk caps to avoid drops"
         );
         assert_eq!(
-            parsed.sumeragi.msg_channel_cap_blocks, LOCALNET_MSG_CHANNEL_CAP_BLOCKS,
+            parsed.sumeragi.queues.blocks, LOCALNET_MSG_CHANNEL_CAP_BLOCKS,
             "localnet should raise block message caps to avoid drops"
         );
         assert_eq!(
-            parsed.sumeragi.control_msg_channel_cap, LOCALNET_CONTROL_MSG_CHANNEL_CAP,
-            "localnet should raise control_msg_channel_cap alongside data channels"
+            parsed.sumeragi.queues.control, LOCALNET_CONTROL_MSG_CHANNEL_CAP,
+            "localnet should raise queues.control alongside data channels"
         );
         assert_eq!(
-            parsed.sumeragi.da_quorum_timeout_multiplier, LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER,
+            parsed.sumeragi.da.quorum_timeout_multiplier, LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER,
             "localnet should set DA commit-quorum timeout multiplier"
         );
         assert_eq!(
-            parsed.sumeragi.da_availability_timeout_multiplier,
+            parsed.sumeragi.da.availability_timeout_multiplier,
             LOCALNET_DA_AVAILABILITY_TIMEOUT_MULTIPLIER,
             "localnet should tune DA availability timeout multiplier"
         );
         assert_eq!(
-            parsed.sumeragi.da_availability_timeout_floor,
+            parsed.sumeragi.da.availability_timeout_floor,
             Duration::from_millis(LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS),
             "localnet should set DA availability timeout floor"
         );
         assert_eq!(
-            parsed.sumeragi.rbc_chunk_max_bytes, LOCALNET_RBC_CHUNK_MAX_BYTES,
+            parsed.sumeragi.rbc.chunk_max_bytes, LOCALNET_RBC_CHUNK_MAX_BYTES,
             "localnet should raise RBC chunk size for large payloads"
         );
         assert_eq!(
-            parsed.sumeragi.rbc_payload_chunks_per_tick, LOCALNET_RBC_PAYLOAD_CHUNKS_PER_TICK,
+            parsed.sumeragi.rbc.payload_chunks_per_tick, LOCALNET_RBC_PAYLOAD_CHUNKS_PER_TICK,
             "localnet should pace RBC payload chunk fanout"
         );
         assert_eq!(
@@ -2521,7 +2526,7 @@ mod tests {
             "localnet should raise per-user queue capacity for bursts"
         );
         assert_eq!(
-            parsed.sumeragi.proposal_queue_scan_multiplier.get(),
+            parsed.sumeragi.block.proposal_queue_scan_multiplier.get(),
             LOCALNET_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
             "localnet should cap proposal scan work to keep block cadence"
         );
@@ -2623,7 +2628,7 @@ mod tests {
             LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MAX_MS,
         );
         assert_eq!(
-            parsed.sumeragi.commit_inflight_timeout,
+            parsed.sumeragi.persistence.commit_inflight_timeout,
             Duration::from_millis(expected_timeout),
             "localnet should tune commit inflight timeout to the fast pipeline"
         );
@@ -2688,8 +2693,8 @@ mod tests {
 
         let source = TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
         let parsed = actual::Root::from_toml_source(source).expect("config should parse");
-        assert_eq!(parsed.sumeragi.collectors_k, 3);
-        assert_eq!(parsed.sumeragi.collectors_redundant_send_r, 2);
+        assert_eq!(parsed.sumeragi.collectors.k, 3);
+        assert_eq!(parsed.sumeragi.collectors.redundant_send_r, 2);
         let expected_filter: Directives = LOCALNET_PERF_LOGGER_FILTER
             .parse()
             .expect("perf logger filter should parse");
@@ -3543,12 +3548,18 @@ mod tests {
                 .and_then(toml::Value::as_table)
                 .expect("sumeragi table");
             assert_eq!(
-                sumeragi.get("da_enabled").and_then(toml::Value::as_bool),
+                sumeragi
+                    .get("da")
+                    .and_then(toml::Value::as_table)
+                    .and_then(|da| da.get("enabled"))
+                    .and_then(toml::Value::as_bool),
                 Some(expected),
                 "peer config should reflect build line"
             );
             let redundant = sumeragi
-                .get("collectors_redundant_send_r")
+                .get("collectors")
+                .and_then(toml::Value::as_table)
+                .and_then(|collectors| collectors.get("redundant_send_r"))
                 .and_then(toml::Value::as_integer)
                 .and_then(|value| u8::try_from(value).ok());
             let expected_redundant = if expected {

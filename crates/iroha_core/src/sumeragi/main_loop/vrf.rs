@@ -573,9 +573,9 @@ impl Actor {
         let (epoch_length, commit_deadline_offset, reveal_deadline_offset) =
             self.epoch_manager.as_ref().map_or(
                 (
-                    self.config.epoch_length_blocks,
-                    self.config.vrf_commit_deadline_offset,
-                    self.config.vrf_reveal_deadline_offset,
+                    self.config.npos.epoch_length_blocks,
+                    self.config.npos.vrf.commit_deadline_offset_blocks,
+                    self.config.npos.vrf.reveal_deadline_offset_blocks,
                 ),
                 |manager| {
                     (

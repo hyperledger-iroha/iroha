@@ -333,9 +333,9 @@ pub(crate) fn load_npos_epoch_params(
 ) -> NposEpochParams {
     view.world.sumeragi_npos_parameters().map_or(
         NposEpochParams {
-            epoch_length_blocks: config.epoch_length_blocks,
-            commit_deadline_offset: config.vrf_commit_deadline_offset,
-            reveal_deadline_offset: config.vrf_reveal_deadline_offset,
+            epoch_length_blocks: config.npos.epoch_length_blocks,
+            commit_deadline_offset: config.npos.vrf.commit_deadline_offset_blocks,
+            reveal_deadline_offset: config.npos.vrf.reveal_deadline_offset_blocks,
         },
         |params| {
             let commit_window = params.vrf_commit_window_blocks();
@@ -7660,14 +7660,14 @@ impl SumeragiStartArgs {
             da_spool_dir,
         } = self;
 
-        status::set_commit_cert_history_cap(config.commit_cert_history_cap);
-        status::set_commit_inflight_timeout(config.commit_inflight_timeout);
+        status::set_commit_cert_history_cap(config.finality.commit_cert_history_cap);
+        status::set_commit_inflight_timeout(config.persistence.commit_inflight_timeout);
 
-        let vote_channel_cap = config.msg_channel_cap_votes.max(1);
-        let block_payload_channel_cap = config.msg_channel_cap_block_payload.max(1);
-        let rbc_chunk_channel_cap = config.msg_channel_cap_rbc_chunks.max(1);
-        let block_channel_cap = config.msg_channel_cap_blocks.max(1);
-        let control_msg_channel_cap = config.control_msg_channel_cap.max(1);
+        let vote_channel_cap = config.queues.votes.max(1);
+        let block_payload_channel_cap = config.queues.block_payload.max(1);
+        let rbc_chunk_channel_cap = config.queues.rbc_chunks.max(1);
+        let block_channel_cap = config.queues.blocks.max(1);
+        let control_msg_channel_cap = config.queues.control.max(1);
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(block_payload_channel_cap);
         let (block_tx, block_rx) = mpsc::sync_channel(block_channel_cap);
         let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(rbc_chunk_channel_cap);
@@ -8831,13 +8831,13 @@ impl SumeragiWorker {
         } = self;
         let fallback_block_time = config.npos.block_time;
         let fallback_commit_time = config.npos.timeouts.commit;
-        let msg_channel_cap_block_payload = config.msg_channel_cap_block_payload;
-        let msg_channel_cap_votes = config.msg_channel_cap_votes;
-        let msg_channel_cap_blocks = config.msg_channel_cap_blocks;
-        let msg_channel_cap_rbc_chunks = config.msg_channel_cap_rbc_chunks;
-        let control_msg_channel_cap = config.control_msg_channel_cap;
-        let worker_iteration_budget_cap = config.worker_iteration_budget_cap;
-        let worker_iteration_drain_budget_cap = config.worker_iteration_drain_budget_cap;
+        let msg_channel_cap_block_payload = config.queues.block_payload;
+        let msg_channel_cap_votes = config.queues.votes;
+        let msg_channel_cap_blocks = config.queues.blocks;
+        let msg_channel_cap_rbc_chunks = config.queues.rbc_chunks;
+        let control_msg_channel_cap = config.queues.control;
+        let worker_iteration_budget_cap = config.worker.iteration_budget_cap;
+        let worker_iteration_drain_budget_cap = config.worker.iteration_drain_budget_cap;
         let (block_time, commit_time, da_enabled) = {
             let view = state.view();
             let params = view.world.parameters().sumeragi();
@@ -8858,7 +8858,7 @@ impl SumeragiWorker {
             let da_enabled = params.da_enabled();
             (block_time, commit_time, da_enabled)
         };
-        let da_quorum_timeout_multiplier = config.da_quorum_timeout_multiplier;
+        let da_quorum_timeout_multiplier = config.da.quorum_timeout_multiplier;
         let time_budget = worker_time_budget(
             block_time,
             commit_time,
@@ -8897,7 +8897,7 @@ impl SumeragiWorker {
             }
         };
         let commit_worker_join = actor.attach_commit_worker();
-        let validation_worker_join = actor.attach_validation_worker();
+        let validation_worker_joins = actor.attach_validation_worker();
         let rbc_persist_worker_join: Option<std::thread::JoinHandle<()>> =
             actor.attach_rbc_persist_worker();
         let vote_rx_drain_budget = vote_rx_drain_budget(
@@ -8968,8 +8968,10 @@ impl SumeragiWorker {
         if let Err(err) = commit_worker_join.join() {
             iroha_logger::warn!(?err, "sumeragi commit worker thread exited with error");
         }
-        if let Err(err) = validation_worker_join.join() {
-            iroha_logger::warn!(?err, "sumeragi validation worker thread exited with error");
+        for join in validation_worker_joins {
+            if let Err(err) = join.join() {
+                iroha_logger::warn!(?err, "sumeragi validation worker thread exited with error");
+            }
         }
         if let Some(join) = rbc_persist_worker_join {
             if let Err(err) = join.join() {

@@ -86,7 +86,7 @@ impl Actor {
         let view = block.header().view_change_index();
         let epoch = self.epoch_for_height(height);
         let payload_bytes = super::proposals::block_payload_bytes(block);
-        let chunk_bytes = rbc::chunk_payload_bytes(&payload_bytes, self.config.rbc_chunk_max_bytes);
+        let chunk_bytes = rbc::chunk_payload_bytes(&payload_bytes, self.config.rbc.chunk_max_bytes);
         let chunk_count = chunk_bytes.len();
         if chunk_count == 0 {
             return;

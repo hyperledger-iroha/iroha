@@ -476,7 +476,7 @@ impl NexusProfile {
             fusion: nexus.fusion,
             commit: nexus.commit,
             da: nexus.da,
-            da_enabled: sumeragi.da_enabled,
+            da_enabled: sumeragi.da.enabled,
             config_layer,
         })
     }
@@ -686,7 +686,7 @@ fn build_nexus_layer(nexus: &ActualNexus, sumeragi: &ActualSumeragi) -> Table {
     };
     TomlWriter::new(&mut layer)
         .write(["sumeragi", "consensus_mode"], consensus_mode)
-        .write(["sumeragi", "da_enabled"], sumeragi.da_enabled);
+        .write(["sumeragi", "da", "enabled"], sumeragi.da.enabled);
 
     layer
 }

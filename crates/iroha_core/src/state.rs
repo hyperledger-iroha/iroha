@@ -10906,14 +10906,14 @@ pub struct SumeragiPolicyConfig {
 impl From<&iroha_config::parameters::actual::Sumeragi> for SumeragiPolicyConfig {
     fn from(cfg: &iroha_config::parameters::actual::Sumeragi) -> Self {
         Self {
-            collectors_k: cfg.collectors_k,
-            collectors_redundant_send_r: cfg.collectors_redundant_send_r,
-            policy_flags: SumeragiPolicyFlags::new(cfg.da_enabled, cfg.key_require_hsm),
-            key_activation_lead_blocks: cfg.key_activation_lead_blocks,
-            key_overlap_grace_blocks: cfg.key_overlap_grace_blocks,
-            key_expiry_grace_blocks: cfg.key_expiry_grace_blocks,
-            key_allowed_algorithms: cfg.key_allowed_algorithms.clone(),
-            key_allowed_hsm_providers: cfg.key_allowed_hsm_providers.clone(),
+            collectors_k: cfg.collectors.k,
+            collectors_redundant_send_r: cfg.collectors.redundant_send_r,
+            policy_flags: SumeragiPolicyFlags::new(cfg.da.enabled, cfg.keys.require_hsm),
+            key_activation_lead_blocks: cfg.keys.activation_lead_blocks,
+            key_overlap_grace_blocks: cfg.keys.overlap_grace_blocks,
+            key_expiry_grace_blocks: cfg.keys.expiry_grace_blocks,
+            key_allowed_algorithms: cfg.keys.allowed_algorithms.clone(),
+            key_allowed_hsm_providers: cfg.keys.allowed_hsm_providers.clone(),
         }
     }
 }

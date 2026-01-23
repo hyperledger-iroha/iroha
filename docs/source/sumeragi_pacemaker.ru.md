@@ -13,20 +13,20 @@ translation_last_reviewed: 2026-01-01
 
 Эта заметка описывает политику pacemaker (timer) для Sumeragi и дает рекомендации операторам и примеры. Таймеры определяют, когда лидеры делают propose и когда валидаторы предлагают/входят в новый view после бездействия.
 
-Статус: реализованы базовое окно на основе EMA, порог RTT и настраиваемые пределы jitter/backoff. Интервал предложений pacemaker теперь зажат между целевым block-time и propose timeout с RTT floor, ограничен `sumeragi.pacemaker_max_backoff_ms`. Jitter применяется детерминированно для каждого узла и каждой пары (height, view).
+Статус: реализованы базовое окно на основе EMA, порог RTT и настраиваемые пределы jitter/backoff. Интервал предложений pacemaker теперь зажат между целевым block-time и propose timeout с RTT floor, ограничен `sumeragi.pacemaker.max_backoff_ms`. Jitter применяется детерминированно для каждого узла и каждой пары (height, view).
 
 ## Концепции
 - Базовое окно: экспоненциальная скользящая средняя наблюдаемых фаз консенсуса
   (propose, collect_da, collect_prevote, collect_precommit, commit). EMA
-  инициализируется из `sumeragi.npos.timeouts.*`; пока не набрано достаточно
+  инициализируется из `sumeragi.npos.timeouts.*_ms`; пока не набрано достаточно
   выборок, она фактически совпадает с настроенными значениями по умолчанию.
   EMA `collect_aggregator` экспортируется для наблюдаемости, но не включается в
   окно pacemaker. Сглаженные значения доступны через
   `sumeragi_phase_latency_ema_ms{phase=...}`.
-- Множитель backoff: `sumeragi.pacemaker_backoff_multiplier` (по умолчанию 1). Каждый timeout добавляет `base * multiplier` к текущему окну.
-- RTT floor: `avg_rtt_ms * sumeragi.pacemaker_rtt_floor_multiplier` (по умолчанию 2). Предотвращает слишком агрессивные timeouts на линках с высокой задержкой.
-- Cap: `sumeragi.pacemaker_max_backoff_ms` (по умолчанию 60_000 ms). Жесткий потолок окна.
-- Seed интервала предложений: `max(block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` и никогда не выше `pacemaker_max_backoff_ms`. Это интервал в устойчивом состоянии даже без backoff.
+- Множитель backoff: `sumeragi.pacemaker.backoff_multiplier` (по умолчанию 1). Каждый timeout добавляет `base * multiplier` к текущему окну.
+- RTT floor: `avg_rtt_ms * sumeragi.pacemaker.rtt_floor_multiplier` (по умолчанию 2). Предотвращает слишком агрессивные timeouts на линках с высокой задержкой.
+- Cap: `sumeragi.pacemaker.max_backoff_ms` (по умолчанию 60_000 ms). Жесткий потолок окна.
+- Seed интервала предложений: `max(block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` и никогда не выше `sumeragi.pacemaker.max_backoff_ms`. Это интервал в устойчивом состоянии даже без backoff.
 
 Обновление эффективного окна при timeout:
 - `window = min(cap, max(window + base * backoff_mul, avg_rtt * rtt_floor_mul))`
@@ -37,7 +37,7 @@ translation_last_reviewed: 2026-01-01
 - REST snapshot: `/v1/sumeragi/phases` теперь включает `ema_ms` вместе с последними
   перефазными задержками, чтобы дашборды могли строить тренд EMA без прямого опроса
   Prometheus.
-- Config: `sumeragi_pacemaker_backoff_multiplier`, `sumeragi_pacemaker_rtt_floor_multiplier`, `sumeragi_pacemaker_max_backoff_ms`
+- Config: `sumeragi.pacemaker.backoff_multiplier`, `sumeragi.pacemaker.rtt_floor_multiplier`, `sumeragi.pacemaker.max_backoff_ms`
 
 ## Политика jitter
 Чтобы избежать эффекта стада (синхронизированных timeout), pacemaker поддерживает небольшой jitter на узел вокруг эффективного окна.
@@ -49,7 +49,7 @@ translation_last_reviewed: 2026-01-01
 
 Псевдокод:
 ```
-base = ema_total_ms(view, height)  // seeded by sumeragi.npos.timeouts.*
+base = ema_total_ms(view, height)  // seeded by sumeragi.npos.timeouts.*_ms
 window = min(cap, max(prev + base * backoff_mul, avg_rtt * rtt_floor_mul))
 seed = blake2(chain_id || peer_id || height || view)
 u = (seed % 10_000) as f64 / 10_000.0  // [0, 1)
@@ -106,7 +106,7 @@ Telemetry:
 - Trend backoff: `avg_over_time(sumeragi_pacemaker_backoff_ms[5m])`
 - Inspect RTT floor: `avg_over_time(sumeragi_pacemaker_rtt_floor_ms[5m])`
 - Сравнить EMA с histogram: `sumeragi_phase_latency_ema_ms{phase=...}` рядом с соответствующими перцентилями `sumeragi_phase_latency_ms{phase=...}`
-- Проверить config: `max(sumeragi_pacemaker_backoff_multiplier)`, `max(sumeragi_pacemaker_rtt_floor_multiplier)`, `max(sumeragi_pacemaker_max_backoff_ms)`
+- Проверить config: `max(sumeragi.pacemaker.backoff_multiplier)`, `max(sumeragi.pacemaker.rtt_floor_multiplier)`, `max(sumeragi.pacemaker.max_backoff_ms)`
 
 ## Детерминизм и безопасность
 - Таймеры/backoff/jitter влияют только на то, когда узлы запускают предложения/смены view; они не влияют на валидность подписей или правила commit certificate.

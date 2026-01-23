@@ -904,7 +904,7 @@ impl ConsensusIngressLimiter {
             critical_msg_rate,
             critical_bytes_rate,
             rbc_session_limit,
-            sumeragi.rbc_session_ttl,
+            sumeragi.rbc.session_ttl,
             penalty,
         )
     }
@@ -921,7 +921,7 @@ impl ConsensusIngressLimiter {
         configured: usize,
         sumeragi: &iroha_config::parameters::actual::Sumeragi,
     ) -> usize {
-        if configured == 0 || sumeragi.rbc_session_ttl.is_zero() {
+        if configured == 0 || sumeragi.rbc.session_ttl.is_zero() {
             return configured;
         }
         let block_time = match sumeragi.consensus_mode {
@@ -932,7 +932,7 @@ impl ConsensusIngressLimiter {
                 )
             }
         };
-        Self::rbc_session_limit_from_ttl(configured, sumeragi.rbc_session_ttl, block_time)
+        Self::rbc_session_limit_from_ttl(configured, sumeragi.rbc.session_ttl, block_time)
     }
 
     fn rbc_session_limit_from_ttl(
@@ -3894,10 +3894,10 @@ impl Iroha {
         supervisor.monitor(child);
 
         // Background poster worker for Sumeragi frames; overflow falls back to inline posts.
-        let background_post_tx = if config.sumeragi.debug_disable_background_worker {
+        let background_post_tx = if config.sumeragi.debug.disable_background_worker {
             None
         } else {
-            let bg_cap = config.sumeragi.control_msg_channel_cap.max(1);
+            let bg_cap = config.sumeragi.queues.control.max(1);
             let (bg_tx, bg_rx) =
                 std::sync::mpsc::sync_channel::<iroha_core::sumeragi::BackgroundPost>(bg_cap);
             {
@@ -4042,7 +4042,7 @@ impl Iroha {
             epoch_roster_provider: if matches!(
                 sumeragi_cfg.consensus_mode,
                 iroha_config::parameters::actual::ConsensusMode::Npos
-            ) && sumeragi_cfg.use_stake_snapshot_roster
+            ) && sumeragi_cfg.npos.use_stake_snapshot_roster
             {
                 // Placeholder: map current WSV peers to contiguous indices.
                 let peers: Vec<PeerId> = state.view().world.peers().to_vec();
@@ -4053,16 +4053,16 @@ impl Iroha {
                 None
             },
             rbc_store: Some({
-                let disk_max_bytes =
-                    usize::try_from(sumeragi_cfg.rbc_disk_store_max_bytes).unwrap_or(usize::MAX);
-                let max_bytes = sumeragi_cfg.rbc_store_max_bytes.min(disk_max_bytes);
+                let disk_max_bytes = usize::try_from(sumeragi_cfg.rbc.disk_store_max_bytes)
+                    .unwrap_or(usize::MAX);
+                let max_bytes = sumeragi_cfg.rbc.store_max_bytes.min(disk_max_bytes);
                 RbcStoreConfig {
                     dir: rbc_store_dir.clone(),
-                    max_sessions: sumeragi_cfg.rbc_store_max_sessions,
-                    soft_sessions: sumeragi_cfg.rbc_store_soft_sessions,
+                    max_sessions: sumeragi_cfg.rbc.store_max_sessions,
+                    soft_sessions: sumeragi_cfg.rbc.store_soft_sessions,
                     max_bytes,
-                    soft_bytes: sumeragi_cfg.rbc_store_soft_bytes,
-                    ttl: sumeragi_cfg.rbc_disk_store_ttl,
+                    soft_bytes: sumeragi_cfg.rbc.store_soft_bytes,
+                    ttl: sumeragi_cfg.rbc.disk_store_ttl,
                 }
             }),
             background_post_tx,
@@ -5096,39 +5096,39 @@ description = "lane overrides should be rejected when nexus is disabled"
         let mut enabled_config =
             Config::from_toml_source(TomlSource::inline(minimal_config_table()))
                 .expect("default config");
-        enabled_config.sumeragi.da_enabled = true;
+        enabled_config.sumeragi.da.enabled = true;
 
         enforce_build_line(BuildLine::Iroha2, &mut enabled_config)
             .expect("iroha2 should keep DA configurable");
 
-        assert!(enabled_config.sumeragi.da_enabled);
+        assert!(enabled_config.sumeragi.da.enabled);
 
         let mut disabled_config =
             Config::from_toml_source(TomlSource::inline(minimal_config_table()))
                 .expect("default config");
-        disabled_config.sumeragi.da_enabled = false;
+        disabled_config.sumeragi.da.enabled = false;
 
         enforce_build_line(BuildLine::Iroha2, &mut disabled_config)
             .expect("iroha2 should keep DA configurable");
 
-        assert!(!disabled_config.sumeragi.da_enabled);
+        assert!(!disabled_config.sumeragi.da.enabled);
     }
 
     #[test]
     fn iroha3_rejects_da_disabled() {
         let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
             .expect("default config");
-        config.sumeragi.da_enabled = false;
+        config.sumeragi.da.enabled = false;
 
         let err = enforce_build_line(BuildLine::Iroha3, &mut config)
             .expect_err("iroha3 should reject DA-disabled config");
         let rendered = format!("{err:?}");
         assert!(
-            rendered.contains("sumeragi.da_enabled"),
-            "error should point at sumeragi.da_enabled: {rendered}"
+            rendered.contains("sumeragi.da.enabled"),
+            "error should point at sumeragi.da.enabled: {rendered}"
         );
         assert!(
-            !config.sumeragi.da_enabled,
+            !config.sumeragi.da.enabled,
             "DA override should not mutate the config"
         );
     }
@@ -5137,7 +5137,7 @@ description = "lane overrides should be rejected when nexus is disabled"
     fn iroha3_rejects_permissioned_consensus_with_nexus_enabled() {
         let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
             .expect("default config");
-        config.sumeragi.da_enabled = true;
+        config.sumeragi.da.enabled = true;
         config.nexus.enabled = true;
         config.sumeragi.consensus_mode =
             iroha_config::parameters::actual::ConsensusMode::Permissioned;
@@ -5613,7 +5613,7 @@ fn read_genesis(path: &Path) -> ReportResult<GenesisBlock, ConfigError> {
 
 fn resolve_norito_max_archive_len(cfg: &Config) -> u64 {
     let requested = cfg.norito.max_archive_len;
-    let rbc_store_max = u64::try_from(cfg.sumeragi.rbc_store_max_bytes).unwrap_or(u64::MAX);
+    let rbc_store_max = u64::try_from(cfg.sumeragi.rbc.store_max_bytes).unwrap_or(u64::MAX);
     let max_frame_bytes = u64::try_from(cfg.network.max_frame_bytes).unwrap_or(u64::MAX);
     let resolved = requested.max(rbc_store_max).max(max_frame_bytes);
 
@@ -5664,9 +5664,9 @@ fn apply_norito_config(cfg: &Config) {
 /// - Iroha 2 honours the configured flags (defaults keep DA/RBC off).
 /// - Iroha 3 always requires DA with RBC.
 fn enforce_da_rbc_policy(build_line: BuildLine, config: &Config) -> ReportResult<(), MainError> {
-    if build_line.is_iroha3() && !config.sumeragi.da_enabled {
+    if build_line.is_iroha3() && !config.sumeragi.da.enabled {
         return Err(Report::new(MainError::Config).attach(
-            "Iroha 3 requires DA/RBC; set sumeragi.da_enabled=true in the configuration",
+            "Iroha 3 requires DA/RBC; set sumeragi.da.enabled=true in the configuration",
         ));
     }
     Ok(())
@@ -6103,7 +6103,7 @@ fn run_main(build_line: BuildLine) -> ReportResult<(), MainError> {
     iroha_logger::info!(
         target: "config",
         build_line = %build_line,
-        da_enabled = config.sumeragi.da_enabled,
+        da_enabled = config.sumeragi.da.enabled,
         "Resolved build line and consensus DA policy"
     );
 
@@ -6239,42 +6239,42 @@ fn parse_confidential_registry_hash(payload: &Json) -> ReportResult<Option<[u8; 
 fn build_consensus_config_caps(
     sumeragi: &iroha_config::parameters::actual::Sumeragi,
 ) -> ReportResult<iroha_p2p::ConsensusConfigCaps, StartError> {
-    let collectors_k = u16::try_from(sumeragi.collectors_k).map_err(|_| {
+    let collectors_k = u16::try_from(sumeragi.collectors.k).map_err(|_| {
         Report::new(StartError::StartP2p)
-            .attach("sumeragi.collectors_k exceeds handshake limits (must fit into u16)")
+            .attach("sumeragi.collectors.k exceeds handshake limits (must fit into u16)")
     })?;
-    let rbc_chunk_max_bytes = u64::try_from(sumeragi.rbc_chunk_max_bytes).map_err(|_| {
+    let rbc_chunk_max_bytes = u64::try_from(sumeragi.rbc.chunk_max_bytes).map_err(|_| {
         Report::new(StartError::StartP2p)
-            .attach("sumeragi.rbc_chunk_max_bytes exceeds handshake limits (must fit into u64)")
+            .attach("sumeragi.rbc.chunk_max_bytes exceeds handshake limits (must fit into u64)")
     })?;
-    let rbc_store_max_bytes = u64::try_from(sumeragi.rbc_store_max_bytes).map_err(|_| {
+    let rbc_store_max_bytes = u64::try_from(sumeragi.rbc.store_max_bytes).map_err(|_| {
         Report::new(StartError::StartP2p)
-            .attach("sumeragi.rbc_store_max_bytes exceeds handshake limits (must fit into u64)")
+            .attach("sumeragi.rbc.store_max_bytes exceeds handshake limits (must fit into u64)")
     })?;
-    let rbc_store_soft_bytes = u64::try_from(sumeragi.rbc_store_soft_bytes).map_err(|_| {
+    let rbc_store_soft_bytes = u64::try_from(sumeragi.rbc.store_soft_bytes).map_err(|_| {
         Report::new(StartError::StartP2p)
-            .attach("sumeragi.rbc_store_soft_bytes exceeds handshake limits (must fit into u64)")
+            .attach("sumeragi.rbc.store_soft_bytes exceeds handshake limits (must fit into u64)")
     })?;
-    let rbc_store_max_sessions = u32::try_from(sumeragi.rbc_store_max_sessions).map_err(|_| {
+    let rbc_store_max_sessions = u32::try_from(sumeragi.rbc.store_max_sessions).map_err(|_| {
         Report::new(StartError::StartP2p)
-            .attach("sumeragi.rbc_store_max_sessions exceeds handshake limits (must fit into u32)")
+            .attach("sumeragi.rbc.store_max_sessions exceeds handshake limits (must fit into u32)")
     })?;
     let rbc_store_soft_sessions =
-        u32::try_from(sumeragi.rbc_store_soft_sessions).map_err(|_| {
+        u32::try_from(sumeragi.rbc.store_soft_sessions).map_err(|_| {
             Report::new(StartError::StartP2p).attach(
-                "sumeragi.rbc_store_soft_sessions exceeds handshake limits (must fit into u32)",
+                "sumeragi.rbc.store_soft_sessions exceeds handshake limits (must fit into u32)",
             )
         })?;
-    let rbc_session_ttl_ms = u64::try_from(sumeragi.rbc_session_ttl.as_millis()).map_err(|_| {
+    let rbc_session_ttl_ms = u64::try_from(sumeragi.rbc.session_ttl.as_millis()).map_err(|_| {
         Report::new(StartError::StartP2p).attach(
-            "sumeragi.rbc_session_ttl exceeds handshake limits (must fit into u64 milliseconds)",
+            "sumeragi.rbc.session_ttl exceeds handshake limits (must fit into u64 milliseconds)",
         )
     })?;
 
     Ok(iroha_p2p::ConsensusConfigCaps {
         collectors_k,
-        redundant_send_r: sumeragi.collectors_redundant_send_r,
-        da_enabled: sumeragi.da_enabled,
+        redundant_send_r: sumeragi.collectors.redundant_send_r,
+        da_enabled: sumeragi.da.enabled,
         rbc_chunk_max_bytes,
         rbc_session_ttl_ms,
         rbc_store_max_sessions,
@@ -6933,7 +6933,7 @@ mod tests {
         fn resolves_to_rbc_store_max_when_larger() {
             let mut config = base_config();
             config.norito.max_archive_len = 32 * 1024 * 1024;
-            config.sumeragi.rbc_store_max_bytes = 128 * 1024 * 1024;
+            config.sumeragi.rbc.store_max_bytes = 128 * 1024 * 1024;
             config.network.max_frame_bytes = 64 * 1024 * 1024;
 
             let resolved = resolve_norito_max_archive_len(&config);
@@ -6945,7 +6945,7 @@ mod tests {
         fn preserves_requested_when_already_largest() {
             let mut config = base_config();
             config.norito.max_archive_len = 256 * 1024 * 1024;
-            config.sumeragi.rbc_store_max_bytes = 128 * 1024 * 1024;
+            config.sumeragi.rbc.store_max_bytes = 128 * 1024 * 1024;
             config.network.max_frame_bytes = 64 * 1024 * 1024;
 
             let resolved = resolve_norito_max_archive_len(&config);

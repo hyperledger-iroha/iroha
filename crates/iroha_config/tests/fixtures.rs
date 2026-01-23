@@ -968,82 +968,108 @@ fn minimal_config_snapshot() {
                 fsync_interval: 50ms,
             },
             sumeragi: Sumeragi {
-                debug_force_soft_fork: false,
-                debug_disable_background_worker: false,
-                debug_rbc_drop_every_nth_chunk: None,
-                debug_rbc_shuffle_chunks: false,
-                debug_rbc_duplicate_inits: false,
-                debug_rbc_force_deliver_quorum_one: false,
-                debug_rbc_corrupt_witness_ack: false,
-                debug_rbc_corrupt_ready_signature: false,
-                debug_rbc_drop_validator_mask: 0,
-                debug_rbc_equivocate_chunk_mask: 0,
-                debug_rbc_equivocate_validator_mask: 0,
-                debug_rbc_conflicting_ready_mask: 0,
-                debug_rbc_partial_chunk_mask: 0,
                 role: Validator,
-                allow_view0_slack: false,
-                collectors_k: 1,
-                collectors_redundant_send_r: 1,
-                block_max_transactions: None,
-                block_max_payload_bytes: None,
-                proposal_queue_scan_multiplier: 4,
-                msg_channel_cap_votes: 8192,
-                msg_channel_cap_block_payload: 128,
-                msg_channel_cap_rbc_chunks: 1024,
-                msg_channel_cap_blocks: 256,
-                control_msg_channel_cap: 1024,
-                worker_iteration_budget_cap: 2s,
-                worker_iteration_drain_budget_cap: 2s,
                 consensus_mode: Permissioned,
-                mode_flip_enabled: true,
-                da_enabled: true,
-                da_quorum_timeout_multiplier: 3,
-                da_availability_timeout_multiplier: 2,
-                da_availability_timeout_floor: 2s,
-                kura_store_retry_interval: 1s,
-                kura_store_retry_max_attempts: 5,
-                commit_inflight_timeout: 30s,
-                missing_block_signer_fallback_attempts: 1,
-                membership_mismatch_alert_threshold: 1,
-                membership_mismatch_fail_closed: false,
-                consensus_future_height_window: 8,
-                consensus_future_view_window: 8,
-                invalid_sig_penalty_threshold: 3,
-                invalid_sig_penalty_window: 5s,
-                invalid_sig_penalty_cooldown: 15s,
-                da_max_commitments_per_block: 16,
-                da_max_proof_openings_per_block: 128,
-                proof_policy: Off,
-                commit_cert_history_cap: 512,
-                zk_finality_k: 0,
-                require_precommit_qc: true,
-                rbc_chunk_max_bytes: 262144,
-                rbc_chunk_fanout: None,
-                rbc_pending_max_chunks: 128,
-                rbc_pending_max_bytes: 8388608,
-                rbc_pending_session_limit: 256,
-                rbc_pending_ttl: 30s,
-                rbc_session_ttl: 120s,
-                rbc_rebroadcast_sessions_per_tick: 8,
-                rbc_payload_chunks_per_tick: 64,
-                rbc_store_max_sessions: 1024,
-                rbc_store_soft_sessions: 768,
-                rbc_store_max_bytes: 536870912,
-                rbc_store_soft_bytes: 402653184,
-                rbc_disk_store_ttl: 120s,
-                rbc_disk_store_max_bytes: 536870912,
-                key_activation_lead_blocks: 1,
-                key_overlap_grace_blocks: 8,
-                key_expiry_grace_blocks: 0,
-                key_require_hsm: false,
-                key_allowed_algorithms: {
-                    BlsNormal,
+                mode_flip: SumeragiModeFlip {
+                    enabled: true,
                 },
-                key_allowed_hsm_providers: {
-                    "pkcs11",
-                    "softkey",
-                    "yubihsm",
+                collectors: SumeragiCollectors {
+                    k: 1,
+                    redundant_send_r: 1,
+                },
+                block: SumeragiBlock {
+                    max_transactions: None,
+                    max_payload_bytes: None,
+                    proposal_queue_scan_multiplier: 4,
+                },
+                queues: SumeragiQueues {
+                    votes: 8192,
+                    block_payload: 128,
+                    rbc_chunks: 1024,
+                    blocks: 256,
+                    control: 1024,
+                },
+                worker: SumeragiWorker {
+                    iteration_budget_cap: 2s,
+                    iteration_drain_budget_cap: 2s,
+                    tick_work_budget_cap: 0ms,
+                    validation_worker_threads: 1,
+                    validation_work_queue_cap: 4,
+                    validation_result_queue_cap: 4,
+                },
+                pacemaker: SumeragiPacemaker {
+                    backoff_multiplier: 1,
+                    rtt_floor_multiplier: 2,
+                    max_backoff: 10s,
+                    jitter_frac_permille: 0,
+                    pending_stall_grace: 250ms,
+                    active_pending_soft_limit: 1,
+                    rbc_backlog_session_soft_limit: 2,
+                    rbc_backlog_chunk_soft_limit: 16,
+                },
+                da: SumeragiDa {
+                    enabled: true,
+                    quorum_timeout_multiplier: 3,
+                    availability_timeout_multiplier: 2,
+                    availability_timeout_floor: 2s,
+                    max_commitments_per_block: 16,
+                    max_proof_openings_per_block: 128,
+                },
+                persistence: SumeragiPersistence {
+                    kura_retry_interval: 1s,
+                    kura_retry_max_attempts: 5,
+                    commit_inflight_timeout: 30s,
+                    commit_work_queue_cap: 1,
+                    commit_result_queue_cap: 1,
+                },
+                recovery: SumeragiRecovery {
+                    missing_block_signer_fallback_attempts: 1,
+                },
+                gating: SumeragiGating {
+                    future_height_window: 8,
+                    future_view_window: 8,
+                    invalid_sig_penalty_threshold: 3,
+                    invalid_sig_penalty_window: 5s,
+                    invalid_sig_penalty_cooldown: 15s,
+                    membership_mismatch_alert_threshold: 1,
+                    membership_mismatch_fail_closed: false,
+                },
+                rbc: SumeragiRbc {
+                    chunk_max_bytes: 262144,
+                    chunk_fanout: None,
+                    pending_max_chunks: 128,
+                    pending_max_bytes: 8388608,
+                    pending_session_limit: 256,
+                    pending_ttl: 30s,
+                    session_ttl: 120s,
+                    rebroadcast_sessions_per_tick: 8,
+                    payload_chunks_per_tick: 64,
+                    store_max_sessions: 1024,
+                    store_soft_sessions: 768,
+                    store_max_bytes: 536870912,
+                    store_soft_bytes: 402653184,
+                    disk_store_ttl: 120s,
+                    disk_store_max_bytes: 536870912,
+                },
+                finality: SumeragiFinality {
+                    proof_policy: Off,
+                    commit_cert_history_cap: 512,
+                    zk_finality_k: 0,
+                    require_precommit_qc: true,
+                },
+                keys: SumeragiKeys {
+                    activation_lead_blocks: 1,
+                    overlap_grace_blocks: 8,
+                    expiry_grace_blocks: 0,
+                    require_hsm: false,
+                    allowed_algorithms: {
+                        BlsNormal,
+                    },
+                    allowed_hsm_providers: {
+                        "pkcs11",
+                        "softkey",
+                        "yubihsm",
+                    },
                 },
                 npos: SumeragiNpos {
                     block_time: 1s,
@@ -1057,15 +1083,11 @@ fn minimal_config_snapshot() {
                         da: 650ms,
                         aggregator: 120ms,
                     },
-                    pacemaker_backoff_multiplier: 1,
-                    pacemaker_rtt_floor_multiplier: 2,
-                    pacemaker_max_backoff: 10s,
-                    pacemaker_jitter_frac_permille: 0,
-                    k_aggregators: 3,
-                    redundant_send_r: 2,
                     vrf: SumeragiNposVrf {
                         commit_window_blocks: 100,
                         reveal_window_blocks: 40,
+                        commit_deadline_offset_blocks: 100,
+                        reveal_deadline_offset_blocks: 140,
                     },
                     election: SumeragiNposElection {
                         max_validators: 128,
@@ -1081,20 +1103,9 @@ fn minimal_config_snapshot() {
                         activation_lag_blocks: 1,
                         slashing_delay_blocks: 259200,
                     },
+                    epoch_length_blocks: 3600,
+                    use_stake_snapshot_roster: false,
                 },
-                use_stake_snapshot_roster: false,
-                epoch_length_blocks: 3600,
-                vrf_commit_deadline_offset: 100,
-                vrf_reveal_deadline_offset: 140,
-                pacemaker_backoff_multiplier: 1,
-                pacemaker_rtt_floor_multiplier: 2,
-                pacemaker_max_backoff: 10s,
-                pacemaker_jitter_frac_permille: 0,
-                pacemaker_pending_stall_grace: 250ms,
-                pacemaker_active_pending_soft_limit: 1,
-                pacemaker_rbc_backlog_session_soft_limit: 2,
-                pacemaker_rbc_backlog_chunk_soft_limit: 16,
-                enable_bls: true,
                 adaptive_observability: AdaptiveObservability {
                     enabled: false,
                     qc_latency_alert_ms: 400,
@@ -1102,6 +1113,23 @@ fn minimal_config_snapshot() {
                     pacemaker_extra_ms: 100,
                     collector_redundant_r: 3,
                     cooldown_ms: 5000,
+                },
+                debug: SumeragiDebug {
+                    force_soft_fork: false,
+                    disable_background_worker: false,
+                    rbc: SumeragiDebugRbc {
+                        drop_every_nth_chunk: None,
+                        shuffle_chunks: false,
+                        duplicate_inits: false,
+                        force_deliver_quorum_one: false,
+                        corrupt_witness_ack: false,
+                        corrupt_ready_signature: false,
+                        drop_validator_mask: 0,
+                        equivocate_chunk_mask: 0,
+                        equivocate_validator_mask: 0,
+                        conflicting_ready_mask: 0,
+                        partial_chunk_mask: 0,
+                    },
                 },
             },
             block_sync: BlockSync {
@@ -3214,7 +3242,7 @@ fn collectors_k_validation_propagates() {
         .parse()
         .expect_err("parse should fail for invalid collectors_k");
     let message = format!("{report:?}");
-    assert_contains!(message, "sumeragi.collectors_k must be greater than zero");
+    assert_contains!(message, "sumeragi.collectors.k must be greater than zero");
 }
 
 #[test]
@@ -3231,7 +3259,7 @@ fn da_timeout_multiplier_validation_propagates() {
     let message = format!("{report:?}");
     assert_contains!(
         message,
-        "sumeragi.da_quorum_timeout_multiplier must be greater than zero"
+        "sumeragi.da.quorum_timeout_multiplier must be greater than zero"
     );
 
     let env = MockEnv::new().set("SUMERAGI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER", "0");
@@ -3246,7 +3274,7 @@ fn da_timeout_multiplier_validation_propagates() {
     let message = format!("{report:?}");
     assert_contains!(
         message,
-        "sumeragi.da_availability_timeout_multiplier must be greater than zero"
+        "sumeragi.da.availability_timeout_multiplier must be greater than zero"
     );
 }
 

@@ -74,6 +74,6 @@ translator: manual
 הערות
 - נקודת הקצה זמינה רק כאשר הטלמטריה מופעלת בזמן קומפילציה.
 - מספקת מוני צבירה לפעילות RBC (שידור אמין).
-- כאשר `sumeragi.da_enabled = true`, תהליך ה־commit ממתין ל־`availability evidence` (ולא לאירוע `DELIVER` מקומי של RBC); ה־RBC משמש כמנגנון הפצה/שחזור של ה־payload.
+- כאשר `sumeragi.da.enabled = true`, תהליך ה־commit ממתין ל־`availability evidence` (ולא לאירוע `DELIVER` מקומי של RBC); ה־RBC משמש כמנגנון הפצה/שחזור של ה־payload.
 
 </div>

@@ -846,7 +846,7 @@ impl Actor {
             "routing decisions must align with transactions"
         );
 
-        let chunk_bytes = chunk_payload_bytes(payload, self.config.rbc_chunk_max_bytes);
+        let chunk_bytes = chunk_payload_bytes(payload, self.config.rbc.chunk_max_bytes);
         if chunk_bytes.is_empty() {
             return Ok(None);
         }
@@ -917,11 +917,13 @@ impl Actor {
 
         let drop_every = self
             .config
-            .debug_rbc_drop_every_nth_chunk
+            .debug
+            .rbc
+            .drop_every_nth_chunk
             .and_then(|value| usize::try_from(value.get()).ok());
         let (order, dropped) = compute_chunk_broadcast_order(
             chunk_bytes.len(),
-            self.config.debug_rbc_shuffle_chunks,
+            self.config.debug.rbc.shuffle_chunks,
             shuffle_seed(&block_hash, height, view),
             drop_every,
         );
@@ -974,7 +976,7 @@ impl Actor {
             roster,
         };
 
-        let duplicate_plan = if self.config.debug_rbc_duplicate_inits {
+        let duplicate_plan = if self.config.debug.rbc.duplicate_inits {
             if view == u64::MAX {
                 None
             } else {
@@ -996,7 +998,7 @@ impl Actor {
                 let dup_roster_hash = rbc_roster_hash(&dup_roster);
                 let (dup_order, dup_dropped) = compute_chunk_broadcast_order(
                     chunk_bytes.len(),
-                    self.config.debug_rbc_shuffle_chunks,
+                    self.config.debug.rbc.shuffle_chunks,
                     shuffle_seed(&block_hash, height, dup_view),
                     drop_every,
                 );
@@ -1179,23 +1181,23 @@ impl Actor {
     }
 
     fn should_drop_rbc_for(&self, validator_idx: u32) -> bool {
-        Self::mask_includes(self.config.debug_rbc_drop_validator_mask, validator_idx)
+        Self::mask_includes(self.config.debug.rbc.drop_validator_mask, validator_idx)
     }
 
     fn should_equivocate_rbc_chunk(&self, validator_idx: u32, chunk_idx: u32) -> bool {
         Self::mask_includes(
-            self.config.debug_rbc_equivocate_validator_mask,
+            self.config.debug.rbc.equivocate_validator_mask,
             validator_idx,
         ) && chunk_idx < 64
-            && Self::mask_includes(self.config.debug_rbc_equivocate_chunk_mask, chunk_idx)
+            && Self::mask_includes(self.config.debug.rbc.equivocate_chunk_mask, chunk_idx)
     }
 
     fn should_withhold_chunk(&self, chunk_idx: u32) -> bool {
-        chunk_idx < 64 && Self::mask_includes(self.config.debug_rbc_partial_chunk_mask, chunk_idx)
+        chunk_idx < 64 && Self::mask_includes(self.config.debug.rbc.partial_chunk_mask, chunk_idx)
     }
 
     pub(super) fn should_fork_ready(&self, validator_idx: u32) -> bool {
-        Self::mask_includes(self.config.debug_rbc_conflicting_ready_mask, validator_idx)
+        Self::mask_includes(self.config.debug.rbc.conflicting_ready_mask, validator_idx)
     }
 
     fn mutate_chunk_for_equivocation(bytes: &mut Vec<u8>) {
@@ -1378,7 +1380,7 @@ impl Actor {
         let mut session = match Self::build_rbc_session_from_payload(
             &payload_bytes,
             payload_hash,
-            self.config.rbc_chunk_max_bytes,
+            self.config.rbc.chunk_max_bytes,
             self.epoch_for_height(key.1),
         ) {
             Ok(session) => session,
@@ -1489,7 +1491,7 @@ impl Actor {
             &mut session,
             payload_bytes,
             payload_hash,
-            self.config.rbc_chunk_max_bytes,
+            self.config.rbc.chunk_max_bytes,
         );
 
         if outcome.payload_hash_mismatch {
@@ -1766,7 +1768,7 @@ impl Actor {
             now,
             retry_window,
             view_change_window,
-            self.config.missing_block_signer_fallback_attempts,
+            self.config.recovery.missing_block_signer_fallback_attempts,
         );
         self.pending.missing_block_requests = requests;
         if defer_view_change {
@@ -1907,7 +1909,7 @@ impl Actor {
             now,
             retry_window,
             view_change_window,
-            self.config.missing_block_signer_fallback_attempts,
+            self.config.recovery.missing_block_signer_fallback_attempts,
         );
         self.pending.missing_block_requests = requests;
         if defer_view_change {
@@ -2682,7 +2684,7 @@ impl Actor {
             );
             return Ok(());
         }
-        let max_chunk_bytes = self.config.rbc_chunk_max_bytes.max(1);
+        let max_chunk_bytes = self.config.rbc.chunk_max_bytes.max(1);
         if chunk.bytes.len() > max_chunk_bytes {
             warn!(
                 height = chunk.height,
@@ -2753,7 +2755,7 @@ impl Actor {
                 );
                 warn!(
                     ?key,
-                    limit = self.config.rbc_pending_session_limit,
+                    limit = self.config.rbc.pending_session_limit,
                     dropped_bytes,
                     "dropping pending RBC chunk: stash session limit reached"
                 );
@@ -3004,7 +3006,7 @@ impl Actor {
                         );
                         warn!(
                             ?key,
-                            limit = self.config.rbc_pending_session_limit,
+                            limit = self.config.rbc.pending_session_limit,
                             ready_sender,
                             ready_view,
                             dropped_bytes,
@@ -3132,7 +3134,7 @@ impl Actor {
                     );
                     warn!(
                         ?key,
-                        limit = actor.config.rbc_pending_session_limit,
+                        limit = actor.config.rbc.pending_session_limit,
                         reason,
                         ready_sender,
                         ready_view,
@@ -3811,7 +3813,7 @@ impl Actor {
                         );
                         warn!(
                             ?key,
-                            limit = self.config.rbc_pending_session_limit,
+                            limit = self.config.rbc.pending_session_limit,
                             dropped_bytes,
                             "dropping pending RBC DELIVER: stash session limit reached before INIT"
                         );
@@ -3947,7 +3949,7 @@ impl Actor {
                     );
                     warn!(
                         ?key,
-                        limit = actor.config.rbc_pending_session_limit,
+                        limit = actor.config.rbc.pending_session_limit,
                         reason,
                         dropped_bytes,
                         "dropping pending RBC DELIVER: stash session limit reached"
@@ -4490,7 +4492,7 @@ impl Actor {
                         height = key.1,
                         view = key.2,
                         sender,
-                        limit = self.config.rbc_pending_session_limit,
+                        limit = self.config.rbc.pending_session_limit,
                         dropped_bytes,
                         "dropping deferred RBC DELIVER: stash session limit reached"
                     );
@@ -4931,7 +4933,7 @@ impl Actor {
     }
 
     pub(super) fn prune_stale_rbc_sessions(&mut self, now: SystemTime) -> bool {
-        let ttl = self.config.rbc_session_ttl;
+        let ttl = self.config.rbc.session_ttl;
         if ttl == Duration::ZERO || self.subsystems.da_rbc.rbc.sessions.is_empty() {
             return false;
         }
@@ -5047,8 +5049,8 @@ impl Actor {
     pub(super) fn publish_rbc_backlog_snapshot(&self) {
         let telemetry_ref = self.telemetry_handle();
         let caps = self.pending_rbc_caps();
-        let ttl = self.config.rbc_pending_ttl;
-        let session_limit = self.config.rbc_pending_session_limit;
+        let ttl = self.config.rbc.pending_ttl;
+        let session_limit = self.config.rbc.pending_session_limit;
         Self::update_rbc_backlog_snapshot(
             &self.subsystems.da_rbc.rbc.sessions,
             &self.subsystems.da_rbc.rbc.pending,

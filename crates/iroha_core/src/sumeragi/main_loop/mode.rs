@@ -13,8 +13,8 @@ impl Actor {
         let mut collectors = super::load_npos_collector_config(&view).or_else(|| {
             Some(NposCollectorConfig {
                 seed: super::latest_epoch_seed(&view),
-                k: self.config.npos.k_aggregators,
-                redundant_send_r: self.config.npos.redundant_send_r,
+                k: self.config.collectors.k,
+                redundant_send_r: self.config.collectors.redundant_send_r,
             })
         });
         let epoch_params = super::load_npos_epoch_params(&view, &self.config);

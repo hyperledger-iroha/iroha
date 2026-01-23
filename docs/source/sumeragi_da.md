@@ -3,7 +3,7 @@
 The integration tests [`sumeragi_rbc_da_large_payload_four_peers`] and
 [`sumeragi_rbc_da_large_payload_six_peers`] (defined in
 `integration_tests/tests/sumeragi_da.rs`) spin up four- and six-peer networks
-with `sumeragi.da_enabled = true` (DA + RBC). Each
+with `sumeragi.da.enabled = true` (DA + RBC). Each
 test submits a ≥10&nbsp;MiB log instruction, observes RBC delivery and commit,
 verifies that availability quorum can be formed for the payload, and prints a
 structured summary that can be ingested by dashboards or regression tooling.
@@ -14,7 +14,7 @@ For light-client driven sampling of RBC payloads see
 
 ### DA timeout & advisory warnings
 
-With `da_enabled=true`, the commit pipeline records local payload availability
+With `sumeragi.da.enabled=true`, the commit pipeline records local payload availability
 (`BlockCreated` or RBC delivery) in the DA gate. Availability evidence (availability votes
 or an RBC `READY` quorum) is tracked separately and does not gate commit/finalize, which
 proceeds on the normal commit-certificate thresholds. Missing local payloads are logged for
@@ -23,11 +23,11 @@ operator visibility.
 The availability deadline is derived from the configured block/commit times and the
 DA timeout tuning knobs; it is used to classify missing payloads as "stale" for logging
 and rebroadcast heuristics:
-- `sumeragi.da_quorum_timeout_multiplier` scales `block_time + 4 * commit_time`
+- `sumeragi.da.quorum_timeout_multiplier` scales `block_time + 4 * commit_time`
   when DA is enabled (default `3`).
-- `sumeragi.da_availability_timeout_multiplier` scales the availability timeout
+- `sumeragi.da.availability_timeout_multiplier` scales the availability timeout
   window in DA mode (default `2`).
-- `sumeragi.da_availability_timeout_floor_ms` enforces a minimum availability
+- `sumeragi.da.availability_timeout_floor_ms` enforces a minimum availability
   window (default `2000`, set to `0` to disable the floor).
 Keep these values aligned across validators to avoid divergent view-change
 pacing.
@@ -86,11 +86,11 @@ the full 2f+1 READY quorum.
 
 ## Expected baselines
 
-With the default `sumeragi.rbc_chunk_max_bytes = 256&nbsp;KiB`, the 10.5&nbsp;MiB
+With the default `sumeragi.rbc.chunk_max_bytes = 256&nbsp;KiB`, the 10.5&nbsp;MiB
 instruction (11 010 048 bytes), and `force_deliver_quorum_one` enabled, the
 following invariants hold:
 
-Note: `sumeragi.rbc_chunk_max_bytes` is clamped at startup so serialized RBC
+Note: `sumeragi.rbc.chunk_max_bytes` is clamped at startup so serialized RBC
 chunks fit within the consensus frame plaintext cap derived from
 `network.max_frame_bytes_block_sync`.
 
