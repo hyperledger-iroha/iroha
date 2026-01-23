@@ -2,9 +2,21 @@
 
 Last update: 2026-01-23
 
-- Sumeragi NPoS config: derive optional timeouts/VRF windows from `block_time_ms` and `epoch_length_blocks`; updated docs and unit tests.
+- Izanami workload: metadata removals now set+remove ephemeral keys, asset metadata ops mint before set/remove, and execute-trigger plans register+execute the call trigger in one transaction to avoid missing-trigger failures.
+- Tests: `cargo test -p izanami metadata -- --nocapture` (ok).
+- Tests: `cargo test -p izanami execute_trigger -- --nocapture` (ok).
+- Izanami 4-peer DA run (stable, 300s, target 20): `IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo run -p izanami -- --allow-net --nexus --peers 4 --faulty 0 --duration 300s --target-blocks 20 --progress-interval 10s --progress-timeout 180s --tps 5 --max-inflight 8 --workload-profile stable` completed; summary `successes=110 failures=1`; no `FrameTooLarge` in stdout; duplicate metric registration warnings persisted; tempdir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_7FkZJC`.
+- Traced missing-payload/roster-sidecar path: missing block fetches originate from QC/vote/RBC handlers → `FetchPendingBlock` → `handle_fetch_pending_block` responds with `BlockSyncUpdate` only when roster evidence (commit QC/checkpoint + stake snapshot) is available; otherwise falls back to `BlockCreated` + RBC init/chunks. Roster sidecar mismatch logs occur when Kura has a different block hash at the same height, so roster evidence is skipped and NPoS sends `BlockCreated`, which can still be dropped by locked-QC/hint gates if the block is stale.
+- NPoS localnet 1 Hz log review: repeated missing block payload fetch retries (heights 5-7) on peer0/1/3, sumeragi tick loop lagging/worker slow warnings on all peers, and view change due to stake_quorum_timeout on peer2; likely explains sub-1 Hz cadence. Logs: `/private/tmp/iroha-localnet-npos-1hz-20260123153657` (peer*.log).
+- NPoS localnet 1 Hz rerun (4 peers, 100x1 Hz `iroha --config client.toml ledger transaction ping --no-wait`): `/private/tmp/iroha-localnet-npos-1hz-20260123153657`; `commit_qc.height` 0->6 over 139 samples (~140s), `view_change_install_total` +3, `pending_rbc.bytes` max 2960 with sessions max 4; logs `sumeragi_status_1hz.jsonl` + `ping_1hz.log`.
+- Izanami 4-peer DA run: `target/debug/izanami --allow-net --peers 4 --faulty 0 --duration 240s --target-blocks 20 --progress-interval 10s --progress-timeout 60s --tps 10 --max-inflight 8 --workload-profile stable` reached `min_height=20` at ~200s (successes 117, failures 0); no FrameTooLarge observed in stdout; duplicate metric registration warnings persisted; test-network dir cleaned (default).
+- Sumeragi NPoS config: derive optional timeouts/VRF windows from `block_time_ms` and `epoch_length_blocks`; updated docs/templates and unit tests; minimal config fixtures now include trusted-peer PoP coverage and the client config snapshot matches current crypto defaults.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Tests: `cargo test -p iroha_config sumeragi_npos -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_config duration_clamp_tests -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_config sora_profile_tests -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_config snapshot_serialized_form -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_config` (ok).
 - Tests: `cargo test --workspace` (aborted by user request; full workspace tests not run).
 - Consensus ingress: treat `BlockCreated` as critical traffic (no bulk drops) so non-leader peers receive payloads; updated ingress tests and guardrail docs/config template.
 - Tests: not run (not requested).

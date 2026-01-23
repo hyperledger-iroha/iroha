@@ -3412,7 +3412,7 @@ mod test {
         //       -> Configuration endpoints
         let expected = expect_test::expect![[r#"
             {
-              "public_key": "ed0120E159467BC273205BB250D41686FCA6CB85F163D5354B06CB3BA8FD42290EDF2A",
+              "public_key": "ed0120CD347EC5DCB5DBBFC032A62C1BB14377E3D40623E6BB76CBF4D41208DE0CEFD0",
               "logger": {
                 "level": "TRACE",
                 "filter": null
@@ -3432,8 +3432,8 @@ mod test {
                 "transaction_gossip_resend_ticks": 3,
                 "soranet_handshake": {
                   "descriptor_commit_hex": "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
-                  "client_capabilities_hex": "010100020101010200020101010400030203010202000200047f100004deadbeef7f110004cafebabe",
-                  "relay_capabilities_hex": "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f0104000302030102010001010202000200047f12000412345678",
+                  "client_capabilities_hex": "0101000201010102000201010104000282030202000200047f100004deadbeef7f110004cafebabe",
+                  "relay_capabilities_hex": "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002820302010001010202000200047f12000412345678",
                   "kem_id": 1,
                   "sig_id": 1,
                   "resume_hash_hex": null,
