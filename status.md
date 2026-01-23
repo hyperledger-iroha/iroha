@@ -11,6 +11,10 @@ Last update: 2026-01-23
 - NPoS localnet 1 Hz rerun (4 peers, 100x1 Hz `iroha --config client.toml ledger transaction ping --no-wait`): `/private/tmp/iroha-localnet-npos-1hz-20260123153657`; `commit_qc.height` 0->6 over 139 samples (~140s), `view_change_install_total` +3, `pending_rbc.bytes` max 2960 with sessions max 4; logs `sumeragi_status_1hz.jsonl` + `ping_1hz.log`.
 - Izanami 4-peer DA run: `target/debug/izanami --allow-net --peers 4 --faulty 0 --duration 240s --target-blocks 20 --progress-interval 10s --progress-timeout 60s --tps 10 --max-inflight 8 --workload-profile stable` reached `min_height=20` at ~200s (successes 117, failures 0); no FrameTooLarge observed in stdout; duplicate metric registration warnings persisted; test-network dir cleaned (default).
 - Sumeragi NPoS config: derive optional timeouts/VRF windows from `block_time_ms` and `epoch_length_blocks`; updated docs/templates and unit tests; minimal config fixtures now include trusted-peer PoP coverage and the client config snapshot matches current crypto defaults.
+- Integration tests: wait for all peers to reach the post-registration block height before querying alias/compressed account literals in `accounts_query_accepts_alias_and_compressed_filter_literals`.
+- Tests: `cargo test -p integration_tests --test address_canonicalisation accounts_query_accepts_alias_and_compressed_filter_literals -- --nocapture` (skipped: sandboxed network restriction).
+- Integration tests: register alias-domain accounts in separate blocking transactions so `accounts_query_accepts_alias_and_compressed_filter_literals` avoids permission gating.
+- Tests: not run (not requested).
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Tests: `cargo test -p iroha_config sumeragi_npos -- --nocapture` (ok).
 - Tests: `cargo test -p iroha_config duration_clamp_tests -- --nocapture` (ok).
