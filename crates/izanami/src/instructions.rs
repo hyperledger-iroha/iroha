@@ -470,10 +470,9 @@ pub(crate) enum RecipeKind {
     CompleteReplicationOrder,
 }
 
+// Stable runs avoid non-idempotent registration and indefinite trigger growth to keep long runs steady.
 const BASE_RECIPES_STABLE: &[RecipeKind] = &[
     RecipeKind::RegisterDomain,
-    RecipeKind::RegisterAssetDefinition,
-    RecipeKind::RegisterAccount,
     RecipeKind::RegisterNft,
     RecipeKind::MintAsset,
     RecipeKind::TransferAsset,
@@ -489,12 +488,7 @@ const BASE_RECIPES_STABLE: &[RecipeKind] = &[
     RecipeKind::RemoveAssetInstanceKeyValue,
     RecipeKind::RegisterRole,
     RecipeKind::RegisterTimeTrigger,
-    RecipeKind::RegisterDataTrigger,
-    RecipeKind::RegisterPipelineTrigger,
-    RecipeKind::SetTriggerKeyValue,
-    RecipeKind::RemoveTriggerKeyValue,
     // TODO: Re-enable trigger repetition recipes once repeatable trigger tracking is concurrency-safe.
-    RecipeKind::ExecuteTrigger,
     RecipeKind::DeployIvmContract,
     // TODO: Re-enable DeployKotodamaContract once Kotodama samples only use ABI v1 syscalls.
 ];
@@ -1151,9 +1145,9 @@ impl ChaosState {
     }
 
     fn plan_set_asset_metadata(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let asset = self.random_asset_instance(rng).unwrap_or_else(|_| {
-            AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone())
-        });
+        let asset = self
+            .random_asset_instance(rng)
+            .unwrap_or_else(|_| AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone()));
         let key: Name = format!("asset_flag_{}", self.bump_metadata())
             .parse()
             .map_err(|_| eyre!("failed to parse asset metadata key"))?;
@@ -1178,9 +1172,9 @@ impl ChaosState {
     }
 
     fn plan_remove_asset_metadata(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        let asset = self.random_asset_instance(rng).unwrap_or_else(|_| {
-            AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone())
-        });
+        let asset = self
+            .random_asset_instance(rng)
+            .unwrap_or_else(|_| AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone()));
         if let Some(keys) = self.asset_metadata.get_mut(&asset) {
             if let Some(existing) = keys.iter().next().cloned() {
                 keys.remove(&existing);
@@ -1678,7 +1672,7 @@ impl ChaosState {
         let trigger_id: TriggerId = format!("ivm_trigger_{}", self.bump_trigger())
             .parse()
             .map_err(|_| eyre!("failed to parse ivm trigger id"))?;
-        let bytecode = smart_contracts::ivm_artifact("artifact_v1_7_mode00_vlen0_cycles0_abi1")?;
+        let bytecode = smart_contracts::ivm_trigger_program()?;
         let action = Action::new(
             bytecode,
             Repeats::Exactly(1),

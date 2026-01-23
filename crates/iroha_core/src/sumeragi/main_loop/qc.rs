@@ -2177,6 +2177,24 @@ impl Actor {
             return Ok(());
         }
 
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            // Persist roster artifacts on QC arrival so block sync can validate missing payloads.
+            let checkpoint = ValidatorSetCheckpoint::new(
+                qc.height,
+                qc.view,
+                qc.subject_block_hash,
+                qc.parent_state_root,
+                qc.post_state_root,
+                qc.validator_set.clone(),
+                qc.aggregate.signers_bitmap.clone(),
+                qc.aggregate.bls_aggregate_signature.clone(),
+                qc.validator_set_hash_version,
+                None,
+            );
+            self.state
+                .record_commit_roster(&qc, &checkpoint, stake_snapshot.clone());
+        }
+
         if !block_known_locally {
             info!(
                 height = qc.height,

@@ -11,6 +11,8 @@ use iroha_data_model::transaction::IvmBytecode;
 use iroha_test_network::repo_root;
 use ivm::KotodamaCompiler;
 
+const IVM_TRIGGER_ARTIFACT: &str = "artifact_v1_0_mode00_vlen0_cycles0_abi1";
+
 /// Compile a Kotodama sample from `crates/kotodama_lang/src/samples` into bytecode.
 ///
 /// Results are cached in-memory so repeated calls do not recompile.
@@ -69,6 +71,11 @@ pub fn ivm_artifact(name: &str) -> Result<IvmBytecode> {
     Ok(IvmBytecode::from_compiled(blob))
 }
 
+/// Load the IVM artifact used by Izanami trigger deployment.
+pub fn ivm_trigger_program() -> Result<IvmBytecode> {
+    ivm_artifact(IVM_TRIGGER_ARTIFACT)
+}
+
 fn validate_name(name: &str, context: &str) -> Result<String> {
     let path = Path::new(name);
 
@@ -118,6 +125,15 @@ mod tests {
         let artifact = ivm_artifact("artifact_v1_7_mode00_vlen0_cycles0_abi1")
             .expect("artifact should be readable");
         assert!(artifact.size_bytes() > 0);
+    }
+
+    #[test]
+    fn ivm_trigger_program_metadata_parses() {
+        let artifact = ivm_trigger_program().expect("trigger program should load");
+        let parsed = ivm::ProgramMetadata::parse(artifact.as_ref()).expect("valid metadata");
+        assert_eq!(parsed.metadata.version_major, 1);
+        assert_eq!(parsed.metadata.version_minor, 0);
+        assert_eq!(parsed.metadata.abi_version, 1);
     }
 
     #[test]

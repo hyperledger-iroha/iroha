@@ -11953,8 +11953,9 @@ fn idle_view_timeout(
         return commit_timeout;
     }
     if da_enabled {
-        // DA payload propagation can lag; give the full commit window before rotating.
-        return commit_timeout.max(Duration::from_millis(1));
+        // DA payload propagation and worker-loop drain can lag; give one extra propose interval.
+        let grace = commit_timeout.saturating_add(propose_interval);
+        return grace.max(Duration::from_millis(1));
     }
     // No proposal observed: rotate sooner to recover from a missing leader, but cap
     // the timeout so we don't exceed the normal commit window.

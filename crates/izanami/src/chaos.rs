@@ -11,7 +11,7 @@ use std::{
 
 use color_eyre::{Result, eyre::eyre};
 use futures::FutureExt;
-use iroha_data_model::prelude::*;
+use iroha_data_model::{parameter::system::SumeragiNposParameters, prelude::*};
 use iroha_genesis::GenesisBlock;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
 use rand::{
@@ -36,7 +36,97 @@ use crate::{
     instructions::{self, PreparedChaos, TransactionPlan, WorkloadEngine},
 };
 
+const IZANAMI_BLOCK_PAYLOAD_QUEUE: i64 = 512;
+const IZANAMI_RBC_PENDING_TTL_MS: i64 = 300_000;
+const IZANAMI_RBC_SESSION_TTL_MS: i64 = 900_000;
+const IZANAMI_RBC_PENDING_MAX_CHUNKS: i64 = 512;
+const IZANAMI_RBC_PENDING_MAX_BYTES: i64 = 32 * 1024 * 1024;
+const IZANAMI_RBC_PENDING_SESSION_LIMIT: i64 = 512;
+const IZANAMI_RBC_REBROADCAST_SESSIONS_PER_TICK: i64 = 32;
+const IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK: i64 = 256;
+const IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS: i64 = 1_000;
+const IZANAMI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT: i64 = 8;
+const IZANAMI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: i64 = 8;
+const IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: i64 = 128;
+const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 2;
+const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 1_500;
+const IZANAMI_NPOS_TIMEOUT_COMMIT_MS: i64 = 2_000;
+const IZANAMI_NPOS_TIMEOUT_DA_MS: i64 = 2_000;
+
+#[derive(Clone, Copy, Debug)]
+struct NposTiming {
+    block_ms: u64,
+    propose_ms: u64,
+    prevote_ms: u64,
+    precommit_ms: u64,
+    commit_ms: u64,
+    da_ms: u64,
+    aggregator_ms: u64,
+}
+
+fn clamp_nonzero_ms(value: u64) -> u64 {
+    value.max(1)
+}
+
+fn split_pipeline_time(duration: Duration) -> (u64, u64) {
+    let total_ms_u128 = duration.as_millis();
+    let total_ms = u64::try_from(total_ms_u128).expect("pipeline time fits into u64 milliseconds");
+    let mut block_ms = total_ms / 3;
+    if block_ms == 0 {
+        block_ms = 1;
+    }
+    if block_ms >= total_ms {
+        block_ms = total_ms.saturating_sub(1);
+    }
+    let mut commit_ms = total_ms.saturating_sub(block_ms);
+    if commit_ms == 0 {
+        commit_ms = 1;
+        if block_ms > 1 {
+            block_ms -= 1;
+        }
+    }
+    (block_ms, commit_ms)
+}
+
+fn derive_npos_phase_timeouts(block_ms: u64, commit_ms: u64) -> (u64, u64, u64, u64) {
+    let propose_ms = clamp_nonzero_ms(block_ms / 2);
+    let prevote_ms = clamp_nonzero_ms(commit_ms / 2);
+    let precommit_ms = clamp_nonzero_ms(commit_ms / 2);
+    let aggregator_ms = clamp_nonzero_ms(block_ms / 4);
+    (propose_ms, prevote_ms, precommit_ms, aggregator_ms)
+}
+
+fn derive_npos_timing(config: &ChaosConfig) -> NposTiming {
+    let (block_ms, commit_ms, da_ms) = if let Some(duration) = config.pipeline_time {
+        let (block_ms, commit_ms) = split_pipeline_time(duration);
+        (block_ms, commit_ms, commit_ms)
+    } else {
+        let block_ms = u64::try_from(IZANAMI_NPOS_BLOCK_TIME_MS)
+            .expect("izanami block time must be non-negative");
+        let commit_ms = u64::try_from(IZANAMI_NPOS_TIMEOUT_COMMIT_MS)
+            .expect("izanami commit timeout must be non-negative");
+        let da_ms = u64::try_from(IZANAMI_NPOS_TIMEOUT_DA_MS)
+            .expect("izanami DA timeout must be non-negative");
+        (block_ms, commit_ms, da_ms)
+    };
+    let block_ms = clamp_nonzero_ms(block_ms);
+    let commit_ms = clamp_nonzero_ms(commit_ms);
+    let da_ms = clamp_nonzero_ms(da_ms);
+    let (propose_ms, prevote_ms, precommit_ms, aggregator_ms) =
+        derive_npos_phase_timeouts(block_ms, commit_ms);
+    NposTiming {
+        block_ms,
+        propose_ms,
+        prevote_ms,
+        precommit_ms,
+        commit_ms,
+        da_ms,
+        aggregator_ms,
+    }
+}
+
 fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>) -> NetworkBuilder {
+    let mut genesis = genesis;
     let mut builder = NetworkBuilder::new()
         .with_peers(config.peer_count)
         .with_base_seed("izanami-chaos");
@@ -49,6 +139,129 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             .with_data_availability_enabled(profile.da_enabled)
             .with_config_table(profile.config_layer.clone());
     }
+    // NPoS timing parameters live on-chain; inject Izanami overrides into genesis.
+    let npos_timing = derive_npos_timing(config);
+    if config.nexus.is_some() {
+        let has_npos_params = genesis.iter().flat_map(|tx| tx.iter()).any(|isi| {
+            let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() else {
+                return false;
+            };
+            matches!(
+                set_param.inner(),
+                Parameter::Custom(custom)
+                    if custom.id == SumeragiNposParameters::parameter_id()
+            )
+        });
+        if !has_npos_params {
+            let mut npos_params = SumeragiNposParameters::default();
+            npos_params.block_time_ms = npos_timing.block_ms;
+            npos_params.timeout_propose_ms = npos_timing.propose_ms;
+            npos_params.timeout_prevote_ms = npos_timing.prevote_ms;
+            npos_params.timeout_precommit_ms = npos_timing.precommit_ms;
+            npos_params.timeout_commit_ms = npos_timing.commit_ms;
+            npos_params.timeout_da_ms = npos_timing.da_ms;
+            npos_params.timeout_aggregator_ms = npos_timing.aggregator_ms;
+            let instruction = InstructionBox::from(SetParameter::new(Parameter::Custom(
+                npos_params.into_custom_parameter(),
+            )));
+            if let Some(first_tx) = genesis.first_mut() {
+                first_tx.insert(0, instruction);
+            } else {
+                genesis.push(vec![instruction]);
+            }
+        }
+    }
+    // Raise payload/RBC budgets and consensus timeouts to keep long Izanami runs stable.
+    builder = builder.with_config_layer(|layer| {
+        let as_i64 = |value: u64| -> i64 {
+            i64::try_from(value).expect("NPoS timing fits into i64 milliseconds")
+        };
+        layer
+            .write(
+                ["sumeragi", "queues", "block_payload"],
+                IZANAMI_BLOCK_PAYLOAD_QUEUE,
+            )
+            .write(
+                ["sumeragi", "pacemaker", "pending_stall_grace_ms"],
+                IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS,
+            )
+            .write(
+                ["sumeragi", "pacemaker", "active_pending_soft_limit"],
+                IZANAMI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT,
+            )
+            .write(
+                ["sumeragi", "pacemaker", "rbc_backlog_session_soft_limit"],
+                IZANAMI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT,
+            )
+            .write(
+                ["sumeragi", "pacemaker", "rbc_backlog_chunk_soft_limit"],
+                IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
+            )
+            .write(
+                ["sumeragi", "rbc", "pending_max_chunks"],
+                IZANAMI_RBC_PENDING_MAX_CHUNKS,
+            )
+            .write(
+                ["sumeragi", "rbc", "pending_max_bytes"],
+                IZANAMI_RBC_PENDING_MAX_BYTES,
+            )
+            .write(
+                ["sumeragi", "rbc", "pending_session_limit"],
+                IZANAMI_RBC_PENDING_SESSION_LIMIT,
+            )
+            .write(
+                ["sumeragi", "rbc", "pending_ttl_ms"],
+                IZANAMI_RBC_PENDING_TTL_MS,
+            )
+            .write(
+                ["sumeragi", "rbc", "session_ttl_ms"],
+                IZANAMI_RBC_SESSION_TTL_MS,
+            )
+            .write(
+                ["sumeragi", "rbc", "disk_store_ttl_ms"],
+                IZANAMI_RBC_SESSION_TTL_MS,
+            )
+            .write(
+                ["sumeragi", "rbc", "rebroadcast_sessions_per_tick"],
+                IZANAMI_RBC_REBROADCAST_SESSIONS_PER_TICK,
+            )
+            .write(
+                ["sumeragi", "rbc", "payload_chunks_per_tick"],
+                IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK,
+            )
+            .write(
+                ["sumeragi", "da", "quorum_timeout_multiplier"],
+                IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER,
+            )
+            .write(
+                ["sumeragi", "npos", "block_time_ms"],
+                as_i64(npos_timing.block_ms),
+            )
+            .write(
+                ["sumeragi", "npos", "timeouts", "propose_ms"],
+                as_i64(npos_timing.propose_ms),
+            )
+            .write(
+                ["sumeragi", "npos", "timeouts", "prevote_ms"],
+                as_i64(npos_timing.prevote_ms),
+            )
+            .write(
+                ["sumeragi", "npos", "timeouts", "precommit_ms"],
+                as_i64(npos_timing.precommit_ms),
+            )
+            .write(
+                ["sumeragi", "npos", "timeouts", "commit_ms"],
+                as_i64(npos_timing.commit_ms),
+            )
+            .write(
+                ["sumeragi", "npos", "timeouts", "da_ms"],
+                as_i64(npos_timing.da_ms),
+            )
+            .write(
+                ["sumeragi", "npos", "timeouts", "aggregator_ms"],
+                as_i64(npos_timing.aggregator_ms),
+            );
+    });
 
     let genesis_len = genesis.len();
     for (idx, transaction) in genesis.into_iter().enumerate() {
@@ -1059,6 +1272,190 @@ mod tests {
         };
 
         assert_eq!(network.pipeline_time(), pipeline_time);
+        let layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
+        let read_i64 = |layer: &Table, path: &[&str]| -> Option<i64> {
+            let mut current = layer;
+            for (idx, key) in path.iter().enumerate() {
+                let value = current.get(*key)?;
+                if idx + 1 == path.len() {
+                    return value.as_integer();
+                }
+                current = value.as_table()?;
+            }
+            None
+        };
+        let lookup = |path| layers.iter().find_map(|layer| read_i64(layer, path));
+        let npos_timing = derive_npos_timing(&config);
+        let npos_block_ms =
+            i64::try_from(npos_timing.block_ms).expect("npos block time fits into i64");
+        let npos_propose_ms =
+            i64::try_from(npos_timing.propose_ms).expect("npos propose timeout fits into i64");
+        let npos_prevote_ms =
+            i64::try_from(npos_timing.prevote_ms).expect("npos prevote timeout fits into i64");
+        let npos_precommit_ms =
+            i64::try_from(npos_timing.precommit_ms).expect("npos precommit timeout fits into i64");
+        let npos_commit_ms =
+            i64::try_from(npos_timing.commit_ms).expect("npos commit timeout fits into i64");
+        let npos_da_ms = i64::try_from(npos_timing.da_ms).expect("npos DA timeout fits into i64");
+        let npos_aggregator_ms = i64::try_from(npos_timing.aggregator_ms)
+            .expect("npos aggregator timeout fits into i64");
+        assert_eq!(
+            lookup(&["sumeragi", "queues", "block_payload"]),
+            Some(IZANAMI_BLOCK_PAYLOAD_QUEUE)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "pacemaker", "pending_stall_grace_ms"]),
+            Some(IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "pacemaker", "active_pending_soft_limit"]),
+            Some(IZANAMI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "pacemaker", "rbc_backlog_session_soft_limit"]),
+            Some(IZANAMI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "pacemaker", "rbc_backlog_chunk_soft_limit"]),
+            Some(IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "rbc", "pending_max_chunks"]),
+            Some(IZANAMI_RBC_PENDING_MAX_CHUNKS)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "rbc", "pending_max_bytes"]),
+            Some(IZANAMI_RBC_PENDING_MAX_BYTES)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "rbc", "pending_session_limit"]),
+            Some(IZANAMI_RBC_PENDING_SESSION_LIMIT)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "rbc", "pending_ttl_ms"]),
+            Some(IZANAMI_RBC_PENDING_TTL_MS)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "rbc", "session_ttl_ms"]),
+            Some(IZANAMI_RBC_SESSION_TTL_MS)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "rbc", "disk_store_ttl_ms"]),
+            Some(IZANAMI_RBC_SESSION_TTL_MS)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "rbc", "rebroadcast_sessions_per_tick"]),
+            Some(IZANAMI_RBC_REBROADCAST_SESSIONS_PER_TICK)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "rbc", "payload_chunks_per_tick"]),
+            Some(IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "da", "quorum_timeout_multiplier"]),
+            Some(IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "npos", "block_time_ms"]),
+            Some(npos_block_ms)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "npos", "timeouts", "propose_ms"]),
+            Some(npos_propose_ms)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "npos", "timeouts", "prevote_ms"]),
+            Some(npos_prevote_ms)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "npos", "timeouts", "precommit_ms"]),
+            Some(npos_precommit_ms)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "npos", "timeouts", "commit_ms"]),
+            Some(npos_commit_ms)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "npos", "timeouts", "da_ms"]),
+            Some(npos_da_ms)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "npos", "timeouts", "aggregator_ms"]),
+            Some(npos_aggregator_ms)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn make_network_builder_injects_npos_parameters() -> Result<()> {
+        init_instruction_registry();
+        let profile = crate::config::NexusProfile::sora_defaults()?;
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 2,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: Some(19),
+            tps: 1.0,
+            max_inflight: 4,
+            workload_profile: WorkloadProfile::Stable,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([false, false, false, false]),
+            nexus: Some(profile),
+        };
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos { genesis, .. } = instructions::prepare_state(
+            account_qty,
+            config.nexus.as_ref(),
+            config.workload_profile,
+        )?;
+        let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            make_network_builder(&config, genesis).build()
+        })) {
+            Ok(network) => network,
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
+                    .unwrap_or_default();
+                if msg.contains("Operation not permitted") || msg.contains("permission denied") {
+                    return Ok(());
+                }
+                std::panic::resume_unwind(payload);
+            }
+        };
+
+        let mut npos_params = None;
+        for tx in network.genesis_isi() {
+            for isi in tx {
+                let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() else {
+                    continue;
+                };
+                let Parameter::Custom(custom) = set_param.inner() else {
+                    continue;
+                };
+                if let Some(params) = SumeragiNposParameters::from_custom_parameter(custom) {
+                    npos_params = Some(params);
+                }
+            }
+        }
+
+        let npos_params = npos_params.expect("npos parameters should be injected for nexus runs");
+        let expected = derive_npos_timing(&config);
+        assert_eq!(npos_params.block_time_ms(), expected.block_ms);
+        assert_eq!(npos_params.timeout_propose_ms(), expected.propose_ms);
+        assert_eq!(npos_params.timeout_prevote_ms(), expected.prevote_ms);
+        assert_eq!(npos_params.timeout_precommit_ms(), expected.precommit_ms);
+        assert_eq!(npos_params.timeout_commit_ms(), expected.commit_ms);
+        assert_eq!(npos_params.timeout_da_ms(), expected.da_ms);
+        assert_eq!(npos_params.timeout_aggregator_ms(), expected.aggregator_ms);
         Ok(())
     }
 
