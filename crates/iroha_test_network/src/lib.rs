@@ -3084,6 +3084,142 @@ fn apply_debug_rbc_defaults(table: &mut Table) {
     }
 }
 
+fn normalize_legacy_sumeragi_config(table: &mut Table) {
+    let Some(sumeragi) = table.get_mut("sumeragi").and_then(Value::as_table_mut) else {
+        return;
+    };
+
+    let mut move_key = |legacy_key: &str, path: &[&str], convert_seconds: bool| {
+        if path.is_empty() {
+            return;
+        }
+        let should_insert = get_nested_value(sumeragi, path).is_none();
+        let Some(mut value) = sumeragi.remove(legacy_key) else {
+            return;
+        };
+        if !should_insert {
+            return;
+        }
+        if convert_seconds {
+            value = match value {
+                Value::Integer(secs) => Value::Integer(secs.saturating_mul(1_000)),
+                other => other,
+            };
+        }
+        let (parent_path, leaf_key) = path.split_at(path.len() - 1);
+        let mut current = &mut *sumeragi;
+        for segment in parent_path {
+            let entry = current
+                .entry((*segment).to_string())
+                .or_insert_with(|| Value::Table(Table::new()));
+            if !entry.is_table() {
+                *entry = Value::Table(Table::new());
+            }
+            current = entry.as_table_mut().expect("entry is a table");
+        }
+        current.insert(leaf_key[0].to_string(), value);
+    };
+
+    move_key("collectors_k", &["collectors", "k"], false);
+    move_key(
+        "collectors_redundant_send_r",
+        &["collectors", "redundant_send_r"],
+        false,
+    );
+    move_key("da_enabled", &["da", "enabled"], false);
+    move_key(
+        "da_quorum_timeout_multiplier",
+        &["da", "quorum_timeout_multiplier"],
+        false,
+    );
+    move_key(
+        "da_availability_timeout_multiplier",
+        &["da", "availability_timeout_multiplier"],
+        false,
+    );
+    move_key(
+        "pacemaker_backoff_multiplier",
+        &["pacemaker", "backoff_multiplier"],
+        false,
+    );
+    move_key(
+        "pacemaker_rtt_floor_multiplier",
+        &["pacemaker", "rtt_floor_multiplier"],
+        false,
+    );
+    move_key(
+        "pacemaker_max_backoff_ms",
+        &["pacemaker", "max_backoff_ms"],
+        false,
+    );
+    move_key(
+        "pacemaker_jitter_frac_permille",
+        &["pacemaker", "jitter_frac_permille"],
+        false,
+    );
+    move_key("msg_channel_cap_blocks", &["queues", "blocks"], false);
+    move_key("rbc_chunk_max_bytes", &["rbc", "chunk_max_bytes"], false);
+    move_key(
+        "rbc_disk_store_max_bytes",
+        &["rbc", "disk_store_max_bytes"],
+        false,
+    );
+    move_key(
+        "rbc_disk_store_ttl_secs",
+        &["rbc", "disk_store_ttl_ms"],
+        true,
+    );
+    move_key(
+        "rbc_payload_chunks_per_tick",
+        &["rbc", "payload_chunks_per_tick"],
+        false,
+    );
+    move_key(
+        "rbc_pending_max_bytes",
+        &["rbc", "pending_max_bytes"],
+        false,
+    );
+    move_key(
+        "rbc_pending_max_chunks",
+        &["rbc", "pending_max_chunks"],
+        false,
+    );
+    move_key("rbc_pending_ttl_ms", &["rbc", "pending_ttl_ms"], false);
+    move_key(
+        "rbc_rebroadcast_sessions_per_tick",
+        &["rbc", "rebroadcast_sessions_per_tick"],
+        false,
+    );
+    move_key("rbc_session_ttl_secs", &["rbc", "session_ttl_ms"], true);
+    move_key("rbc_store_max_bytes", &["rbc", "store_max_bytes"], false);
+    move_key(
+        "rbc_store_max_sessions",
+        &["rbc", "store_max_sessions"],
+        false,
+    );
+    move_key("rbc_store_soft_bytes", &["rbc", "store_soft_bytes"], false);
+    move_key(
+        "rbc_store_soft_sessions",
+        &["rbc", "store_soft_sessions"],
+        false,
+    );
+    move_key(
+        "use_stake_snapshot_roster",
+        &["npos", "use_stake_snapshot_roster"],
+        false,
+    );
+    move_key(
+        "vrf_commit_deadline_offset",
+        &["npos", "vrf", "commit_deadline_offset_blocks"],
+        false,
+    );
+    move_key(
+        "vrf_reveal_deadline_offset",
+        &["npos", "vrf", "reveal_deadline_offset_blocks"],
+        false,
+    );
+}
+
 fn merged_sumeragi_config(config_layers: &[Table]) -> Table {
     let mut merged = Table::new();
     for layer in config_layers {
@@ -3380,6 +3516,7 @@ impl NetworkBuilder {
         let mut table = Table::new();
         let mut writer = TomlWriter::new(&mut table);
         f(&mut writer);
+        normalize_legacy_sumeragi_config(&mut table);
         apply_debug_rbc_defaults(&mut table);
         self.config_layers.push(table);
         self
@@ -3388,6 +3525,7 @@ impl NetworkBuilder {
     /// Push a pre-built TOML configuration layer.
     pub fn with_config_table(mut self, table: Table) -> Self {
         let mut table = table;
+        normalize_legacy_sumeragi_config(&mut table);
         apply_debug_rbc_defaults(&mut table);
         self.config_layers.push(table);
         self
@@ -7901,6 +8039,79 @@ exit 0
         assert_eq!(
             pipeline.get("workers").and_then(toml::Value::as_integer),
             Some(expected)
+        );
+    }
+
+    #[test]
+    fn config_layers_normalize_legacy_sumeragi_keys() {
+        let builder = NetworkBuilder::new()
+            .with_config_layer(|layer| {
+                layer
+                    .write(["sumeragi", "collectors_k"], 2_i64)
+                    .write(["sumeragi", "da_enabled"], true)
+                    .write(["sumeragi", "pacemaker_max_backoff_ms"], 12_000_i64)
+                    .write(["sumeragi", "rbc_session_ttl_secs"], 5_i64);
+            })
+            .with_config_table({
+                let mut sumeragi = Table::new();
+                sumeragi.insert("collectors_redundant_send_r".into(), TomlValue::Integer(3));
+                sumeragi.insert("rbc_disk_store_ttl_secs".into(), TomlValue::Integer(7));
+                sumeragi.insert("rbc_pending_ttl_ms".into(), TomlValue::Integer(500));
+                let mut table = Table::new();
+                table.insert("sumeragi".into(), TomlValue::Table(sumeragi));
+                table
+            });
+        let NetworkBuilder { config_layers, .. } = builder;
+        let layer_from_writer = config_layers
+            .get(1)
+            .expect("custom layer from with_config_layer");
+        let layer_from_table = config_layers
+            .get(2)
+            .expect("custom layer from with_config_table");
+
+        let sumeragi_writer = layer_from_writer
+            .get("sumeragi")
+            .and_then(TomlValue::as_table)
+            .expect("sumeragi table");
+        assert!(!sumeragi_writer.contains_key("collectors_k"));
+        assert_eq!(
+            get_nested_value(sumeragi_writer, &["collectors", "k"]),
+            Some(&TomlValue::Integer(2))
+        );
+        assert!(!sumeragi_writer.contains_key("da_enabled"));
+        assert_eq!(
+            get_nested_value(sumeragi_writer, &["da", "enabled"]),
+            Some(&TomlValue::Boolean(true))
+        );
+        assert!(!sumeragi_writer.contains_key("pacemaker_max_backoff_ms"));
+        assert_eq!(
+            get_nested_value(sumeragi_writer, &["pacemaker", "max_backoff_ms"]),
+            Some(&TomlValue::Integer(12_000))
+        );
+        assert!(!sumeragi_writer.contains_key("rbc_session_ttl_secs"));
+        assert_eq!(
+            get_nested_value(sumeragi_writer, &["rbc", "session_ttl_ms"]),
+            Some(&TomlValue::Integer(5_000))
+        );
+
+        let sumeragi_table = layer_from_table
+            .get("sumeragi")
+            .and_then(TomlValue::as_table)
+            .expect("sumeragi table");
+        assert!(!sumeragi_table.contains_key("collectors_redundant_send_r"));
+        assert_eq!(
+            get_nested_value(sumeragi_table, &["collectors", "redundant_send_r"]),
+            Some(&TomlValue::Integer(3))
+        );
+        assert!(!sumeragi_table.contains_key("rbc_disk_store_ttl_secs"));
+        assert_eq!(
+            get_nested_value(sumeragi_table, &["rbc", "disk_store_ttl_ms"]),
+            Some(&TomlValue::Integer(7_000))
+        );
+        assert!(!sumeragi_table.contains_key("rbc_pending_ttl_ms"));
+        assert_eq!(
+            get_nested_value(sumeragi_table, &["rbc", "pending_ttl_ms"]),
+            Some(&TomlValue::Integer(500))
         );
     }
 
