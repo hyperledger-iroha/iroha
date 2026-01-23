@@ -412,6 +412,9 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             worker_iteration_budget_cap: std::time::Duration::from_millis(
                 iroha_config::parameters::defaults::sumeragi::WORKER_ITERATION_BUDGET_CAP_MS,
             ),
+            worker_iteration_drain_budget_cap: std::time::Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::WORKER_ITERATION_DRAIN_BUDGET_CAP_MS,
+            ),
             consensus_mode: A::ConsensusMode::Permissioned,
             mode_flip_enabled: iroha_config::parameters::defaults::sumeragi::MODE_FLIP_ENABLED,
             da_enabled: iroha_config::parameters::defaults::sumeragi::DA_ENABLED,
