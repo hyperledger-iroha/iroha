@@ -2141,20 +2141,37 @@ impl Queue {
     /// Remove any entries from `txs` that have expired or were already committed,
     /// emitting expiration events for TTL-elapsed transactions.
     fn cull_expired_entries(&self, state_view: &StateView) -> usize {
+        const CULL_WARN_MS: u64 = 1_000;
         #[cfg(feature = "telemetry")]
         let backpressure_telemetry: Option<&StateTelemetry> = Some(state_view.telemetry);
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
+        let scan_start = std::time::Instant::now();
+        let tracked_before = self.txs.len();
         let mut to_remove = Vec::new();
+        let mut expired = 0usize;
+        let mut committed = 0usize;
         for entry in &self.txs {
             let tx = entry.value();
-            if self.is_expired(tx.as_accepted()) || tx.is_in_blockchain(state_view) {
+            if self.is_expired(tx.as_accepted()) {
+                expired = expired.saturating_add(1);
+                to_remove.push(*entry.key());
+            } else if tx.is_in_blockchain(state_view) {
+                committed = committed.saturating_add(1);
                 to_remove.push(*entry.key());
             }
         }
+        let scan_ms = Self::duration_to_millis(scan_start.elapsed());
         if to_remove.is_empty() {
+            if scan_ms >= CULL_WARN_MS {
+                warn!(
+                    scan_ms,
+                    tracked_before, expired, committed, "queue expiry sweep slow without removals"
+                );
+            }
             return 0;
         }
+        let remove_start = std::time::Instant::now();
         let _guard = self.push_remove_lock.lock();
         let mut removed = 0usize;
         for hash in to_remove {
@@ -2187,11 +2204,26 @@ impl Queue {
                 removed = removed.saturating_add(1);
             }
         }
+        let remove_ms = Self::duration_to_millis(remove_start.elapsed());
         if removed > 0 && !self.removed_hashes.is_empty() && !self.tx_hashes.is_empty() {
             let _ = self.compact_hash_queue_locked();
         }
         if removed > 0 {
             self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
+        }
+        let total_ms = scan_ms.saturating_add(remove_ms);
+        if total_ms >= CULL_WARN_MS {
+            warn!(
+                scan_ms,
+                remove_ms,
+                total_ms,
+                tracked_before,
+                tracked_after = self.txs.len(),
+                expired,
+                committed,
+                removed,
+                "queue expiry sweep slow"
+            );
         }
         removed
     }

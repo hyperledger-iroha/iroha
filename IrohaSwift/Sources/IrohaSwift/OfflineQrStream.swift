@@ -625,12 +625,12 @@ private enum OfflineQrStreamChecksum {
 private extension Data {
     mutating func appendUInt16LE(_ value: UInt16) {
         var le = value.littleEndian
-        withUnsafeBytes(of: &le) { append(contentsOf: $0) }
+        Swift.withUnsafeBytes(of: &le) { append(contentsOf: $0) }
     }
 
     mutating func appendUInt32LE(_ value: UInt32) {
         var le = value.littleEndian
-        withUnsafeBytes(of: &le) { append(contentsOf: $0) }
+        Swift.withUnsafeBytes(of: &le) { append(contentsOf: $0) }
     }
 }
 
