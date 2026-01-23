@@ -49159,6 +49159,43 @@ async fn rbc_message_stale_allows_missing_payload_for_committed_height_with_da()
 }
 
 #[tokio::test]
+async fn rbc_message_stale_drops_conflicting_hash_at_committed_height() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.da.enabled = true;
+    let harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 2).await;
+
+    let leader_kp = &harness.key_pairs[0];
+    let make_block = |height| -> SignedBlock {
+        super::ValidBlock::new_dummy_and_modify_header(leader_kp.private_key(), |header| {
+            header.set_height(NonZeroU64::new(height).expect("height nonzero"));
+        })
+        .into()
+    };
+    let block1 = make_block(1);
+    let block2 = make_block(2);
+    let committed_hash = block2.hash();
+    harness
+        .actor
+        .kura
+        .store_block(Arc::new(block1))
+        .expect("store block1");
+    harness
+        .actor
+        .kura
+        .store_block(Arc::new(block2))
+        .expect("store block2");
+
+    let other_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x99; 32]));
+    assert_ne!(other_hash, committed_hash, "hashes must differ");
+    assert!(
+        harness.actor.rbc_message_stale(&other_hash, 2),
+        "conflicting hashes at committed height should be treated as stale"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test]
 async fn rbc_stale_view_accepts_when_da_enabled() {
     let mut harness = test_actor_harness(4).await;
     let now = Instant::now();
