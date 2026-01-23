@@ -13030,6 +13030,85 @@ async fn handle_qc_records_commit_qc_history() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn handle_qc_records_commit_roster_for_unknown_block() {
+    use crate::sumeragi::status;
+    use iroha_config::{
+        base::WithOrigin,
+        kura::InitMode,
+        parameters::actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
+    };
+
+    let _guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
+    let temp_dir = tempfile::tempdir().expect("tempdir");
+    let kura_cfg = KuraConfig {
+        init_mode: InitMode::Strict,
+        store_dir: WithOrigin::inline(temp_dir.path().join("kura")),
+        max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+        blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+        debug_output_new_blocks: false,
+        merge_ledger_cache_capacity:
+            iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+        fsync_mode: iroha_config::kura::FsyncMode::Batched,
+        fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+        block_sync_roster_retention:
+            iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+        roster_sidecar_retention:
+            iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+    };
+    let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
+    let mut harness =
+        test_actor_harness_with_config_and_height_and_kura(4, consensus_cfg, None, 1, kura).await;
+    let actor = &mut harness.actor;
+    let height = 2u64;
+    let view = 0u64;
+    let block_hash = sample_block(height, view, None).hash();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit().max(1);
+    let mut signers = BTreeSet::new();
+    for idx in 0..topology.as_ref().len() {
+        if signers.len() >= required {
+            break;
+        }
+        signers.insert(
+            ValidatorIndex::try_from(u32::try_from(idx).expect("signer idx"))
+                .expect("signer idx fits"),
+        );
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        actor.epoch_for_height(height),
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    actor.handle_qc(qc).expect("handle qc");
+
+    let snapshot = actor
+        .state
+        .commit_roster_snapshot_for_block(height, block_hash);
+    assert!(
+        snapshot.is_some(),
+        "commit roster should be recorded for commit QCs without the block payload"
+    );
+
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_qc_records_commit_qc_for_committed_block() {
     use crate::sumeragi::status;
 
@@ -28234,7 +28313,7 @@ fn idle_view_timeout_caps_no_proposal_grace() {
     );
     assert_eq!(
         super::idle_view_timeout(false, commit, propose, true),
-        commit
+        commit.saturating_add(propose)
     );
 
     let commit = Duration::from_millis(5_000);
@@ -28245,7 +28324,7 @@ fn idle_view_timeout_caps_no_proposal_grace() {
     );
     assert_eq!(
         super::idle_view_timeout(false, commit, propose, true),
-        commit
+        commit.saturating_add(propose)
     );
 }
 

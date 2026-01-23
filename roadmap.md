@@ -786,7 +786,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Emit dataspace-specific DSID bytes for non-global lanes and update docs/tests accordingly.
 
 43. **IZANAMI-LONGRUN-STABILITY — Validate long-run multi-peer execution-root QC flow** (Consensus/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈺 In Progress, target TBD)
- - [ ] Run Izanami stable profile on 4+ peers for 2000+ blocks (no faults) and confirm commit QCs aggregate with matching execution roots.
+ - [ ] Run Izanami stable profile on 4+ peers for 2000+ blocks (no faults) and confirm commit QCs aggregate with matching execution roots (2026-01-23 run: `RUST_LOG=izanami::summary=info,izanami::workload=warn IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo run -p izanami --release -- --allow-net --nexus --peers 4 --faulty 0 --duration 3600s --target-blocks 2000 --progress-interval 10s --progress-timeout 300s --tps 5 --max-inflight 8 --workload-profile stable` failed with no block height progress for 300s at min height 31; workload tx confirmations timed out; logs in `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_kjtBGK`).
  - [ ] Investigate and resolve any execution-root divergence or consensus stalls surfaced during the run.
 
 ## Archived
