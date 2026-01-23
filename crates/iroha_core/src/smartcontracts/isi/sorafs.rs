@@ -2437,7 +2437,7 @@ mod sorafs_tests {
             valid_until: 1_700_086_400,
             metadata: vec![CapacityMetadataEntry {
                 key: PROVIDER_OWNER_METADATA_KEY.to_owned(),
-                value: alice().to_string(),
+                value: account_literal(&alice()),
             }],
         }
     }
@@ -2462,7 +2462,7 @@ mod sorafs_tests {
         let mut declaration = sample_capacity_declaration();
         declaration.metadata = vec![CapacityMetadataEntry {
             key: PROVIDER_OWNER_METADATA_KEY.to_owned(),
-            value: owner.to_string(),
+            value: account_literal(owner),
         }];
         let canonical_bytes = norito::to_bytes(&declaration).expect("serialize declaration");
         let provider = ProviderId::new(declaration.provider_id);
@@ -2596,6 +2596,14 @@ mod sorafs_tests {
             "ed25519:ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland",
         )
         .expect("valid account id")
+    }
+
+    fn account_literal(account: &AccountId) -> String {
+        // Avoid implicit domain selector resolution in tests by keeping the domain explicit.
+        account
+            .try_signatory()
+            .map(|signatory| format!("{signatory}@{}", account.domain()))
+            .unwrap_or_else(|| account.to_string())
     }
 
     pub(super) fn bob() -> AccountId {
@@ -2893,7 +2901,7 @@ mod sorafs_tests {
         let key = Name::from_str(PROVIDER_OWNER_METADATA_KEY).expect("metadata key");
         declaration
             .metadata
-            .insert(key.clone(), Json::new(bob().to_string()));
+            .insert(key.clone(), Json::new(account_literal(&bob())));
 
         let err = RegisterCapacityDeclaration {
             record: declaration.clone(),
@@ -2910,7 +2918,7 @@ mod sorafs_tests {
         // Align owner with authority and succeed
         declaration
             .metadata
-            .insert(key, Json::new(alice().to_string()));
+            .insert(key, Json::new(account_literal(&alice())));
         RegisterCapacityDeclaration {
             record: declaration,
         }
@@ -5536,7 +5544,7 @@ mod sorafs_tests {
                 valid_until: 1_700_000_000 + (SECONDS_PER_BILLING_MONTH * 64),
                 metadata: vec![CapacityMetadataEntry {
                     key: PROVIDER_OWNER_METADATA_KEY.to_owned(),
-                    value: alice().to_string(),
+                    value: account_literal(&alice()),
                 }],
             };
             let canonical_bytes =
