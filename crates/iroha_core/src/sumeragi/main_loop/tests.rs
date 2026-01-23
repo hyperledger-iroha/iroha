@@ -22,9 +22,12 @@ use std::{
 
 use eyre::eyre;
 use iroha_config::parameters::actual::{
-    ConsensusMode, NodeRole, ProofPolicy, Queue as QueueConfig, SoranetHandshake, SoranetPrivacy,
-    SoranetVpn, Sumeragi as SumeragiConfig, SumeragiNpos, SumeragiNposReconfig,
-    SumeragiNposTimeouts, SumeragiNposVrf,
+    AdaptiveObservability, ConsensusMode, NodeRole, ProofPolicy, Queue as QueueConfig,
+    SoranetHandshake, SoranetPrivacy, SoranetVpn, Sumeragi as SumeragiConfig, SumeragiBlock,
+    SumeragiCollectors, SumeragiDa, SumeragiDebug, SumeragiDebugRbc, SumeragiFinality,
+    SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNpos, SumeragiNposElection,
+    SumeragiNposReconfig, SumeragiNposTimeouts, SumeragiNposVrf, SumeragiPacemaker,
+    SumeragiPersistence, SumeragiQueues, SumeragiRbc, SumeragiRecovery, SumeragiWorker,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
 use iroha_data_model::{
@@ -829,10 +832,10 @@ async fn apply_mode_flip_uses_world_epoch_params() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 5;
-    consensus_cfg.vrf_commit_deadline_offset = 2;
-    consensus_cfg.vrf_reveal_deadline_offset = 3;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 5;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 2;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 3;
 
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
@@ -869,10 +872,10 @@ async fn apply_mode_flip_uses_world_epoch_params() {
 async fn apply_mode_flip_aligns_epoch_to_current_height_without_vrf_record() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 5;
-    consensus_cfg.vrf_commit_deadline_offset = 2;
-    consensus_cfg.vrf_reveal_deadline_offset = 4;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 5;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 2;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 4;
 
     let height = 7u64;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
@@ -907,10 +910,10 @@ async fn apply_mode_flip_aligns_epoch_to_current_height_without_vrf_record() {
 async fn actor_new_aligns_epoch_to_current_height_without_vrf_record() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 4;
-    consensus_cfg.vrf_commit_deadline_offset = 1;
-    consensus_cfg.vrf_reveal_deadline_offset = 2;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 4;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 1;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 2;
 
     let height = 6u64;
     let harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, height).await;
@@ -955,145 +958,169 @@ fn block_with_da_commitment(manifest_hash: ManifestDigest) -> SignedBlock {
 
 fn test_sumeragi_config() -> SumeragiConfig {
     SumeragiConfig {
-        debug_force_soft_fork: false,
-        debug_disable_background_worker: false,
-        debug_rbc_drop_every_nth_chunk: None,
-        debug_rbc_shuffle_chunks: false,
-        debug_rbc_duplicate_inits: false,
-        debug_rbc_force_deliver_quorum_one: false,
-        debug_rbc_corrupt_witness_ack: false,
-        debug_rbc_corrupt_ready_signature: false,
-        debug_rbc_drop_validator_mask: 0,
-        debug_rbc_equivocate_chunk_mask: 0,
-        debug_rbc_equivocate_validator_mask: 0,
-        debug_rbc_conflicting_ready_mask: 0,
-        debug_rbc_partial_chunk_mask: 0,
         role: NodeRole::Validator,
-        allow_view0_slack: false,
-        collectors_k: 1,
-        collectors_redundant_send_r: 1,
-        block_max_transactions: None,
-        block_max_payload_bytes: None,
-        proposal_queue_scan_multiplier:
-            iroha_config::parameters::defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-        msg_channel_cap_votes: iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
-        msg_channel_cap_block_payload:
-            iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD,
-        msg_channel_cap_rbc_chunks:
-            iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_RBC_CHUNKS,
-        msg_channel_cap_blocks:
-            iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_BLOCKS,
-        control_msg_channel_cap:
-            iroha_config::parameters::defaults::sumeragi::CONTROL_MSG_CHANNEL_CAP,
-        worker_iteration_budget_cap: Duration::from_millis(
-            iroha_config::parameters::defaults::sumeragi::WORKER_ITERATION_BUDGET_CAP_MS,
-        ),
-        worker_iteration_drain_budget_cap: Duration::from_millis(
-            iroha_config::parameters::defaults::sumeragi::WORKER_ITERATION_DRAIN_BUDGET_CAP_MS,
-        ),
         consensus_mode: ConsensusMode::Npos,
-        mode_flip_enabled: iroha_config::parameters::defaults::sumeragi::MODE_FLIP_ENABLED,
-        da_enabled: true,
-        da_quorum_timeout_multiplier:
-            iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
-        da_availability_timeout_multiplier:
-            iroha_config::parameters::defaults::sumeragi::DA_AVAILABILITY_TIMEOUT_MULTIPLIER,
-        da_availability_timeout_floor: Duration::from_millis(
-            iroha_config::parameters::defaults::sumeragi::DA_AVAILABILITY_TIMEOUT_FLOOR_MS,
-        ),
-        kura_store_retry_interval: Duration::from_millis(1),
-        kura_store_retry_max_attempts: 1,
-        commit_inflight_timeout: Duration::from_millis(5_000),
-        missing_block_signer_fallback_attempts:
-            iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
-        membership_mismatch_alert_threshold:
-            iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD,
-        membership_mismatch_fail_closed:
-            iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED,
-        consensus_future_height_window:
-            iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,
-        consensus_future_view_window:
-            iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_VIEW_WINDOW,
-        invalid_sig_penalty_threshold:
-            iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_THRESHOLD,
-        invalid_sig_penalty_window: Duration::from_millis(
-            iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_WINDOW_MS,
-        ),
-        invalid_sig_penalty_cooldown: Duration::from_millis(
-            iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_COOLDOWN_MS,
-        ),
-        da_max_commitments_per_block: 0,
-        da_max_proof_openings_per_block: 0,
-        proof_policy: ProofPolicy::Off,
-        commit_cert_history_cap: 0,
-        zk_finality_k: 0,
-        require_precommit_qc: false,
-        rbc_chunk_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES,
-        rbc_chunk_fanout: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_FANOUT,
-        rbc_pending_max_chunks:
-            iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
-        rbc_pending_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_BYTES,
-        rbc_pending_session_limit:
-            iroha_config::parameters::defaults::sumeragi::RBC_PENDING_SESSION_LIMIT,
-        rbc_pending_ttl: Duration::from_millis(
-            iroha_config::parameters::defaults::sumeragi::RBC_PENDING_TTL_MS,
-        ),
-        rbc_session_ttl: Duration::from_secs(
-            iroha_config::parameters::defaults::sumeragi::RBC_SESSION_TTL_SECS,
-        ),
-        rbc_rebroadcast_sessions_per_tick:
-            iroha_config::parameters::defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK,
-        rbc_payload_chunks_per_tick:
-            iroha_config::parameters::defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK,
-        rbc_store_max_sessions:
-            iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
-        rbc_store_soft_sessions:
-            iroha_config::parameters::defaults::sumeragi::RBC_STORE_SOFT_SESSIONS,
-        rbc_store_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_BYTES,
-        rbc_store_soft_bytes: iroha_config::parameters::defaults::sumeragi::RBC_STORE_SOFT_BYTES,
-        rbc_disk_store_ttl: Duration::from_secs(
-            iroha_config::parameters::defaults::sumeragi::RBC_DISK_STORE_TTL_SECS,
-        ),
-        rbc_disk_store_max_bytes:
-            iroha_config::parameters::defaults::sumeragi::RBC_DISK_STORE_MAX_BYTES,
-        key_activation_lead_blocks: 0,
-        key_overlap_grace_blocks: 0,
-        key_expiry_grace_blocks: 0,
-        key_require_hsm: false,
-        key_allowed_algorithms: BTreeSet::from([Algorithm::BlsNormal]),
-        key_allowed_hsm_providers: BTreeSet::new(),
+        mode_flip: SumeragiModeFlip {
+            enabled: iroha_config::parameters::defaults::sumeragi::MODE_FLIP_ENABLED,
+        },
+        collectors: SumeragiCollectors {
+            k: 1,
+            redundant_send_r: 1,
+        },
+        block: SumeragiBlock {
+            max_transactions: None,
+            max_payload_bytes: None,
+            proposal_queue_scan_multiplier:
+                iroha_config::parameters::defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+        },
+        queues: SumeragiQueues {
+            votes: iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
+            block_payload: iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD,
+            rbc_chunks: iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_RBC_CHUNKS,
+            blocks: iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_BLOCKS,
+            control: iroha_config::parameters::defaults::sumeragi::CONTROL_MSG_CHANNEL_CAP,
+        },
+        worker: SumeragiWorker {
+            iteration_budget_cap: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::WORKER_ITERATION_BUDGET_CAP_MS,
+            ),
+            iteration_drain_budget_cap: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::WORKER_ITERATION_DRAIN_BUDGET_CAP_MS,
+            ),
+            tick_work_budget_cap: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::WORKER_TICK_WORK_BUDGET_CAP_MS,
+            ),
+            validation_worker_threads:
+                iroha_config::parameters::defaults::sumeragi::VALIDATION_WORKER_THREADS,
+            validation_work_queue_cap:
+                iroha_config::parameters::defaults::sumeragi::VALIDATION_WORK_QUEUE_CAP,
+            validation_result_queue_cap:
+                iroha_config::parameters::defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP,
+        },
+        pacemaker: SumeragiPacemaker {
+            backoff_multiplier: 1,
+            rtt_floor_multiplier: 1,
+            max_backoff: Duration::from_secs(0),
+            jitter_frac_permille: 0,
+            pending_stall_grace: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::PACEMAKER_PENDING_STALL_GRACE_MS,
+            ),
+            active_pending_soft_limit:
+                iroha_config::parameters::defaults::sumeragi::PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT,
+            rbc_backlog_session_soft_limit: iroha_config::parameters::defaults::sumeragi::
+                PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT,
+            rbc_backlog_chunk_soft_limit: iroha_config::parameters::defaults::sumeragi::
+                PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
+        },
+        da: SumeragiDa {
+            enabled: true,
+            quorum_timeout_multiplier:
+                iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
+            availability_timeout_multiplier: iroha_config::parameters::defaults::sumeragi::
+                DA_AVAILABILITY_TIMEOUT_MULTIPLIER,
+            availability_timeout_floor: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::DA_AVAILABILITY_TIMEOUT_FLOOR_MS,
+            ),
+            max_commitments_per_block: 0,
+            max_proof_openings_per_block: 0,
+        },
+        persistence: SumeragiPersistence {
+            kura_retry_interval: Duration::from_millis(1),
+            kura_retry_max_attempts: 1,
+            commit_inflight_timeout: Duration::from_millis(5_000),
+            commit_work_queue_cap:
+                iroha_config::parameters::defaults::sumeragi::COMMIT_WORK_QUEUE_CAP,
+            commit_result_queue_cap:
+                iroha_config::parameters::defaults::sumeragi::COMMIT_RESULT_QUEUE_CAP,
+        },
+        recovery: SumeragiRecovery {
+            missing_block_signer_fallback_attempts:
+                iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+        },
+        gating: SumeragiGating {
+            future_height_window:
+                iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,
+            future_view_window:
+                iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_VIEW_WINDOW,
+            invalid_sig_penalty_threshold:
+                iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_THRESHOLD,
+            invalid_sig_penalty_window: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_WINDOW_MS,
+            ),
+            invalid_sig_penalty_cooldown: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_COOLDOWN_MS,
+            ),
+            membership_mismatch_alert_threshold:
+                iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD,
+            membership_mismatch_fail_closed:
+                iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED,
+        },
+        rbc: SumeragiRbc {
+            chunk_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES,
+            chunk_fanout: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_FANOUT,
+            pending_max_chunks: iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
+            pending_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_BYTES,
+            pending_session_limit: iroha_config::parameters::defaults::sumeragi::RBC_PENDING_SESSION_LIMIT,
+            pending_ttl: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::RBC_PENDING_TTL_MS,
+            ),
+            session_ttl: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::RBC_SESSION_TTL_MS,
+            ),
+            rebroadcast_sessions_per_tick:
+                iroha_config::parameters::defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK,
+            payload_chunks_per_tick:
+                iroha_config::parameters::defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK,
+            store_max_sessions: iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_SESSIONS,
+            store_soft_sessions: iroha_config::parameters::defaults::sumeragi::RBC_STORE_SOFT_SESSIONS,
+            store_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_STORE_MAX_BYTES,
+            store_soft_bytes: iroha_config::parameters::defaults::sumeragi::RBC_STORE_SOFT_BYTES,
+            disk_store_ttl: Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::RBC_DISK_STORE_TTL_MS,
+            ),
+            disk_store_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_DISK_STORE_MAX_BYTES,
+        },
+        finality: SumeragiFinality {
+            proof_policy: ProofPolicy::Off,
+            commit_cert_history_cap: 0,
+            zk_finality_k: 0,
+            require_precommit_qc: false,
+        },
+        keys: SumeragiKeys {
+            activation_lead_blocks: 0,
+            overlap_grace_blocks: 0,
+            expiry_grace_blocks: 0,
+            require_hsm: false,
+            allowed_algorithms: BTreeSet::from([Algorithm::BlsNormal]),
+            allowed_hsm_providers: BTreeSet::new(),
+        },
         npos: SumeragiNpos {
             block_time: Duration::from_secs(1),
             timeouts: SumeragiNposTimeouts::default(),
-            pacemaker_backoff_multiplier: 1,
-            pacemaker_rtt_floor_multiplier: 1,
-            pacemaker_max_backoff: Duration::from_secs(0),
-            pacemaker_jitter_frac_permille: 0,
-            k_aggregators: 1,
-            redundant_send_r: 1,
             vrf: SumeragiNposVrf::default(),
             reconfig: SumeragiNposReconfig::default(),
-            election: iroha_config::parameters::actual::SumeragiNposElection::default(),
+            election: SumeragiNposElection::default(),
+            epoch_length_blocks: 0,
+            use_stake_snapshot_roster: false,
         },
-        use_stake_snapshot_roster: false,
-        epoch_length_blocks: 0,
-        vrf_commit_deadline_offset: 0,
-        vrf_reveal_deadline_offset: 0,
-        pacemaker_backoff_multiplier: 1,
-        pacemaker_rtt_floor_multiplier: 1,
-        pacemaker_max_backoff: Duration::from_secs(0),
-        pacemaker_jitter_frac_permille: 0,
-        pacemaker_pending_stall_grace: Duration::from_millis(
-            iroha_config::parameters::defaults::sumeragi::PACEMAKER_PENDING_STALL_GRACE_MS,
-        ),
-        pacemaker_active_pending_soft_limit:
-            iroha_config::parameters::defaults::sumeragi::PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT,
-        pacemaker_rbc_backlog_session_soft_limit:
-            iroha_config::parameters::defaults::sumeragi::PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT,
-        pacemaker_rbc_backlog_chunk_soft_limit:
-            iroha_config::parameters::defaults::sumeragi::PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
-        adaptive_observability: iroha_config::parameters::actual::AdaptiveObservability::default(),
-        enable_bls: true,
+        adaptive_observability: AdaptiveObservability::default(),
+        debug: SumeragiDebug {
+            force_soft_fork: false,
+            disable_background_worker: false,
+            rbc: SumeragiDebugRbc {
+                drop_every_nth_chunk: None,
+                shuffle_chunks: false,
+                duplicate_inits: false,
+                force_deliver_quorum_one: false,
+                corrupt_witness_ack: false,
+                corrupt_ready_signature: false,
+                drop_validator_mask: 0,
+                equivocate_chunk_mask: 0,
+                equivocate_validator_mask: 0,
+                conflicting_ready_mask: 0,
+                partial_chunk_mask: 0,
+            },
+        },
     }
 }
 
@@ -1126,11 +1153,11 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 3;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 3;
     consensus_cfg.npos.block_time = Duration::from_millis(1000);
-    consensus_cfg.npos.k_aggregators = 1;
-    consensus_cfg.npos.redundant_send_r = 1;
+    consensus_cfg.collectors.k = 1;
+    consensus_cfg.collectors.redundant_send_r = 1;
 
     let npos_params = SumeragiNposParameters {
         epoch_seed: [0x11; 32],
@@ -1274,7 +1301,7 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.epoch_length_blocks = 9;
+    consensus_cfg.npos.epoch_length_blocks = 9;
     consensus_cfg.npos.block_time = Duration::from_millis(1500);
     consensus_cfg.npos.timeouts.propose = Duration::from_millis(200);
     consensus_cfg.npos.timeouts.prevote = Duration::from_millis(220);
@@ -1282,8 +1309,8 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
     consensus_cfg.npos.timeouts.commit = Duration::from_millis(260);
     consensus_cfg.npos.timeouts.da = Duration::from_millis(280);
     consensus_cfg.npos.timeouts.aggregator = Duration::from_millis(300);
-    consensus_cfg.npos.k_aggregators = 2;
-    consensus_cfg.npos.redundant_send_r = 3;
+    consensus_cfg.collectors.k = 2;
+    consensus_cfg.collectors.redundant_send_r = 3;
     consensus_cfg.npos.vrf.commit_window_blocks = 42;
     consensus_cfg.npos.vrf.reveal_window_blocks = 7;
     consensus_cfg.npos.election.max_validators = 10;
@@ -1365,11 +1392,11 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
                 timeout_da_ms: duration_ms(consensus_cfg.npos.timeouts.da),
                 timeout_aggregator_ms: duration_ms(consensus_cfg.npos.timeouts.aggregator),
                 k_aggregators: consensus_cfg
-                    .npos
-                    .k_aggregators
+                    .collectors
+                    .k
                     .try_into()
-                    .expect("k_aggregators fits u16"),
-                redundant_send_r: consensus_cfg.npos.redundant_send_r,
+                    .expect("collectors.k fits u16"),
+                redundant_send_r: consensus_cfg.collectors.redundant_send_r,
                 epoch_seed: expected_seed,
                 vrf_commit_window_blocks: consensus_cfg.npos.vrf.commit_window_blocks,
                 vrf_reveal_window_blocks: consensus_cfg.npos.vrf.reveal_window_blocks,
@@ -1433,7 +1460,7 @@ async fn start_network_or_closed(
 async fn test_actor_harness(peer_count: usize) -> TestActorHarness {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     test_actor_harness_with_config(peer_count, consensus_cfg, None).await
 }
 
@@ -1443,7 +1470,7 @@ async fn test_actor_harness_with_rbc_store(
 ) -> TestActorHarness {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     test_actor_harness_with_config(peer_count, consensus_cfg, rbc_store_cfg).await
 }
 
@@ -1489,7 +1516,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
     use iroha_futures::supervisor::ShutdownSignal;
 
     assert!(
-        consensus_cfg.da_enabled,
+        consensus_cfg.da.enabled,
         "DA must remain enabled in sumeragi tests; disabling it can deadlock consensus startup"
     );
 
@@ -1671,7 +1698,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         peer_ids.extend(other_peers.iter().map(|peer| peer.id().clone()));
         insert_consensus_keys_for_peers(&mut block, &peer_ids, &key_pairs);
         let params = block.parameters.get_mut();
-        params.sumeragi.da_enabled = consensus_cfg.da_enabled;
+        params.sumeragi.da_enabled = consensus_cfg.da.enabled;
         block.commit();
     }
     let mut state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
@@ -1927,7 +1954,7 @@ async fn actor_next_tick_deadline_tracks_missing_block_windows() {
 async fn actor_next_tick_deadline_tracks_pending_quorum_timeout() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     consensus_cfg.npos.block_time = Duration::from_secs(2);
     consensus_cfg.npos.timeouts.commit = Duration::from_secs(1);
 
@@ -2060,10 +2087,12 @@ async fn actor_next_tick_deadline_prioritizes_queue_with_pending_block() {
 async fn actor_next_tick_deadline_tracks_aborted_retention() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     consensus_cfg.npos.block_time = Duration::from_secs(2);
     consensus_cfg.npos.timeouts.commit = Duration::from_secs(1);
-    consensus_cfg.missing_block_signer_fallback_attempts = 1;
+    consensus_cfg
+        .recovery
+        .missing_block_signer_fallback_attempts = 1;
 
     let mut harness = test_actor_harness_with_config_and_height(1, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
@@ -2073,6 +2102,7 @@ async fn actor_next_tick_deadline_tracks_aborted_retention() {
     let quorum_reschedule_cooldown = quorum_timeout.max(super::QUORUM_RESCHEDULE_COOLDOWN);
     let retention_factor = actor
         .config
+        .recovery
         .missing_block_signer_fallback_attempts
         .saturating_add(2)
         .max(4);
@@ -2162,7 +2192,7 @@ async fn actor_next_tick_deadline_tracks_idle_view_timeout() {
 async fn actor_next_tick_deadline_tracks_rbc_rebroadcast_cooldown() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     consensus_cfg.npos.block_time = Duration::from_secs(2);
     consensus_cfg.npos.timeouts.commit = Duration::from_secs(1);
 
@@ -2658,8 +2688,8 @@ async fn merge_committee_accepts_remote_signature() {
 async fn latest_committed_qc_uses_epoch_for_height() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 2;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 2;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &harness.actor;
@@ -2698,7 +2728,7 @@ async fn latest_committed_qc_uses_epoch_for_height() {
 async fn epoch_for_height_from_view_matches_epoch_for_height() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.epoch_length_blocks = 3;
+    consensus_cfg.npos.epoch_length_blocks = 3;
 
     let harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let height = 5;
@@ -3072,7 +3102,7 @@ async fn rbc_persist_queue_full_increments_metric() {
     let session = Actor::build_rbc_session_from_payload(
         &payload,
         payload_hash,
-        actor.config.rbc_chunk_max_bytes,
+        actor.config.rbc.chunk_max_bytes,
         actor.epoch_for_height(key.1),
     )
     .expect("session");
@@ -4037,7 +4067,7 @@ async fn rbc_roster_for_session_uses_active_topology_in_npos_bootstrap() {
 async fn rbc_roster_for_session_uses_active_topology_when_payload_known_same_epoch() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.epoch_length_blocks = 100;
+    consensus_cfg.npos.epoch_length_blocks = 100;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -4325,7 +4355,7 @@ async fn block_sync_update_accepts_pre_activation_qc_epoch_after_mode_flip() {
     let pending = PendingBlock::new(block.clone(), payload_hash, block_height, view);
     actor.pending.pending_blocks.insert(block.hash(), pending);
     let roster_cache =
-        roster_cache_for_state(actor.state.as_ref(), actor.config.epoch_length_blocks);
+        roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
     let mut update = super::block_sync_update_with_roster(
         &block,
         actor.state.as_ref(),
@@ -4432,7 +4462,7 @@ async fn block_sync_update_rejects_conflicting_precommit_qc_against_lock() {
     super::status::set_locked_qc(locked_height, 0, Some(locked_block.hash()));
 
     let roster_cache =
-        roster_cache_for_state(actor.state.as_ref(), actor.config.epoch_length_blocks);
+        roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
     let mut update = super::block_sync_update_with_roster(
         &conflicting_block,
         actor.state.as_ref(),
@@ -4571,7 +4601,7 @@ async fn block_sync_update_drops_qc_height_mismatch() {
     let pending = PendingBlock::new(block.clone(), payload_hash, block_height, view);
     actor.pending.pending_blocks.insert(block.hash(), pending);
     let roster_cache =
-        roster_cache_for_state(actor.state.as_ref(), actor.config.epoch_length_blocks);
+        roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
     let mut update = super::block_sync_update_with_roster(
         &block,
         actor.state.as_ref(),
@@ -4796,7 +4826,7 @@ async fn block_sync_update_drops_qc_epoch_mismatch() {
     let pending = PendingBlock::new(block.clone(), payload_hash, block_height, view);
     actor.pending.pending_blocks.insert(block.hash(), pending);
     let roster_cache =
-        roster_cache_for_state(actor.state.as_ref(), actor.config.epoch_length_blocks);
+        roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
     let mut update = super::block_sync_update_with_roster(
         &block,
         actor.state.as_ref(),
@@ -4963,7 +4993,7 @@ async fn block_sync_update_records_commit_qc_from_cached_qc() {
         Some(retry_window),
     );
     let roster_cache =
-        roster_cache_for_state(actor.state.as_ref(), actor.config.epoch_length_blocks);
+        roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
     let mut update = super::block_sync_update_with_roster(
         &block,
         actor.state.as_ref(),
@@ -5051,7 +5081,7 @@ async fn block_sync_update_known_block_records_commit_qc() {
         .get_block(NonZeroUsize::new(1).expect("height"))
         .expect("block exists");
     let roster_cache =
-        roster_cache_for_state(actor.state.as_ref(), actor.config.epoch_length_blocks);
+        roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
     let mut update = super::block_sync_update_with_roster(
         block.as_ref(),
         actor.state.as_ref(),
@@ -5146,7 +5176,7 @@ async fn block_sync_update_skips_commit_roster_for_unaccepted_block() {
         None,
     );
     let roster_cache =
-        roster_cache_for_state(actor.state.as_ref(), actor.config.epoch_length_blocks);
+        roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
     let mut update = super::block_sync_update_with_roster(
         &block,
         actor.state.as_ref(),
@@ -5748,7 +5778,7 @@ async fn fetch_pending_block_uses_block_sync_update_when_roster_available() {
 async fn fetch_pending_block_npos_falls_back_without_roster_hints() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -5917,7 +5947,7 @@ async fn fetch_pending_block_sends_rbc_init_when_da_enabled() {
     assert_eq!(init.height, height);
     assert_eq!(init.view, view);
     let payload_bytes = super::proposals::block_payload_bytes(&block_clone);
-    let chunks = super::rbc::chunk_payload_bytes(&payload_bytes, actor.config.rbc_chunk_max_bytes);
+    let chunks = super::rbc::chunk_payload_bytes(&payload_bytes, actor.config.rbc.chunk_max_bytes);
     assert!(!chunks.is_empty(), "expected RBC chunks response");
 
     harness.shutdown.send();
@@ -6469,7 +6499,7 @@ async fn block_sync_update_drops_mismatched_commit_votes() {
     );
 
     let roster_cache =
-        roster_cache_for_state(actor.state.as_ref(), actor.config.epoch_length_blocks);
+        roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
     let mut update = super::block_sync_update_with_roster(
         &block,
         actor.state.as_ref(),
@@ -7461,7 +7491,7 @@ async fn quorum_reschedule_keeps_cached_commit_qc_on_drop() {
 #[tokio::test(flavor = "current_thread")]
 async fn payload_rebroadcast_targets_only_highest_pending_block() {
     let mut harness = test_actor_harness(4).await;
-    harness.actor.config.rbc_rebroadcast_sessions_per_tick = 1;
+    harness.actor.config.rbc.rebroadcast_sessions_per_tick = 1;
     let view = harness.actor.state.view();
     let tip_height = view.height();
     let tip_hash = view.latest_block_hash();
@@ -7869,7 +7899,7 @@ async fn commit_pipeline_uses_commit_qc_roster_for_validation() {
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.pending.last_commit_pipeline_run = Instant::now() - Duration::from_secs(10);
 
-    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick);
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
 
     let has_vote = actor.vote_log.values().any(|vote| {
         vote.phase == Phase::Commit
@@ -8022,7 +8052,7 @@ async fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
         "permissioned consensus uses epoch 0"
     );
     let roster_cache =
-        roster_cache_for_state(actor.state.as_ref(), actor.config.epoch_length_blocks);
+        roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
     let persisted = super::persisted_roster_for_block(
         actor.state.as_ref(),
         actor.kura.as_ref(),
@@ -8121,7 +8151,7 @@ async fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
     actor.last_qc_rebuild = Instant::now() - Duration::from_secs(10);
     let last_qc_rebuild = actor.last_qc_rebuild;
 
-    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick);
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
 
     assert!(
         actor.last_qc_rebuild > last_qc_rebuild,
@@ -8141,7 +8171,7 @@ async fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
 async fn commit_pipeline_uses_epoch_for_height_when_emitting_votes() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.epoch_length_blocks = 2;
+    consensus_cfg.npos.epoch_length_blocks = 2;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -8537,7 +8567,7 @@ async fn finalize_pending_block_revives_aborted_on_tip_with_commit_qc() {
 async fn finalize_pending_block_defers_until_tip_extends() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
 
     let mut harness = test_actor_harness_with_config_and_height(1, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
@@ -8631,7 +8661,7 @@ async fn commit_pipeline_drains_inflight_result_with_empty_pending() {
 
     harness
         .actor
-        .process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick);
+        .process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
 
     assert!(harness.actor.subsystems.commit.inflight.is_none());
     assert!(harness.actor.pending.pending_blocks.is_empty());
@@ -8699,7 +8729,7 @@ async fn commit_rejection_records_invalid_proposal_view() {
         })
         .expect("send commit result");
 
-    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick);
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
 
     let evidence_view = actor.state.world.consensus_evidence.view();
     let mut recorded_view = None;
@@ -8721,8 +8751,8 @@ async fn commit_rejection_records_invalid_proposal_view() {
 async fn commit_inflight_timeout_triggers_view_change_and_retains_aborted_pending() {
     let mut cfg = test_sumeragi_config();
     cfg.consensus_mode = ConsensusMode::Permissioned;
-    cfg.da_enabled = true;
-    cfg.commit_inflight_timeout = Duration::from_millis(10);
+    cfg.da.enabled = true;
+    cfg.persistence.commit_inflight_timeout = Duration::from_millis(10);
     let mut harness = test_actor_harness_with_config(1, cfg, None).await;
 
     super::status::reset_view_change_cause_counters_for_tests();
@@ -8765,7 +8795,7 @@ async fn commit_inflight_timeout_triggers_view_change_and_retains_aborted_pendin
 
     harness
         .actor
-        .process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick);
+        .process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
 
     assert!(harness.actor.subsystems.commit.inflight.is_none());
     let pending = harness
@@ -8916,7 +8946,7 @@ async fn rbc_payload_rebroadcast_sends_single_init_and_respects_cooldown() {
         "RBC payload rebroadcasts should bypass the background queue"
     );
     let expected_targets =
-        super::rbc::rbc_chunk_target_count(roster.len(), harness.actor.config.rbc_chunk_fanout);
+        super::rbc::rbc_chunk_target_count(roster.len(), harness.actor.config.rbc.chunk_fanout);
     if should_rebroadcast {
         let entry = harness
             .actor
@@ -9093,7 +9123,7 @@ async fn rbc_payload_rebroadcast_includes_leader_override() {
 #[tokio::test(flavor = "current_thread")]
 async fn rbc_outbound_chunk_budget_limits_per_tick() {
     let mut harness = test_actor_harness(4).await;
-    harness.actor.config.rbc_payload_chunks_per_tick = 2;
+    harness.actor.config.rbc.payload_chunks_per_tick = 2;
     let key = session_key();
     let roster = harness.actor.effective_commit_topology();
     let chunks = vec![
@@ -9277,7 +9307,7 @@ async fn rbc_payload_rebroadcast_allows_derived_roster() {
         "RBC payload rebroadcasts should bypass the background queue"
     );
     let expected_targets =
-        super::rbc::rbc_chunk_target_count(roster.len(), harness.actor.config.rbc_chunk_fanout);
+        super::rbc::rbc_chunk_target_count(roster.len(), harness.actor.config.rbc.chunk_fanout);
     let should_rebroadcast = harness.actor.should_rebroadcast_rbc_payload(&roster, key);
     let chunk_count = usize::try_from(session.total_chunks()).unwrap_or(0);
     if should_rebroadcast {
@@ -9760,7 +9790,7 @@ async fn rbc_ready_rebroadcast_skips_on_roster_hash_mismatch() {
 async fn tick_rebroadcasts_stalled_rbc_payloads_and_respects_cooldown() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
     let _ = harness.background_rx.try_iter().count();
 
@@ -10091,7 +10121,7 @@ async fn commit_quorum_timeout_uses_npos_timeouts() {
         block_time,
         commit_time,
         da_enabled,
-        actor.config.da_quorum_timeout_multiplier.max(1),
+        actor.config.da.quorum_timeout_multiplier.max(1),
     );
     assert_eq!(actor.commit_quorum_timeout(), expected);
 
@@ -12941,8 +12971,8 @@ async fn handle_qc_records_commit_qc_history() {
     status::reset_commit_certs_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.rbc_chunk_max_bytes = 1024 * 1024;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
     let height = 2u64;
@@ -13112,7 +13142,7 @@ async fn handle_qc_drops_empty_block_payload() {
 async fn handle_qc_marks_pending_with_commit_qc() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
 
@@ -13357,7 +13387,7 @@ async fn handle_vote_seeds_missing_block_fetch_when_roster_missing() {
 async fn handle_qc_accepts_stale_precommit_qc_for_unknown_block() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config_and_height(1, consensus_cfg, None, 2).await;
     let actor = &mut harness.actor;
 
@@ -13412,7 +13442,7 @@ async fn handle_qc_accepts_stale_precommit_qc_for_unknown_block() {
 async fn block_created_applies_cached_precommit_qc() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
 
@@ -13478,8 +13508,10 @@ async fn block_created_applies_cached_precommit_qc() {
 async fn handle_qc_missing_block_fetch_falls_back_after_signer_attempts() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.missing_block_signer_fallback_attempts = 1;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg
+        .recovery
+        .missing_block_signer_fallback_attempts = 1;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
     seed_genesis_block_for_state(&actor.state);
@@ -13599,7 +13631,7 @@ async fn handle_qc_missing_block_fetch_falls_back_after_signer_attempts() {
 async fn defer_qc_if_block_missing_uses_rebroadcast_cooldown() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(2, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -13642,7 +13674,7 @@ async fn defer_qc_if_block_missing_uses_rebroadcast_cooldown() {
 async fn defer_qc_if_block_missing_defers_view_change_on_payload_backlog() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(2, consensus_cfg, None).await;
     let actor = &mut harness.actor;
     super::status::reset_worker_loop_snapshot_for_tests();
@@ -13781,8 +13813,8 @@ async fn clear_missing_block_view_change_resets_window_and_trigger() {
 async fn rbc_chunk_commit_pipeline_runs_on_completion() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.rbc_chunk_max_bytes = 1024 * 1024;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
 
     let view = 0u64;
@@ -13881,13 +13913,14 @@ async fn rbc_chunk_commit_pipeline_runs_on_completion() {
 async fn rbc_pending_caps_respect_minimum_chunk_size() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.rbc_chunk_max_bytes = 1;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1;
     let hard_chunk_cap = usize::try_from(super::RBC_MAX_TOTAL_CHUNKS).unwrap_or(usize::MAX);
-    let chunk_max_bytes = consensus_cfg.rbc_chunk_max_bytes.max(1);
+    let chunk_max_bytes = consensus_cfg.rbc.chunk_max_bytes.max(1);
     let hard_byte_cap = chunk_max_bytes.saturating_mul(hard_chunk_cap);
     let expected_max_bytes = consensus_cfg
-        .rbc_pending_max_bytes
+        .rbc
+        .pending_max_bytes
         .min(hard_byte_cap)
         .max(chunk_max_bytes);
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
@@ -14188,8 +14221,8 @@ async fn handle_rbc_ready_refreshes_roster_when_unverified() {
 #[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_ready_requests_missing_block_on_stash_cap_drop() {
     let mut harness = test_actor_harness(4).await;
-    harness.actor.config.rbc_chunk_max_bytes = 1;
-    harness.actor.config.rbc_pending_max_bytes = 1;
+    harness.actor.config.rbc.chunk_max_bytes = 1;
+    harness.actor.config.rbc.pending_max_bytes = 1;
     let key = session_key();
     let roster = harness.actor.effective_commit_topology();
     assert!(!roster.is_empty());
@@ -15801,7 +15834,7 @@ async fn rebroadcast_stalled_rbc_payloads_skips_when_queue_backpressured() {
 #[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_stalled_rbc_payloads_respects_session_budget() {
     let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.rbc_rebroadcast_sessions_per_tick = 1;
+    consensus_cfg.rbc.rebroadcast_sessions_per_tick = 1;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let local_peer_id = harness.actor.common_config.peer.id().clone();
     let mut roster = vec![local_peer_id.clone()];
@@ -16082,7 +16115,7 @@ async fn recover_block_from_rbc_session_requests_missing_block_created() {
     let mut session = Actor::build_rbc_session_from_payload(
         &payload_bytes,
         payload_hash,
-        actor.config.rbc_chunk_max_bytes,
+        actor.config.rbc.chunk_max_bytes,
         epoch,
     )
     .expect("session");
@@ -16132,7 +16165,7 @@ async fn recover_block_from_rbc_session_defers_view_change_on_queue_backlog() {
     let mut session = Actor::build_rbc_session_from_payload(
         &payload_bytes,
         payload_hash,
-        actor.config.rbc_chunk_max_bytes,
+        actor.config.rbc.chunk_max_bytes,
         epoch,
     )
     .expect("session");
@@ -16454,8 +16487,8 @@ async fn record_rbc_session_roster_refreshes_derived_on_change() {
 async fn handle_rbc_init_rejects_epoch_mismatch() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 2;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 2;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -16496,8 +16529,8 @@ async fn handle_rbc_init_rejects_epoch_mismatch() {
 async fn handle_rbc_init_caches_vote_roster() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 2;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 2;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -16548,8 +16581,8 @@ async fn handle_rbc_init_caches_vote_roster() {
 async fn handle_rbc_init_ignores_result_merkle_root_mismatch() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 2;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 2;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -17009,7 +17042,7 @@ async fn handle_rbc_init_rejects_duplicate_roster() {
 async fn handle_rbc_init_rejects_zero_chunks() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -17050,8 +17083,8 @@ async fn handle_rbc_init_rejects_zero_chunks() {
 async fn handle_rbc_ready_rejects_epoch_mismatch() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 2;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 2;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -17098,8 +17131,8 @@ async fn handle_rbc_ready_rejects_epoch_mismatch() {
 async fn handle_rbc_deliver_rejects_epoch_mismatch() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 2;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 2;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -17150,8 +17183,8 @@ async fn handle_rbc_deliver_rejects_epoch_mismatch() {
 async fn handle_rbc_chunk_rejects_epoch_mismatch() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 2;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 2;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -17392,7 +17425,7 @@ async fn hydrate_rbc_session_from_block_attributes_mismatch_to_sender() {
     let session = Actor::build_rbc_session_from_payload(
         &expected_payload,
         expected_hash,
-        actor.config.rbc_chunk_max_bytes,
+        actor.config.rbc.chunk_max_bytes,
         epoch,
     )
     .expect("session");
@@ -18577,7 +18610,7 @@ async fn maybe_emit_rbc_deliver_recovers_block_created_locally() {
     let mut session = Actor::build_rbc_session_from_payload(
         &payload_bytes,
         payload_hash,
-        actor.config.rbc_chunk_max_bytes,
+        actor.config.rbc.chunk_max_bytes,
         epoch,
     )
     .expect("session");
@@ -18691,7 +18724,7 @@ async fn maybe_emit_rbc_deliver_rejects_chunk_root_mismatch() {
 #[tokio::test(flavor = "current_thread")]
 async fn rbc_session_ttl_prunes_stale_sessions() {
     let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.rbc_session_ttl = Duration::from_secs(1);
+    consensus_cfg.rbc.session_ttl = Duration::from_secs(1);
     let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
     let key = session_key();
     let payload = b"payload".to_vec();
@@ -18751,9 +18784,9 @@ async fn rbc_session_ttl_prunes_stale_sessions() {
 #[tokio::test(flavor = "current_thread")]
 async fn seed_rbc_session_flushes_pending_ready() {
     let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.rbc_chunk_max_bytes = 1024;
-    consensus_cfg.rbc_pending_max_chunks = 4;
-    consensus_cfg.rbc_pending_max_bytes = 4096;
+    consensus_cfg.rbc.chunk_max_bytes = 1024;
+    consensus_cfg.rbc.pending_max_chunks = 4;
+    consensus_cfg.rbc.pending_max_bytes = 4096;
     let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
 
     let block = sample_block(1, 0, None);
@@ -18766,7 +18799,7 @@ async fn seed_rbc_session_flushes_pending_ready() {
     let session = Actor::build_rbc_session_from_payload(
         &payload_bytes,
         payload_hash,
-        harness.actor.config.rbc_chunk_max_bytes,
+        harness.actor.config.rbc.chunk_max_bytes,
         epoch,
     )
     .expect("rbc session");
@@ -18827,7 +18860,7 @@ async fn seed_rbc_session_flushes_pending_ready() {
 async fn seed_rbc_session_uses_epoch_for_height() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.epoch_length_blocks = 2;
+    consensus_cfg.npos.epoch_length_blocks = 2;
     let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
 
     let height = 3u64;
@@ -18878,7 +18911,7 @@ async fn seed_rbc_session_uses_epoch_for_height() {
 #[tokio::test(flavor = "current_thread")]
 async fn ensure_rbc_session_from_pending_block_seeds_session() {
     let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.rbc_chunk_max_bytes = 1024 * 1024;
+    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let height = harness
         .actor
@@ -18939,7 +18972,7 @@ async fn ensure_rbc_session_from_pending_block_seeds_session() {
     Actor::build_rbc_session_from_payload(
         &payload_bytes,
         payload_hash,
-        harness.actor.config.rbc_chunk_max_bytes,
+        harness.actor.config.rbc.chunk_max_bytes,
         harness.actor.epoch_for_height(height),
     )
     .expect("rbc session should build for pending block payload");
@@ -19685,8 +19718,8 @@ fn membership_view_hash_changes_with_context() {
 #[tokio::test(flavor = "current_thread")]
 async fn init_collector_plan_broadcasts_membership_advert() {
     let mut harness = test_actor_harness(3).await;
-    harness.actor.config.collectors_k = 1;
-    harness.actor.config.collectors_redundant_send_r = 1;
+    harness.actor.config.collectors.k = 1;
+    harness.actor.config.collectors.redundant_send_r = 1;
     {
         let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
         let mut block = state.world.block();
@@ -19739,8 +19772,8 @@ async fn init_collector_plan_broadcasts_membership_advert() {
 async fn init_collector_plan_uses_epoch_for_height() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 2;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 2;
 
     let mut harness = test_actor_harness_with_config(3, consensus_cfg, None).await;
 
@@ -19788,8 +19821,8 @@ async fn init_collector_plan_uses_epoch_for_height() {
 #[tokio::test(flavor = "current_thread")]
 async fn collector_plan_params_permissioned_use_on_chain() {
     let mut harness = test_actor_harness(3).await;
-    harness.actor.config.collectors_k = 1;
-    harness.actor.config.collectors_redundant_send_r = 1;
+    harness.actor.config.collectors.k = 1;
+    harness.actor.config.collectors.redundant_send_r = 1;
     {
         let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
         let mut block = state.world.block();
@@ -19811,8 +19844,8 @@ async fn collector_plan_params_permissioned_use_on_chain() {
 #[tokio::test(flavor = "current_thread")]
 async fn consensus_params_expectation_uses_on_chain_values() {
     let mut harness = test_actor_harness(3).await;
-    harness.actor.config.collectors_k = 1;
-    harness.actor.config.collectors_redundant_send_r = 1;
+    harness.actor.config.collectors.k = 1;
+    harness.actor.config.collectors.redundant_send_r = 1;
     {
         let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
         let mut block = state.world.block();
@@ -19844,8 +19877,8 @@ async fn consensus_params_expectation_uses_on_chain_values() {
 #[tokio::test(flavor = "current_thread")]
 async fn consensus_caps_use_on_chain_collectors() {
     let mut harness = test_actor_harness(3).await;
-    harness.actor.config.collectors_k = 1;
-    harness.actor.config.collectors_redundant_send_r = 1;
+    harness.actor.config.collectors.k = 1;
+    harness.actor.config.collectors.redundant_send_r = 1;
     {
         let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
         let mut block = state.world.block();
@@ -19868,8 +19901,8 @@ async fn init_collector_plan_uses_activation_height_collectors() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 1;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 1;
 
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
@@ -20171,7 +20204,7 @@ fn non_rbc_payload_budget_clamps_to_lower_of_config_and_cap() {
 #[tokio::test(flavor = "current_thread")]
 async fn consensus_frame_caps_are_plaintext_and_rbc_chunk_is_clamped() {
     let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.rbc_chunk_max_bytes = 1024 * 1024;
+    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
     let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -20192,10 +20225,10 @@ async fn consensus_frame_caps_are_plaintext_and_rbc_chunk_is_clamped() {
     let expected_chunk_cap =
         super::rbc_chunk_payload_cap(actor.common_config.peer.id(), expected_payload_cap);
     assert_eq!(
-        actor.config.rbc_chunk_max_bytes, expected_chunk_cap,
+        actor.config.rbc.chunk_max_bytes, expected_chunk_cap,
         "RBC chunk size should be clamped to consensus payload cap"
     );
-    let chunk = sample_chunk_with_len(0, actor.config.rbc_chunk_max_bytes);
+    let chunk = sample_chunk_with_len(0, actor.config.rbc.chunk_max_bytes);
     assert!(
         super::consensus_block_wire_len(
             actor.common_config.peer.id(),
@@ -20278,7 +20311,7 @@ fn consensus_block_wire_len_matches_network_message() {
 async fn trim_block_sync_update_drops_commit_votes_to_fit() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -20328,7 +20361,7 @@ async fn trim_block_sync_update_drops_commit_votes_to_fit() {
 async fn trim_block_sync_update_keeps_stake_snapshot_in_npos() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -20468,7 +20501,7 @@ async fn stale_pending_block_requeues_transactions() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
 
     let shutdown = ShutdownSignal::new();
     let (local_peer, _local_pop, key_pair) = bls_peer("127.0.0.1:0");
@@ -27774,8 +27807,8 @@ async fn trigger_view_change_uses_commit_qc_roster_for_new_view_vote() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.rbc_chunk_max_bytes = 1024;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let _guard = status::view_change_proof_test_guard();
     status::reset_commit_certs_for_tests();
@@ -28215,7 +28248,7 @@ fn idle_view_timeout_caps_no_proposal_grace() {
 async fn active_pending_blocks_len_ignores_aborted_and_nonextending() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
 
@@ -28879,7 +28912,7 @@ async fn force_view_change_if_idle_skips_when_consensus_queue_backpressure() {
         .phase_tracker
         .on_view_change(height, current_view, start);
 
-    actor.config.msg_channel_cap_block_payload = 1;
+    actor.config.queues.block_payload = 1;
     super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
 
     assert!(
@@ -28990,11 +29023,11 @@ async fn proposal_backpressure_ignores_inactive_rbc_sessions() {
 async fn should_defer_proposal_when_active_pending_rbc_session_not_delivered() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.pacemaker_pending_stall_grace = Duration::ZERO;
-    consensus_cfg.pacemaker_active_pending_soft_limit = 0;
-    consensus_cfg.pacemaker_rbc_backlog_session_soft_limit = 0;
-    consensus_cfg.pacemaker_rbc_backlog_chunk_soft_limit = 0;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.pacemaker.pending_stall_grace = Duration::ZERO;
+    consensus_cfg.pacemaker.active_pending_soft_limit = 0;
+    consensus_cfg.pacemaker.rbc_backlog_session_soft_limit = 0;
+    consensus_cfg.pacemaker.rbc_backlog_chunk_soft_limit = 0;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -29206,9 +29239,9 @@ async fn proposal_backpressure_blocks_commit_qc_pending_after_reschedule() {
 async fn proposal_backpressure_respects_pending_stall_grace() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.pacemaker_active_pending_soft_limit = 0;
-    consensus_cfg.pacemaker_pending_stall_grace = Duration::from_millis(200);
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.pacemaker.active_pending_soft_limit = 0;
+    consensus_cfg.pacemaker.pending_stall_grace = Duration::from_millis(200);
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -29236,7 +29269,7 @@ async fn proposal_backpressure_respects_pending_stall_grace() {
     let quorum_timeout = actor
         .quorum_timeout(actor.runtime_da_enabled())
         .max(Duration::from_millis(1));
-    let stall_grace = actor.config.pacemaker_pending_stall_grace;
+    let stall_grace = actor.config.pacemaker.pending_stall_grace;
     let stalled = now
         .checked_sub(stall_grace.saturating_add(Duration::from_millis(1)))
         .unwrap_or(now);
@@ -29284,8 +29317,8 @@ async fn proposal_backpressure_respects_pending_stall_grace() {
 async fn proposal_backpressure_allows_pending_with_soft_limit() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.pacemaker_active_pending_soft_limit = 1;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.pacemaker.active_pending_soft_limit = 1;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -29308,9 +29341,9 @@ async fn proposal_backpressure_allows_pending_with_soft_limit() {
 async fn proposal_backpressure_allows_rbc_backlog_with_soft_limits() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.pacemaker_rbc_backlog_session_soft_limit = 1;
-    consensus_cfg.pacemaker_rbc_backlog_chunk_soft_limit = 4;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.pacemaker.rbc_backlog_session_soft_limit = 1;
+    consensus_cfg.pacemaker.rbc_backlog_chunk_soft_limit = 4;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -31056,8 +31089,8 @@ async fn recover_qc_from_aggregate_rejects_new_view_highest_epoch_mismatch() {
 async fn handle_qc_rejects_new_view_highest_epoch_mismatch() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.epoch_length_blocks = 1;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 1;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -31386,8 +31419,8 @@ async fn roster_for_vote_uses_commit_qc_history_for_next_height() {
     status::reset_commit_certs_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.rbc_chunk_max_bytes = 1024 * 1024;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -33007,8 +33040,8 @@ async fn ensure_rbc_session_roster_falls_back_to_prev_commit_topology_without_sn
 async fn handle_evidence_uses_subject_height_prf_seed() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 1;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 1;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -33222,8 +33255,8 @@ async fn censorship_evidence_triggers_view_change() {
 async fn handle_vote_uses_height_prf_seed() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 1;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 1;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -33455,8 +33488,8 @@ async fn emit_precommit_vote_uses_activation_height_mode_tag() {
 async fn handle_qc_uses_height_prf_seed() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 1;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 1;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -33553,8 +33586,8 @@ async fn handle_qc_uses_activation_height_mode_tag() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 1;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 1;
 
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
@@ -33747,8 +33780,8 @@ async fn handle_qc_uses_activation_height_mode_tag() {
 async fn leader_index_for_uses_height_prf_seed() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 1;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 1;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -33801,7 +33834,7 @@ async fn leader_index_for_uses_height_prf_seed() {
 async fn leader_index_for_canonicalizes_npos_roster_order() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -33836,8 +33869,8 @@ async fn leader_index_for_uses_activation_height_mode() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 1;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 1;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -33899,10 +33932,10 @@ async fn load_npos_epoch_params_prefers_world_values() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 7;
-    consensus_cfg.vrf_commit_deadline_offset = 2;
-    consensus_cfg.vrf_reveal_deadline_offset = 3;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 7;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 2;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 3;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -33994,8 +34027,8 @@ async fn assemble_proposal_skips_view_overflow() {
 async fn assemble_proposal_schedules_rbc_after_proposal_messages() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.rbc_chunk_max_bytes = 1024;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -34198,8 +34231,8 @@ async fn proposal_queue_scan_budget_limits_fetch() {
 async fn proposal_scan_budget_tracks_multiplier() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = false;
-    consensus_cfg.proposal_queue_scan_multiplier = nonzero!(2_usize);
+    consensus_cfg.da.enabled = false;
+    consensus_cfg.block.proposal_queue_scan_multiplier = nonzero!(2_usize);
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -34214,7 +34247,7 @@ async fn proposal_scan_budget_tracks_multiplier() {
 async fn da_proposal_rejects_single_tx_exceeding_consensus_payload_frame_cap() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -34295,7 +34328,7 @@ async fn proposal_defers_when_all_txs_exceed_payload_budget() {
         encoded_len > super::RBC_MAX_TOTAL_CHUNKS as usize,
         "transaction must exceed total RBC chunk budget"
     );
-    actor.config.rbc_chunk_max_bytes = 1;
+    actor.config.rbc.chunk_max_bytes = 1;
 
     actor
         .queue
@@ -34347,12 +34380,12 @@ async fn refresh_npos_seed_updates_collector_params_from_world() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.npos.k_aggregators = 1;
-    consensus_cfg.npos.redundant_send_r = 1;
-    consensus_cfg.epoch_length_blocks = 2;
-    consensus_cfg.vrf_commit_deadline_offset = 1;
-    consensus_cfg.vrf_reveal_deadline_offset = 2;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.collectors.k = 1;
+    consensus_cfg.collectors.redundant_send_r = 1;
+    consensus_cfg.npos.epoch_length_blocks = 2;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 1;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 2;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -34397,10 +34430,10 @@ async fn refresh_npos_seed_realigns_epoch_after_epoch_length_change() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 10;
-    consensus_cfg.vrf_commit_deadline_offset = 1;
-    consensus_cfg.vrf_reveal_deadline_offset = 2;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 10;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 1;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 2;
 
     let height = 15;
     let mut harness =
@@ -34452,8 +34485,8 @@ async fn update_prf_context_uses_activation_height_seed() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 1;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 1;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -34498,7 +34531,7 @@ async fn epoch_for_height_uses_npos_params_before_activation() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
 
     let activation_height = 10;
     let current_height = 5;
@@ -34541,10 +34574,10 @@ async fn epoch_for_height_uses_npos_params_before_activation() {
 async fn on_block_commit_persists_new_epoch_seed_record() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 2;
-    consensus_cfg.vrf_commit_deadline_offset = 0;
-    consensus_cfg.vrf_reveal_deadline_offset = 0;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 2;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 0;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 0;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -34794,8 +34827,8 @@ async fn new_view_votes_target_topology_when_collectors_below_quorum() {
 async fn new_view_votes_target_collectors_when_local_leads_in_npos() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.npos.k_aggregators = 3;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.collectors.k = 3;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -34840,7 +34873,7 @@ async fn new_view_votes_target_collectors_when_local_leads_in_npos() {
     let mut expected = super::collectors::deterministic_collectors(
         &signature_topology,
         consensus_mode,
-        actor.config.npos.k_aggregators,
+        actor.config.collectors.k,
         prf_seed,
         height,
         view,
@@ -35214,8 +35247,8 @@ async fn pacemaker_defers_proposal_when_precommit_votes_in_prior_epoch() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 2;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 2;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -35551,8 +35584,8 @@ async fn pacemaker_uses_commit_qc_roster_for_proposal_leader() {
     status::reset_commit_certs_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.rbc_chunk_max_bytes = 1024 * 1024;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -35654,7 +35687,7 @@ async fn pacemaker_uses_commit_qc_roster_for_proposal_leader() {
         actor.consensus_payload_frame_cap,
     );
     assert_eq!(
-        actor.config.rbc_chunk_max_bytes, expected_chunk_cap,
+        actor.config.rbc.chunk_max_bytes, expected_chunk_cap,
         "RBC chunk size should be clamped to consensus payload cap"
     );
     let highest_qc = actor.latest_committed_qc().expect("committed qc");
@@ -35735,7 +35768,7 @@ async fn npos_commit_qc_roster_roll_forward_canonicalizes_order() {
     status::reset_commit_certs_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -35852,7 +35885,7 @@ async fn pacemaker_bootstraps_with_commit_qc_when_active_roster_empty() {
     status::reset_commit_certs_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -37060,7 +37093,7 @@ async fn block_created_updates_locked_status_when_lock_missing() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -37129,7 +37162,7 @@ async fn block_created_uses_cached_proposal_when_lock_missing() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -37201,7 +37234,7 @@ async fn block_created_accepts_when_hint_highest_missing() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -37557,7 +37590,7 @@ async fn block_created_rebuilds_qc_with_snapshot_roster() {
 async fn duplicate_block_created_hydrates_existing_rbc_session() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.rbc_chunk_max_bytes = 1024;
+    consensus_cfg.rbc.chunk_max_bytes = 1024;
     let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -37596,7 +37629,7 @@ async fn duplicate_block_created_hydrates_existing_rbc_session() {
     let seeded = Actor::build_rbc_session_from_payload(
         &payload_bytes,
         payload_hash,
-        actor.config.rbc_chunk_max_bytes,
+        actor.config.rbc.chunk_max_bytes,
         epoch,
     )
     .expect("rbc session");
@@ -43432,9 +43465,9 @@ fn rbc_mismatch_throttle_logs_on_view_advance() {
 #[test]
 fn invalid_signature_penalty_suppresses_after_threshold() {
     let mut config = test_sumeragi_config();
-    config.invalid_sig_penalty_threshold = 2;
-    config.invalid_sig_penalty_window = Duration::from_secs(10);
-    config.invalid_sig_penalty_cooldown = Duration::from_secs(5);
+    config.gating.invalid_sig_penalty_threshold = 2;
+    config.gating.invalid_sig_penalty_window = Duration::from_secs(10);
+    config.gating.invalid_sig_penalty_cooldown = Duration::from_secs(5);
     let mut penalty = InvalidSigPenalty::new(&config);
     let now = Instant::now();
 
@@ -43449,8 +43482,8 @@ fn invalid_signature_penalty_suppresses_after_threshold() {
 #[tokio::test]
 async fn future_consensus_height_window_drops_far_height() {
     let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_future_height_window = 1;
-    consensus_cfg.consensus_future_view_window = 0;
+    consensus_cfg.gating.future_height_window = 1;
+    consensus_cfg.gating.future_view_window = 0;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
     let actor = &mut harness.actor;
     let base_height = actor.last_committed_height.saturating_add(1);
@@ -43467,8 +43500,8 @@ async fn future_consensus_height_window_drops_far_height() {
 #[tokio::test]
 async fn future_consensus_view_window_drops_far_view() {
     let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_future_height_window = 0;
-    consensus_cfg.consensus_future_view_window = 1;
+    consensus_cfg.gating.future_height_window = 0;
+    consensus_cfg.gating.future_view_window = 1;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
     let actor = &mut harness.actor;
     let base_height = actor.last_committed_height.saturating_add(1);
@@ -43484,8 +43517,8 @@ async fn future_consensus_view_window_drops_far_view() {
 #[tokio::test]
 async fn future_consensus_view_window_allows_new_view_messages() {
     let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_future_height_window = 0;
-    consensus_cfg.consensus_future_view_window = 1;
+    consensus_cfg.gating.future_height_window = 0;
+    consensus_cfg.gating.future_view_window = 1;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
     let actor = &mut harness.actor;
     let base_height = actor.last_committed_height.saturating_add(1);
@@ -43501,8 +43534,8 @@ async fn future_consensus_view_window_allows_new_view_messages() {
 #[tokio::test]
 async fn future_consensus_view_window_skips_stale_round() {
     let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_future_height_window = 0;
-    consensus_cfg.consensus_future_view_window = 1;
+    consensus_cfg.gating.future_height_window = 0;
+    consensus_cfg.gating.future_view_window = 1;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
     let actor = &mut harness.actor;
     let base_height = actor.last_committed_height.saturating_add(1);
@@ -43522,8 +43555,8 @@ async fn future_consensus_view_window_skips_stale_round() {
 #[tokio::test]
 async fn block_sync_update_future_window_drops_unrequested() {
     let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_future_height_window = 1;
-    consensus_cfg.consensus_future_view_window = 0;
+    consensus_cfg.gating.future_height_window = 1;
+    consensus_cfg.gating.future_view_window = 0;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
     let actor = &mut harness.actor;
     let base_height = actor.last_committed_height.saturating_add(1);
@@ -43554,8 +43587,8 @@ async fn block_sync_update_future_window_drops_unrequested() {
 #[tokio::test]
 async fn block_sync_update_future_window_allows_requested() {
     let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_future_height_window = 1;
-    consensus_cfg.consensus_future_view_window = 0;
+    consensus_cfg.gating.future_height_window = 1;
+    consensus_cfg.gating.future_view_window = 0;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
     let actor = &mut harness.actor;
     let base_height = actor.last_committed_height.saturating_add(1);
@@ -43596,8 +43629,8 @@ async fn block_sync_update_future_window_allows_requested() {
 #[tokio::test]
 async fn block_sync_update_future_window_allows_known_block() {
     let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_future_height_window = 1;
-    consensus_cfg.consensus_future_view_window = 0;
+    consensus_cfg.gating.future_height_window = 1;
+    consensus_cfg.gating.future_view_window = 0;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
     let actor = &mut harness.actor;
     let base_height = actor.last_committed_height.saturating_add(1);
@@ -43636,8 +43669,8 @@ async fn block_sync_update_future_window_allows_known_block() {
 #[tokio::test]
 async fn block_sync_update_future_window_allows_known_parent() {
     let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_future_height_window = 1;
-    consensus_cfg.consensus_future_view_window = 0;
+    consensus_cfg.gating.future_height_window = 1;
+    consensus_cfg.gating.future_view_window = 0;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
     let actor = &mut harness.actor;
     let base_height = actor.last_committed_height.saturating_add(1);
@@ -45305,21 +45338,21 @@ fn build_consensus_proposal_populates_defaults() {
 #[test]
 fn commit_quorum_timeout_tracks_block_time() {
     let mut cfg = test_sumeragi_config();
-    cfg.da_enabled = true;
+    cfg.da.enabled = true;
     cfg.npos.block_time = Duration::from_millis(1_000);
     cfg.npos.timeouts.commit = Duration::from_millis(150);
-    let default_multiplier = cfg.da_quorum_timeout_multiplier;
+    let default_multiplier = cfg.da.quorum_timeout_multiplier;
 
     assert_eq!(
         commit_quorum_timeout_for_config(&cfg),
         Duration::from_millis(4_800)
     );
-    cfg.da_quorum_timeout_multiplier = 1;
+    cfg.da.quorum_timeout_multiplier = 1;
     assert_eq!(
         commit_quorum_timeout_for_config(&cfg),
         Duration::from_millis(1_600)
     );
-    cfg.da_quorum_timeout_multiplier = default_multiplier;
+    cfg.da.quorum_timeout_multiplier = default_multiplier;
 
     cfg.npos.timeouts.commit = Duration::from_millis(2_500);
     assert_eq!(
@@ -45334,7 +45367,7 @@ fn commit_quorum_timeout_tracks_block_time() {
         "zero commit timeout should fall back to block_time for liveness"
     );
 
-    cfg.da_enabled = false;
+    cfg.da.enabled = false;
     cfg.npos.timeouts.commit = Duration::from_millis(150);
     assert_eq!(
         commit_quorum_timeout_for_config(&cfg),
@@ -45365,7 +45398,7 @@ fn rebroadcast_cooldown_tracks_block_time() {
         super::rebroadcast_cooldown_from_block_time(Duration::from_millis(150)),
         super::saturating_mul_duration(
             super::REBROADCAST_COOLDOWN_FLOOR,
-            super::REBROADCAST_COOLDOWN_MULTIPLIER
+            super::REBROADCAST_COOLDOWN_MULTIPLIER_FAST
         )
     );
     assert_eq!(
@@ -45388,7 +45421,7 @@ fn payload_rebroadcast_cooldown_tracks_block_time() {
         super::saturating_mul_duration(
             super::saturating_mul_duration(
                 super::REBROADCAST_COOLDOWN_FLOOR,
-                super::REBROADCAST_COOLDOWN_MULTIPLIER
+                super::REBROADCAST_COOLDOWN_MULTIPLIER_FAST
             ),
             super::PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER
         )
@@ -45523,8 +45556,8 @@ fn availability_timeout_from_quorum_scales_for_da() {
 fn pacemaker_interval_respects_rtt_floor_and_cap() {
     let mut cfg = test_sumeragi_config();
     cfg.npos.timeouts.propose = Duration::from_millis(300);
-    cfg.npos.pacemaker_rtt_floor_multiplier = 3; // 900ms floor from propose
-    cfg.npos.pacemaker_max_backoff = Duration::from_millis(1_200);
+    cfg.pacemaker.rtt_floor_multiplier = 3; // 900ms floor from propose
+    cfg.pacemaker.max_backoff = Duration::from_millis(1_200);
     let block_time = Duration::from_millis(800);
 
     assert_eq!(
@@ -45532,14 +45565,14 @@ fn pacemaker_interval_respects_rtt_floor_and_cap() {
         Duration::from_millis(900)
     );
 
-    cfg.npos.pacemaker_rtt_floor_multiplier = 5; // 1_500ms floor → capped by max_backoff
+    cfg.pacemaker.rtt_floor_multiplier = 5; // 1_500ms floor → capped by max_backoff
     assert_eq!(
         pacemaker_base_interval_with_propose_timeout(block_time, cfg.npos.timeouts.propose, &cfg),
         Duration::from_millis(1_200)
     );
 
-    cfg.npos.pacemaker_rtt_floor_multiplier = 1;
-    cfg.npos.pacemaker_max_backoff = Duration::from_millis(5_000);
+    cfg.pacemaker.rtt_floor_multiplier = 1;
+    cfg.pacemaker.max_backoff = Duration::from_millis(5_000);
     let block_time = Duration::from_millis(1_500);
     assert_eq!(
         pacemaker_base_interval_with_propose_timeout(block_time, cfg.npos.timeouts.propose, &cfg),
@@ -45551,8 +45584,8 @@ fn pacemaker_interval_respects_rtt_floor_and_cap() {
 fn pacemaker_interval_uses_explicit_propose_timeout() {
     let mut cfg = test_sumeragi_config();
     cfg.npos.timeouts.propose = Duration::from_millis(300);
-    cfg.npos.pacemaker_rtt_floor_multiplier = 2;
-    cfg.npos.pacemaker_max_backoff = Duration::from_millis(2_000);
+    cfg.pacemaker.rtt_floor_multiplier = 2;
+    cfg.pacemaker.max_backoff = Duration::from_millis(2_000);
     let block_time = Duration::from_millis(800);
     let on_chain_propose = Duration::from_millis(700);
 
@@ -45961,7 +45994,7 @@ async fn reschedule_stale_pending_blocks_skips_empty_roster() {
 async fn reschedule_stale_pending_blocks_evicts_aborted_payloads() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
     let view = actor.state.view();
@@ -45988,6 +46021,7 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_payloads() {
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
     let retention_factor = actor
         .config
+        .recovery
         .missing_block_signer_fallback_attempts
         .saturating_add(2)
         .max(4);
@@ -46013,7 +46047,7 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_payloads() {
 async fn reschedule_stale_pending_blocks_evicts_aborted_payloads_without_active() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
     let view = actor.state.view();
@@ -46031,6 +46065,7 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_payloads_without_active(
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
     let retention_factor = actor
         .config
+        .recovery
         .missing_block_signer_fallback_attempts
         .saturating_add(2)
         .max(4);
@@ -46056,7 +46091,7 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_payloads_without_active(
 async fn reschedule_stale_pending_blocks_retains_aborted_with_votes() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
     let view = actor.state.view();
@@ -46083,6 +46118,7 @@ async fn reschedule_stale_pending_blocks_retains_aborted_with_votes() {
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
     let retention_factor = actor
         .config
+        .recovery
         .missing_block_signer_fallback_attempts
         .saturating_add(2)
         .max(4);
@@ -46147,6 +46183,7 @@ async fn reschedule_stale_pending_blocks_retains_aborted_above_committed_height(
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
     let retention_factor = actor
         .config
+        .recovery
         .missing_block_signer_fallback_attempts
         .saturating_add(2)
         .max(4);
@@ -46194,6 +46231,7 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_above_committed_height_a
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
     let retention_factor = actor
         .config
+        .recovery
         .missing_block_signer_fallback_attempts
         .saturating_add(2)
         .max(4);
@@ -46430,7 +46468,7 @@ async fn commit_pipeline_defers_reschedule_until_availability_timeout() {
         );
     assert!(!payload_available, "test requires missing local payload");
 
-    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event);
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event, None);
 
     let pending_after = actor
         .pending
@@ -46456,7 +46494,7 @@ async fn commit_pipeline_defers_reschedule_until_availability_timeout() {
         pending.inserted_at = Instant::now() - availability_timeout - Duration::from_millis(1);
     }
 
-    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event);
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event, None);
 
     let pending_after = actor
         .pending
@@ -46506,7 +46544,7 @@ async fn commit_pipeline_defers_reschedule_while_vote_queue_backlogged() {
     actor.pending.last_commit_pipeline_run = Instant::now() - Duration::from_secs(10);
     super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
 
-    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick);
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
 
     let pending_after = actor
         .pending
@@ -46555,12 +46593,59 @@ async fn commit_pipeline_runs_event_when_queue_backlogged() {
     let last_run = actor.pending.last_commit_pipeline_run;
     super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
 
-    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event);
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event, None);
 
     assert!(
         actor.pending.last_commit_pipeline_run > last_run,
         "event-driven commit pipeline should run when queues are backlogged"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_sets_wakeup_on_tick_budget_exhaustion() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let view_idx = block.header().view_change_index();
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.validation_status = ValidationStatus::Valid;
+    pending.parent_state_root = Some(zero_state_root());
+    pending.post_state_root = Some(zero_state_root());
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.pending.commit_pipeline_wakeup = false;
+
+    let deadline = Instant::now() - Duration::from_millis(1);
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, Some(deadline));
+
+    assert!(actor.pending.commit_pipeline_wakeup);
+    assert!(actor.pending.pending_blocks.contains_key(&block_hash));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tick_work_budget_deadline_tracks_config() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.worker.tick_work_budget_cap = Duration::from_millis(5);
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let start = Instant::now();
+    let deadline = actor.tick_work_budget_deadline(start).expect("deadline");
+    assert_eq!(deadline.duration_since(start), Duration::from_millis(5));
+
+    actor.config.worker.tick_work_budget_cap = Duration::ZERO;
+    assert!(actor.tick_work_budget_deadline(start).is_none());
 
     harness.shutdown.send();
 }
@@ -47916,10 +48001,10 @@ fn allow_stale_block_created_accepts_missing_request() {
 async fn stale_view_accepts_rbc_messages_with_da() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.rbc_chunk_max_bytes = 1024;
-    consensus_cfg.rbc_pending_max_chunks = 10;
-    consensus_cfg.rbc_pending_max_bytes = 4096;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024;
+    consensus_cfg.rbc.pending_max_chunks = 10;
+    consensus_cfg.rbc.pending_max_bytes = 4096;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
     let height = 7;
@@ -48023,10 +48108,10 @@ async fn stale_view_accepts_rbc_messages_with_da() {
 async fn stale_view_stashes_rbc_ready_without_session_with_da() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.rbc_chunk_max_bytes = 1024;
-    consensus_cfg.rbc_pending_max_chunks = 10;
-    consensus_cfg.rbc_pending_max_bytes = 4096;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024;
+    consensus_cfg.rbc.pending_max_chunks = 10;
+    consensus_cfg.rbc.pending_max_bytes = 4096;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
     let height = 7;
@@ -49057,7 +49142,7 @@ async fn rbc_message_stale_ignores_uncommitted_kura_blocks() {
 #[tokio::test]
 async fn rbc_message_stale_allows_missing_payload_for_committed_height_with_da() {
     let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
     let harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 2).await;
 
     let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
@@ -50124,7 +50209,7 @@ fn pending_rbc_slot_does_not_evict_active_sessions_on_cap() {
 async fn pending_rbc_slot_respects_config_session_limit() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
-    actor.config.rbc_pending_session_limit = 1;
+    actor.config.rbc.pending_session_limit = 1;
 
     let key_a = session_key();
     let key_b = (
@@ -50154,7 +50239,7 @@ async fn pending_rbc_slot_respects_config_session_limit() {
 async fn pending_rbc_slot_eviction_releases_block_payload_dedup() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
-    actor.config.rbc_pending_ttl = Duration::from_millis(1);
+    actor.config.rbc.pending_ttl = Duration::from_millis(1);
 
     let key = pending_session_key(10);
     let epoch = actor.epoch_for_height(key.1);
@@ -50256,7 +50341,7 @@ async fn pending_rbc_slot_eviction_releases_block_payload_dedup() {
 async fn rbc_drop_releases_block_payload_dedup_on_session_limit() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
-    actor.config.rbc_pending_session_limit = 1;
+    actor.config.rbc.pending_session_limit = 1;
 
     let active_key = session_key();
     let epoch = actor.epoch_for_height(active_key.1);
@@ -51324,8 +51409,8 @@ fn activation_plan_applies_after_margin() {
 async fn pending_roster_activation_applies_at_activation_height_during_catchup() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 10;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 10;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -51371,10 +51456,10 @@ async fn pending_roster_activation_applies_at_activation_height_during_catchup()
 async fn vrf_snapshot_uses_epoch_manager_params() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
-    consensus_cfg.da_enabled = true;
-    consensus_cfg.epoch_length_blocks = 10;
-    consensus_cfg.vrf_commit_deadline_offset = 3;
-    consensus_cfg.vrf_reveal_deadline_offset = 7;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 10;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 3;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 7;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let roster_len = harness.actor.effective_commit_topology().len();
@@ -51490,7 +51575,7 @@ fn pending_rbc_ttl_counts_from_first_seen() {
 async fn commit_pipeline_runs_with_backlog_when_commit_qc_ready() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
 
     let mut harness = test_actor_harness_with_config_and_height(1, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
@@ -51527,7 +51612,7 @@ async fn commit_pipeline_runs_with_backlog_when_commit_qc_ready() {
     // Provide a dummy lock QC to allow commit
     actor.locked_qc = Some(sample_qc_ref(1, 0));
 
-    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event);
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event, None);
 
     assert!(
         actor.pending.last_commit_pipeline_run > last_run,
@@ -51542,7 +51627,7 @@ async fn commit_pipeline_runs_with_backlog_when_commit_qc_ready() {
 async fn commit_pipeline_runs_with_backlog_without_commit_qc() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da_enabled = true;
+    consensus_cfg.da.enabled = true;
 
     let mut harness = test_actor_harness_with_config_and_height(1, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
@@ -51578,7 +51663,7 @@ async fn commit_pipeline_runs_with_backlog_without_commit_qc() {
     // Provide a dummy lock QC
     actor.locked_qc = Some(sample_qc_ref(1, 0));
 
-    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event);
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event, None);
 
     assert!(
         actor.pending.last_commit_pipeline_run > last_run,

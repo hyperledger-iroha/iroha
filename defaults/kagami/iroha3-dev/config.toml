@@ -21,8 +21,8 @@ public_address = "127.0.0.1:1337"
 [torii]
 address = "0.0.0.0:8080"
 
-[sumeragi]
-da_enabled = true
+[sumeragi.da]
+enabled = true
 
 [streaming]
 identity_public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B"

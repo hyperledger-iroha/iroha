@@ -634,8 +634,12 @@ mod tests {
 
     use eyre::Result;
     use iroha_config::parameters::actual::{
-        ConsensusMode, NodeRole, ProofPolicy, Sumeragi as SumeragiConfig, SumeragiNpos,
-        SumeragiNposReconfig, SumeragiNposTimeouts, SumeragiNposVrf,
+        AdaptiveObservability, ConsensusMode, NodeRole, ProofPolicy, Sumeragi as SumeragiConfig,
+        SumeragiBlock, SumeragiCollectors, SumeragiDa, SumeragiDebug, SumeragiDebugRbc,
+        SumeragiFinality, SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNpos,
+        SumeragiNposElection, SumeragiNposReconfig, SumeragiNposTimeouts, SumeragiNposVrf,
+        SumeragiPacemaker, SumeragiPersistence, SumeragiQueues, SumeragiRbc, SumeragiRecovery,
+        SumeragiWorker,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -674,134 +678,162 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn test_sumeragi_config() -> SumeragiConfig {
         SumeragiConfig {
-            debug_force_soft_fork: false,
-            debug_disable_background_worker: false,
-            debug_rbc_drop_every_nth_chunk: None,
-            debug_rbc_shuffle_chunks: false,
-            debug_rbc_duplicate_inits: false,
-            debug_rbc_force_deliver_quorum_one: false,
-            debug_rbc_corrupt_witness_ack: false,
-            debug_rbc_corrupt_ready_signature: false,
-            debug_rbc_drop_validator_mask: 0,
-            debug_rbc_equivocate_chunk_mask: 0,
-            debug_rbc_equivocate_validator_mask: 0,
-            debug_rbc_conflicting_ready_mask: 0,
-            debug_rbc_partial_chunk_mask: 0,
             role: NodeRole::Validator,
-            allow_view0_slack: false,
-            collectors_k: 1,
-            collectors_redundant_send_r: 1,
-            block_max_transactions: None,
-            block_max_payload_bytes: None,
-            proposal_queue_scan_multiplier:
-                iroha_config::parameters::defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            msg_channel_cap_votes:
-                iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
-            msg_channel_cap_block_payload:
-                iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD,
-            msg_channel_cap_rbc_chunks:
-                iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_RBC_CHUNKS,
-            msg_channel_cap_blocks:
-                iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_BLOCKS,
-            control_msg_channel_cap:
-                iroha_config::parameters::defaults::sumeragi::CONTROL_MSG_CHANNEL_CAP,
-            worker_iteration_budget_cap: Duration::from_millis(
-                iroha_config::parameters::defaults::sumeragi::WORKER_ITERATION_BUDGET_CAP_MS,
-            ),
-            worker_iteration_drain_budget_cap: Duration::from_millis(
-                iroha_config::parameters::defaults::sumeragi::WORKER_ITERATION_DRAIN_BUDGET_CAP_MS,
-            ),
             consensus_mode: ConsensusMode::Npos,
-            mode_flip_enabled: iroha_config::parameters::defaults::sumeragi::MODE_FLIP_ENABLED,
-            da_enabled: false,
-            da_quorum_timeout_multiplier:
-                iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
-            da_availability_timeout_multiplier:
-                iroha_config::parameters::defaults::sumeragi::DA_AVAILABILITY_TIMEOUT_MULTIPLIER,
-            da_availability_timeout_floor: Duration::from_millis(
-                iroha_config::parameters::defaults::sumeragi::DA_AVAILABILITY_TIMEOUT_FLOOR_MS,
-            ),
-            kura_store_retry_interval: Duration::from_millis(1),
-            kura_store_retry_max_attempts: 1,
-            commit_inflight_timeout: Duration::from_millis(5_000),
-            missing_block_signer_fallback_attempts:
-                iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
-            membership_mismatch_alert_threshold:
-                iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD,
-            membership_mismatch_fail_closed:
-                iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED,
-            consensus_future_height_window:
-                iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,
-            consensus_future_view_window:
-                iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_VIEW_WINDOW,
-            invalid_sig_penalty_threshold:
-                iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_THRESHOLD,
-            invalid_sig_penalty_window: Duration::from_millis(
-                iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_WINDOW_MS,
-            ),
-            invalid_sig_penalty_cooldown: Duration::from_millis(
-                iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_COOLDOWN_MS,
-            ),
-            da_max_commitments_per_block: 0,
-            da_max_proof_openings_per_block: 0,
-            proof_policy: ProofPolicy::Off,
-            commit_cert_history_cap: 0,
-            zk_finality_k: 0,
-            require_precommit_qc: false,
-            rbc_chunk_max_bytes: 0,
-            rbc_chunk_fanout: None,
-            rbc_pending_max_chunks: 0,
-            rbc_pending_max_bytes: 0,
-            rbc_pending_session_limit: 0,
-            rbc_pending_ttl: Duration::from_secs(0),
-            rbc_session_ttl: Duration::from_secs(0),
-            rbc_rebroadcast_sessions_per_tick: 1,
-            rbc_payload_chunks_per_tick: 1,
-            rbc_store_max_sessions: 0,
-            rbc_store_soft_sessions: 0,
-            rbc_store_max_bytes: 0,
-            rbc_store_soft_bytes: 0,
-            rbc_disk_store_ttl: Duration::from_secs(0),
-            rbc_disk_store_max_bytes: 0,
-            key_activation_lead_blocks: 0,
-            key_overlap_grace_blocks: 0,
-            key_expiry_grace_blocks: 0,
-            key_require_hsm: false,
-            key_allowed_algorithms: BTreeSet::from([Algorithm::BlsNormal]),
-            key_allowed_hsm_providers: BTreeSet::new(),
+            mode_flip: SumeragiModeFlip {
+                enabled: iroha_config::parameters::defaults::sumeragi::MODE_FLIP_ENABLED,
+            },
+            collectors: SumeragiCollectors {
+                k: 1,
+                redundant_send_r: 1,
+            },
+            block: SumeragiBlock {
+                max_transactions: None,
+                max_payload_bytes: None,
+                proposal_queue_scan_multiplier:
+                    iroha_config::parameters::defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
+            },
+            queues: SumeragiQueues {
+                votes: iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_VOTES,
+                block_payload:
+                    iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD,
+                rbc_chunks: iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_RBC_CHUNKS,
+                blocks: iroha_config::parameters::defaults::sumeragi::MSG_CHANNEL_CAP_BLOCKS,
+                control: iroha_config::parameters::defaults::sumeragi::CONTROL_MSG_CHANNEL_CAP,
+            },
+            worker: SumeragiWorker {
+                iteration_budget_cap: Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::WORKER_ITERATION_BUDGET_CAP_MS,
+                ),
+                iteration_drain_budget_cap: Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::WORKER_ITERATION_DRAIN_BUDGET_CAP_MS,
+                ),
+                tick_work_budget_cap: Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::WORKER_TICK_WORK_BUDGET_CAP_MS,
+                ),
+                validation_worker_threads:
+                    iroha_config::parameters::defaults::sumeragi::VALIDATION_WORKER_THREADS,
+                validation_work_queue_cap:
+                    iroha_config::parameters::defaults::sumeragi::VALIDATION_WORK_QUEUE_CAP,
+                validation_result_queue_cap:
+                    iroha_config::parameters::defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP,
+            },
+            pacemaker: SumeragiPacemaker {
+                backoff_multiplier: 1,
+                rtt_floor_multiplier: 1,
+                max_backoff: Duration::from_secs(0),
+                jitter_frac_permille: 0,
+                pending_stall_grace: Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::PACEMAKER_PENDING_STALL_GRACE_MS,
+                ),
+                active_pending_soft_limit:
+                    iroha_config::parameters::defaults::sumeragi::PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT,
+                rbc_backlog_session_soft_limit: iroha_config::parameters::defaults::sumeragi::
+                    PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT,
+                rbc_backlog_chunk_soft_limit: iroha_config::parameters::defaults::sumeragi::
+                    PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
+            },
+            da: SumeragiDa {
+                enabled: false,
+                quorum_timeout_multiplier:
+                    iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
+                availability_timeout_multiplier: iroha_config::parameters::defaults::sumeragi::
+                    DA_AVAILABILITY_TIMEOUT_MULTIPLIER,
+                availability_timeout_floor: Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::DA_AVAILABILITY_TIMEOUT_FLOOR_MS,
+                ),
+                max_commitments_per_block: 0,
+                max_proof_openings_per_block: 0,
+            },
+            persistence: SumeragiPersistence {
+                kura_retry_interval: Duration::from_millis(1),
+                kura_retry_max_attempts: 1,
+                commit_inflight_timeout: Duration::from_millis(5_000),
+                commit_work_queue_cap:
+                    iroha_config::parameters::defaults::sumeragi::COMMIT_WORK_QUEUE_CAP,
+                commit_result_queue_cap:
+                    iroha_config::parameters::defaults::sumeragi::COMMIT_RESULT_QUEUE_CAP,
+            },
+            recovery: SumeragiRecovery {
+                missing_block_signer_fallback_attempts:
+                    iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
+            },
+            gating: SumeragiGating {
+                future_height_window:
+                    iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW,
+                future_view_window:
+                    iroha_config::parameters::defaults::sumeragi::CONSENSUS_FUTURE_VIEW_WINDOW,
+                invalid_sig_penalty_threshold:
+                    iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_THRESHOLD,
+                invalid_sig_penalty_window: Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_WINDOW_MS,
+                ),
+                invalid_sig_penalty_cooldown: Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::INVALID_SIG_PENALTY_COOLDOWN_MS,
+                ),
+                membership_mismatch_alert_threshold:
+                    iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD,
+                membership_mismatch_fail_closed:
+                    iroha_config::parameters::defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED,
+            },
+            rbc: SumeragiRbc {
+                chunk_max_bytes: 0,
+                chunk_fanout: None,
+                pending_max_chunks: 0,
+                pending_max_bytes: 0,
+                pending_session_limit: 0,
+                pending_ttl: Duration::from_secs(0),
+                session_ttl: Duration::from_secs(0),
+                rebroadcast_sessions_per_tick: 1,
+                payload_chunks_per_tick: 1,
+                store_max_sessions: 0,
+                store_soft_sessions: 0,
+                store_max_bytes: 0,
+                store_soft_bytes: 0,
+                disk_store_ttl: Duration::from_secs(0),
+                disk_store_max_bytes: 0,
+            },
+            finality: SumeragiFinality {
+                proof_policy: ProofPolicy::Off,
+                commit_cert_history_cap: 0,
+                zk_finality_k: 0,
+                require_precommit_qc: false,
+            },
+            keys: SumeragiKeys {
+                activation_lead_blocks: 0,
+                overlap_grace_blocks: 0,
+                expiry_grace_blocks: 0,
+                require_hsm: false,
+                allowed_algorithms: BTreeSet::from([Algorithm::BlsNormal]),
+                allowed_hsm_providers: BTreeSet::new(),
+            },
             npos: SumeragiNpos {
                 block_time: Duration::from_secs(1),
                 timeouts: SumeragiNposTimeouts::default(),
-                pacemaker_backoff_multiplier: 1,
-                pacemaker_rtt_floor_multiplier: 1,
-                pacemaker_max_backoff: Duration::from_secs(0),
-                pacemaker_jitter_frac_permille: 0,
-                k_aggregators: 1,
-                redundant_send_r: 1,
                 vrf: SumeragiNposVrf::default(),
                 reconfig: SumeragiNposReconfig::default(),
-                election: iroha_config::parameters::actual::SumeragiNposElection::default(),
+                election: SumeragiNposElection::default(),
+                epoch_length_blocks: 0,
+                use_stake_snapshot_roster: false,
             },
-            use_stake_snapshot_roster: false,
-            epoch_length_blocks: 0,
-            vrf_commit_deadline_offset: 0,
-            vrf_reveal_deadline_offset: 0,
-            pacemaker_backoff_multiplier: 1,
-            pacemaker_rtt_floor_multiplier: 1,
-            pacemaker_max_backoff: Duration::from_secs(0),
-            pacemaker_jitter_frac_permille: 0,
-            pacemaker_pending_stall_grace: Duration::from_millis(
-                iroha_config::parameters::defaults::sumeragi::PACEMAKER_PENDING_STALL_GRACE_MS,
-            ),
-            pacemaker_active_pending_soft_limit:
-                iroha_config::parameters::defaults::sumeragi::PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT,
-            pacemaker_rbc_backlog_session_soft_limit:
-                iroha_config::parameters::defaults::sumeragi::PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT,
-            pacemaker_rbc_backlog_chunk_soft_limit:
-                iroha_config::parameters::defaults::sumeragi::PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
-            adaptive_observability:
-                iroha_config::parameters::actual::AdaptiveObservability::default(),
-            enable_bls: true,
+            adaptive_observability: AdaptiveObservability::default(),
+            debug: SumeragiDebug {
+                force_soft_fork: false,
+                disable_background_worker: false,
+                rbc: SumeragiDebugRbc {
+                    drop_every_nth_chunk: None,
+                    shuffle_chunks: false,
+                    duplicate_inits: false,
+                    force_deliver_quorum_one: false,
+                    corrupt_witness_ack: false,
+                    corrupt_ready_signature: false,
+                    drop_validator_mask: 0,
+                    equivocate_chunk_mask: 0,
+                    equivocate_validator_mask: 0,
+                    conflicting_ready_mask: 0,
+                    partial_chunk_mask: 0,
+                },
+            },
         }
     }
 

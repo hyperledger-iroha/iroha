@@ -188,6 +188,7 @@ pub fn compute_consensus_handshake_caps_from_view(
         view.world().sumeragi_npos_parameters().map_or_else(
             || {
                 let npos_cfg = &sumeragi_config.npos;
+                let collectors_cfg = &sumeragi_config.collectors;
                 let duration_ms = |d: Duration| -> u64 {
                     let ms = d.as_millis();
                     u64::try_from(ms).expect("NPoS timeout exceeds supported millisecond range")
@@ -201,9 +202,9 @@ pub fn compute_consensus_handshake_caps_from_view(
                         timeout_commit_ms: duration_ms(npos_cfg.timeouts.commit),
                         timeout_da_ms: duration_ms(npos_cfg.timeouts.da),
                         timeout_aggregator_ms: duration_ms(npos_cfg.timeouts.aggregator),
-                        k_aggregators: u16::try_from(npos_cfg.k_aggregators)
-                            .expect("npos.k_aggregators must fit into u16"),
-                        redundant_send_r: npos_cfg.redundant_send_r,
+                        k_aggregators: u16::try_from(collectors_cfg.k)
+                            .expect("sumeragi.collectors.k must fit into u16"),
+                        redundant_send_r: collectors_cfg.redundant_send_r,
                         epoch_seed: super::chain_epoch_seed(&common_config.chain),
                         vrf_commit_window_blocks: npos_cfg.vrf.commit_window_blocks,
                         vrf_reveal_window_blocks: npos_cfg.vrf.reveal_window_blocks,
@@ -220,7 +221,7 @@ pub fn compute_consensus_handshake_caps_from_view(
                         activation_lag_blocks: npos_cfg.reconfig.activation_lag_blocks,
                         slashing_delay_blocks: npos_cfg.reconfig.slashing_delay_blocks,
                     }),
-                    sumeragi_config.epoch_length_blocks.max(1),
+                    sumeragi_config.npos.epoch_length_blocks.max(1),
                 )
             },
             |npos| {

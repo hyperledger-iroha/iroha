@@ -1,4 +1,4 @@
 extends = ["minimal_with_trusted_peers.toml"]
 
-[sumeragi]
-rbc_payload_chunks_per_tick = 0
+[sumeragi.rbc]
+payload_chunks_per_tick = 0

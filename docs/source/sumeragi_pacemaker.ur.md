@@ -17,19 +17,19 @@ translation_last_reviewed: 2026-01-01
 
 یہ نوٹ Sumeragi کے pacemaker (timer) پالیسی کی وضاحت کرتا ہے اور آپریٹر رہنمائی اور مثالیں دیتا ہے۔ ٹائمرز یہ طے کرتے ہیں کہ لیڈرز کب propose کریں اور validators کب inactivity کے بعد نئی view تجویز/داخل ہوں۔
 
-Status: EMA سے اخذ کردہ base window، RTT floor، اور configurable jitter/backoff caps نافذ ہیں۔ pacemaker proposal interval اب block-time target اور RTT-floor والے propose timeout کے درمیان clamp کیا جاتا ہے، `sumeragi.pacemaker_max_backoff_ms` سے اوپر نہیں جاتا۔ jitter ہر node اور ہر (height, view) پر deterministically apply ہوتا ہے۔
+Status: EMA سے اخذ کردہ base window، RTT floor، اور configurable jitter/backoff caps نافذ ہیں۔ pacemaker proposal interval اب block-time target اور RTT-floor والے propose timeout کے درمیان clamp کیا جاتا ہے، `sumeragi.pacemaker.max_backoff_ms` سے اوپر نہیں جاتا۔ jitter ہر node اور ہر (height, view) پر deterministically apply ہوتا ہے۔
 
 ## تصورات
 - Base window: observed consensus phases کی exponential moving average
   (propose, collect_da, collect_prevote, collect_precommit, commit). EMA کو
-  `sumeragi.npos.timeouts.*` سے seed کیا جاتا ہے؛ جب تک کافی samples نہ آئیں یہ
+  `sumeragi.npos.timeouts.*_ms` سے seed کیا جاتا ہے؛ جب تک کافی samples نہ آئیں یہ
   عملی طور پر configured defaults سے match کرتی ہے۔ `collect_aggregator` EMA
   observability کیلئے export ہوتی ہے مگر pacemaker window میں شامل نہیں۔
   Smoothed values `sumeragi_phase_latency_ema_ms{phase=...}` کے ذریعے نظر آتی ہیں۔
-- Backoff multiplier: `sumeragi.pacemaker_backoff_multiplier` (default 1). ہر timeout موجودہ window میں `base * multiplier` کا اضافہ کرتا ہے۔
-- RTT floor: `avg_rtt_ms * sumeragi.pacemaker_rtt_floor_multiplier` (default 2). زیادہ latency والے links پر overly aggressive timeouts روکتا ہے۔
-- Cap: `sumeragi.pacemaker_max_backoff_ms` (default 60_000 ms). window کیلئے سخت ceiling.
-- Proposal interval seed: `max(block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` اور کبھی `pacemaker_max_backoff_ms` سے اوپر نہیں۔ یہ steady-state interval ہے حتی کہ backoff کے بغیر بھی۔
+- Backoff multiplier: `sumeragi.pacemaker.backoff_multiplier` (default 1). ہر timeout موجودہ window میں `base * multiplier` کا اضافہ کرتا ہے۔
+- RTT floor: `avg_rtt_ms * sumeragi.pacemaker.rtt_floor_multiplier` (default 2). زیادہ latency والے links پر overly aggressive timeouts روکتا ہے۔
+- Cap: `sumeragi.pacemaker.max_backoff_ms` (default 60_000 ms). window کیلئے سخت ceiling.
+- Proposal interval seed: `max(block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` اور کبھی `sumeragi.pacemaker.max_backoff_ms` سے اوپر نہیں۔ یہ steady-state interval ہے حتی کہ backoff کے بغیر بھی۔
 
 timeout پر effective window اپ ڈیٹ:
 - `window = min(cap, max(window + base * backoff_mul, avg_rtt * rtt_floor_mul))`
@@ -38,7 +38,7 @@ timeout پر effective window اپ ڈیٹ:
 Exposed telemetria (telemetry.md دیکھیں):
 - Runtime: `sumeragi_pacemaker_backoff_ms`, `sumeragi_pacemaker_rtt_floor_ms`, `sumeragi_phase_latency_ema_ms{phase=...}`
 - REST snapshot: `/v1/sumeragi/phases` اب تازہ ترین per-phase latencies کے ساتھ `ema_ms` شامل کرتا ہے تاکہ dashboards براہ راست Prometheus scrape کیے بغیر EMA trend دکھا سکیں۔
-- Config: `sumeragi_pacemaker_backoff_multiplier`, `sumeragi_pacemaker_rtt_floor_multiplier`, `sumeragi_pacemaker_max_backoff_ms`
+- Config: `sumeragi.pacemaker.backoff_multiplier`, `sumeragi.pacemaker.rtt_floor_multiplier`, `sumeragi.pacemaker.max_backoff_ms`
 
 ## Jitter پالیسی
 herd effects (synchronized timeouts) سے بچنے کیلئے pacemaker effective window کے ارد گرد ہر node کیلئے چھوٹا jitter سپورٹ کرتا ہے۔
@@ -50,7 +50,7 @@ Deterministic jitter per node:
 
 Pseudocode:
 ```
-base = ema_total_ms(view, height)  // seeded by sumeragi.npos.timeouts.*
+base = ema_total_ms(view, height)  // seeded by sumeragi.npos.timeouts.*_ms
 window = min(cap, max(prev + base * backoff_mul, avg_rtt * rtt_floor_mul))
 seed = blake2(chain_id || peer_id || height || view)
 u = (seed % 10_000) as f64 / 10_000.0  // [0, 1)
@@ -107,7 +107,7 @@ High-variance یا mobile networks
 - Trend backoff: `avg_over_time(sumeragi_pacemaker_backoff_ms[5m])`
 - Inspect RTT floor: `avg_over_time(sumeragi_pacemaker_rtt_floor_ms[5m])`
 - EMA vs histograms: `sumeragi_phase_latency_ema_ms{phase=...}` ساتھ میں `sumeragi_phase_latency_ms{phase=...}` کے matching percentiles
-- Verify config: `max(sumeragi_pacemaker_backoff_multiplier)`, `max(sumeragi_pacemaker_rtt_floor_multiplier)`, `max(sumeragi_pacemaker_max_backoff_ms)`
+- Verify config: `max(sumeragi.pacemaker.backoff_multiplier)`, `max(sumeragi.pacemaker.rtt_floor_multiplier)`, `max(sumeragi.pacemaker.max_backoff_ms)`
 
 ## حتمیت اور سیفٹی
 - Timers/backoff/jitter صرف اس بات پر اثر ڈالتے ہیں کہ nodes کب proposals/view-changes trigger کریں؛ signatures کی validity یا commit certificate rules پر اثر نہیں پڑتا۔

@@ -777,7 +777,7 @@ impl From<&base::Sumeragi> for Consensus {
         .to_string();
         Self {
             mode,
-            mode_flip_enabled: value.mode_flip_enabled,
+            mode_flip_enabled: value.mode_flip.enabled,
         }
     }
 }

@@ -42,7 +42,7 @@ manifest.json          # deterministic file manifest with SHA-256 hashes
    For multi-lane/Nexus profiles, populate the `[nexus]` and `[sumeragi]`
    sections in `config/local.toml` (or pass `--nexus-config`, `--enable-nexus`,
    and `--enable-da` on the CLI). MOCHI validates `nexus.enabled` against lane
-   counts and forces `sumeragi.da_enabled = true` when Nexus is enabled, because
+   counts and forces `sumeragi.da.enabled = true` when Nexus is enabled, because
    Iroha 3 always runs with DA gating enabled. Use `[torii.da_ingest]` to pin
    DA replay/manifest spool roots if you do not want the per-peer defaults.
 3. Start the supervisor via `./bin/mochi`. The egui application will create the

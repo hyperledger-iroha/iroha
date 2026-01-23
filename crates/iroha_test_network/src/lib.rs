@@ -1610,13 +1610,10 @@ impl Network {
         self.consensus_profile.clone()
     }
 
-    fn config_sumeragi_flag(&self, key: &str) -> Option<bool> {
+    fn config_sumeragi_flag(&self, path: &[&str]) -> Option<bool> {
         self.config_layers.iter().rev().find_map(|layer| {
-            layer
-                .get("sumeragi")
-                .and_then(|value| value.as_table())
-                .and_then(|table| table.get(key))
-                .and_then(|value| value.as_bool())
+            let table = layer.get("sumeragi").and_then(Value::as_table)?;
+            get_nested_value(table, path).and_then(Value::as_bool)
         })
     }
 
@@ -1628,7 +1625,7 @@ impl Network {
     }
 
     fn log_startup_diagnostics(&self) {
-        let config_da_enabled = self.config_sumeragi_flag("da_enabled");
+        let config_da_enabled = self.config_sumeragi_flag(&["da", "enabled"]);
         let param_da_enabled = self.parameter_flag(|param| match param {
             SumeragiParameter::DaEnabled(value) => Some(*value),
             _ => None,
@@ -3439,7 +3436,7 @@ impl NetworkBuilder {
         let mut sumeragi_parameters = sumeragi_parameters;
         let merged_sumeragi = merged_sumeragi_config(&config_layers);
         let default_da_enabled = true;
-        let config_da_enabled = read_bool(&merged_sumeragi, &["da_enabled"]);
+        let config_da_enabled = read_bool(&merged_sumeragi, &["da", "enabled"]);
         let mut da_enabled = sumeragi_da_enabled
             .or(config_da_enabled)
             .unwrap_or(default_da_enabled);
@@ -3812,50 +3809,49 @@ impl NetworkBuilder {
                 ["network", "block_gossip_size"],
                 i64::try_from(peers.len()).unwrap_or(i64::MAX),
             );
-        base_layer = base_layer.write(["sumeragi", "msg_channel_cap_blocks"], 512i64);
+        base_layer = base_layer.write(["sumeragi", "queues", "blocks"], 512i64);
         if da_enabled {
             base_layer = base_layer
-                .write(["sumeragi", "da_enabled"], true)
+                .write(["sumeragi", "da", "enabled"], true)
                 .write(
-                    ["sumeragi", "rbc_store_max_sessions"],
+                    ["sumeragi", "rbc", "store_max_sessions"],
                     DEFAULT_RBC_STORE_MAX_SESSIONS,
                 )
                 .write(
-                    ["sumeragi", "rbc_store_soft_sessions"],
+                    ["sumeragi", "rbc", "store_soft_sessions"],
                     DEFAULT_RBC_STORE_SOFT_SESSIONS,
                 )
                 .write(
-                    ["sumeragi", "rbc_store_max_bytes"],
+                    ["sumeragi", "rbc", "store_max_bytes"],
                     DEFAULT_RBC_STORE_MAX_BYTES,
                 )
                 .write(
-                    ["sumeragi", "rbc_store_soft_bytes"],
+                    ["sumeragi", "rbc", "store_soft_bytes"],
                     DEFAULT_RBC_STORE_SOFT_BYTES,
                 );
         } else {
             base_layer = base_layer
-                .write(["sumeragi", "da_enabled"], false)
-                .write(["sumeragi", "rbc_store_max_sessions"], 0i64)
-                .write(["sumeragi", "rbc_store_soft_sessions"], 0i64)
-                .write(["sumeragi", "rbc_store_max_bytes"], 0i64)
-                .write(["sumeragi", "rbc_store_soft_bytes"], 0i64);
+                .write(["sumeragi", "da", "enabled"], false)
+                .write(["sumeragi", "rbc", "store_max_sessions"], 0i64)
+                .write(["sumeragi", "rbc", "store_soft_sessions"], 0i64)
+                .write(["sumeragi", "rbc", "store_max_bytes"], 0i64)
+                .write(["sumeragi", "rbc", "store_soft_bytes"], 0i64);
         }
         base_layer = base_layer
             .write(
-                ["sumeragi", "rbc_chunk_max_bytes"],
+                ["sumeragi", "rbc", "chunk_max_bytes"],
                 LOCALNET_RBC_CHUNK_MAX_BYTES,
             )
-            // Test networks always provision BLS validator keys; keep BLS plumbing enabled
-            // and drop the HSM binding requirement so genesis peer registration succeeds.
-            .write(["sumeragi", "enable_bls"], true)
-            .write(["sumeragi", "key_require_hsm"], false)
+            // Test networks always provision BLS validator keys; drop the HSM binding requirement
+            // so genesis peer registration succeeds.
+            .write(["sumeragi", "keys", "require_hsm"], false)
             .write(
                 ["genesis", "public_key"],
                 genesis_key_pair.public_key().to_string(),
             )
             // Keep consensus permissive for integration tests: disable precommit QC requirement
             // so small networks can make progress even when peers start slowly.
-            .write(["sumeragi", "require_precommit_qc"], false);
+            .write(["sumeragi", "finality", "require_precommit_qc"], false);
         base_layer = base_layer
             // Ensure BLS batching stays enabled so PoP-based peers can register and vote.
             .write(["pipeline", "signature_batch_max_bls"], 4i64)
@@ -7446,7 +7442,7 @@ exit 0
         let network = NetworkBuilder::new()
             .with_peers(2)
             .with_config_layer(|layer| {
-                layer.write(["sumeragi", "da_enabled"], false);
+                layer.write(["sumeragi", "da", "enabled"], false);
             })
             .build();
 
@@ -7920,9 +7916,9 @@ exit 0
                 panic!("missing sumeragi table; keys={keys:?}")
             })
             .as_table()
-            .expect("sumeragi entry must be a table")
-            .get("da_enabled")
-            .and_then(toml::Value::as_bool);
+            .expect("sumeragi entry must be a table");
+        let rbc_flag =
+            get_nested_value(rbc_flag, &["da", "enabled"]).and_then(toml::Value::as_bool);
         assert_eq!(
             rbc_flag,
             Some(true),
@@ -7941,7 +7937,7 @@ exit 0
         let cap = base
             .get("sumeragi")
             .and_then(TomlValue::as_table)
-            .and_then(|table| table.get("msg_channel_cap_blocks"))
+            .and_then(|table| get_nested_value(table, &["queues", "blocks"]))
             .and_then(TomlValue::as_integer);
         assert_eq!(
             cap,
@@ -7962,7 +7958,7 @@ exit 0
         let rbc_chunk_max = base
             .get("sumeragi")
             .and_then(toml::Value::as_table)
-            .and_then(|sumeragi| sumeragi.get("rbc_chunk_max_bytes"))
+            .and_then(|sumeragi| get_nested_value(sumeragi, &["rbc", "chunk_max_bytes"]))
             .and_then(toml::Value::as_integer);
 
         assert_eq!(
@@ -8348,12 +8344,11 @@ exit 0
             .and_then(|value| value.as_table())
             .expect("sumeragi table present");
         assert_eq!(
-            sumeragi.get("da_enabled").and_then(|value| value.as_bool()),
+            get_nested_value(sumeragi, &["da", "enabled"]).and_then(|value| value.as_bool()),
             Some(true)
         );
         assert_eq!(
-            sumeragi
-                .get("rbc_store_max_sessions")
+            get_nested_value(sumeragi, &["rbc", "store_max_sessions"])
                 .and_then(|value| value.as_integer()),
             Some(DEFAULT_RBC_STORE_MAX_SESSIONS)
         );
