@@ -63,11 +63,11 @@ DA/RBC note
 ### NPoS mode configuration (operators)
 
 2. **Choose the roster source.** `sumeragi.npos.use_stake_snapshot_roster = true` tells the validator to hydrate the epoch roster from the staking snapshot provider (required for production NPoS). Leaving it `false` continues to mirror `trusted_peers` so small devnets can stage upgrades without the staking sidecar. When stake records are missing for some roster peers, NPoS assigns the minimum self-bond (or 1 when unset) to the missing entries; if no public-lane stake records exist, every roster peer receives the same fallback stake for quorum checks. If the commit topology omits active validators, the epoch roster widens to include the active set before filtering so validator elections and quorum checks retain the full active roster.
-3. **Define epoch cadence.** `sumeragi.npos.epoch_length_blocks` controls how long a validator set lives. Within each epoch, `sumeragi.npos.vrf.commit_window_blocks` and `.reveal_window_blocks` fence the VRF commit/reveal RPCs, and the on-chain `sumeragi_npos_parameters.block_time_ms` target informs telemetry dashboards and the pacemaker expectation (keep `sumeragi.npos.block_time_ms` aligned as a bootstrap fallback). When `sumeragi_npos_parameters` is present on-chain (genesis or governance), its `block_time_ms`, pacemaker timeouts, collector fan-out, `epoch_length_blocks`, VRF commit/reveal windows, and election/reconfig knobs are authoritative and override the local config values.
+3. **Define epoch cadence.** `sumeragi.npos.epoch_length_blocks` controls how long a validator set lives. Within each epoch, `sumeragi.npos.vrf.commit_window_blocks` and `.reveal_window_blocks` fence the VRF commit/reveal RPCs (when omitted, VRF windows and deadlines are derived from `epoch_length_blocks`), and the on-chain `sumeragi_npos_parameters.block_time_ms` target informs telemetry dashboards and the pacemaker expectation (keep `sumeragi.npos.block_time_ms` aligned as a bootstrap fallback). When `sumeragi_npos_parameters` is present on-chain (genesis or governance), its `block_time_ms`, pacemaker timeouts, collector fan-out, `epoch_length_blocks`, VRF commit/reveal windows, and election/reconfig knobs are authoritative and override the local config values.
 4. **Calibrate collector fan-out.**
    - `sumeragi.collectors.k` decides how many collectors assemble votes per slot.
    - `sumeragi.collectors.redundant_send_r` caps how many additional collectors a validator targets when local timeouts expire.
-   - `sumeragi.npos.timeouts.*_ms` provide the per-phase pacemaker budget (proposal, prevote, precommit, commit, DA, aggregator). These values are milliseconds in the user config and are mirrored directly into the runtime; `exec`/`witness` timeouts remain reserved for future witness pacing and do not influence the pacemaker today.
+   - `sumeragi.npos.timeouts.*_ms` provide the per-phase pacemaker budget (proposal, prevote, precommit, commit, DA, aggregator). These values are milliseconds in the user config and are mirrored directly into the runtime; `exec`/`witness` timeouts remain reserved for future witness pacing and do not influence the pacemaker today. Unset fields derive from `sumeragi.npos.block_time_ms` using the default ratios.
 5. **Record election and reconfiguration policy.**
    - `sumeragi.npos.election.*` sets self‑bond minimums and the guardrails for nominator concentration, seat variance, and validator correlation.
    - `sumeragi.npos.reconfig.{evidence_horizon_blocks,activation_lag_blocks,slashing_delay_blocks}` govern how long evidence is retained, how long it takes for a newly scheduled validator set to activate, and how long consensus slashing is delayed before it applies.
@@ -86,10 +86,12 @@ redundant_send_r = 2
 block_time_ms = 1000
 epoch_length_blocks = 7200
 use_stake_snapshot_roster = true
+# timeouts.*_ms derive from block_time_ms when omitted
 
-[sumeragi.npos.vrf]
-commit_window_blocks = 120
-reveal_window_blocks = 60
+## Optional: override derived VRF windows.
+#[sumeragi.npos.vrf]
+# commit_window_blocks = 120
+# reveal_window_blocks = 60
 
 [sumeragi.npos.election]
 min_self_bond = 10_000
@@ -246,9 +248,9 @@ K / r Parameters
 
 NPoS Tunables (`sumeragi.npos.*`)
 - `block_time_ms` (default `1000`): target round length in milliseconds; must be > 0.
-- `timeouts.{propose_ms, prevote_ms, precommit_ms, exec_ms, witness_ms, commit_ms, da_ms, aggregator_ms}` with defaults `350/450/550/150/150/750/650/120`; each value must be > 0. The pacemaker currently consumes propose/collect_da/collect_prevote/collect_precommit/commit; `exec_ms`/`witness_ms` are reserved for future witness pacing and `collect_aggregator` remains observability-only.
+- `timeouts.{propose_ms, prevote_ms, precommit_ms, exec_ms, witness_ms, commit_ms, da_ms, aggregator_ms}` (optional): each value must be > 0 when set. Unset fields derive from `block_time_ms` using the 1s ratios `350/450/550/150/150/750/650/120`. The pacemaker currently consumes propose/collect_da/collect_prevote/collect_precommit/commit; `exec_ms`/`witness_ms` are reserved for future witness pacing and `collect_aggregator` remains observability-only.
 - Collector fan-out is configured under `sumeragi.collectors.{k,redundant_send_r}` (shared with permissioned). Both must be > 0; invalid values are rejected during config parsing.
-- `vrf.{commit_window_blocks, reveal_window_blocks}` (defaults `100` and `40` respectively): length of the commit and reveal windows inside an epoch; both must be > 0.
+- `vrf.{commit_window_blocks, reveal_window_blocks}` (optional): length of the commit and reveal windows inside an epoch; both must be > 0 when set. Unset values derive from `epoch_length_blocks` using the 3600-block ratios `100/40`. `vrf.commit_deadline_offset_blocks` defaults to `commit_window_blocks` and `vrf.reveal_deadline_offset_blocks` defaults to `commit_window_blocks + reveal_window_blocks` when omitted.
 - `election.{min_self_bond, max_nominator_concentration_pct, seat_band_pct, max_entity_correlation_pct}` with defaults `1000`, `25`, `5`, and `25`. Percentages are clamped to the 0–100 range, and `min_self_bond` must be > 0.
 - Candidates failing these staking constraints are excluded from the election; the entity correlation cap limits how many winners can share the same validator account.
 - `election.finality_margin_blocks` delays activation of the newly elected roster until the chain has advanced by the configured number of blocks after the election snapshot, preventing premature swaps before finality.

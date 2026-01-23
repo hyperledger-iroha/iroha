@@ -2,6 +2,10 @@
 
 Last update: 2026-01-23
 
+- Sumeragi NPoS config: derive optional timeouts/VRF windows from `block_time_ms` and `epoch_length_blocks`; updated docs and unit tests.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Tests: `cargo test -p iroha_config sumeragi_npos -- --nocapture` (ok).
+- Tests: `cargo test --workspace` (aborted by user request; full workspace tests not run).
 - Consensus ingress: treat `BlockCreated` as critical traffic (no bulk drops) so non-leader peers receive payloads; updated ingress tests and guardrail docs/config template.
 - Tests: not run (not requested).
 - Android SDK: preserve canonical instruction fixtures, fix QR stream envelope sizing, and align signer prehash expectations in tests; JS SDK: normalize encoded `@domain` error handling, relax canonical-account-id assertions, and use fixture authority hints in parity checks.
