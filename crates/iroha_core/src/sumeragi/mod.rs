@@ -907,6 +907,7 @@ mod tests {
 
         let cfg = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -999,6 +1000,7 @@ mod tests {
 
         let cfg = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -1099,6 +1101,7 @@ mod tests {
 
         let cfg = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -4525,6 +4528,7 @@ mod tests {
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -4656,6 +4660,7 @@ mod tests {
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -4786,6 +4791,7 @@ mod tests {
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -4846,6 +4852,7 @@ mod tests {
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -4903,6 +4910,7 @@ mod tests {
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -4980,6 +4988,7 @@ mod tests {
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -5035,6 +5044,7 @@ mod tests {
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -5090,6 +5100,7 @@ mod tests {
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -5134,6 +5145,95 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn run_worker_iteration_caps_total_drain_budget() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        let vote = Vote {
+            phase: Phase::Prepare,
+            block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        vote_tx
+            .send(inbound(BlockMessage::QcVote(vote.clone())))
+            .expect("send prevote");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
+        vote_tx
+            .send(inbound(BlockMessage::QcVote(vote)))
+            .expect("send prevote");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_millis(5),
+            drain_budget_cap: Duration::from_millis(5),
+            vote_rx_drain_budget: Duration::from_millis(50),
+            block_payload_rx_drain_budget: Duration::from_millis(50),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_millis(50),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_millis(50),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_millis(50),
+            block_rx_starve_max: Duration::from_millis(50),
+            non_vote_starve_max: Duration::from_millis(50),
+        };
+        let past = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        let mut loop_state = WorkerLoopState {
+            last_tick: past,
+            last_served: [past; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = SlowVoteActor {
+            events: Vec::new(),
+            vote_sleep: Duration::from_millis(20),
+        };
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(actor.events, vec!["vote", "payload"]);
+        assert_eq!(stats.votes_handled, 1);
+        assert_eq!(stats.block_payloads_handled, 1);
+        assert!(stats.budget_exceeded);
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn run_worker_iteration_caps_drain_at_config_cap() {
         status::reset_worker_loop_snapshot_for_tests();
 
         let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -5187,22 +5287,23 @@ mod tests {
         status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
 
         let config = WorkerLoopConfig {
-            time_budget: Duration::from_millis(5),
-            vote_rx_drain_budget: Duration::from_millis(50),
-            block_payload_rx_drain_budget: Duration::from_millis(50),
+            time_budget: Duration::from_millis(100),
+            drain_budget_cap: Duration::from_millis(10),
+            vote_rx_drain_budget: Duration::from_millis(100),
+            block_payload_rx_drain_budget: Duration::from_millis(100),
             block_payload_rx_drain_max_messages: 16,
             vote_rx_drain_max_messages: 16,
-            block_rx_drain_budget: Duration::from_millis(50),
+            block_rx_drain_budget: Duration::from_millis(100),
             block_rx_drain_max_messages: 16,
-            rbc_chunk_rx_drain_budget: Duration::from_millis(50),
+            rbc_chunk_rx_drain_budget: Duration::from_millis(100),
             rbc_chunk_rx_drain_max_messages: 16,
             consensus_rx_drain_max_messages: 16,
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
-            tick_max_gap: Duration::from_millis(50),
-            block_rx_starve_max: Duration::from_millis(50),
-            non_vote_starve_max: Duration::from_millis(50),
+            tick_max_gap: Duration::from_millis(100),
+            block_rx_starve_max: Duration::ZERO,
+            non_vote_starve_max: Duration::ZERO,
         };
         let past = Instant::now()
             .checked_sub(Duration::from_secs(1))
@@ -5230,14 +5331,11 @@ mod tests {
             &background_rx,
         );
 
-        assert_eq!(actor.events, vec!["vote", "payload"]);
-        assert_eq!(stats.votes_handled, 1);
-        assert_eq!(stats.block_payloads_handled, 1);
+        assert!(!actor.events.is_empty());
+        assert!(actor.events.iter().all(|event| *event == "vote"));
+        assert!(stats.votes_handled >= 1);
+        assert_eq!(stats.block_payloads_handled, 0);
         assert!(stats.budget_exceeded);
-        assert!(matches!(
-            block_payload_rx.try_recv(),
-            Err(mpsc::TryRecvError::Empty)
-        ));
     }
 
     #[test]
@@ -5296,6 +5394,7 @@ mod tests {
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -5393,6 +5492,7 @@ mod tests {
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -5484,6 +5584,7 @@ mod tests {
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -5541,6 +5642,7 @@ mod tests {
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -5726,6 +5828,7 @@ mod tests {
 
             let config = WorkerLoopConfig {
                 time_budget: Duration::from_secs(1),
+                drain_budget_cap: Duration::from_secs(1),
                 vote_rx_drain_budget: Duration::from_secs(1),
                 block_payload_rx_drain_budget: Duration::from_secs(1),
                 block_payload_rx_drain_max_messages: 16,
@@ -5923,6 +6026,7 @@ mod tests {
 
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -5984,6 +6088,7 @@ mod tests {
         let mut actor = RecordingActor::default();
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -6044,6 +6149,7 @@ mod tests {
         };
         let config = WorkerLoopConfig {
             time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
             vote_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_budget: Duration::from_secs(1),
             block_payload_rx_drain_max_messages: 16,
@@ -8118,6 +8224,7 @@ impl TierBudgets {
 #[derive(Clone, Copy, Debug)]
 struct WorkerLoopConfig {
     time_budget: Duration,
+    drain_budget_cap: Duration,
     vote_rx_drain_budget: Duration,
     block_payload_rx_drain_budget: Duration,
     block_payload_rx_drain_max_messages: usize,
@@ -8200,7 +8307,10 @@ fn drain_mailbox<A: WorkerActor>(
 ) {
     let vote_burst = cfg.vote_rx_drain_max_messages.min(VOTE_BURST_CAP).max(1);
     // Cap per-iteration draining so ticks cannot be starved by long queue backlogs.
-    let drain_budget = cfg.time_budget.min(cfg.tick_max_gap);
+    let drain_budget = cfg
+        .time_budget
+        .min(cfg.tick_max_gap)
+        .min(cfg.drain_budget_cap);
     loop {
         if iter_start.elapsed() >= drain_budget {
             stats.budget_exceeded = true;
@@ -8540,6 +8650,7 @@ fn run_worker_loop<A: WorkerActor>(
 ) {
     iroha_logger::debug!(
         time_budget = ?cfg.time_budget,
+        drain_budget_cap = ?cfg.drain_budget_cap,
         vote_rx_drain_budget = ?cfg.vote_rx_drain_budget,
         block_payload_rx_drain_budget = ?cfg.block_payload_rx_drain_budget,
         rbc_chunk_rx_drain_budget = ?cfg.rbc_chunk_rx_drain_budget,
@@ -8726,6 +8837,7 @@ impl SumeragiWorker {
         let msg_channel_cap_rbc_chunks = config.msg_channel_cap_rbc_chunks;
         let control_msg_channel_cap = config.control_msg_channel_cap;
         let worker_iteration_budget_cap = config.worker_iteration_budget_cap;
+        let worker_iteration_drain_budget_cap = config.worker_iteration_drain_budget_cap;
         let (block_time, commit_time, da_enabled) = {
             let view = state.view();
             let params = view.world.parameters().sumeragi();
@@ -8813,6 +8925,7 @@ impl SumeragiWorker {
         tick_max_gap = tick_max_gap.max(tick_min_gap);
         let loop_config = WorkerLoopConfig {
             time_budget,
+            drain_budget_cap: worker_iteration_drain_budget_cap,
             vote_rx_drain_budget,
             block_payload_rx_drain_budget: non_vote_drain_budget,
             block_payload_rx_drain_max_messages: msg_channel_cap_block_payload.max(1),

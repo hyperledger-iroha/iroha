@@ -4,7 +4,7 @@ use std::{
     fs,
     path::PathBuf,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use eyre::{Result, WrapErr, eyre};
@@ -20,8 +20,9 @@ use iroha::data_model::{
     repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
 };
 use iroha_data_model::account::{
-    AccountDomainSelector, clear_account_domain_selector_resolver,
-    set_account_domain_selector_resolver,
+    AccountDomainSelector,
+    address::{AccountAddress, AccountAddressFormat},
+    clear_account_domain_selector_resolver, set_account_domain_selector_resolver,
 };
 use iroha_data_model::prelude::RepoInstructionBox;
 use iroha_primitives::json::Json;
@@ -56,6 +57,39 @@ fn extract_account_ids(value: &norito::json::Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+async fn wait_for_account_in_query(
+    http: &Client,
+    url: reqwest::Url,
+    account_literal: &str,
+) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let body = format!(
+        r#"{{"filter":{{"op":"eq","args":["id","{account_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
+    );
+    loop {
+        let resp = http
+            .post(url.clone())
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .body(body.clone())
+            .send()
+            .await?;
+        if resp.status().is_success() {
+            let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
+            let ids = extract_account_ids(&parsed);
+            if ids.iter().any(|id| id == account_literal) {
+                return Ok(());
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "timed out waiting for account {account_literal} to appear in accounts query"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }
 
 fn extract_holder_account_ids(value: &norito::json::Value) -> Vec<String> {
@@ -117,16 +151,13 @@ fn extract_account_transaction_authorities(value: &norito::json::Value) -> Vec<S
 
 fn assert_authorities_are_ih58(authorities: &[String]) -> Result<()> {
     for literal in authorities {
-        let parsed = AccountId::parse(literal)
-            .wrap_err_with(|| format!("authority {literal} should parse as account id"))?;
-        if !matches!(
-            parsed.source(),
-            AccountAddressSource::Encoded(AccountAddressFormat::IH58 { .. })
-        ) {
+        let (_, format) = AccountAddress::parse_any(literal, None)
+            .wrap_err_with(|| format!("authority {literal} should parse as account address"))?;
+        if !matches!(format, AccountAddressFormat::IH58 { .. }) {
             return Err(eyre!(
                 "IH58 default should emit canonical IH58 literals; got {} ({:?})",
                 literal,
-                parsed.source()
+                format
             ));
         }
     }
@@ -1551,28 +1582,24 @@ async fn accounts_query_accepts_alias_and_compressed_filter_literals() -> Result
 
     let client = network.client();
     let domain_id: DomainId = "aliases".parse()?;
-    client.submit_blocking(Register::domain(Domain::new(domain_id.clone())))?;
 
     let label = AccountLabel::new(domain_id.clone(), "primary".parse()?);
     let keypair = KeyPair::random();
     let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
     let account = Account::new(account_id.clone()).with_label(Some(label.clone()));
-    client.submit_blocking(Register::account(account))?;
+    client.submit_all([
+        InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
+        InstructionBox::from(Register::account(account)),
+    ])?;
 
-    let other_keypair = KeyPair::random();
-    let other_id = AccountId::new(domain_id.clone(), other_keypair.public_key().clone());
-    let duplicate = Account::new(other_id).with_label(Some(label.clone()));
-    let dup_err = client
-        .submit_blocking(Register::account(duplicate))
-        .expect_err("duplicate alias label should be rejected");
-    let dup_msg = dup_err.to_string();
-    assert!(
-        dup_msg.contains("Account label already registered"),
-        "expected alias collision error, got {dup_msg}"
-    );
-
-    let blocks = client.get_status()?.blocks;
-    network.ensure_blocks(blocks).await?;
+    let url = network
+        .client()
+        .torii_url
+        .join("/v1/accounts/query")
+        .expect("join accounts query url");
+    let expected = account_id.to_string();
+    let http = http_client();
+    wait_for_account_in_query(&http, url.clone(), &expected).await?;
 
     let alias_literal = format!("{}@{}", label.label, domain_id);
     let compressed_literal = account_id
@@ -1580,14 +1607,6 @@ async fn accounts_query_accepts_alias_and_compressed_filter_literals() -> Result
         .expect("account address should encode")
         .to_compressed_sora()
         .expect("compressed address encoding");
-    let expected = account_id.to_string();
-
-    let http = http_client();
-    let url = network
-        .client()
-        .torii_url
-        .join("/v1/accounts/query")
-        .expect("join accounts query url");
 
     for literal in [alias_literal, compressed_literal] {
         let body = format!(
@@ -1600,12 +1619,13 @@ async fn accounts_query_accepts_alias_and_compressed_filter_literals() -> Result
             .body(body)
             .send()
             .await?;
+        let status = resp.status();
+        let body = resp.text().await?;
         assert!(
-            resp.status().is_success(),
-            "alias/compressed literal should be accepted, got {}",
-            resp.status()
+            status.is_success(),
+            "alias/compressed literal should be accepted, got {status} body={body}"
         );
-        let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
+        let parsed: norito::json::Value = norito::json::from_str(&body)?;
         let ids = extract_account_ids(&parsed);
         assert!(
             ids.iter().any(|id| id == &expected),

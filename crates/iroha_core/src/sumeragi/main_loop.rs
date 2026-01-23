@@ -3420,6 +3420,10 @@ impl Actor {
         if quorum_timeout == Duration::ZERO {
             return self.blocking_pending_blocks_len();
         }
+        let stall_grace = self
+            .config
+            .pacemaker_pending_stall_grace
+            .min(quorum_timeout);
         let view = self.state.view();
         let tip_height = view.height();
         let tip_hash = view.latest_block_hash();
@@ -3444,7 +3448,8 @@ impl Actor {
                 if pending.commit_qc_seen {
                     return true;
                 }
-                pending.progress_age(now) < quorum_timeout
+                let progress_age = pending.progress_age(now);
+                progress_age >= stall_grace && progress_age < quorum_timeout
             })
             .count()
     }
@@ -8284,6 +8289,7 @@ impl Actor {
         tick_max_gap = tick_max_gap.max(tick_min_gap);
 
         cfg.time_budget = time_budget;
+        cfg.drain_budget_cap = self.config.worker_iteration_drain_budget_cap;
         cfg.vote_rx_drain_budget = vote_rx_drain_budget;
         cfg.block_payload_rx_drain_budget = non_vote_drain_budget;
         cfg.block_rx_drain_budget = block_rx_drain_budget;

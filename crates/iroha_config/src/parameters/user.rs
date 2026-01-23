@@ -5221,6 +5221,12 @@ pub struct Sumeragi {
         default = "defaults::sumeragi::WORKER_ITERATION_BUDGET_CAP_MS"
     )]
     pub worker_iteration_budget_cap_ms: u64,
+    /// Cap (ms) on the worker loop's per-iteration drain budget.
+    #[config(
+        env = "SUMERAGI_WORKER_ITERATION_DRAIN_BUDGET_CAP_MS",
+        default = "defaults::sumeragi::WORKER_ITERATION_DRAIN_BUDGET_CAP_MS"
+    )]
+    pub worker_iteration_drain_budget_cap_ms: u64,
     /// Runtime consensus mode: `permissioned` (default) or `npos`.
     #[config(
         env = "SUMERAGI_CONSENSUS_MODE",
@@ -5513,6 +5519,12 @@ pub struct Sumeragi {
         default = "defaults::sumeragi::PACEMAKER_JITTER_FRAC_PERMILLE"
     )]
     pub pacemaker_jitter_frac_permille: u32,
+    /// Grace period (ms) before a pending block counts as stalled for pacemaker backpressure.
+    #[config(
+        env = "SUMERAGI_PACEMAKER_PENDING_STALL_GRACE_MS",
+        default = "defaults::sumeragi::PACEMAKER_PENDING_STALL_GRACE_MS"
+    )]
+    pub pacemaker_pending_stall_grace_ms: u64,
     /// Soft limit for blocking pending blocks before pacemaker backpressure defers proposals.
     /// 0 keeps strict gating (any pending block defers).
     #[config(
@@ -5903,6 +5915,7 @@ impl Sumeragi {
             msg_channel_cap_blocks,
             control_msg_channel_cap,
             worker_iteration_budget_cap_ms,
+            worker_iteration_drain_budget_cap_ms,
             consensus_mode,
             mode_flip_enabled,
             da_enabled,
@@ -5957,6 +5970,7 @@ impl Sumeragi {
             pacemaker_rtt_floor_multiplier,
             pacemaker_max_backoff_ms,
             pacemaker_jitter_frac_permille,
+            pacemaker_pending_stall_grace_ms,
             pacemaker_active_pending_soft_limit,
             pacemaker_rbc_backlog_session_soft_limit,
             pacemaker_rbc_backlog_chunk_soft_limit,
@@ -6084,6 +6098,15 @@ impl Sumeragi {
         } else {
             true
         };
+        let worker_drain_budget_ok =
+            if worker_iteration_drain_budget_cap_ms == 0 {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.worker_iteration_drain_budget_cap_ms must be greater than zero",
+                ));
+                false
+            } else {
+                true
+            };
 
         let membership_mismatch_threshold_ok =
             if membership_mismatch_alert_threshold == 0 {
@@ -6182,6 +6205,7 @@ impl Sumeragi {
             && kura_retry_ok
             && commit_inflight_ok
             && worker_budget_ok
+            && worker_drain_budget_ok
             && membership_mismatch_threshold_ok
             && bls_ok)
         {
@@ -6253,6 +6277,9 @@ impl Sumeragi {
             worker_iteration_budget_cap: std::time::Duration::from_millis(
                 worker_iteration_budget_cap_ms,
             ),
+            worker_iteration_drain_budget_cap: std::time::Duration::from_millis(
+                worker_iteration_drain_budget_cap_ms,
+            ),
             commit_cert_history_cap,
             consensus_mode: match consensus_mode {
                 ConsensusMode::Permissioned => actual::ConsensusMode::Permissioned,
@@ -6320,6 +6347,9 @@ impl Sumeragi {
             pacemaker_rtt_floor_multiplier,
             pacemaker_max_backoff: std::time::Duration::from_millis(pacemaker_max_backoff_ms),
             pacemaker_jitter_frac_permille,
+            pacemaker_pending_stall_grace: std::time::Duration::from_millis(
+                pacemaker_pending_stall_grace_ms,
+            ),
             pacemaker_active_pending_soft_limit,
             pacemaker_rbc_backlog_session_soft_limit,
             pacemaker_rbc_backlog_chunk_soft_limit,

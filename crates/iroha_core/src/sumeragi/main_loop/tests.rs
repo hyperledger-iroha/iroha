@@ -838,7 +838,7 @@ async fn apply_mode_flip_uses_world_epoch_params() {
     let actor = &mut harness.actor;
 
     {
-        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let state = std::sync::Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut block = state.world.block();
         let params = block.parameters.get_mut();
         let npos_params = SumeragiNposParameters {
@@ -988,6 +988,9 @@ fn test_sumeragi_config() -> SumeragiConfig {
         worker_iteration_budget_cap: Duration::from_millis(
             iroha_config::parameters::defaults::sumeragi::WORKER_ITERATION_BUDGET_CAP_MS,
         ),
+        worker_iteration_drain_budget_cap: Duration::from_millis(
+            iroha_config::parameters::defaults::sumeragi::WORKER_ITERATION_DRAIN_BUDGET_CAP_MS,
+        ),
         consensus_mode: ConsensusMode::Npos,
         mode_flip_enabled: iroha_config::parameters::defaults::sumeragi::MODE_FLIP_ENABLED,
         da_enabled: true,
@@ -1080,6 +1083,9 @@ fn test_sumeragi_config() -> SumeragiConfig {
         pacemaker_rtt_floor_multiplier: 1,
         pacemaker_max_backoff: Duration::from_secs(0),
         pacemaker_jitter_frac_permille: 0,
+        pacemaker_pending_stall_grace: Duration::from_millis(
+            iroha_config::parameters::defaults::sumeragi::PACEMAKER_PENDING_STALL_GRACE_MS,
+        ),
         pacemaker_active_pending_soft_limit:
             iroha_config::parameters::defaults::sumeragi::PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT,
         pacemaker_rbc_backlog_session_soft_limit:
@@ -28982,7 +28988,14 @@ async fn proposal_backpressure_ignores_inactive_rbc_sessions() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn should_defer_proposal_when_active_pending_rbc_session_not_delivered() {
-    let mut harness = test_actor_harness(4).await;
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da_enabled = true;
+    consensus_cfg.pacemaker_pending_stall_grace = Duration::ZERO;
+    consensus_cfg.pacemaker_active_pending_soft_limit = 0;
+    consensus_cfg.pacemaker_rbc_backlog_session_soft_limit = 0;
+    consensus_cfg.pacemaker_rbc_backlog_chunk_soft_limit = 0;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
     let genesis_hash = seed_genesis_block_for_state(&actor.state);
@@ -29012,7 +29025,7 @@ async fn should_defer_proposal_when_active_pending_rbc_session_not_delivered() {
         .insert(session_key, session);
 
     let backpressure = actor.proposal_backpressure();
-    assert!(backpressure.active_pending);
+    assert!(backpressure.rbc_backlog);
     assert!(
         backpressure.should_defer(),
         "proposal assembly should defer while pending RBC sessions are unresolved"
@@ -29190,25 +29203,60 @@ async fn proposal_backpressure_blocks_commit_qc_pending_after_reschedule() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn proposal_backpressure_ignores_stale_pending_progress() {
+async fn proposal_backpressure_respects_pending_stall_grace() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da_enabled = true;
     consensus_cfg.pacemaker_active_pending_soft_limit = 0;
+    consensus_cfg.pacemaker_pending_stall_grace = Duration::from_millis(200);
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
+
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut params_block = state.world.parameters.block();
+        params_block.sumeragi.block_time_ms = 1_000;
+        params_block.sumeragi.commit_time_ms = 250;
+        params_block.sumeragi.da_enabled = true;
+        params_block.commit();
+    }
 
     let key = insert_active_pending_block(actor, 0);
     let now = Instant::now();
     let backpressure_fresh = actor.proposal_backpressure_at(now);
     assert!(
-        backpressure_fresh.active_pending,
-        "fresh pending progress should block proposals under a strict soft limit"
+        !backpressure_fresh.active_pending,
+        "pending progress should not block proposals during the stall grace period"
+    );
+    assert!(
+        !backpressure_fresh.should_defer(),
+        "proposal assembly should proceed while pending progress is within grace"
     );
 
     let quorum_timeout = actor
         .quorum_timeout(actor.runtime_da_enabled())
         .max(Duration::from_millis(1));
+    let stall_grace = actor.config.pacemaker_pending_stall_grace;
+    let stalled = now
+        .checked_sub(stall_grace.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&key.0)
+        .expect("pending block exists")
+        .touch_progress(stalled);
+
+    let backpressure_stalled = actor.proposal_backpressure_at(now);
+    assert!(
+        backpressure_stalled.active_pending,
+        "pending progress beyond the grace period should block proposals"
+    );
+    assert!(
+        backpressure_stalled.should_defer(),
+        "proposal assembly should defer while pending progress is stalled"
+    );
+
     let stale = now
         .checked_sub(quorum_timeout.saturating_add(Duration::from_millis(1)))
         .unwrap_or(now);
@@ -29222,11 +29270,11 @@ async fn proposal_backpressure_ignores_stale_pending_progress() {
     let backpressure_stale = actor.proposal_backpressure_at(now);
     assert!(
         !backpressure_stale.active_pending,
-        "stalled pending progress should not keep proposals deferred"
+        "stalled pending progress should not keep proposals deferred past quorum timeout"
     );
     assert!(
         !backpressure_stale.should_defer(),
-        "proposal assembly should proceed once pending progress stalls"
+        "proposal assembly should proceed once pending progress stalls past quorum timeout"
     );
 
     harness.shutdown.send();

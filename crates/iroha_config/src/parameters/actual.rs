@@ -3584,6 +3584,8 @@ pub struct Sumeragi {
     pub control_msg_channel_cap: usize,
     /// Cap on the worker loop's per-iteration time budget.
     pub worker_iteration_budget_cap: Duration,
+    /// Cap on worker mailbox draining per iteration.
+    pub worker_iteration_drain_budget_cap: Duration,
     /// Runtime consensus mode selection (permissioned vs npos).
     pub consensus_mode: ConsensusMode,
     /// Whether runtime consensus mode flips triggered by on-chain parameters are applied automatically.
@@ -3692,6 +3694,8 @@ pub struct Sumeragi {
     pub pacemaker_max_backoff: Duration,
     /// Pacemaker jitter band (permille of window). 0 disables jitter.
     pub pacemaker_jitter_frac_permille: u32,
+    /// Grace period before a pending block counts as stalled for pacemaker backpressure.
+    pub pacemaker_pending_stall_grace: Duration,
     /// Soft limit for blocking pending blocks before pacemaker backpressure defers proposals.
     /// 0 keeps strict gating (any pending block defers).
     pub pacemaker_active_pending_soft_limit: usize,

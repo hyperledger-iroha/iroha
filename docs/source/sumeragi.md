@@ -315,10 +315,12 @@ msg_channel_cap_rbc_chunks = 1024  # RBC chunk capacity
 rbc_chunk_fanout = null            # RBC chunk fanout cap (null = full roster minus local)
 msg_channel_cap_blocks = 256       # block message capacity (params, etc.)
 control_msg_channel_cap = 1024     # control/background/lane channel capacity
-worker_iteration_budget_cap_ms = 2000 # clamp worker drain budget per iteration
-pacemaker_active_pending_soft_limit = 0    # allow proposals with <= N blocking pending blocks (0 = strict)
-pacemaker_rbc_backlog_session_soft_limit = 0 # allow proposals with <= N backlog sessions (0 = strict)
-pacemaker_rbc_backlog_chunk_soft_limit = 0   # allow proposals with <= N missing chunks (0 = strict)
+worker_iteration_budget_cap_ms = 2000 # cap worker loop time budget per iteration
+worker_iteration_drain_budget_cap_ms = 2000 # cap mailbox drain per iteration
+pacemaker_pending_stall_grace_ms = 250       # grace before pending progress counts as stalled
+pacemaker_active_pending_soft_limit = 1      # allow proposals with <= N blocking pending blocks (0 = strict)
+pacemaker_rbc_backlog_session_soft_limit = 2 # allow proposals with <= N backlog sessions (0 = strict)
+pacemaker_rbc_backlog_chunk_soft_limit = 16  # allow proposals with <= N missing chunks (0 = strict)
 da_enabled = true                  # enable DA + RBC; availability evidence tracked (commit does not wait)
 kura_store_retry_interval_ms = 1000 # retry failed kura persistence with exponential backoff
 kura_store_retry_max_attempts = 5   # abort and requeue the block payload after repeated failures
