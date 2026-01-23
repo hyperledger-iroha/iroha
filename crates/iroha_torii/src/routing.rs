@@ -14233,7 +14233,10 @@ pub async fn handle_v1_account_transactions_with_policy(
     use std::time::Instant;
 
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::transaction::prelude::FindTransactions;
+    use iroha_data_model::query::{
+        dsl::{CommittedTxPredicate, CompoundPredicate},
+        transaction::prelude::FindTransactions,
+    };
     #[cfg(feature = "telemetry")]
     let start = Instant::now();
     #[cfg(feature = "telemetry")]
@@ -14254,7 +14257,7 @@ pub async fn handle_v1_account_transactions_with_policy(
         })
         .unwrap_or(0);
 
-    let _ = parse_account_path_segment(
+    let (account_id, _canonical_literal) = parse_account_path_segment(
         &account_id,
         &telemetry,
         ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
@@ -14264,6 +14267,9 @@ pub async fn handle_v1_account_transactions_with_policy(
         &telemetry,
         ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
         address_format,
+    );
+    let account_predicate = CompoundPredicate::from_committed_tx_predicate(
+        CommittedTxPredicate::AuthorityEq(account_id),
     );
     let limits = app_query_limits();
     let cap = app_query_page_cap(&state);
@@ -14296,8 +14302,9 @@ pub async fn handle_v1_account_transactions_with_policy(
                 .map_err(|e| map_filter_error(e, ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY))?;
             tx_predicate_from_filter(expr)
         } else {
-            iroha_data_model::query::dsl::CompoundPredicate::PASS
+            CompoundPredicate::PASS
         };
+        let predicate = predicate.and(account_predicate);
         let iter = ValidQuery::execute(FindTransactions, predicate.clone(), &state_view)
             .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
 
@@ -15739,15 +15746,9 @@ mod tx_query_integration_smoke {
             .execute(&exec_id, &mut stx)
             .ok();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let kp_c = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let acc_a = dm::AccountId::new(domain_id.clone(), kp_a.public_key().clone());
-        let acc_b = dm::AccountId::new(domain_id.clone(), kp_b.public_key().clone());
-        let acc_c = dm::AccountId::new(domain_id.clone(), kp_c.public_key().clone());
+        let account_literal = acc_a.to_string();
         dm::Register::account(dm::Account::new(acc_a.clone()))
-            .execute(&exec_id, &mut stx)
-            .ok();
-        dm::Register::account(dm::Account::new(acc_b.clone()))
             .execute(&exec_id, &mut stx)
             .ok();
         stx.apply();
@@ -15759,7 +15760,7 @@ mod tx_query_integration_smoke {
         let committed0 = valid0.commit_unchecked().unpack(|_| {});
         crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
 
-        // Build three transactions (two share same timestamp for tie-breaking)
+        // Build three transactions for the same authority (two share timestamp for tie-breaking)
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -15773,21 +15774,29 @@ mod tx_query_integration_smoke {
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx_a = AcceptedTransaction::new_unchecked(Cow::Owned(tx_a));
-        // tx_b: authority acc_b at t=2000ms
-        let mut bldr_b = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
+        // tx_b: authority acc_a at t=2000ms
+        let mut bldr_b = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         bldr_b.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_b = bldr_b
-            .with_instructions::<dm::InstructionBox>([log_instruction()])
-            .sign(kp_b.private_key());
+            .with_instructions::<dm::InstructionBox>([dm::Log::new(
+                dm::Level::INFO,
+                "test-b".to_string(),
+            )
+            .into()])
+            .sign(kp_a.private_key());
         let _entry_b_str = format!("{}", signed_b.hash_as_entrypoint());
         let tx_b = AcceptedTransaction::new_unchecked(Cow::Owned(signed_b));
 
-        // tx_c: authority acc_c at t=2000ms (different entrypoint hash)
-        let mut bldr_c = dm::TransactionBuilder::new(chain_id.clone(), acc_c.clone());
+        // tx_c: authority acc_a at t=2000ms (different entrypoint hash)
+        let mut bldr_c = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         bldr_c.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_c = bldr_c
-            .with_instructions::<dm::InstructionBox>([log_instruction()])
-            .sign(kp_c.private_key());
+            .with_instructions::<dm::InstructionBox>([dm::Log::new(
+                dm::Level::INFO,
+                "test-c".to_string(),
+            )
+            .into()])
+            .sign(kp_a.private_key());
         let _entry_c_str = format!("{}", signed_c.hash_as_entrypoint());
         let tx_c = AcceptedTransaction::new_unchecked(Cow::Owned(signed_c));
 
@@ -15834,10 +15843,7 @@ mod tx_query_integration_smoke {
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(account_literal.clone()),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -15879,10 +15885,7 @@ mod tx_query_integration_smoke {
         };
         let resp2 = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(account_literal),
             crate::utils::extractors::NoritoJson(env2),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -16062,7 +16065,7 @@ mod tx_query_integration_smoke {
         };
 
         // tx1: t=1000, result_ok=true, capture entrypoint hash string
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a);
+        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let signed1 = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -16070,7 +16073,7 @@ mod tx_query_integration_smoke {
         let entry_hash1_str = format!("{}", signed1.hash_as_entrypoint());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed1));
         // tx2: t=2000, result_ok=true
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b);
+        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let signed2 = b2
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -16134,10 +16137,7 @@ mod tx_query_integration_smoke {
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(acc_b.to_string()),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -16266,7 +16266,7 @@ mod tx_query_integration_smoke {
         };
 
         // tx for A at 1000, tx for B at 2000
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a);
+        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let signed_a = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -16333,10 +16333,7 @@ mod tx_query_integration_smoke {
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(acc_b_str.clone()),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -16363,13 +16360,11 @@ mod tx_query_integration_smoke {
             query,
         ));
 
-        // Build two transactions: A at 1500ms, B at 900ms
+        // Build two transactions: A at 1500ms, A at 900ms
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let dom: dm::DomainId = "wonderland".parse().unwrap();
         let acc_a = dm::AccountId::new(dom.clone(), kp_a.public_key().clone());
-        let acc_b = dm::AccountId::new(dom.clone(), kp_b.public_key().clone());
         let acc_a_str = format!("{}", acc_a);
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -16377,18 +16372,18 @@ mod tx_query_integration_smoke {
             (p.sumeragi().max_clock_drift(), p.transaction())
         };
 
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a);
+        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b1.set_creation_time(core::time::Duration::from_millis(1500));
         let tx1 = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b);
+        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b2.set_creation_time(core::time::Duration::from_millis(900));
         let tx2 = b2
             .with_instructions::<dm::InstructionBox>([log_instruction()])
-            .sign(kp_b.private_key());
+            .sign(kp_a.private_key());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
 
         // Commit block
@@ -16433,10 +16428,7 @@ mod tx_query_integration_smoke {
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(acc_a.to_string()),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -16478,28 +16470,26 @@ mod tx_query_integration_smoke {
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let dom: dm::DomainId = "wonderland".parse().unwrap();
         let acc_a = dm::AccountId::new(dom.clone(), kp_a.public_key().clone());
-        let acc_b = dm::AccountId::new(dom, kp_b.public_key().clone());
 
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
             let p = v.world().parameters();
             (p.sumeragi().max_clock_drift(), p.transaction())
         };
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a);
+        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let signed_a = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
-        let entry_hash_a = format!("{}", signed_a.hash_as_entrypoint());
+        let _entry_hash_a = format!("{}", signed_a.hash_as_entrypoint());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_a));
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b);
+        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let tx2 = b2
             .with_instructions::<dm::InstructionBox>([log_instruction()])
-            .sign(kp_b.private_key());
+            .sign(kp_a.private_key());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
 
         let leader = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
@@ -16540,10 +16530,7 @@ mod tx_query_integration_smoke {
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(acc_a.to_string()),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -16682,10 +16669,7 @@ mod tx_query_integration_smoke {
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(acc_b_str.clone()),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -16739,26 +16723,26 @@ mod tx_query_integration_smoke {
             (p.sumeragi().max_clock_drift(), p.transaction())
         };
 
-        // Three external transactions with different authorities
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a);
+        // Three external transactions with the same authority
+        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b1.set_creation_time(core::time::Duration::from_millis(1));
         let tx1 = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b);
+        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b2.set_creation_time(core::time::Duration::from_millis(2));
         let tx2 = b2
             .with_instructions::<dm::InstructionBox>([log_instruction()])
-            .sign(kp_b.private_key());
+            .sign(kp_a.private_key());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
 
-        let mut b3 = dm::TransactionBuilder::new(chain_id.clone(), acc_c);
+        let mut b3 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b3.set_creation_time(core::time::Duration::from_millis(3));
         let tx3 = b3
             .with_instructions::<dm::InstructionBox>([log_instruction()])
-            .sign(kp_c.private_key());
+            .sign(kp_a.private_key());
         let tx3 = AcceptedTransaction::new_unchecked(Cow::Owned(tx3));
 
         // Commit block with all three
@@ -16775,7 +16759,7 @@ mod tx_query_integration_smoke {
         let committed = valid.clone().commit_unchecked().unpack(|_| {});
         crate::test_utils::finalize_committed_block(&state, st_block, committed);
 
-        // 1) Eq(authority == A) => exactly 1
+        // 1) Eq(authority == A) => all
         let env_eq = crate::filter::QueryEnvelope {
             query: None,
             filter: Some(crate::filter::FilterExpr::Eq(
@@ -16793,10 +16777,7 @@ mod tx_query_integration_smoke {
         };
         let resp_eq = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(acc_a_str.clone()),
             crate::utils::extractors::NoritoJson(env_eq),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -16807,9 +16788,9 @@ mod tx_query_integration_smoke {
         let v_eq: norito::json::Value =
             norito::json::from_slice(&resp_eq.into_body().collect().await.unwrap().to_bytes())
                 .unwrap();
-        assert_eq!(v_eq["items"].as_array().unwrap().len(), 1);
+        assert_eq!(v_eq["items"].as_array().unwrap().len(), 3);
 
-        // 2) Ne(authority != B) => 2 (A and C)
+        // 2) Ne(authority != B) => all
         let env_ne = crate::filter::QueryEnvelope {
             query: None,
             filter: Some(crate::filter::FilterExpr::Ne(
@@ -16827,10 +16808,7 @@ mod tx_query_integration_smoke {
         };
         let resp_ne = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(acc_a_str.clone()),
             crate::utils::extractors::NoritoJson(env_ne),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -16841,9 +16819,9 @@ mod tx_query_integration_smoke {
         let v_ne: norito::json::Value =
             norito::json::from_slice(&resp_ne.into_body().collect().await.unwrap().to_bytes())
                 .unwrap();
-        assert_eq!(v_ne["items"].as_array().unwrap().len(), 2);
+        assert_eq!(v_ne["items"].as_array().unwrap().len(), 3);
 
-        // 3) In(authority IN {A,C}) => 2
+        // 3) In(authority IN {A,C}) => all
         let env_in = crate::filter::QueryEnvelope {
             query: None,
             filter: Some(crate::filter::FilterExpr::In(
@@ -16864,10 +16842,7 @@ mod tx_query_integration_smoke {
         };
         let resp_in = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(acc_a_str.clone()),
             crate::utils::extractors::NoritoJson(env_in),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -16878,9 +16853,9 @@ mod tx_query_integration_smoke {
         let v_in: norito::json::Value =
             norito::json::from_slice(&resp_in.into_body().collect().await.unwrap().to_bytes())
                 .unwrap();
-        assert_eq!(v_in["items"].as_array().unwrap().len(), 2);
+        assert_eq!(v_in["items"].as_array().unwrap().len(), 3);
 
-        // 4) Nin(authority NIN {A}) => 2 (B and C)
+        // 4) Nin(authority NIN {A}) => 0
         let env_nin = crate::filter::QueryEnvelope {
             query: None,
             filter: Some(crate::filter::FilterExpr::Nin(
@@ -16898,10 +16873,7 @@ mod tx_query_integration_smoke {
         };
         let resp_nin = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(acc_a_str.clone()),
             crate::utils::extractors::NoritoJson(env_nin),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -16912,7 +16884,7 @@ mod tx_query_integration_smoke {
         let v_nin: norito::json::Value =
             norito::json::from_slice(&resp_nin.into_body().collect().await.unwrap().to_bytes())
                 .unwrap();
-        assert_eq!(v_nin["items"].as_array().unwrap().len(), 2);
+        assert_eq!(v_nin["items"].as_array().unwrap().len(), 0);
     }
 
     #[cfg(feature = "tx_predicates")]
@@ -16931,10 +16903,9 @@ mod tx_query_integration_smoke {
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random();
-        let kp_b = KeyPair::random();
         let dom: dm::DomainId = "wonderland".parse().unwrap();
         let acc_a = dm::AccountId::new(dom.clone(), kp_a.public_key().clone());
-        let acc_b = dm::AccountId::new(dom.clone(), kp_b.public_key().clone());
+        let account_literal = acc_a.to_string();
 
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -16943,7 +16914,7 @@ mod tx_query_integration_smoke {
         };
 
         // Two transactions with distinct entrypoint hashes
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a);
+        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b1.set_creation_time(core::time::Duration::from_millis(10));
         let signed1 = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
@@ -16951,11 +16922,11 @@ mod tx_query_integration_smoke {
         let entry1 = format!("{}", signed1.hash_as_entrypoint());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed1));
 
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b);
+        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b2.set_creation_time(core::time::Duration::from_millis(20));
         let signed2 = b2
             .with_instructions::<dm::InstructionBox>([log_instruction()])
-            .sign(kp_b.private_key());
+            .sign(kp_a.private_key());
         let entry2 = format!("{}", signed2.hash_as_entrypoint());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed2));
 
@@ -16991,10 +16962,7 @@ mod tx_query_integration_smoke {
         };
         let resp_eq = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(account_literal.clone()),
             crate::utils::extractors::NoritoJson(env_eq),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -17024,10 +16992,7 @@ mod tx_query_integration_smoke {
         };
         let resp_ne = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(account_literal.clone()),
             crate::utils::extractors::NoritoJson(env_ne),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -17057,10 +17022,7 @@ mod tx_query_integration_smoke {
         };
         let resp_in_one = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(account_literal.clone()),
             crate::utils::extractors::NoritoJson(env_in_one),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -17093,10 +17055,7 @@ mod tx_query_integration_smoke {
         };
         let resp_in_two = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(account_literal.clone()),
             crate::utils::extractors::NoritoJson(env_in_two),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -17126,10 +17085,7 @@ mod tx_query_integration_smoke {
         };
         let resp_nin = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(account_literal),
             crate::utils::extractors::NoritoJson(env_nin),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -17158,10 +17114,9 @@ mod tx_query_integration_smoke {
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random();
-        let kp_b = KeyPair::random();
         let dom: dm::domain::DomainId = "wonderland".parse().unwrap();
         let acc_a = dm::account::AccountId::new(dom.clone(), kp_a.public_key().clone());
-        let acc_b = dm::account::AccountId::new(dom.clone(), kp_b.public_key().clone());
+        let account_literal = acc_a.to_string();
 
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -17169,24 +17124,25 @@ mod tx_query_integration_smoke {
             (p.sumeragi().max_clock_drift(), p.transaction())
         };
 
-        // A: success, B: failure
-        let mut b1 = dm::transaction::signed::TransactionBuilder::new(chain_id.clone(), acc_a);
+        // A: success, A: failure
+        let mut b1 =
+            dm::transaction::signed::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b1.set_creation_time(core::time::Duration::from_millis(100));
         let tx1 = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(tx1));
 
-        let mut b2 = dm::transaction::signed::TransactionBuilder::new(chain_id.clone(), acc_b);
+        let mut b2 =
+            dm::transaction::signed::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b2.set_creation_time(core::time::Duration::from_millis(200));
         let signed_b = b2
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
                 "nope".parse::<dm::DomainId>().unwrap(),
             )
             .into()])
-            .sign(kp_b.private_key());
+            .sign(kp_a.private_key());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_b));
-        let acc_b_str = format!("{}", tx2.as_ref().authority());
 
         // Commit
         let leader = KeyPair::random();
@@ -17220,10 +17176,7 @@ mod tx_query_integration_smoke {
         };
         let resp_exists_entry = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(account_literal.clone()),
             crate::utils::extractors::NoritoJson(env_exists_entry),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -17258,10 +17211,7 @@ mod tx_query_integration_smoke {
         };
         let resp_null_entry = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(account_literal.clone()),
             crate::utils::extractors::NoritoJson(env_null_entry),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -17296,10 +17246,7 @@ mod tx_query_integration_smoke {
         };
         let resp_exists_result = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(account_literal.clone()),
             crate::utils::extractors::NoritoJson(env_exists_result),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -17334,10 +17281,7 @@ mod tx_query_integration_smoke {
         };
         let resp_null_result = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(account_literal),
             crate::utils::extractors::NoritoJson(env_null_result),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -17372,14 +17316,8 @@ mod tx_query_integration_smoke {
         // Accounts and chain
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_b = KeyPair::from_seed(vec![0; 32], Algorithm::Ed25519);
-        let kp_c = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
-        let kp_d = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
-        let kp_e = KeyPair::from_seed(vec![3; 32], Algorithm::Ed25519);
         let dom: dm::DomainId = "wonderland".parse().unwrap();
         let acc_b = dm::AccountId::new(dom.clone(), kp_b.public_key().clone());
-        let acc_c = dm::AccountId::new(dom.clone(), kp_c.public_key().clone());
-        let acc_d = dm::AccountId::new(dom.clone(), kp_d.public_key().clone());
-        let acc_e = dm::AccountId::new(dom.clone(), kp_e.public_key().clone());
         // Pre-register the domain and the successful authority (account B).
         {
             let leader0 = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
@@ -17418,31 +17356,33 @@ mod tx_query_integration_smoke {
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_b.private_key());
         let tx_success = AcceptedTransaction::new_unchecked(Cow::Owned(signed_success));
-        // tx_fail_c: authority == C, failure due to missing account
-        let mut fail_c_builder = dm::TransactionBuilder::new(chain_id.clone(), acc_c);
+        // tx_fail_c: failure due to missing account
+        let mut fail_c_builder = dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
         fail_c_builder.set_creation_time(core::time::Duration::from_millis(1500));
         let fail_inst_c = dm::Register::domain(dm::Domain::new(dom.clone()));
         let signed_c = fail_c_builder
             .with_instructions::<dm::InstructionBox>([fail_inst_c.into()])
-            .sign(kp_c.private_key());
+            .sign(kp_b.private_key());
         let tx_fail_c = AcceptedTransaction::new_unchecked(Cow::Owned(signed_c));
 
-        // tx_fail_d: authority == D, failure due to missing account (unregister non-existent)
-        let mut unregister_missing_builder = dm::TransactionBuilder::new(chain_id.clone(), acc_d);
+        // tx_fail_d: failure due to missing account (unregister non-existent)
+        let mut unregister_missing_builder =
+            dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
         unregister_missing_builder.set_creation_time(core::time::Duration::from_millis(1500));
         let fail_inst_d = dm::Unregister::domain("void".parse::<dm::DomainId>().unwrap());
         let signed_d = unregister_missing_builder
             .with_instructions::<dm::InstructionBox>([fail_inst_d.into()])
-            .sign(kp_d.private_key());
+            .sign(kp_b.private_key());
         let tx_fail_d = AcceptedTransaction::new_unchecked(Cow::Owned(signed_d));
 
-        // tx_fail_e: authority == E, another failure case (duplicate domain register)
-        let mut duplicate_domain_builder = dm::TransactionBuilder::new(chain_id.clone(), acc_e);
+        // tx_fail_e: another failure case (duplicate domain register)
+        let mut duplicate_domain_builder =
+            dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone());
         duplicate_domain_builder.set_creation_time(core::time::Duration::from_millis(1500));
         let fail_inst_e = dm::Register::domain(dm::Domain::new(dom.clone()));
         let signed_e = duplicate_domain_builder
             .with_instructions::<dm::InstructionBox>([fail_inst_e.into()])
-            .sign(kp_e.private_key());
+            .sign(kp_b.private_key());
         let tx_fail_e = AcceptedTransaction::new_unchecked(Cow::Owned(signed_e));
 
         // Commit block with all four
@@ -17502,10 +17442,7 @@ mod tx_query_integration_smoke {
 
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(acc_b.to_string()),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -17555,12 +17492,8 @@ mod tx_query_integration_smoke {
         // Accounts and chain
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random();
-        let kp_b = KeyPair::random();
-        let kp_c = KeyPair::random();
         let dom: dm::DomainId = "wonderland".parse().unwrap();
         let acc_a = dm::AccountId::new(dom.clone(), kp_a.public_key().clone());
-        let acc_b = dm::AccountId::new(dom.clone(), kp_b.public_key().clone());
-        let acc_c = dm::AccountId::new(dom.clone(), kp_c.public_key().clone());
 
         // Pre-register domain and accounts so A exists; B and C will attempt invalid ops later
         {
@@ -17579,12 +17512,6 @@ mod tx_query_integration_smoke {
             dm::Register::account(dm::Account::new(acc_a.clone()))
                 .execute(&exec_id, &mut stx0)
                 .ok();
-            dm::Register::account(dm::Account::new(acc_b.clone()))
-                .execute(&exec_id, &mut stx0)
-                .ok();
-            dm::Register::account(dm::Account::new(acc_c.clone()))
-                .execute(&exec_id, &mut stx0)
-                .ok();
             stx0.apply();
             let valid0 = unverified0
                 .clone()
@@ -17601,33 +17528,33 @@ mod tx_query_integration_smoke {
         };
 
         // A_true@1000
-        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a);
+        let mut b1 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b1.set_creation_time(core::time::Duration::from_millis(1000));
         let signed_a = b1
             .with_instructions::<dm::InstructionBox>([log_instruction()])
             .sign(kp_a.private_key());
         let entry_hash_a = format!("{}", signed_a.hash_as_entrypoint());
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_a));
-        // B_false@2000 (fail)
-        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_b);
+        // A_false@2000 (fail)
+        let mut b2 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_b = b2
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
                 "nope".parse::<dm::DomainId>().unwrap(),
             )
             .into()])
-            .sign(kp_b.private_key());
+            .sign(kp_a.private_key());
         let entry_hash_b = format!("{}", signed_b.hash_as_entrypoint());
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_b));
-        // C_false@2000 (fail)
-        let mut b3 = dm::TransactionBuilder::new(chain_id.clone(), acc_c);
+        // A_false@2000 (fail)
+        let mut b3 = dm::TransactionBuilder::new(chain_id.clone(), acc_a.clone());
         b3.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_c = b3
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
                 "nada".parse::<dm::DomainId>().unwrap(),
             )
             .into()])
-            .sign(kp_c.private_key());
+            .sign(kp_a.private_key());
         let entry_hash_c = format!("{}", signed_c.hash_as_entrypoint());
         let tx3 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_c));
 
@@ -17680,10 +17607,7 @@ mod tx_query_integration_smoke {
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(acc_a.to_string()),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -17877,6 +17801,7 @@ mod app_api_integration_tests {
         let dom: DomainId = "wonderland".parse().unwrap();
         let acc_a = AccountId::new(dom.clone(), kp_a.public_key().clone());
         let acc_b = AccountId::new(dom.clone(), kp_b.public_key().clone());
+        let account_literal = acc_b.to_string();
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
             let p = v.world().parameters();
@@ -17933,10 +17858,7 @@ mod app_api_integration_tests {
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-                    .into(),
-            ),
+            axum::extract::Path(account_literal),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -17947,9 +17869,9 @@ mod app_api_integration_tests {
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let s = String::from_utf8(bytes.to_vec()).unwrap();
         let json: norito::json::Value = norito::json::from_str(&s).unwrap();
-        assert_eq!(json["total"].as_u64(), Some(3));
+        assert_eq!(json["total"].as_u64(), Some(2));
         assert_eq!(json["items"].as_array().unwrap().len(), 1);
-        assert_eq!(json["items"][0]["timestamp_ms"].as_u64(), Some(2000));
+        assert_eq!(json["items"][0]["timestamp_ms"].as_u64(), Some(3000));
     }
 
     #[tokio::test]

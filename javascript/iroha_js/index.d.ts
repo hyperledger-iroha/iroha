@@ -2156,6 +2156,7 @@ export const Norito: typeof import("./src/norito.js");
 export const Crypto: typeof import("./src/crypto.js");
 export const Offline: typeof import("./src/offlineEnvelope.js");
 export const OfflineCounters: typeof import("./src/offlineCounterJournal.js");
+export const OfflineQrStream: typeof import("./src/offlineQrStream.js");
 
 export interface SoranetPuzzleParamsSnapshot {
   memoryKib: number;
@@ -7073,6 +7074,138 @@ export function replayOfflineEnvelope(
     maxAttempts?: number | null;
   },
 ): Promise<any>;
+
+export const OfflineQrStreamFrameKind: Readonly<{
+  header: number;
+  data: number;
+  parity: number;
+}>;
+
+export const OfflineQrPayloadKind: Readonly<{
+  unspecified: number;
+  offlineToOnlineTransfer: number;
+  offlineSpendReceipt: number;
+  offlineEnvelope: number;
+}>;
+
+export class OfflineQrStreamOptions {
+  chunkSize: number;
+  parityGroup: number;
+  payloadKind: number;
+  constructor(options?: { chunkSize?: number; parityGroup?: number; payloadKind?: number });
+}
+
+export class OfflineQrStreamEnvelope {
+  readonly version: number;
+  readonly flags: number;
+  readonly encoding: number;
+  readonly parityGroup: number;
+  readonly chunkSize: number;
+  readonly dataChunks: number;
+  readonly parityChunks: number;
+  readonly payloadKind: number;
+  readonly payloadLength: number;
+  readonly payloadHash: Buffer;
+  constructor(input: {
+    flags?: number;
+    encoding?: number;
+    parityGroup?: number;
+    chunkSize: number;
+    dataChunks: number;
+    parityChunks: number;
+    payloadKind: number;
+    payloadLength: number;
+    payloadHash: ArrayBufferView | ArrayBuffer | Buffer;
+  });
+  get streamId(): Buffer;
+  encode(): Buffer;
+  static decode(bytes: ArrayBufferView | ArrayBuffer | Buffer): OfflineQrStreamEnvelope;
+}
+
+export class OfflineQrStreamFrame {
+  readonly kind: number;
+  readonly streamId: Buffer;
+  readonly index: number;
+  readonly total: number;
+  readonly payload: Buffer;
+  constructor(input: {
+    kind: number;
+    streamId: ArrayBufferView | ArrayBuffer | Buffer;
+    index: number;
+    total: number;
+    payload?: ArrayBufferView | ArrayBuffer | Buffer;
+  });
+  encode(): Buffer;
+  static decode(bytes: ArrayBufferView | ArrayBuffer | Buffer): OfflineQrStreamFrame;
+}
+
+export class OfflineQrStreamEncoder {
+  static encodeFrames(
+    payload: ArrayBufferView | ArrayBuffer | Buffer,
+    options?: { chunkSize?: number; parityGroup?: number; payloadKind?: number },
+  ): OfflineQrStreamFrame[];
+  static encodeFrameBytes(
+    payload: ArrayBufferView | ArrayBuffer | Buffer,
+    options?: { chunkSize?: number; parityGroup?: number; payloadKind?: number },
+  ): Buffer[];
+}
+
+export class OfflineQrStreamDecoder {
+  ingest(
+    frameBytes: ArrayBufferView | ArrayBuffer | Buffer,
+  ): {
+    payload: Buffer | null;
+    receivedChunks: number;
+    totalChunks: number;
+    recoveredChunks: number;
+    progress: number;
+    isComplete: boolean;
+  };
+}
+
+export class OfflineQrStreamScanSession {
+  ingest(
+    frameBytes: ArrayBufferView | ArrayBuffer | Buffer,
+  ): {
+    payload: Buffer | null;
+    receivedChunks: number;
+    totalChunks: number;
+    recoveredChunks: number;
+    progress: number;
+    isComplete: boolean;
+  };
+}
+
+export interface OfflineQrStreamColor {
+  red: number;
+  green: number;
+  blue: number;
+}
+
+export class OfflineQrStreamTheme {
+  readonly name: string;
+  readonly backgroundStart: OfflineQrStreamColor;
+  readonly backgroundEnd: OfflineQrStreamColor;
+  readonly accent: OfflineQrStreamColor;
+  readonly petal: OfflineQrStreamColor;
+  readonly petalCount: number;
+  readonly pulsePeriod: number;
+  constructor(input: {
+    name: string;
+    backgroundStart: OfflineQrStreamColor;
+    backgroundEnd: OfflineQrStreamColor;
+    accent: OfflineQrStreamColor;
+    petal: OfflineQrStreamColor;
+    petalCount: number;
+    pulsePeriod: number;
+  });
+  frameStyle(
+    frameIndex: number,
+    totalFrames: number,
+  ): { petalPhase: number; accentStrength: number; gradientAngle: number };
+}
+
+export const sakuraQrStreamTheme: OfflineQrStreamTheme;
 
 export function buildRegisterDomainTransaction(
   input: RegisterDomainInput,
