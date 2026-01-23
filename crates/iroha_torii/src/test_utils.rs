@@ -666,6 +666,9 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             worker_iteration_budget_cap: Duration::from_millis(
                 defaults::sumeragi::WORKER_ITERATION_BUDGET_CAP_MS,
             ),
+            worker_iteration_drain_budget_cap: Duration::from_millis(
+                defaults::sumeragi::WORKER_ITERATION_DRAIN_BUDGET_CAP_MS,
+            ),
             consensus_mode: A::ConsensusMode::Permissioned,
             mode_flip_enabled: defaults::sumeragi::MODE_FLIP_ENABLED,
             commit_cert_history_cap: defaults::sumeragi::COMMIT_CERT_HISTORY_CAP,

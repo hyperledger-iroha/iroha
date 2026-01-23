@@ -1,7 +1,21 @@
 # Status
 
-Last update: 2026-01-22
+Last update: 2026-01-23
 
+- Sumeragi worker loop: added `worker_iteration_drain_budget_cap_ms` to cap per-iteration mailbox drain time; config/docs updated; new unit coverage.
+- Tests: `cargo test -p iroha_core run_worker_iteration_caps_drain_at_config_cap -- --nocapture` (ok).
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Build: `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target-localnet28 cargo build --release -p iroha_kagami -p iroha_cli -p irohad` (ok).
+- Localnet baseline (NPoS, 7 peers, 753ms, telemetry=extended): `/private/tmp/iroha-localnet-7peer-run161-npos-baseline` (25580/26500). 50 TPS for 100 blocks with 1s `/metrics` sampling → `commit_qc.height` 0->102 over 491s (avg block interval 4.81s), avg tx/block 132.7 (~27.6 TPS), view-change log entries 46. Metrics: `metrics_peer0_50tps_100blocks.log`. Load log: `load_50tps_100blocks.log`.
+- Localnet baseline (same run). 12 min 50 TPS with 1s `/metrics` sampling → `commit_qc.height` 103->248 over 745s (avg block interval 5.14s), avg tx/block 137.3 (~26.7 TPS), view-change log entries 46. Metrics: `metrics_peer0_50tps_12min.log`. Load log: `load_50tps_12min.log`.
+- Localnet drain-cap (NPoS, 7 peers, 753ms, telemetry=extended, `worker_iteration_drain_budget_cap_ms=150`): `/private/tmp/iroha-localnet-7peer-run162-npos-cap150` (25680/26600). 50 TPS for 100 blocks with 1s `/metrics` sampling → `commit_qc.height` 0->103 over 530s (avg block interval 5.15s), avg tx/block 142.6 (~27.7 TPS), view-change log entries 336. Metrics: `metrics_peer0_50tps_100blocks.log`. Load log: `load_50tps_100blocks.log`.
+- Localnet drain-cap (same run). 12 min 50 TPS with 1s `/metrics` sampling → `commit_qc.height` 103->249 over 742s (avg block interval 5.08s), avg tx/block 157.3 (~30.9 TPS), view-change log entries 336. Metrics: `metrics_peer0_50tps_12min.log`. Load log: `load_50tps_12min.log`.
+- Account parsing: allow base58-like alias labels to resolve when IH58 parsing fails with a checksum mismatch; added unit coverage for alias resolution.
+- Integration tests: validate IH58 authorities via `AccountAddress::parse_any` and wait for the account to appear in accounts queries before alias/compressed filter assertions.
+- Tests: `cargo test -p iroha_data_model from_str_resolves_base58_like_alias -- --nocapture` (ok); `cargo test -p integration_tests --test address_canonicalisation account_transactions_get_supports_address_format -- --nocapture` (ok); `cargo test -p integration_tests --test address_canonicalisation account_transactions_query_supports_address_format -- --nocapture` (ok); `cargo test -p integration_tests --test address_canonicalisation accounts_query_accepts_alias_and_compressed_filter_literals -- --nocapture` (ok).
+- Build: `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target-localnet27 cargo build --release -p iroha_kagami -p irohad -p iroha_cli` (ok).
+- Localnet (NPoS, 7 peers, 753ms, telemetry=extended): `/private/tmp/iroha-localnet-7peer-run159-npos` (25280/26200). 50 TPS for 100 blocks with 1s `/metrics` sampling → `commit_qc.height` 2->99 over 460s (avg block interval 4.74s), avg tx/block 206 (~43 TPS), `view_change_install_total=0`, pacemaker deferrals `active_pending=70`, `rbc_backlog=70`, pending blocks total 1, tx queue depth 450. Metrics: `metrics_peer0_50tps_100blocks.log`. Load log: `load_50tps_100blocks.log`.
+- Localnet (NPoS, 7 peers, 753ms, telemetry=extended): `/private/tmp/iroha-localnet-7peer-run159-npos` (25280/26200). 12 min 50 TPS with 1s `/metrics` sampling → `commit_qc.height` 102->224 over 720s (avg block interval 5.90s), avg tx/block 245 (~41.6 TPS), `view_change_install_total=6`, pacemaker deferrals `active_pending=159`, `rbc_backlog=155`, tx queue depth 304. Metrics: `metrics_peer0_50tps_12min.log`. Load log: `load_50tps_12min.log`.
 - Sumeragi pacemaker: reuse the existing state snapshot when gating proposals to avoid nested `State::view` reads under writer pressure; added `active_pending_blocks_len_for_tip` and updated coverage.
 - Tests: `cargo test -p iroha_core active_pending_blocks_len_ignores_aborted_and_nonextending -- --nocapture` (ok).
 - Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).

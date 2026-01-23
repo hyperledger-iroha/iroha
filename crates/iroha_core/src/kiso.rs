@@ -973,6 +973,9 @@ mod tests {
                 worker_iteration_budget_cap: Duration::from_millis(
                     iroha_config::parameters::defaults::sumeragi::WORKER_ITERATION_BUDGET_CAP_MS,
                 ),
+                worker_iteration_drain_budget_cap: Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::WORKER_ITERATION_DRAIN_BUDGET_CAP_MS,
+                ),
                 consensus_mode: iroha_config::parameters::actual::ConsensusMode::Permissioned,
                 mode_flip_enabled: iroha_config::parameters::defaults::sumeragi::MODE_FLIP_ENABLED,
                 da_enabled: iroha_config::parameters::defaults::sumeragi::DA_ENABLED,
@@ -1149,6 +1152,9 @@ mod tests {
                 ),
                 pacemaker_jitter_frac_permille:
                     iroha_config::parameters::defaults::sumeragi::PACEMAKER_JITTER_FRAC_PERMILLE,
+                pacemaker_pending_stall_grace: std::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::sumeragi::PACEMAKER_PENDING_STALL_GRACE_MS,
+                ),
                 pacemaker_active_pending_soft_limit:
                     iroha_config::parameters::defaults::sumeragi::PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT,
                 pacemaker_rbc_backlog_session_soft_limit:

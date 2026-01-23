@@ -779,7 +779,10 @@ impl AccountId {
                             AccountAddressSource::Encoded(format),
                         ));
                     }
-                    Err(AccountAddressError::UnsupportedAddressFormat) => {}
+                    Err(
+                        AccountAddressError::UnsupportedAddressFormat
+                        | AccountAddressError::ChecksumMismatch,
+                    ) => {}
                     Err(err) => return Err(ParseError::new(err.code_str())),
                 }
 
@@ -1150,15 +1153,19 @@ mod account_id_parsing_tests {
         let key_pair = KeyPair::from_seed(vec![0xCD; 32], Algorithm::Ed25519);
         let account = AccountId::new(domain.clone(), key_pair.public_key().clone());
         let account_for_resolver = account.clone();
+        let alias_label = "primary";
+        let err = AccountAddress::parse_any(alias_label, Some(address::chain_discriminant()))
+            .expect_err("alias label should not parse as a valid address");
+        assert_eq!(err.code_str(), "ERR_CHECKSUM_MISMATCH");
         set_account_alias_resolver(Arc::new(move |label, alias_domain| {
-            if label == "bob" && alias_domain == &domain {
+            if label == alias_label && alias_domain == &domain {
                 Some(account_for_resolver.clone())
             } else {
                 None
             }
         }));
 
-        let parsed: AccountId = "bob@wonderland"
+        let parsed: AccountId = "primary@wonderland"
             .parse()
             .expect("alias matching the IH58 alphabet should still resolve");
         assert_eq!(parsed, account);

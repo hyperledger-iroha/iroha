@@ -2332,6 +2332,8 @@ pub mod sumeragi {
     pub const CONTROL_MSG_CHANNEL_CAP: usize = 1_024;
     /// Cap (ms) on the worker loop's per-iteration time budget.
     pub const WORKER_ITERATION_BUDGET_CAP_MS: u64 = 2_000;
+    /// Cap (ms) on worker mailbox draining per iteration.
+    pub const WORKER_ITERATION_DRAIN_BUDGET_CAP_MS: u64 = 2_000;
     /// Default runtime consensus mode: "permissioned".
     pub const CONSENSUS_MODE: &str = "permissioned";
     /// Default: allow runtime consensus mode flips driven by on-chain parameters.
@@ -2437,15 +2439,17 @@ pub mod sumeragi {
     pub const PACEMAKER_MAX_BACKOFF_MS: u64 = 10_000; // 10 seconds to keep localnet responsive
     /// Pacemaker jitter band size as permille of the backoff window (0..=1000). 0 disables jitter.
     pub const PACEMAKER_JITTER_FRAC_PERMILLE: u32 = 0;
+    /// Grace period (ms) before a pending block counts as stalled for pacemaker backpressure.
+    pub const PACEMAKER_PENDING_STALL_GRACE_MS: u64 = 250;
     /// Soft limit for blocking pending blocks before pacemaker backpressure defers proposals.
     /// 0 keeps strict gating (any pending block defers).
-    pub const PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT: usize = 0;
+    pub const PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT: usize = 1;
     /// Soft limit for unresolved RBC backlog sessions before pacemaker backpressure defers proposals.
     /// 0 keeps strict gating (any backlog session defers).
-    pub const PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: usize = 0;
+    pub const PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: usize = 2;
     /// Soft limit for missing RBC chunks before pacemaker backpressure defers proposals.
     /// 0 keeps strict gating (any missing chunks defers).
-    pub const PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: usize = 0;
+    pub const PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: usize = 16;
     /// Permissioned default block time (ms); keep aligned with on-chain defaults.
     pub const BLOCK_TIME_MS: u64 = 2_000;
     /// Minimum lead time (blocks) between publishing a new consensus key and its activation.
