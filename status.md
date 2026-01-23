@@ -2,6 +2,8 @@
 
 Last update: 2026-01-23
 
+- Integration tests: update `iroha_cli` command paths for executor upgrade and domain listing (`ops executor`, `ledger domain`).
+- Tests: `cargo test -p integration_tests --test iroha_cli can_upgrade_executor -- --nocapture` (ok); `cargo test -p integration_tests --test iroha_cli reads_client_toml_by_default -- --nocapture` (ok).
 - Sumeragi worker loop: added `worker_iteration_drain_budget_cap_ms` to cap per-iteration mailbox drain time; config/docs updated; new unit coverage.
 - Tests: `cargo test -p iroha_core run_worker_iteration_caps_drain_at_config_cap -- --nocapture` (ok).
 - Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).

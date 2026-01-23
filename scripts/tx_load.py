@@ -63,6 +63,8 @@ class LoadShard:
     torii_url: str
     count: int
     parallel: int
+    batch_size: int
+    batch_interval: float
     client_config: Path
 
 
@@ -161,6 +163,18 @@ def main() -> int:
     parser.add_argument("--wait", dest="no_wait", action="store_false")
     parser.add_argument("--no-index", dest="no_index", action="store_true", default=True)
     parser.add_argument("--with-index", dest="no_index", action="store_false")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=0,
+        help="Batch size for paced submission (0 = submit all at once).",
+    )
+    parser.add_argument(
+        "--batch-interval",
+        type=float,
+        default=0.0,
+        help="Seconds between paced submission batches (0 = submit all at once).",
+    )
     parser.add_argument("--poll-interval", type=float, default=0.25)
     parser.add_argument("--drain-timeout", type=float, default=120.0)
     parser.add_argument("--block-max", type=int, default=10_000)
@@ -181,6 +195,12 @@ def main() -> int:
         parser.error("--peer-urls and --peer-count are mutually exclusive")
     if args.peer_count is not None and args.peer_count <= 0:
         parser.error("--peer-count must be greater than zero")
+    if args.batch_size < 0:
+        parser.error("--batch-size must be >= 0")
+    if args.batch_interval < 0:
+        parser.error("--batch-interval must be >= 0")
+    if (args.batch_size > 0) != (args.batch_interval > 0):
+        parser.error("--batch-size and --batch-interval must be set together")
 
     peer_urls = []
     if args.peer_urls:
@@ -211,11 +231,13 @@ def main() -> int:
     if args.per_peer:
         count_shards = [args.count for _ in peer_urls]
         parallel_shards = [args.parallel for _ in peer_urls]
+        batch_shards = [args.batch_size for _ in peer_urls]
     else:
         count_shards = split_even(args.count, len(peer_urls))
         parallel_shards = split_even(args.parallel, len(peer_urls))
+        batch_shards = split_even(args.batch_size, len(peer_urls))
 
-    shard_specs: list[tuple[str, int, int]] = []
+    shard_specs: list[tuple[str, int, int, int]] = []
     for idx, torii_url in enumerate(peer_urls):
         count = count_shards[idx]
         if count == 0:
@@ -223,7 +245,10 @@ def main() -> int:
         parallel = parallel_shards[idx]
         if parallel <= 0:
             parallel = 1
-        shard_specs.append((torii_url, count, parallel))
+        batch_size = batch_shards[idx]
+        if batch_size <= 0 and args.batch_size > 0:
+            batch_size = 1
+        shard_specs.append((torii_url, count, parallel, batch_size))
 
     if not shard_specs:
         parser.error("no load shards configured; check --count and peer settings")
@@ -281,7 +306,7 @@ def main() -> int:
     base_config_text = Path(args.client_config).read_text(encoding="utf-8")
     temp_configs: list[Path] = []
     shards: list[LoadShard] = []
-    for torii_url, count, parallel in shard_specs:
+    for torii_url, count, parallel, batch_size in shard_specs:
         rendered = render_client_config(base_config_text, torii_url)
         with tempfile.NamedTemporaryFile("w", delete=False, suffix=".toml") as handle:
             handle.write(rendered)
@@ -292,6 +317,8 @@ def main() -> int:
                 torii_url=torii_url,
                 count=count,
                 parallel=parallel,
+                batch_size=batch_size,
+                batch_interval=args.batch_interval,
                 client_config=temp_path,
             )
         )
@@ -301,32 +328,70 @@ def main() -> int:
             args.iroha_bin,
             "--config",
             str(shard.client_config),
+            "ledger",
             "transaction",
             "ping",
             "--msg",
             args.msg,
             "--log-level",
             args.log_level,
-            "--count",
-            str(shard.count),
-            "--parallel",
-            str(shard.parallel),
         ]
         if args.no_wait:
             ping_cmd.append("--no-wait")
         if args.no_index:
             ping_cmd.append("--no-index")
+
+        stdout_chunks = []
+        stderr_chunks = []
+        rate_limit_hits = 0
+        returncode = 0
         start = time.monotonic()
-        result = subprocess.run(ping_cmd, check=False, capture_output=True, text=True)
+
+        def run_batch(batch_count: int) -> subprocess.CompletedProcess[str]:
+            cmd = ping_cmd + [
+                "--count",
+                str(batch_count),
+                "--parallel",
+                str(shard.parallel),
+            ]
+            return subprocess.run(cmd, check=False, capture_output=True, text=True)
+
+        if shard.batch_size > 0 and shard.batch_interval > 0:
+            remaining = shard.count
+            while remaining > 0:
+                batch = min(shard.batch_size, remaining)
+                batch_start = time.monotonic()
+                result = run_batch(batch)
+                stdout_chunks.append(result.stdout or "")
+                stderr_chunks.append(result.stderr or "")
+                combined = (result.stdout or "") + (result.stderr or "")
+                rate_limit_hits += count_rate_limit_hits(combined)
+                if result.returncode != 0:
+                    returncode = result.returncode
+                    break
+                remaining -= batch
+                if remaining <= 0:
+                    break
+                elapsed = time.monotonic() - batch_start
+                sleep_for = shard.batch_interval - elapsed
+                if sleep_for > 0:
+                    time.sleep(sleep_for)
+        else:
+            result = run_batch(shard.count)
+            stdout_chunks.append(result.stdout or "")
+            stderr_chunks.append(result.stderr or "")
+            combined = (result.stdout or "") + (result.stderr or "")
+            rate_limit_hits += count_rate_limit_hits(combined)
+            returncode = result.returncode
+
         elapsed = time.monotonic() - start
-        combined = (result.stdout or "") + (result.stderr or "")
         return LoadShardResult(
             shard=shard,
-            returncode=result.returncode,
-            stdout=result.stdout or "",
-            stderr=result.stderr or "",
+            returncode=returncode,
+            stdout="".join(stdout_chunks),
+            stderr="".join(stderr_chunks),
             elapsed=elapsed,
-            rate_limit_hits=count_rate_limit_hits(combined),
+            rate_limit_hits=rate_limit_hits,
         )
 
     submit_start = time.monotonic()

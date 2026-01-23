@@ -141,6 +141,7 @@ async fn can_upgrade_executor() -> eyre::Result<()> {
 
     let mut child = tokio::process::Command::new(program())
         .current_dir(dir.path())
+        .arg("ops")
         .arg("executor")
         .arg("upgrade")
         .arg("--path")
@@ -176,6 +177,7 @@ async fn reads_client_toml_by_default() -> eyre::Result<()> {
 
     let mut child = tokio::process::Command::new(program())
         .current_dir(dir.path())
+        .arg("ledger")
         .arg("domain")
         .arg("list")
         .arg("all")
