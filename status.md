@@ -9,6 +9,31 @@ Last update: 2026-01-24
 - Petal stream: added Rust framing + CLI `ops offline petal` encode/decode + sakura wind renderer, JS/Swift/Android encoder/decoder + scan helpers (CameraX/AVFoundation), and docs for petal handoff.
 - Torii pipeline status: scope the state view during queue checks to avoid writer-preferred lock deadlocks before fallback state lookups.
 - Tests: not run (not requested).
+- Integration tests: remove snapshot mtime gating in `extra_functional::restart_peer` and clear snapshot files before restart while snapshot deserialization on startup is unresolved.
+- Tests: `cargo test -p integration_tests --test mod restarted_peer_should_restore_its_state -- --nocapture` (ok).
+- Lane relay tests: seed consensus-key PoPs in lane relay fixtures so QC verification succeeds before conflict/merge checks.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Tests: `cargo test -p iroha_core record_lane_relay_rejects_conflicting_relay -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core record_lane_relay_rejects_stale_relay -- --nocapture` (ok).
+- Merge QC tests: seed consensus-key PoPs for commit-topology signers so merge entry verification can validate aggregate signatures.
+- Tests: `cargo test -p iroha_core record_lane_relay_builds_merge_candidate_for_single_lane -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core record_lane_relay_builds_merge_candidate_once_all_lanes_have_relays -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core commit_worker_does_not_block_on_full_wake_channel -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core commit_worker_wakes_on_result -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core execute_commit_work_reports_kura_store_failure -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core execute_commit_work_emits_pipeline_events_before_state_apply -- --nocapture` (ok).
+- Integration tests: after registering a new peer in `network_stable_after_add_and_after_remove_peer`, emit a sync log block and wait for the target height derived from status before verifying the peer catches up.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Tests: `cargo test -p integration_tests extra_functional::unregister_peer::network_stable_after_add_and_after_remove_peer -- --nocapture` (timed out after 20m; build dir locked by other active cargo tests).
+- SoraFS tests: use explicit `<pub>@<domain>` owner metadata literals to avoid domain-selector resolution failures in capacity declaration tests.
+- SoraFS tests: use explicit owner literals in `capacity_record_with_owner` to avoid domain-selector resolution dependencies.
+- Tests: `cargo test -p iroha_core register_capacity_dispute_rejects_duplicate -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core register_capacity_dispute_rejects_unknown_replication_order -- --nocapture` (ok).
+- Sumeragi ticks: avoid scheduling idle view deadlines before phase tracking is seeded so fresh actors stay idle and missing-block windows drive deadlines.
+- Tests: `cargo test -p iroha_core actor_next_tick_deadline_tracks_missing_block_windows -- --nocapture` (ok).
+- Sumeragi tests: align `bitmap_count_matches_min_votes_for_commit` to derive the signer bitmap/votes from `min_votes_for_commit`.
+- Tests: not run (not requested).
+- Test network: normalize legacy flat Sumeragi config keys in test layers to match nested schema; added unit coverage.
 - Tests: not run (not requested).
 - Sumeragi tests: guard P2P startup in the main-loop harness with a timeout and fall back to `closed_for_tests` to avoid hangs when `iroha_p2p::network::start` stalls.
 - Tests: not run (not requested).

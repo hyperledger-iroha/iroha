@@ -8247,7 +8247,8 @@ impl Actor {
         let height = active_round_height(self.highest_qc, committed_qc, committed_height);
         let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
         let Some(age) = self.phase_tracker.view_age(height, now) else {
-            return Some(now);
+            // Avoid scheduling idle view changes before the round tracker is seeded.
+            return None;
         };
         let proposal_seen = self
             .subsystems
@@ -9512,9 +9513,24 @@ impl Actor {
             }
         );
         if bypass_queue {
-            if !self.config.debug.disable_background_worker {
-                self.dispatch_background_fallback(request);
+            if self.config.debug.disable_background_worker {
+                #[cfg(test)]
+                {
+                    #[cfg(feature = "telemetry")]
+                    let _ = background::dispatch_background_request(
+                        self.background_post_tx.as_ref(),
+                        request,
+                        &self.telemetry,
+                    );
+                    #[cfg(not(feature = "telemetry"))]
+                    let _ = background::dispatch_background_request(
+                        self.background_post_tx.as_ref(),
+                        request,
+                    );
+                }
+                return;
             }
+            self.dispatch_background_fallback(request);
             return;
         }
         let dispatched = {

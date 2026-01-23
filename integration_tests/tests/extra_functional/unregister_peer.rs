@@ -8,7 +8,7 @@ use iroha::{
     client::Client,
     data_model::{isi::register::RegisterPeerWithPop, parameter::BlockParameter, prelude::*},
 };
-use iroha_test_network::{BlockHeight, NetworkBuilder, NetworkPeer};
+use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
 use tokio::{
@@ -105,6 +105,15 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     {
         return Ok(());
     }
+    let baseline_height = run_blocking_with_timeout(
+        {
+            let client = client.clone();
+            move || client.get_status().map(|status| status.blocks)
+        },
+        tx_timeout,
+        "network_stable_after_add_and_after_remove_peer fetch status",
+    )
+    .await?;
     let genesis = network.genesis();
     if let Err(err) = new_peer
         .start(
@@ -120,15 +129,31 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         }
         return Err(err);
     }
-    network.add_peer(&new_peer);
-    let sync_result = timeout(
-        sync_timeout,
-        new_peer.once_block_with(BlockHeight::predicate_non_empty(4)),
+    submit_or_skip(
+        client.clone(),
+        Log::new(
+            Level::INFO,
+            "network_stable_after_add_and_after_remove_peer sync".to_string(),
+        ),
+        tx_timeout,
+        "network_stable_after_add_and_after_remove_peer sync",
     )
+    .await?;
+    let target_height = baseline_height.saturating_add(1);
+    if sandbox::handle_result(
+        network.ensure_blocks(target_height).await,
+        stringify!(network_stable_after_add_and_after_remove_peer),
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    network.add_peer(&new_peer);
+    let sync_result = timeout(sync_timeout, new_peer.once_block(target_height))
     .await
     .map_err(|_| {
         eyre!(
-            "network_stable_after_add_and_after_remove_peer timed out waiting for new peer to sync"
+            "network_stable_after_add_and_after_remove_peer timed out waiting for new peer to sync to block {target_height}"
         )
     });
     if sandbox::handle_result(

@@ -20767,7 +20767,7 @@ mod tests {
             BlockHeader, SignedBlock,
             consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         },
-        consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        consensus::{ConsensusKeyRecord, ConsensusKeyStatus, VALIDATOR_SET_HASH_VERSION_V1},
         da::{
             commitment::{
                 DaCommitmentBundle, DaCommitmentLocation, DaCommitmentRecord, DaProofScheme,
@@ -21776,6 +21776,39 @@ mod tests {
         (accounts, keypairs)
     }
 
+    fn seed_consensus_keys_with_pops(state: &State, keypairs: &[KeyPair]) {
+        let mut world_block = state.world.block();
+        for keypair in keypairs {
+            let pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                .expect("generate pop for consensus key");
+            let id = derive_validator_key_id(keypair.public_key());
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: keypair.public_key().clone(),
+                pop: Some(pop),
+                activation_height: 0,
+                expiry_height: None,
+                hsm: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            world_block
+                .consensus_keys
+                .insert(id.clone(), record.clone());
+            let pk = record.public_key.to_string();
+            let mut by_pk = world_block
+                .consensus_keys_by_pk
+                .get(&pk)
+                .cloned()
+                .unwrap_or_default();
+            if !by_pk.contains(&record.id) {
+                by_pk.push(record.id.clone());
+                world_block.consensus_keys_by_pk.insert(pk, by_pk);
+            }
+        }
+        world_block.commit();
+    }
+
     fn commit_qc_with_signers(
         header: &BlockHeader,
         parent_state_root: Hash,
@@ -21919,6 +21952,7 @@ mod tests {
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
         let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
         let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
@@ -21951,6 +21985,7 @@ mod tests {
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
         let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
         let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
@@ -21990,6 +22025,7 @@ mod tests {
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
         let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
         let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
@@ -22013,6 +22049,7 @@ mod tests {
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
         let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
         let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
@@ -22055,6 +22092,7 @@ mod tests {
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
         let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
         let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
@@ -22095,6 +22133,7 @@ mod tests {
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
         let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
         let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
@@ -22122,6 +22161,7 @@ mod tests {
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
         let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
         let signers = vec![&validator_keypairs[0]];
         let signers_bitmap = signer_bitmap(&[0], validator_keypairs.len());
         install_lane_manifest_registry(
@@ -22144,6 +22184,7 @@ mod tests {
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
         let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
         let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
@@ -22778,6 +22819,7 @@ mod tests {
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
         let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
         let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
@@ -22822,6 +22864,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
         let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
         let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         let lane_catalog = LaneCatalog::new(
@@ -22898,6 +22941,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
         let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
         let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         let lane_catalog = LaneCatalog::new(
@@ -28824,6 +28868,7 @@ mod tests {
             topo.push(peer);
         }
         topo.commit();
+        seed_consensus_keys_with_pops(state, &keypairs);
         keypairs
     }
 
