@@ -1246,7 +1246,7 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
             epoch_length_blocks: 12,
             bls_domain: bls_domain.clone(),
             npos: Some(NposGenesisParams {
-                block_time_ms: 2000,
+                block_time_ms: 1600,
                 timeout_propose_ms: 250,
                 timeout_prevote_ms: 300,
                 timeout_precommit_ms: 350,
@@ -1384,7 +1384,7 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
             epoch_length_blocks: 9,
             bls_domain: bls_domain.clone(),
             npos: Some(NposGenesisParams {
-                block_time_ms: duration_ms(consensus_cfg.npos.block_time),
+                block_time_ms: 1600,
                 timeout_propose_ms: duration_ms(consensus_cfg.npos.timeouts.propose),
                 timeout_prevote_ms: duration_ms(consensus_cfg.npos.timeouts.prevote),
                 timeout_precommit_ms: duration_ms(consensus_cfg.npos.timeouts.precommit),
@@ -1977,6 +1977,16 @@ async fn actor_next_tick_deadline_tracks_pending_quorum_timeout() {
 
     let mut harness = test_actor_harness_with_config_and_height(1, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
+    {
+        use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
+
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(2_000)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1_000)));
+        block.commit();
+    }
 
     let now = Instant::now();
     let quorum_timeout = actor.commit_quorum_timeout();
@@ -2113,6 +2123,16 @@ async fn actor_next_tick_deadline_tracks_aborted_retention() {
 
     let mut harness = test_actor_harness_with_config_and_height(1, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
+    {
+        use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
+
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(2_000)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1_000)));
+        block.commit();
+    }
 
     let now = Instant::now();
     let quorum_timeout = actor.commit_quorum_timeout();
@@ -2215,6 +2235,16 @@ async fn actor_next_tick_deadline_tracks_rbc_rebroadcast_cooldown() {
 
     let mut harness = test_actor_harness_with_config(2, consensus_cfg, None).await;
     let actor = &mut harness.actor;
+    {
+        use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
+
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(2_000)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1_000)));
+        block.commit();
+    }
 
     let now = Instant::now();
     let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
@@ -10070,24 +10100,15 @@ async fn rebroadcast_cooldown_uses_npos_block_time() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn pacemaker_base_interval_uses_npos_block_time_on_mode_reset() {
-    use iroha_data_model::parameter::system::SumeragiNposParameters;
-
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
     actor.config.npos.block_time = Duration::from_secs(10);
     {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
-        let mut block = state.world.block();
-        let params = SumeragiNposParameters {
-            block_time_ms: 200,
-            ..SumeragiNposParameters::default()
-        };
-        block.parameters.get_mut().custom.insert(
-            SumeragiNposParameters::parameter_id(),
-            params.into_custom_parameter(),
-        );
-        block.commit();
+        let mut params_block = state.world.parameters.block();
+        params_block.sumeragi.block_time_ms = 200;
+        params_block.commit();
     }
 
     actor.reset_mode_flip_state();

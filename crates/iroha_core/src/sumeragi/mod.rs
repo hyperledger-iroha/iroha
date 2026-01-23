@@ -4,7 +4,11 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 
@@ -28,6 +32,7 @@ use iroha_data_model::{
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
 use iroha_genesis::GenesisBlock;
+use iroha_logger::warn;
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode as _;
 
@@ -39,6 +44,7 @@ use crate::{
 /// Stack size reserved for the consensus worker thread to handle deep recursion safely.
 const SUMERAGI_STACK_SIZE_BYTES: usize = 64 * 1024 * 1024;
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
+static WARNED_DEPRECATED_NPOS_BLOCK_TIME: AtomicBool = AtomicBool::new(false);
 
 /// Build the initial validator topology from trusted peers.
 /// Enforces BLS-normal keys and, when configured with a complete `PoP` map, valid `PoP` entries.
@@ -349,15 +355,14 @@ pub(crate) fn load_npos_epoch_params(
     )
 }
 
-/// Resolve the `NPoS` pacemaker block time from on-chain parameters, falling back to config.
+/// Resolve the pacemaker block time from on-chain Sumeragi parameters, falling back to config.
 pub(crate) fn resolve_npos_block_time(view: &StateView<'_>, fallback: &SumeragiNpos) -> Duration {
-    view.world
-        .sumeragi_npos_parameters()
-        .and_then(|params| {
-            let ms = params.block_time_ms();
-            (ms > 0).then_some(Duration::from_millis(ms))
-        })
-        .unwrap_or(fallback.block_time)
+    let block_time = view.world.parameters().sumeragi().block_time();
+    if block_time == Duration::ZERO {
+        fallback.block_time.max(Duration::from_millis(1))
+    } else {
+        block_time
+    }
 }
 
 /// Resolve `NPoS` pacemaker timeouts from on-chain parameters, falling back to config values.
@@ -365,10 +370,21 @@ pub(crate) fn resolve_npos_timeouts(
     view: &StateView<'_>,
     fallback: &SumeragiNpos,
 ) -> SumeragiNposTimeouts {
-    let mut out = fallback.timeouts;
+    let block_time = resolve_npos_block_time(view, fallback);
+    let derived = SumeragiNposTimeouts::from_block_time(block_time);
     let Some(params) = view.world.sumeragi_npos_parameters() else {
-        return out;
+        return fallback.timeouts;
     };
+    let on_chain_block_ms = view.world.parameters().sumeragi().block_time_ms();
+    if params.block_time_ms() > 0 && params.block_time_ms() != on_chain_block_ms {
+        if !WARNED_DEPRECATED_NPOS_BLOCK_TIME.swap(true, Ordering::Relaxed) {
+            warn!(
+                on_chain_block_time_ms = on_chain_block_ms,
+                npos_block_time_ms = params.block_time_ms(),
+                "on-chain sumeragi_npos_parameters.block_time_ms is deprecated and ignored; update SumeragiParameters.block_time_ms instead"
+            );
+        }
+    }
     let resolve = |value_ms: u64, fallback: Duration| {
         if value_ms == 0 {
             fallback
@@ -376,12 +392,13 @@ pub(crate) fn resolve_npos_timeouts(
             Duration::from_millis(value_ms)
         }
     };
-    out.propose = resolve(params.timeout_propose_ms(), fallback.timeouts.propose);
-    out.prevote = resolve(params.timeout_prevote_ms(), fallback.timeouts.prevote);
-    out.precommit = resolve(params.timeout_precommit_ms(), fallback.timeouts.precommit);
-    out.commit = resolve(params.timeout_commit_ms(), fallback.timeouts.commit);
-    out.da = resolve(params.timeout_da_ms(), fallback.timeouts.da);
-    out.aggregator = resolve(params.timeout_aggregator_ms(), fallback.timeouts.aggregator);
+    let mut out = derived;
+    out.propose = resolve(params.timeout_propose_ms(), derived.propose);
+    out.prevote = resolve(params.timeout_prevote_ms(), derived.prevote);
+    out.precommit = resolve(params.timeout_precommit_ms(), derived.precommit);
+    out.commit = resolve(params.timeout_commit_ms(), derived.commit);
+    out.da = resolve(params.timeout_da_ms(), derived.da);
+    out.aggregator = resolve(params.timeout_aggregator_ms(), derived.aggregator);
     out
 }
 
@@ -553,7 +570,7 @@ mod tests {
         nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
         parameter::{
             Parameter,
-            system::{SumeragiConsensusMode, SumeragiNposParameters},
+            system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
         },
         peer::{Peer, PeerId},
     };
@@ -616,6 +633,23 @@ mod tests {
                 SumeragiNposParameters::parameter_id(),
                 params.into_custom_parameter(),
             );
+            block.commit();
+        }
+        State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        )
+    }
+
+    fn state_with_sumeragi_block_time(block_time_ms: u64) -> State {
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let params = block.parameters.get_mut();
+            params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(
+                block_time_ms,
+            )));
             block.commit();
         }
         State::new_for_testing(
@@ -1309,6 +1343,7 @@ mod tests {
             Duration::from_secs(1),
             Duration::from_secs(1),
             Duration::from_secs(2),
+            Duration::ZERO,
         );
         assert_eq!(gap, Duration::from_millis(250));
 
@@ -1316,6 +1351,7 @@ mod tests {
             Duration::from_secs(10),
             Duration::from_secs(10),
             Duration::from_secs(2),
+            Duration::ZERO,
         );
         assert_eq!(clamped, Duration::from_secs(2));
 
@@ -1323,8 +1359,20 @@ mod tests {
             Duration::from_millis(10),
             Duration::from_millis(10),
             Duration::from_millis(200),
+            Duration::ZERO,
         );
         assert_eq!(floored, Duration::from_millis(IDLE_TICK_GAP_FLOOR_MS));
+    }
+
+    #[test]
+    fn idle_tick_gap_honors_tick_work_budget_cap() {
+        let gap = idle_tick_gap(
+            Duration::from_millis(400),
+            Duration::from_millis(400),
+            Duration::from_millis(400),
+            Duration::from_millis(500),
+        );
+        assert_eq!(gap, Duration::from_millis(500));
     }
 
     #[test]
@@ -1589,10 +1637,7 @@ mod tests {
             ..SumeragiNpos::default()
         };
 
-        let state = state_with_npos_params(SumeragiNposParameters {
-            block_time_ms: 1_500,
-            ..SumeragiNposParameters::default()
-        });
+        let state = state_with_sumeragi_block_time(1_500);
         let view = state.view();
         assert_eq!(
             resolve_npos_block_time(&view, &fallback),
@@ -1600,10 +1645,7 @@ mod tests {
         );
         drop(view);
 
-        let state = state_with_npos_params(SumeragiNposParameters {
-            block_time_ms: 0,
-            ..SumeragiNposParameters::default()
-        });
+        let state = state_with_sumeragi_block_time(0);
         let view = state.view();
         assert_eq!(
             resolve_npos_block_time(&view, &fallback),
@@ -1634,14 +1676,18 @@ mod tests {
         });
         let view = state.view();
         let resolved = resolve_npos_timeouts(&view, &fallback);
+        let derived = SumeragiNposTimeouts::from_block_time(resolve_npos_block_time(
+            &view,
+            &fallback,
+        ));
         assert_eq!(resolved.propose, Duration::from_millis(100));
         assert_eq!(resolved.prevote, Duration::from_millis(110));
         assert_eq!(resolved.precommit, Duration::from_millis(120));
-        assert_eq!(resolved.commit, fallback.timeouts.commit);
+        assert_eq!(resolved.commit, derived.commit);
         assert_eq!(resolved.da, Duration::from_millis(140));
         assert_eq!(resolved.aggregator, Duration::from_millis(150));
-        assert_eq!(resolved.exec, fallback.timeouts.exec);
-        assert_eq!(resolved.witness, fallback.timeouts.witness);
+        assert_eq!(resolved.exec, derived.exec);
+        assert_eq!(resolved.witness, derived.witness);
     }
 
     #[test]
@@ -8035,15 +8081,26 @@ const DRAIN_BUDGET_CAP_MS: u64 = 500;
 const VOTE_DRAIN_BUDGET_CAP_MS: u64 = 2_000;
 const RBC_DRAIN_BUDGET_CAP_MS: u64 = 2_000;
 
-fn idle_tick_gap(block_time: Duration, commit_time: Duration, max_tick_gap: Duration) -> Duration {
+fn idle_tick_gap(
+    block_time: Duration,
+    commit_time: Duration,
+    max_tick_gap: Duration,
+    tick_work_budget_cap: Duration,
+) -> Duration {
     let base = block_time.min(commit_time);
     let raw = if base == Duration::ZERO {
         max_tick_gap
     } else {
         base / 4
     };
-    raw.max(Duration::from_millis(IDLE_TICK_GAP_FLOOR_MS))
-        .min(max_tick_gap)
+    let gap = raw
+        .max(Duration::from_millis(IDLE_TICK_GAP_FLOOR_MS))
+        .min(max_tick_gap);
+    if tick_work_budget_cap.is_zero() {
+        gap
+    } else {
+        gap.max(tick_work_budget_cap)
+    }
 }
 
 fn cap_drain_budget(raw: Duration, floor: Duration, budget_cap: Duration) -> Duration {
@@ -8990,8 +9047,9 @@ impl SumeragiWorker {
             vote_dedup: _vote_dedup,
             block_payload_dedup,
         } = self;
-        let fallback_block_time = config.npos.block_time;
-        let fallback_commit_time = config.npos.timeouts.commit;
+        let fallback_params = iroha_data_model::parameter::system::SumeragiParameters::default();
+        let fallback_block_time = fallback_params.block_time();
+        let fallback_commit_time = fallback_params.commit_time();
         let msg_channel_cap_block_payload = config.queues.block_payload;
         let msg_channel_cap_votes = config.queues.votes;
         let msg_channel_cap_blocks = config.queues.blocks;
@@ -8999,6 +9057,7 @@ impl SumeragiWorker {
         let control_msg_channel_cap = config.queues.control;
         let worker_iteration_budget_cap = config.worker.iteration_budget_cap;
         let worker_iteration_drain_budget_cap = config.worker.iteration_drain_budget_cap;
+        let tick_work_budget_cap = config.worker.tick_work_budget_cap;
         let (block_time, commit_time, da_enabled) = {
             let view = state.view();
             let params = view.world.parameters().sumeragi();
@@ -9077,7 +9136,8 @@ impl SumeragiWorker {
         let block_rx_drain_budget =
             cap_drain_budget(block_time / 4, time_budget, worker_iteration_budget_cap);
         let starve_max = block_time.max(commit_time).max(time_budget);
-        let tick_min_gap = idle_tick_gap(block_time, commit_time, time_budget);
+        let tick_min_gap =
+            idle_tick_gap(block_time, commit_time, time_budget, tick_work_budget_cap);
         let mut tick_max_gap = if block_time.is_zero() {
             time_budget
         } else {

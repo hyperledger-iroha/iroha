@@ -16,9 +16,9 @@ For light-client driven sampling of RBC payloads see
 
 With `sumeragi.da.enabled=true`, the commit pipeline records local payload availability
 (`BlockCreated` or RBC delivery) in the DA gate. Availability evidence (availability votes
-or an RBC `READY` quorum) is tracked separately and does not gate commit/finalize, which
-proceeds on the normal commit-certificate thresholds. Missing local payloads are logged for
-operator visibility.
+or an RBC `READY` quorum) is tracked for audit/telemetry and is advisory in v1; commit/finalize
+continue even when availability is missing. Missing local payloads are logged for operator
+visibility and fetched via RBC or block sync.
 
 The availability deadline is derived from the configured block/commit times and the
 DA timeout tuning knobs; it is used to classify missing payloads as "stale" for logging

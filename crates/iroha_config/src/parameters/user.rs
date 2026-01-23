@@ -5679,7 +5679,10 @@ pub struct Sumeragi {
 /// User-level configuration container for `SumeragiNpos`.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct SumeragiNpos {
-    /// Target block time in milliseconds (1s default).
+    /// Target block time in milliseconds (fallback only).
+    ///
+    /// On-chain `SumeragiParameters.block_time_ms` is authoritative for both permissioned and
+    /// NPoS modes. This value is only used when on-chain parameters are missing or invalid.
     #[config(default = "defaults::sumeragi::npos::BLOCK_TIME_MS")]
     pub block_time_ms: u64,
     /// Epoch length in blocks.
@@ -5693,6 +5696,7 @@ pub struct SumeragiNpos {
     pub use_stake_snapshot_roster: bool,
     /// Per-phase pacemaker timeouts.
     /// Unset values are derived from `block_time_ms`.
+    /// On-chain `sumeragi_npos_parameters` overrides these values when present.
     #[config(nested)]
     pub timeouts: SumeragiNposTimeouts,
     /// VRF commit/reveal window configuration.
@@ -6498,14 +6502,6 @@ fn scale_ratio_at_least_one(value: u64, numerator: u64, denominator: u64) -> u64
     scaled.max(1)
 }
 
-fn derive_timeout_ms(block_time_ms: u64, default_timeout_ms: u64) -> u64 {
-    scale_ratio_at_least_one(
-        block_time_ms,
-        default_timeout_ms,
-        defaults::sumeragi::npos::BLOCK_TIME_MS,
-    )
-}
-
 fn derive_vrf_window_blocks(epoch_length_blocks: u64, default_window_blocks: u64) -> u64 {
     scale_ratio_at_least_one(
         epoch_length_blocks,
@@ -6573,79 +6569,48 @@ impl SumeragiNposTimeouts {
         emitter: &mut Emitter<ParseError>,
     ) -> Option<actual::SumeragiNposTimeouts> {
         let mut valid = true;
+        let derived = actual::SumeragiNposTimeouts::from_block_time(
+            std::time::Duration::from_millis(block_time_ms),
+        );
 
-        let mut resolve_timeout = |value: Option<u64>, field: &'static str, derived: u64| -> u64 {
-            match value {
-                Some(value) => {
-                    if value == 0 {
-                        emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                            format!("sumeragi.npos.timeouts.{field} must be greater than zero"),
-                        ));
-                        valid = false;
+        let mut resolve_timeout =
+            |value: Option<u64>, field: &'static str, derived: Duration| -> Duration {
+                match value {
+                    Some(value) => {
+                        if value == 0 {
+                            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                                format!("sumeragi.npos.timeouts.{field} must be greater than zero"),
+                            ));
+                            valid = false;
+                        }
+                        Duration::from_millis(value)
                     }
-                    value
+                    None => derived,
                 }
-                None => derived,
-            }
-        };
+            };
 
-        let propose_ms = resolve_timeout(
-            self.propose_ms,
-            "propose_ms",
-            derive_timeout_ms(block_time_ms, defaults::sumeragi::npos::TIMEOUT_PROPOSE_MS),
-        );
-        let prevote_ms = resolve_timeout(
-            self.prevote_ms,
-            "prevote_ms",
-            derive_timeout_ms(block_time_ms, defaults::sumeragi::npos::TIMEOUT_PREVOTE_MS),
-        );
-        let precommit_ms = resolve_timeout(
-            self.precommit_ms,
-            "precommit_ms",
-            derive_timeout_ms(
-                block_time_ms,
-                defaults::sumeragi::npos::TIMEOUT_PRECOMMIT_MS,
-            ),
-        );
-        let exec_ms = resolve_timeout(
-            self.exec_ms,
-            "exec_ms",
-            derive_timeout_ms(block_time_ms, defaults::sumeragi::npos::TIMEOUT_EXEC_MS),
-        );
-        let witness_ms = resolve_timeout(
-            self.witness_ms,
-            "witness_ms",
-            derive_timeout_ms(block_time_ms, defaults::sumeragi::npos::TIMEOUT_WITNESS_MS),
-        );
-        let commit_ms = resolve_timeout(
-            self.commit_ms,
-            "commit_ms",
-            derive_timeout_ms(block_time_ms, defaults::sumeragi::npos::TIMEOUT_COMMIT_MS),
-        );
-        let da_ms = resolve_timeout(
-            self.da_ms,
-            "da_ms",
-            derive_timeout_ms(block_time_ms, defaults::sumeragi::npos::TIMEOUT_DA_MS),
-        );
-        let aggregator_ms = resolve_timeout(
-            self.aggregator_ms,
-            "aggregator_ms",
-            derive_timeout_ms(block_time_ms, defaults::sumeragi::npos::TIMEOUT_AGG_MS),
-        );
+        let propose = resolve_timeout(self.propose_ms, "propose_ms", derived.propose);
+        let prevote = resolve_timeout(self.prevote_ms, "prevote_ms", derived.prevote);
+        let precommit = resolve_timeout(self.precommit_ms, "precommit_ms", derived.precommit);
+        let exec = resolve_timeout(self.exec_ms, "exec_ms", derived.exec);
+        let witness = resolve_timeout(self.witness_ms, "witness_ms", derived.witness);
+        let commit = resolve_timeout(self.commit_ms, "commit_ms", derived.commit);
+        let da = resolve_timeout(self.da_ms, "da_ms", derived.da);
+        let aggregator = resolve_timeout(self.aggregator_ms, "aggregator_ms", derived.aggregator);
 
         if !valid {
             return None;
         }
 
         Some(actual::SumeragiNposTimeouts {
-            propose: std::time::Duration::from_millis(propose_ms),
-            prevote: std::time::Duration::from_millis(prevote_ms),
-            precommit: std::time::Duration::from_millis(precommit_ms),
-            exec: std::time::Duration::from_millis(exec_ms),
-            witness: std::time::Duration::from_millis(witness_ms),
-            commit: std::time::Duration::from_millis(commit_ms),
-            da: std::time::Duration::from_millis(da_ms),
-            aggregator: std::time::Duration::from_millis(aggregator_ms),
+            propose,
+            prevote,
+            precommit,
+            exec,
+            witness,
+            commit,
+            da,
+            aggregator,
         })
     }
 }

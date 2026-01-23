@@ -8,6 +8,7 @@ Response (first release; single ABI policy V1)
 {
   "supported_abi_versions": [1],
   "default_compile_target": 1,
+  "data_model_version": 1,
   "crypto": {
     "sm": {
       "enabled": false,
@@ -33,6 +34,7 @@ Response (first release; single ABI policy V1)
 Notes
 - `supported_abi_versions` lists ABI versions currently accepted by the node at admission.
 - `default_compile_target` is the highest active ABI version and should be used by Kotodama compilers by default.
+- `data_model_version` is the data model compatibility version; SDKs should reject submissions when it differs from their built-in value.
 - `crypto.curves.allowed_curve_ids` enumerates the [`address_curve_registry`](../references/address_curve_registry.md) identifiers configured in `iroha_config.crypto.curves.allowed_curve_ids`. Use this advert to decide whether ML‑DSA/GOST/SM controllers are usable on the target cluster.
 
 See also

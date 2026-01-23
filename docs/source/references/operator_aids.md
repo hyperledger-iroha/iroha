@@ -29,7 +29,7 @@ Consensus (Sumeragi)
   - Deterministic collector plan derived from the committed topology and on-chain parameters: exports `mode`, plan `(height, view)` (with `height` equal to the current chain height), `collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, the ordered collector list, and `epoch_seed` (hex) when NPoS is active.
 - GET `/v1/sumeragi/params`
   - Snapshot of on-chain Sumeragi parameters `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
-  - When `da_enabled` is true, availability evidence (availability votes or RBC `READY`) is tracked but commit does not wait on it; local RBC `DELIVER` is also not a requirement. Operators can confirm payload transport health via the RBC endpoints below.
+  - When `da_enabled` is true, availability evidence (availability votes or RBC `READY`) is tracked but does not gate commit; local payload is required and can be satisfied via RBC `DELIVER` or block sync. Operators can confirm payload transport health via the RBC endpoints below.
 - GET `/v1/sumeragi/rbc`
   - Aggregate Reliable Broadcast counters: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
 - GET `/v1/sumeragi/rbc/sessions`

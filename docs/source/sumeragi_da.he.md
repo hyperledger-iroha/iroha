@@ -18,7 +18,7 @@ translator: manual
 
 ### טיימאאוט DA והתראות
 
-כאשר `sumeragi.da.enabled=true`, צינור הקומיט רושם עדות זמינות (`availability evidence` או קוורום RBC `READY`; לא `DELIVER` מקומי). הקונצנזוס לא ממתין לעדות הזמינות: הקומיט מתקדם לפי ה-commit certificate הרגיל, וחוסר זמינות נרשם לצרכים תפעוליים. `sumeragi_da_gate_block_total{reason="missing_local_data"}` גדל, ו-`status_snapshot().da_reschedule_total` הוא legacy ולכן בדרך כלל נשאר 0.
+כאשר `sumeragi.da.enabled=true`, צינור הקומיט רושם עדות זמינות (`availability evidence` או קוורום RBC `READY`) ועוקב אחריה כ‑advisory (הקומיט אינו ממתין). payload מקומי חסר מתקבל דרך RBC `DELIVER` או BlockCreated/סנכרון בלוקים. חוסר זמינות נרשם לצרכים תפעוליים. `sumeragi_da_gate_block_total{reason="missing_local_data"}` גדל, ו-`status_snapshot().da_reschedule_total` הוא legacy ולכן בדרך כלל נשאר 0.
 
 טיימאאוט הזמינות נגזר מזמני block/commit ומכווני ה-DA, ומשמש רק ללוגים ולהחלטות rebroadcast:
 - `sumeragi.da.quorum_timeout_multiplier` מקדם את `block_time + 4 * commit_time` כאשר DA פעיל (ברירת מחדל `3`).

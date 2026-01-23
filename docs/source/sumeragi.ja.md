@@ -66,7 +66,7 @@ translator: manual
 
 ### RBC／DA（データ可用性）
 - RBC はトポロジから導出された Collector 集合を使用してブロック本体を配布します。ブロックヘッダーには RBC セッション ID とパケットメタデータが含まれます。
-- `sumeragi.da.enabled` を有効にすると、可用性証跡（`availability evidence`）を追跡しますがコミットは待機しません（ローカルの RBC `DELIVER` は条件になりません）。可用性証跡が不足している間は `sumeragi_da_gate_block_total{reason="missing_local_data"}` が増加し、`da_reschedule_total` はレガシーのため通常 0 のままです。
+- `sumeragi.da.enabled` を有効にすると、可用性証跡（`availability evidence`）は advisory として追跡され、コミットは待機せずに進行します。ローカル payload が不足すると RBC `DELIVER` または BlockCreated/ブロック同期で取得します。可用性証跡が不足している間は `sumeragi_da_gate_block_total{reason="missing_local_data"}` が増加し、`da_reschedule_total` はレガシーのため通常 0 のままです。
 - INIT 前に READY/DELIVER/チャンクが届いた場合、ノードはスタッシュし、欠落した `BlockCreated` を即時にリクエストします（欠落ブロックのバックオフを尊重）。
 - `sumeragi.rbc.rebroadcast_sessions_per_tick` が tick あたりの RBC 再送セッション数を制限し、バックログ時の再送嵐を抑制します。復旧速度を上げたい場合は増やし、P2P キューが詰まる場合は下げます。
 - 大規模ペイロード（≥10 MiB）を扱うシナリオでは RBC デリバリー時間、コミット時間、スループット、キュー深さをテレメトリで監視し、SLO 違反をアラートします。
@@ -140,7 +140,7 @@ translator: manual
 ### RBC
 - RBC セッションは `RbcSessionId` で識別され、メタデータにはブロック高さ・ハッシュ・収集に必要な閾値が含まれます。
 - RBC は Gossip でブロック断片を流通させ、全ピアが復元できるようにすることで DA を実現します。
-- `sumeragi.da.enabled` を有効にすると、コミット前に `availability evidence` が必要になります。RBC は同じ設定で有効になり、ペイロード配布と欠落回復に使われます（コミットはローカルの `RbcDeliver` を待ちません）。
+- `sumeragi.da.enabled` を有効にすると、`availability evidence` は advisory として追跡され、コミットは待機せずに進行します。RBC は同じ設定で有効になり、ペイロード配布と欠落回復に使われます（ローカル payload は `RbcDeliver` またはブロック同期で満たされます）。
 - INIT に含まれるロースターは未検証スナップショットとして保持し、コミットトポロジから導出したロースターを READY/DELIVER 検証とローカル署名の権威ソースとします。導出ロースターと競合する INIT ロースターは拒否されます。
 - READY/DELIVER は権威ロースターが確定するまで一時保留し、欠落している `BlockCreated` はコミットトポロジにフォールバックしてリクエストします。権威化後に `roster_hash` が不一致な READY/DELIVER は破棄されます。
 - READY 再送信は決定論的な f+1 サブセット（リーダーを常に含む）に限定し、メッセージ嵐を抑制します。
@@ -201,7 +201,7 @@ translator: manual
 
 ## RBC / DA ロードマップ
 
-1. **DA/RBC 有効化**: `sumeragi.da.enabled = true` を既定とし、コミット前に `availability evidence` を要求。RBC は同じ設定で有効になり、ペイロード配布と欠落回復に使われます（コミットはローカルの `RbcDeliver` を待ちません）。
+1. **DA/RBC 有効化**: `sumeragi.da.enabled = true` を既定とし、`availability evidence` は advisory として追跡（コミットは待機せずに進行）。RBC は同じ設定で有効になり、ペイロード配布と欠落回復に使われます（ローカル payload は `RbcDeliver` またはブロック同期で満たされます）。
 2. **前処理**: リーダーはブロック提案と同時に RBC セッションを起動し、Collectors が投票を集約するまでに全ピアへブロック断片を配布します。
 3. **Fallback**: RBC 完了前に View 変更が発生した場合、次リーダーが同一ブロックを提案する必要性を評価し、未完セッションを踏まえて処理します。
 4. **監視**: `sumeragi_da_summary::*` と `/v1/sumeragi/rbc/sessions` を定期取得し、遅延や失敗を早期検知します。

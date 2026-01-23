@@ -9,7 +9,7 @@ use std::{
     num::NonZeroUsize,
     ops::Bound::{Excluded, Unbounded},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, mpsc},
+    sync::{Arc, Mutex, atomic::AtomicBool, mpsc},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -18,7 +18,7 @@ use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use eyre::{Result, eyre};
 use iroha_config::parameters::actual::{
     AdaptiveObservability, Common as CommonConfig, ConsensusMode, DaManifestPolicy,
-    LaneConfig as LaneConfigSnapshot, NodeRole, Sumeragi as SumeragiConfig,
+    LaneConfig as LaneConfigSnapshot, NodeRole, Sumeragi as SumeragiConfig, SumeragiNposTimeouts,
 };
 use iroha_crypto::{Hash, HashOf, MerkleTree, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
@@ -118,6 +118,8 @@ mod propose;
 mod qc;
 mod rbc;
 mod reschedule;
+
+static WARNED_IGNORED_CONFIG_OVERRIDES: AtomicBool = AtomicBool::new(false);
 mod roster;
 mod validation;
 mod votes;
@@ -7118,16 +7120,96 @@ impl Actor {
                 common_config.peer.id(),
                 mode,
             );
+            let pacemaker_block_time = super::resolve_npos_block_time(&view, &config.npos);
             let pacemaker_timeouts = if matches!(mode, ConsensusMode::Npos) {
                 super::resolve_npos_timeouts(&view, &config.npos)
             } else {
-                config.npos.timeouts
+                SumeragiNposTimeouts::from_block_time(pacemaker_block_time)
             };
-            let pacemaker_block_time = if matches!(mode, ConsensusMode::Npos) {
-                super::resolve_npos_block_time(&view, &config.npos)
-            } else {
-                view.world.parameters().sumeragi().block_time()
-            };
+            if !WARNED_IGNORED_CONFIG_OVERRIDES.load(Ordering::Relaxed) {
+                let mut ignored = Vec::new();
+                if config.collectors.k != iroha_config::parameters::defaults::sumeragi::COLLECTORS_K
+                {
+                    ignored.push("sumeragi.collectors.k");
+                }
+                if config.collectors.redundant_send_r
+                    != iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R
+                {
+                    ignored.push("sumeragi.collectors.redundant_send_r");
+                }
+                if config.npos.block_time != pacemaker_block_time {
+                    ignored.push("sumeragi.npos.block_time_ms");
+                }
+                if view.world.sumeragi_npos_parameters().is_some() {
+                    let derived = SumeragiNposTimeouts::from_block_time(pacemaker_block_time);
+                    let timeouts_overridden = config.npos.timeouts.propose != derived.propose
+                        || config.npos.timeouts.prevote != derived.prevote
+                        || config.npos.timeouts.precommit != derived.precommit
+                        || config.npos.timeouts.exec != derived.exec
+                        || config.npos.timeouts.witness != derived.witness
+                        || config.npos.timeouts.commit != derived.commit
+                        || config.npos.timeouts.da != derived.da
+                        || config.npos.timeouts.aggregator != derived.aggregator;
+                    if timeouts_overridden {
+                        ignored.push("sumeragi.npos.timeouts.*");
+                    }
+                    if config.npos.epoch_length_blocks
+                        != iroha_config::parameters::defaults::sumeragi::EPOCH_LENGTH_BLOCKS
+                    {
+                        ignored.push("sumeragi.npos.epoch_length_blocks");
+                    }
+                    if config.npos.use_stake_snapshot_roster
+                        != iroha_config::parameters::defaults::sumeragi::USE_STAKE_SNAPSHOT_ROSTER
+                    {
+                        ignored.push("sumeragi.npos.use_stake_snapshot_roster");
+                    }
+                    if config.npos.vrf.commit_window_blocks
+                        != iroha_config::parameters::defaults::sumeragi::npos::VRF_COMMIT_WINDOW_BLOCKS
+                        || config.npos.vrf.reveal_window_blocks
+                            != iroha_config::parameters::defaults::sumeragi::npos::VRF_REVEAL_WINDOW_BLOCKS
+                        || config.npos.vrf.commit_deadline_offset_blocks
+                            != iroha_config::parameters::defaults::sumeragi::VRF_COMMIT_DEADLINE_OFFSET
+                        || config.npos.vrf.reveal_deadline_offset_blocks
+                            != iroha_config::parameters::defaults::sumeragi::VRF_REVEAL_DEADLINE_OFFSET
+                    {
+                        ignored.push("sumeragi.npos.vrf.*");
+                    }
+                    if config.npos.election.max_validators
+                        != iroha_config::parameters::defaults::sumeragi::npos::MAX_VALIDATORS
+                        || config.npos.election.min_self_bond
+                            != iroha_config::parameters::defaults::sumeragi::npos::MIN_SELF_BOND
+                        || config.npos.election.min_nomination_bond
+                            != iroha_config::parameters::defaults::sumeragi::npos::MIN_NOMINATION_BOND
+                        || config.npos.election.max_nominator_concentration_pct
+                            != iroha_config::parameters::defaults::sumeragi::npos::MAX_NOMINATOR_CONCENTRATION_PCT
+                        || config.npos.election.seat_band_pct
+                            != iroha_config::parameters::defaults::sumeragi::npos::SEAT_BAND_PCT
+                        || config.npos.election.max_entity_correlation_pct
+                            != iroha_config::parameters::defaults::sumeragi::npos::MAX_ENTITY_CORRELATION_PCT
+                        || config.npos.election.finality_margin_blocks
+                            != iroha_config::parameters::defaults::sumeragi::npos::FINALITY_MARGIN_BLOCKS
+                    {
+                        ignored.push("sumeragi.npos.election.*");
+                    }
+                    if config.npos.reconfig.evidence_horizon_blocks
+                        != iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_EVIDENCE_HORIZON_BLOCKS
+                        || config.npos.reconfig.activation_lag_blocks
+                            != iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS
+                        || config.npos.reconfig.slashing_delay_blocks
+                            != iroha_config::parameters::defaults::sumeragi::npos::SLASHING_DELAY_BLOCKS
+                    {
+                        ignored.push("sumeragi.npos.reconfig.*");
+                    }
+                }
+                if !ignored.is_empty()
+                    && !WARNED_IGNORED_CONFIG_OVERRIDES.swap(true, Ordering::Relaxed)
+                {
+                    warn!(
+                        ignored = ?ignored,
+                        "local sumeragi overrides are ignored when on-chain parameters are present"
+                    );
+                }
+            }
             let mut collectors = if matches!(mode, ConsensusMode::Npos) {
                 super::load_npos_collector_config(&view)
             } else {
@@ -7964,6 +8046,13 @@ impl Actor {
         }
         let flip_blocked = !self.config.mode_flip.enabled && effective_mode != self.consensus_mode;
         if flip_blocked && !super::status::mode_flip_blocked() {
+            warn!(
+                configured_mode = ?self.consensus_mode,
+                effective_mode = ?effective_mode,
+                staged_mode = staged_mode_tag,
+                staged_height = staged_mode_activation_height,
+                "mode flip is blocked by sumeragi.mode_flip.enabled=false; on-chain upgrades will not apply until re-enabled"
+            );
             let now_ms = SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
@@ -8302,7 +8391,12 @@ impl Actor {
             self.config.worker.iteration_budget_cap,
         );
         let starve_max = block_time.max(commit_time).max(time_budget);
-        let tick_min_gap = super::idle_tick_gap(block_time, commit_time, time_budget);
+        let tick_min_gap = super::idle_tick_gap(
+            block_time,
+            commit_time,
+            time_budget,
+            self.config.worker.tick_work_budget_cap,
+        );
         let mut tick_max_gap = if block_time.is_zero() {
             time_budget
         } else {

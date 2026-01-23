@@ -2,6 +2,7 @@
 
 use std::time::SystemTime;
 
+use iroha_config::parameters::actual::SumeragiNposTimeouts;
 use iroha_logger::prelude::*;
 
 use super::*;
@@ -185,16 +186,11 @@ impl Actor {
         let (effective_mode, pacemaker_block_time, pacemaker_timeouts) = {
             let view = self.state.view();
             let effective_mode = super::effective_consensus_mode(&view, self.config.consensus_mode);
-            let (block_time, timeouts) = if matches!(effective_mode, ConsensusMode::Npos) {
-                (
-                    super::resolve_npos_block_time(&view, &self.config.npos),
-                    super::resolve_npos_timeouts(&view, &self.config.npos),
-                )
+            let block_time = super::resolve_npos_block_time(&view, &self.config.npos);
+            let timeouts = if matches!(effective_mode, ConsensusMode::Npos) {
+                super::resolve_npos_timeouts(&view, &self.config.npos)
             } else {
-                (
-                    view.world.parameters().sumeragi().block_time(),
-                    self.config.npos.timeouts,
-                )
+                SumeragiNposTimeouts::from_block_time(block_time)
             };
             (effective_mode, block_time, timeouts)
         };

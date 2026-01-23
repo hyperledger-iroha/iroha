@@ -49,6 +49,8 @@ const IZANAMI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT: i64 = 8;
 const IZANAMI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: i64 = 8;
 const IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: i64 = 128;
 const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 2;
+const IZANAMI_FUTURE_HEIGHT_WINDOW: i64 = 2;
+const IZANAMI_FUTURE_VIEW_WINDOW: i64 = 2;
 const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 1_500;
 const IZANAMI_NPOS_TIMEOUT_COMMIT_MS: i64 = 2_000;
 const IZANAMI_NPOS_TIMEOUT_DA_MS: i64 = 2_000;
@@ -232,6 +234,14 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             .write(
                 ["sumeragi", "da", "quorum_timeout_multiplier"],
                 IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER,
+            )
+            .write(
+                ["sumeragi", "gating", "future_height_window"],
+                IZANAMI_FUTURE_HEIGHT_WINDOW,
+            )
+            .write(
+                ["sumeragi", "gating", "future_view_window"],
+                IZANAMI_FUTURE_VIEW_WINDOW,
             )
             .write(
                 ["sumeragi", "npos", "block_time_ms"],
@@ -1354,6 +1364,14 @@ mod tests {
         assert_eq!(
             lookup(&["sumeragi", "da", "quorum_timeout_multiplier"]),
             Some(IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "gating", "future_height_window"]),
+            Some(IZANAMI_FUTURE_HEIGHT_WINDOW)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "gating", "future_view_window"]),
+            Some(IZANAMI_FUTURE_VIEW_WINDOW)
         );
         assert_eq!(
             lookup(&["sumeragi", "npos", "block_time_ms"]),

@@ -387,6 +387,7 @@ def test_get_node_capabilities_parses_snapshot() -> None:
             payload={
                 "supported_abi_versions": [1, 5],
                 "default_compile_target": 5,
+                "data_model_version": 1,
                 "crypto": {
                     "sm": {
                         "enabled": True,
@@ -416,6 +417,7 @@ def test_get_node_capabilities_parses_snapshot() -> None:
 
     assert capabilities.supported_abi_versions == [1, 5]
     assert capabilities.default_compile_target == 5
+    assert capabilities.data_model_version == 1
     assert capabilities.crypto.sm.allowed_signing == ["sm2"]
     assert capabilities.crypto.sm.acceleration.neon_sm3 is True
     assert capabilities.crypto.curves.registry_version == 2

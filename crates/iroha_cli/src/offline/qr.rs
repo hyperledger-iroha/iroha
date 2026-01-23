@@ -59,6 +59,9 @@ pub struct QrEncodeArgs {
     /// Output format for rendered frames.
     #[arg(long, value_enum, default_value = "frames")]
     pub format: QrOutputFormat,
+    /// Render style for preview images (ignored for --format frames).
+    #[arg(long, value_enum, default_value = "mono")]
+    pub style: QrRenderStyle,
     /// Frames per second for animated outputs.
     #[arg(long, default_value_t = 12)]
     pub fps: u16,
@@ -122,7 +125,7 @@ impl QrEncodeArgs {
                     eyre!("failed to create svg dir {}: {err}", svg_dir.display())
                 })?;
                 for frame in &rendered {
-                    let svg = render_svg(&frame.code, self.dimension)?;
+                    let svg = render_svg(&frame.code, self.dimension, self.style)?;
                     let path = svg_dir.join(format!("frame_{:04}.svg", frame.index));
                     fs::write(&path, svg)
                         .map_err(|err| eyre!("failed to write {}: {err}", path.display()))?;
@@ -133,21 +136,38 @@ impl QrEncodeArgs {
                 fs::create_dir_all(&png_dir).map_err(|err| {
                     eyre!("failed to create png dir {}: {err}", png_dir.display())
                 })?;
+                let total_frames = rendered.len() as u32;
                 for frame in &rendered {
-                    let image = render_image(&frame.code, self.dimension)?;
                     let path = png_dir.join(format!("frame_{:04}.png", frame.index));
-                    write_png(&path, &image)?;
+                    if self.style == QrRenderStyle::SakuraWind {
+                        let image =
+                            render_sakura_wind_rgba(&frame.code, self.dimension, frame.index, total_frames);
+                        write_png_rgba(&path, &image)?;
+                    } else {
+                        let image = render_image(&frame.code, self.dimension)?;
+                        write_png(&path, &image, self.style, frame.index, total_frames)?;
+                    }
                 }
             }
             QrOutputFormat::Gif => {
-                let frames = render_animation(&rendered, self.dimension)?;
                 let path = output_dir.join("stream.gif");
-                write_gif(&path, &frames, self.fps)?;
+                if self.style == QrRenderStyle::SakuraWind {
+                    let frames = render_sakura_wind_animation(&rendered, self.dimension);
+                    write_gif_rgba(&path, &frames, self.fps)?;
+                } else {
+                    let frames = render_animation(&rendered, self.dimension)?;
+                    write_gif(&path, &frames, self.fps, self.style)?;
+                }
             }
             QrOutputFormat::Apng => {
-                let frames = render_animation(&rendered, self.dimension)?;
                 let path = output_dir.join("stream.png");
-                write_apng(&path, &frames, self.fps)?;
+                if self.style == QrRenderStyle::SakuraWind {
+                    let frames = render_sakura_wind_animation(&rendered, self.dimension);
+                    write_apng_rgba(&path, &frames, self.fps)?;
+                } else {
+                    let frames = render_animation(&rendered, self.dimension)?;
+                    write_apng(&path, &frames, self.fps, self.style)?;
+                }
             }
         }
 
@@ -296,6 +316,13 @@ pub enum QrOutputFormat {
     Apng,
 }
 
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QrRenderStyle {
+    Mono,
+    Sakura,
+    SakuraWind,
+}
+
 #[derive(clap::ValueEnum, Debug, Clone, Copy)]
 pub enum QrPayloadKindArg {
     Unspecified,
@@ -371,9 +398,39 @@ struct GrayImage {
     data: Vec<u8>,
 }
 
-fn render_svg(code: &QrCode, dimension: u32) -> Result<String> {
-    let svg = code
-        .render::<svg::Color>()
+const SAKURA_BG_START: [f64; 3] = [0.98, 0.94, 0.96];
+const SAKURA_BG_END: [f64; 3] = [1.0, 0.98, 0.99];
+const SAKURA_PETAL: [f64; 3] = [0.98, 0.80, 0.86];
+const SAKURA_INK: [f64; 3] = [0.34, 0.15, 0.20];
+const SAKURA_PETAL_COUNT: usize = 6;
+const SAKURA_PETAL_ORBIT: f64 = 0.28;
+const SAKURA_PETAL_RADIUS: f64 = 0.11;
+const SAKURA_PETAL_ALPHA: f64 = 0.12;
+const SAKURA_PETAL_DRIFT: f64 = 0.035;
+const SAKURA_SVG_INK: &str = "#572633";
+const SAKURA_SVG_BG: &str = "#FCF5F9";
+const SAKURA_WIND_PETAL_COUNT: usize = 9;
+const SAKURA_WIND_PETAL_ORBIT: f64 = 0.32;
+const SAKURA_WIND_PETAL_RADIUS: f64 = 0.14;
+const SAKURA_WIND_PETAL_ALPHA: f64 = 0.18;
+const SAKURA_WIND_PETAL_DRIFT: f64 = 0.06;
+const SAKURA_WIND_STREAK_ALPHA: f64 = 0.04;
+const SAKURA_WIND_STREAK_FREQ_X: f64 = 6.0;
+const SAKURA_WIND_STREAK_FREQ_Y: f64 = 3.5;
+const SAKURA_WIND_PETAL_MAJOR: f64 = 0.46;
+const SAKURA_WIND_PETAL_MINOR: f64 = 0.24;
+const SAKURA_WIND_PETAL_SECONDARY_MAJOR: f64 = 0.34;
+const SAKURA_WIND_PETAL_SECONDARY_MINOR: f64 = 0.18;
+const SAKURA_WIND_CORE_RADIUS: f64 = 0.18;
+const SAKURA_WIND_MODULE_DRIFT: f64 = 0.12;
+
+fn render_svg(code: &QrCode, dimension: u32, style: QrRenderStyle) -> Result<String> {
+    let mut renderer = code.render::<svg::Color>();
+    if matches!(style, QrRenderStyle::Sakura | QrRenderStyle::SakuraWind) {
+        renderer.dark_color(svg::Color(SAKURA_SVG_INK));
+        renderer.light_color(svg::Color(SAKURA_SVG_BG));
+    }
+    let svg = renderer
         .min_dimensions(dimension, dimension)
         .max_dimensions(dimension, dimension)
         .build();
@@ -403,6 +460,249 @@ fn render_image(code: &QrCode, dimension: u32) -> Result<GrayImage> {
     })
 }
 
+fn render_sakura_rgba(
+    frame: &GrayImage,
+    frame_index: u32,
+    frame_count: u32,
+) -> image::RgbaImage {
+    let frame_count = frame_count.max(1);
+    let phase = (frame_index % frame_count) as f64 / frame_count as f64;
+    let angle = phase * std::f64::consts::TAU;
+    let dir_x = angle.cos();
+    let dir_y = angle.sin();
+    let drift = (phase * std::f64::consts::TAU).sin() * SAKURA_PETAL_DRIFT;
+    let norm = |idx: u32, max: u32| -> f64 {
+        if max <= 1 {
+            0.5
+        } else {
+            idx as f64 / (max - 1) as f64
+        }
+    };
+    let lerp = |a: f64, b: f64, t: f64| a + (b - a) * t;
+    let to_u8 = |value: f64| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round() as u8 };
+
+    let pixel_count = frame.width as usize * frame.height as usize;
+    let mut rgba = Vec::with_capacity(pixel_count * 4);
+    for y in 0..frame.height {
+        let ny = norm(y, frame.height);
+        let cy = ny - 0.5;
+        for x in 0..frame.width {
+            let nx = norm(x, frame.width);
+            let cx = nx - 0.5;
+            let proj = cx * dir_x + cy * dir_y;
+            let t = (proj + 0.5).clamp(0.0, 1.0);
+            let mut r = lerp(SAKURA_BG_START[0], SAKURA_BG_END[0], t);
+            let mut g = lerp(SAKURA_BG_START[1], SAKURA_BG_END[1], t);
+            let mut b = lerp(SAKURA_BG_START[2], SAKURA_BG_END[2], t);
+
+            if SAKURA_PETAL_ALPHA > 0.0 {
+                let mut petal_alpha = 0.0;
+                for petal_index in 0..SAKURA_PETAL_COUNT {
+                    let petal_phase =
+                        (petal_index as f64 / SAKURA_PETAL_COUNT as f64) + phase;
+                    let petal_angle = petal_phase * std::f64::consts::TAU;
+                    let cx = 0.5 + petal_angle.cos() * SAKURA_PETAL_ORBIT;
+                    let cy = 0.5 + petal_angle.sin() * SAKURA_PETAL_ORBIT + drift;
+                    let dx = nx - cx;
+                    let dy = ny - cy;
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    if dist < SAKURA_PETAL_RADIUS {
+                        let alpha =
+                            (1.0 - dist / SAKURA_PETAL_RADIUS) * SAKURA_PETAL_ALPHA;
+                        if alpha > petal_alpha {
+                            petal_alpha = alpha;
+                        }
+                    }
+                }
+                if petal_alpha > 0.0 {
+                    r = lerp(r, SAKURA_PETAL[0], petal_alpha);
+                    g = lerp(g, SAKURA_PETAL[1], petal_alpha);
+                    b = lerp(b, SAKURA_PETAL[2], petal_alpha);
+                }
+            }
+
+            let gray = frame.data[(y * frame.width + x) as usize];
+            if gray < 128 {
+                r = SAKURA_INK[0];
+                g = SAKURA_INK[1];
+                b = SAKURA_INK[2];
+            }
+            rgba.extend_from_slice(&[to_u8(r), to_u8(g), to_u8(b), 0xFF]);
+        }
+    }
+
+    image::RgbaImage::from_raw(frame.width, frame.height, rgba)
+        .expect("rgba buffer size")
+}
+
+fn render_sakura_wind_rgba(
+    code: &QrCode,
+    dimension: u32,
+    frame_index: u32,
+    frame_count: u32,
+) -> image::RgbaImage {
+    // Keep functional modules solid while stylizing data modules as petals.
+    let modules = code.width() as u32;
+    let quiet_zone = if code.version().is_micro() { 2 } else { 4 };
+    let total_modules = modules + quiet_zone * 2;
+    let module_size = (dimension / total_modules).max(1);
+    let width = total_modules * module_size;
+    let height = width;
+    let module_size_f = module_size as f64;
+    let colors = code.to_colors();
+    let mut module_dark = vec![false; (modules * modules) as usize];
+    let mut module_functional = vec![false; (modules * modules) as usize];
+    for y in 0..modules {
+        for x in 0..modules {
+            let idx = (y * modules + x) as usize;
+            module_dark[idx] = colors[idx] != qrcode::types::Color::Light;
+            module_functional[idx] = code.is_functional(x as usize, y as usize);
+        }
+    }
+
+    let frame_count = frame_count.max(1);
+    let phase = (frame_index % frame_count) as f64 / frame_count as f64;
+    let wind_angle = phase * std::f64::consts::TAU;
+    let wind_dir_x = wind_angle.cos();
+    let wind_dir_y = wind_angle.sin();
+    let norm = |idx: u32, max: u32| -> f64 {
+        if max <= 1 {
+            0.5
+        } else {
+            idx as f64 / (max - 1) as f64
+        }
+    };
+    let lerp = |a: f64, b: f64, t: f64| a + (b - a) * t;
+    let to_u8 = |value: f64| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round() as u8 };
+    let petal_mask = |dx: f64, dy: f64, angle: f64, major: f64, minor: f64| -> bool {
+        let (sin_a, cos_a) = angle.sin_cos();
+        let rx = dx * cos_a + dy * sin_a;
+        let ry = -dx * sin_a + dy * cos_a;
+        let nx = rx / major;
+        let ny = ry / minor;
+        nx * nx + ny * ny <= 1.0
+    };
+    let core_radius_sq = SAKURA_WIND_CORE_RADIUS * SAKURA_WIND_CORE_RADIUS;
+    let pixel_count = width as usize * height as usize;
+    let mut rgba = Vec::with_capacity(pixel_count * 4);
+    for y in 0..height {
+        let ny = norm(y, height);
+        let cy = ny - 0.5;
+        let module_y = y / module_size;
+        for x in 0..width {
+            let nx = norm(x, width);
+            let cx = nx - 0.5;
+            let proj = cx * wind_dir_x + cy * wind_dir_y;
+            let t = (proj + 0.5).clamp(0.0, 1.0);
+            let mut r = lerp(SAKURA_BG_START[0], SAKURA_BG_END[0], t);
+            let mut g = lerp(SAKURA_BG_START[1], SAKURA_BG_END[1], t);
+            let mut b = lerp(SAKURA_BG_START[2], SAKURA_BG_END[2], t);
+
+            if SAKURA_WIND_STREAK_ALPHA > 0.0 {
+                let streak = (nx * SAKURA_WIND_STREAK_FREQ_X
+                    + ny * SAKURA_WIND_STREAK_FREQ_Y
+                    + wind_angle)
+                    .sin();
+                let streak = (streak * 0.5 + 0.5) * SAKURA_WIND_STREAK_ALPHA;
+                r = (r + streak).min(1.0);
+                g = (g + streak).min(1.0);
+                b = (b + streak).min(1.0);
+            }
+
+            if SAKURA_WIND_PETAL_ALPHA > 0.0 {
+                let drift = (phase * std::f64::consts::TAU).sin() * SAKURA_WIND_PETAL_DRIFT;
+                let mut petal_alpha = 0.0;
+                for petal_index in 0..SAKURA_WIND_PETAL_COUNT {
+                    let petal_phase =
+                        (petal_index as f64 / SAKURA_WIND_PETAL_COUNT as f64) + phase;
+                    let petal_angle = petal_phase * std::f64::consts::TAU;
+                    let cx = 0.5 + petal_angle.cos() * SAKURA_WIND_PETAL_ORBIT + wind_dir_x * drift;
+                    let cy = 0.5 + petal_angle.sin() * SAKURA_WIND_PETAL_ORBIT + wind_dir_y * drift;
+                    let dx = nx - cx;
+                    let dy = ny - cy;
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    if dist < SAKURA_WIND_PETAL_RADIUS {
+                        let alpha =
+                            (1.0 - dist / SAKURA_WIND_PETAL_RADIUS) * SAKURA_WIND_PETAL_ALPHA;
+                        if alpha > petal_alpha {
+                            petal_alpha = alpha;
+                        }
+                    }
+                }
+                if petal_alpha > 0.0 {
+                    r = lerp(r, SAKURA_PETAL[0], petal_alpha);
+                    g = lerp(g, SAKURA_PETAL[1], petal_alpha);
+                    b = lerp(b, SAKURA_PETAL[2], petal_alpha);
+                }
+            }
+
+            let module_x = x / module_size;
+            if module_x >= quiet_zone
+                && module_x < quiet_zone + modules
+                && module_y >= quiet_zone
+                && module_y < quiet_zone + modules
+            {
+                let mx = module_x - quiet_zone;
+                let my = module_y - quiet_zone;
+                let idx = (my * modules + mx) as usize;
+                if module_dark[idx] {
+                    let is_functional = module_functional[idx];
+                    if is_functional || module_size <= 4 {
+                        r = SAKURA_INK[0];
+                        g = SAKURA_INK[1];
+                        b = SAKURA_INK[2];
+                    } else {
+                        let local_x = (x % module_size) as f64 / module_size_f - 0.5;
+                        let local_y = (y % module_size) as f64 / module_size_f - 0.5;
+                        let gust = ((mx + my) as f64 * 0.35 + wind_angle).sin();
+                        let offset = gust * SAKURA_WIND_MODULE_DRIFT;
+                        let dx = local_x - wind_dir_x * offset;
+                        let dy = local_y - wind_dir_y * offset;
+                        let angle = wind_angle + gust * 0.6;
+                        let core = dx * dx + dy * dy <= core_radius_sq;
+                        let petal =
+                            petal_mask(dx, dy, angle, SAKURA_WIND_PETAL_MAJOR, SAKURA_WIND_PETAL_MINOR)
+                                || petal_mask(
+                                    dx,
+                                    dy,
+                                    angle + 1.1,
+                                    SAKURA_WIND_PETAL_SECONDARY_MAJOR,
+                                    SAKURA_WIND_PETAL_SECONDARY_MINOR,
+                                )
+                                || core;
+                        if petal {
+                            r = SAKURA_INK[0];
+                            g = SAKURA_INK[1];
+                            b = SAKURA_INK[2];
+                        }
+                    }
+                }
+            }
+
+            rgba.extend_from_slice(&[to_u8(r), to_u8(g), to_u8(b), 0xFF]);
+        }
+    }
+
+    image::RgbaImage::from_raw(width, height, rgba).expect("rgba buffer size")
+}
+
+fn render_sakura_wind_animation(
+    frames: &[RenderedFrame],
+    dimension: u32,
+) -> Vec<image::RgbaImage> {
+    let frame_count = frames.len().max(1) as u32;
+    let mut out = Vec::with_capacity(frames.len());
+    for frame in frames {
+        out.push(render_sakura_wind_rgba(
+            &frame.code,
+            dimension,
+            frame.index,
+            frame_count,
+        ));
+    }
+    out
+}
+
 fn render_animation(frames: &[RenderedFrame], dimension: u32) -> Result<Vec<GrayImage>> {
     let mut out = Vec::with_capacity(frames.len());
     for frame in frames {
@@ -411,25 +711,127 @@ fn render_animation(frames: &[RenderedFrame], dimension: u32) -> Result<Vec<Gray
     Ok(out)
 }
 
-fn write_png(path: &Path, image: &GrayImage) -> Result<()> {
+fn write_png(
+    path: &Path,
+    image: &GrayImage,
+    style: QrRenderStyle,
+    frame_index: u32,
+    frame_count: u32,
+) -> Result<()> {
+    if style == QrRenderStyle::SakuraWind {
+        return Err(eyre!("sakura-wind render requires the RGBA pipeline"));
+    }
     let file = fs::File::create(path)?;
     let writer = BufWriter::new(file);
     let mut encoder = png::Encoder::new(writer, image.width, image.height);
-    encoder.set_color(png::ColorType::Grayscale);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header()?;
-    writer.write_image_data(&image.data)?;
+    match style {
+        QrRenderStyle::Mono => {
+            encoder.set_color(png::ColorType::Grayscale);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header()?;
+            writer.write_image_data(&image.data)?;
+        }
+        QrRenderStyle::Sakura => {
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header()?;
+            let rgba = render_sakura_rgba(image, frame_index, frame_count);
+            writer.write_image_data(rgba.as_raw())?;
+        }
+        QrRenderStyle::SakuraWind => unreachable!("sakura-wind guard should have returned"),
+    }
     Ok(())
 }
 
-fn write_apng(path: &Path, frames: &[GrayImage], fps: u16) -> Result<()> {
+fn write_apng(
+    path: &Path,
+    frames: &[GrayImage],
+    fps: u16,
+    style: QrRenderStyle,
+) -> Result<()> {
+    if frames.is_empty() {
+        return Err(eyre!("no frames to encode"));
+    }
+    if style == QrRenderStyle::SakuraWind {
+        return Err(eyre!("sakura-wind render requires the RGBA pipeline"));
+    }
+    let file = fs::File::create(path)?;
+    let writer = BufWriter::new(file);
+    let mut encoder = png::Encoder::new(writer, frames[0].width, frames[0].height);
+    match style {
+        QrRenderStyle::Mono => encoder.set_color(png::ColorType::Grayscale),
+        QrRenderStyle::Sakura => encoder.set_color(png::ColorType::Rgba),
+        QrRenderStyle::SakuraWind => unreachable!("sakura-wind guard should have returned"),
+    }
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_animated(frames.len() as u32, 0)?;
+    encoder.set_sep_def_img(false)?;
+    let mut writer = encoder.write_header()?;
+    let delay = frame_delay_ms(fps);
+    let delay_den = 1000u16;
+    for (idx, frame) in frames.iter().enumerate() {
+        writer.set_frame_delay(delay as u16, delay_den)?;
+        match style {
+            QrRenderStyle::Mono => writer.write_image_data(&frame.data)?,
+            QrRenderStyle::Sakura => {
+                let rgba = render_sakura_rgba(frame, idx as u32, frames.len() as u32);
+                writer.write_image_data(rgba.as_raw())?;
+            }
+            QrRenderStyle::SakuraWind => unreachable!("sakura-wind guard should have returned"),
+        }
+    }
+    Ok(())
+}
+
+fn write_gif(
+    path: &Path,
+    frames: &[GrayImage],
+    fps: u16,
+    style: QrRenderStyle,
+) -> Result<()> {
+    if frames.is_empty() {
+        return Err(eyre!("no frames to encode"));
+    }
+    if style == QrRenderStyle::SakuraWind {
+        return Err(eyre!("sakura-wind render requires the RGBA pipeline"));
+    }
+    let file = fs::File::create(path)?;
+    let mut encoder = image::codecs::gif::GifEncoder::new(file);
+    let delay_ms = frame_delay_ms(fps) as u32;
+    let delay = image::Delay::from_numer_denom_ms(delay_ms.max(1), 1);
+    let frame_count = frames.len() as u32;
+    let mut gif_frames = Vec::with_capacity(frames.len());
+    for (idx, frame) in frames.iter().enumerate() {
+        let rgba = match style {
+            QrRenderStyle::Mono => grayscale_to_rgba(frame),
+            QrRenderStyle::Sakura => render_sakura_rgba(frame, idx as u32, frame_count),
+            QrRenderStyle::SakuraWind => unreachable!("sakura-wind guard should have returned"),
+        };
+        gif_frames.push(image::Frame::from_parts(rgba, 0, 0, delay));
+    }
+    encoder.encode_frames(gif_frames.into_iter())?;
+    Ok(())
+}
+
+fn write_png_rgba(path: &Path, image: &image::RgbaImage) -> Result<()> {
+    let file = fs::File::create(path)?;
+    let writer = BufWriter::new(file);
+    let mut encoder = png::Encoder::new(writer, image.width(), image.height());
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(image.as_raw())?;
+    Ok(())
+}
+
+fn write_apng_rgba(path: &Path, frames: &[image::RgbaImage], fps: u16) -> Result<()> {
     if frames.is_empty() {
         return Err(eyre!("no frames to encode"));
     }
     let file = fs::File::create(path)?;
     let writer = BufWriter::new(file);
-    let mut encoder = png::Encoder::new(writer, frames[0].width, frames[0].height);
-    encoder.set_color(png::ColorType::Grayscale);
+    let mut encoder = png::Encoder::new(writer, frames[0].width(), frames[0].height());
+    encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     encoder.set_animated(frames.len() as u32, 0)?;
     encoder.set_sep_def_img(false)?;
@@ -438,12 +840,12 @@ fn write_apng(path: &Path, frames: &[GrayImage], fps: u16) -> Result<()> {
     let delay_den = 1000u16;
     for frame in frames {
         writer.set_frame_delay(delay as u16, delay_den)?;
-        writer.write_image_data(&frame.data)?;
+        writer.write_image_data(frame.as_raw())?;
     }
     Ok(())
 }
 
-fn write_gif(path: &Path, frames: &[GrayImage], fps: u16) -> Result<()> {
+fn write_gif_rgba(path: &Path, frames: &[image::RgbaImage], fps: u16) -> Result<()> {
     if frames.is_empty() {
         return Err(eyre!("no frames to encode"));
     }
@@ -453,8 +855,7 @@ fn write_gif(path: &Path, frames: &[GrayImage], fps: u16) -> Result<()> {
     let delay = image::Delay::from_numer_denom_ms(delay_ms.max(1), 1);
     let mut gif_frames = Vec::with_capacity(frames.len());
     for frame in frames {
-        let rgba = grayscale_to_rgba(frame);
-        gif_frames.push(image::Frame::from_parts(rgba, 0, 0, delay));
+        gif_frames.push(image::Frame::from_parts(frame.clone(), 0, 0, delay));
     }
     encoder.encode_frames(gif_frames.into_iter())?;
     Ok(())
@@ -514,6 +915,8 @@ fn frame_kind_label(kind: QrStreamFrameKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn qr_text_roundtrip() {
@@ -544,5 +947,156 @@ mod tests {
         let result = last.expect("result");
         assert!(result.is_complete());
         assert_eq!(result.received_chunks, result.total_chunks);
+    }
+
+    #[test]
+    fn sakura_rgba_uses_ink_for_dark_pixels() {
+        let image = GrayImage {
+            width: 1,
+            height: 1,
+            data: vec![0],
+        };
+        let rgba = render_sakura_rgba(&image, 0, 1);
+        let pixel = rgba.get_pixel(0, 0).0;
+        let to_u8 = |value: f64| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round() as u8 };
+        let expected = [
+            to_u8(SAKURA_INK[0]),
+            to_u8(SAKURA_INK[1]),
+            to_u8(SAKURA_INK[2]),
+            0xFF,
+        ];
+        assert_eq!(pixel, expected);
+    }
+
+    #[test]
+    fn sakura_rgba_uses_gradient_for_light_pixels() {
+        let image = GrayImage {
+            width: 1,
+            height: 1,
+            data: vec![255],
+        };
+        let rgba = render_sakura_rgba(&image, 0, 1);
+        let pixel = rgba.get_pixel(0, 0).0;
+        let to_u8 = |value: f64| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round() as u8 };
+        let expected = [
+            to_u8((SAKURA_BG_START[0] + SAKURA_BG_END[0]) * 0.5),
+            to_u8((SAKURA_BG_START[1] + SAKURA_BG_END[1]) * 0.5),
+            to_u8((SAKURA_BG_START[2] + SAKURA_BG_END[2]) * 0.5),
+            0xFF,
+        ];
+        assert_eq!(pixel, expected);
+    }
+
+    #[test]
+    fn qr_svg_sakura_applies_palette() {
+        let code = QrCode::new(b"sakura").expect("qr code");
+        for style in [QrRenderStyle::Sakura, QrRenderStyle::SakuraWind] {
+            let svg = render_svg(&code, 32, style).expect("svg");
+            assert!(svg.contains("fill=\"#FCF5F9\""));
+            assert!(svg.contains("fill=\"#572633\""));
+        }
+    }
+
+    #[test]
+    fn sakura_wind_finder_modules_render_as_ink() {
+        let code = QrCode::new(b"sakura-wind").expect("qr code");
+        let dimension = 128;
+        let image = render_sakura_wind_rgba(&code, dimension, 0, 1);
+        let quiet_zone = if code.version().is_micro() { 2 } else { 4 };
+        let modules = code.width() as u32;
+        let total_modules = modules + quiet_zone * 2;
+        let module_size = (dimension / total_modules).max(1);
+        let module_x = quiet_zone + 3;
+        let module_y = quiet_zone + 3;
+        let x = module_x * module_size + module_size / 2;
+        let y = module_y * module_size + module_size / 2;
+        let pixel = image.get_pixel(x, y).0;
+        let to_u8 = |value: f64| -> u8 { (value.clamp(0.0, 1.0) * 255.0).round() as u8 };
+        let expected = [
+            to_u8(SAKURA_INK[0]),
+            to_u8(SAKURA_INK[1]),
+            to_u8(SAKURA_INK[2]),
+            0xFF,
+        ];
+        assert_eq!(pixel, expected);
+    }
+
+    #[test]
+    fn write_png_sakura_emits_rgba() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("frame.png");
+        let image = GrayImage {
+            width: 1,
+            height: 1,
+            data: vec![0],
+        };
+        write_png(&path, &image, QrRenderStyle::Sakura, 0, 1).expect("write");
+        let file = fs::File::open(&path).expect("open");
+        let decoder = png::Decoder::new(file);
+        let reader = decoder.read_info().expect("read info");
+        assert_eq!(reader.info().color_type, png::ColorType::Rgba);
+    }
+
+    #[test]
+    fn write_apng_sakura_writes_png_header() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("stream.png");
+        let image = GrayImage {
+            width: 1,
+            height: 1,
+            data: vec![0],
+        };
+        write_apng(&path, &[image], 12, QrRenderStyle::Sakura).expect("write");
+        let bytes = fs::read(&path).expect("read");
+        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    #[test]
+    fn write_gif_sakura_writes_gif_header() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("stream.gif");
+        let image = GrayImage {
+            width: 1,
+            height: 1,
+            data: vec![0],
+        };
+        write_gif(&path, &[image], 12, QrRenderStyle::Sakura).expect("write");
+        let bytes = fs::read(&path).expect("read");
+        assert!(bytes.starts_with(b"GIF"));
+    }
+
+    #[test]
+    fn write_png_sakura_wind_emits_rgba() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("frame.png");
+        let code = QrCode::new(b"sakura-wind").expect("qr code");
+        let image = render_sakura_wind_rgba(&code, 64, 0, 1);
+        write_png_rgba(&path, &image).expect("write");
+        let file = fs::File::open(&path).expect("open");
+        let decoder = png::Decoder::new(file);
+        let reader = decoder.read_info().expect("read info");
+        assert_eq!(reader.info().color_type, png::ColorType::Rgba);
+    }
+
+    #[test]
+    fn write_apng_sakura_wind_writes_png_header() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("stream.png");
+        let code = QrCode::new(b"sakura-wind").expect("qr code");
+        let image = render_sakura_wind_rgba(&code, 64, 0, 1);
+        write_apng_rgba(&path, &[image], 12).expect("write");
+        let bytes = fs::read(&path).expect("read");
+        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+    }
+
+    #[test]
+    fn write_gif_sakura_wind_writes_gif_header() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("stream.gif");
+        let code = QrCode::new(b"sakura-wind").expect("qr code");
+        let image = render_sakura_wind_rgba(&code, 64, 0, 1);
+        write_gif_rgba(&path, &[image], 12).expect("write");
+        let bytes = fs::read(&path).expect("read");
+        assert!(bytes.starts_with(b"GIF"));
     }
 }

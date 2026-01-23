@@ -6337,7 +6337,7 @@ fn consensus_caps_from_genesis(
     let npos_params = if use_npos {
         npos_payload.map(
             |npos| iroha_data_model::block::consensus::NposGenesisParams {
-                block_time_ms: npos.block_time_ms(),
+                block_time_ms: params.sumeragi().block_time_ms,
                 timeout_propose_ms: npos.timeout_propose_ms(),
                 timeout_prevote_ms: npos.timeout_prevote_ms(),
                 timeout_precommit_ms: npos.timeout_precommit_ms(),
@@ -6582,7 +6582,7 @@ fn verify_genesis_metadata(
     let npos_params = if use_npos {
         npos_payload.map(
             |npos| iroha_data_model::block::consensus::NposGenesisParams {
-                block_time_ms: npos.block_time_ms(),
+                block_time_ms: params.sumeragi().block_time_ms,
                 timeout_propose_ms: npos.timeout_propose_ms(),
                 timeout_prevote_ms: npos.timeout_prevote_ms(),
                 timeout_precommit_ms: npos.timeout_precommit_ms(),

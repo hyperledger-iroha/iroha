@@ -260,6 +260,8 @@ If you need the immediate submission receipt without waiting for a terminal stat
 call `torii.submitTransaction(data: envelope.norito)` directly. The returned
 `ToriiSubmitTransactionResponse` includes the receipt payload and signature; use
 `receipt.hash` (or `receipt.payload.txHash`) to poll with `torii.getTransactionStatus(hashHex:)`.
+`submitTransaction` validates `data_model_version` from `/v1/node/capabilities` and throws
+`ToriiClientError.incompatibleDataModel` if the node was built from a different release.
 
 `ToriiClient.getMetrics()` automatically decodes JSON payloads even when Torii forgets to
 set `Content-Type: application/json`, falling back to the Prometheus/text response only

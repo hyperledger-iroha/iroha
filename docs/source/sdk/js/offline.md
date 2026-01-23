@@ -199,3 +199,15 @@ For device-to-device transfers, use the QR stream helpers from `offlineQrStream.
 - **Playback skins:** use `sakuraQrStreamSkin` for default animation,
   `sakuraQrStreamReducedMotionSkin` for accessibility, and `sakuraQrStreamLowPowerSkin` for
   battery-friendly playback.
+
+## Petal stream handoff (custom scanner)
+
+Petal stream renders the same QR stream frames as a sakura petal field and requires a custom
+scanner. Use the helpers from `offlinePetalStream.js`:
+
+- **Encode grids:** `OfflinePetalStreamEncoder.encodeGrids(frameBytes[])` returns a consistent
+  `gridSize` and per-frame grids.
+- **Sampling:** `samplePetalStreamGridFromRgba(image, gridSize)` converts RGBA frames into
+  luminance samples.
+- **Scan session:** `OfflinePetalStreamScanSession` ingests sample grids and returns the
+  `OfflineQrStreamDecodeResult` for progress + payload recovery.

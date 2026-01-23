@@ -536,6 +536,15 @@ final class ToriiClientTests: XCTestCase {
         return ToriiClient(baseURL: baseURL, session: session)
     }
 
+    private func nodeCapabilitiesBody(dataModelVersion: Int = ToriiNodeCapabilities.expectedDataModelVersion) -> Data {
+        let payload: [String: Any] = [
+            "supported_abi_versions": [1],
+            "default_compile_target": 1,
+            "data_model_version": dataModelVersion
+        ]
+        return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+    }
+
     private func canonicalOwnerLiteral(domain: String = "wonderland") throws -> String {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 1, count: 32))
         let address = try AccountAddress.fromAccount(domain: domain, publicKey: keypair.publicKey)
@@ -588,15 +597,30 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitTransactionAsync() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/transaction")
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {"payload":{"tx_hash":"abc","submitted_at_ms":1,"submitted_at_height":2,"signer":"signer"},"signature":"deadbeef"}
-            """.data(using: .utf8)!
-            return (response, body)
+            switch request.url?.path {
+            case "/v1/node/capabilities":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, self.nodeCapabilitiesBody())
+            case "/transaction":
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 202,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let body = """
+                {"payload":{"tx_hash":"abc","submitted_at_ms":1,"submitted_at_height":2,"signer":"signer"},"signature":"deadbeef"}
+                """.data(using: .utf8)!
+                return (response, body)
+            default:
+                XCTFail("unexpected request: \(request.url?.path ?? "")")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            }
         }
 
         let payload = try await makeClient().submitTransaction(data: Data([0x00]))
@@ -610,18 +634,33 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitTransactionRejectCodeHeaderSurfaced() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/transaction")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
-            let headers = [
-                "Content-Type": "application/json",
-                "x-iroha-reject-code": "PRTRY:TX_SIGNATURE_MISSING"
-            ]
-            let response = HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: nil, headerFields: headers)!
-            let body = """
-            {"message":"failed to accept transaction"}
-            """.data(using: .utf8)!
-            return (response, body)
+            switch request.url?.path {
+            case "/v1/node/capabilities":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, self.nodeCapabilitiesBody())
+            case "/transaction":
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
+                let headers = [
+                    "Content-Type": "application/json",
+                    "x-iroha-reject-code": "PRTRY:TX_SIGNATURE_MISSING"
+                ]
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 400,
+                                               httpVersion: nil,
+                                               headerFields: headers)!
+                let body = """
+                {"message":"failed to accept transaction"}
+                """.data(using: .utf8)!
+                return (response, body)
+            default:
+                XCTFail("unexpected request: \(request.url?.path ?? "")")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            }
         }
 
         do {
@@ -634,6 +673,41 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(code, 400)
             XCTAssertEqual(rejectCode, "PRTRY:TX_SIGNATURE_MISSING")
             XCTAssertEqual(message, HTTPURLResponse.localizedString(forStatusCode: 400))
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitTransactionRejectsMismatchedDataModelVersion() async throws {
+        StubURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/node/capabilities":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, self.nodeCapabilitiesBody(dataModelVersion: 9))
+            case "/transaction":
+                XCTFail("transaction submitted with incompatible data model")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            default:
+                XCTFail("unexpected request: \(request.url?.path ?? "")")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            }
+        }
+
+        do {
+            _ = try await makeClient().submitTransaction(data: Data([0x02]))
+            XCTFail("expected data model mismatch")
+        } catch let error as ToriiClientError {
+            guard case let .incompatibleDataModel(expected, actual) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(expected, ToriiNodeCapabilities.expectedDataModelVersion)
+            XCTAssertEqual(actual, 9)
         } catch {
             XCTFail("unexpected error: \(error)")
         }
@@ -4446,16 +4520,31 @@ id: 88
     func testSubmitTransactionPostsNorito() {
         let expectation = expectation(description: "submit transaction")
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/transaction")
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
-            XCTAssertEqual(self.bodyData(from: request), Data([0x01, 0x02]))
-            let response = HTTPURLResponse(url: request.url!, statusCode: 202, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {"payload":{"tx_hash":"abc","submitted_at_ms":1,"submitted_at_height":2,"signer":"signer"},"signature":"deadbeef"}
-            """.data(using: .utf8)!
-            return (response, body)
+            switch request.url?.path {
+            case "/v1/node/capabilities":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, self.nodeCapabilitiesBody())
+            case "/transaction":
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-norito")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/x-norito, application/json")
+                XCTAssertEqual(self.bodyData(from: request), Data([0x01, 0x02]))
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 202,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let body = """
+                {"payload":{"tx_hash":"abc","submitted_at_ms":1,"submitted_at_height":2,"signer":"signer"},"signature":"deadbeef"}
+                """.data(using: .utf8)!
+                return (response, body)
+            default:
+                XCTFail("unexpected request: \(request.url?.path ?? "")")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            }
         }
 
         makeClient().submitTransaction(data: Data([0x01, 0x02])) { result in

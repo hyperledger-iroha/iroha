@@ -208,11 +208,12 @@ against the Norito-encoded manifest bytes before verifying the inspector signatu
 bound freshness via `android.provisioned.max_manifest_age_ms`; after that TTL expires Torii rejects
 receipts until a new manifest is registered.
 
-## 4. QR stream handoff (animated QR)
+## 4. Optical handoff (QR stream / petal stream)
 
-Offline receipts and bundles can be handed off via the QR stream transport (`docs/source/qr_stream.md`).
-Use the animated QR UI for short-range transfers between POS terminals, operator consoles, and
-mobile wallets.
+Offline receipts and bundles can be handed off via the QR stream transport (`docs/source/qr_stream.md`)
+or the optional Petal Stream transport (`docs/source/petal_stream.md`). Use the animated QR UI for
+short-range transfers between POS terminals, operator consoles, and mobile wallets. Petal Stream
+requires a custom scanner but offers branded, sakura-styled playback.
 
 ### 4.1 Scan timing and progress UI
 

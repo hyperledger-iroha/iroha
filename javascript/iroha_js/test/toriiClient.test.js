@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   ToriiClient,
+  ToriiDataModelCompatibilityError,
   ToriiHttpError,
   extractPipelineStatusKind,
   decodePdpCommitmentHeader,
@@ -5547,6 +5548,36 @@ test("submitTransaction posts norito payload and decodes receipt response", asyn
     signature: "ed25519:" + "cc".repeat(64),
   });
   const fetchImpl = async (url, init) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          supported_abi_versions: [1],
+          default_compile_target: 1,
+          data_model_version: 1,
+          crypto: {
+            sm: {
+              enabled: false,
+              default_hash: "sha2_256",
+              allowed_signing: ["ed25519"],
+              sm2_distid_default: "",
+              openssl_preview: false,
+              acceleration: {
+                scalar: true,
+                neon_sm3: false,
+                neon_sm4: false,
+                policy: "scalar-only",
+              },
+            },
+            curves: {
+              registry_version: 1,
+              allowed_curve_ids: [1],
+            },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
     assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
     assert.equal(init.method, "POST");
     assert.equal(init.headers["Content-Type"], "application/x-norito");
@@ -5583,6 +5614,36 @@ test("submitTransaction retries transient failures via pipeline profile", async 
   const payload = new Uint8Array([0xaa]);
   let attempts = 0;
   const fetchImpl = async (url, init) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          supported_abi_versions: [1],
+          default_compile_target: 1,
+          data_model_version: 1,
+          crypto: {
+            sm: {
+              enabled: false,
+              default_hash: "sha2_256",
+              allowed_signing: ["ed25519"],
+              sm2_distid_default: "",
+              openssl_preview: false,
+              acceleration: {
+                scalar: true,
+                neon_sm3: false,
+                neon_sm4: false,
+                policy: "scalar-only",
+              },
+            },
+            curves: {
+              registry_version: 1,
+              allowed_curve_ids: [1],
+            },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
     attempts += 1;
     assert.equal(url, `${BASE_URL}/v1/pipeline/transactions`);
     assert.equal(init.method, "POST");
@@ -5599,6 +5660,53 @@ test("submitTransaction retries transient failures via pipeline profile", async 
   const response = await client.submitTransaction(payload);
   assert.deepEqual(response, { ok: true });
   assert.equal(attempts, 2);
+});
+
+test("submitTransaction rejects mismatched data model version", async () => {
+  const payload = new Uint8Array([0x01]);
+  const fetchImpl = async (url) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          supported_abi_versions: [1],
+          default_compile_target: 1,
+          data_model_version: 9,
+          crypto: {
+            sm: {
+              enabled: false,
+              default_hash: "sha2_256",
+              allowed_signing: ["ed25519"],
+              sm2_distid_default: "",
+              openssl_preview: false,
+              acceleration: {
+                scalar: true,
+                neon_sm3: false,
+                neon_sm4: false,
+                policy: "scalar-only",
+              },
+            },
+            curves: {
+              registry_version: 1,
+              allowed_curve_ids: [1],
+            },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.submitTransaction(payload),
+    (error) => {
+      assert(error instanceof ToriiDataModelCompatibilityError);
+      assert.equal(error.expected, 1);
+      assert.equal(error.actual, 9);
+      return true;
+    },
+  );
 });
 
 test("getTransactionStatus queries pipeline endpoint", async () => {
@@ -7685,6 +7793,7 @@ test("getNodeCapabilities normalizes runtime advert", async () => {
       jsonData: {
         supported_abi_versions: [1, 4],
         default_compile_target: 4,
+        data_model_version: 1,
         crypto: {
           sm: {
             enabled: true,
@@ -7713,6 +7822,7 @@ test("getNodeCapabilities normalizes runtime advert", async () => {
   assert.deepEqual(result, {
     supportedAbiVersions: [1, 4],
     defaultCompileTarget: 4,
+    dataModelVersion: 1,
     crypto: {
       sm: {
         enabled: true,
@@ -7743,6 +7853,7 @@ test("getNodeCapabilities rejects non-integer capability lists", async () => {
       jsonData: {
         supported_abi_versions: [1, 1.5],
         default_compile_target: 4,
+        data_model_version: 1,
         crypto: {
           sm: {
             enabled: true,

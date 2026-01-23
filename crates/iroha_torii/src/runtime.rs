@@ -24,6 +24,8 @@ pub struct NodeCapabilitiesResponse {
     pub supported_abi_versions: Vec<u16>,
     /// Default Kotodama compile target (highest active ABI version)
     pub default_compile_target: u16,
+    /// Data model compatibility version for SDK handshakes.
+    pub data_model_version: u32,
     /// Cryptography capabilities (SM, default hashes, allow-lists)
     pub crypto: NodeCryptoCapabilities,
 }
@@ -170,6 +172,7 @@ pub async fn handle_node_capabilities(
     Ok(NodeCapabilitiesResponse {
         supported_abi_versions: list,
         default_compile_target: default,
+        data_model_version: iroha_data_model::DATA_MODEL_VERSION,
         crypto: NodeCryptoCapabilities {
             sm: NodeSmCapabilities {
                 enabled: crypto_cfg.sm_helpers_enabled(),

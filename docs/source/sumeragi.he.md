@@ -69,7 +69,7 @@ translator: manual
 
 ### RBC / DA (זמינות נתונים)
 - RBC משתמש בקבוצת האספנים כדי להפיץ את גוף הבלוק. כותרת הבלוק מכילה מזהה סשן ומטא-נתונים.
-- `sumeragi.da.enabled = true` עוקב אחרי עדות זמינות (`availability evidence`) אבל לא מעכב קומיט (ל־RBC `DELIVER` מקומי אין תנאי). כאשר עדות זמינות חסרה, `sumeragi_da_gate_block_total{reason="missing_local_data"}` גדל ו־`da_reschedule_total` הוא legacy ולכן בדרך כלל נשאר 0.
+- `sumeragi.da.enabled = true` מפעיל מעקב עדות זמינות (`availability evidence`) כ‑advisory ואינו מעכב קומיט; payload מקומי חסר מתקבל דרך RBC `DELIVER` או BlockCreated/סנכרון בלוקים. כאשר עדות זמינות חסרה, `sumeragi_da_gate_block_total{reason="missing_local_data"}` גדל ו־`da_reschedule_total` הוא legacy ולכן בדרך כלל נשאר 0.
 - כאשר READY/DELIVER או צ׳אנקים מגיעים לפני INIT, הנוד שומר אותם ב־stash ומבקש מיד את `BlockCreated` החסר (בכפוף ל־backoff של missing‑block).
 - `sumeragi.rbc.rebroadcast_sessions_per_tick` מגביל את מספר סשני ה־RBC שנשלחים מחדש בכל tick כדי למנוע סופות שידור כשיש backlog. להאצת התאוששות מעלים את הערך, ובמקרה של עומס תורים מורידים.
 - תרחישים של ≥10 MiB נבחנים בסוויטת האינטגרציה ומודדים זמני RBC, קומיט, סף סינון תורים וזרימות P2P. הפרת SLO נכשלת במבחן ומפעילה התרעה.
@@ -127,7 +127,7 @@ translator: manual
 
 ### RBC
 - סשני RBC מזוהים באמצעות `RbcSessionId` ומכילים מטא-נתונים על גובה, hash, ומספר חלקים. הם מפיצים את גוף הבלוק ומספקים זמינות נתונים.
-- כאשר `sumeragi.da.enabled` פעיל, קומיט תלוי ב-`availability evidence` (ולא בהשלמה מקומית של RBC). RBC משמש כמנגנון הפצה/שחזור של ה-payload.
+- כאשר `sumeragi.da.enabled` פעיל, `availability evidence` נעקב כ‑advisory והקומיט אינו ממתין; payload מקומי חסר מתקבל דרך RBC `DELIVER` או block sync. RBC משמש כמנגנון הפצה/שחזור של ה-payload.
 - רוסטר ה‑INIT נשמר כסנאפשוט לא מאומת; הרוסטר הנגזר מטופולוגיית הקומיט הוא המקור הסמכותי ל‑READY/DELIVER ולאימות חתימה מקומית. INIT שסותר רוסטר נגזר נדחה.
 - READY/DELIVER שמגיעים לפני אימות הרוסטר נאגרים (stash), ובקשות ל‑`BlockCreated` חסר נופלות חזרה לטופולוגיית הקומיט. לאחר אימות, אי־התאמה של `roster_hash` גוררת דחייה.
 - שידורי READY חוזרים מוגבלים לתת־קבוצה דטרמיניסטית של f+1 (כולל תמיד את המנהיג) כדי לצמצם סערות הודעות.

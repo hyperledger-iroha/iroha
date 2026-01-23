@@ -312,6 +312,7 @@ print("Queue capacity:", snapshot.configuration.queue.capacity)
 print("Peers:", [peer.address for peer in snapshot.peers])
 print("Time offset (ms):", snapshot.time_now.offset_ms)
 print("ABI versions:", snapshot.node_capabilities.supported_abi_versions)
+print("Data model version:", snapshot.node_capabilities.data_model_version)
 
 if snapshot.telemetry_peers is None:
     print("Telemetry endpoint skipped")
@@ -322,6 +323,8 @@ else:
 Pass ``include_peer_telemetry=False`` when the fleet omits
 `/v1/telemetry/peers-info`; the helper still records the remaining endpoints so
 dashboards and auditors can rely on one deterministic structure.
+The SDK refuses to submit transactions when `data_model_version` differs from
+its built-in value, so mismatched nodes are rejected before submission.
 
 ## 7. Persist Connect session counters
 

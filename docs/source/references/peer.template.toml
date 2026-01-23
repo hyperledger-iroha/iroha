@@ -119,7 +119,7 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 [sumeragi.worker]
 # iteration_budget_cap_ms = 2000       # cap worker loop time budget per iteration
 # iteration_drain_budget_cap_ms = 2000 # cap mailbox drain per iteration
-# tick_work_budget_cap_ms = 0          # cap per-tick proposal/commit work (0 disables)
+# tick_work_budget_cap_ms = 500        # cap per-tick proposal/commit work (0 disables)
 # validation_worker_threads = 1        # pre-vote validation worker threads
 # validation_work_queue_cap = 4        # validation work queue per worker
 # validation_result_queue_cap = 4      # validation result queue
@@ -152,16 +152,16 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # invalid_sig_penalty_cooldown_ms = 15000
 
 [sumeragi.da]
-# enabled = true
+# enabled = true                     # commit waits for availability evidence when enabled
 # quorum_timeout_multiplier = 3          # DA quorum timeout scaling (block_time + 4 * commit_time)
 # availability_timeout_multiplier = 2    # availability timeout scaling for DA logging/rebroadcasts
 # availability_timeout_floor_ms = 2000   # floor for availability timeouts (0 disables floor)
 
 [sumeragi.npos]
-# block_time_ms = 1000                 # target block time in milliseconds
+# block_time_ms = 1000                 # bootstrap fallback; on-chain SumeragiParameters.block_time_ms is authoritative
 # epoch_length_blocks = 3600           # validator set epoch length
 # use_stake_snapshot_roster = true     # hydrate roster from stake snapshots
-# timeouts.*_ms derive from block_time_ms when omitted
+# timeouts.*_ms derive from block_time_ms when omitted (bootstrap fallback only)
 # vrf.* windows/deadlines derive from epoch_length_blocks when omitted
 
 #[sumeragi.npos.timeouts]

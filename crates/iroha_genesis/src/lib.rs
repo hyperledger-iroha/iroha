@@ -2090,7 +2090,7 @@ impl RawGenesisTransaction {
             epoch_length_blocks,
             bls_domain: bls_domain.clone(),
             npos: resolved_npos.map(|npos| NposGenesisParams {
-                block_time_ms: npos.block_time_ms(),
+                block_time_ms,
                 timeout_propose_ms: npos.timeout_propose_ms(),
                 timeout_prevote_ms: npos.timeout_prevote_ms(),
                 timeout_precommit_ms: npos.timeout_precommit_ms(),
@@ -3109,7 +3109,7 @@ mod tests2 {
                 npos: resolved_npos.map(|npos| {
                     use iroha_data_model::block::consensus::NposGenesisParams;
                     NposGenesisParams {
-                        block_time_ms: npos.block_time_ms(),
+                        block_time_ms: sumeragi.block_time_ms(),
                         timeout_propose_ms: npos.timeout_propose_ms(),
                         timeout_prevote_ms: npos.timeout_prevote_ms(),
                         timeout_precommit_ms: npos.timeout_precommit_ms(),

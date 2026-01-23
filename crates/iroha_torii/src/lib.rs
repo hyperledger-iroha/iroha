@@ -10436,12 +10436,14 @@ async fn handler_pipeline_transaction_status(
         ));
     }
 
-    let view = app.state.view();
-    if app
-        .queue
-        .all_transactions(&view)
-        .any(|tx| tx.as_ref().hash() == hash)
-    {
+    // Drop the view before the follow-up state lookup to avoid writer-preferring lock deadlocks.
+    let queued = {
+        let view = app.state.view();
+        app.queue
+            .all_transactions(&view)
+            .any(|tx| tx.as_ref().hash() == hash)
+    };
+    if queued {
         let entry = PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None);
         app.pipeline_status_cache.record_entry(hash, entry.clone());
         return Ok(crate::utils::respond_value_with_format(
@@ -16610,6 +16612,10 @@ pub(crate) mod tests_runtime_handlers {
             norito::json::from_slice(&caps_bytes).expect("decode json");
         assert!(caps.supported_abi_versions.contains(&1));
         assert_eq!(caps.default_compile_target, 1);
+        assert_eq!(
+            caps.data_model_version,
+            iroha_data_model::DATA_MODEL_VERSION
+        );
         assert!(caps.crypto.sm.acceleration.scalar);
         assert!(
             !caps.crypto.sm.allowed_signing.is_empty(),
