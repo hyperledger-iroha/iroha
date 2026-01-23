@@ -2334,6 +2334,14 @@ pub mod sumeragi {
     pub const WORKER_ITERATION_BUDGET_CAP_MS: u64 = 2_000;
     /// Cap (ms) on worker mailbox draining per iteration.
     pub const WORKER_ITERATION_DRAIN_BUDGET_CAP_MS: u64 = 2_000;
+    /// Cap (ms) on per-tick proposal/commit work (0 disables).
+    pub const WORKER_TICK_WORK_BUDGET_CAP_MS: u64 = 0;
+    /// Validation worker threads for pre-vote checks.
+    pub const VALIDATION_WORKER_THREADS: usize = 1;
+    /// Validation worker work-queue capacity per worker.
+    pub const VALIDATION_WORK_QUEUE_CAP: usize = 4;
+    /// Validation worker result-queue capacity (shared).
+    pub const VALIDATION_RESULT_QUEUE_CAP: usize = 4;
     /// Default runtime consensus mode: "permissioned".
     pub const CONSENSUS_MODE: &str = "permissioned";
     /// Default: allow runtime consensus mode flips driven by on-chain parameters.
@@ -2352,6 +2360,10 @@ pub mod sumeragi {
     pub const KURA_STORE_RETRY_MAX_ATTEMPTS: u32 = 5;
     /// Default timeout for inflight commit jobs before aborting (milliseconds).
     pub const COMMIT_INFLIGHT_TIMEOUT_MS: u64 = 30_000;
+    /// Commit worker work-queue capacity.
+    pub const COMMIT_WORK_QUEUE_CAP: usize = 1;
+    /// Commit worker result-queue capacity.
+    pub const COMMIT_RESULT_QUEUE_CAP: usize = 1;
     /// Default number of missing-block fetch attempts before falling back to the full topology.
     /// A value of 0 disables signer preference.
     pub const MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: u32 = 1;
@@ -2365,8 +2377,8 @@ pub mod sumeragi {
     pub const RBC_CHUNK_MAX_BYTES: usize = 256 * 1024; // 256 KiB
     /// Optional fanout cap for RBC chunk broadcasts (None = auto based on topology).
     pub const RBC_CHUNK_FANOUT: Option<NonZeroUsize> = None;
-    /// Default RBC session TTL (seconds) before pruning inactive sessions.
-    pub const RBC_SESSION_TTL_SECS: u64 = 120; // 2 minutes
+    /// Default RBC session TTL (milliseconds) before pruning inactive sessions.
+    pub const RBC_SESSION_TTL_MS: u64 = 120_000; // 2 minutes
     /// Maximum RBC sessions rebroadcast per tick to avoid payload storms.
     pub const RBC_REBROADCAST_SESSIONS_PER_TICK: usize = 8;
     /// Maximum RBC payload chunks broadcast per tick to avoid bursty floods.
@@ -2379,8 +2391,8 @@ pub mod sumeragi {
     pub const RBC_STORE_MAX_BYTES: usize = 512 * 1024 * 1024; // 512 MiB
     /// Default soft quota for persisted RBC payload bytes. Compaction triggers beyond this.
     pub const RBC_STORE_SOFT_BYTES: usize = (RBC_STORE_MAX_BYTES * 3) / 4;
-    /// Default disk-backed RBC chunk retention TTL (seconds).
-    pub const RBC_DISK_STORE_TTL_SECS: u64 = RBC_SESSION_TTL_SECS;
+    /// Default disk-backed RBC chunk retention TTL (milliseconds).
+    pub const RBC_DISK_STORE_TTL_MS: u64 = RBC_SESSION_TTL_MS;
     /// Default maximum bytes allocated for disk-backed RBC chunks.
     pub const RBC_DISK_STORE_MAX_BYTES: u64 = RBC_STORE_MAX_BYTES as u64;
     /// Default maximum number of RBC chunks stashed before INIT per session.

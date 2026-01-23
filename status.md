@@ -2,6 +2,12 @@
 
 Last update: 2026-01-23
 
+- Sumeragi config: update core config access paths (recovery/gating/debug/rbc) to match nested config keys; fix compile errors after nesting.
+- Tests: not run (config path updates only).
+- Client API: fix consensus JSON serialization to use `mode_flip_enabled` field.
+- Tests: not run (not requested).
+- Sumeragi config rationalization: nested config keys applied across docs/templates/translations (collectors/block/queues/pacemaker/da/persistence/recovery/gating/rbc); legacy flat-key mentions removed.
+- Tests: not run (docs/config-template updates only).
 - Integration tests: update `iroha_cli` command paths for executor upgrade and domain listing (`ops executor`, `ledger domain`).
 - Tests: `cargo test -p integration_tests --test iroha_cli can_upgrade_executor -- --nocapture` (ok); `cargo test -p integration_tests --test iroha_cli reads_client_toml_by_default -- --nocapture` (ok).
 - Sumeragi worker loop: added `worker_iteration_drain_budget_cap_ms` to cap per-iteration mailbox drain time; config/docs updated; new unit coverage.

@@ -231,7 +231,7 @@ impl Actor {
             phase,
             signers,
             topology,
-            self.config.missing_block_signer_fallback_attempts,
+            self.config.recovery.missing_block_signer_fallback_attempts,
             &mut requests,
             telemetry,
             move |targets| send_missing_block_request(&network, &peer_id, block_hash, targets),
@@ -515,7 +515,7 @@ impl Actor {
                     now,
                     retry_window,
                     view_change_window,
-                    self.config.missing_block_signer_fallback_attempts,
+                    self.config.recovery.missing_block_signer_fallback_attempts,
                 )
             } else {
                 let retry_due = super::touch_missing_block_request(
@@ -1476,7 +1476,7 @@ impl Actor {
                         lock.phase,
                         &signers,
                         &topology,
-                        self.config.missing_block_signer_fallback_attempts,
+                        self.config.recovery.missing_block_signer_fallback_attempts,
                         &mut requests,
                         self.telemetry_handle(),
                         move |targets| {
@@ -2201,7 +2201,7 @@ impl Actor {
                 now,
                 retry_window,
                 Some(retry_window),
-                self.config.missing_block_signer_fallback_attempts,
+                self.config.recovery.missing_block_signer_fallback_attempts,
             );
             let dwell = self
                 .pending

@@ -13,20 +13,20 @@ translation_last_reviewed: 2026-01-01
 
 Esta nota describe la politica de pacemaker (timer) para Sumeragi y ofrece guia para operadores y ejemplos. Los temporizadores gobiernan cuando los lideres proponen y cuando los validadores sugieren/entran a una nueva vista tras inactividad.
 
-Estado: implementada la ventana base derivada de EMA, el piso RTT y los topes configurables de jitter/backoff. El intervalo de propuesta del pacemaker ahora se limita entre el objetivo de block-time y el propose timeout con piso RTT, limitado por `sumeragi.pacemaker_max_backoff_ms`. El jitter se aplica de forma determinista por nodo y por (height, view).
+Estado: implementada la ventana base derivada de EMA, el piso RTT y los topes configurables de jitter/backoff. El intervalo de propuesta del pacemaker ahora se limita entre el objetivo de block-time y el propose timeout con piso RTT, limitado por `sumeragi.pacemaker.max_backoff_ms`. El jitter se aplica de forma determinista por nodo y por (height, view).
 
 ## Conceptos
 - Ventana base: media movil exponencial de las fases de consenso observadas
   (propose, collect_da, collect_prevote, collect_precommit, commit). La EMA se
-  inicia desde `sumeragi.npos.timeouts.*`; hasta que lleguen suficientes
+  inicia desde `sumeragi.npos.timeouts.*_ms`; hasta que lleguen suficientes
   muestras, coincide efectivamente con los valores por defecto. La EMA de
   `collect_aggregator` se exporta para observabilidad pero no se incluye en la
   ventana del pacemaker. Los valores suavizados aparecen via
   `sumeragi_phase_latency_ema_ms{phase=...}`.
-- Multiplicador de backoff: `sumeragi.pacemaker_backoff_multiplier` (por defecto 1). Cada timeout agrega `base * multiplier` a la ventana actual.
-- Piso RTT: `avg_rtt_ms * sumeragi.pacemaker_rtt_floor_multiplier` (por defecto 2). Evita timeouts demasiado agresivos en enlaces de alta latencia.
-- Cap: `sumeragi.pacemaker_max_backoff_ms` (por defecto 60_000 ms). Techo duro de la ventana.
-- Semilla del intervalo de propuesta: `max(block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` y nunca por encima de `pacemaker_max_backoff_ms`. Este es el intervalo en estado estable incluso sin backoff.
+- Multiplicador de backoff: `sumeragi.pacemaker.backoff_multiplier` (por defecto 1). Cada timeout agrega `base * multiplier` a la ventana actual.
+- Piso RTT: `avg_rtt_ms * sumeragi.pacemaker.rtt_floor_multiplier` (por defecto 2). Evita timeouts demasiado agresivos en enlaces de alta latencia.
+- Cap: `sumeragi.pacemaker.max_backoff_ms` (por defecto 60_000 ms). Techo duro de la ventana.
+- Semilla del intervalo de propuesta: `max(block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` y nunca por encima de `sumeragi.pacemaker.max_backoff_ms`. Este es el intervalo en estado estable incluso sin backoff.
 
 Actualizacion de ventana efectiva en timeout:
 - `window = min(cap, max(window + base * backoff_mul, avg_rtt * rtt_floor_mul))`
@@ -35,7 +35,7 @@ Actualizacion de ventana efectiva en timeout:
 Telemetria expuesta (ver telemetry.md):
 - Runtime: `sumeragi_pacemaker_backoff_ms`, `sumeragi_pacemaker_rtt_floor_ms`, `sumeragi_phase_latency_ema_ms{phase=...}`
 - REST snapshot: `/v1/sumeragi/phases` ahora incluye `ema_ms` junto con las latencias por fase mas recientes para que los dashboards puedan graficar la tendencia EMA sin consultar Prometheus directamente.
-- Config: `sumeragi_pacemaker_backoff_multiplier`, `sumeragi_pacemaker_rtt_floor_multiplier`, `sumeragi_pacemaker_max_backoff_ms`
+- Config: `sumeragi.pacemaker.backoff_multiplier`, `sumeragi.pacemaker.rtt_floor_multiplier`, `sumeragi.pacemaker.max_backoff_ms`
 
 ## Politica de jitter
 Para evitar efectos de manada (timeouts sincronizados), el pacemaker soporta un jitter pequeno por nodo alrededor de la ventana efectiva.
@@ -47,7 +47,7 @@ Jitter determinista por nodo:
 
 Pseudocodigo:
 ```
-base = ema_total_ms(view, height)  // seeded by sumeragi.npos.timeouts.*
+base = ema_total_ms(view, height)  // seeded by sumeragi.npos.timeouts.*_ms
 window = min(cap, max(prev + base * backoff_mul, avg_rtt * rtt_floor_mul))
 seed = blake2(chain_id || peer_id || height || view)
 u = (seed % 10_000) as f64 / 10_000.0  // [0, 1)
@@ -104,7 +104,7 @@ Redes de alta variancia o moviles
 - Trend de backoff: `avg_over_time(sumeragi_pacemaker_backoff_ms[5m])`
 - Inspeccionar piso RTT: `avg_over_time(sumeragi_pacemaker_rtt_floor_ms[5m])`
 - Comparar EMA vs histogramas: `sumeragi_phase_latency_ema_ms{phase=...}` junto con el percentil correspondiente de `sumeragi_phase_latency_ms{phase=...}`
-- Verificar config: `max(sumeragi_pacemaker_backoff_multiplier)`, `max(sumeragi_pacemaker_rtt_floor_multiplier)`, `max(sumeragi_pacemaker_max_backoff_ms)`
+- Verificar config: `max(sumeragi.pacemaker.backoff_multiplier)`, `max(sumeragi.pacemaker.rtt_floor_multiplier)`, `max(sumeragi.pacemaker.max_backoff_ms)`
 
 ## Determinismo y seguridad
 - Temporizadores/backoff/jitter solo influyen en cuando los nodos disparan propuestas/cambios de vista; no afectan la validez de firmas ni las reglas de commit certificate.

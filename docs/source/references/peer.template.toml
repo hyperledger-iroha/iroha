@@ -91,36 +91,56 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 ## Consensus settings (Sumeragi)
 ## Participation role and collector settings for consensus.
 ## - role: "validator" (proposes, votes, commits) or "observer" (sync-only, no votes)
-## - allow_view0_slack: testing knob; Set B votes are accepted in view 0 regardless
-## - collectors_k: number of concurrent collectors per height (K). 1 preserves the original single proxy-tail collector.
-## - collectors_redundant_send_r: redundant send fanout; upon local timeout in view 0, validators may send their vote to up to r collectors.
+## - consensus_mode: "permissioned" (default) or "npos"
+## - collectors.k: number of concurrent collectors per height (K). 1 preserves the original single proxy-tail collector.
+## - collectors.redundant_send_r: redundant send fanout; upon local timeout in view 0, validators may send their vote to up to r collectors.
 ##
-## Note: K and r are also stored on-chain in `SumeragiParameters`. At startup, nodes adopt the
+## Note: K and r are also stored on-chain in `SumeragiParameters`/`sumeragi_npos_parameters`. At startup, nodes adopt the
 ## on-chain values (and log a mismatch if config differs). Ensure operator configs and on-chain
 ## parameters are aligned to avoid inconsistent pacing. Invalid combinations (e.g., `k == 0`,
 ## `r == 0`, `r > k`, or `k` larger than available collectors) are rejected at startup.
 [sumeragi]
 # role = "validator"
-# allow_view0_slack = false
-# collectors_k = 1
-# collectors_redundant_send_r = 1
-# msg_channel_cap_votes = 8192          # vote channel capacity
-# msg_channel_cap_block_payload = 128   # block payload capacity (proposal backpressure if saturated)
-# msg_channel_cap_rbc_chunks = 1024     # RBC chunk capacity (proposal backpressure if saturated)
-# rbc_chunk_fanout = null               # RBC chunk fanout cap (null = full roster minus local)
-# rbc_payload_chunks_per_tick = 64      # max RBC chunks broadcast per tick
-# rbc_pending_session_limit = 256       # max pending RBC sessions before INIT
-# msg_channel_cap_blocks = 256          # block message capacity (block sync updates, params, etc.)
-# control_msg_channel_cap = 1024        # control/background/lane channel capacity
-# worker_iteration_budget_cap_ms = 2000       # cap worker loop time budget per iteration
-# worker_iteration_drain_budget_cap_ms = 2000 # cap mailbox drain per iteration
-# pacemaker_pending_stall_grace_ms = 250       # grace before pending progress counts as stalled
-# pacemaker_active_pending_soft_limit = 1      # allow proposals with <= N blocking pending blocks (0 = strict)
-# pacemaker_rbc_backlog_session_soft_limit = 2 # allow proposals with <= N backlog sessions (0 = strict)
-# pacemaker_rbc_backlog_chunk_soft_limit = 16  # allow proposals with <= N missing chunks (0 = strict)
-# msg_channel_cap = 100                 # fallback when per-queue caps are omitted
+# consensus_mode = "permissioned"
+
+[sumeragi.collectors]
+# k = 1
+# redundant_send_r = 1
+
+[sumeragi.queues]
+# votes = 8192          # vote channel capacity
+# block_payload = 128   # block payload capacity (proposal backpressure if saturated)
+# rbc_chunks = 1024     # RBC chunk capacity (proposal backpressure if saturated)
+# blocks = 256          # block message capacity (block sync updates, params, etc.)
+# control = 1024        # control/background/lane channel capacity
+
+[sumeragi.worker]
+# iteration_budget_cap_ms = 2000       # cap worker loop time budget per iteration
+# iteration_drain_budget_cap_ms = 2000 # cap mailbox drain per iteration
+# tick_work_budget_cap_ms = 0          # cap per-tick proposal/commit work (0 disables)
+# validation_worker_threads = 1        # pre-vote validation worker threads
+# validation_work_queue_cap = 4        # validation work queue per worker
+# validation_result_queue_cap = 4      # validation result queue
+
+[sumeragi.pacemaker]
+# pending_stall_grace_ms = 250       # grace before pending progress counts as stalled
+# active_pending_soft_limit = 1      # allow proposals with <= N blocking pending blocks (0 = strict)
+# rbc_backlog_session_soft_limit = 2 # allow proposals with <= N backlog sessions (0 = strict)
+# rbc_backlog_chunk_soft_limit = 16  # allow proposals with <= N missing chunks (0 = strict)
+# backoff_multiplier = 1             # view-timeout backoff multiplier
+# rtt_floor_multiplier = 2           # RTT floor multiplier for pacemaker backoff
+# max_backoff_ms = 10000             # max pacemaker backoff window
+# jitter_frac_per_mille = 0          # jitter band size as permille of backoff window (0 disables)
+
+[sumeragi.persistence]
 # commit_inflight_timeout_ms = 30000
+# commit_work_queue_cap = 1            # commit worker queue capacity
+# commit_result_queue_cap = 1          # commit worker result queue capacity
+
+[sumeragi.recovery]
 # missing_block_signer_fallback_attempts = 1 # fetch from commit certificate signers before falling back to full topology
+
+[sumeragi.gating]
 # membership_mismatch_alert_threshold = 1    # consecutive mismatches before alert/fail-closed
 # membership_mismatch_fail_closed = false    # drop consensus messages from mismatched peers
 # consensus_future_height_window = 8         # drop consensus messages beyond this height delta (0 disables)
@@ -128,9 +148,18 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # invalid_sig_penalty_threshold = 3          # invalid signatures before temporary suppression (0 disables)
 # invalid_sig_penalty_window_ms = 5000
 # invalid_sig_penalty_cooldown_ms = 15000
-# da_quorum_timeout_multiplier = 3          # DA quorum timeout scaling (block_time + 4 * commit_time)
-# da_availability_timeout_multiplier = 2    # availability timeout scaling for DA logging/rebroadcasts
-# da_availability_timeout_floor_ms = 2000   # floor for availability timeouts (0 disables floor)
+
+[sumeragi.da]
+# enabled = true
+# quorum_timeout_multiplier = 3          # DA quorum timeout scaling (block_time + 4 * commit_time)
+# availability_timeout_multiplier = 2    # availability timeout scaling for DA logging/rebroadcasts
+# availability_timeout_floor_ms = 2000   # floor for availability timeouts (0 disables floor)
+
+[sumeragi.rbc]
+# chunk_fanout = null               # RBC chunk fanout cap (null = full roster minus local)
+# chunk_max_bytes = 262144          # RBC chunk size cap (bytes)
+# payload_chunks_per_tick = 64      # max RBC chunks broadcast per tick
+# pending_session_limit = 256       # max pending RBC sessions before INIT
 
 [torii]
 # address =

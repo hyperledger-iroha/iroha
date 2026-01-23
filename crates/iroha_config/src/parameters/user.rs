@@ -5168,119 +5168,248 @@ pub struct AdaptiveObservability {
     pub cooldown_ms: u64,
 }
 
-/// User-level configuration container for `Sumeragi`.
-#[derive(Debug, Clone, ReadConfig)]
-#[allow(clippy::struct_excessive_bools)]
-pub struct Sumeragi {
-    /// Node role: `validator` (default) or `observer`.
-    #[config(env = "NODE_ROLE", default = "NodeRole::Validator")]
-    pub role: NodeRole,
-    /// Allow SetBValidator signatures as slack in view 0 after local deadline widening.
-    /// Disabled by default to preserve strict minimal message patterns.
-    #[config(env = "SUMERAGI_ALLOW_VIEW0_SLACK", default)]
-    pub allow_view0_slack: bool,
+/// User-level configuration container for `SumeragiModeFlip`.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiModeFlip {
+    /// Enable runtime consensus mode flips driven by on-chain parameters and activation heights.
+    #[config(
+        env = "SUMERAGI_MODE_FLIP_ENABLED",
+        default = "defaults::sumeragi::MODE_FLIP_ENABLED"
+    )]
+    pub enabled: bool,
+}
+
+/// User-level configuration container for `SumeragiCollectors`.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiCollectors {
     /// Number of collectors (K) concurrently eligible to aggregate votes.
     #[config(
         env = "SUMERAGI_COLLECTORS_K",
         default = "defaults::sumeragi::COLLECTORS_K"
     )]
-    pub collectors_k: usize,
+    pub k: usize,
     /// Redundant send fanout (r): how many distinct collectors a validator
     /// will send its vote to over time on timeouts. Default 1 (no redundancy).
     #[config(
         env = "SUMERAGI_COLLECTORS_REDUNDANT_SEND_R",
         default = "defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R"
     )]
-    pub collectors_redundant_send_r: u8,
+    pub redundant_send_r: u8,
+}
+
+/// User-level configuration container for `SumeragiBlock`.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiBlock {
     /// Optional cap on transactions included in a block (`None` = unlimited).
     #[config(env = "SUMERAGI_BLOCK_MAX_TRANSACTIONS")]
-    pub block_max_transactions: Option<NonZeroUsize>,
+    pub max_transactions: Option<NonZeroUsize>,
     /// Optional cap on payload bytes per block when RBC is disabled (`None` = unlimited).
     #[config(env = "SUMERAGI_BLOCK_MAX_PAYLOAD_BYTES")]
-    pub block_max_payload_bytes: Option<NonZeroUsize>,
+    pub max_payload_bytes: Option<NonZeroUsize>,
     /// Multiplier applied to the proposal queue scan budget (relative to max tx per block).
     #[config(
         env = "SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER",
         default = "defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER"
     )]
     pub proposal_queue_scan_multiplier: NonZeroUsize,
+}
+
+/// User-level configuration container for `SumeragiQueues`.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiQueues {
     /// Capacity for the vote message channel.
-    pub msg_channel_cap_votes: Option<NonZeroUsize>,
+    #[config(default = "defaults::sumeragi::MSG_CHANNEL_CAP_VOTES")]
+    pub votes: usize,
     /// Capacity for the block payload channel.
-    pub msg_channel_cap_block_payload: Option<NonZeroUsize>,
+    #[config(default = "defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD")]
+    pub block_payload: usize,
     /// Capacity for the RBC chunk channel.
-    pub msg_channel_cap_rbc_chunks: Option<NonZeroUsize>,
+    #[config(default = "defaults::sumeragi::MSG_CHANNEL_CAP_RBC_CHUNKS")]
+    pub rbc_chunks: usize,
     /// Capacity for the block message channel (block sync updates, params, etc.).
-    pub msg_channel_cap_blocks: Option<NonZeroUsize>,
+    #[config(default = "defaults::sumeragi::MSG_CHANNEL_CAP_BLOCKS")]
+    pub blocks: usize,
     /// Capacity for Sumeragi control-message channel.
     #[config(default = "defaults::sumeragi::CONTROL_MSG_CHANNEL_CAP")]
-    pub control_msg_channel_cap: usize,
+    pub control: usize,
+}
+
+/// User-level configuration container for `SumeragiWorker`.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiWorker {
     /// Cap (ms) on the worker loop's per-iteration time budget.
     #[config(
         env = "SUMERAGI_WORKER_ITERATION_BUDGET_CAP_MS",
         default = "defaults::sumeragi::WORKER_ITERATION_BUDGET_CAP_MS"
     )]
-    pub worker_iteration_budget_cap_ms: u64,
+    pub iteration_budget_cap_ms: u64,
     /// Cap (ms) on the worker loop's per-iteration drain budget.
     #[config(
         env = "SUMERAGI_WORKER_ITERATION_DRAIN_BUDGET_CAP_MS",
         default = "defaults::sumeragi::WORKER_ITERATION_DRAIN_BUDGET_CAP_MS"
     )]
-    pub worker_iteration_drain_budget_cap_ms: u64,
-    /// Runtime consensus mode: `permissioned` (default) or `npos`.
+    pub iteration_drain_budget_cap_ms: u64,
+    /// Cap (ms) on per-tick proposal/commit work (0 disables).
     #[config(
-        env = "SUMERAGI_CONSENSUS_MODE",
-        default = "ConsensusMode::Permissioned"
+        env = "SUMERAGI_WORKER_TICK_WORK_BUDGET_CAP_MS",
+        default = "defaults::sumeragi::WORKER_TICK_WORK_BUDGET_CAP_MS"
     )]
-    pub consensus_mode: ConsensusMode,
-    /// Enable runtime consensus mode flips driven by on-chain parameters and activation heights.
+    pub tick_work_budget_cap_ms: u64,
+    /// Validation worker threads for pre-vote checks.
     #[config(
-        env = "SUMERAGI_MODE_FLIP_ENABLED",
-        default = "defaults::sumeragi::MODE_FLIP_ENABLED"
+        env = "SUMERAGI_VALIDATION_WORKER_THREADS",
+        default = "defaults::sumeragi::VALIDATION_WORKER_THREADS"
     )]
-    pub mode_flip_enabled: bool,
-    /// Enable data availability for consensus (RBC + availability QC gating); default false.
+    pub validation_worker_threads: usize,
+    /// Validation work queue capacity per worker.
+    #[config(
+        env = "SUMERAGI_VALIDATION_WORK_QUEUE_CAP",
+        default = "defaults::sumeragi::VALIDATION_WORK_QUEUE_CAP"
+    )]
+    pub validation_work_queue_cap: usize,
+    /// Validation result queue capacity (shared).
+    #[config(
+        env = "SUMERAGI_VALIDATION_RESULT_QUEUE_CAP",
+        default = "defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP"
+    )]
+    pub validation_result_queue_cap: usize,
+}
+
+/// User-level configuration container for `SumeragiPacemaker`.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiPacemaker {
+    /// Pacemaker backoff multiplier for view-change increments (>=1).
+    #[config(
+        env = "SUMERAGI_PACEMAKER_BACKOFF_MULTIPLIER",
+        default = "defaults::sumeragi::PACEMAKER_BACKOFF_MULTIPLIER"
+    )]
+    pub backoff_multiplier: u32,
+    /// Pacemaker RTT floor multiplier applied to avg RTT (>=1).
+    #[config(
+        env = "SUMERAGI_PACEMAKER_RTT_FLOOR_MULTIPLIER",
+        default = "defaults::sumeragi::PACEMAKER_RTT_FLOOR_MULTIPLIER"
+    )]
+    pub rtt_floor_multiplier: u32,
+    /// Pacemaker maximum backoff cap in milliseconds.
+    #[config(
+        env = "SUMERAGI_PACEMAKER_MAX_BACKOFF_MS",
+        default = "defaults::sumeragi::PACEMAKER_MAX_BACKOFF_MS"
+    )]
+    pub max_backoff_ms: u64,
+    /// Pacemaker jitter band size as permille of the backoff window (0..=1000). 0 disables jitter.
+    #[config(
+        env = "SUMERAGI_PACEMAKER_JITTER_FRAC_PERMILLE",
+        default = "defaults::sumeragi::PACEMAKER_JITTER_FRAC_PERMILLE"
+    )]
+    pub jitter_frac_permille: u32,
+    /// Grace period (ms) before a pending block counts as stalled for pacemaker backpressure.
+    #[config(
+        env = "SUMERAGI_PACEMAKER_PENDING_STALL_GRACE_MS",
+        default = "defaults::sumeragi::PACEMAKER_PENDING_STALL_GRACE_MS"
+    )]
+    pub pending_stall_grace_ms: u64,
+    /// Soft limit for blocking pending blocks before pacemaker backpressure defers proposals.
+    /// 0 keeps strict gating (any pending block defers).
+    #[config(
+        env = "SUMERAGI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT",
+        default = "defaults::sumeragi::PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT"
+    )]
+    pub active_pending_soft_limit: usize,
+    /// Soft limit for unresolved RBC backlog sessions before pacemaker backpressure defers proposals.
+    /// 0 keeps strict gating (any backlog session defers).
+    #[config(
+        env = "SUMERAGI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT",
+        default = "defaults::sumeragi::PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT"
+    )]
+    pub rbc_backlog_session_soft_limit: usize,
+    /// Soft limit for missing RBC chunks before pacemaker backpressure defers proposals.
+    /// 0 keeps strict gating (any missing chunks defers).
+    #[config(
+        env = "SUMERAGI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT",
+        default = "defaults::sumeragi::PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT"
+    )]
+    pub rbc_backlog_chunk_soft_limit: usize,
+}
+
+/// User-level configuration container for `SumeragiDa`.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiDa {
+    /// Enable data availability for consensus (RBC + availability QC gating).
     #[config(
         env = "SUMERAGI_DA_ENABLED",
         default = "defaults::sumeragi::DA_ENABLED"
     )]
-    pub da_enabled: bool,
+    pub enabled: bool,
     /// Multiplier for DA commit-quorum timeouts.
     #[config(
         env = "SUMERAGI_DA_QUORUM_TIMEOUT_MULTIPLIER",
         default = "defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER"
     )]
-    pub da_quorum_timeout_multiplier: u32,
+    pub quorum_timeout_multiplier: u32,
     /// Multiplier for availability timeouts in DA mode.
     #[config(
         env = "SUMERAGI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER",
         default = "defaults::sumeragi::DA_AVAILABILITY_TIMEOUT_MULTIPLIER"
     )]
-    pub da_availability_timeout_multiplier: u32,
+    pub availability_timeout_multiplier: u32,
     /// Floor (ms) for availability timeouts in DA mode.
     #[config(
         env = "SUMERAGI_DA_AVAILABILITY_TIMEOUT_FLOOR_MS",
         default = "defaults::sumeragi::DA_AVAILABILITY_TIMEOUT_FLOOR_MS"
     )]
-    pub da_availability_timeout_floor_ms: u64,
+    pub availability_timeout_floor_ms: u64,
+    /// Maximum DA commitments (blobs) permitted in a single block.
+    #[config(
+        env = "SUMERAGI_DA_MAX_COMMITMENTS_PER_BLOCK",
+        default = "defaults::sumeragi::DA_MAX_COMMITMENTS_PER_BLOCK"
+    )]
+    pub max_commitments_per_block: usize,
+    /// Maximum DA proof openings permitted in a single block (aggregate cap).
+    #[config(
+        env = "SUMERAGI_DA_MAX_PROOF_OPENINGS_PER_BLOCK",
+        default = "defaults::sumeragi::DA_MAX_PROOF_OPENINGS_PER_BLOCK"
+    )]
+    pub max_proof_openings_per_block: usize,
+}
+
+/// User-level configuration container for `SumeragiPersistence`.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiPersistence {
     /// Interval between kura persistence retry attempts in milliseconds.
     #[config(
         env = "SUMERAGI_KURA_STORE_RETRY_INTERVAL_MS",
         default = "defaults::sumeragi::KURA_STORE_RETRY_INTERVAL_MS"
     )]
-    pub kura_store_retry_interval_ms: u64,
+    pub kura_retry_interval_ms: u64,
     /// Maximum number of kura persistence retry attempts before aborting the block.
     #[config(
         env = "SUMERAGI_KURA_STORE_RETRY_MAX_ATTEMPTS",
         default = "defaults::sumeragi::KURA_STORE_RETRY_MAX_ATTEMPTS"
     )]
-    pub kura_store_retry_max_attempts: u32,
+    pub kura_retry_max_attempts: u32,
     /// Timeout (ms) for inflight commit jobs before aborting.
     #[config(
         env = "SUMERAGI_COMMIT_INFLIGHT_TIMEOUT_MS",
         default = "defaults::sumeragi::COMMIT_INFLIGHT_TIMEOUT_MS"
     )]
     pub commit_inflight_timeout_ms: u64,
+    /// Commit worker work-queue capacity.
+    #[config(
+        env = "SUMERAGI_COMMIT_WORK_QUEUE_CAP",
+        default = "defaults::sumeragi::COMMIT_WORK_QUEUE_CAP"
+    )]
+    pub commit_work_queue_cap: usize,
+    /// Commit worker result-queue capacity.
+    #[config(
+        env = "SUMERAGI_COMMIT_RESULT_QUEUE_CAP",
+        default = "defaults::sumeragi::COMMIT_RESULT_QUEUE_CAP"
+    )]
+    pub commit_result_queue_cap: usize,
+}
+
+/// User-level configuration container for `SumeragiRecovery`.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiRecovery {
     /// Missing-block fetch attempts before falling back to the full commit topology.
     /// A value of 0 disables signer preference.
     #[config(
@@ -5288,24 +5417,23 @@ pub struct Sumeragi {
         default = "defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS"
     )]
     pub missing_block_signer_fallback_attempts: u32,
-    /// Consecutive membership mismatches required before alerting.
-    #[config(default = "defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD")]
-    pub membership_mismatch_alert_threshold: u32,
-    /// Whether to drop consensus messages from peers with repeated membership mismatches.
-    #[config(default = "defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED")]
-    pub membership_mismatch_fail_closed: bool,
+}
+
+/// User-level configuration container for `SumeragiGating`.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiGating {
     /// Maximum height delta accepted for inbound consensus messages (0 disables future gating).
     #[config(
         env = "SUMERAGI_CONSENSUS_FUTURE_HEIGHT_WINDOW",
         default = "defaults::sumeragi::CONSENSUS_FUTURE_HEIGHT_WINDOW"
     )]
-    pub consensus_future_height_window: u64,
+    pub future_height_window: u64,
     /// Maximum view delta accepted for inbound consensus messages (0 disables future gating).
     #[config(
         env = "SUMERAGI_CONSENSUS_FUTURE_VIEW_WINDOW",
         default = "defaults::sumeragi::CONSENSUS_FUTURE_VIEW_WINDOW"
     )]
-    pub consensus_future_view_window: u64,
+    pub future_view_window: u64,
     /// Invalid signature count before temporarily suppressing a signer (0 disables).
     #[config(
         env = "SUMERAGI_INVALID_SIG_PENALTY_THRESHOLD",
@@ -5324,112 +5452,110 @@ pub struct Sumeragi {
         default = "defaults::sumeragi::INVALID_SIG_PENALTY_COOLDOWN_MS"
     )]
     pub invalid_sig_penalty_cooldown_ms: u64,
-    /// Maximum DA commitments (blobs) permitted in a single block.
-    #[config(
-        env = "SUMERAGI_DA_MAX_COMMITMENTS_PER_BLOCK",
-        default = "defaults::sumeragi::DA_MAX_COMMITMENTS_PER_BLOCK"
-    )]
-    pub da_max_commitments_per_block: usize,
-    /// Maximum DA proof openings permitted in a single block (aggregate cap).
-    #[config(
-        env = "SUMERAGI_DA_MAX_PROOF_OPENINGS_PER_BLOCK",
-        default = "defaults::sumeragi::DA_MAX_PROOF_OPENINGS_PER_BLOCK"
-    )]
-    pub da_max_proof_openings_per_block: usize,
+    /// Consecutive membership mismatches required before alerting.
+    #[config(default = "defaults::sumeragi::MEMBERSHIP_MISMATCH_ALERT_THRESHOLD")]
+    pub membership_mismatch_alert_threshold: u32,
+    /// Whether to drop consensus messages from peers with repeated membership mismatches.
+    #[config(default = "defaults::sumeragi::MEMBERSHIP_MISMATCH_FAIL_CLOSED")]
+    pub membership_mismatch_fail_closed: bool,
+}
+
+/// User-level configuration container for `SumeragiRbc`.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiRbc {
     /// RBC per-chunk maximum bytes.
     #[config(
         env = "SUMERAGI_RBC_CHUNK_MAX_BYTES",
         default = "defaults::sumeragi::RBC_CHUNK_MAX_BYTES"
     )]
-    pub rbc_chunk_max_bytes: usize,
+    pub chunk_max_bytes: usize,
     /// Optional fanout cap for RBC chunk broadcasts (null = auto).
     #[config(env = "SUMERAGI_RBC_CHUNK_FANOUT")]
-    pub rbc_chunk_fanout: Option<NonZeroUsize>,
+    pub chunk_fanout: Option<NonZeroUsize>,
     /// Maximum pending RBC chunks stashed before INIT is observed.
     #[config(
         env = "SUMERAGI_RBC_PENDING_MAX_CHUNKS",
         default = "defaults::sumeragi::RBC_PENDING_MAX_CHUNKS"
     )]
-    pub rbc_pending_max_chunks: usize,
+    pub pending_max_chunks: usize,
     /// Maximum pending RBC bytes per session before INIT is observed.
     #[config(
         env = "SUMERAGI_RBC_PENDING_MAX_BYTES",
         default = "defaults::sumeragi::RBC_PENDING_MAX_BYTES"
     )]
-    pub rbc_pending_max_bytes: usize,
+    pub pending_max_bytes: usize,
     /// Maximum pending RBC sessions stashed before INIT is observed.
     #[config(
         env = "SUMERAGI_RBC_PENDING_SESSION_LIMIT",
         default = "defaults::sumeragi::RBC_PENDING_SESSION_LIMIT"
     )]
-    pub rbc_pending_session_limit: usize,
+    pub pending_session_limit: usize,
     /// TTL (milliseconds) for pending RBC messages awaiting INIT.
     #[config(
         env = "SUMERAGI_RBC_PENDING_TTL_MS",
         default = "defaults::sumeragi::RBC_PENDING_TTL_MS"
     )]
-    pub rbc_pending_ttl_ms: u64,
-    /// RBC session TTL in seconds (inactive sessions pruned after this).
+    pub pending_ttl_ms: u64,
+    /// RBC session TTL in milliseconds (inactive sessions pruned after this).
     #[config(
-        env = "SUMERAGI_RBC_SESSION_TTL_SECS",
-        default = "defaults::sumeragi::RBC_SESSION_TTL_SECS"
+        env = "SUMERAGI_RBC_SESSION_TTL_MS",
+        default = "defaults::sumeragi::RBC_SESSION_TTL_MS"
     )]
-    pub rbc_session_ttl_secs: u64,
+    pub session_ttl_ms: u64,
     /// Maximum RBC sessions rebroadcast per tick (prevents message storms).
     #[config(
         env = "SUMERAGI_RBC_REBROADCAST_SESSIONS_PER_TICK",
         default = "defaults::sumeragi::RBC_REBROADCAST_SESSIONS_PER_TICK"
     )]
-    pub rbc_rebroadcast_sessions_per_tick: usize,
+    pub rebroadcast_sessions_per_tick: usize,
     /// Maximum RBC payload chunks broadcast per tick (limits burst fanout).
     #[config(
         env = "SUMERAGI_RBC_PAYLOAD_CHUNKS_PER_TICK",
         default = "defaults::sumeragi::RBC_PAYLOAD_CHUNKS_PER_TICK"
     )]
-    pub rbc_payload_chunks_per_tick: usize,
+    pub payload_chunks_per_tick: usize,
     /// Maximum number of RBC session summaries persisted to disk.
     #[config(
         env = "SUMERAGI_RBC_STORE_MAX_SESSIONS",
         default = "defaults::sumeragi::RBC_STORE_MAX_SESSIONS"
     )]
-    pub rbc_store_max_sessions: usize,
+    pub store_max_sessions: usize,
     /// Soft quota for persisted RBC sessions; beyond this compaction/back-pressure engages.
     #[config(
         env = "SUMERAGI_RBC_STORE_SOFT_SESSIONS",
         default = "defaults::sumeragi::RBC_STORE_SOFT_SESSIONS"
     )]
-    pub rbc_store_soft_sessions: usize,
+    pub store_soft_sessions: usize,
     /// Maximum total disk bytes allocated for persisted RBC session payloads.
     #[config(
         env = "SUMERAGI_RBC_STORE_MAX_BYTES",
         default = "defaults::sumeragi::RBC_STORE_MAX_BYTES"
     )]
-    pub rbc_store_max_bytes: usize,
+    pub store_max_bytes: usize,
     /// Soft quota for persisted RBC payload bytes; beyond this compaction/back-pressure engages.
     #[config(
         env = "SUMERAGI_RBC_STORE_SOFT_BYTES",
         default = "defaults::sumeragi::RBC_STORE_SOFT_BYTES"
     )]
-    pub rbc_store_soft_bytes: usize,
-    /// Disk-backed RBC chunk retention TTL (seconds).
+    pub store_soft_bytes: usize,
+    /// Disk-backed RBC chunk retention TTL (milliseconds).
     #[config(
-        env = "SUMERAGI_RBC_DISK_STORE_TTL_SECS",
-        default = "defaults::sumeragi::RBC_DISK_STORE_TTL_SECS"
+        env = "SUMERAGI_RBC_DISK_STORE_TTL_MS",
+        default = "defaults::sumeragi::RBC_DISK_STORE_TTL_MS"
     )]
-    pub rbc_disk_store_ttl_secs: u64,
+    pub disk_store_ttl_ms: u64,
     /// Maximum bytes allocated for disk-backed RBC chunk persistence.
     #[config(
         env = "SUMERAGI_RBC_DISK_STORE_MAX_BYTES",
         default = "defaults::sumeragi::RBC_DISK_STORE_MAX_BYTES"
     )]
-    pub rbc_disk_store_max_bytes: u64,
-    /// Adaptive observability/auto-mitigation knobs.
-    #[config(nested)]
-    pub adaptive_observability: AdaptiveObservability,
-    /// NPoS-specific tuning knobs (only effective in `npos` mode).
-    #[config(nested)]
-    pub npos: SumeragiNpos,
-    /// Proof policy (off/zk_parent)
+    pub disk_store_max_bytes: u64,
+}
+
+/// User-level configuration container for `SumeragiFinality`.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiFinality {
+    /// Proof policy (off/zk_parent).
     #[config(env = "SUMERAGI_PROOF_POLICY", default = "ProofPolicy::Off")]
     pub proof_policy: ProofPolicy,
     /// Cap for in-memory commit certificate history (used for status/finality proofs).
@@ -5438,7 +5564,7 @@ pub struct Sumeragi {
         default = "defaults::sumeragi::COMMIT_CERT_HISTORY_CAP"
     )]
     pub commit_cert_history_cap: usize,
-    /// Zk parent-proving depth (0 disables zk finality)
+    /// Zk parent-proving depth (0 disables zk finality).
     #[config(
         env = "SUMERAGI_ZK_FINALITY_K",
         default = "defaults::sumeragi::ZK_FINALITY_K"
@@ -5450,111 +5576,103 @@ pub struct Sumeragi {
         default = "defaults::sumeragi::REQUIRE_PRECOMMIT_QC"
     )]
     pub require_precommit_qc: bool,
-    /// Epoch length in blocks (`NPoS`)
-    #[config(default = "defaults::sumeragi::EPOCH_LENGTH_BLOCKS")]
-    pub epoch_length_blocks: u64,
-    /// VRF commit deadline offset from epoch start (blocks)
-    #[config(default = "defaults::sumeragi::VRF_COMMIT_DEADLINE_OFFSET")]
-    pub vrf_commit_deadline_offset: u64,
-    /// VRF reveal deadline offset from epoch start (blocks)
-    #[config(default = "defaults::sumeragi::VRF_REVEAL_DEADLINE_OFFSET")]
-    pub vrf_reveal_deadline_offset: u64,
-    /// Use stake snapshot provider for epoch validator roster (`NPoS`)
-    #[config(
-        env = "SUMERAGI_USE_STAKE_SNAPSHOT_ROSTER",
-        default = "defaults::sumeragi::USE_STAKE_SNAPSHOT_ROSTER"
-    )]
-    pub use_stake_snapshot_roster: bool,
+}
+
+/// User-level configuration container for `SumeragiKeys`.
+#[derive(Debug, Clone, ReadConfig)]
+pub struct SumeragiKeys {
     /// Minimum lead time (blocks) between publishing a new consensus key and activation.
     #[config(
         env = "SUMERAGI_KEY_ACTIVATION_LEAD_BLOCKS",
         default = "defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS"
     )]
-    pub key_activation_lead_blocks: u64,
+    pub activation_lead_blocks: u64,
     /// Overlap/grace window (blocks) permitting dual-signing during rotation.
     #[config(
         env = "SUMERAGI_KEY_OVERLAP_GRACE_BLOCKS",
         default = "defaults::sumeragi::KEY_OVERLAP_GRACE_BLOCKS"
     )]
-    pub key_overlap_grace_blocks: u64,
+    pub overlap_grace_blocks: u64,
     /// Expiry grace window (blocks) after declared expiry.
     #[config(
         env = "SUMERAGI_KEY_EXPIRY_GRACE_BLOCKS",
         default = "defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS"
     )]
-    pub key_expiry_grace_blocks: u64,
+    pub expiry_grace_blocks: u64,
     /// Require HSM binding for consensus/committee keys.
     #[config(
         env = "SUMERAGI_KEY_REQUIRE_HSM",
         default = "defaults::sumeragi::KEY_REQUIRE_HSM"
     )]
-    pub key_require_hsm: bool,
+    pub require_hsm: bool,
     /// Allowed algorithms for consensus/committee keys.
     #[config(default = "defaults::sumeragi::key_allowed_algorithms()")]
-    pub key_allowed_algorithms: Vec<Algorithm>,
+    pub allowed_algorithms: Vec<Algorithm>,
     /// Allowed HSM providers for consensus/committee keys.
     #[config(default = "defaults::sumeragi::key_allowed_hsm_providers()")]
-    pub key_allowed_hsm_providers: Vec<String>,
-    /// Pacemaker backoff multiplier for view-change increments (>=1).
+    pub allowed_hsm_providers: Vec<String>,
+}
+
+/// User-level configuration container for `Sumeragi`.
+#[derive(Debug, Clone, ReadConfig)]
+pub struct Sumeragi {
+    /// Node role: `validator` (default) or `observer`.
+    #[config(env = "NODE_ROLE", default = "NodeRole::Validator")]
+    pub role: NodeRole,
+    /// Runtime consensus mode: `permissioned` (default) or `npos`.
     #[config(
-        env = "SUMERAGI_PACEMAKER_BACKOFF_MULTIPLIER",
-        default = "defaults::sumeragi::PACEMAKER_BACKOFF_MULTIPLIER"
+        env = "SUMERAGI_CONSENSUS_MODE",
+        default = "ConsensusMode::Permissioned"
     )]
-    pub pacemaker_backoff_multiplier: u32,
-    /// Pacemaker RTT floor multiplier applied to avg RTT (>=1).
-    #[config(
-        env = "SUMERAGI_PACEMAKER_RTT_FLOOR_MULTIPLIER",
-        default = "defaults::sumeragi::PACEMAKER_RTT_FLOOR_MULTIPLIER"
-    )]
-    pub pacemaker_rtt_floor_multiplier: u32,
-    /// Pacemaker maximum backoff cap in milliseconds.
-    #[config(
-        env = "SUMERAGI_PACEMAKER_MAX_BACKOFF_MS",
-        default = "defaults::sumeragi::PACEMAKER_MAX_BACKOFF_MS"
-    )]
-    pub pacemaker_max_backoff_ms: u64,
-    /// Pacemaker jitter band size as permille of the backoff window (0..=1000). 0 disables jitter.
-    #[config(
-        env = "SUMERAGI_PACEMAKER_JITTER_FRAC_PERMILLE",
-        default = "defaults::sumeragi::PACEMAKER_JITTER_FRAC_PERMILLE"
-    )]
-    pub pacemaker_jitter_frac_permille: u32,
-    /// Grace period (ms) before a pending block counts as stalled for pacemaker backpressure.
-    #[config(
-        env = "SUMERAGI_PACEMAKER_PENDING_STALL_GRACE_MS",
-        default = "defaults::sumeragi::PACEMAKER_PENDING_STALL_GRACE_MS"
-    )]
-    pub pacemaker_pending_stall_grace_ms: u64,
-    /// Soft limit for blocking pending blocks before pacemaker backpressure defers proposals.
-    /// 0 keeps strict gating (any pending block defers).
-    #[config(
-        env = "SUMERAGI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT",
-        default = "defaults::sumeragi::PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT"
-    )]
-    pub pacemaker_active_pending_soft_limit: usize,
-    /// Soft limit for unresolved RBC backlog sessions before pacemaker backpressure defers proposals.
-    /// 0 keeps strict gating (any backlog session defers).
-    #[config(
-        env = "SUMERAGI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT",
-        default = "defaults::sumeragi::PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT"
-    )]
-    pub pacemaker_rbc_backlog_session_soft_limit: usize,
-    /// Soft limit for missing RBC chunks before pacemaker backpressure defers proposals.
-    /// 0 keeps strict gating (any missing chunks defers).
-    #[config(
-        env = "SUMERAGI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT",
-        default = "defaults::sumeragi::PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT"
-    )]
-    pub pacemaker_rbc_backlog_chunk_soft_limit: usize,
+    pub consensus_mode: ConsensusMode,
+    /// Mode-flip guardrails.
+    #[config(nested)]
+    pub mode_flip: SumeragiModeFlip,
+    /// Collector selection knobs.
+    #[config(nested)]
+    pub collectors: SumeragiCollectors,
+    /// Block assembly limits.
+    #[config(nested)]
+    pub block: SumeragiBlock,
+    /// Consensus queue capacities.
+    #[config(nested)]
+    pub queues: SumeragiQueues,
+    /// Worker-loop scheduling limits.
+    #[config(nested)]
+    pub worker: SumeragiWorker,
+    /// Pacemaker tuning.
+    #[config(nested)]
+    pub pacemaker: SumeragiPacemaker,
+    /// Data-availability configuration.
+    #[config(nested)]
+    pub da: SumeragiDa,
+    /// Persistence/retry configuration.
+    #[config(nested)]
+    pub persistence: SumeragiPersistence,
+    /// Recovery behavior.
+    #[config(nested)]
+    pub recovery: SumeragiRecovery,
+    /// Ingress gating and penalties.
+    #[config(nested)]
+    pub gating: SumeragiGating,
+    /// RBC (reliable broadcast) tuning.
+    #[config(nested)]
+    pub rbc: SumeragiRbc,
+    /// Finality/proof configuration.
+    #[config(nested)]
+    pub finality: SumeragiFinality,
+    /// Consensus key rotation and HSM policy.
+    #[config(nested)]
+    pub keys: SumeragiKeys,
+    /// Adaptive observability/auto-mitigation knobs.
+    #[config(nested)]
+    pub adaptive_observability: AdaptiveObservability,
+    /// NPoS-specific tuning knobs (only effective in `npos` mode).
+    #[config(nested)]
+    pub npos: SumeragiNpos,
     /// Debug-only overrides for injecting faults or altering behaviour.
     #[config(nested)]
     pub debug: SumeragiDebug,
-    /// Enable real BLS signing/verification for consensus votes (mandatory).
-    #[config(
-        env = "SUMERAGI_ENABLE_BLS",
-        default = "defaults::sumeragi::ENABLE_BLS"
-    )]
-    pub enable_bls: bool,
 }
 
 /// NPoS consensus tunables exposed via configuration.
@@ -5564,15 +5682,18 @@ pub struct SumeragiNpos {
     /// Target block time in milliseconds (1s default).
     #[config(default = "defaults::sumeragi::npos::BLOCK_TIME_MS")]
     pub block_time_ms: u64,
+    /// Epoch length in blocks.
+    #[config(default = "defaults::sumeragi::EPOCH_LENGTH_BLOCKS")]
+    pub epoch_length_blocks: u64,
+    /// Use stake snapshot provider for epoch validator roster.
+    #[config(
+        env = "SUMERAGI_USE_STAKE_SNAPSHOT_ROSTER",
+        default = "defaults::sumeragi::USE_STAKE_SNAPSHOT_ROSTER"
+    )]
+    pub use_stake_snapshot_roster: bool,
     /// Per-phase pacemaker timeouts.
     #[config(nested)]
     pub timeouts: SumeragiNposTimeouts,
-    /// Number of aggregators per round.
-    #[config(default = "defaults::sumeragi::npos::K_AGGREGATORS")]
-    pub k_aggregators: usize,
-    /// Redundant send fanout for validators.
-    #[config(default = "defaults::sumeragi::npos::REDUNDANT_SEND_R")]
-    pub redundant_send_r: u8,
     /// VRF commit/reveal window configuration.
     #[config(nested)]
     pub vrf: SumeragiNposVrf,
@@ -5625,6 +5746,12 @@ pub struct SumeragiNposVrf {
     /// Number of blocks allotted for VRF reveal submissions.
     #[config(default = "defaults::sumeragi::npos::VRF_REVEAL_WINDOW_BLOCKS")]
     pub reveal_window_blocks: u64,
+    /// Commit deadline offset from epoch start (blocks).
+    #[config(default = "defaults::sumeragi::VRF_COMMIT_DEADLINE_OFFSET")]
+    pub commit_deadline_offset_blocks: u64,
+    /// Reveal deadline offset from epoch start (blocks).
+    #[config(default = "defaults::sumeragi::VRF_REVEAL_DEADLINE_OFFSET")]
+    pub reveal_deadline_offset_blocks: u64,
 }
 
 /// Election policy defaults for validator selection.
@@ -5899,275 +6026,259 @@ impl From<actual::AdaptiveObservability> for AdaptiveObservability {
 }
 
 impl Sumeragi {
-    #[allow(clippy::too_many_lines)]
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Sumeragi> {
         let Self {
             role,
-            allow_view0_slack,
-            collectors_k,
-            collectors_redundant_send_r,
-            block_max_transactions,
-            block_max_payload_bytes,
-            proposal_queue_scan_multiplier,
-            msg_channel_cap_votes,
-            msg_channel_cap_block_payload,
-            msg_channel_cap_rbc_chunks,
-            msg_channel_cap_blocks,
-            control_msg_channel_cap,
-            worker_iteration_budget_cap_ms,
-            worker_iteration_drain_budget_cap_ms,
             consensus_mode,
-            mode_flip_enabled,
-            da_enabled,
-            da_quorum_timeout_multiplier,
-            da_availability_timeout_multiplier,
-            da_availability_timeout_floor_ms,
-            kura_store_retry_interval_ms,
-            kura_store_retry_max_attempts,
-            commit_inflight_timeout_ms,
-            missing_block_signer_fallback_attempts,
-            membership_mismatch_alert_threshold,
-            membership_mismatch_fail_closed,
-            consensus_future_height_window,
-            consensus_future_view_window,
-            invalid_sig_penalty_threshold,
-            invalid_sig_penalty_window_ms,
-            invalid_sig_penalty_cooldown_ms,
-            da_max_commitments_per_block,
-            da_max_proof_openings_per_block,
-            rbc_chunk_max_bytes,
-            rbc_chunk_fanout,
-            rbc_pending_max_chunks,
-            rbc_pending_max_bytes,
-            rbc_pending_session_limit,
-            rbc_pending_ttl_ms,
-            rbc_session_ttl_secs,
-            rbc_rebroadcast_sessions_per_tick,
-            rbc_payload_chunks_per_tick,
-            rbc_store_max_sessions,
-            rbc_store_soft_sessions,
-            rbc_store_max_bytes,
-            rbc_store_soft_bytes,
-            rbc_disk_store_ttl_secs,
-            rbc_disk_store_max_bytes,
+            mode_flip,
+            collectors,
+            block,
+            queues,
+            worker,
+            pacemaker,
+            da,
+            persistence,
+            recovery,
+            gating,
+            rbc,
+            finality,
+            keys,
             adaptive_observability,
             npos,
-            proof_policy,
-            commit_cert_history_cap,
-            zk_finality_k,
-            require_precommit_qc,
-            epoch_length_blocks,
-            vrf_commit_deadline_offset,
-            vrf_reveal_deadline_offset,
-            use_stake_snapshot_roster,
-            key_activation_lead_blocks,
-            key_overlap_grace_blocks,
-            key_expiry_grace_blocks,
-            key_require_hsm,
-            key_allowed_algorithms,
-            key_allowed_hsm_providers,
-            pacemaker_backoff_multiplier,
-            pacemaker_rtt_floor_multiplier,
-            pacemaker_max_backoff_ms,
-            pacemaker_jitter_frac_permille,
-            pacemaker_pending_stall_grace_ms,
-            pacemaker_active_pending_soft_limit,
-            pacemaker_rbc_backlog_session_soft_limit,
-            pacemaker_rbc_backlog_chunk_soft_limit,
-            enable_bls,
             debug,
         } = self;
 
-        let force_soft_fork = debug.force_soft_fork;
-        let disable_background_worker = debug.disable_background_worker;
-        let SumeragiDebugRbc {
-            drop_every_nth_chunk,
-            shuffle_chunks,
-            duplicate_inits,
-            force_deliver_quorum_one,
-            corrupt_witness_ack,
-            corrupt_ready_signature,
-            drop_validator_mask,
-            equivocate_chunk_mask,
-            equivocate_validator_mask,
-            conflicting_ready_mask,
-            partial_chunk_mask,
-            ..
-        } = debug.rbc;
-
-        let msg_channel_cap_votes = msg_channel_cap_votes
-            .map_or(defaults::sumeragi::MSG_CHANNEL_CAP_VOTES, NonZeroUsize::get);
-        let msg_channel_cap_block_payload = msg_channel_cap_block_payload.map_or(
-            defaults::sumeragi::MSG_CHANNEL_CAP_BLOCK_PAYLOAD,
-            NonZeroUsize::get,
-        );
-        let msg_channel_cap_rbc_chunks = msg_channel_cap_rbc_chunks.map_or(
-            defaults::sumeragi::MSG_CHANNEL_CAP_RBC_CHUNKS,
-            NonZeroUsize::get,
-        );
-        let msg_channel_cap_blocks = msg_channel_cap_blocks.map_or(
-            defaults::sumeragi::MSG_CHANNEL_CAP_BLOCKS,
-            NonZeroUsize::get,
-        );
-
-        let collectors_ok = if collectors_k == 0 {
+        let collectors_ok = if collectors.k == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.collectors_k must be greater than zero"),
+                    .attach("sumeragi.collectors.k must be greater than zero"),
             );
             false
         } else {
             true
         };
-
-        let redundant_ok = if collectors_redundant_send_r == 0 {
+        let redundant_ok = if collectors.redundant_send_r == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.collectors_redundant_send_r must be greater than zero"),
+                    .attach("sumeragi.collectors.redundant_send_r must be greater than zero"),
             );
             false
         } else {
             true
         };
-        let da_quorum_multiplier_ok = if da_quorum_timeout_multiplier == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.da_quorum_timeout_multiplier must be greater than zero"),
-            );
-            false
-        } else {
-            true
-        };
-        let da_availability_multiplier_ok =
-            if da_availability_timeout_multiplier == 0 {
-                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.da_availability_timeout_multiplier must be greater than zero",
-                ));
-                false
-            } else {
-                true
-            };
-        let da_caps_ok = if da_max_commitments_per_block == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.da_max_commitments_per_block must be greater than zero"),
-            );
-            false
-        } else {
-            true
-        };
-
-        let da_openings_ok = if da_max_proof_openings_per_block == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.da_max_proof_openings_per_block must be greater than zero"),
-            );
-            false
-        } else {
-            true
-        };
-
-        let kura_retry_ok = if kura_store_retry_max_attempts == 0
-            || kura_store_retry_interval_ms == 0
+        let queues_ok = if queues.votes == 0
+            || queues.block_payload == 0
+            || queues.rbc_chunks == 0
+            || queues.blocks == 0
+            || queues.control == 0
         {
             emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.kura_store_retry_max_attempts and kura_store_retry_interval_ms must be greater than zero",
-                ),
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.queues.* must be greater than zero"),
             );
             false
         } else {
             true
         };
-
-        let commit_inflight_ok = if commit_inflight_timeout_ms == 0 {
+        let worker_budget_ok = if worker.iteration_budget_cap_ms == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.commit_inflight_timeout_ms must be greater than zero"),
-            );
-            false
-        } else {
-            true
-        };
-        let worker_budget_ok = if worker_iteration_budget_cap_ms == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.worker_iteration_budget_cap_ms must be greater than zero"),
+                    .attach("sumeragi.worker.iteration_budget_cap_ms must be greater than zero"),
             );
             false
         } else {
             true
         };
         let worker_drain_budget_ok =
-            if worker_iteration_drain_budget_cap_ms == 0 {
+            if worker.iteration_drain_budget_cap_ms == 0 {
                 emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.worker_iteration_drain_budget_cap_ms must be greater than zero",
+                    "sumeragi.worker.iteration_drain_budget_cap_ms must be greater than zero",
                 ));
                 false
             } else {
                 true
             };
-
-        let membership_mismatch_threshold_ok =
-            if membership_mismatch_alert_threshold == 0 {
-                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.membership_mismatch_alert_threshold must be greater than zero",
-                ));
-                false
-            } else {
-                true
-            };
-
-        let rbc_chunk_max_ok = if rbc_chunk_max_bytes == 0 {
+        let validation_threads_ok = if worker.validation_worker_threads == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.rbc_chunk_max_bytes must be greater than zero"),
+                    .attach("sumeragi.worker.validation_worker_threads must be greater than zero"),
             );
             false
         } else {
             true
         };
-
-        let pending_caps_ok = if rbc_pending_max_chunks == 0 || rbc_pending_max_bytes == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.rbc_pending_max_chunks and rbc_pending_max_bytes must be greater than zero",
-                ),
-            );
-            false
-        } else if rbc_pending_ttl_ms == 0 {
+        let validation_work_queue_ok = if worker.validation_work_queue_cap == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.rbc_pending_ttl_ms must be greater than zero"),
+                    .attach("sumeragi.worker.validation_work_queue_cap must be greater than zero"),
             );
             false
-        } else if rbc_pending_max_bytes < rbc_chunk_max_bytes {
+        } else {
+            true
+        };
+        let validation_result_queue_ok =
+            if worker.validation_result_queue_cap == 0 {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.worker.validation_result_queue_cap must be greater than zero",
+                ));
+                false
+            } else {
+                true
+            };
+        let pacemaker_backoff_ok = if pacemaker.backoff_multiplier == 0
+            || pacemaker.rtt_floor_multiplier == 0
+            || pacemaker.max_backoff_ms == 0
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.pacemaker.backoff_multiplier, rtt_floor_multiplier, and max_backoff_ms must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
+        let da_enabled_ok = if !da.enabled {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.da.enabled must be true for this release"),
+            );
+            false
+        } else {
+            true
+        };
+        let da_quorum_multiplier_ok = if da.quorum_timeout_multiplier == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.da.quorum_timeout_multiplier must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
+        let da_availability_multiplier_ok =
+            if da.availability_timeout_multiplier == 0 {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.da.availability_timeout_multiplier must be greater than zero",
+                ));
+                false
+            } else {
+                true
+            };
+        let da_caps_ok = if da.max_commitments_per_block == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.da.max_commitments_per_block must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
+        let da_openings_ok = if da.max_proof_openings_per_block == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.da.max_proof_openings_per_block must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
+        let kura_retry_ok = if persistence.kura_retry_max_attempts == 0
+            || persistence.kura_retry_interval_ms == 0
+        {
             emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                "sumeragi.rbc_pending_max_bytes must be at least sumeragi.rbc_chunk_max_bytes",
+                "sumeragi.persistence.kura_retry_max_attempts and kura_retry_interval_ms must be greater than zero",
             ));
             false
-        } else if rbc_pending_session_limit == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.rbc_pending_session_limit must be greater than zero"),
-            );
+        } else {
+            true
+        };
+        let commit_inflight_ok = if persistence.commit_inflight_timeout_ms == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.persistence.commit_inflight_timeout_ms must be greater than zero",
+            ));
             false
         } else {
             true
         };
-        let rbc_rebroadcast_budget_ok = if rbc_rebroadcast_sessions_per_tick == 0 {
+        let commit_work_queue_ok = if persistence.commit_work_queue_cap == 0 {
             emitter
                 .emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.rbc_rebroadcast_sessions_per_tick must be greater than zero",
+                    "sumeragi.persistence.commit_work_queue_cap must be greater than zero",
                 ));
             false
         } else {
             true
         };
-        let rbc_payload_budget_ok = if rbc_payload_chunks_per_tick == 0 {
+        let commit_result_queue_ok =
+            if persistence.commit_result_queue_cap == 0 {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.persistence.commit_result_queue_cap must be greater than zero",
+                ));
+                false
+            } else {
+                true
+            };
+        let membership_mismatch_threshold_ok = if gating.membership_mismatch_alert_threshold == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.gating.membership_mismatch_alert_threshold must be greater than zero",
+            ));
+            false
+        } else {
+            true
+        };
+        let rbc_chunk_max_ok = if rbc.chunk_max_bytes == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.rbc_payload_chunks_per_tick must be greater than zero"),
+                    .attach("sumeragi.rbc.chunk_max_bytes must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
+        let pending_caps_ok = if rbc.pending_max_chunks == 0 || rbc.pending_max_bytes == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.rbc.pending_max_chunks and pending_max_bytes must be greater than zero",
+            ));
+            false
+        } else if rbc.pending_ttl_ms == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.rbc.pending_ttl_ms must be greater than zero"),
+            );
+            false
+        } else if rbc.pending_max_bytes < rbc.chunk_max_bytes {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.rbc.pending_max_bytes must be at least sumeragi.rbc.chunk_max_bytes",
+            ));
+            false
+        } else if rbc.pending_session_limit == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.rbc.pending_session_limit must be greater than zero"),
+            );
+            false
+        } else if rbc.session_ttl_ms == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.rbc.session_ttl_ms must be greater than zero"),
+            );
+            false
+        } else {
+            true
+        };
+        let rbc_rebroadcast_budget_ok = if rbc.rebroadcast_sessions_per_tick == 0 {
+            emitter
+                .emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.rbc.rebroadcast_sessions_per_tick must be greater than zero",
+                ));
+            false
+        } else {
+            true
+        };
+        let rbc_payload_budget_ok = if rbc.payload_chunks_per_tick == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.rbc.payload_chunks_per_tick must be greater than zero"),
             );
             false
         } else {
@@ -6175,69 +6286,61 @@ impl Sumeragi {
         };
 
         let adaptive_observability = adaptive_observability.parse(emitter)?;
-        let npos = npos.parse(
-            emitter,
-            pacemaker_backoff_multiplier,
-            pacemaker_rtt_floor_multiplier,
-            pacemaker_max_backoff_ms,
-            pacemaker_jitter_frac_permille,
-        )?;
-        let bls_ok = if enable_bls {
-            true
-        } else {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.enable_bls must be true; BLS signatures are mandatory"),
-            );
-            false
-        };
+        let npos = npos.parse(emitter)?;
 
         if !(collectors_ok
             && redundant_ok
+            && queues_ok
+            && worker_budget_ok
+            && worker_drain_budget_ok
+            && validation_threads_ok
+            && validation_work_queue_ok
+            && validation_result_queue_ok
+            && pacemaker_backoff_ok
+            && da_enabled_ok
             && da_quorum_multiplier_ok
             && da_availability_multiplier_ok
-            && rbc_chunk_max_ok
-            && pending_caps_ok
-            && rbc_rebroadcast_budget_ok
-            && rbc_payload_budget_ok
             && da_caps_ok
             && da_openings_ok
             && kura_retry_ok
             && commit_inflight_ok
-            && worker_budget_ok
-            && worker_drain_budget_ok
+            && commit_work_queue_ok
+            && commit_result_queue_ok
             && membership_mismatch_threshold_ok
-            && bls_ok)
+            && rbc_chunk_max_ok
+            && pending_caps_ok
+            && rbc_rebroadcast_budget_ok
+            && rbc_payload_budget_ok)
         {
             return None;
         }
 
-        let key_algorithms: BTreeSet<Algorithm> = if key_allowed_algorithms.is_empty() {
+        let key_algorithms: BTreeSet<Algorithm> = if keys.allowed_algorithms.is_empty() {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.key_allowed_algorithms must not be empty"),
+                    .attach("sumeragi.keys.allowed_algorithms must not be empty"),
             );
             None
         } else {
-            Some(key_allowed_algorithms.into_iter().collect())
+            Some(keys.allowed_algorithms.into_iter().collect())
         }?;
         if !key_algorithms.contains(&Algorithm::BlsNormal) {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.key_allowed_algorithms must include BlsNormal"),
+                    .attach("sumeragi.keys.allowed_algorithms must include BlsNormal"),
             );
             return None;
         }
 
         let key_providers: BTreeSet<String> =
-            if key_require_hsm && key_allowed_hsm_providers.is_empty() {
+            if keys.require_hsm && keys.allowed_hsm_providers.is_empty() {
                 emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.key_allowed_hsm_providers must not be empty when HSM is required",
+                    "sumeragi.keys.allowed_hsm_providers must not be empty when HSM is required",
                 ));
                 None
             } else {
                 Some(
-                    key_allowed_hsm_providers
+                    keys.allowed_hsm_providers
                         .into_iter()
                         .map(|s| s.trim().to_owned())
                         .filter(|s| !s.is_empty())
@@ -6245,135 +6348,164 @@ impl Sumeragi {
                 )
             }?;
 
+        let proof_policy = match finality.proof_policy {
+            ProofPolicy::Off => actual::ProofPolicy::Off,
+            ProofPolicy::ZkParent => actual::ProofPolicy::ZkParent,
+        };
+
         Some(actual::Sumeragi {
-            debug_force_soft_fork: force_soft_fork,
-            debug_disable_background_worker: disable_background_worker,
-            debug_rbc_drop_every_nth_chunk: drop_every_nth_chunk,
-            debug_rbc_shuffle_chunks: shuffle_chunks,
-            debug_rbc_duplicate_inits: duplicate_inits,
-            debug_rbc_force_deliver_quorum_one: force_deliver_quorum_one,
-            debug_rbc_corrupt_witness_ack: corrupt_witness_ack,
-            debug_rbc_corrupt_ready_signature: corrupt_ready_signature,
-            debug_rbc_drop_validator_mask: drop_validator_mask,
-            debug_rbc_equivocate_chunk_mask: equivocate_chunk_mask,
-            debug_rbc_equivocate_validator_mask: equivocate_validator_mask,
-            debug_rbc_conflicting_ready_mask: conflicting_ready_mask,
-            debug_rbc_partial_chunk_mask: partial_chunk_mask,
             role: match role {
                 NodeRole::Validator => actual::NodeRole::Validator,
                 NodeRole::Observer => actual::NodeRole::Observer,
             },
-            allow_view0_slack,
-            collectors_k,
-            collectors_redundant_send_r,
-            block_max_transactions,
-            block_max_payload_bytes,
-            proposal_queue_scan_multiplier,
-            msg_channel_cap_votes,
-            msg_channel_cap_block_payload,
-            msg_channel_cap_rbc_chunks,
-            msg_channel_cap_blocks,
-            control_msg_channel_cap,
-            worker_iteration_budget_cap: std::time::Duration::from_millis(
-                worker_iteration_budget_cap_ms,
-            ),
-            worker_iteration_drain_budget_cap: std::time::Duration::from_millis(
-                worker_iteration_drain_budget_cap_ms,
-            ),
-            commit_cert_history_cap,
             consensus_mode: match consensus_mode {
                 ConsensusMode::Permissioned => actual::ConsensusMode::Permissioned,
                 ConsensusMode::Npos => actual::ConsensusMode::Npos,
             },
-            mode_flip_enabled,
-            da_enabled,
-            da_quorum_timeout_multiplier,
-            da_availability_timeout_multiplier,
-            da_availability_timeout_floor: std::time::Duration::from_millis(
-                da_availability_timeout_floor_ms,
-            ),
-            kura_store_retry_interval: std::time::Duration::from_millis(
-                kura_store_retry_interval_ms,
-            ),
-            kura_store_retry_max_attempts,
-            commit_inflight_timeout: std::time::Duration::from_millis(commit_inflight_timeout_ms),
-            missing_block_signer_fallback_attempts,
-            membership_mismatch_alert_threshold,
-            membership_mismatch_fail_closed,
-            consensus_future_height_window,
-            consensus_future_view_window,
-            invalid_sig_penalty_threshold,
-            invalid_sig_penalty_window: std::time::Duration::from_millis(
-                invalid_sig_penalty_window_ms,
-            ),
-            invalid_sig_penalty_cooldown: std::time::Duration::from_millis(
-                invalid_sig_penalty_cooldown_ms,
-            ),
-            da_max_commitments_per_block,
-            da_max_proof_openings_per_block,
-            rbc_chunk_max_bytes,
-            rbc_chunk_fanout,
-            rbc_pending_max_chunks,
-            rbc_pending_max_bytes,
-            rbc_pending_session_limit,
-            rbc_pending_ttl: std::time::Duration::from_millis(rbc_pending_ttl_ms),
-            rbc_session_ttl: std::time::Duration::from_secs(rbc_session_ttl_secs),
-            rbc_rebroadcast_sessions_per_tick,
-            rbc_payload_chunks_per_tick,
-            rbc_store_max_sessions,
-            rbc_store_soft_sessions,
-            rbc_store_max_bytes,
-            rbc_store_soft_bytes,
-            rbc_disk_store_ttl: std::time::Duration::from_secs(rbc_disk_store_ttl_secs),
-            rbc_disk_store_max_bytes,
-            npos,
-            proof_policy: match proof_policy {
-                ProofPolicy::Off => actual::ProofPolicy::Off,
-                ProofPolicy::ZkParent => actual::ProofPolicy::ZkParent,
+            mode_flip: actual::SumeragiModeFlip {
+                enabled: mode_flip.enabled,
             },
-            zk_finality_k,
-            require_precommit_qc,
-            epoch_length_blocks,
-            vrf_commit_deadline_offset,
-            vrf_reveal_deadline_offset,
-            use_stake_snapshot_roster,
-            key_activation_lead_blocks,
-            key_overlap_grace_blocks,
-            key_expiry_grace_blocks,
-            key_require_hsm,
-            key_allowed_algorithms: key_algorithms,
-            key_allowed_hsm_providers: key_providers,
-            pacemaker_backoff_multiplier,
-            pacemaker_rtt_floor_multiplier,
-            pacemaker_max_backoff: std::time::Duration::from_millis(pacemaker_max_backoff_ms),
-            pacemaker_jitter_frac_permille,
-            pacemaker_pending_stall_grace: std::time::Duration::from_millis(
-                pacemaker_pending_stall_grace_ms,
-            ),
-            pacemaker_active_pending_soft_limit,
-            pacemaker_rbc_backlog_session_soft_limit,
-            pacemaker_rbc_backlog_chunk_soft_limit,
+            collectors: actual::SumeragiCollectors {
+                k: collectors.k,
+                redundant_send_r: collectors.redundant_send_r,
+            },
+            block: actual::SumeragiBlock {
+                max_transactions: block.max_transactions,
+                max_payload_bytes: block.max_payload_bytes,
+                proposal_queue_scan_multiplier: block.proposal_queue_scan_multiplier,
+            },
+            queues: actual::SumeragiQueues {
+                votes: queues.votes,
+                block_payload: queues.block_payload,
+                rbc_chunks: queues.rbc_chunks,
+                blocks: queues.blocks,
+                control: queues.control,
+            },
+            worker: actual::SumeragiWorker {
+                iteration_budget_cap: std::time::Duration::from_millis(
+                    worker.iteration_budget_cap_ms,
+                ),
+                iteration_drain_budget_cap: std::time::Duration::from_millis(
+                    worker.iteration_drain_budget_cap_ms,
+                ),
+                tick_work_budget_cap: std::time::Duration::from_millis(
+                    worker.tick_work_budget_cap_ms,
+                ),
+                validation_worker_threads: worker.validation_worker_threads,
+                validation_work_queue_cap: worker.validation_work_queue_cap,
+                validation_result_queue_cap: worker.validation_result_queue_cap,
+            },
+            pacemaker: actual::SumeragiPacemaker {
+                backoff_multiplier: pacemaker.backoff_multiplier,
+                rtt_floor_multiplier: pacemaker.rtt_floor_multiplier,
+                max_backoff: std::time::Duration::from_millis(pacemaker.max_backoff_ms),
+                jitter_frac_permille: pacemaker.jitter_frac_permille,
+                pending_stall_grace: std::time::Duration::from_millis(
+                    pacemaker.pending_stall_grace_ms,
+                ),
+                active_pending_soft_limit: pacemaker.active_pending_soft_limit,
+                rbc_backlog_session_soft_limit: pacemaker.rbc_backlog_session_soft_limit,
+                rbc_backlog_chunk_soft_limit: pacemaker.rbc_backlog_chunk_soft_limit,
+            },
+            da: actual::SumeragiDa {
+                enabled: da.enabled,
+                quorum_timeout_multiplier: da.quorum_timeout_multiplier,
+                availability_timeout_multiplier: da.availability_timeout_multiplier,
+                availability_timeout_floor: std::time::Duration::from_millis(
+                    da.availability_timeout_floor_ms,
+                ),
+                max_commitments_per_block: da.max_commitments_per_block,
+                max_proof_openings_per_block: da.max_proof_openings_per_block,
+            },
+            persistence: actual::SumeragiPersistence {
+                kura_retry_interval: std::time::Duration::from_millis(
+                    persistence.kura_retry_interval_ms,
+                ),
+                kura_retry_max_attempts: persistence.kura_retry_max_attempts,
+                commit_inflight_timeout: std::time::Duration::from_millis(
+                    persistence.commit_inflight_timeout_ms,
+                ),
+                commit_work_queue_cap: persistence.commit_work_queue_cap,
+                commit_result_queue_cap: persistence.commit_result_queue_cap,
+            },
+            recovery: actual::SumeragiRecovery {
+                missing_block_signer_fallback_attempts: recovery
+                    .missing_block_signer_fallback_attempts,
+            },
+            gating: actual::SumeragiGating {
+                future_height_window: gating.future_height_window,
+                future_view_window: gating.future_view_window,
+                invalid_sig_penalty_threshold: gating.invalid_sig_penalty_threshold,
+                invalid_sig_penalty_window: std::time::Duration::from_millis(
+                    gating.invalid_sig_penalty_window_ms,
+                ),
+                invalid_sig_penalty_cooldown: std::time::Duration::from_millis(
+                    gating.invalid_sig_penalty_cooldown_ms,
+                ),
+                membership_mismatch_alert_threshold: gating.membership_mismatch_alert_threshold,
+                membership_mismatch_fail_closed: gating.membership_mismatch_fail_closed,
+            },
+            rbc: actual::SumeragiRbc {
+                chunk_max_bytes: rbc.chunk_max_bytes,
+                chunk_fanout: rbc.chunk_fanout,
+                pending_max_chunks: rbc.pending_max_chunks,
+                pending_max_bytes: rbc.pending_max_bytes,
+                pending_session_limit: rbc.pending_session_limit,
+                pending_ttl: std::time::Duration::from_millis(rbc.pending_ttl_ms),
+                session_ttl: std::time::Duration::from_millis(rbc.session_ttl_ms),
+                rebroadcast_sessions_per_tick: rbc.rebroadcast_sessions_per_tick,
+                payload_chunks_per_tick: rbc.payload_chunks_per_tick,
+                store_max_sessions: rbc.store_max_sessions,
+                store_soft_sessions: rbc.store_soft_sessions,
+                store_max_bytes: rbc.store_max_bytes,
+                store_soft_bytes: rbc.store_soft_bytes,
+                disk_store_ttl: std::time::Duration::from_millis(rbc.disk_store_ttl_ms),
+                disk_store_max_bytes: rbc.disk_store_max_bytes,
+            },
+            finality: actual::SumeragiFinality {
+                proof_policy,
+                commit_cert_history_cap: finality.commit_cert_history_cap,
+                zk_finality_k: finality.zk_finality_k,
+                require_precommit_qc: finality.require_precommit_qc,
+            },
+            keys: actual::SumeragiKeys {
+                activation_lead_blocks: keys.activation_lead_blocks,
+                overlap_grace_blocks: keys.overlap_grace_blocks,
+                expiry_grace_blocks: keys.expiry_grace_blocks,
+                require_hsm: keys.require_hsm,
+                allowed_algorithms: key_algorithms,
+                allowed_hsm_providers: key_providers,
+            },
+            npos,
             adaptive_observability,
-            enable_bls,
+            debug: actual::SumeragiDebug {
+                force_soft_fork: debug.force_soft_fork,
+                disable_background_worker: debug.disable_background_worker,
+                rbc: actual::SumeragiDebugRbc {
+                    drop_every_nth_chunk: debug.rbc.drop_every_nth_chunk,
+                    shuffle_chunks: debug.rbc.shuffle_chunks,
+                    duplicate_inits: debug.rbc.duplicate_inits,
+                    force_deliver_quorum_one: debug.rbc.force_deliver_quorum_one,
+                    corrupt_witness_ack: debug.rbc.corrupt_witness_ack,
+                    corrupt_ready_signature: debug.rbc.corrupt_ready_signature,
+                    drop_validator_mask: debug.rbc.drop_validator_mask,
+                    equivocate_chunk_mask: debug.rbc.equivocate_chunk_mask,
+                    equivocate_validator_mask: debug.rbc.equivocate_validator_mask,
+                    conflicting_ready_mask: debug.rbc.conflicting_ready_mask,
+                    partial_chunk_mask: debug.rbc.partial_chunk_mask,
+                },
+            },
         })
     }
 }
 
 impl SumeragiNpos {
-    #[allow(clippy::too_many_arguments)]
-    fn parse(
-        self,
-        emitter: &mut Emitter<ParseError>,
-        pacemaker_backoff_multiplier: u32,
-        pacemaker_rtt_floor_multiplier: u32,
-        pacemaker_max_backoff_ms: u64,
-        pacemaker_jitter_frac_permille: u32,
-    ) -> Option<actual::SumeragiNpos> {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::SumeragiNpos> {
         let Self {
             block_time_ms,
+            epoch_length_blocks,
+            use_stake_snapshot_roster,
             timeouts,
-            k_aggregators,
-            redundant_send_r,
             vrf,
             election,
             reconfig,
@@ -6388,21 +6520,10 @@ impl SumeragiNpos {
         } else {
             true
         };
-
-        let aggregators_ok = if k_aggregators == 0 {
+        let epoch_length_ok = if epoch_length_blocks == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.npos.k_aggregators must be greater than zero"),
-            );
-            false
-        } else {
-            true
-        };
-
-        let redundant_ok = if redundant_send_r == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.npos.redundant_send_r must be greater than zero"),
+                    .attach("sumeragi.npos.epoch_length_blocks must be greater than zero"),
             );
             false
         } else {
@@ -6414,22 +6535,18 @@ impl SumeragiNpos {
         let election = election.parse(emitter)?;
         let reconfig = reconfig.parse(emitter)?;
 
-        if !(block_time_ok && aggregators_ok && redundant_ok) {
+        if !(block_time_ok && epoch_length_ok) {
             return None;
         }
 
         Some(actual::SumeragiNpos {
             block_time: std::time::Duration::from_millis(block_time_ms),
             timeouts,
-            pacemaker_backoff_multiplier,
-            pacemaker_rtt_floor_multiplier,
-            pacemaker_max_backoff: std::time::Duration::from_millis(pacemaker_max_backoff_ms),
-            pacemaker_jitter_frac_permille,
-            k_aggregators,
-            redundant_send_r,
             vrf,
             election,
             reconfig,
+            epoch_length_blocks,
+            use_stake_snapshot_roster,
         })
     }
 }
@@ -6506,6 +6623,8 @@ impl SumeragiNposVrf {
         Some(actual::SumeragiNposVrf {
             commit_window_blocks: self.commit_window_blocks,
             reveal_window_blocks: self.reveal_window_blocks,
+            commit_deadline_offset_blocks: self.commit_deadline_offset_blocks,
+            reveal_deadline_offset_blocks: self.reveal_deadline_offset_blocks,
         })
     }
 }
@@ -6630,12 +6749,13 @@ impl SumeragiNposReconfig {
 #[cfg(test)]
 mod sumeragi_npos_tests {
     use super::*;
-    use crate::parameters::defaults;
 
     #[test]
     fn npos_parse_converts_to_durations() {
         let user = SumeragiNpos {
             block_time_ms: 1_500,
+            epoch_length_blocks: 256,
+            use_stake_snapshot_roster: true,
             timeouts: SumeragiNposTimeouts {
                 propose_ms: 200,
                 prevote_ms: 210,
@@ -6646,11 +6766,11 @@ mod sumeragi_npos_tests {
                 da_ms: 310,
                 aggregator_ms: 120,
             },
-            k_aggregators: 5,
-            redundant_send_r: 3,
             vrf: SumeragiNposVrf {
                 commit_window_blocks: 42,
                 reveal_window_blocks: 13,
+                commit_deadline_offset_blocks: 5,
+                reveal_deadline_offset_blocks: 8,
             },
             election: SumeragiNposElection {
                 max_validators: 7,
@@ -6670,18 +6790,14 @@ mod sumeragi_npos_tests {
 
         let mut emitter = Emitter::new();
         let actual = user
-            .parse(
-                &mut emitter,
-                defaults::sumeragi::PACEMAKER_BACKOFF_MULTIPLIER,
-                defaults::sumeragi::PACEMAKER_RTT_FLOOR_MULTIPLIER,
-                defaults::sumeragi::PACEMAKER_MAX_BACKOFF_MS,
-                defaults::sumeragi::PACEMAKER_JITTER_FRAC_PERMILLE,
-            )
+            .parse(&mut emitter)
             .expect("configuration should be valid");
         emitter
             .into_result()
             .expect("no validation errors expected");
         assert_eq!(actual.block_time, std::time::Duration::from_millis(1_500));
+        assert_eq!(actual.epoch_length_blocks, 256);
+        assert!(actual.use_stake_snapshot_roster);
         assert_eq!(
             actual.timeouts.propose,
             std::time::Duration::from_millis(200)
@@ -6695,10 +6811,10 @@ mod sumeragi_npos_tests {
             actual.timeouts.aggregator,
             std::time::Duration::from_millis(120)
         );
-        assert_eq!(actual.k_aggregators, 5);
-        assert_eq!(actual.redundant_send_r, 3);
         assert_eq!(actual.vrf.commit_window_blocks, 42);
         assert_eq!(actual.vrf.reveal_window_blocks, 13);
+        assert_eq!(actual.vrf.commit_deadline_offset_blocks, 5);
+        assert_eq!(actual.vrf.reveal_deadline_offset_blocks, 8);
         assert_eq!(actual.election.max_validators, 7);
         assert_eq!(actual.election.min_self_bond, 10_000);
         assert_eq!(actual.election.min_nomination_bond, 50);
@@ -6710,9 +6826,11 @@ mod sumeragi_npos_tests {
     }
 
     #[test]
-    fn npos_requires_positive_k() {
+    fn npos_requires_positive_epoch_length() {
         let user = SumeragiNpos {
             block_time_ms: 1_000,
+            epoch_length_blocks: 0,
+            use_stake_snapshot_roster: false,
             timeouts: SumeragiNposTimeouts {
                 propose_ms: 1,
                 prevote_ms: 1,
@@ -6723,11 +6841,11 @@ mod sumeragi_npos_tests {
                 da_ms: 1,
                 aggregator_ms: 1,
             },
-            k_aggregators: 0,
-            redundant_send_r: 1,
             vrf: SumeragiNposVrf {
                 commit_window_blocks: 1,
                 reveal_window_blocks: 1,
+                commit_deadline_offset_blocks: 1,
+                reveal_deadline_offset_blocks: 2,
             },
             election: SumeragiNposElection {
                 max_validators: 1,
@@ -6746,25 +6864,18 @@ mod sumeragi_npos_tests {
         };
 
         let mut emitter = Emitter::new();
-        assert!(
-            user.parse(
-                &mut emitter,
-                defaults::sumeragi::PACEMAKER_BACKOFF_MULTIPLIER,
-                defaults::sumeragi::PACEMAKER_RTT_FLOOR_MULTIPLIER,
-                defaults::sumeragi::PACEMAKER_MAX_BACKOFF_MS,
-                defaults::sumeragi::PACEMAKER_JITTER_FRAC_PERMILLE,
-            )
-            .is_none()
-        );
+        assert!(user.parse(&mut emitter).is_none());
         let report = emitter.into_result().expect_err("validation should fail");
         let message = format!("{report:?}");
-        assert!(message.contains("sumeragi.npos.k_aggregators must be greater than zero"));
+        assert!(message.contains("sumeragi.npos.epoch_length_blocks must be greater than zero"));
     }
 
     #[test]
     fn npos_timeouts_reject_zero() {
         let user = SumeragiNpos {
             block_time_ms: 1_000,
+            epoch_length_blocks: 1,
+            use_stake_snapshot_roster: false,
             timeouts: SumeragiNposTimeouts {
                 propose_ms: 0,
                 prevote_ms: 1,
@@ -6775,11 +6886,11 @@ mod sumeragi_npos_tests {
                 da_ms: 1,
                 aggregator_ms: 1,
             },
-            k_aggregators: 1,
-            redundant_send_r: 1,
             vrf: SumeragiNposVrf {
                 commit_window_blocks: 1,
                 reveal_window_blocks: 1,
+                commit_deadline_offset_blocks: 1,
+                reveal_deadline_offset_blocks: 2,
             },
             election: SumeragiNposElection {
                 max_validators: 4,
@@ -6798,16 +6909,7 @@ mod sumeragi_npos_tests {
         };
 
         let mut emitter = Emitter::new();
-        assert!(
-            user.parse(
-                &mut emitter,
-                defaults::sumeragi::PACEMAKER_BACKOFF_MULTIPLIER,
-                defaults::sumeragi::PACEMAKER_RTT_FLOOR_MULTIPLIER,
-                defaults::sumeragi::PACEMAKER_MAX_BACKOFF_MS,
-                defaults::sumeragi::PACEMAKER_JITTER_FRAC_PERMILLE,
-            )
-            .is_none()
-        );
+        assert!(user.parse(&mut emitter).is_none());
         let report = emitter.into_result().expect_err("validation should fail");
         let message = format!("{report:?}");
         assert!(message.contains("sumeragi.npos.timeouts.propose_ms must be greater than zero"));
@@ -15264,18 +15366,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
 
     #[test]
-    fn sumeragi_rejects_disable_bls() {
-        let mut table = base_table();
-        let sumeragi = table
-            .entry("sumeragi")
-            .or_insert_with(|| Value::Table(Table::new()))
-            .as_table_mut()
-            .expect("sumeragi table");
-        sumeragi.insert("enable_bls".into(), Value::Boolean(false));
-        assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
-    }
-
-    #[test]
     fn sumeragi_rejects_zero_membership_mismatch_threshold() {
         let mut table = base_table();
         let sumeragi = table
@@ -15283,7 +15373,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .or_insert_with(|| Value::Table(Table::new()))
             .as_table_mut()
             .expect("sumeragi table");
-        sumeragi.insert(
+        let gating = sumeragi
+            .entry("gating")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi.gating table");
+        gating.insert(
             "membership_mismatch_alert_threshold".into(),
             Value::Integer(0),
         );

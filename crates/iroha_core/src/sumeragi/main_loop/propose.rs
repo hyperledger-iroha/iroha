@@ -461,7 +461,7 @@ impl Actor {
             let (max_tx_target, max_in_block) = Self::max_tx_budget(
                 queue_len,
                 block_max_param.get(),
-                self.config.block_max_transactions,
+                self.config.block.max_transactions,
             );
             let scan_budget = self.proposal_scan_budget(max_in_block);
             debug!(
@@ -472,7 +472,7 @@ impl Actor {
                 max_tx_target,
                 max_in_block = max_in_block.get(),
                 scan_budget,
-                scan_multiplier = self.config.proposal_queue_scan_multiplier.get(),
+                scan_multiplier = self.config.block.proposal_queue_scan_multiplier.get(),
                 "proposal assembly budget"
             );
             // Bound queue scanning to keep proposal assembly from stalling under sustained load.
@@ -562,10 +562,10 @@ impl Actor {
         let mut tx_sizes;
         if da_enabled {
             let mut remaining_budget = da_payload_budget(
-                self.config.rbc_chunk_max_bytes,
-                self.config.rbc_pending_max_bytes,
-                self.config.rbc_pending_max_chunks,
-                self.config.block_max_payload_bytes,
+                self.config.rbc.chunk_max_bytes,
+                self.config.rbc.pending_max_bytes,
+                self.config.rbc.pending_max_chunks,
+                self.config.block.max_payload_bytes,
                 self.consensus_payload_frame_cap,
             );
             tx_batch = Vec::with_capacity(transactions.len());
@@ -584,7 +584,7 @@ impl Actor {
             }
         } else {
             let mut payload_budget = Some(non_rbc_payload_budget(
-                self.config.block_max_payload_bytes,
+                self.config.block.max_payload_bytes,
                 self.consensus_payload_frame_cap,
             ));
             tx_batch = Vec::with_capacity(transactions.len());
@@ -944,7 +944,7 @@ impl Actor {
                 let payload_bytes = block_payload_bytes(&signed_block);
                 if da_enabled {
                     let total_chunks =
-                        rbc::chunk_count(payload_bytes.len(), self.config.rbc_chunk_max_bytes);
+                        rbc::chunk_count(payload_bytes.len(), self.config.rbc.chunk_max_bytes);
                     if total_chunks > usize::try_from(RBC_MAX_TOTAL_CHUNKS).expect("fits in usize")
                     {
                         if tx_batch.len() <= 1 {
@@ -1204,8 +1204,8 @@ impl Actor {
         let lane_config = self.state.nexus_snapshot().lane_config.clone();
         validate_da_bundle_caps(
             bundle,
-            self.config.da_max_commitments_per_block,
-            self.config.da_max_proof_openings_per_block,
+            self.config.da.max_commitments_per_block,
+            self.config.da.max_proof_openings_per_block,
         )?;
 
         for record in &bundle.commitments {
@@ -1306,14 +1306,14 @@ impl Actor {
         self.subsystems.propose.backpressure_gate.refresh();
         let queue_state = self.subsystems.propose.backpressure_gate.state();
         let blocking_pending = self.blocking_pending_blocks_len_with_progress(now);
-        let active_pending = blocking_pending > self.config.pacemaker_active_pending_soft_limit;
+        let active_pending = blocking_pending > self.config.pacemaker.active_pending_soft_limit;
         let rbc_backlog_summary = self.rbc_backlog_summary();
         let mut rbc_backlog = self.rbc_backlog_exceeds_pacemaker_soft_limits(rbc_backlog_summary);
         let queue_depths = status::worker_queue_depth_snapshot();
         let consensus_queue_backpressure = consensus_queue_backpressure(
             queue_depths,
-            self.config.msg_channel_cap_block_payload,
-            self.config.msg_channel_cap_rbc_chunks,
+            self.config.queues.block_payload,
+            self.config.queues.rbc_chunks,
         );
         let relay_backpressure = if self.backpressure_override_due(now) {
             // Liveness override: don't let prolonged relay/RBC backpressure stall proposals.
@@ -1334,7 +1334,7 @@ impl Actor {
     pub(super) fn proposal_scan_budget(&self, max_in_block: NonZeroUsize) -> usize {
         max_in_block
             .get()
-            .saturating_mul(self.config.proposal_queue_scan_multiplier.get())
+            .saturating_mul(self.config.block.proposal_queue_scan_multiplier.get())
     }
 
     fn maybe_rebroadcast_cached_proposal(
@@ -1484,7 +1484,7 @@ impl Actor {
         state: BackpressureState,
     ) {
         let blocking_pending = self.blocking_pending_blocks_len_with_progress(now);
-        let active_pending = blocking_pending > self.config.pacemaker_active_pending_soft_limit;
+        let active_pending = blocking_pending > self.config.pacemaker.active_pending_soft_limit;
         let rbc_backlog_summary = self.rbc_backlog_summary();
         let rbc_backlog = self.rbc_backlog_exceeds_pacemaker_soft_limits(rbc_backlog_summary);
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
@@ -1499,12 +1499,12 @@ impl Actor {
             tx_queue_capacity = state.capacity().get(),
             active_pending,
             blocking_pending,
-            pending_soft_limit = self.config.pacemaker_active_pending_soft_limit,
+            pending_soft_limit = self.config.pacemaker.active_pending_soft_limit,
             rbc_backlog,
             rbc_sessions = rbc_backlog_summary.sessions_pending,
             rbc_missing_chunks = rbc_backlog_summary.missing_chunks_total,
-            rbc_session_soft_limit = self.config.pacemaker_rbc_backlog_session_soft_limit,
-            rbc_chunk_soft_limit = self.config.pacemaker_rbc_backlog_chunk_soft_limit,
+            rbc_session_soft_limit = self.config.pacemaker.rbc_backlog_session_soft_limit,
+            rbc_chunk_soft_limit = self.config.pacemaker.rbc_backlog_chunk_soft_limit,
             relay_backpressure,
             "Pacemaker deferred proposal assembly due to backpressure"
         );

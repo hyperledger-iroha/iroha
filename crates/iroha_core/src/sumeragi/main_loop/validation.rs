@@ -6,9 +6,6 @@ use iroha_logger::prelude::*;
 
 use super::*;
 
-const VALIDATION_WORK_QUEUE_CAP: usize = 1;
-const VALIDATION_RESULT_QUEUE_CAP: usize = 1;
-
 #[derive(Debug)]
 pub(super) struct ValidationWork {
     pub(super) id: u64,
@@ -32,66 +29,83 @@ pub(super) struct ValidationResult {
 
 #[derive(Debug)]
 pub(super) struct ValidationWorkerHandle {
-    pub(super) work_tx: mpsc::SyncSender<ValidationWork>,
+    pub(super) work_txs: Vec<mpsc::SyncSender<ValidationWork>>,
     pub(super) result_rx: mpsc::Receiver<ValidationResult>,
-    pub(super) join_handle: std::thread::JoinHandle<()>,
+    pub(super) join_handles: Vec<std::thread::JoinHandle<()>>,
 }
 
-pub(super) fn spawn_validation_worker(
+pub(super) fn spawn_validation_workers(
     state: Arc<State>,
     chain_id: ChainId,
     genesis_account: AccountId,
     wake_tx: Option<mpsc::SyncSender<()>>,
+    worker_threads: usize,
+    work_queue_cap: usize,
+    result_queue_cap: usize,
 ) -> ValidationWorkerHandle {
-    let (work_tx, work_rx) = mpsc::sync_channel::<ValidationWork>(VALIDATION_WORK_QUEUE_CAP);
-    let (result_tx, result_rx) =
-        mpsc::sync_channel::<ValidationResult>(VALIDATION_RESULT_QUEUE_CAP);
-    let join_handle = std::thread::Builder::new()
-        .name("sumeragi-validate".to_owned())
-        .spawn(move || {
-            while let Ok(work) = work_rx.recv() {
-                let ValidationWork {
-                    id,
-                    hash,
-                    block,
-                    height,
-                    view,
-                    mut topology,
-                    commit_topology,
-                } = work;
-                let mut voting_block = None;
-                let outcome = validate_block_for_voting(
-                    block,
-                    &mut topology,
-                    &chain_id,
-                    &genesis_account,
-                    state.as_ref(),
-                    &mut voting_block,
-                );
-                if result_tx
-                    .send(ValidationResult {
+    let threads = worker_threads.max(1);
+    let work_queue_cap = work_queue_cap.max(1);
+    let result_queue_cap = result_queue_cap.max(1);
+    let (result_tx, result_rx) = mpsc::sync_channel::<ValidationResult>(result_queue_cap);
+    let mut work_txs = Vec::with_capacity(threads);
+    let mut join_handles = Vec::with_capacity(threads);
+    for idx in 0..threads {
+        let (work_tx, work_rx) = mpsc::sync_channel::<ValidationWork>(work_queue_cap);
+        work_txs.push(work_tx);
+        let result_tx = result_tx.clone();
+        let wake_tx = wake_tx.clone();
+        let state = Arc::clone(&state);
+        let chain_id = chain_id.clone();
+        let genesis_account = genesis_account.clone();
+        let name = format!("sumeragi-validate-{idx}");
+        let join_handle = std::thread::Builder::new()
+            .name(name)
+            .spawn(move || {
+                while let Ok(work) = work_rx.recv() {
+                    let ValidationWork {
                         id,
                         hash,
+                        block,
                         height,
                         view,
+                        mut topology,
                         commit_topology,
-                        outcome,
-                    })
-                    .is_err()
-                {
-                    break;
+                    } = work;
+                    let mut voting_block = None;
+                    let outcome = validate_block_for_voting(
+                        block,
+                        &mut topology,
+                        &chain_id,
+                        &genesis_account,
+                        state.as_ref(),
+                        &mut voting_block,
+                    );
+                    if result_tx
+                        .send(ValidationResult {
+                            id,
+                            hash,
+                            height,
+                            view,
+                            commit_topology,
+                            outcome,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                    if let Some(wake) = wake_tx.as_ref() {
+                        let _ = wake.try_send(());
+                    }
                 }
-                if let Some(wake) = wake_tx.as_ref() {
-                    let _ = wake.try_send(());
-                }
-            }
-        })
-        .expect("failed to spawn sumeragi validation worker thread");
+            })
+            .expect("failed to spawn sumeragi validation worker thread");
+        join_handles.push(join_handle);
+    }
 
     ValidationWorkerHandle {
-        work_tx,
+        work_txs,
         result_rx,
-        join_handle,
+        join_handles,
     }
 }
 
@@ -138,7 +152,7 @@ impl Actor {
             return ValidationGateOutcome::Deferred;
         }
 
-        if let Some(work_tx) = self.subsystems.validation.work_tx.clone() {
+        if !self.subsystems.validation.work_txs.is_empty() {
             if self.subsystems.validation.inflight.contains_key(&hash) {
                 pending.validation_status = ValidationStatus::Pending;
                 self.pending.pending_blocks.insert(hash, pending);
@@ -146,7 +160,7 @@ impl Actor {
             }
 
             let id = self.subsystems.validation.next_id();
-            let work = ValidationWork {
+            let mut work = ValidationWork {
                 id,
                 hash,
                 block: pending.block.clone(),
@@ -155,36 +169,70 @@ impl Actor {
                 topology: topology.clone(),
                 commit_topology: commit_topology.to_vec(),
             };
+            let mut dispatched = false;
+            let mut disconnected = Vec::new();
+            let total = self.subsystems.validation.work_txs.len();
+            for _ in 0..total {
+                let idx = self.subsystems.validation.next_worker % total;
+                self.subsystems.validation.next_worker =
+                    self.subsystems.validation.next_worker.saturating_add(1);
+                let work_tx = &self.subsystems.validation.work_txs[idx];
+                match work_tx.try_send(work) {
+                    Ok(()) => {
+                        dispatched = true;
+                        break;
+                    }
+                    Err(mpsc::TrySendError::Full(returned)) => {
+                        work = returned;
+                    }
+                    Err(mpsc::TrySendError::Disconnected(returned)) => {
+                        work = returned;
+                        disconnected.push(idx);
+                    }
+                }
+            }
 
-            match work_tx.try_send(work) {
-                Ok(()) => {
-                    self.subsystems.validation.inflight.insert(hash, id);
-                    pending.validation_status = ValidationStatus::Pending;
-                    self.pending.pending_blocks.insert(hash, pending);
-                    return ValidationGateOutcome::Deferred;
+            if !disconnected.is_empty() {
+                disconnected.sort_unstable();
+                disconnected.dedup();
+                for idx in disconnected.into_iter().rev() {
+                    if idx < self.subsystems.validation.work_txs.len() {
+                        self.subsystems.validation.work_txs.swap_remove(idx);
+                    }
                 }
-                Err(mpsc::TrySendError::Full(_work)) => {
-                    warn!(
-                        height = pending.height,
-                        view = pending.view,
-                        block = %hash,
-                        "validation worker queue full; deferring pre-vote validation"
-                    );
-                    pending.validation_status = ValidationStatus::Pending;
-                    self.pending.pending_blocks.insert(hash, pending);
-                    return ValidationGateOutcome::Deferred;
+                if self.subsystems.validation.next_worker
+                    >= self.subsystems.validation.work_txs.len()
+                {
+                    self.subsystems.validation.next_worker = 0;
                 }
-                Err(mpsc::TrySendError::Disconnected(_work)) => {
-                    warn!(
-                        height = pending.height,
-                        view = pending.view,
-                        block = %hash,
-                        "validation worker unavailable; running pre-vote validation inline"
-                    );
-                    self.subsystems.validation.work_tx = None;
-                    self.subsystems.validation.result_rx = None;
-                    self.subsystems.validation.inflight.clear();
-                }
+            }
+
+            if dispatched {
+                self.subsystems.validation.inflight.insert(hash, id);
+                pending.validation_status = ValidationStatus::Pending;
+                self.pending.pending_blocks.insert(hash, pending);
+                return ValidationGateOutcome::Deferred;
+            }
+
+            if self.subsystems.validation.work_txs.is_empty() {
+                warn!(
+                    height = pending.height,
+                    view = pending.view,
+                    block = %hash,
+                    "validation workers unavailable; running pre-vote validation inline"
+                );
+                self.subsystems.validation.result_rx = None;
+                self.subsystems.validation.inflight.clear();
+            } else {
+                warn!(
+                    height = pending.height,
+                    view = pending.view,
+                    block = %hash,
+                    "validation worker queue full; deferring pre-vote validation"
+                );
+                pending.validation_status = ValidationStatus::Pending;
+                self.pending.pending_blocks.insert(hash, pending);
+                return ValidationGateOutcome::Deferred;
             }
         }
 
@@ -330,7 +378,7 @@ impl Actor {
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
                     warn!("validation worker result channel closed; falling back to inline");
-                    self.subsystems.validation.work_tx = None;
+                    self.subsystems.validation.work_txs.clear();
                     self.subsystems.validation.inflight.clear();
                     keep_rx = false;
                     break;

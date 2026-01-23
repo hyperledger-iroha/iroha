@@ -46,7 +46,7 @@ translator: manual
 - ב-v1 בוטל מרווח ההצבעה של Observers ב-View 0: עמיתי צפייה אינם מצביעים כלל ב-View 0. בטיימאאוט מקומי הם מבקשים שינוי View ללא הרחבה לפני הרוטציה. התזמונים נשלטים על ידי פרמטרים on-chain: ב-permissioned משתמשים ב-`SumeragiParameters` (`BlockTimeMs`,‏ `CommitTimeMs`), וב‑NPoS ב-`sumeragi_npos_parameters` (`block_time_ms`, `timeouts.timeout_commit_ms`) – הצעת לידר סביב שליש זמן הצינור וקומיט צפוי סביב שני שלישים.
 
 ### פרמטרים K / r
-- בקונפיג: ‏`sumeragi.collectors_k: usize` (מספר אספנים לגובה, ברירת מחדל 1) ו-`sumeragi.collectors_redundant_send_r: u8` (פיזור שליחות עודפות, ברירת מחדל 1).
+- בקונפיג: ‏`sumeragi.collectors.k: usize` (מספר אספנים לגובה, ברירת מחדל 1) ו-`sumeragi.collectors.redundant_send_r: u8` (פיזור שליחות עודפות, ברירת מחדל 1).
 - בשרשרת: K ו-r נמצאים ב-`SumeragiParameters` והם המקור הקובע לתכנון הקולקטורים ולפרסום `ConsensusParams`; ערכי הקונפיג מזינים את ברירות המחדל ב-genesis. כאשר פירים מפרסמים K/r שונים, נרשם mismatch אך נשמרים הערכים מהשרשרת.
 - פולבק: אם `k` לא מחזיר קולקטורים, ההצבעות נופלות לטופולוגיית ה-commit המלאה; `redundant_send_r` מטופל לפחות כ-1.
 
@@ -69,9 +69,9 @@ translator: manual
 
 ### RBC / DA (זמינות נתונים)
 - RBC משתמש בקבוצת האספנים כדי להפיץ את גוף הבלוק. כותרת הבלוק מכילה מזהה סשן ומטא-נתונים.
-- `sumeragi.da_enabled = true` עוקב אחרי עדות זמינות (`availability evidence`) אבל לא מעכב קומיט (ל־RBC `DELIVER` מקומי אין תנאי). כאשר עדות זמינות חסרה, `sumeragi_da_gate_block_total{reason="missing_local_data"}` גדל ו־`da_reschedule_total` הוא legacy ולכן בדרך כלל נשאר 0.
+- `sumeragi.da.enabled = true` עוקב אחרי עדות זמינות (`availability evidence`) אבל לא מעכב קומיט (ל־RBC `DELIVER` מקומי אין תנאי). כאשר עדות זמינות חסרה, `sumeragi_da_gate_block_total{reason="missing_local_data"}` גדל ו־`da_reschedule_total` הוא legacy ולכן בדרך כלל נשאר 0.
 - כאשר READY/DELIVER או צ׳אנקים מגיעים לפני INIT, הנוד שומר אותם ב־stash ומבקש מיד את `BlockCreated` החסר (בכפוף ל־backoff של missing‑block).
-- `sumeragi.rbc_rebroadcast_sessions_per_tick` מגביל את מספר סשני ה־RBC שנשלחים מחדש בכל tick כדי למנוע סופות שידור כשיש backlog. להאצת התאוששות מעלים את הערך, ובמקרה של עומס תורים מורידים.
+- `sumeragi.rbc.rebroadcast_sessions_per_tick` מגביל את מספר סשני ה־RBC שנשלחים מחדש בכל tick כדי למנוע סופות שידור כשיש backlog. להאצת התאוששות מעלים את הערך, ובמקרה של עומס תורים מורידים.
 - תרחישים של ≥10 MiB נבחנים בסוויטת האינטגרציה ומודדים זמני RBC, קומיט, סף סינון תורים וזרימות P2P. הפרת SLO נכשלת במבחן ומפעילה התרעה.
 
 ### דוגמאות CLI לטופולוגיה ותפקידים
@@ -127,7 +127,7 @@ translator: manual
 
 ### RBC
 - סשני RBC מזוהים באמצעות `RbcSessionId` ומכילים מטא-נתונים על גובה, hash, ומספר חלקים. הם מפיצים את גוף הבלוק ומספקים זמינות נתונים.
-- כאשר `sumeragi.da_enabled` פעיל, קומיט תלוי ב-`availability evidence` (ולא בהשלמה מקומית של RBC). RBC משמש כמנגנון הפצה/שחזור של ה-payload.
+- כאשר `sumeragi.da.enabled` פעיל, קומיט תלוי ב-`availability evidence` (ולא בהשלמה מקומית של RBC). RBC משמש כמנגנון הפצה/שחזור של ה-payload.
 - רוסטר ה‑INIT נשמר כסנאפשוט לא מאומת; הרוסטר הנגזר מטופולוגיית הקומיט הוא המקור הסמכותי ל‑READY/DELIVER ולאימות חתימה מקומית. INIT שסותר רוסטר נגזר נדחה.
 - READY/DELIVER שמגיעים לפני אימות הרוסטר נאגרים (stash), ובקשות ל‑`BlockCreated` חסר נופלות חזרה לטופולוגיית הקומיט. לאחר אימות, אי־התאמה של `roster_hash` גוררת דחייה.
 - שידורי READY חוזרים מוגבלים לתת־קבוצה דטרמיניסטית של f+1 (כולל תמיד את המנהיג) כדי לצמצם סערות הודעות.
@@ -171,13 +171,13 @@ translator: manual
 - זמני availability evidence: אם `sumeragi_qc_last_latency_ms{kind="availability"}` חוצה `0.6 * commit_time_ms` פעמיים או שה-P95 עובר `0.7 * commit_time_ms` (permissioned: `CommitTimeMs`, ‏NPoS: `timeouts.timeout_commit_ms`).
 - קיפאון הצבעות: `sum(rate(sumeragi_da_votes_ingested_total[2m])) == 0` בזמן ש-`sumeragi_rbc_backlog_sessions_pending > 0`.
 - קומיט: `commit_ms` או P95 של `sumeragi_phase_latency_ms{phase="commit"}` עולים על `0.75 * commit_time_ms` (permissioned: `CommitTimeMs`, ‏NPoS: `timeouts.timeout_commit_ms`), או נותרים אפס ≥3 סבבים למרות בלוקים חדשים.
-- פיזור אספנים: `collect_aggregator_ms` > `0.5 * sumeragi.npos.timeouts.aggregator_ms` בשלושה סבבים, ‎`sumeragi_redundant_sends_total` > `redundant_send_r`, ‎`rate(sumeragi_gossip_fallback_total[5m]) > 0`, או ‎`increase(block_created_*[5m]) > 0`/`increase(pacemaker_backpressure_deferrals_total[5m]) > 0`.
+- פיזור אספנים: `collect_aggregator_ms` > `0.5 * sumeragi.npos.timeouts.aggregator_ms` בשלושה סבבים, ‎`sumeragi_redundant_sends_total` > `sumeragi.collectors.redundant_send_r`, ‎`rate(sumeragi_gossip_fallback_total[5m]) > 0`, או ‎`increase(block_created_*[5m]) > 0`/`increase(pacemaker_backpressure_deferrals_total[5m]) > 0`.
 
 מדדי השליחה העודפת (`sumeragi_redundant_sends_total`) עולים כאשר DA משדר מחדש מטעני RBC. הבדיקה `npos_redundant_send_retries_update_metrics` מבטיחה שדשבורדים תואמים לציפיות.
 
 **תהליך תחקור**
 1. בדקו עם `iroha_cli --output-format text ops sumeragi collectors` שהאספן התקוע עדיין מוקצה.
-2. נתחו `/v1/sumeragi/telemetry` כדי לאתר אינדקס ללא `votes_ingested`. אם רק אספן יחיד נפגע, ניתן להגדיל זמנית את `collectors_redundant_send_r`.
+2. נתחו `/v1/sumeragi/telemetry` כדי לאתר אינדקס ללא `votes_ingested`. אם רק אספן יחיד נפגע, ניתן להגדיל זמנית את `sumeragi.collectors.redundant_send_r`.
 3. בדקו `sumeragi_bg_post_queue_depth` ו-`p2p_*_throttled_total` לזיהוי עומסי תורים או מגבלות רשת.
 4. בעיות FASTPQ/prover: עיינו ב-`/v1/torii/zk/prover/reports` ובלוגים כדי לאתר כשלים בפרוברים.
 5. כאשר שני האספנים אינם מגיבים, יש לבדוק backlog של RBC, `sumeragi_rbc_store_evictions_total`, `sumeragi_rbc_persist_drops_total` ו-`rbc_store.recent_evictions` כדי לזהות עומס דיסק או TTL. בנוסף, `iroha_cli --output-format text ops sumeragi status` כולל את המונים `lane_governance_sealed_total` / `lane_governance_sealed_aliases`, כך שניתן לאתר מסילות שעדיין חסומות בלי לפענח את כל ה-JSON. בתהליכי שחרור ו-CI מומלץ להריץ גם `iroha_cli app nexus lane-report --only-missing --fail-on-sealed` כדי לעצור אוטומטית כאשר יש מסילות שלא שוחררו.

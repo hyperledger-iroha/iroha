@@ -203,7 +203,7 @@ impl Root {
         self.nexus.enabled = true;
         self.torii.sorafs_storage.enabled = true;
         self.torii.sorafs_discovery.discovery_enabled = true;
-        self.sumeragi.da_enabled = true;
+        self.sumeragi.da.enabled = true;
         if self.tiered_state.da_store_root.is_none() {
             self.tiered_state.da_store_root =
                 Some(PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT));
@@ -457,7 +457,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "Sora profile must force NPoS consensus"
         );
         assert!(
-            root.sumeragi.da_enabled,
+            root.sumeragi.da.enabled,
             "Sora profile must enable data availability"
         );
         assert_eq!(root.nexus.lane_catalog, sora_lane_catalog());
@@ -529,7 +529,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "Sora profile must force NPoS consensus"
         );
         assert!(
-            root.sumeragi.da_enabled,
+            root.sumeragi.da.enabled,
             "Sora profile must enable data availability"
         );
         assert_eq!(
@@ -3522,109 +3522,182 @@ impl Default for AdaptiveObservability {
     }
 }
 
-/// Consensus (Sumeragi) configuration.
-#[derive(Debug, Clone)]
-#[allow(clippy::struct_excessive_bools)]
-pub struct Sumeragi {
-    /// If true, force a soft fork for debugging purposes.
-    pub debug_force_soft_fork: bool,
-    /// Disable the dedicated consensus background post worker; actor sends inline instead (testing).
-    pub debug_disable_background_worker: bool,
-    /// Drop every Nth RBC chunk when acting as leader (adversarial testing).
-    pub debug_rbc_drop_every_nth_chunk: Option<NonZeroU32>,
-    /// Shuffle RBC chunk send order when broadcasting payloads (adversarial testing).
-    pub debug_rbc_shuffle_chunks: bool,
-    /// Broadcast a duplicate RBC init/chunk set for the next view (adversarial testing).
-    pub debug_rbc_duplicate_inits: bool,
-    /// Force RBC DELIVER quorum to 1 (adversarial testing).
-    pub debug_rbc_force_deliver_quorum_one: bool,
-    /// Corrupt witness availability acknowledgements emitted by this node (adversarial testing).
-    pub debug_rbc_corrupt_witness_ack: bool,
-    /// Corrupt RBC READY signatures emitted by this node (adversarial testing).
-    pub debug_rbc_corrupt_ready_signature: bool,
-    /// Bitmap of validator indexes (0-based) that should never receive RBC chunks from this node.
-    /// Intended for deterministic adversarial tests; limited to the lower 64 validators.
-    pub debug_rbc_drop_validator_mask: u64,
-    /// Bitmap of chunk indexes (0-based) that should be equivocated when sent to targeted validators.
-    /// Only the lower 64 chunk indexes are addressable; higher bits must remain zero.
-    pub debug_rbc_equivocate_chunk_mask: u64,
-    /// Bitmap of validator indexes (0-based) that should receive equivocated chunk payloads.
-    /// Combined with `debug_rbc_equivocate_chunk_mask` to target specific peers/chunks.
-    pub debug_rbc_equivocate_validator_mask: u64,
-    /// Bitmap of validator indexes that should emit a conflicting RBC READY signature
-    /// for adversarial testing. Limited to lower 64 validators.
-    pub debug_rbc_conflicting_ready_mask: u64,
-    /// Bitmap of chunk indexes withheld entirely from broadcast to simulate partial erasure.
-    /// Limited to lower 64 chunk indexes; higher bits must remain zero.
-    pub debug_rbc_partial_chunk_mask: u64,
-    /// Node participation role (validator or observer).
-    pub role: NodeRole,
-    /// Allow SetBValidator votes in view 0 after local deadline widening.
-    pub allow_view0_slack: bool,
+/// Mode flip gating configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiModeFlip {
+    /// Enable runtime consensus mode flips driven by on-chain parameters.
+    pub enabled: bool,
+}
+
+/// Collector selection configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiCollectors {
     /// Number of collectors (K) used by validators and committers.
-    pub collectors_k: usize,
-    /// Redundant send fanout (r): number of distinct collectors a validator
-    /// will target over time upon local timeouts.
-    pub collectors_redundant_send_r: u8,
+    pub k: usize,
+    /// Redundant send fanout (r): number of distinct collectors targeted on retries.
+    pub redundant_send_r: u8,
+}
+
+/// Block assembly limits.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiBlock {
     /// Optional cap on transactions included in a single block (None = unlimited).
-    pub block_max_transactions: Option<NonZeroUsize>,
+    pub max_transactions: Option<NonZeroUsize>,
     /// Optional cap on block payload bytes when RBC is disabled (None = unlimited).
-    pub block_max_payload_bytes: Option<NonZeroUsize>,
+    pub max_payload_bytes: Option<NonZeroUsize>,
     /// Multiplier applied to the proposal queue scan budget (relative to max tx per block).
     pub proposal_queue_scan_multiplier: NonZeroUsize,
+}
+
+/// Consensus queue capacities.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiQueues {
     /// Capacity for the vote message channel.
-    pub msg_channel_cap_votes: usize,
+    pub votes: usize,
     /// Capacity for the block payload channel.
-    pub msg_channel_cap_block_payload: usize,
+    pub block_payload: usize,
     /// Capacity for the RBC chunk channel.
-    pub msg_channel_cap_rbc_chunks: usize,
+    pub rbc_chunks: usize,
     /// Capacity for the block message channel (block sync updates, params, etc.).
-    pub msg_channel_cap_blocks: usize,
+    pub blocks: usize,
     /// Capacity for Sumeragi control-message channel.
-    pub control_msg_channel_cap: usize,
+    pub control: usize,
+}
+
+/// Worker-loop scheduling limits.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiWorker {
     /// Cap on the worker loop's per-iteration time budget.
-    pub worker_iteration_budget_cap: Duration,
+    pub iteration_budget_cap: Duration,
     /// Cap on worker mailbox draining per iteration.
-    pub worker_iteration_drain_budget_cap: Duration,
-    /// Runtime consensus mode selection (permissioned vs npos).
-    pub consensus_mode: ConsensusMode,
-    /// Whether runtime consensus mode flips triggered by on-chain parameters are applied automatically.
-    pub mode_flip_enabled: bool,
+    pub iteration_drain_budget_cap: Duration,
+    /// Cap on per-tick proposal/commit work.
+    pub tick_work_budget_cap: Duration,
+    /// Validation worker threads for pre-vote checks.
+    pub validation_worker_threads: usize,
+    /// Validation work queue capacity per worker.
+    pub validation_work_queue_cap: usize,
+    /// Validation result queue capacity (shared).
+    pub validation_result_queue_cap: usize,
+}
+
+/// Pacemaker configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiPacemaker {
+    /// Pacemaker backoff multiplier for view-change increments (>=1).
+    pub backoff_multiplier: u32,
+    /// Pacemaker RTT floor multiplier (avg_rtt * multiplier).
+    pub rtt_floor_multiplier: u32,
+    /// Pacemaker maximum backoff cap.
+    pub max_backoff: Duration,
+    /// Pacemaker jitter band (permille of window). 0 disables jitter.
+    pub jitter_frac_permille: u32,
+    /// Grace period before a pending block counts as stalled for backpressure.
+    pub pending_stall_grace: Duration,
+    /// Soft limit for blocking pending blocks before backpressure defers proposals.
+    pub active_pending_soft_limit: usize,
+    /// Soft limit for unresolved RBC backlog sessions before backpressure defers proposals.
+    pub rbc_backlog_session_soft_limit: usize,
+    /// Soft limit for missing RBC chunks before backpressure defers proposals.
+    pub rbc_backlog_chunk_soft_limit: usize,
+}
+
+/// DA (data-availability) configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiDa {
     /// Enable data availability for consensus (RBC + availability QC gating).
-    pub da_enabled: bool,
+    pub enabled: bool,
     /// Multiplier for DA commit-quorum timeouts.
-    pub da_quorum_timeout_multiplier: u32,
+    pub quorum_timeout_multiplier: u32,
     /// Multiplier for availability timeouts in DA mode.
-    pub da_availability_timeout_multiplier: u32,
+    pub availability_timeout_multiplier: u32,
     /// Floor for availability timeouts in DA mode.
-    pub da_availability_timeout_floor: Duration,
+    pub availability_timeout_floor: Duration,
+    /// Maximum DA commitments (blobs) permitted in a single block.
+    pub max_commitments_per_block: usize,
+    /// Maximum DA proof openings permitted in a single block (aggregate cap).
+    pub max_proof_openings_per_block: usize,
+}
+
+/// Persistence/retry configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiPersistence {
     /// Interval between kura persistence retry attempts.
-    pub kura_store_retry_interval: Duration,
-    /// Maximum number of kura persistence retry attempts before aborting the block.
-    pub kura_store_retry_max_attempts: u32,
+    pub kura_retry_interval: Duration,
+    /// Maximum number of kura persistence retry attempts before aborting.
+    pub kura_retry_max_attempts: u32,
     /// Timeout for inflight commit jobs before aborting.
     pub commit_inflight_timeout: Duration,
+    /// Commit worker work-queue capacity.
+    pub commit_work_queue_cap: usize,
+    /// Commit worker result-queue capacity.
+    pub commit_result_queue_cap: usize,
+}
+
+/// Recovery-related configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiRecovery {
     /// Missing-block fetch attempts before falling back to the full commit topology.
-    /// A value of 0 disables signer preference.
     pub missing_block_signer_fallback_attempts: u32,
-    /// Consecutive membership mismatches required before alerting.
-    pub membership_mismatch_alert_threshold: u32,
-    /// Whether to drop consensus messages from peers with repeated membership mismatches.
-    pub membership_mismatch_fail_closed: bool,
+}
+
+/// Ingress gating and penalty configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiGating {
     /// Maximum height delta accepted for inbound consensus messages (0 disables future gating).
-    pub consensus_future_height_window: u64,
+    pub future_height_window: u64,
     /// Maximum view delta accepted for inbound consensus messages (0 disables future gating).
-    pub consensus_future_view_window: u64,
+    pub future_view_window: u64,
     /// Invalid signature count before temporarily suppressing a signer (0 disables).
     pub invalid_sig_penalty_threshold: u32,
     /// Window for invalid signature penalty counting.
     pub invalid_sig_penalty_window: Duration,
     /// Cooldown applied after invalid signature penalties trigger.
     pub invalid_sig_penalty_cooldown: Duration,
-    /// Maximum DA commitments (blobs) permitted in a single block.
-    pub da_max_commitments_per_block: usize,
-    /// Maximum DA proof openings permitted in a single block (aggregate cap).
-    pub da_max_proof_openings_per_block: usize,
+    /// Consecutive membership mismatches required before alerting.
+    pub membership_mismatch_alert_threshold: u32,
+    /// Whether to drop consensus messages from peers with repeated membership mismatches.
+    pub membership_mismatch_fail_closed: bool,
+}
+
+/// RBC (reliable broadcast) configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiRbc {
+    /// RBC chunk maximum bytes per chunk.
+    pub chunk_max_bytes: usize,
+    /// Optional fanout cap for RBC chunk broadcasts (None = auto based on topology).
+    pub chunk_fanout: Option<NonZeroUsize>,
+    /// Maximum pending RBC chunks stashed before INIT.
+    pub pending_max_chunks: usize,
+    /// Maximum pending RBC bytes per session before INIT.
+    pub pending_max_bytes: usize,
+    /// Maximum pending RBC sessions stashed before INIT.
+    pub pending_session_limit: usize,
+    /// TTL for pending RBC messages awaiting INIT.
+    pub pending_ttl: Duration,
+    /// RBC session TTL for pruning inactive sessions.
+    pub session_ttl: Duration,
+    /// Maximum RBC sessions rebroadcast per tick.
+    pub rebroadcast_sessions_per_tick: usize,
+    /// Maximum RBC payload chunks broadcast per tick.
+    pub payload_chunks_per_tick: usize,
+    /// Maximum number of persisted RBC session summaries retained on disk.
+    pub store_max_sessions: usize,
+    /// Soft quota for persisted RBC session summaries.
+    pub store_soft_sessions: usize,
+    /// Maximum total disk bytes allocated for persisted RBC session payloads.
+    pub store_max_bytes: usize,
+    /// Soft quota for persisted RBC session payload bytes.
+    pub store_soft_bytes: usize,
+    /// Disk-backed RBC chunk retention TTL.
+    pub disk_store_ttl: Duration,
+    /// Maximum bytes allocated for disk-backed RBC chunk persistence.
+    pub disk_store_max_bytes: u64,
+}
+
+/// Finality/proof configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiFinality {
     /// Proof policy selector (off/zk_parent).
     pub proof_policy: ProofPolicy,
     /// Cap for in-memory commit certificate history (used for status/finality proofs).
@@ -3632,83 +3705,106 @@ pub struct Sumeragi {
     /// Zk parent-proving depth (0 disables zk finality).
     pub zk_finality_k: u8,
     /// Require PrecommitQC for the candidate block before commit (consensus path).
-    /// Defaults to false while the new voting path is being integrated.
     pub require_precommit_qc: bool,
-    /// RBC chunk maximum bytes per chunk.
-    pub rbc_chunk_max_bytes: usize,
-    /// Optional fanout cap for RBC chunk broadcasts (None = auto based on topology).
-    pub rbc_chunk_fanout: Option<NonZeroUsize>,
-    /// Maximum pending RBC chunks stashed before INIT.
-    pub rbc_pending_max_chunks: usize,
-    /// Maximum pending RBC bytes per session before INIT.
-    pub rbc_pending_max_bytes: usize,
-    /// Maximum pending RBC sessions stashed before INIT.
-    pub rbc_pending_session_limit: usize,
-    /// TTL for pending RBC messages awaiting INIT.
-    pub rbc_pending_ttl: Duration,
-    /// RBC session TTL for pruning inactive sessions.
-    pub rbc_session_ttl: Duration,
-    /// Maximum RBC sessions rebroadcast per tick.
-    pub rbc_rebroadcast_sessions_per_tick: usize,
-    /// Maximum RBC payload chunks broadcast per tick.
-    pub rbc_payload_chunks_per_tick: usize,
-    /// Maximum number of persisted RBC session summaries retained on disk.
-    pub rbc_store_max_sessions: usize,
-    /// Soft quota for persisted RBC session summaries.
-    pub rbc_store_soft_sessions: usize,
-    /// Maximum total disk bytes allocated for persisted RBC session payloads.
-    pub rbc_store_max_bytes: usize,
-    /// Soft quota for persisted RBC session payload bytes.
-    pub rbc_store_soft_bytes: usize,
-    /// Disk-backed RBC chunk retention TTL.
-    pub rbc_disk_store_ttl: Duration,
-    /// Maximum bytes allocated for disk-backed RBC chunk persistence.
-    pub rbc_disk_store_max_bytes: u64,
+}
+
+/// Consensus key-rotation configuration.
+#[derive(Debug, Clone)]
+pub struct SumeragiKeys {
     /// Minimum lead time (blocks) between publishing a new consensus key and activation.
-    pub key_activation_lead_blocks: u64,
+    pub activation_lead_blocks: u64,
     /// Overlap/grace window (blocks) permitting dual-signing during rotation.
-    pub key_overlap_grace_blocks: u64,
+    pub overlap_grace_blocks: u64,
     /// Expiry grace window (blocks) after declared expiry.
-    pub key_expiry_grace_blocks: u64,
+    pub expiry_grace_blocks: u64,
     /// Require HSM binding for consensus/committee keys.
-    pub key_require_hsm: bool,
+    pub require_hsm: bool,
     /// Allowed algorithms for consensus/committee keys.
-    pub key_allowed_algorithms: BTreeSet<Algorithm>,
+    pub allowed_algorithms: BTreeSet<Algorithm>,
     /// Allowed HSM providers for consensus/committee keys.
-    pub key_allowed_hsm_providers: BTreeSet<String>,
+    pub allowed_hsm_providers: BTreeSet<String>,
+}
+
+/// Debug-only consensus configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiDebug {
+    /// Force a soft fork condition for testing recovery paths.
+    pub force_soft_fork: bool,
+    /// Disable the dedicated consensus background post worker.
+    pub disable_background_worker: bool,
+    /// RBC-specific debug toggles.
+    pub rbc: SumeragiDebugRbc,
+}
+
+/// Debug-only RBC fault injection configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiDebugRbc {
+    /// Drop every Nth RBC chunk when acting as leader (adversarial testing).
+    pub drop_every_nth_chunk: Option<NonZeroU32>,
+    /// Shuffle RBC chunk send order when broadcasting payloads (adversarial testing).
+    pub shuffle_chunks: bool,
+    /// Broadcast a duplicate RBC init/chunk set for the next view (adversarial testing).
+    pub duplicate_inits: bool,
+    /// Force RBC DELIVER quorum to 1 (adversarial testing).
+    pub force_deliver_quorum_one: bool,
+    /// Corrupt witness availability acknowledgements emitted by this node (adversarial testing).
+    pub corrupt_witness_ack: bool,
+    /// Corrupt RBC READY signatures emitted by this node (adversarial testing).
+    pub corrupt_ready_signature: bool,
+    /// Bitmap of validator indexes (0-based) that should never receive RBC chunks from this node.
+    /// Intended for deterministic adversarial tests; limited to the lower 64 validators.
+    pub drop_validator_mask: u64,
+    /// Bitmap of chunk indexes (0-based) that should be equivocated when sent to targeted validators.
+    /// Only the lower 64 chunk indexes are addressable; higher bits must remain zero.
+    pub equivocate_chunk_mask: u64,
+    /// Bitmap of validator indexes (0-based) that should receive equivocated chunk payloads.
+    /// Combined with `equivocate_chunk_mask` to target specific peers/chunks.
+    pub equivocate_validator_mask: u64,
+    /// Bitmap of validator indexes that should emit a conflicting RBC READY signature.
+    pub conflicting_ready_mask: u64,
+    /// Bitmap of chunk indexes withheld entirely from broadcast to simulate partial erasure.
+    pub partial_chunk_mask: u64,
+}
+
+/// Consensus (Sumeragi) configuration.
+#[derive(Debug, Clone)]
+pub struct Sumeragi {
+    /// Node participation role (validator or observer).
+    pub role: NodeRole,
+    /// Runtime consensus mode selection (permissioned vs npos).
+    pub consensus_mode: ConsensusMode,
+    /// Runtime consensus mode flip gating.
+    pub mode_flip: SumeragiModeFlip,
+    /// Collector selection configuration.
+    pub collectors: SumeragiCollectors,
+    /// Block assembly limits.
+    pub block: SumeragiBlock,
+    /// Consensus queue capacities.
+    pub queues: SumeragiQueues,
+    /// Worker-loop scheduling limits.
+    pub worker: SumeragiWorker,
+    /// Pacemaker configuration.
+    pub pacemaker: SumeragiPacemaker,
+    /// DA (data-availability) configuration.
+    pub da: SumeragiDa,
+    /// Persistence/retry configuration.
+    pub persistence: SumeragiPersistence,
+    /// Recovery-related configuration.
+    pub recovery: SumeragiRecovery,
+    /// Ingress gating and penalty configuration.
+    pub gating: SumeragiGating,
+    /// RBC (reliable broadcast) configuration.
+    pub rbc: SumeragiRbc,
+    /// Finality/proof configuration.
+    pub finality: SumeragiFinality,
+    /// Consensus key-rotation configuration.
+    pub keys: SumeragiKeys,
     /// NPoS-specific consensus parameters.
     pub npos: SumeragiNpos,
-    /// Use stake snapshot provider for epoch validator roster (NPoS)
-    pub use_stake_snapshot_roster: bool,
-    /// Epoch length in blocks (NPoS)
-    pub epoch_length_blocks: u64,
-    /// VRF commit deadline offset from epoch start (blocks)
-    pub vrf_commit_deadline_offset: u64,
-    /// VRF reveal deadline offset from epoch start (blocks)
-    pub vrf_reveal_deadline_offset: u64,
-    /// Pacemaker backoff multiplier for view-change increments (>=1)
-    pub pacemaker_backoff_multiplier: u32,
-    /// Pacemaker RTT floor multiplier (avg_rtt * multiplier)
-    pub pacemaker_rtt_floor_multiplier: u32,
-    /// Pacemaker maximum backoff cap
-    pub pacemaker_max_backoff: Duration,
-    /// Pacemaker jitter band (permille of window). 0 disables jitter.
-    pub pacemaker_jitter_frac_permille: u32,
-    /// Grace period before a pending block counts as stalled for pacemaker backpressure.
-    pub pacemaker_pending_stall_grace: Duration,
-    /// Soft limit for blocking pending blocks before pacemaker backpressure defers proposals.
-    /// 0 keeps strict gating (any pending block defers).
-    pub pacemaker_active_pending_soft_limit: usize,
-    /// Soft limit for unresolved RBC backlog sessions before pacemaker backpressure defers proposals.
-    /// 0 keeps strict gating (any backlog session defers).
-    pub pacemaker_rbc_backlog_session_soft_limit: usize,
-    /// Soft limit for missing RBC chunks before pacemaker backpressure defers proposals.
-    /// 0 keeps strict gating (any missing chunks defers).
-    pub pacemaker_rbc_backlog_chunk_soft_limit: usize,
-    /// Enable real BLS signing/verification for consensus votes (mandatory).
-    pub enable_bls: bool,
     /// Adaptive observability/auto-mitigation knobs.
     pub adaptive_observability: AdaptiveObservability,
+    /// Debug-only configuration.
+    pub debug: SumeragiDebug,
 }
 
 /// NPoS configuration bundle.
@@ -3718,24 +3814,16 @@ pub struct SumeragiNpos {
     pub block_time: Duration,
     /// Pacemaker per-phase timeouts.
     pub timeouts: SumeragiNposTimeouts,
-    /// Pacemaker backoff multiplier applied to RTT estimates.
-    pub pacemaker_backoff_multiplier: u32,
-    /// Pacemaker RTT floor multiplier applied to RTT estimates.
-    pub pacemaker_rtt_floor_multiplier: u32,
-    /// Maximum pacemaker backoff window.
-    pub pacemaker_max_backoff: Duration,
-    /// Jitter band size as a permille of the backoff window.
-    pub pacemaker_jitter_frac_permille: u32,
-    /// Number of aggregators per round.
-    pub k_aggregators: usize,
-    /// Redundant send fanout for validators.
-    pub redundant_send_r: u8,
     /// VRF commit/reveal windows.
     pub vrf: SumeragiNposVrf,
     /// Election policy knobs.
     pub election: SumeragiNposElection,
     /// Reconfiguration pipeline knobs.
     pub reconfig: SumeragiNposReconfig,
+    /// Epoch length in blocks.
+    pub epoch_length_blocks: u64,
+    /// Use stake snapshot provider for epoch validator roster.
+    pub use_stake_snapshot_roster: bool,
 }
 
 /// Pacemaker timeout durations.
@@ -3766,6 +3854,10 @@ pub struct SumeragiNposVrf {
     pub commit_window_blocks: u64,
     /// Number of blocks after the commit window reserved for VRF reveals.
     pub reveal_window_blocks: u64,
+    /// Commit deadline offset from epoch start (blocks).
+    pub commit_deadline_offset_blocks: u64,
+    /// Reveal deadline offset from epoch start (blocks).
+    pub reveal_deadline_offset_blocks: u64,
 }
 
 /// Election policy configuration.
@@ -3803,17 +3895,11 @@ impl Default for SumeragiNpos {
         Self {
             block_time: Duration::from_millis(defaults::sumeragi::npos::BLOCK_TIME_MS),
             timeouts: SumeragiNposTimeouts::default(),
-            pacemaker_backoff_multiplier: defaults::sumeragi::PACEMAKER_BACKOFF_MULTIPLIER,
-            pacemaker_rtt_floor_multiplier: defaults::sumeragi::PACEMAKER_RTT_FLOOR_MULTIPLIER,
-            pacemaker_max_backoff: Duration::from_millis(
-                defaults::sumeragi::PACEMAKER_MAX_BACKOFF_MS,
-            ),
-            pacemaker_jitter_frac_permille: defaults::sumeragi::PACEMAKER_JITTER_FRAC_PERMILLE,
-            k_aggregators: defaults::sumeragi::npos::K_AGGREGATORS,
-            redundant_send_r: defaults::sumeragi::npos::REDUNDANT_SEND_R,
             vrf: SumeragiNposVrf::default(),
             election: SumeragiNposElection::default(),
             reconfig: SumeragiNposReconfig::default(),
+            epoch_length_blocks: defaults::sumeragi::EPOCH_LENGTH_BLOCKS,
+            use_stake_snapshot_roster: defaults::sumeragi::USE_STAKE_SNAPSHOT_ROSTER,
         }
     }
 }
@@ -3838,6 +3924,8 @@ impl Default for SumeragiNposVrf {
         Self {
             commit_window_blocks: defaults::sumeragi::npos::VRF_COMMIT_WINDOW_BLOCKS,
             reveal_window_blocks: defaults::sumeragi::npos::VRF_REVEAL_WINDOW_BLOCKS,
+            commit_deadline_offset_blocks: defaults::sumeragi::VRF_COMMIT_DEADLINE_OFFSET,
+            reveal_deadline_offset_blocks: defaults::sumeragi::VRF_REVEAL_DEADLINE_OFFSET,
         }
     }
 }

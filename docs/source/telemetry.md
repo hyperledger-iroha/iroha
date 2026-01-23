@@ -781,10 +781,10 @@ Configuration
   - `iroha_zk_halo2_verifier_max_batch`: maximum proofs accepted in a batch verification.
 
 DA/RBC (Sumeragi) configuration
-- `sumeragi.da_enabled` (bool): enables data availability tracking and Reliable Broadcast (RBC) payload distribution together. Availability evidence (`availability evidence` or an RBC `READY` quorum) is recorded but does not gate commit; RBC remains transport/recovery and its delivery latency is still tracked.
-- `sumeragi.rbc_chunk_max_bytes` (usize): maximum bytes per RBC chunk when broadcasting payloads; must be > 0. Clamped at startup so serialized RBC chunks fit within the consensus payload plaintext cap derived from `network.max_frame_bytes_block_sync`.
-- `sumeragi.rbc_session_ttl_secs` (u64): inactive RBC sessions are pruned after this TTL to bound memory.
-- `sumeragi.rbc_rebroadcast_sessions_per_tick` (usize): cap on RBC session rebroadcasts per tick to prevent payload storms when backlogs accumulate.
+- `sumeragi.da.enabled` (bool): enables data availability tracking and Reliable Broadcast (RBC) payload distribution together. Availability evidence (`availability evidence` or an RBC `READY` quorum) is recorded but does not gate commit; RBC remains transport/recovery and its delivery latency is still tracked.
+- `sumeragi.rbc.chunk_max_bytes` (usize): maximum bytes per RBC chunk when broadcasting payloads; must be > 0. Clamped at startup so serialized RBC chunks fit within the consensus payload plaintext cap derived from `network.max_frame_bytes_block_sync`.
+- `sumeragi.rbc.session_ttl_ms` (u64): inactive RBC sessions are pruned after this TTL (milliseconds) to bound memory.
+- `sumeragi.rbc.rebroadcast_sessions_per_tick` (usize): cap on RBC session rebroadcasts per tick to prevent payload storms when backlogs accumulate.
 
 Metrics: RBC exports gauges/counters (`sumeragi_rbc_sessions_active`, `sumeragi_rbc_sessions_pruned_total`, `sumeragi_rbc_ready_broadcasts_total`, `sumeragi_rbc_deliver_broadcasts_total`, `sumeragi_rbc_payload_bytes_delivered_total`, `sumeragi_rbc_rebroadcast_skipped_total{kind="payload|ready"}`, `sumeragi_rbc_mismatch_total{peer,kind}`, `sumeragi_rbc_persist_drops_total`) and per-lane/dataspace backlog gauges (`sumeragi_rbc_lane_{tx_count,total_chunks,pending_chunks,bytes_total}{lane_id}` and `sumeragi_rbc_dataspace_{tx_count,total_chunks,pending_chunks,bytes_total}{lane_id,dataspace_id}`) alongside the Torii JSON endpoints shown above.
 Additional gauges track backlog pressure: `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`, and `sumeragi_rbc_backlog_sessions_pending`.
@@ -804,16 +804,16 @@ Additional gauges track backlog pressure: `sumeragi_rbc_backlog_chunks_total`, `
 7. **Escalate persistent issues.** If backlog/deferral metrics stay high beyond two blocks:
    - Freeze new client submissions via admission rate limiting.
    - Manually inspect problematic sessions with `iroha_cli --output-format json ops sumeragi telemetry` to confirm which height/view is stuck.
-   - Consider increasing `sumeragi.rbc_chunk_max_bytes` or provisioning additional bandwidth before re-enabling full load.
+   - Consider increasing `sumeragi.rbc.chunk_max_bytes` or provisioning additional bandwidth before re-enabling full load.
 
 
 Availability collectors expose vote ingestion counters: `sumeragi_da_votes_ingested_total`, `sumeragi_da_votes_ingested_by_collector{collector_idx="..."}`, and `sumeragi_da_votes_ingested_by_peer{peer="..."}`. Availability-evidence assembly latency is recorded via the histogram `sumeragi_qc_assembly_latency_ms{kind="availability"}` with the latest observed latency mirrored in `sumeragi_qc_last_latency_ms{kind="availability"}`.
 
 Pacemaker configuration (Sumeragi)
-- `sumeragi.pacemaker_backoff_multiplier` (u32): scales each timeout backoff step (default 1).
-- `sumeragi.pacemaker_rtt_floor_multiplier` (u32): RTT floor multiplier; floor = avg_rtt * multiplier (default 2).
-- `sumeragi.pacemaker_max_backoff_ms` (u64): backoff cap in milliseconds (default 60000).
- - `sumeragi.pacemaker_jitter_frac_permille` (u32): jitter band in permille of the window (0..=1000, default 0 = off).
+- `sumeragi.pacemaker.backoff_multiplier` (u32): scales each timeout backoff step (default 1).
+- `sumeragi.pacemaker.rtt_floor_multiplier` (u32): RTT floor multiplier; floor = avg_rtt * multiplier (default 2).
+- `sumeragi.pacemaker.max_backoff_ms` (u64): backoff cap in milliseconds (default 60000).
+- `sumeragi.pacemaker.jitter_frac_permille` (u32): jitter band in permille of the window (0..=1000, default 0 = off).
 
 Notes
 - All metrics have deterministic semantics across hardware. Parallel paths publish counters only after deterministic commit.
@@ -863,7 +863,7 @@ annotations:
     No VRF commitments observed during an active epoch. Verify validators are online and check `/v1/sumeragi/status.vrf_penalty_epoch`.
 ```
 
-Adjust the 140 minute window to match your deployment’s `vrf_commit_deadline_offset + vrf_reveal_deadline_offset` (defaults assume one-second blocks). Link alerts to the response checklist in `docs/source/sumeragi.md#vrf-alert-response-runbook`.
+Adjust the 140 minute window to match your deployment’s `sumeragi.npos.vrf.commit_deadline_offset_blocks + sumeragi.npos.vrf.reveal_deadline_offset_blocks` (defaults assume one-second blocks). Link alerts to the response checklist in `docs/source/sumeragi.md#vrf-alert-response-runbook`.
 The sample rule group lives at `docs/source/references/prometheus.rules.sumeragi_vrf.yml`; include it from your Prometheus configuration (see `docs/source/references/prometheus.template.yml` for an example `rule_files` entry).
 Run `scripts/check_prometheus_rules.sh` to validate the rules locally. The helper invokes `promtool check rules` if Prometheus is installed, or falls back to `docker run --rm prom/prometheus …` when Docker is available.
 ## Alerting — Consensus Membership Mismatch

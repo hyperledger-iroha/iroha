@@ -11,18 +11,18 @@ translator: manual
 # Sumeragi データ可用性 & RBC シナリオ
 
 統合テスト [`sumeragi_rbc_da_large_payload_four_peers`] と
-[`sumeragi_rbc_da_large_payload_six_peers`]（`integration_tests/tests/sumeragi_da.rs`）は、`sumeragi.da_enabled = true`（DA + RBC）とした 4 ノードおよび 6 ノード構成を起動します。それぞれ 10 MiB 以上のログ命令を投入し、RBC の配信とコミットを観測し、ペイロードの可用性クォーラムが形成できることを確認し、ダッシュボードや回帰ツールで取り込める構造化サマリを出力します。
+[`sumeragi_rbc_da_large_payload_six_peers`]（`integration_tests/tests/sumeragi_da.rs`）は、`sumeragi.da.enabled = true`（DA + RBC）とした 4 ノードおよび 6 ノード構成を起動します。それぞれ 10 MiB 以上のログ命令を投入し、RBC の配信とコミットを観測し、ペイロードの可用性クォーラムが形成できることを確認し、ダッシュボードや回帰ツールで取り込める構造化サマリを出力します。
 
 RBC ペイロードをライトクライアントがサンプリングする手順については [`light_client_da.md`](light_client_da.md) を参照してください。認証付き `/v1/sumeragi/rbc/sample` エンドポイントと関連するレート制限・予算を解説しています。
 
 ### DA タイムアウトと警告
 
-`da_enabled=true` の場合、コミットパイプラインは `availability evidence` または RBC `READY` クォーラムを可用性証跡として記録します（ローカルの RBC `DELIVER` は条件ではありません）。コンセンサスは可用性証跡を待たずに進み、証跡が不足している場合は運用向けにログが出ます。`sumeragi_da_gate_block_total{reason="missing_local_data"}` が増加し、`status_snapshot().da_reschedule_total` はレガシーのため通常 0 のままです。
+`sumeragi.da.enabled=true` の場合、コミットパイプラインは `availability evidence` または RBC `READY` クォーラムを可用性証跡として記録します（ローカルの RBC `DELIVER` は条件ではありません）。コンセンサスは可用性証跡を待たずに進み、証跡が不足している場合は運用向けにログが出ます。`sumeragi_da_gate_block_total{reason="missing_local_data"}` が増加し、`status_snapshot().da_reschedule_total` はレガシーのため通常 0 のままです。
 
 可用性タイムアウトは block/commit 時間と DA タイムアウト調整値から導出され、ログと再ブロードキャストの判定にのみ使われます:
-- `sumeragi.da_quorum_timeout_multiplier` は DA 有効時の `block_time + 4 * commit_time` をスケールします（既定 `3`）。
-- `sumeragi.da_availability_timeout_multiplier` は DA モードの可用性タイムアウトをスケールします（既定 `2`）。
-- `sumeragi.da_availability_timeout_floor_ms` は可用性タイムアウトの最小値を強制します（既定 `2000`、`0` で無効）。
+- `sumeragi.da.quorum_timeout_multiplier` は DA 有効時の `block_time + 4 * commit_time` をスケールします（既定 `3`）。
+- `sumeragi.da.availability_timeout_multiplier` は DA モードの可用性タイムアウトをスケールします（既定 `2`）。
+- `sumeragi.da.availability_timeout_floor_ms` は可用性タイムアウトの最小値を強制します（既定 `2000`、`0` で無効）。
 値はバリデータ間で揃えてください。
 
 可用性追跡に起因する RBC の自動 resend/abort は、配信と投票の循環待ちを避けるため v1 で廃止されました。`availability evidence` または RBC `READY` クォーラムを観測したがペイロードが不足しているノードは、commit certificate 署名者を優先して決定論的に欠落ブロック取得を行い、失敗時はコミットトポロジ全体にフォールバックします。
@@ -54,9 +54,9 @@ cargo test -p integration_tests \
 
 ## 想定ベースライン
 
-既定の `sumeragi.rbc_chunk_max_bytes = 256 KiB` と命令サイズ 10.5 MiB（11 010 048 バイト）に加え、`force_deliver_quorum_one` を有効化した前提で次の不変条件が成り立ちます。
+既定の `sumeragi.rbc.chunk_max_bytes = 256 KiB` と命令サイズ 10.5 MiB（11 010 048 バイト）に加え、`force_deliver_quorum_one` を有効化した前提で次の不変条件が成り立ちます。
 
-注記: `sumeragi.rbc_chunk_max_bytes` は起動時にクランプされ、`network.max_frame_bytes_block_sync` から暗号化オーバーヘッドを差し引いた平文上限に収まるよう調整されます。
+注記: `sumeragi.rbc.chunk_max_bytes` は起動時にクランプされ、`network.max_frame_bytes_block_sync` から暗号化オーバーヘッドを差し引いた平文上限に収まるよう調整されます。
 
 | シナリオ | チャンク数 | READY 閾値 | ピアごとのカウンタ | タイミング予算 |
 | --- | --- | --- | --- | --- |
