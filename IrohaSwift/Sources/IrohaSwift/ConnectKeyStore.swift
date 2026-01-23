@@ -70,7 +70,9 @@ public struct ConnectKeyStore {
     /// The default initializer stores records under the user's application support directory.
     public init(directory: URL? = nil, configuration: Configuration = .default) {
         let baseDirectory = directory ?? FileBacking.defaultBaseDirectory()
-        let integrity = IntegrityKeyProvider(baseDirectory: baseDirectory, accessGroup: configuration.appGroup)
+        let integrity = IntegrityKeyProvider(baseDirectory: baseDirectory,
+                                             accessGroup: configuration.appGroup,
+                                             useKeychain: configuration.preferKeychain)
         let fileBacking = FileBacking(baseDirectory: baseDirectory, integrity: integrity)
         let keychainBacking = configuration.preferKeychain ? KeychainBacking(configuration: configuration) : nil
         backing = HybridBacking(file: fileBacking, keychain: keychainBacking)
@@ -308,21 +310,26 @@ private struct IntegrityKeyProvider {
     private let keyFilename = ".integrity.key"
     private let baseDirectory: URL
     private let accessGroup: String?
+    private let useKeychain: Bool
     private static let cacheLock = NSLock()
     private static nonisolated(unsafe) var cachedKeys: [String: SymmetricKey] = [:]
 
-    init(baseDirectory: URL, accessGroup: String?) {
+    init(baseDirectory: URL, accessGroup: String?, useKeychain: Bool) {
         self.baseDirectory = baseDirectory
         self.accessGroup = accessGroup
+        self.useKeychain = useKeychain
     }
 
     func key() throws -> SymmetricKey {
-        let cacheKey = Self.cacheKey(baseDirectory: baseDirectory, accessGroup: accessGroup)
+        let cacheKey = Self.cacheKey(baseDirectory: baseDirectory,
+                                     accessGroup: accessGroup,
+                                     useKeychain: useKeychain)
         if let cached = Self.cachedKey(for: cacheKey) {
             return cached
         }
 
-        if let keyData = try loadFromKeychain() ?? loadFromFile() {
+        let keyData = try (useKeychain ? loadFromKeychain() : nil) ?? loadFromFile()
+        if let keyData {
             let key = SymmetricKey(data: keyData)
             Self.storeCached(key, for: cacheKey)
             return key
@@ -335,7 +342,7 @@ private struct IntegrityKeyProvider {
         }
         let data = Data(bytes)
 
-        if !storeInKeychain(data: data) {
+        if !(useKeychain && storeInKeychain(data: data)) {
             try storeInFile(data: data)
         }
 
@@ -344,8 +351,8 @@ private struct IntegrityKeyProvider {
         return key
     }
 
-    private static func cacheKey(baseDirectory: URL, accessGroup: String?) -> String {
-        "\(baseDirectory.standardizedFileURL.path)|\(accessGroup ?? "")"
+    private static func cacheKey(baseDirectory: URL, accessGroup: String?, useKeychain: Bool) -> String {
+        "\(baseDirectory.standardizedFileURL.path)|\(accessGroup ?? "")|\(useKeychain)"
     }
 
     private static func cachedKey(for key: String) -> SymmetricKey? {

@@ -208,6 +208,39 @@ against the Norito-encoded manifest bytes before verifying the inspector signatu
 bound freshness via `android.provisioned.max_manifest_age_ms`; after that TTL expires Torii rejects
 receipts until a new manifest is registered.
 
+## 4. QR stream handoff (animated QR)
+
+Offline receipts and bundles can be handed off via the QR stream transport (`docs/source/qr_stream.md`).
+Use the animated QR UI for short-range transfers between POS terminals, operator consoles, and
+mobile wallets.
+
+### 4.1 Scan timing and progress UI
+
+- **Warm-up frames.** Always show the header frame at least once per second so late scanners can
+  join mid-stream.
+- **Progress overlay.** Surface `received / total` and a percentage ring based on
+  `QrStreamDecodeResult.progress`.
+- **Cadence.** 10-12 fps for default playback, 6-8 fps for reduced-motion/low-power modes.
+- **Stall fallback.** If no new frames land within 2x the frame interval, prompt the user to
+  re-center the camera or switch to the text fallback.
+
+### 4.2 Text fallback flow
+
+Some scanners only expose QR text. Use the text wrapper:
+
+```
+iroha:qr1:<base64(frame_bytes)>
+```
+
+If the camera API only returns `stringValue` (iOS AVFoundation, browser BarcodeDetector),
+decode the prefix and feed the bytes into the QR stream decoder.
+
+### 4.3 Failure recovery
+
+- If progress stalls below 60%, switch to a slower animation profile (reduced motion).
+- If progress stalls above 60%, emit the remaining frames as text (copy/paste or NFC fallback).
+- Always re-verify `payload_hash` before submitting offline bundles.
+
 Rust data-model callers can now compute these digests directly via
 `OfflineReceiptChallengePreimage::hash_with_chain_id()` or
 `OfflineSpendReceipt::challenge_hash_with_chain_id()`, avoiding the manual

@@ -119,3 +119,8 @@ harness = false
 name = "axt_fixtures"
 path = "src/bin/axt_fixtures.rs"
 required-features = ["test-fixtures"]
+
+[[bin]]
+name = "qr_stream_fixtures"
+path = "src/bin/qr_stream_fixtures.rs"
+required-features = ["test-fixtures"]

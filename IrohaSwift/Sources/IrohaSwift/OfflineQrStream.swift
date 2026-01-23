@@ -32,6 +32,11 @@ public enum OfflineQrStreamFrameKind: UInt8, Sendable {
     case parity = 2
 }
 
+public enum OfflineQrStreamFrameEncoding: Sendable {
+    case binary
+    case base64
+}
+
 public enum OfflineQrPayloadKind: UInt16, Sendable {
     case unspecified = 0
     case offlineToOnlineTransfer = 1
@@ -552,6 +557,14 @@ public struct OfflineQrStreamFrameStyle: Sendable, Equatable {
     public let gradientAngle: Double
 }
 
+public struct OfflineQrStreamPlaybackStyle: Sendable, Equatable {
+    public let petalPhase: Double
+    public let accentStrength: Double
+    public let gradientAngle: Double
+    public let driftOffset: Double
+    public let progressAlpha: Double
+}
+
 public struct OfflineQrStreamTheme: Sendable, Equatable {
     public let name: String
     public let backgroundStart: OfflineQrStreamColor
@@ -580,14 +593,120 @@ public struct OfflineQrStreamTheme: Sendable, Equatable {
     }
 }
 
+public struct OfflineQrStreamPlaybackSkin: Sendable, Equatable {
+    public let name: String
+    public let theme: OfflineQrStreamTheme
+    public let frameRate: Double
+    public let petalDriftSpeed: Double
+    public let progressOverlayAlpha: Double
+    public let reducedMotion: Bool
+    public let lowPower: Bool
+
+    public static let sakura = OfflineQrStreamPlaybackSkin(
+        name: "sakura",
+        theme: .sakura,
+        frameRate: 12,
+        petalDriftSpeed: 1.0,
+        progressOverlayAlpha: 0.4,
+        reducedMotion: false,
+        lowPower: false
+    )
+
+    public static let sakuraReducedMotion = OfflineQrStreamPlaybackSkin(
+        name: "sakura-reduced-motion",
+        theme: .sakura,
+        frameRate: 6,
+        petalDriftSpeed: 0.0,
+        progressOverlayAlpha: 0.25,
+        reducedMotion: true,
+        lowPower: false
+    )
+
+    public static let sakuraLowPower = OfflineQrStreamPlaybackSkin(
+        name: "sakura-low-power",
+        theme: OfflineQrStreamTheme(
+            name: "sakura-low-power",
+            backgroundStart: OfflineQrStreamTheme.sakura.backgroundStart,
+            backgroundEnd: OfflineQrStreamTheme.sakura.backgroundEnd,
+            accent: OfflineQrStreamTheme.sakura.accent,
+            petal: OfflineQrStreamTheme.sakura.petal,
+            petalCount: 4,
+            pulsePeriod: 72
+        ),
+        frameRate: 8,
+        petalDriftSpeed: 0.4,
+        progressOverlayAlpha: 0.3,
+        reducedMotion: false,
+        lowPower: true
+    )
+
+    public func frameStyle(frameIndex: Int, totalFrames: Int, progress: Double) -> OfflineQrStreamPlaybackStyle {
+        let safeTotal = max(totalFrames, 1)
+        let phase = Double(frameIndex % safeTotal) / Double(safeTotal)
+        let pulse = (sin((Double(frameIndex) / theme.pulsePeriod) * Double.pi * 2) + 1) / 2
+        let angle = phase * 360.0
+        let drift = reducedMotion ? 0.0 : sin(phase * Double.pi * 2) * petalDriftSpeed
+        let progressClamped = min(max(progress, 0), 1)
+        return OfflineQrStreamPlaybackStyle(
+            petalPhase: phase,
+            accentStrength: pulse,
+            gradientAngle: angle,
+            driftOffset: drift,
+            progressAlpha: progressOverlayAlpha * progressClamped
+        )
+    }
+}
+
 public final class OfflineQrStreamScanSession {
     private let decoder = OfflineQrStreamDecoder()
 
     public init() {}
 
-    // TODO: Add camera/Vision integration helpers that feed raw QR bytes into this session.
     public func ingest(frameBytes: Data) throws -> OfflineQrStreamDecodeResult {
         try decoder.ingest(frameBytes: frameBytes)
+    }
+
+    public func ingest(frameString: String, encoding: OfflineQrStreamFrameEncoding = .base64) throws -> OfflineQrStreamDecodeResult {
+        let bytes = try OfflineQrStreamTextCodec.decode(frameString, encoding: encoding)
+        return try ingest(frameBytes: bytes)
+    }
+}
+
+public enum OfflineQrStreamTextCodec {
+    private static let prefix = "iroha:qr1:"
+
+    public static func encode(_ data: Data, encoding: OfflineQrStreamFrameEncoding) -> String {
+        switch encoding {
+        case .binary:
+            return data.base64EncodedString()
+        case .base64:
+            return prefix + data.base64EncodedString()
+        }
+    }
+
+    public static func decode(_ value: String, encoding: OfflineQrStreamFrameEncoding) throws -> Data {
+        switch encoding {
+        case .binary:
+            guard let decoded = Data(base64Encoded: value) else {
+                throw OfflineQrStreamError.invalidEnvelope("frame text is not base64")
+            }
+            return decoded
+        case .base64:
+            guard let stripped = value.trimmingCharacters(in: .whitespacesAndNewlines).stripPrefix(prefix) else {
+                throw OfflineQrStreamError.invalidEnvelope("qr text prefix missing")
+            }
+            guard let decoded = Data(base64Encoded: stripped) else {
+                throw OfflineQrStreamError.invalidEnvelope("frame text is not base64")
+            }
+            return decoded
+        }
+    }
+}
+
+private extension String {
+    func stripPrefix(_ prefix: String) -> String? {
+        guard hasPrefix(prefix) else { return nil }
+        return String(dropFirst(prefix.count))
     }
 }
 

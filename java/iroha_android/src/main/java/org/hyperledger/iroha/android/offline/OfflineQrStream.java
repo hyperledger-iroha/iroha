@@ -16,7 +16,7 @@ public final class OfflineQrStream {
   private static final byte FRAME_VERSION = 1;
   private static final byte ENVELOPE_VERSION = 1;
   private static final byte ENCODING_BINARY = 0;
-  private static final int ENVELOPE_LENGTH = 46;
+  private static final int ENVELOPE_LENGTH = 48;
 
   private OfflineQrStream() {}
 
@@ -45,6 +45,11 @@ public final class OfflineQrStream {
     }
   }
 
+  public enum FrameEncoding {
+    BINARY,
+    BASE64,
+  }
+
   public enum PayloadKind {
     UNSPECIFIED(0),
     OFFLINE_TO_ONLINE_TRANSFER(1),
@@ -59,6 +64,38 @@ public final class OfflineQrStream {
 
     public int value() {
       return value;
+    }
+  }
+
+  public static final class TextCodec {
+    private static final String PREFIX = "iroha:qr1:";
+
+    private TextCodec() {}
+
+    public static String encode(final byte[] data, final FrameEncoding encoding) {
+      Objects.requireNonNull(data, "data");
+      Objects.requireNonNull(encoding, "encoding");
+      final String base64 = java.util.Base64.getEncoder().encodeToString(data);
+      if (encoding == FrameEncoding.BASE64) {
+        return PREFIX + base64;
+      }
+      return base64;
+    }
+
+    public static byte[] decode(final String value, final FrameEncoding encoding) {
+      Objects.requireNonNull(value, "value");
+      Objects.requireNonNull(encoding, "encoding");
+      final String trimmed = value.trim();
+      final String payload;
+      if (encoding == FrameEncoding.BASE64) {
+        if (!trimmed.startsWith(PREFIX)) {
+          throw new IllegalArgumentException("QR text prefix missing");
+        }
+        payload = trimmed.substring(PREFIX.length());
+      } else {
+        payload = trimmed;
+      }
+      return java.util.Base64.getDecoder().decode(payload);
     }
   }
 
@@ -551,7 +588,6 @@ public final class OfflineQrStream {
 
     public ScanSession() {}
 
-    // TODO: Wire CameraX/ZXing byte capture into this session for live scans.
     public DecodeResult ingest(final byte[] frameBytes) {
       return decoder.ingest(frameBytes);
     }
@@ -578,6 +614,27 @@ public final class OfflineQrStream {
       this.petalPhase = petalPhase;
       this.accentStrength = accentStrength;
       this.gradientAngle = gradientAngle;
+    }
+  }
+
+  public static final class PlaybackStyle {
+    public final double petalPhase;
+    public final double accentStrength;
+    public final double gradientAngle;
+    public final double driftOffset;
+    public final double progressAlpha;
+
+    public PlaybackStyle(
+        final double petalPhase,
+        final double accentStrength,
+        final double gradientAngle,
+        final double driftOffset,
+        final double progressAlpha) {
+      this.petalPhase = petalPhase;
+      this.accentStrength = accentStrength;
+      this.gradientAngle = gradientAngle;
+      this.driftOffset = driftOffset;
+      this.progressAlpha = progressAlpha;
     }
   }
 
@@ -616,6 +673,44 @@ public final class OfflineQrStream {
     }
   }
 
+  public static final class PlaybackSkin {
+    public final String name;
+    public final Theme theme;
+    public final double frameRate;
+    public final double petalDriftSpeed;
+    public final double progressOverlayAlpha;
+    public final boolean reducedMotion;
+    public final boolean lowPower;
+
+    public PlaybackSkin(
+        final String name,
+        final Theme theme,
+        final double frameRate,
+        final double petalDriftSpeed,
+        final double progressOverlayAlpha,
+        final boolean reducedMotion,
+        final boolean lowPower) {
+      this.name = name;
+      this.theme = theme;
+      this.frameRate = frameRate;
+      this.petalDriftSpeed = petalDriftSpeed;
+      this.progressOverlayAlpha = progressOverlayAlpha;
+      this.reducedMotion = reducedMotion;
+      this.lowPower = lowPower;
+    }
+
+    public PlaybackStyle frameStyle(final int frameIndex, final int totalFrames, final double progress) {
+      final int safeTotal = Math.max(totalFrames, 1);
+      final double phase = (frameIndex % safeTotal) / (double) safeTotal;
+      final double pulse =
+          (Math.sin((frameIndex / theme.pulsePeriod) * Math.PI * 2.0) + 1.0) / 2.0;
+      final double angle = phase * 360.0;
+      final double drift = reducedMotion ? 0.0 : Math.sin(phase * Math.PI * 2.0) * petalDriftSpeed;
+      final double clamped = Math.min(Math.max(progress, 0.0), 1.0);
+      return new PlaybackStyle(phase, pulse, angle, drift, progressOverlayAlpha * clamped);
+    }
+  }
+
   public static final Theme SAKURA_THEME =
       new Theme(
           "sakura",
@@ -625,6 +720,29 @@ public final class OfflineQrStream {
           new Color(0.98, 0.8, 0.86),
           6,
           48);
+
+  public static final PlaybackSkin SAKURA_SKIN =
+      new PlaybackSkin("sakura", SAKURA_THEME, 12.0, 1.0, 0.4, false, false);
+
+  public static final PlaybackSkin SAKURA_REDUCED_MOTION_SKIN =
+      new PlaybackSkin("sakura-reduced-motion", SAKURA_THEME, 6.0, 0.0, 0.25, true, false);
+
+  public static final PlaybackSkin SAKURA_LOW_POWER_SKIN =
+      new PlaybackSkin(
+          "sakura-low-power",
+          new Theme(
+              "sakura-low-power",
+              SAKURA_THEME.backgroundStart,
+              SAKURA_THEME.backgroundEnd,
+              SAKURA_THEME.accent,
+              SAKURA_THEME.petal,
+              4,
+              72),
+          8.0,
+          0.4,
+          0.3,
+          false,
+          true);
 
   private static byte[] xorParity(
       final byte[] payload,

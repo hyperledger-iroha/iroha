@@ -8865,7 +8865,7 @@ test("governanceSubmitZk ballots reject noncanonical owners", async () => {
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
-      assert.match(String(error?.message), /canonical account id/i);
+      assert.match(String(error?.message), /canonical (?:IH58 )?account id/i);
       return true;
     },
   );
@@ -8915,7 +8915,7 @@ test("governanceSubmitZkBallotV1 rejects noncanonical owner", async () => {
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
-      assert.match(String(error?.message), /canonical account id/i);
+      assert.match(String(error?.message), /canonical (?:IH58 )?account id/i);
       return true;
     },
   );
@@ -8987,7 +8987,7 @@ test("governanceSubmitZkBallotProofV1 rejects noncanonical owner", async () => {
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
-      assert.match(String(error?.message), /canonical account id/i);
+      assert.match(String(error?.message), /canonical (?:IH58 )?account id/i);
       return true;
     },
   );
@@ -11441,7 +11441,7 @@ test("iterateAccountAssets walks multiple pages", async () => {
   for await (const holding of client.iterateAccountAssets("34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", { pageSize: 1 })) {
     collected.push(holding.asset_id);
   }
-  assert.deepEqual(collected, ["rose##alice", "daisy##alice"]);
+  assert.deepEqual(collected, [`rose##${FIXTURE_ALICE_ID}`, `daisy##${FIXTURE_ALICE_ID}`]);
 });
 
 test("iterateAccountAssetsQuery paginates per-account query endpoint", async () => {

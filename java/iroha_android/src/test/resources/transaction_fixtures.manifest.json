@@ -421,7 +421,7 @@
       "time_to_live_ms": 7000
     }
   ],
-  "generated_at": "2026-01-22T12:50:13.907076Z",
+  "generated_at": "2026-01-23T09:46:24.277744Z",
   "schema": {
     "payload": "iroha.android.transaction.Payload.v1",
     "signed": "iroha.transaction.SignedTransaction.v1"

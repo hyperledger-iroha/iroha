@@ -492,6 +492,36 @@ pub enum Program {
     Iroha,
 }
 
+#[derive(Debug)]
+struct ProgramSpec {
+    name: &'static str,
+    env: &'static str,
+    pkg: &'static str,
+    build_args: Vec<OsString>,
+}
+
+impl Program {
+    fn spec(&self) -> ProgramSpec {
+        match self {
+            Self::Irohad => ProgramSpec {
+                name: "iroha3d",
+                env: PROGRAM_IROHAD_ENV,
+                pkg: "irohad",
+                build_args: ["--bin", "iroha3d", "--features", "expensive-telemetry"]
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect(),
+            },
+            Self::Iroha => ProgramSpec {
+                name: "iroha",
+                env: PROGRAM_IROHA_ENV,
+                pkg: "iroha_cli",
+                build_args: Vec::new(),
+            },
+        }
+    }
+}
+
 // Cache resolved binary paths to avoid redundant rebuilds/resolution per peer
 static IROHAD_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHA_BIN: OnceLock<PathBuf> = OnceLock::new();
@@ -1163,18 +1193,12 @@ impl Program {
             None
         }
 
-        let (name, env, pkg, build_args): (&str, &str, &str, Vec<OsString>) = match self {
-            Self::Irohad => (
-                "iroha3d",
-                PROGRAM_IROHAD_ENV,
-                "irohad",
-                ["--bin", "iroha3d"]
-                    .into_iter()
-                    .map(OsString::from)
-                    .collect(),
-            ),
-            Self::Iroha => ("iroha", PROGRAM_IROHA_ENV, "iroha_cli", Vec::new()),
-        };
+        let ProgramSpec {
+            name,
+            env,
+            pkg,
+            build_args,
+        } = self.spec();
 
         // 1) Explicit override
         if let Ok(path) = std::env::var(env) {
@@ -8483,6 +8507,20 @@ exit 0
         }
         // Do not remove the dummy file to avoid races if other tests concurrently resolve;
         // it's under target/ and harmless.
+    }
+
+    #[test]
+    fn program_spec_irohad_enables_expensive_telemetry() {
+        let spec = Program::Irohad.spec();
+        let args: Vec<String> = spec
+            .build_args
+            .iter()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        assert!(args.contains(&"--bin".to_string()));
+        assert!(args.contains(&"iroha3d".to_string()));
+        assert!(args.contains(&"--features".to_string()));
+        assert!(args.contains(&"expensive-telemetry".to_string()));
     }
 
     #[test]

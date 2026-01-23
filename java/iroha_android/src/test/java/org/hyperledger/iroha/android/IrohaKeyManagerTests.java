@@ -12,6 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.crypto.KeyProviderMetadata;
+import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
 import org.hyperledger.iroha.android.crypto.keystore.KeyAttestation;
@@ -298,7 +299,7 @@ public final class IrohaKeyManagerTests {
     final KeyPair keyPair =
         manager.generateOrLoad("signing-alias", IrohaKeyManager.KeySecurityPreference.SOFTWARE_ONLY);
     verifier.initVerify(keyPair.getPublic());
-    verifier.update(message);
+    verifier.update(IrohaHash.prehash(message));
     assert verifier.verify(signature) : "Generated signature must verify with stored public key";
   }
 

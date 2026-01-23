@@ -438,6 +438,19 @@ top-level `transfer` object or alongside the receipt that generated the token:
 }
 ```
 
+## QR stream handoff
+
+Use the QR stream helpers when passing offline receipts or bundles between devices:
+
+- **Encode frames:** `OfflineQrStream.Encoder.encodeFrames(...)` produces header/data/parity frames.
+- **Scan pipeline:** `OfflineQrStreamCameraXScanner` wires CameraX + ZXing to feed raw bytes into
+  `OfflineQrStream.ScanSession`.
+- **Text fallback:** if QR decoders return text, decode
+  `iroha:qr1:<base64(frame_bytes)>` via `OfflineQrStream.TextCodec`.
+- **Playback skins:** use `OfflineQrStream.SAKURA_SKIN` for default playback,
+  `SAKURA_REDUCED_MOTION_SKIN` for accessibility, and `SAKURA_LOW_POWER_SKIN` for battery-friendly
+  animations.
+
 `OfflineTransferPayloads.attachPlatformSnapshot(...)` wires this JSON snippet into either the
 in-memory map passed to the Norito encoder or a staged envelope pulled from disk:
 

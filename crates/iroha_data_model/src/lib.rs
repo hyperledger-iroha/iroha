@@ -116,6 +116,8 @@ pub mod peer;
 pub mod permission;
 /// Zero-knowledge proof payload types
 pub mod proof;
+/// QR stream framing types for offline payload handoff.
+pub mod qr_stream;
 /// Query builders, predicates, and parameter types.
 pub mod query;
 /// Repo agreement descriptors and governance knobs.

@@ -10,7 +10,7 @@ pub(crate) mod routing_ledger;
 
 use core::time::Duration;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
     num::NonZeroUsize,
     ops::Deref,
@@ -233,8 +233,14 @@ pub struct Queue {
     pub tx_time_to_live: Duration,
     /// Minimum interval between expired-transaction sweeps.
     expired_cull_interval: Duration,
+    /// Maximum number of entries scanned per expired-transaction sweep.
+    expired_cull_batch: NonZeroUsize,
     /// Last time (unix ms) we swept expired transactions.
     last_expired_cull_ms: AtomicU64,
+    /// Round-robin ring of queued transaction hashes used for TTL sweeps.
+    expiry_ring: parking_lot::Mutex<VecDeque<SignedTxHash>>,
+    /// Membership guard for the expiry ring to prevent unbounded growth.
+    expiry_ring_members: DashMap<SignedTxHash, ()>,
     /// Queue to gossip transactions
     tx_gossip: ArrayQueue<SignedTxHash>,
     /// Broadcast queue load so producers can observe backpressure.
@@ -267,6 +273,7 @@ impl fmt::Debug for Queue {
             .field("capacity_per_user", &self.capacity_per_user)
             .field("tx_time_to_live", &self.tx_time_to_live)
             .field("expired_cull_interval", &self.expired_cull_interval)
+            .field("expired_cull_batch", &self.expired_cull_batch)
             .finish_non_exhaustive()
     }
 }
@@ -1147,6 +1154,7 @@ impl Queue {
             capacity_per_user,
             transaction_time_to_live,
             expired_cull_interval,
+            expired_cull_batch,
         }: Config,
         events_sender: EventsSender,
         router: Arc<dyn LaneRouter>,
@@ -1159,6 +1167,7 @@ impl Queue {
                 capacity_per_user,
                 transaction_time_to_live,
                 expired_cull_interval,
+                expired_cull_batch,
             },
             events_sender,
             router,
@@ -1176,6 +1185,7 @@ impl Queue {
             capacity_per_user,
             transaction_time_to_live,
             expired_cull_interval,
+            expired_cull_batch,
         }: Config,
         events_sender: EventsSender,
         router: Arc<dyn LaneRouter>,
@@ -1190,6 +1200,7 @@ impl Queue {
                 capacity_per_user,
                 transaction_time_to_live,
                 expired_cull_interval,
+                expired_cull_batch,
             },
             events_sender,
             router,
@@ -1207,6 +1218,7 @@ impl Queue {
             capacity_per_user,
             transaction_time_to_live,
             expired_cull_interval,
+            expired_cull_batch,
         }: Config,
         events_sender: EventsSender,
         router: Arc<dyn LaneRouter>,
@@ -1239,7 +1251,10 @@ impl Queue {
                 time_source: TimeSource::new_system(),
                 tx_time_to_live: transaction_time_to_live,
                 expired_cull_interval,
+                expired_cull_batch,
                 last_expired_cull_ms: AtomicU64::new(0),
+                expiry_ring: parking_lot::Mutex::new(VecDeque::new()),
+                expiry_ring_members: DashMap::new(),
                 tx_gossip: ArrayQueue::new(capacity.get()),
                 backpressure_tx,
                 sumeragi_wake: OnceLock::new(),
@@ -1298,6 +1313,11 @@ impl Queue {
 
     /// Checks if the transaction is waiting longer than its TTL or than the TTL from [`Config`].
     pub fn is_expired(&self, tx: &AcceptedTransaction<'static>) -> bool {
+        self.is_expired_at(tx, self.time_source.get_unix_time())
+    }
+
+    /// Checks if the transaction is expired at a specific time.
+    fn is_expired_at(&self, tx: &AcceptedTransaction<'static>, now: Duration) -> bool {
         let tx_creation_time = tx.as_ref().creation_time();
 
         let time_limit = tx.as_ref().time_to_live().map_or_else(
@@ -1305,8 +1325,7 @@ impl Queue {
             |tx_time_to_live| core::cmp::min(self.tx_time_to_live, tx_time_to_live),
         );
 
-        let curr_time = self.time_source.get_unix_time();
-        curr_time.saturating_sub(tx_creation_time) > time_limit
+        now.saturating_sub(tx_creation_time) > time_limit
     }
 
     /// Returns all pending transactions.
@@ -1740,6 +1759,7 @@ impl Queue {
                 err: Error::Full,
             });
         }
+        self.track_expiry_hash(hash);
         #[cfg(feature = "telemetry")]
         self.record_teu_enqueue(
             hash,
@@ -1811,6 +1831,8 @@ impl Queue {
         }
         while self.tx_gossip.pop().is_some() {}
         self.txs_per_user.clear();
+        self.expiry_ring_members.clear();
+        self.expiry_ring.lock().clear();
         #[cfg(feature = "telemetry")]
         {
             self.tx_teu.clear();
@@ -1855,6 +1877,7 @@ impl Queue {
             let tx_arc = if let Some(entry) = self.txs.get(&hash) {
                 Arc::clone(entry.value())
             } else {
+                self.untrack_expiry_hash(&hash);
                 #[cfg(test)]
                 self.vacant_entry_warnings.fetch_add(1, Ordering::Relaxed);
                 warn!("Looks like we're experiencing a high load");
@@ -1871,6 +1894,7 @@ impl Queue {
                 // Drop the cloned arc before removing to keep expiration recovery effective.
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.untrack_expiry_hash(&hash);
                     self.decrease_per_user_tx_count(removed_tx.as_ref().as_ref().authority());
                     if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                         routing_ledger::discard_if_matches(&hash, decision);
@@ -1975,19 +1999,33 @@ impl Queue {
         queued.saturating_sub(self.removed_hashes.len())
     }
 
+    /// Track a queued transaction hash for TTL sweeps.
+    fn track_expiry_hash(&self, hash: SignedTxHash) {
+        if self.expiry_ring_members.insert(hash, ()).is_none() {
+            let mut ring = self.expiry_ring.lock();
+            ring.push_back(hash);
+        }
+    }
+
+    /// Drop a transaction hash from TTL sweep tracking.
+    fn untrack_expiry_hash(&self, hash: &SignedTxHash) {
+        self.expiry_ring_members.remove(hash);
+    }
+
     /// Remove expired transactions if the configured sweep interval has elapsed.
-    pub(crate) fn cull_expired_entries_if_due(&self, state_view: &StateView) -> usize {
+    pub(crate) fn cull_expired_entries_if_due(&self) -> usize {
         let interval_ms = Self::duration_to_millis(self.expired_cull_interval);
         if interval_ms == 0 {
             return 0;
         }
-        let now_ms = Self::duration_to_millis(self.time_source.now());
+        let now = self.time_source.get_unix_time();
+        let now_ms = Self::duration_to_millis(now);
         let last_ms = self.last_expired_cull_ms.load(Ordering::Relaxed);
         if now_ms.saturating_sub(last_ms) < interval_ms {
             return 0;
         }
         self.last_expired_cull_ms.store(now_ms, Ordering::Relaxed);
-        self.cull_expired_entries(state_view)
+        self.cull_expired_entries(now)
     }
 
     /// Gets transactions till they fill whole block or till the end of queue.
@@ -2058,7 +2096,7 @@ impl Queue {
         // and some expired transactions remain only in the `txs` map, cull them now so
         // that expiration events are not missed, preventing tests from hanging on recv().
         if transactions.is_empty() {
-            let _ = self.cull_expired_entries(state_view);
+            let _ = self.cull_expired_entries(self.time_source.get_unix_time());
         }
     }
 
@@ -2138,35 +2176,49 @@ impl Queue {
         u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
     }
 
-    /// Remove any entries from `txs` that have expired or were already committed,
-    /// emitting expiration events for TTL-elapsed transactions.
-    fn cull_expired_entries(&self, state_view: &StateView) -> usize {
+    /// Remove any entries from `txs` that have expired, emitting expiration
+    /// events for TTL-elapsed transactions.
+    fn cull_expired_entries(&self, now: Duration) -> usize {
         const CULL_WARN_MS: u64 = 1_000;
-        #[cfg(feature = "telemetry")]
-        let backpressure_telemetry: Option<&StateTelemetry> = Some(state_view.telemetry);
-        #[cfg(not(feature = "telemetry"))]
-        let backpressure_telemetry: Option<&StateTelemetry> = None;
         let scan_start = std::time::Instant::now();
         let tracked_before = self.txs.len();
         let mut to_remove = Vec::new();
         let mut expired = 0usize;
-        let mut committed = 0usize;
-        for entry in &self.txs {
-            let tx = entry.value();
-            if self.is_expired(tx.as_accepted()) {
+        let mut scanned = 0usize;
+        let max_scan = self.expired_cull_batch.get();
+        let mut ring = self.expiry_ring.lock();
+        while scanned < max_scan {
+            let Some(hash) = ring.pop_front() else {
+                break;
+            };
+            scanned = scanned.saturating_add(1);
+            if !self.expiry_ring_members.contains_key(&hash) {
+                continue;
+            }
+            let Some(entry) = self.txs.get(&hash) else {
+                self.expiry_ring_members.remove(&hash);
+                continue;
+            };
+            if self.is_expired_at(entry.value().as_accepted(), now) {
                 expired = expired.saturating_add(1);
-                to_remove.push(*entry.key());
-            } else if tx.is_in_blockchain(state_view) {
-                committed = committed.saturating_add(1);
-                to_remove.push(*entry.key());
+                to_remove.push(hash);
+                self.expiry_ring_members.remove(&hash);
+            } else {
+                ring.push_back(hash);
             }
         }
+        let ring_len = ring.len();
+        drop(ring);
         let scan_ms = Self::duration_to_millis(scan_start.elapsed());
         if to_remove.is_empty() {
             if scan_ms >= CULL_WARN_MS {
                 warn!(
                     scan_ms,
-                    tracked_before, expired, committed, "queue expiry sweep slow without removals"
+                    tracked_before,
+                    scanned,
+                    ring_len,
+                    expired,
+                    "queue expiry sweep slow without removals"
                 );
             }
             return 0;
@@ -2183,12 +2235,13 @@ impl Queue {
                     .or_else(|| routing_ledger::take(&hash))
                     .unwrap_or_default();
                 self.removed_hashes.insert(hash, ());
+                self.untrack_expiry_hash(&hash);
                 self.decrease_per_user_tx_count(tx_arc.as_ref().as_ref().authority());
                 #[cfg(feature = "telemetry")]
-                self.record_teu_dequeue(&hash, Some(state_view.telemetry));
+                self.record_teu_dequeue(&hash, None);
                 if let Ok(tx) = Arc::try_unwrap(tx_arc) {
                     let accepted = tx.into_accepted();
-                    if self.is_expired(&accepted) {
+                    if self.is_expired_at(&accepted, now) {
                         let _ = self.events_sender.send(
                             TransactionEvent {
                                 hash,
@@ -2209,7 +2262,7 @@ impl Queue {
             let _ = self.compact_hash_queue_locked();
         }
         if removed > 0 {
-            self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
+            self.publish_backpressure_state(self.active_len(), None);
         }
         let total_ms = scan_ms.saturating_add(remove_ms);
         if total_ms >= CULL_WARN_MS {
@@ -2219,8 +2272,9 @@ impl Queue {
                 total_ms,
                 tracked_before,
                 tracked_after = self.txs.len(),
+                scanned,
+                ring_len,
                 expired,
-                committed,
                 removed,
                 "queue expiry sweep slow"
             );
@@ -2273,6 +2327,7 @@ impl Queue {
         let hash = tx.as_ref().hash();
         let _guard = self.push_remove_lock.lock();
         if self.txs.remove(&hash).is_some() {
+            self.untrack_expiry_hash(&hash);
             let decision = self
                 .routing_decisions
                 .remove(&hash)
@@ -2288,6 +2343,37 @@ impl Queue {
         #[cfg(feature = "telemetry")]
         self.record_teu_dequeue(&hash, telemetry);
         self.publish_backpressure_state(self.active_len(), telemetry);
+    }
+
+    /// Remove committed transactions from the queue by hash, preserving routing metadata.
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    pub(crate) fn remove_committed_hashes(
+        &self,
+        hashes: impl IntoIterator<Item = SignedTxHash>,
+        telemetry: Option<&StateTelemetry>,
+    ) -> usize {
+        let _guard = self.push_remove_lock.lock();
+        let mut removed = 0usize;
+        for hash in hashes {
+            let tx_arc = self.txs.remove(&hash).map(|(_, tx)| tx);
+            self.untrack_expiry_hash(&hash);
+            let _ = self.routing_decisions.remove(&hash);
+            let _ = routing_ledger::take(&hash);
+            if let Some(tx_arc) = tx_arc {
+                self.removed_hashes.insert(hash, ());
+                self.decrease_per_user_tx_count(tx_arc.as_ref().as_ref().authority());
+                #[cfg(feature = "telemetry")]
+                self.record_teu_dequeue(&hash, telemetry);
+                removed = removed.saturating_add(1);
+            }
+        }
+        if removed > 0 && !self.removed_hashes.is_empty() && !self.tx_hashes.is_empty() {
+            let _ = self.compact_hash_queue_locked();
+        }
+        if removed > 0 {
+            self.publish_backpressure_state(self.active_len(), telemetry);
+        }
+        removed
     }
 
     /// Check that the user adhered to the maximum transaction per user limit and increment their transaction count.
@@ -2766,7 +2852,10 @@ pub mod tests {
                     time_source: time_source.clone(),
                     tx_time_to_live: cfg.transaction_time_to_live,
                     expired_cull_interval: cfg.expired_cull_interval,
+                    expired_cull_batch: cfg.expired_cull_batch,
                     last_expired_cull_ms: AtomicU64::new(0),
+                    expiry_ring: parking_lot::Mutex::new(VecDeque::new()),
+                    expiry_ring_members: DashMap::new(),
                     backpressure_tx,
                     sumeragi_wake: OnceLock::new(),
                     nexus_limits: parking_lot::RwLock::new(QueueLimits::default()),
@@ -5729,7 +5818,7 @@ pub mod tests {
         assert_eq!(queue.active_len(), 1, "tx tracked before expiration");
 
         time_handle.advance(Duration::from_secs(2));
-        let culled = queue.cull_expired_entries_if_due(&state.view());
+        let culled = queue.cull_expired_entries_if_due();
         assert_eq!(culled, 1, "expired transaction should be culled");
         assert_eq!(
             queue.active_len(),
@@ -5761,7 +5850,7 @@ pub mod tests {
         assert_eq!(queue.queued_len(), 2, "hash queue tracks queued txs");
 
         time_handle.advance(Duration::from_secs(2));
-        let culled = queue.cull_expired_entries_if_due(&state.view());
+        let culled = queue.cull_expired_entries_if_due();
         assert_eq!(culled, 2, "expired transactions should be culled");
         assert_eq!(queue.queued_len(), 0, "hash queue compacted after cull");
 
@@ -5769,6 +5858,66 @@ pub mod tests {
             .push(accepted_tx_by_someone(&time_source), state.view())
             .expect("push after compaction succeeds");
         assert_eq!(queue.queued_len(), 1, "hash queue accepts new txs");
+    }
+
+    #[test]
+    fn expired_cull_respects_batch_limit() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let mut cfg = config_factory();
+        cfg.transaction_time_to_live = Duration::from_millis(1);
+        cfg.expired_cull_interval = Duration::from_millis(1);
+        cfg.expired_cull_batch = nonzero!(1_usize);
+
+        let queue = Queue::test(cfg, &time_source);
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+
+        time_handle.advance(Duration::from_millis(2));
+        let culled = queue.cull_expired_entries_if_due();
+        assert_eq!(culled, 1, "batch-limited sweep culls one tx");
+        assert_eq!(queue.active_len(), 1, "one tx remains after first sweep");
+
+        time_handle.advance(Duration::from_millis(2));
+        let culled = queue.cull_expired_entries_if_due();
+        assert_eq!(culled, 1, "second sweep culls remaining tx");
+        assert_eq!(queue.active_len(), 0, "all expired txs removed");
+    }
+
+    #[test]
+    fn remove_committed_hashes_clears_expiry_tracking() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push succeeds");
+        assert!(
+            queue.expiry_ring_members.contains_key(&hash),
+            "expiry tracking is set on push"
+        );
+
+        let removed = queue.remove_committed_hashes([hash], None);
+        assert_eq!(removed, 1, "committed hash should be removed");
+        assert_eq!(queue.active_len(), 0, "queue no longer tracks tx");
+        assert!(
+            !queue.expiry_ring_members.contains_key(&hash),
+            "expiry tracking cleared on commit removal"
+        );
+        assert!(
+            queue.removed_hashes.contains_key(&hash),
+            "removed hash marker set for committed tx"
+        );
     }
 
     #[test]
@@ -5828,7 +5977,7 @@ pub mod tests {
         assert!(expired.is_empty());
 
         time_handle.advance(Duration::from_millis(2));
-        let culled = queue.cull_expired_entries_if_due(&state.view());
+        let culled = queue.cull_expired_entries_if_due();
         assert_eq!(culled, 1, "expired in-flight tx should be culled");
         assert_eq!(
             queue.active_len(),

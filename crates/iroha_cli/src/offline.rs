@@ -1,5 +1,7 @@
 use super::*;
 
+mod qr;
+
 use clap::ValueEnum;
 use core::convert::TryFrom;
 use iroha::data_model::{
@@ -56,6 +58,9 @@ pub enum Command {
     /// Fetch offline rejection telemetry snapshots
     #[command(subcommand)]
     Rejection(RejectionCommand),
+    /// Encode/decode QR stream frames for offline payloads
+    #[command(subcommand)]
+    Qr(qr::QrCommand),
 }
 
 impl Run for Command {
@@ -67,6 +72,7 @@ impl Run for Command {
             Command::Summary(cmd) => cmd.run(context),
             Command::Revocation(cmd) => cmd.run(context),
             Command::Rejection(cmd) => cmd.run(context),
+            Command::Qr(cmd) => cmd.run(context),
         }
     }
 }

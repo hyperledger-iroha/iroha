@@ -58,6 +58,7 @@ traces/*
 npm-iroha-js.log
 javascript/npm-iroha-js.log
 javascript/iroha_js/**/*.log
+javascript/iroha_js/native/*.node
 javascript/iroha_js/scripts/release_matrix.targets.json
 build/*
 dist/*

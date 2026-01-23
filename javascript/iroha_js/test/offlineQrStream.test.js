@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 
 import {
   OfflineQrStreamDecoder,
   OfflineQrStreamEncoder,
   OfflineQrStreamFrameKind,
+  OfflineQrStreamFrameEncoding,
+  OfflineQrStreamScanSession,
+  encodeQrFrameText,
+  decodeQrFrameText,
+  scanQrStreamFrames,
 } from "../src/offlineQrStream.js";
 
 function buildPayload(size = 1200) {
@@ -66,4 +72,56 @@ test("offline qr stream rejects frames with invalid checksum", () => {
   frame[frame.length - 1] ^= 0x22;
   const decoder = new OfflineQrStreamDecoder();
   assert.throws(() => decoder.ingest(frame), /checksum/i);
+});
+
+test("offline qr stream text codec round-trips", () => {
+  const payload = buildPayload(128);
+  const encoded = encodeQrFrameText(payload, OfflineQrStreamFrameEncoding.base64);
+  const decoded = decodeQrFrameText(encoded, OfflineQrStreamFrameEncoding.base64);
+  assert.deepEqual(decoded, payload);
+});
+
+test("offline qr stream scan loop ingests frames", async () => {
+  const payload = buildPayload(512);
+  const frames = OfflineQrStreamEncoder.encodeFrameBytes(payload, { chunkSize: 200 });
+  const encodedFrames = frames.map((frame) =>
+    encodeQrFrameText(frame, OfflineQrStreamFrameEncoding.base64),
+  );
+  const result = await scanQrStreamFrames(encodedFrames, {
+    frameEncoding: OfflineQrStreamFrameEncoding.base64,
+  });
+  assert.ok(result);
+  assert.equal(result.isComplete, true);
+  assert.deepEqual(result.payload, payload);
+});
+
+test("offline qr stream scan session ingests text frames", () => {
+  const payload = buildPayload(256);
+  const frames = OfflineQrStreamEncoder.encodeFrameBytes(payload, { chunkSize: 200 });
+  const session = new OfflineQrStreamScanSession({
+    frameEncoding: OfflineQrStreamFrameEncoding.base64,
+  });
+  let result = null;
+  for (const frame of frames) {
+    const encoded = encodeQrFrameText(frame, OfflineQrStreamFrameEncoding.base64);
+    result = session.ingest(encoded);
+  }
+  assert.ok(result);
+  assert.equal(result.isComplete, true);
+  assert.deepEqual(result.payload, payload);
+});
+
+test("offline qr stream fixtures round-trip", () => {
+  const fixturePath = new URL("../../../fixtures/qr_stream/qr_stream_basic.json", import.meta.url);
+  const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
+  const payload = Buffer.from(fixture.payload_hex, "hex");
+  const frames = fixture.frames.map((frame) => Buffer.from(frame.bytes_hex, "hex"));
+  const decoder = new OfflineQrStreamDecoder();
+  let result = null;
+  for (const frame of frames) {
+    result = decoder.ingest(frame);
+  }
+  assert.ok(result);
+  assert.equal(result.isComplete, true);
+  assert.deepEqual(result.payload, payload);
 });

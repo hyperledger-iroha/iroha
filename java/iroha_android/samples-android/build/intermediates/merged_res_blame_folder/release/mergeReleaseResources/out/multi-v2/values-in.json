@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "org.hyperledger.iroha.android.samples.samples-android-mergeReleaseResources-8:/values-in/values-in.xml",
+            "map": [
+                {
+                    "source": "/Users/mtakemiya/.gradle/caches/8.13/transforms/b1a0b266f4a79314d6c63d313107b3b5/transformed/core-1.1.0/res/values-in/values-in.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "100",
+                        "endOffsets": "151"
+                    }
+                }
+            ]
+        }
+    ]
+}

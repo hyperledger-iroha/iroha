@@ -251,14 +251,14 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       if (domain.isBlank()) {
         return null;
       }
-      final String publicKey = parseIdentifierToPublicKey(identifier);
+      final String publicKey = parseIdentifierToPublicKey(identifier, domain);
       if (publicKey == null) {
         return null;
       }
       return new AccountIdSingle(domain, publicKey);
     }
 
-    private static String parseIdentifierToPublicKey(final String identifier) {
+    private static String parseIdentifierToPublicKey(final String identifier, final String domain) {
       try {
         final AccountAddress.ParseResult parsed = AccountAddress.parseAny(identifier, null);
         final java.util.Optional<AccountAddress.SingleKeyPayload> singlePayload =

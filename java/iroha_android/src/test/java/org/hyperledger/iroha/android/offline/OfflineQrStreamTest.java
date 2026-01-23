@@ -10,6 +10,7 @@ public final class OfflineQrStreamTest {
     roundTripPayload();
     recoversMissingChunk();
     rejectsBadChecksum();
+    textCodecRoundTrip();
     System.out.println("[IrohaAndroid] OfflineQrStreamTest passed.");
   }
 
@@ -77,6 +78,15 @@ public final class OfflineQrStreamTest {
       threw = true;
     }
     assertTrue(threw, "checksum mismatch should throw");
+  }
+
+  private static void textCodecRoundTrip() {
+    final byte[] payload = makePayload(128);
+    final String encoded =
+        OfflineQrStream.TextCodec.encode(payload, OfflineQrStream.FrameEncoding.BASE64);
+    final byte[] decoded =
+        OfflineQrStream.TextCodec.decode(encoded, OfflineQrStream.FrameEncoding.BASE64);
+    assertArrayEquals(payload, decoded, "text codec payload mismatch");
   }
 
   private static byte[] makePayload(final int length) {

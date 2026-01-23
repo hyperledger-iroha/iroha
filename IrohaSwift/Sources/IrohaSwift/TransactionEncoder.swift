@@ -123,7 +123,8 @@ struct TransactionInputValidator {
                 guard parsed.0.matchesDomainLabel(canonicalDomain) else {
                     throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
                 }
-                return try parsed.0.toIH58(networkPrefix: AccountId.defaultNetworkPrefix)
+                let ih58 = try parsed.0.toIH58(networkPrefix: AccountId.defaultNetworkPrefix)
+                return "\(ih58)@\(canonicalDomain)"
             }
             return "\(addressPart)@\(canonicalDomain)"
         }

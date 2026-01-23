@@ -8005,6 +8005,9 @@ pub struct Queue {
     /// Minimum interval between expired-transaction sweeps.
     #[config(default = "defaults::queue::EXPIRED_CULL_INTERVAL.into()")]
     pub expired_cull_interval_ms: DurationMs,
+    /// Maximum number of entries scanned per expired-transaction sweep.
+    #[config(default = "defaults::queue::EXPIRED_CULL_BATCH")]
+    pub expired_cull_batch: NonZeroUsize,
 }
 
 impl Queue {
@@ -8015,12 +8018,14 @@ impl Queue {
             capacity_per_user,
             transaction_time_to_live_ms: transaction_time_to_live,
             expired_cull_interval_ms: expired_cull_interval,
+            expired_cull_batch,
         } = self;
         actual::Queue {
             capacity,
             capacity_per_user,
             transaction_time_to_live: transaction_time_to_live.0,
             expired_cull_interval: expired_cull_interval.0,
+            expired_cull_batch,
         }
     }
 }

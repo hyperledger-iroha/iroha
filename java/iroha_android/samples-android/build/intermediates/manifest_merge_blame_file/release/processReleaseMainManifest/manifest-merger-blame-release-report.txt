@@ -1,0 +1,55 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="org.hyperledger.iroha.android.samples"
+4    android:versionCode="1"
+5    android:versionName="0.1.0" >
+6
+7    <uses-sdk
+8        android:minSdkVersion="24"
+9        android:targetSdkVersion="34" />
+10
+11    <application
+11-->/Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:4:5-15:19
+12        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+12-->[androidx.core:core:1.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/b1a0b266f4a79314d6c63d313107b3b5/transformed/core-1.1.0/AndroidManifest.xml:24:18-86
+13        android:extractNativeLibs="false"
+14        android:label="Iroha Sample"
+14-->/Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:5:9-37
+15        android:theme="@android:style/Theme.DeviceDefault.Light" >
+15-->/Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:6:9-65
+16        <activity
+16-->/Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:7:9-14:20
+17            android:name="org.hyperledger.iroha.android.samples.MainActivity"
+17-->/Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:8:13-41
+18            android:exported="true" >
+18-->/Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:9:13-36
+19            <intent-filter>
+19-->/Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:10:13-13:29
+20                <action android:name="android.intent.action.MAIN" />
+20-->/Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:11:17-69
+20-->/Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:11:25-66
+21
+22                <category android:name="android.intent.category.LAUNCHER" />
+22-->/Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:12:17-77
+22-->/Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:12:27-74
+23            </intent-filter>
+24        </activity>
+25
+26        <service
+26-->[androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:24:9-33:19
+27            android:name="androidx.camera.core.impl.MetadataHolderService"
+27-->[androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:25:13-75
+28            android:enabled="false"
+28-->[androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:26:13-36
+29            android:exported="false" >
+29-->[androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:27:13-37
+30            <meta-data
+30-->[androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:30:13-32:89
+31                android:name="androidx.camera.core.impl.MetadataHolderService.DEFAULT_CONFIG_PROVIDER"
+31-->[androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:31:17-103
+32                android:value="androidx.camera.camera2.Camera2Config$DefaultProvider" />
+32-->[androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:32:17-86
+33        </service>
+34    </application>
+35
+36</manifest>

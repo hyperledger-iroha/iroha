@@ -837,13 +837,13 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::VrfReveal(_)
                 | BlockMessage::FetchPendingBlock(_)
                 | BlockMessage::ProposalHint(_)
-                | BlockMessage::Proposal(_) => IngressPolicy::critical(),
+                | BlockMessage::Proposal(_)
+                | BlockMessage::BlockCreated(_) => IngressPolicy::critical(),
                 BlockMessage::RbcInit(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_) => IngressPolicy::critical_with_rbc_sessions(),
                 BlockMessage::ConsensusParams(_) => IngressPolicy::limited(),
-                BlockMessage::BlockCreated(_)
-                | BlockMessage::BlockSyncUpdate(_)
+                BlockMessage::BlockSyncUpdate(_)
                 | BlockMessage::ExecWitness(_)
                 | BlockMessage::RbcChunk(_) => IngressPolicy::bulk(),
             },
@@ -2519,6 +2519,7 @@ mod network_relay_tests {
         let msg = consensus_params_msg();
         let hint = proposal_hint_msg();
         let proposal = proposal_msg();
+        let created = block_created_msg();
         let mut limiter = ConsensusIngressLimiter::new(
             Some(BucketConfig {
                 rate_per_sec: nz_u32(1),
@@ -2548,6 +2549,7 @@ mod network_relay_tests {
         );
         assert_eq!(limiter.should_drop(&peer, &hint, 1), None);
         assert_eq!(limiter.should_drop(&peer, &proposal, 1), None);
+        assert_eq!(limiter.should_drop(&peer, &created, 1), None);
     }
 
     #[test]
@@ -2664,7 +2666,6 @@ mod network_relay_tests {
         }
 
         let peer = sample_peer();
-        assert_bulk(&peer, &block_created_msg());
         assert_bulk(&peer, &block_sync_update_msg());
         assert_bulk(&peer, &exec_witness_msg());
         assert_bulk(&peer, &rbc_chunk_msg(0x01, 2, 0));

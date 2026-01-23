@@ -61,8 +61,7 @@ public final class TransactionBuilderTests {
         new TransactionBuilder(codec, IrohaKeyManager.withSoftwareFallback());
 
     final SignedTransaction signed = builder.encodeAndSign(payload, signer);
-    final byte[] prehashed = IrohaHash.prehash(signed.encodedPayload());
-    final byte[] expectedSignature = concat(prehashed, "-signature".getBytes());
+    final byte[] expectedSignature = concat(signed.encodedPayload(), "-signature".getBytes());
     assert Arrays.equals(expectedSignature, signed.signature())
         : "Fake signer should append signature suffix";
     assert Arrays.equals("fake-public-key".getBytes(), signed.publicKey())

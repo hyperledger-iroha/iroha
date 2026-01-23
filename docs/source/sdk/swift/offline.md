@@ -70,3 +70,14 @@ let drained = try queue.drain()
 ## Operational guidance
 - Ship with explicit `maxRecords`/`maxBytes` tuned to your retry policy; monitor `connect.queue_*` and `swift.offline.queue_depth` gauges.
 - Include queue/journal export steps in support playbooks so operators can collect bundles before clearing state.
+
+## QR stream handoff
+Use `OfflineQrStreamEncoder` to split receipts/bundles into frames and animate them as QR codes.
+
+- **Scan pipeline:** `OfflineQrStreamVisionScanner` decodes raw QR bytes via Vision. Use
+  `OfflineQrStreamCameraSession` to drive an `AVCaptureSession` and feed frames into
+  `OfflineQrStreamScanSession`.
+- **Text fallback:** if only `payloadStringValue` is available, decode
+  `iroha:qr1:<base64(frame_bytes)>` via `OfflineQrStreamTextCodec`.
+- **Playback skins:** use `OfflineQrStreamPlaybackSkin.sakura` for default animation,
+  `sakuraReducedMotion` for accessibility, and `sakuraLowPower` for battery-friendly playback.

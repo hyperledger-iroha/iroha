@@ -724,6 +724,12 @@ impl Actor {
             } => {
                 let mut pending = pending_opt.take().expect("pending present");
                 self.note_view_change_from_block(pending_height, pending_view);
+                let committed_tx_hashes = committed_block
+                    .as_ref()
+                    .external_transactions()
+                    .map(|tx| tx.hash());
+                self.queue
+                    .remove_committed_hashes(committed_tx_hashes, None);
                 crate::sumeragi::status::record_kura_stage(
                     pending_height,
                     pending_view,
