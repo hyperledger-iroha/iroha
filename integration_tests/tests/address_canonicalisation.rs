@@ -1587,10 +1587,8 @@ async fn accounts_query_accepts_alias_and_compressed_filter_literals() -> Result
     let keypair = KeyPair::random();
     let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
     let account = Account::new(account_id.clone()).with_label(Some(label.clone()));
-    client.submit_all([
-        InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
-        InstructionBox::from(Register::account(account)),
-    ])?;
+    client.submit_blocking(Register::domain(Domain::new(domain_id.clone())))?;
+    client.submit_blocking(Register::account(account))?;
 
     let url = network
         .client()

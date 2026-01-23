@@ -2,6 +2,8 @@
 
 Last update: 2026-01-23
 
+- Integration tests: register alias-domain accounts in separate blocking transactions so `accounts_query_accepts_alias_and_compressed_filter_literals` avoids permission gating.
+- Tests: not run (not requested).
 - Consensus ingress: treat `BlockCreated` as critical traffic (no bulk drops) so non-leader peers receive payloads; updated ingress tests and guardrail docs/config template.
 - Tests: not run (not requested).
 - Android SDK: preserve canonical instruction fixtures, fix QR stream envelope sizing, and align signer prehash expectations in tests; JS SDK: normalize encoded `@domain` error handling, relax canonical-account-id assertions, and use fixture authority hints in parity checks.
