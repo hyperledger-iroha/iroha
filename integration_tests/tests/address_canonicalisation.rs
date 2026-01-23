@@ -1570,8 +1570,17 @@ async fn accounts_query_accepts_public_key_filter_literals() -> Result<()> {
 
 #[tokio::test]
 async fn accounts_query_accepts_alias_and_compressed_filter_literals() -> Result<()> {
+    let domain_id: DomainId = "aliases".parse()?;
+    let label = AccountLabel::new(domain_id.clone(), "primary".parse()?);
+    let keypair = KeyPair::random();
+    let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
+    let account = Account::new(account_id.clone()).with_label(Some(label.clone()));
+    let builder = NetworkBuilder::new()
+        .with_min_peers(4)
+        .with_genesis_instruction(Register::domain(Domain::new(domain_id.clone())))
+        .with_genesis_instruction(Register::account(account));
     let Some(network) = start_network_async_or_skip(
-        NetworkBuilder::new().with_min_peers(4),
+        builder,
         stringify!(accounts_query_accepts_alias_and_compressed_filter_literals),
     )
     .await?
@@ -1581,24 +1590,7 @@ async fn accounts_query_accepts_alias_and_compressed_filter_literals() -> Result
     network.ensure_blocks(1).await?;
 
     let client = network.client();
-    let domain_id: DomainId = "aliases".parse()?;
-
-    let label = AccountLabel::new(domain_id.clone(), "primary".parse()?);
-    let keypair = KeyPair::random();
-    let account_id = AccountId::new(domain_id.clone(), keypair.public_key().clone());
-    let account = Account::new(account_id.clone()).with_label(Some(label.clone()));
-    client.submit_blocking(Register::domain(Domain::new(domain_id.clone())))?;
-    client.submit_blocking(Register::account(account))?;
-    let status = client.get_status()?;
-    // Wait for all peers to apply the registration blocks before resolving literals.
-    network
-        .ensure_blocks_with(iroha_test_network::BlockHeight::predicate_non_empty(
-            status.blocks_non_empty,
-        ))
-        .await?;
-
-    let url = network
-        .client()
+    let url = client
         .torii_url
         .join("/v1/accounts/query")
         .expect("join accounts query url");

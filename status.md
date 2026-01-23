@@ -2,6 +2,10 @@
 
 Last update: 2026-01-23
 
+- Sumeragi tests: guard P2P startup in the main-loop harness with a timeout and fall back to `closed_for_tests` to avoid hangs when `iroha_p2p::network::start` stalls.
+- Tests: not run (not requested).
+- Integration tests: seed alias-domain account in genesis for `accounts_query_accepts_alias_and_compressed_filter_literals` to avoid transaction confirmation timeouts.
+- Tests: `cargo test -p integration_tests --test address_canonicalisation accounts_query_accepts_alias_and_compressed_filter_literals -- --nocapture` (ok; duplicate metric registration warnings).
 - Client: limit transaction-committed fallback query to a single entrypoint-hash match with pagination/fetch-size caps to avoid timeout-prone full-history scans.
 - Tests: `cargo test -p iroha transaction_committed_limits_query_params` (ok).
 - Build: `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target-localnet31 cargo build --release -p iroha_kagami -p iroha_cli -p irohad` (ok).
@@ -9,6 +13,8 @@ Last update: 2026-01-23
 - Localnet (permissioned, same run). 12 min 50 TPS (36k tx, 1s `/metrics` sampling) → `blocks_non_empty` +118 over 728.74s (avg block interval 6.18s), admitted 49.0 TPS, `view_change_install_total=19` (`view_change_suggest_total=11`). Logs: `metrics_peer0_50tps_12min.log`, `load_50tps_12min.log`.
 - Localnet (NPoS, 7 peers, 753ms, telemetry=extended, tick_work_budget_cap_ms=150, validation workers=2, commit queues=2/2): `/private/tmp/iroha-localnet-7peer-run171-npos` (25280/26200). 50 TPS for 100-block target (25k tx, 1s `/metrics` sampling) → `blocks_non_empty` +89 over 506.14s (avg block interval 5.69s), admitted 49.0 TPS, committed estimate 49.4 TPS, `view_change_install_total=5` (`view_change_suggest_total=2`). Logs: `metrics_peer0_50tps_100blocks.log`, `load_50tps_100blocks.log`; view-change logs show "no proposal observed before cutoff".
 - Localnet (NPoS, same run). 12 min 50 TPS (36k tx, 1s `/metrics` sampling) → `blocks_non_empty` +132 over 740.07s (avg block interval 5.61s), admitted 48.4 TPS, committed estimate 48.9 TPS, `view_change_install_total=7` (`view_change_suggest_total=3`). Logs: `metrics_peer0_50tps_12min.log`, `load_50tps_12min.log`.
+- Telemetry: emit pipeline DAG metrics when telemetry is enabled even if Nexus is disabled; added coverage for `pipeline_dag_vertices`/`pipeline_dag_edges`.
+- Tests: `cargo test -p iroha_core --features telemetry state_telemetry_pipeline_dag_emits_without_nexus -- --nocapture` (ok; duplicate metric registration warnings in test output).
 - Sumeragi tests: ensure all `sumeragi/main_loop` tests that spin up a harness send shutdown signals so background network/gossiper tasks exit cleanly; prevents `cargo test -p iroha_core` from hanging.
 - Tests: not run (not requested).
 
