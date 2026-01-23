@@ -6985,7 +6985,14 @@ class ToriiClient(_BaseToriiClient):
         if self._data_model_compatibility == "incompatible":
             raise DataModelCompatibilityError(DATA_MODEL_VERSION, self._data_model_actual)
 
-        capabilities = self.get_node_capabilities()
+        try:
+            capabilities = self.get_node_capabilities()
+        except RuntimeError as error:
+            if "data_model_version" in str(error):
+                self._data_model_compatibility = "incompatible"
+                self._data_model_actual = None
+                raise DataModelCompatibilityError(DATA_MODEL_VERSION, None) from error
+            raise
         actual = capabilities.data_model_version
         if actual != DATA_MODEL_VERSION:
             self._data_model_compatibility = "incompatible"
@@ -6995,7 +7002,10 @@ class ToriiClient(_BaseToriiClient):
         self._data_model_actual = actual
 
     def submit_transaction(self, payload: bytes) -> Optional[Any]:
-        """Submit a Norito-encoded transaction payload to `/v1/pipeline/transactions`."""
+        """Submit a Norito-encoded transaction payload to `/v1/pipeline/transactions`.
+
+        Raises :class:`DataModelCompatibilityError` when the node data model version mismatches.
+        """
 
         self._ensure_data_model_compatibility()
         response = self._request(

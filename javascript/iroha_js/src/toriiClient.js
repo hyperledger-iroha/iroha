@@ -2810,6 +2810,7 @@ export class ToriiClient {
 
   /**
    * Submit a Norito-encoded transaction payload.
+   * Throws ToriiDataModelCompatibilityError when the node data model version mismatches.
    * @param {ArrayBufferView | ArrayBuffer | Buffer} payload
    * @returns {Promise<any>} Submission receipt (decoded from Norito) or JSON when present; otherwise null.
    */
