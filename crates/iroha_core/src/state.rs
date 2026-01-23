@@ -4759,6 +4759,38 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
     }
 }
 
+thread_local! {
+    static STATE_VIEW_CONTEXT: std::cell::Cell<Option<&'static str>> =
+        std::cell::Cell::new(None);
+}
+
+/// Scoped context label for `StateView` hold-time logging.
+pub(crate) struct StateViewContextGuard {
+    prev: Option<&'static str>,
+}
+
+impl StateViewContextGuard {
+    /// Record a new context label for `StateView` timing logs.
+    pub(crate) fn new(context: &'static str) -> Self {
+        let prev = STATE_VIEW_CONTEXT.with(|cell| {
+            let prev = cell.get();
+            cell.set(Some(context));
+            prev
+        });
+        Self { prev }
+    }
+}
+
+impl Drop for StateViewContextGuard {
+    fn drop(&mut self) {
+        STATE_VIEW_CONTEXT.with(|cell| cell.set(self.prev));
+    }
+}
+
+fn current_state_view_context() -> Option<&'static str> {
+    STATE_VIEW_CONTEXT.with(std::cell::Cell::get)
+}
+
 /// Consistent point in time view of the [`State`]
 pub struct StateView<'state> {
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
@@ -4924,10 +4956,31 @@ impl Drop for StateView<'_> {
         if held > Duration::from_secs(1) {
             iroha_logger::warn!(
                 held_ms = held.as_millis(),
+                context = ?current_state_view_context(),
                 backtrace = ?std::backtrace::Backtrace::force_capture(),
                 "StateView guard held for over 1s"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod state_view_context_tests {
+    use super::{StateViewContextGuard, current_state_view_context};
+
+    #[test]
+    fn state_view_context_guard_restores_previous() {
+        assert_eq!(current_state_view_context(), None);
+        {
+            let _outer = StateViewContextGuard::new("outer");
+            assert_eq!(current_state_view_context(), Some("outer"));
+            {
+                let _inner = StateViewContextGuard::new("inner");
+                assert_eq!(current_state_view_context(), Some("inner"));
+            }
+            assert_eq!(current_state_view_context(), Some("outer"));
+        }
+        assert_eq!(current_state_view_context(), None);
     }
 }
 
