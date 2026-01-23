@@ -72,17 +72,18 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
     }
 
     func testOfflineEndpointsRequests() async throws {
-        let assetId = "rose#wonderland#mint@wonderland"
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let assetId = "rose#wonderland#\(accountId)"
         let receiptsPayload = """
         {
           "items": [{
             "bundle_id_hex": "aa",
             "tx_id_hex": "bb",
             "certificate_id_hex": "cc",
-            "controller_id": "alice@wonderland",
-            "controller_display": "alice@wonderland",
-            "receiver_id": "bob@wonderland",
-            "receiver_display": "bob@wonderland",
+            "controller_id": "\(accountId)",
+            "controller_display": "\(accountId)",
+            "receiver_id": "\(accountId)",
+            "receiver_display": "\(accountId)",
             "asset_id": "\(assetId)",
             "amount": "10",
             "invoice_id": "inv-1",
@@ -117,7 +118,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
         {
           "certificate_id_hex": "deadbeef",
           "certificate": {
-            "controller": "alice@wonderland",
+            "controller": "\(accountId)",
             "allowance": {
               "asset": "\(assetId)",
               "amount": "10",
@@ -144,7 +145,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
         {
           "certificate_id_hex": "beadfeed",
           "certificate": {
-            "controller": "alice@wonderland",
+            "controller": "\(accountId)",
             "allowance": {
               "asset": "\(assetId)",
               "amount": "11",
@@ -176,7 +177,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
 
         let receiptsRequest = ToriiOfflineSpendReceiptsSubmitRequest(receipts: [.object(["tx_id": .string("aa")])])
         let settlementRequest = ToriiOfflineSettlementSubmitRequest(
-            authority: "alice@wonderland",
+            authority: accountId,
             privateKey: "ed0120deadbeef",
             transfer: .object(["bundle_id": .string("aa")])
         )
@@ -184,7 +185,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
                                                             kind: "counter",
                                                             counterCheckpoint: 1)
         let draft = OfflineWalletCertificateDraft(
-            controller: "alice@wonderland",
+            controller: accountId,
             allowance: OfflineAllowanceCommitment(assetId: assetId,
                                                   amount: "10",
                                                   commitment: Data([0x01, 0x02])),
@@ -231,7 +232,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
             ExpectedRequest(method: "POST", path: "/v1/offline/settlements", responseBody: settlementPayload, assertBody: { data in
                 let body = try XCTUnwrap(data)
                 let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
-                XCTAssertEqual(json["authority"] as? String, "alice@wonderland")
+                XCTAssertEqual(json["authority"] as? String, accountId)
                 XCTAssertNotNil(json["private_key"] as? String)
                 XCTAssertNotNil(json["transfer"] as? [String: Any])
             }),
@@ -279,7 +280,7 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
 
         let issueResponse = try await client.issueOfflineCertificate(issueRequest)
         let issuedCertificate = try issueResponse.decodeCertificate()
-        XCTAssertEqual(issuedCertificate.controller, "alice@wonderland")
+        XCTAssertEqual(issuedCertificate.controller, accountId)
 
         let renewResponse = try await client.issueOfflineCertificateRenewal(certificateIdHex: "deadbeef",
                                                                             requestBody: renewRequest)

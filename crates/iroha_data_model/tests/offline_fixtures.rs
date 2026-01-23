@@ -5,11 +5,19 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::Arc,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use hex::encode_upper;
 use iroha_crypto::{Hash, Signature};
+use iroha_data_model::{
+    account::{
+        AccountDomainSelector, clear_account_domain_selector_resolver,
+        set_account_domain_selector_resolver,
+    },
+    domain::DomainId,
+};
 use iroha_data_model::{
     metadata::Metadata,
     offline::{OfflineAllowanceCommitment, OfflineWalletCertificate, OfflineWalletPolicy},
@@ -21,6 +29,7 @@ use norito::{
 
 #[test]
 fn offline_allowance_fixtures_roundtrip() {
+    let _resolver_guard = install_domain_selector_resolver();
     let root = fixture_root();
     let manifest_bytes =
         fs::read(root.join("allowance_fixtures.manifest.json")).expect("read fixture manifest");
@@ -89,6 +98,7 @@ fn offline_allowance_fixtures_roundtrip() {
 #[test]
 #[ignore = "regenerates fixtures for offline allowances"]
 fn regenerate_offline_allowance_certificates() {
+    let _resolver_guard = install_domain_selector_resolver();
     let root = fixture_root();
     let manifest_bytes =
         fs::read(root.join("allowance_fixtures.manifest.json")).expect("read fixture manifest");
@@ -115,6 +125,33 @@ fn regenerate_offline_allowance_certificates() {
         let certificate_out = fixture_path(&root, entry, "certificate_norito");
         fs::write(&certificate_out, encoded)
             .unwrap_or_else(|err| panic!("write certificate norito for `{label}`: {err}"));
+    }
+}
+
+fn install_domain_selector_resolver() -> DomainSelectorResolverGuard {
+    let candidates = ["wonderland", "treasury", "sora"];
+    let mappings: Vec<(AccountDomainSelector, DomainId)> = candidates
+        .iter()
+        .filter_map(|label| {
+            let domain: DomainId = (*label).parse().ok()?;
+            let selector = AccountDomainSelector::from_domain(&domain).ok()?;
+            Some((selector, domain))
+        })
+        .collect();
+    set_account_domain_selector_resolver(Arc::new(move |selector| {
+        mappings
+            .iter()
+            .find(|(candidate, _)| candidate == selector)
+            .map(|(_, domain)| domain.clone())
+    }));
+    DomainSelectorResolverGuard
+}
+
+struct DomainSelectorResolverGuard;
+
+impl Drop for DomainSelectorResolverGuard {
+    fn drop(&mut self) {
+        clear_account_domain_selector_resolver();
     }
 }
 

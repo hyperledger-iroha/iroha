@@ -1,0 +1,20 @@
+{
+  "fixture_version": 1,
+  "payload_hex": "69726f68612d71722d73747265616d2d62617369632d7631",
+  "options": {
+    "chunk_size": 200,
+    "parity_group": 0,
+    "payload_kind": "offline_to_online_transfer"
+  },
+  "envelope_hex": "01000000c800010000000100180000007d6ab4cc1b9f18a717b3930aab178a39eba2de24d5f109ddd4edfe86d420d972",
+  "frames": [
+    {
+      "kind": "header",
+      "bytes_hex": "495101007d6ab4cc1b9f18a717b3930aab178a3900000100300001000000c800010000000100180000007d6ab4cc1b9f18a717b3930aab178a39eba2de24d5f109ddd4edfe86d420d97209b2885a"
+    },
+    {
+      "kind": "data",
+      "bytes_hex": "495101017d6ab4cc1b9f18a717b3930aab178a3900000100180069726f68612d71722d73747265616d2d62617369632d7631bcfb8384"
+    }
+  ]
+}

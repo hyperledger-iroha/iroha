@@ -1042,7 +1042,7 @@ test("buildCastZkBallotInstruction rejects noncanonical owner", () => {
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
-      assert.match(String(error?.message), /canonical account id/i);
+      assert.match(String(error?.message), /canonical (?:IH58 )?account id/i);
       return true;
     },
   );

@@ -186,3 +186,16 @@ await journal.popOldest(ConnectDirection.APP_TO_WALLET, 1);
 
 Pair the journal with the snapshot/evidence helpers above to materialise offline queues on disk, and
 ship the resulting bundle to operators for replay or audits.
+
+## QR stream handoff
+
+For device-to-device transfers, use the QR stream helpers from `offlineQrStream.js`:
+
+- **Encode frames:** `OfflineQrStreamEncoder.encodeFrames(...)` produces header/data/parity frames.
+- **Scan loop:** `scanQrStreamFrames(...)` accepts an async iterable of frames (strings or bytes)
+  and feeds them into `OfflineQrStreamScanSession`.
+- **Text fallback:** wrap frame bytes as `iroha:qr1:<base64(frame_bytes)>` using
+  `encodeQrFrameText`, and decode with `decodeQrFrameText`.
+- **Playback skins:** use `sakuraQrStreamSkin` for default animation,
+  `sakuraQrStreamReducedMotionSkin` for accessibility, and `sakuraQrStreamLowPowerSkin` for
+  battery-friendly playback.

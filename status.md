@@ -2,6 +2,22 @@
 
 Last update: 2026-01-23
 
+- Consensus ingress: treat `BlockCreated` as critical traffic (no bulk drops) so non-leader peers receive payloads; updated ingress tests and guardrail docs/config template.
+- Tests: not run (not requested).
+- Swift offline receipts: align test receipt amounts to allowance scale (2dp) and update scale-mismatch expectation in `OfflineReceiptBuilderTests`/`OfflineWalletReceiptTests`.
+- Tests: `swift test` (ok).
+- Test network: build `iroha3d` with `--features expensive-telemetry` so `/metrics` is populated during throughput runs; added a unit test for the build args.
+- Tests: `cargo test -p iroha_test_network program_spec_irohad_enables_expensive_telemetry -- --nocapture` (ok).
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Android harness: added `OfflineQrStreamTest` to the Gradle main-harness list.
+- Tests: `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineQrStreamTest ./gradlew :core:test --no-daemon` (failed: Gradle wrapper download blocked; `UnknownHostException: services.gradle.org`).
+- Izanami 4-peer DA run attempt (2026-01-23): `cargo run -p izanami -- --allow-net --peers 4 --faulty 0 --duration 60s --target-blocks 20 --progress-interval 10s --progress-timeout 60s --tps 5 --max-inflight 8 --workload-profile stable` failed: loopback bind denied (`Operation not permitted` for 127.0.0.1:30000) in `crates/iroha_test_network/src/fslock_ports.rs:188` (sandbox networking restriction).
+- JS offline QR stream: allow `OfflineQrStreamScanSession` to ingest text frames (optional encoding), reuse decode helper in `scanQrStreamFrames`, and add unit coverage.
+- Tests: `node --test javascript/iroha_js/test/offlineQrStream.test.js` (ok).
+- OFFLINE-QR-STREAM: implemented `QrStreamEnvelope`/`QrStreamFrame` codec + assembler caps in `iroha_data_model`, added CRC32 + parity recovery tests, and generated deterministic fixtures + generator bin.
+- OFFLINE-QR-STREAM: added `iroha offline qr encode/decode` with SVG/PNG/GIF/APNG export; added Swift/Android/JS QrStream codecs + scan pipelines + playback skins; updated QR stream spec and SDK/offline docs.
+- OFFLINE-QR-STREAM: fixed payload-kind tag fallback and CLI QR manifest JSON construction.
+- Tests: `cargo test -p iroha_data_model qr_stream -- --nocapture` (ok); `cargo test -p iroha_cli qr_ -- --nocapture` (ok).
 - Integration tests: update `iroha_cli` command paths for executor upgrade and domain listing (`ops executor`, `ledger domain`).
 - Tests: `cargo test -p integration_tests --test iroha_cli can_upgrade_executor -- --nocapture` (ok); `cargo test -p integration_tests --test iroha_cli reads_client_toml_by_default -- --nocapture` (ok).
 - Sumeragi worker loop: added `worker_iteration_drain_budget_cap_ms` to cap per-iteration mailbox drain time; config/docs updated; new unit coverage.

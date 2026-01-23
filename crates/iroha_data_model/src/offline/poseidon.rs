@@ -529,7 +529,7 @@ fn pack_bytes(bytes: &[u8]) -> Vec<u64> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path, str::FromStr};
+    use std::{fs, path::Path, str::FromStr, sync::Arc};
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use iroha_crypto::{Algorithm, KeyPair, Signature};
@@ -538,7 +538,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        account::AccountId,
+        account::{AccountDomainSelector, AccountId},
+        account::{clear_account_domain_selector_resolver, set_account_domain_selector_resolver},
         asset::{AssetDefinitionId, AssetId},
         domain::DomainId,
         metadata::Metadata,
@@ -762,7 +763,7 @@ mod tests {
         let root = builder.finalize();
         assert_eq!(
             root.to_hex_upper(),
-            "0000000000000000000000000000000000000000000000003E09C16D3EAE69CE"
+            "000000000000000000000000000000000000000000000000092966700D9AD6BB"
         );
     }
 
@@ -914,6 +915,33 @@ mod tests {
 
     #[test]
     fn aggregate_proof_fixture_matches_receipts_root() {
+        struct DomainSelectorResolverGuard;
+
+        impl Drop for DomainSelectorResolverGuard {
+            fn drop(&mut self) {
+                clear_account_domain_selector_resolver();
+            }
+        }
+
+        let resolver_guard = {
+            let candidates = ["wonderland", "treasury", "sora"];
+            let mappings: Vec<(AccountDomainSelector, DomainId)> = candidates
+                .iter()
+                .filter_map(|label| {
+                    let domain: DomainId = (*label).parse().ok()?;
+                    let selector = AccountDomainSelector::from_domain(&domain).ok()?;
+                    Some((selector, domain))
+                })
+                .collect();
+            set_account_domain_selector_resolver(Arc::new(move |selector| {
+                mappings
+                    .iter()
+                    .find(|(candidate, _)| candidate == selector)
+                    .map(|(_, domain)| domain.clone())
+            }));
+            DomainSelectorResolverGuard
+        };
+
         let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(2)
@@ -965,6 +993,7 @@ mod tests {
             .collect();
         let computed_root = compute_receipts_root(&parsed_receipts).expect("root");
         assert_eq!(computed_root, expected_root);
+        drop(resolver_guard);
 
         let envelope = AggregateProofEnvelope::from_receipts(
             &parsed_receipts,

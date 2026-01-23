@@ -8354,8 +8354,7 @@ impl Actor {
         let mut progress = self.tick_mode_management();
         let expired_culled = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.cull_expired");
-            let view = self.state.view();
-            self.queue.cull_expired_entries_if_due(&view)
+            self.queue.cull_expired_entries_if_due()
         };
         if expired_culled > 0 {
             progress = true;

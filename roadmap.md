@@ -9,7 +9,7 @@ Latest sync: Consensus payload frames now use the block-sync cap (defaults raise
 Latest sync (CLI tests): updated `integration_tests/tests/iroha_cli.rs` to use `iroha ops executor` and `iroha ledger domain` command groups.
 Latest sync (tests): `cargo test -p iroha_core --tests --features "zk-tests halo2-dev-tests" zk` timed out after 1800s while running `gov_auto_close_zk_requires_tally`; ZK unit tests passed, including `kaigi_usage_backend_accepts_valid_proof`.
 Latest sync (consensus relay): RBC chunk traffic now uses a dedicated `ConsensusChunk` topic/queue with low-priority posting so payload drops do not starve votes; telemetry/docs/tests updated.
-Latest sync (consensus ingress/P2P): critical caps now apply to votes/VRF/proposals/fetch-pending + RBC INIT/READY/DELIVER + control-flow evidence (penalty cooldowns skipped, RBC-session tracked), bulk payloads (BlockCreated/BlockSyncUpdate/ExecWitness/RBC chunks/BlockSync) use a separate bulk bucket seeded from the standard caps (penalty cooldowns skipped, RBC sessions tracked), critical caps fall back to standard caps when unset with penalty cooldowns enabled, and defaults are 300 msg/s.
+Latest sync (consensus ingress/P2P): critical caps now apply to votes/VRF/proposals/fetch-pending + BlockCreated + RBC INIT/READY/DELIVER + control-flow evidence (penalty cooldowns skipped, RBC-session tracked), bulk payloads (BlockSyncUpdate/ExecWitness/RBC chunks/BlockSync) use a separate bulk bucket seeded from the standard caps (penalty cooldowns skipped, RBC sessions tracked), critical caps fall back to standard caps when unset with penalty cooldowns enabled, and defaults are 300 msg/s.
 Latest sync (consensus telemetry): consensus_message_handling now tracks proposals, votes, QCs, VRF, RBC init/ready/chunk, fetch-pending requests, and evidence drops/deferrals with unit coverage.
 Latest sync (storage budgets): Kura now persists oversized blocks directly into `da_blocks/` (indexed as evicted) while budget accounting treats oversized pending blocks at the evicted footprint; unit tests and docs updated.
 Latest sync (roster/PoP): PoP filtering now skips incomplete PoP maps and falls back to the BLS baseline roster to avoid divergent validator topologies.
@@ -108,7 +108,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 4. **LOCALNET-10K-TPS — 7-peer localnet throughput + stall resilience** (Consensus/Performance/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈺 In Progress, target TBD)
 - [ ] Use the new pending-block/commit-inflight metrics to isolate pacemaker backpressure during 100 TPS localnet runs (run151 NPoS: avg slot 5.68s, view changes 11, proposal_gap 1, pending/inflight <=4/1; run152 permissioned + commit_time_ms=300: avg slot 10.69s, view changes 18, pending/inflight <=4/1; run153 NPoS 7-peer 753ms soft limits: height 5, view changes 42, tx_queue depth 4796, pending max 5/inflight 0, missing_qc/stake_quorum timeouts; run154 permissioned 7-peer 753ms: height 5, view changes 9, tx_queue depth 11522, pending/inflight 0, missing_qc/quorum timeouts). Identify the proposal-gap root cause and re-test.
 - [ ] Validate worker-iteration drain-cap impact with a load generator that sustains 50 TPS (current CLI batch loop undershoots per-second pacing) and correlate view-change spikes with proposal gaps vs queue backpressure.
-- [ ] Enable expensive-metrics capture for throughput runs (telemetry profile/config) or surface pending-block + commit-inflight gauges in `/v1/sumeragi/status`; current `/metrics` scrapes are empty under the test-network defaults.
+- [x] Enable expensive-metrics capture for throughput runs (telemetry profile/config) or surface pending-block + commit-inflight gauges in `/v1/sumeragi/status`; current `/metrics` scrapes are empty under the test-network defaults.
 - [ ] Investigate skewed NEW_VIEW participation during throughput stalls (recent NPoS/permissioned runs show `new_view_slots` max < quorum with per-peer NEW_VIEW vote traffic heavily skewed).
  - [x] NPoS roster selection now appends active validators missing from the commit topology so the full validator set participates; unit coverage added.
  - [x] Seed commit topology from the checkpoint topology when world peers are incomplete (prevents genesis roster shrink/QC stalls); unit coverage added.
@@ -203,25 +203,25 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Add end-to-end tests for proposal/ballot/enactment flows, authorization gates, and rejection paths.
  - [x] Update governance docs and Torii OpenAPI to reflect the real API surface.
 
-10. **OFFLINE-QR-STREAM — Animated QR transport for offline payloads** (Core/SDK/CLI, Line: Shared, Owner: Offline WG, Priority: High, Status: 🈺 In Progress, target TBD)
- - [ ] Spec: define `QrStreamEnvelope` + `QrStreamFrame` wire format (Norito), payload kinds, CRC32 rules, chunking, replay guards, and size caps; include deterministic hashing + schema binding in `docs/source/qr_stream.md`.
- - [ ] Spec: define frame scheduling (header cadence, data/parity frames), binary QR requirements, and capacity profile (ECC level + chunk size bounds) with a compatibility matrix for iOS/Android/JS scanners.
- - [ ] Parity frames: select a deterministic erasure scheme (reuse `iroha_primitives::rs16` if possible) and define parameters/seed derivation + target drop tolerance.
- - [ ] Parity frames: implement encode/decode + recovery tests (out-of-order, dropped frames, duplicates) in Rust helpers.
- - [ ] Fixtures: generate deterministic fixtures under `fixtures/qr_stream/` (receipt + transfer payloads, envelope bytes, frame bytes, parity frames) and document regeneration flow.
- - [ ] Data model: add `qr_stream` types + helpers to `iroha_data_model` (encode/decode, CRC32, assembler state machine) with unit coverage.
- - [ ] Data model: add assembler caps (max payload bytes/frames, timeout policy) and tests for rejection paths.
- - [ ] CLI tooling: add `iroha offline qr encode` (binary QR mode, chunk sizing, ECC/fps controls, SVG/PNG + animated GIF/APNG export) with tests.
- - [ ] CLI tooling: add `iroha offline qr decode` (frames/dir input, hash verification, Norito/JSON output) with tests.
+10. **OFFLINE-QR-STREAM — Animated QR transport for offline payloads** (Core/SDK/CLI, Line: Shared, Owner: Offline WG, Priority: High, Status: 🈴 Completed, target TBD)
+ - [x] Spec: define `QrStreamEnvelope` + `QrStreamFrame` wire format (Norito), payload kinds, CRC32 rules, chunking, replay guards, and size caps; include deterministic hashing + schema binding in `docs/source/qr_stream.md`.
+ - [x] Spec: define frame scheduling (header cadence, data/parity frames), binary QR requirements, and capacity profile (ECC level + chunk size bounds) with a compatibility matrix for iOS/Android/JS scanners.
+ - [x] Parity frames: select a deterministic erasure scheme (reuse `iroha_primitives::rs16` if possible) and define parameters/seed derivation + target drop tolerance.
+ - [x] Parity frames: implement encode/decode + recovery tests (out-of-order, dropped frames, duplicates) in Rust helpers.
+ - [x] Fixtures: generate deterministic fixtures under `fixtures/qr_stream/` (receipt + transfer payloads, envelope bytes, frame bytes, parity frames) and document regeneration flow.
+ - [x] Data model: add `qr_stream` types + helpers to `iroha_data_model` (encode/decode, CRC32, assembler state machine) with unit coverage.
+ - [x] Data model: add assembler caps (max payload bytes/frames, timeout policy) and tests for rejection paths.
+ - [x] CLI tooling: add `iroha offline qr encode` (binary QR mode, chunk sizing, ECC/fps controls, SVG/PNG + animated GIF/APNG export) with tests.
+ - [x] CLI tooling: add `iroha offline qr decode` (frames/dir input, hash verification, Norito/JSON output) with tests.
  - [x] Swift SDK: add QrStream encoder/decoder + ScanSession core with unit tests.
- - [ ] Swift SDK: integrate Vision/AVFoundation scan pipeline to feed raw bytes into ScanSession + fixture tests.
+ - [x] Swift SDK: integrate Vision/AVFoundation scan pipeline to feed raw bytes into ScanSession + fixture tests.
  - [x] Android SDK: add QrStream encoder/decoder + ScanSession core with unit tests.
- - [ ] Android SDK: integrate CameraX/ZXing scan pipeline to feed raw bytes into ScanSession + fixture tests.
+ - [x] Android SDK: integrate CameraX/ZXing scan pipeline to feed raw bytes into ScanSession + fixture tests.
  - [x] JS SDK: add QrStream encoder/decoder + ScanSession core with unit tests.
- - [ ] JS SDK: add scan-loop integration (browser/Node) + fixture tests.
+ - [x] JS SDK: add scan-loop integration (browser/Node) + fixture tests.
  - [x] SDK theme palette + frame-style helpers for sakura animation (colors, pulse, petal phase).
- - [ ] Streaming animation: ship on-brand playback skins (petal drift, warm gradient, progress overlay), plus reduced-motion and low-power variants for accessibility/perf.
- - [ ] UX guidance: add scan timing + progress UI guidelines and fallback flows to `docs/source/offline_allowance.md` + SDK guides.
+ - [x] Streaming animation: ship on-brand playback skins (petal drift, warm gradient, progress overlay), plus reduced-motion and low-power variants for accessibility/perf.
+ - [x] UX guidance: add scan timing + progress UI guidelines and fallback flows to `docs/source/offline_allowance.md` + SDK guides.
 
 10. **ZK-VERIFY-COMPLETE — Full ZK verification + prover** (ZK/Core/Torii, Line: Shared, Owner: ZK WG, Priority: High, Status: 🈴 Completed, target TBD)
  - [x] Route `halo2/ipa` OpenVerifyEnvelope decoding into the IPA verifier, remove placeholder acceptance, and refresh tiny-add fixtures/tests to use real proofs + VK bytes.
@@ -268,7 +268,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Clean Torii contract API and IVM docs to remove alias notes.
 
 15. **IZANAMI-SUMERAGI-FRAME-CAP — Validate consensus frame cap + RBC chunk clamp** (Consensus/QA, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈺 In Progress, target TBD)
- - [ ] Re-run Izanami 4-peer DA runs to confirm no `FrameTooLarge` disconnects and consensus reaches target blocks.
+- [ ] Re-run Izanami 4-peer DA runs to confirm no `FrameTooLarge` disconnects and consensus reaches target blocks (2026-01-23 attempt failed: loopback bind denied for 127.0.0.1:30000 in `crates/iroha_test_network/src/fslock_ports.rs:188` due to sandbox networking restrictions).
  - [ ] Re-run `cargo test --workspace` (latest attempt timed out after 600s during compilation; see `status.md`).
  - [x] Size consensus frames using NetworkMessage wire lengths, trim BlockSyncUpdate payloads to fit caps, and guard background consensus sends against oversize frames.
  - [x] Trim proposal tx batches in bulk when BlockCreated frames exceed consensus caps to avoid O(n^2) assembly stalls; add unit coverage.

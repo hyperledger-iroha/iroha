@@ -1,0 +1,113 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:2:1-17:12
+INJECTED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:2:1-17:12
+INJECTED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:2:1-17:12
+INJECTED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:2:1-17:12
+MERGED from [:android] /Users/mtakemiya/dev/iroha/java/iroha_android/android/build/intermediates/merged_manifest/release/processReleaseManifest/AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.camera:camera-lifecycle:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/ee53cbadd545f38a584dc65bdf900d50/transformed/camera-lifecycle-1.3.3/AndroidManifest.xml:2:1-7:12
+MERGED from [androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:17:1-36:12
+MERGED from [androidx.camera:camera-core:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/496c0c9a790d9bf2fe866512485a8212/transformed/camera-core-1.3.3/AndroidManifest.xml:17:1-36:12
+MERGED from [androidx.core:core:1.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/b1a0b266f4a79314d6c63d313107b3b5/transformed/core-1.1.0/AndroidManifest.xml:17:1-26:12
+MERGED from [androidx.exifinterface:exifinterface:1.3.2] /Users/mtakemiya/.gradle/caches/8.13/transforms/434f3b54409cede1752f24f404caf305/transformed/exifinterface-1.3.2/AndroidManifest.xml:17:1-24:12
+MERGED from [androidx.lifecycle:lifecycle-runtime:2.0.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/e7178974802ab2571ffe99d1ad8ab1e1/transformed/lifecycle-runtime-2.0.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.lifecycle:lifecycle-livedata:2.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/a5b7f88fba91471a3d702895826f021d/transformed/lifecycle-livedata-2.1.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.lifecycle:lifecycle-livedata-core:2.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/b338496d74c20e5750b97ea17e7cb9d4/transformed/lifecycle-livedata-core-2.1.0/AndroidManifest.xml:17:1-22:12
+MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/6c3bf0d461ac4b84087253809783a65c/transformed/versionedparcelable-1.1.0/AndroidManifest.xml:17:1-27:12
+MERGED from [androidx.arch.core:core-runtime:2.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/32da99be8d9242f325754cd5d6e9e844/transformed/core-runtime-2.1.0/AndroidManifest.xml:17:1-24:12
+MERGED from [androidx.annotation:annotation-experimental:1.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/433d06606276885235d19e0dc57e4471/transformed/annotation-experimental-1.1.0/AndroidManifest.xml:17:1-24:12
+	package
+		INJECTED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml
+	android:versionName
+		INJECTED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml
+	android:versionCode
+		INJECTED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml
+	xmlns:android
+		ADDED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:2:11-69
+application
+ADDED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:4:5-15:19
+INJECTED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:4:5-15:19
+MERGED from [androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:23:5-34:19
+MERGED from [androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:23:5-34:19
+MERGED from [androidx.camera:camera-core:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/496c0c9a790d9bf2fe866512485a8212/transformed/camera-core-1.3.3/AndroidManifest.xml:23:5-34:19
+MERGED from [androidx.camera:camera-core:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/496c0c9a790d9bf2fe866512485a8212/transformed/camera-core-1.3.3/AndroidManifest.xml:23:5-34:19
+MERGED from [androidx.core:core:1.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/b1a0b266f4a79314d6c63d313107b3b5/transformed/core-1.1.0/AndroidManifest.xml:24:5-89
+MERGED from [androidx.core:core:1.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/b1a0b266f4a79314d6c63d313107b3b5/transformed/core-1.1.0/AndroidManifest.xml:24:5-89
+MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/6c3bf0d461ac4b84087253809783a65c/transformed/versionedparcelable-1.1.0/AndroidManifest.xml:24:5-25:19
+MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/6c3bf0d461ac4b84087253809783a65c/transformed/versionedparcelable-1.1.0/AndroidManifest.xml:24:5-25:19
+	android:extractNativeLibs
+		INJECTED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml
+	android:appComponentFactory
+		ADDED from [androidx.core:core:1.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/b1a0b266f4a79314d6c63d313107b3b5/transformed/core-1.1.0/AndroidManifest.xml:24:18-86
+	android:label
+		ADDED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:5:9-37
+	android:theme
+		ADDED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:6:9-65
+activity#org.hyperledger.iroha.android.samples.MainActivity
+ADDED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:7:9-14:20
+	android:exported
+		ADDED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:9:13-36
+	android:name
+		ADDED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:8:13-41
+intent-filter#action:name:android.intent.action.MAIN+category:name:android.intent.category.LAUNCHER
+ADDED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:10:13-13:29
+action#android.intent.action.MAIN
+ADDED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:11:17-69
+	android:name
+		ADDED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:11:25-66
+category#android.intent.category.LAUNCHER
+ADDED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:12:17-77
+	android:name
+		ADDED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml:12:27-74
+uses-sdk
+INJECTED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml
+INJECTED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml
+MERGED from [:android] /Users/mtakemiya/dev/iroha/java/iroha_android/android/build/intermediates/merged_manifest/release/processReleaseManifest/AndroidManifest.xml:5:5-44
+MERGED from [:android] /Users/mtakemiya/dev/iroha/java/iroha_android/android/build/intermediates/merged_manifest/release/processReleaseManifest/AndroidManifest.xml:5:5-44
+MERGED from [androidx.camera:camera-lifecycle:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/ee53cbadd545f38a584dc65bdf900d50/transformed/camera-lifecycle-1.3.3/AndroidManifest.xml:5:5-44
+MERGED from [androidx.camera:camera-lifecycle:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/ee53cbadd545f38a584dc65bdf900d50/transformed/camera-lifecycle-1.3.3/AndroidManifest.xml:5:5-44
+MERGED from [androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:21:5-44
+MERGED from [androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:21:5-44
+MERGED from [androidx.camera:camera-core:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/496c0c9a790d9bf2fe866512485a8212/transformed/camera-core-1.3.3/AndroidManifest.xml:21:5-44
+MERGED from [androidx.camera:camera-core:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/496c0c9a790d9bf2fe866512485a8212/transformed/camera-core-1.3.3/AndroidManifest.xml:21:5-44
+MERGED from [androidx.core:core:1.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/b1a0b266f4a79314d6c63d313107b3b5/transformed/core-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.core:core:1.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/b1a0b266f4a79314d6c63d313107b3b5/transformed/core-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.exifinterface:exifinterface:1.3.2] /Users/mtakemiya/.gradle/caches/8.13/transforms/434f3b54409cede1752f24f404caf305/transformed/exifinterface-1.3.2/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.exifinterface:exifinterface:1.3.2] /Users/mtakemiya/.gradle/caches/8.13/transforms/434f3b54409cede1752f24f404caf305/transformed/exifinterface-1.3.2/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.lifecycle:lifecycle-runtime:2.0.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/e7178974802ab2571ffe99d1ad8ab1e1/transformed/lifecycle-runtime-2.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-runtime:2.0.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/e7178974802ab2571ffe99d1ad8ab1e1/transformed/lifecycle-runtime-2.0.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata:2.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/a5b7f88fba91471a3d702895826f021d/transformed/lifecycle-livedata-2.1.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata:2.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/a5b7f88fba91471a3d702895826f021d/transformed/lifecycle-livedata-2.1.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata-core:2.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/b338496d74c20e5750b97ea17e7cb9d4/transformed/lifecycle-livedata-core-2.1.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.lifecycle:lifecycle-livedata-core:2.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/b338496d74c20e5750b97ea17e7cb9d4/transformed/lifecycle-livedata-core-2.1.0/AndroidManifest.xml:20:5-44
+MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/6c3bf0d461ac4b84087253809783a65c/transformed/versionedparcelable-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.versionedparcelable:versionedparcelable:1.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/6c3bf0d461ac4b84087253809783a65c/transformed/versionedparcelable-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.arch.core:core-runtime:2.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/32da99be8d9242f325754cd5d6e9e844/transformed/core-runtime-2.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.arch.core:core-runtime:2.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/32da99be8d9242f325754cd5d6e9e844/transformed/core-runtime-2.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.annotation:annotation-experimental:1.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/433d06606276885235d19e0dc57e4471/transformed/annotation-experimental-1.1.0/AndroidManifest.xml:20:5-22:41
+MERGED from [androidx.annotation:annotation-experimental:1.1.0] /Users/mtakemiya/.gradle/caches/8.13/transforms/433d06606276885235d19e0dc57e4471/transformed/annotation-experimental-1.1.0/AndroidManifest.xml:20:5-22:41
+	android:targetSdkVersion
+		INJECTED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from /Users/mtakemiya/dev/iroha/java/iroha_android/samples-android/src/main/AndroidManifest.xml
+service#androidx.camera.core.impl.MetadataHolderService
+ADDED from [androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:24:9-33:19
+MERGED from [androidx.camera:camera-core:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/496c0c9a790d9bf2fe866512485a8212/transformed/camera-core-1.3.3/AndroidManifest.xml:29:9-33:78
+MERGED from [androidx.camera:camera-core:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/496c0c9a790d9bf2fe866512485a8212/transformed/camera-core-1.3.3/AndroidManifest.xml:29:9-33:78
+	tools:node
+		ADDED from [androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:29:13-31
+	android:enabled
+		ADDED from [androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:26:13-36
+	android:exported
+		ADDED from [androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:27:13-37
+	tools:ignore
+		ADDED from [androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:28:13-75
+	android:name
+		ADDED from [androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:25:13-75
+meta-data#androidx.camera.core.impl.MetadataHolderService.DEFAULT_CONFIG_PROVIDER
+ADDED from [androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:30:13-32:89
+	android:value
+		ADDED from [androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:32:17-86
+	android:name
+		ADDED from [androidx.camera:camera-camera2:1.3.3] /Users/mtakemiya/.gradle/caches/8.13/transforms/f829cd68394ebcae77e48d0f23826d07/transformed/camera-camera2-1.3.3/AndroidManifest.xml:31:17-103

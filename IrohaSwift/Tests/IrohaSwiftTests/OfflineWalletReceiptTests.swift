@@ -20,7 +20,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 0x22, count: 32))
         let certificate = try makeCertificate(signingKey: signingKey)
         let txId = IrohaHash.hash(Data("wallet-receipt".utf8))
-        let amount = "10"
+        let amount = "10.00"
         let invoiceId = "inv-wallet"
         let issuedAtMs = validIssuedAtMs(for: certificate)
         let proof = try makeProof(txId: txId,
@@ -76,7 +76,7 @@ final class OfflineWalletReceiptTests: XCTestCase {
         )
 
         let txId = IrohaHash.hash(Data("wallet-receipt-jump".utf8))
-        let amount = "10"
+        let amount = "10.00"
         let invoiceId = "inv-wallet-jump"
         let issuedAtMs = validIssuedAtMs(for: certificate, offset: 2_000)
         let proof = try makeProof(txId: txId,

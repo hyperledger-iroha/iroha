@@ -72,7 +72,9 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # consensus_ingress_burst = 300
 # consensus_ingress_bytes_per_sec = 67_108_864
 # consensus_ingress_bytes_burst = 134_217_728
-# Bulk payload frames (BlockCreated/BlockSyncUpdate/ExecWitness/RbcChunk/BlockSync) use a
+# Critical recovery/coordination + payload delivery (BlockCreated, Proposal, QcVote/Qc,
+# VrfCommit/VrfReveal, FetchPendingBlock, RbcInit/RbcReady/RbcDeliver, Evidence) use the
+# critical caps; bulk payload frames (BlockSyncUpdate/ExecWitness/RbcChunk/BlockSync) use a
 # separate bucket seeded from the standard caps, scaled by block_time vs 2s (1s -> 2x),
 # and skip penalty cooldowns.
 # consensus_ingress_critical_rate_per_sec = 300

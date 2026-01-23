@@ -79,6 +79,7 @@ enum OfflineNorito {
     private static let fallbackDomainCandidates = [
         "sora",
         "wonderland",
+        "treasury",
     ]
 
     static func wrap(typeName: String, payload: Data) -> Data {
@@ -93,31 +94,22 @@ enum OfflineNorito {
         return writer.data
     }
 
-    private struct AccountIdParts {
-        let domain: String
-        let publicKey: String
-    }
-
     static func encodeAccountId(_ value: String) throws -> Data {
-        let parts = try parseAccountIdParts(value)
+        let parts = try resolveAccountId(value)
         var writer = OfflineNoritoWriter()
-        let domainPayload = try encodeDomainId(parts.domain)
+        let domainPayload = try encodeDomainId(parts.domainLabel)
         writer.writeField(domainPayload)
-        let controllerPayload = encodeAccountController(publicKey: parts.publicKey)
+        let controllerPayload = try parts.address.noritoAccountControllerPayload()
         writer.writeField(controllerPayload)
-        return writer.data
-    }
-
-    private static func encodeAccountController(publicKey: String) -> Data {
-        var writer = OfflineNoritoWriter()
-        writer.writeUInt32LE(0)
-        let keyPayload = encodeString(publicKey)
-        writer.writeField(keyPayload)
         return writer.data
     }
 
     static func encodeBool(_ value: Bool) -> Data {
         Data([value ? 1 : 0])
+    }
+
+    static func encodeUInt8(_ value: UInt8) -> Data {
+        Data([value])
     }
 
     static func encodeUInt16(_ value: UInt16) -> Data {
@@ -290,7 +282,12 @@ enum OfflineNorito {
         return writer.data
     }
 
-    private static func parseAccountIdParts(_ value: String) throws -> AccountIdParts {
+    private struct ResolvedAccountId {
+        let address: AccountAddress
+        let domainLabel: String
+    }
+
+    private static func resolveAccountId(_ value: String) throws -> ResolvedAccountId {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw OfflineNoritoError.invalidAccountId(value)
@@ -317,16 +314,25 @@ enum OfflineNorito {
             } catch {
                 throw OfflineNoritoError.invalidAccountId(trimmed)
             }
-            if (try? AccountAddress.parseAny(addressPart,
-                                             expectedPrefix: defaultNetworkPrefix)) != nil {
-                throw OfflineNoritoError.invalidAccountId(trimmed)
+            if let (address, _) = try? AccountAddress.parseAny(addressPart,
+                                                               expectedPrefix: defaultNetworkPrefix) {
+                guard address.matchesDomainLabel(canonicalDomain) else {
+                    throw OfflineNoritoError.invalidAccountId(trimmed)
+                }
+                return ResolvedAccountId(address: address, domainLabel: canonicalDomain)
             }
             guard let parsed = try parsePublicKeyMultihash(addressPart, raw: trimmed) else {
                 throw OfflineNoritoError.invalidAccountId(trimmed)
             }
-            let canonicalKey = formatPublicKeyMultihash(functionCode: parsed.functionCode,
-                                                        payload: parsed.publicKey)
-            return AccountIdParts(domain: canonicalDomain, publicKey: canonicalKey)
+            let address: AccountAddress
+            do {
+                address = try AccountAddress.fromAccount(domain: canonicalDomain,
+                                                         publicKey: parsed.publicKey,
+                                                         algorithm: algorithmLabel(parsed.algorithm))
+            } catch {
+                throw OfflineNoritoError.invalidAccountId(trimmed)
+            }
+            return ResolvedAccountId(address: address, domainLabel: canonicalDomain)
         }
         let address: AccountAddress
         do {
@@ -337,14 +343,7 @@ enum OfflineNorito {
         guard let domain = resolveDomain(from: address) else {
             throw OfflineNoritoError.invalidAccountId(trimmed)
         }
-        guard let info = address.singleControllerInfo() else {
-            // TODO: Support multisig account controllers in offline Norito encoding.
-            throw OfflineNoritoError.invalidAccountId(trimmed)
-        }
-        let functionCode = multihashFunctionCode(for: info.algorithm)
-        let canonicalKey = formatPublicKeyMultihash(functionCode: functionCode,
-                                                    payload: info.publicKey)
-        return AccountIdParts(domain: domain, publicKey: canonicalKey)
+        return ResolvedAccountId(address: address, domainLabel: domain)
     }
 
     private static func parseAccountId(_ value: String) throws -> (String, String) {
@@ -371,6 +370,19 @@ enum OfflineNorito {
             throw OfflineNoritoError.invalidAccountId(trimmed)
         }
         return (addressPart, domainPart)
+    }
+
+    private static func algorithmLabel(_ algorithm: SigningAlgorithm) -> String {
+        switch algorithm {
+        case .ed25519:
+            return "ed25519"
+        case .secp256k1:
+            return "secp256k1"
+        case .mlDsa:
+            return "ml-dsa"
+        case .sm2:
+            return "sm2"
+        }
     }
 
     private static func resolveDomain(from address: AccountAddress) -> String? {
@@ -498,6 +510,11 @@ enum OfflineNorito {
         case .sm2:
             return 0x1306
         }
+    }
+
+    static func publicKeyMultihash(algorithm: SigningAlgorithm, payload: Data) -> String {
+        let functionCode = multihashFunctionCode(for: algorithm)
+        return formatPublicKeyMultihash(functionCode: functionCode, payload: payload)
     }
 
     private static func parseAlgorithmPrefix(_ value: String) -> SigningAlgorithm? {

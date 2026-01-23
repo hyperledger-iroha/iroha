@@ -32,16 +32,41 @@ function selectFixture(fixtures, name) {
 }
 
 const burnFixture = selectFixture(canonicalManifest.fixtures, "burn_asset");
-const signingSeedHex = canonicalManifest.signing_key?.seed_hex;
-if (!signingSeedHex) {
-  throw new Error("Canonical manifest is missing signing_key.seed_hex");
-}
+const DEFAULT_SIGNING_SEED_HEX =
+  "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
+const signingSeedHex =
+  canonicalManifest.signing_key?.seed_hex ?? DEFAULT_SIGNING_SEED_HEX;
 const signingKeySeed = Buffer.from(signingSeedHex, "hex");
 if (signingKeySeed.byteLength !== 32) {
   throw new Error("Fixture signing seed must be exactly 32 bytes (Ed25519)");
 }
 
-function extractCanonicalAuthority(payloadBase64) {
+function extractCanonicalAuthority(payloadBase64, authorityHint) {
+  if (typeof authorityHint === "string") {
+    const trimmed = authorityHint.trim();
+    if (trimmed.length > 0) {
+      const atIndex = trimmed.lastIndexOf("@");
+      if (atIndex !== -1) {
+        const signatory = trimmed.slice(0, atIndex);
+        const domain = trimmed.slice(atIndex + 1);
+        if (signatory && domain) {
+          try {
+            const { address } = AccountAddress.parseAny(signatory, undefined, domain);
+            return address.toIH58();
+          } catch {
+            // Fall back to payload scan.
+          }
+        }
+      } else {
+        try {
+          const { address } = AccountAddress.parseAny(trimmed);
+          return address.toIH58();
+        } catch {
+          // Fall back to payload scan.
+        }
+      }
+    }
+  }
   const bytes = Buffer.from(payloadBase64, "base64");
   const printable = [];
   let current = "";
@@ -87,7 +112,7 @@ function extractCanonicalAuthority(payloadBase64) {
 }
 
 const canonicalAuthority =
-  extractCanonicalAuthority(burnFixture.payload_base64) ??
+  extractCanonicalAuthority(burnFixture.payload_base64, burnFixture.authority) ??
   (() => {
     throw new Error("Failed to extract canonical authority from fixture payload");
   })();

@@ -104,6 +104,15 @@ final class TransactionInputValidatorTests: XCTestCase {
         XCTAssertEqual(ids.authorityId, ih58)
     }
 
+    func testValidatePreservesIh58WithDomain() throws {
+        let publicKey = Data(repeating: 0xAC, count: 32)
+        let ih58 = try AccountId.makeIH58(publicKey: publicKey, domain: "wonderland")
+        let literal = "\(ih58)@wonderland"
+        let ids = try TransactionInputValidator.validate(chainId: "0000",
+                                                         authorityId: literal)
+        XCTAssertEqual(ids.authorityId, literal)
+    }
+
     func testValidateAcceptsUaidAuthority() throws {
         let uaidHex = String(repeating: "0", count: 63) + "f"
         let literal = "uaid:\(uaidHex)"

@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use clap::{ArgAction, Parser};
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
 use iroha_data_model::name::Name;
 use iroha_data_model::parameter::Parameter;
 use iroha_data_model::{
@@ -1582,6 +1582,18 @@ fn parse_account_id(value: &str) -> Result<AccountId> {
     let domain: DomainId = domain_part
         .parse()
         .with_context(|| format!("invalid domain id '{domain_part}'"))?;
+    let expected_prefix = address::chain_discriminant();
+    if let Ok((address, _)) =
+        address::AccountAddress::parse_any(signatory_hint, Some(expected_prefix))
+    {
+        let account = address
+            .to_account_id(&domain)
+            .map_err(|err| anyhow::anyhow!(err.code_str()))?;
+        return Ok(account);
+    }
+    if let Ok(signatory) = signatory_hint.parse::<PublicKey>() {
+        return Ok(AccountId::of(domain, signatory));
+    }
     let seed = derive_seed(signatory_hint, domain_part);
     let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
     Ok(AccountId::of(domain, keypair.public_key().clone()))

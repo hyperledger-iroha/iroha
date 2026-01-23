@@ -4,11 +4,17 @@ const QR_STREAM_MAGIC = Buffer.from([0x49, 0x51]);
 const QR_STREAM_VERSION = 1;
 const ENVELOPE_VERSION = 1;
 const ENCODING_BINARY = 0;
+const QR_TEXT_PREFIX = "iroha:qr1:";
 
 export const OfflineQrStreamFrameKind = Object.freeze({
   header: 0,
   data: 1,
   parity: 2,
+});
+
+export const OfflineQrStreamFrameEncoding = Object.freeze({
+  binary: "binary",
+  base64: "base64",
 });
 
 export const OfflineQrPayloadKind = Object.freeze({
@@ -421,13 +427,14 @@ export class OfflineQrStreamDecoder {
 }
 
 export class OfflineQrStreamScanSession {
-  constructor() {
+  constructor({ frameEncoding = OfflineQrStreamFrameEncoding.base64 } = {}) {
     this.decoder = new OfflineQrStreamDecoder();
+    this.frameEncoding = frameEncoding;
   }
 
-  // TODO: Integrate QR scanner byte capture to feed frames into this session.
-  ingest(frameBytes) {
-    return this.decoder.ingest(frameBytes);
+  ingest(frame, encoding = this.frameEncoding) {
+    const bytes = normalizeFrameInput(frame, encoding);
+    return this.decoder.ingest(bytes);
   }
 }
 
@@ -464,6 +471,113 @@ export const sakuraQrStreamTheme = new OfflineQrStreamTheme({
   pulsePeriod: 48,
 });
 
+export class OfflineQrStreamPlaybackSkin {
+  constructor({
+    name,
+    theme,
+    frameRate = 12,
+    petalDriftSpeed = 1.0,
+    progressOverlayAlpha = 0.4,
+    reducedMotion = false,
+    lowPower = false,
+  }) {
+    this.name = assertNonEmptyString(name, "name");
+    this.theme = theme ?? sakuraQrStreamTheme;
+    this.frameRate = normalizePositiveInt(frameRate, "frameRate");
+    this.petalDriftSpeed = Number(petalDriftSpeed);
+    this.progressOverlayAlpha = Number(progressOverlayAlpha);
+    this.reducedMotion = Boolean(reducedMotion);
+    this.lowPower = Boolean(lowPower);
+  }
+
+  frameStyle(frameIndex, totalFrames, progress = 0) {
+    const safeTotal = Math.max(1, totalFrames);
+    const phase = (frameIndex % safeTotal) / safeTotal;
+    const pulse =
+      (Math.sin((frameIndex / this.theme.pulsePeriod) * Math.PI * 2) + 1) / 2;
+    const angle = phase * 360;
+    const drift = this.reducedMotion
+      ? 0
+      : Math.sin(phase * Math.PI * 2) * this.petalDriftSpeed;
+    const clamped = Math.max(0, Math.min(1, progress));
+    return {
+      petalPhase: phase,
+      accentStrength: pulse,
+      gradientAngle: angle,
+      driftOffset: drift,
+      progressAlpha: this.progressOverlayAlpha * clamped,
+    };
+  }
+}
+
+export const sakuraQrStreamSkin = new OfflineQrStreamPlaybackSkin({
+  name: "sakura",
+  theme: sakuraQrStreamTheme,
+  frameRate: 12,
+  petalDriftSpeed: 1.0,
+  progressOverlayAlpha: 0.4,
+});
+
+export const sakuraQrStreamReducedMotionSkin = new OfflineQrStreamPlaybackSkin({
+  name: "sakura-reduced-motion",
+  theme: sakuraQrStreamTheme,
+  frameRate: 6,
+  petalDriftSpeed: 0.0,
+  progressOverlayAlpha: 0.25,
+  reducedMotion: true,
+});
+
+export const sakuraQrStreamLowPowerSkin = new OfflineQrStreamPlaybackSkin({
+  name: "sakura-low-power",
+  theme: new OfflineQrStreamTheme({
+    name: "sakura-low-power",
+    backgroundStart: sakuraQrStreamTheme.backgroundStart,
+    backgroundEnd: sakuraQrStreamTheme.backgroundEnd,
+    accent: sakuraQrStreamTheme.accent,
+    petal: sakuraQrStreamTheme.petal,
+    petalCount: 4,
+    pulsePeriod: 72,
+  }),
+  frameRate: 8,
+  petalDriftSpeed: 0.4,
+  progressOverlayAlpha: 0.3,
+  lowPower: true,
+});
+
+export function encodeQrFrameText(bytes, encoding = OfflineQrStreamFrameEncoding.base64) {
+  const buffer = toBuffer(bytes, "frameBytes");
+  if (encoding === OfflineQrStreamFrameEncoding.base64) {
+    return `${QR_TEXT_PREFIX}${buffer.toString("base64")}`;
+  }
+  return buffer.toString("base64");
+}
+
+export function decodeQrFrameText(value, encoding = OfflineQrStreamFrameEncoding.base64) {
+  const text = assertNonEmptyString(value, "value").trim();
+  if (encoding === OfflineQrStreamFrameEncoding.base64) {
+    if (!text.startsWith(QR_TEXT_PREFIX)) {
+      throw new Error("qr text prefix missing");
+    }
+    return Buffer.from(text.slice(QR_TEXT_PREFIX.length), "base64");
+  }
+  return Buffer.from(text, "base64");
+}
+
+export async function scanQrStreamFrames(frames, options = {}) {
+  const {
+    session = new OfflineQrStreamScanSession(),
+    frameEncoding = OfflineQrStreamFrameEncoding.base64,
+  } = options;
+  let result = null;
+  for await (const frame of frames) {
+    result = session.ingest(frame, frameEncoding);
+    if (result && result.isComplete) {
+      break;
+    }
+  }
+  return result;
+}
+
 function toBuffer(value, context) {
   if (
     value instanceof ArrayBuffer ||
@@ -489,6 +603,27 @@ function normalizeNonNegativeInt(value, context) {
     throw new TypeError(`${context} must be a non-negative integer`);
   }
   return numeric;
+}
+
+function assertNonEmptyString(value, context) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new TypeError(`${context} must be a non-empty string`);
+  }
+  return value;
+}
+
+function normalizeFrameInput(frame, encoding) {
+  if (
+    frame instanceof Buffer ||
+    ArrayBuffer.isView(frame) ||
+    frame instanceof ArrayBuffer
+  ) {
+    return Buffer.from(frame);
+  }
+  if (typeof frame === "string") {
+    return decodeQrFrameText(frame, encoding);
+  }
+  throw new TypeError("frame must be bytes or text");
 }
 
 function xorParity(payload, chunkSize, dataChunks, groupIndex, groupSize) {

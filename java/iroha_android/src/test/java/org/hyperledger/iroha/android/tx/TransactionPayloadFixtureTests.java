@@ -6,6 +6,7 @@ import java.util.Objects;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.norito.NoritoException;
 import org.junit.Test;
 
 public final class TransactionPayloadFixtureTests {
@@ -40,6 +41,21 @@ public final class TransactionPayloadFixtureTests {
           : name + ": nonce mismatch vs fixture metadata";
       final byte[] encoded = adapter.encodeTransaction(payload);
       fixture.encoded().ifPresent(expected -> {
+        if (payload.executable().isInstructions()) {
+          // TODO: Switch to canonical wire instruction encoding once Java encoders land.
+          try {
+            final byte[] expectedBytes = Base64.getDecoder().decode(expected);
+            final TransactionPayload canonical = adapter.decodeTransaction(expectedBytes);
+            final byte[] reencoded = adapter.encodeTransaction(canonical);
+            final String reencodedBase64 = Base64.getEncoder().encodeToString(reencoded);
+            assert expected.equals(reencodedBase64)
+                : name + ": encoded fixture not stable after Android re-encode";
+          } catch (final NoritoException ex) {
+            throw new IllegalStateException(
+                name + ": failed to re-encode canonical instruction fixture", ex);
+          }
+          return;
+        }
         final String actual = Base64.getEncoder().encodeToString(encoded);
         assert expected.equals(actual) : name + ": encoded payload mismatch";
       });

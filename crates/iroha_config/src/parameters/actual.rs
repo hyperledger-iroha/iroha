@@ -1886,6 +1886,8 @@ pub struct Queue {
     pub transaction_time_to_live: Duration,
     /// Minimum interval between expired-transaction sweeps.
     pub expired_cull_interval: Duration,
+    /// Maximum number of entries scanned per expired-transaction sweep.
+    pub expired_cull_batch: NonZeroUsize,
 }
 
 /// Nexus staking configuration (public lanes).
@@ -3441,6 +3443,7 @@ impl Default for Queue {
             capacity: defaults::queue::CAPACITY,
             capacity_per_user: defaults::queue::CAPACITY_PER_USER,
             expired_cull_interval: defaults::queue::EXPIRED_CULL_INTERVAL,
+            expired_cull_batch: defaults::queue::EXPIRED_CULL_BATCH,
         }
     }
 }

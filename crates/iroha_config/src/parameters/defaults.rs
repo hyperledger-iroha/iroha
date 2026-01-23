@@ -162,6 +162,8 @@ pub mod queue {
     pub const TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_hours(24);
     /// Minimum interval between expired-transaction sweeps.
     pub const EXPIRED_CULL_INTERVAL: Duration = Duration::from_secs(1);
+    /// Maximum number of entries scanned per expired-transaction sweep.
+    pub const EXPIRED_CULL_BATCH: NonZeroUsize = nonzero!(256_usize);
 }
 
 /// Transaction admission defaults enforced at pipeline ingress.

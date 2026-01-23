@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="org.hyperledger.iroha.android.samples.SampleAddressTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-01-23T09:46:57.865Z" hostname="takemiyacStudio.lan" time="0.155">
+  <properties/>
+  <testcase name="buildsAddressFromAarSurface" classname="org.hyperledger.iroha.android.samples.SampleAddressTest" time="0.155"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

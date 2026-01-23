@@ -1249,6 +1249,75 @@ extension AccountAddressError {
     }
 }
 
+extension AccountAddress {
+    func noritoAccountControllerPayload() throws -> Data {
+        var writer = OfflineNoritoWriter()
+        switch controller {
+        case .singleKey(let curve, let publicKey):
+            let keyPayload = try noritoPublicKeyPayload(curve: curve, publicKey: publicKey)
+            writer.writeUInt32LE(0)
+            writer.writeLength(UInt64(keyPayload.count))
+            writer.writeBytes(keyPayload)
+        case .multiSig(let version, let threshold, let members):
+            let policyPayload = try noritoMultisigPolicyPayload(version: version,
+                                                                threshold: threshold,
+                                                                members: members)
+            writer.writeUInt32LE(1)
+            writer.writeLength(UInt64(policyPayload.count))
+            writer.writeBytes(policyPayload)
+        }
+        return writer.data
+    }
+
+    private func noritoPublicKeyPayload(curve: CurveId, publicKey: Data) throws -> Data {
+        let algorithm = try noritoSigningAlgorithm(for: curve)
+        let multihash = OfflineNorito.publicKeyMultihash(algorithm: algorithm, payload: publicKey)
+        return OfflineNorito.encodeString(multihash)
+    }
+
+    private func noritoMultisigPolicyPayload(
+        version: UInt8,
+        threshold: UInt16,
+        members: [ControllerPayload.MultisigMember]
+    ) throws -> Data {
+        var writer = OfflineNoritoWriter()
+        writer.writeField(OfflineNorito.encodeUInt8(version))
+        writer.writeField(OfflineNorito.encodeUInt16(threshold))
+        let membersPayload = try OfflineNorito.encodeVec(members) { member in
+            var memberWriter = OfflineNoritoWriter()
+            let keyPayload = try noritoPublicKeyPayload(curve: member.curve, publicKey: member.publicKey)
+            memberWriter.writeField(keyPayload)
+            memberWriter.writeField(OfflineNorito.encodeUInt16(member.weight))
+            return memberWriter.data
+        }
+        writer.writeField(membersPayload)
+        return writer.data
+    }
+
+    private func noritoSigningAlgorithm(for curve: CurveId) throws -> SigningAlgorithm {
+        switch curve {
+        case .ed25519:
+            return .ed25519
+        #if IROHASWIFT_ENABLE_SECP256K1
+        case .secp256k1:
+            return .secp256k1
+        #endif
+        #if IROHASWIFT_ENABLE_MLDSA
+        case .mldsa:
+            return .mlDsa
+        #endif
+        #if IROHASWIFT_ENABLE_GOST
+        case .gost256A, .gost256B, .gost256C, .gost512A, .gost512B:
+            throw OfflineNoritoError.invalidAccountId("unsupported GOST account controller")
+        #endif
+        #if IROHASWIFT_ENABLE_SM
+        case .sm2:
+            return .sm2
+        #endif
+        }
+    }
+}
+
 // MARK: - Multisig builder (IOS4 scaffolding)
 
 public enum MultisigBuilderError: Error, LocalizedError {

@@ -14,7 +14,7 @@ final class ConnectKeyStoreTests: XCTestCase {
         try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCryptoAvailable,
                       "NoritoBridge connect crypto symbols not linked")
         let dir = try temporaryDirectory()
-        let store = ConnectKeyStore(directory: dir)
+        let store = ConnectKeyStore(directory: dir, configuration: .init(preferKeychain: false))
 
         let (firstPair, firstAttestation) = try store.generateOrLoad(label: "wallet")
         XCTAssertEqual(firstAttestation.publicKeyDigest.count, 32)

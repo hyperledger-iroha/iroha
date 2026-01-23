@@ -65,6 +65,13 @@ final class OfflineQrStreamTests: XCTestCase {
         }
     }
 
+    func testQrStreamTextCodecRoundTrip() throws {
+        let payload = makePayload(length: 128)
+        let encoded = OfflineQrStreamTextCodec.encode(payload, encoding: .base64)
+        let decoded = try OfflineQrStreamTextCodec.decode(encoded, encoding: .base64)
+        XCTAssertEqual(decoded, payload)
+    }
+
     private func makePayload(length: Int) -> Data {
         var bytes = [UInt8](repeating: 0, count: length)
         for index in bytes.indices {

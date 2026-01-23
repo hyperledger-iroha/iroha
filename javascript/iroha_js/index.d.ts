@@ -7081,6 +7081,11 @@ export const OfflineQrStreamFrameKind: Readonly<{
   parity: number;
 }>;
 
+export const OfflineQrStreamFrameEncoding: Readonly<{
+  binary: "binary";
+  base64: "base64";
+}>;
+
 export const OfflineQrPayloadKind: Readonly<{
   unspecified: number;
   offlineToOnlineTransfer: number;
@@ -7164,8 +7169,10 @@ export class OfflineQrStreamDecoder {
 }
 
 export class OfflineQrStreamScanSession {
+  constructor(options?: { frameEncoding?: "binary" | "base64" });
   ingest(
-    frameBytes: ArrayBufferView | ArrayBuffer | Buffer,
+    frame: string | ArrayBufferView | ArrayBuffer | Buffer,
+    encoding?: "binary" | "base64",
   ): {
     payload: Buffer | null;
     receivedChunks: number;
@@ -7205,7 +7212,65 @@ export class OfflineQrStreamTheme {
   ): { petalPhase: number; accentStrength: number; gradientAngle: number };
 }
 
+export class OfflineQrStreamPlaybackSkin {
+  readonly name: string;
+  readonly theme: OfflineQrStreamTheme;
+  readonly frameRate: number;
+  readonly petalDriftSpeed: number;
+  readonly progressOverlayAlpha: number;
+  readonly reducedMotion: boolean;
+  readonly lowPower: boolean;
+  constructor(input: {
+    name: string;
+    theme?: OfflineQrStreamTheme;
+    frameRate?: number;
+    petalDriftSpeed?: number;
+    progressOverlayAlpha?: number;
+    reducedMotion?: boolean;
+    lowPower?: boolean;
+  });
+  frameStyle(
+    frameIndex: number,
+    totalFrames: number,
+    progress?: number,
+  ): {
+    petalPhase: number;
+    accentStrength: number;
+    gradientAngle: number;
+    driftOffset: number;
+    progressAlpha: number;
+  };
+}
+
 export const sakuraQrStreamTheme: OfflineQrStreamTheme;
+export const sakuraQrStreamSkin: OfflineQrStreamPlaybackSkin;
+export const sakuraQrStreamReducedMotionSkin: OfflineQrStreamPlaybackSkin;
+export const sakuraQrStreamLowPowerSkin: OfflineQrStreamPlaybackSkin;
+
+export function encodeQrFrameText(
+  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+  encoding?: "binary" | "base64",
+): string;
+
+export function decodeQrFrameText(
+  value: string,
+  encoding?: "binary" | "base64",
+): Buffer;
+
+export function scanQrStreamFrames(
+  frames: AsyncIterable<string | ArrayBufferView | ArrayBuffer | Buffer> | Iterable<string | ArrayBufferView | ArrayBuffer | Buffer>,
+  options?: {
+    session?: OfflineQrStreamScanSession;
+    frameEncoding?: "binary" | "base64";
+  },
+): Promise<{
+  payload: Buffer | null;
+  receivedChunks: number;
+  totalChunks: number;
+  recoveredChunks: number;
+  progress: number;
+  isComplete: boolean;
+} | null>;
 
 export function buildRegisterDomainTransaction(
   input: RegisterDomainInput,
