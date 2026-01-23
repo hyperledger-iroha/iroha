@@ -1589,6 +1589,13 @@ async fn accounts_query_accepts_alias_and_compressed_filter_literals() -> Result
     let account = Account::new(account_id.clone()).with_label(Some(label.clone()));
     client.submit_blocking(Register::domain(Domain::new(domain_id.clone())))?;
     client.submit_blocking(Register::account(account))?;
+    let status = client.get_status()?;
+    // Wait for all peers to apply the registration blocks before resolving literals.
+    network
+        .ensure_blocks_with(iroha_test_network::BlockHeight::predicate_non_empty(
+            status.blocks_non_empty,
+        ))
+        .await?;
 
     let url = network
         .client()
