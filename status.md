@@ -2,6 +2,9 @@
 
 Last update: 2026-01-22
 
+- Test-network config: enable `telemetry_profile = "extended"` for localnet/test configs so `/metrics` snapshots are available; added `base_config_enables_extended_telemetry` coverage. (`crates/iroha_test_network/src/config.rs`)
+- Queue cull profiling: log slow expiry sweeps with scan/remove timing, counts (expired/committed), and tracked size deltas to pinpoint long `StateView` holds. (`crates/iroha_core/src/queue.rs`)
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Localnet throughput (NPoS, 7 peers, release, telemetry profile Extended): `TELEMETRY_PROFILE=Extended TELEMETRY_ENABLED=true IROHA_THROUGHPUT_ARTIFACT_DIR=/private/tmp/iroha-throughput-npos-20260123a IROHA_TEST_NETWORK_KEEP_DIRS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-throughput cargo test -p integration_tests --release --test sumeragi_localnet_smoke npos_localnet_throughput_10k_tps -- --ignored --nocapture` (failed: submit queue did not drain below 20000 within 180s; queue_size ~20458, min_non_empty=3). Artifacts: `/private/tmp/iroha-throughput-npos-20260123a/throughput-1769116348574` (summary.json + status_npos.jsonl; metrics_npos.prom empty; network dir `/private/tmp/iroha-throughput-npos-tmp/irohad_test_network_0PlwjN`).
 - Throughput snapshot (NPoS rerun): `/private/tmp/iroha-throughput-npos-20260123a/status_npos.jsonl` shows `tx_queue.depth` 0→295 (capacity 0→65536) and `pacemaker_backpressure_deferrals_total` 0→181; tick logs show `pending_blocks` max 3 (last observed 1) with `queue_len` max 20480. `/metrics` scrape remained empty (expensive metrics still gated in test-network configs).
 - NEW_VIEW quorum correlation (NPoS throughput rerun `irohad_test_network_0PlwjN`): required 5, max `new_view_slots` 4 (`3:1`/`3:2`); NEW_VIEW vote sends per peer: creative_flamingo 29, blameless_groundhog 5, promising_salamander 4, sinewy_bongo 3, tasty_chiffchaff 3, pure_crane 2, national_lizard 1.
