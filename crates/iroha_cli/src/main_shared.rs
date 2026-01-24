@@ -128,6 +128,9 @@ enum Command {
     /// Node and operator helpers
     #[command(subcommand)]
     Ops(ops::Command),
+    /// Inspect offline allowances and offline-to-online bundles
+    #[command(subcommand)]
+    Offline(crate::offline::Command),
     /// App API helpers and product tooling
     #[command(subcommand)]
     App(app::Command),
@@ -368,6 +371,7 @@ impl Run for Command {
         match self {
             Ledger(variant) => Run::run(variant, context),
             Ops(variant) => Run::run(variant, context),
+            Offline(variant) => Run::run(variant, context),
             App(variant) => Run::run(variant, context),
             Tools(variant) => Run::run(variant, context),
         }
@@ -7391,6 +7395,19 @@ mod multisig_json_tests {
         );
     }
 
+}
+
+#[cfg(test)]
+mod cli_command_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn top_level_offline_parses() {
+        let args = Args::try_parse_from(["iroha_cli", "offline", "allowance", "list"])
+            .expect("parse");
+        assert!(matches!(args.command, Command::Offline(_)));
+    }
 }
 
 #[cfg(all(test, feature = "cli_integration_harness"))]

@@ -2315,7 +2315,8 @@ async fn observer_assemble_proposal_returns_false() {
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
-    let height = 1u64;
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
     let view = 0u64;
     let highest_qc = sample_qc_ref(0, 0);
     let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
@@ -37857,6 +37858,83 @@ async fn duplicate_block_created_hydrates_existing_rbc_session() {
         );
         assert!(!summary.invalid, "hydrated RBC session should stay valid");
     }
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pending_block_hydrates_rbc_session_for_init() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 1024;
+    let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0u64;
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "commit roster must not be empty");
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
+    let block = SignedBlock::presigned(leader_signature, block_header, Vec::new());
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block.clone(), payload_hash, height, view),
+    );
+
+    let epoch = actor.epoch_for_height(height);
+    let seeded = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        epoch,
+    )
+    .expect("rbc session");
+    let expected_root = seeded.chunk_root().expect("chunk root");
+    let init_session = RbcSession::new(
+        seeded.total_chunks(),
+        Some(payload_hash),
+        Some(expected_root),
+        Some(
+            seeded
+                .expected_chunk_digests
+                .clone()
+                .expect("chunk digests"),
+        ),
+        epoch,
+    )
+    .expect("init session");
+
+    let key = Actor::session_key(&block_hash, height, view);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, init_session);
+
+    let hydrated = actor
+        .maybe_hydrate_rbc_session_from_pending_block(key, None)
+        .expect("hydrate");
+    assert!(hydrated, "pending payload should hydrate the RBC session");
+    let session = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert_eq!(
+        session.received_chunks(),
+        session.total_chunks(),
+        "pending payload should hydrate the missing chunks"
+    );
+    assert!(!session.is_invalid(), "hydrated session should stay valid");
 
     harness.shutdown.send();
 }

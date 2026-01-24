@@ -17,9 +17,7 @@ pub const PETAL_STREAM_DEFAULT_BORDER: u8 = 1;
 /// Default anchor size in cells.
 pub const PETAL_STREAM_DEFAULT_ANCHOR: u8 = 3;
 /// Default grid size candidates for auto sizing.
-pub const PETAL_STREAM_GRID_SIZES: &[u16] = &[
-    33, 37, 41, 45, 49, 53, 57, 61, 65, 69,
-];
+pub const PETAL_STREAM_GRID_SIZES: &[u16] = &[33, 37, 41, 45, 49, 53, 57, 61, 65, 69];
 
 /// Errors raised while encoding or decoding petal stream frames.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -105,7 +103,9 @@ impl PetalStreamSampleGrid {
     pub fn new(grid_size: u16, samples: Vec<u8>) -> Result<Self, PetalStreamError> {
         let expected = grid_size as usize * grid_size as usize;
         if expected == 0 || samples.len() != expected {
-            return Err(PetalStreamError::InvalidOptions("sample grid size mismatch"));
+            return Err(PetalStreamError::InvalidOptions(
+                "sample grid size mismatch",
+            ));
         }
         Ok(Self { grid_size, samples })
     }
@@ -202,7 +202,9 @@ impl PetalStreamDecoder {
     ) -> Result<Vec<u8>, PetalStreamError> {
         let grid_size = resolve_grid_size_for_decode(samples.grid_size, options)?;
         if grid_size != samples.grid_size {
-            return Err(PetalStreamError::InvalidOptions("sample grid size mismatch"));
+            return Err(PetalStreamError::InvalidOptions(
+                "sample grid size mismatch",
+            ));
         }
         let mut dark_sum = 0u64;
         let mut light_sum = 0u64;
@@ -243,7 +245,10 @@ impl PetalStreamDecoder {
     }
 }
 
-fn resolve_grid_size(payload_len: usize, options: PetalStreamOptions) -> Result<u16, PetalStreamError> {
+fn resolve_grid_size(
+    payload_len: usize,
+    options: PetalStreamOptions,
+) -> Result<u16, PetalStreamError> {
     let border = options.border;
     let anchor_size = options.anchor_size;
     if border == 0 {
@@ -295,13 +300,13 @@ fn capacity_bits(grid_size: u16, options: PetalStreamOptions) -> Result<usize, P
     }
     let min_grid = border * 2 + anchor * 2 + 1;
     if grid < min_grid {
-        return Err(PetalStreamError::InvalidOptions("grid size too small for anchors"));
+        return Err(PetalStreamError::InvalidOptions(
+            "grid size too small for anchors",
+        ));
     }
     let total = (grid as usize) * (grid as usize);
     let border_cells = (grid as usize) * 4 - 4;
-    let anchor_cells = (options.anchor_size as usize)
-        * (options.anchor_size as usize)
-        * 4;
+    let anchor_cells = (options.anchor_size as usize) * (options.anchor_size as usize) * 4;
     let data_cells = total.saturating_sub(border_cells + anchor_cells);
     Ok(data_cells)
 }
@@ -334,8 +339,8 @@ fn cell_role(x: u16, y: u16, grid_size: u16, options: PetalStreamOptions) -> Cel
 }
 
 fn encode_header(payload: &[u8]) -> Result<Vec<u8>, PetalStreamError> {
-    let payload_len = u16::try_from(payload.len())
-        .map_err(|_| PetalStreamError::PayloadTooLarge)?;
+    let payload_len =
+        u16::try_from(payload.len()).map_err(|_| PetalStreamError::PayloadTooLarge)?;
     let crc = crc32(payload);
     let mut header = Vec::with_capacity(PETAL_STREAM_HEADER_LEN);
     header.extend_from_slice(&PETAL_STREAM_MAGIC);
@@ -360,7 +365,9 @@ fn decode_payload(bytes: &[u8]) -> Result<Vec<u8>, PetalStreamError> {
     let start = PETAL_STREAM_HEADER_LEN;
     let end = start + payload_len;
     if end > bytes.len() {
-        return Err(PetalStreamError::InvalidHeader("payload length exceeds data"));
+        return Err(PetalStreamError::InvalidHeader(
+            "payload length exceeds data",
+        ));
     }
     let payload = bytes[start..end].to_vec();
     let expected = crc32(&payload);

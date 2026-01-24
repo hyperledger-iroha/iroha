@@ -687,9 +687,10 @@ fn try_read_snapshot_bundle(
         #[cfg(feature = "telemetry")]
         telemetry,
     };
-    let state = seed
-        .into_state_from_json(value)
-        .map_err(TryReadError::Serialization)?;
+    let state = seed.into_state_from_json(value).map_err(|err| {
+        iroha_logger::warn!(?err, "snapshot state deserialization failed");
+        TryReadError::Serialization(err)
+    })?;
     if &state.chain_id != expected_chain_id {
         return Err(TryReadError::ChainIdMismatch {
             expected: expected_chain_id.clone(),
@@ -983,7 +984,7 @@ pub enum TryReadError {
     /// Failed reading/writing {1:?} from disk
     IO(#[source] std::io::Error, PathBuf),
     /// Error (de)serializing state snapshot
-    Serialization(norito::json::Error),
+    Serialization(#[source] norito::json::Error),
     /// Snapshot digest file missing at {0:?}
     ChecksumMissing(PathBuf),
     /// Snapshot digest mismatch (expected `{expected}`, got `{actual}`)
@@ -1120,10 +1121,17 @@ enum TryWriteError {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Write, num::NonZeroUsize};
+    use std::{
+        fs::File,
+        io::Write,
+        num::NonZeroUsize,
+        sync::{LazyLock, Mutex},
+    };
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-    use iroha_data_model::{ChainId, peer::PeerId};
+    use iroha_data_model::{
+        ChainId, account::clear_account_domain_selector_resolver, peer::PeerId,
+    };
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
     use tokio::test;
@@ -1135,6 +1143,7 @@ mod tests {
 
     const TEST_CHUNK_SIZE: NonZeroUsize = nonzero!(1024_usize);
     const TEST_CHAIN_ID: &str = "test-chain";
+    static DOMAIN_SELECTOR_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn state_factory() -> State {
         let kura = Kura::blank_kura_for_testing();
@@ -1179,9 +1188,10 @@ mod tests {
         let expected_chain_id = state.chain_id.clone();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+        let kura = Kura::blank_kura_for_testing();
         let snapshot_state = try_read_snapshot(
             &store_dir,
-            &Kura::blank_kura_for_testing(),
+            &kura,
             LiveQueryStore::start_test,
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
@@ -1192,6 +1202,35 @@ mod tests {
         )
         .unwrap();
         assert_eq!(snapshot_state.chain_id, expected_chain_id);
+    }
+
+    #[test]
+    async fn snapshot_read_sets_domain_selector_resolver() {
+        let _guard = DOMAIN_SELECTOR_GUARD.lock().unwrap();
+        clear_account_domain_selector_resolver();
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = KeyPair::random();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+        clear_account_domain_selector_resolver();
+
+        let snapshot_state = try_read_snapshot(
+            &store_dir,
+            &Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
+        )
+        .unwrap();
+
+        assert_eq!(snapshot_state.chain_id, state.chain_id);
+        clear_account_domain_selector_resolver();
     }
 
     #[test]

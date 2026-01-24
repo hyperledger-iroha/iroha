@@ -111,14 +111,14 @@ pub mod nft;
 pub mod offline;
 /// Oracle feed schemas and deterministic committee helpers.
 pub mod oracle;
-/// Petal stream framing for offline payload handoff.
-pub mod petal_stream;
 /// Runtime parameter definitions and schema.
 pub mod parameter;
 /// Peer and network-topology types.
 pub mod peer;
 /// Permission token and grant model.
 pub mod permission;
+/// Petal stream framing for offline payload handoff.
+pub mod petal_stream;
 /// Zero-knowledge proof payload types
 pub mod proof;
 /// QR stream framing types for offline payload handoff.

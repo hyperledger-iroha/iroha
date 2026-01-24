@@ -7344,8 +7344,7 @@ mod tests {
     #[test]
     fn npos_timeouts_from_block_time_defaults() {
         let defaults_ms = defaults::sumeragi::npos::BLOCK_TIME_MS;
-        let timeouts =
-            SumeragiNposTimeouts::from_block_time(Duration::from_millis(defaults_ms));
+        let timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(defaults_ms));
         assert_eq!(
             timeouts.propose,
             Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_PROPOSE_MS)
@@ -7384,8 +7383,7 @@ mod tests {
     fn npos_timeouts_scale_with_block_time() {
         let base_ms = defaults::sumeragi::npos::BLOCK_TIME_MS;
         let scaled_ms = base_ms.saturating_mul(2);
-        let timeouts =
-            SumeragiNposTimeouts::from_block_time(Duration::from_millis(scaled_ms));
+        let timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(scaled_ms));
         assert_eq!(
             timeouts.propose,
             Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_PROPOSE_MS * 2)

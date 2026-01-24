@@ -140,20 +140,6 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     // shutdown all
     network.shutdown().await;
 
-    // TODO: Remove this cleanup once snapshot deserialization succeeds on restart.
-    for name in [
-        "snapshot.data",
-        "snapshot.sha256",
-        "snapshot.sig",
-        "snapshot.merkle.json",
-        "snapshot.tmp",
-        "snapshot.sha256.tmp",
-        "snapshot.sig.tmp",
-        "snapshot.merkle.json.tmp",
-    ] {
-        let _ = std::fs::remove_file(snapshot_dir.join(name));
-    }
-
     // restart another one, **without a genesis** even
     let config: Vec<_> = network.config_layers().collect();
     assert_ne!(peer_a, peer_b);

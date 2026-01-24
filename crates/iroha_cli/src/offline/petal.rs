@@ -367,20 +367,23 @@ const SAKURA_BG_START: [f64; 3] = [0.99, 0.93, 0.96];
 const SAKURA_BG_END: [f64; 3] = [1.0, 0.98, 0.99];
 const SAKURA_PETAL: [f64; 3] = [1.0, 0.79, 0.87];
 const SAKURA_INK: [f64; 3] = [0.26, 0.08, 0.14];
-const SAKURA_WIND_STREAK_ALPHA: f64 = 0.06;
+const SAKURA_WIND_STREAK_ALPHA: f64 = 0.08;
 const SAKURA_WIND_STREAK_FREQ_X: f64 = 6.0;
 const SAKURA_WIND_STREAK_FREQ_Y: f64 = 3.5;
-const SAKURA_BG_PETAL_COUNT: usize = 12;
-const SAKURA_BG_PETAL_ORBIT: f64 = 0.34;
-const SAKURA_BG_PETAL_RADIUS: f64 = 0.24;
-const SAKURA_BG_PETAL_ALPHA: f64 = 0.16;
-const SAKURA_TECH_RING_ALPHA: f64 = 0.025;
+const SAKURA_BG_PETAL_COUNT: usize = 16;
+const SAKURA_BG_PETAL_ORBIT: f64 = 0.36;
+const SAKURA_BG_PETAL_RADIUS: f64 = 0.26;
+const SAKURA_BG_PETAL_ALPHA: f64 = 0.20;
+const SAKURA_TECH_RING_ALPHA: f64 = 0.035;
 const SAKURA_TECH_RING_FREQ: f64 = 10.0;
 const DATA_PETAL_MAJOR: f64 = 0.52;
 const DATA_PETAL_MINOR: f64 = 0.28;
 const DATA_PETAL_JITTER: f64 = 0.10;
 const DATA_PETAL_ROTATION: f64 = 0.45;
 const DATA_PETAL_SWAY: f64 = 0.08;
+const DATA_PETAL_GLOW_RADIUS: f64 = 1.6;
+const DATA_PETAL_GLOW_ALPHA: f64 = 0.12;
+const DATA_PETAL_HIGHLIGHT_ALPHA: f64 = 0.08;
 
 fn render_petal_frame(
     grid: &PetalStreamGrid,
@@ -398,6 +401,7 @@ fn render_petal_frame(
     let phase = (frame_index % frame_count.max(1)) as f64 / frame_count.max(1) as f64;
     let wind_angle = phase * std::f64::consts::TAU;
     let wind_dir = (wind_angle.cos(), wind_angle.sin());
+    let glow_radius_sq = DATA_PETAL_GLOW_RADIUS * DATA_PETAL_GLOW_RADIUS;
 
     let mut cell_params = Vec::with_capacity(grid.cells.len());
     for y in 0..grid_size {
@@ -496,10 +500,25 @@ fn render_petal_frame(
                     let ry = -dx * sin_a + dy * cos_a;
                     let nx = rx / DATA_PETAL_MAJOR;
                     let ny = ry / DATA_PETAL_MINOR;
-                    if nx * nx + ny * ny <= 1.0 {
+                    let dist = nx * nx + ny * ny;
+                    if dist <= glow_radius_sq {
+                        let glow = (1.0 - dist / glow_radius_sq)
+                            .clamp(0.0, 1.0)
+                            * DATA_PETAL_GLOW_ALPHA;
+                        r = lerp(r, SAKURA_PETAL[0], glow);
+                        g = lerp(g, SAKURA_PETAL[1], glow);
+                        b = lerp(b, SAKURA_PETAL[2], glow);
+                    }
+                    if dist <= 1.0 {
                         r = SAKURA_INK[0];
                         g = SAKURA_INK[1];
                         b = SAKURA_INK[2];
+                        let highlight = (1.0 - dist)
+                            .clamp(0.0, 1.0)
+                            * DATA_PETAL_HIGHLIGHT_ALPHA;
+                        r = lerp(r, SAKURA_PETAL[0], highlight);
+                        g = lerp(g, SAKURA_PETAL[1], highlight);
+                        b = lerp(b, SAKURA_PETAL[2], highlight);
                     }
                 }
             }
@@ -556,7 +575,7 @@ fn sample_grid_from_rgba(
 }
 
 fn load_png(path: impl AsRef<Path>) -> Result<image::RgbaImage> {
-    let reader = image::io::Reader::open(&path)
+    let reader = image::ImageReader::open(&path)
         .map_err(|err| eyre!("failed to read {}: {err}", path.as_ref().display()))?
         .with_guessed_format()
         .map_err(|err| eyre!("failed to detect image format: {err}"))?;
@@ -722,6 +741,20 @@ mod tests {
         let decoder = png::Decoder::new(file);
         let reader = decoder.read_info().expect("read info");
         assert_eq!(reader.info().color_type, png::ColorType::Rgba);
+    }
+
+    #[test]
+    fn load_png_roundtrips_frame_dimensions() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("frame.png");
+        let payload = b"petal-cli-load";
+        let grid = PetalStreamEncoder::encode_grid(payload, PetalStreamOptions::default())
+            .expect("encode");
+        let image = render_petal_frame(&grid, 96, 0, 1, PetalRenderStyle::SakuraWind);
+        write_png_rgba(&path, &image).expect("write");
+        let decoded = load_png(&path).expect("load");
+        assert_eq!(decoded.width(), image.width());
+        assert_eq!(decoded.height(), image.height());
     }
 
     #[test]

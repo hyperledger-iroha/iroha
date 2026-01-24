@@ -1676,10 +1676,8 @@ mod tests {
         });
         let view = state.view();
         let resolved = resolve_npos_timeouts(&view, &fallback);
-        let derived = SumeragiNposTimeouts::from_block_time(resolve_npos_block_time(
-            &view,
-            &fallback,
-        ));
+        let derived =
+            SumeragiNposTimeouts::from_block_time(resolve_npos_block_time(&view, &fallback));
         assert_eq!(resolved.propose, Duration::from_millis(100));
         assert_eq!(resolved.prevote, Duration::from_millis(110));
         assert_eq!(resolved.precommit, Duration::from_millis(120));
