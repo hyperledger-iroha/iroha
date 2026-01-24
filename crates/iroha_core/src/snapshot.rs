@@ -1,5 +1,6 @@
 //! This module contains [`State`] snapshot actor service.
 use std::{
+    collections::BTreeMap,
     io::Write,
     num::NonZeroUsize,
     path::{Path, PathBuf},
@@ -13,7 +14,12 @@ use iroha_config::{
     snapshot::Mode,
 };
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature};
-use iroha_data_model::{ChainId, block::BlockHeader};
+use iroha_data_model::{
+    ChainId,
+    account::{AccountDomainSelector, set_account_domain_selector_resolver},
+    block::BlockHeader,
+    domain::DomainId,
+};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
 use norito::json::{self, JsonDeserialize, JsonSerialize, JsonSerialize as JsonSerializeTrait};
@@ -630,6 +636,61 @@ struct SnapshotReadOutcome {
     merkle_used_tmp: bool,
 }
 
+fn install_snapshot_domain_selector_resolver(value: &json::Value) {
+    let Some(domains) = snapshot_domain_selector_map(value) else {
+        return;
+    };
+    if domains.is_empty() {
+        return;
+    }
+    let domains = Arc::new(domains);
+    set_account_domain_selector_resolver(Arc::new(move |selector| {
+        domains.get(selector).cloned()
+    }));
+}
+
+fn snapshot_domain_selector_map(
+    value: &json::Value,
+) -> Option<BTreeMap<AccountDomainSelector, DomainId>> {
+    let world = value.get("world")?.as_object()?;
+    let domains = world.get("domains")?;
+    let mut selectors = BTreeMap::new();
+    for key in ["revert", "blocks"] {
+        let Some(section) = domains.get(key) else {
+            continue;
+        };
+        let Some(section_map) = section.as_object() else {
+            continue;
+        };
+        for domain_label in section_map.keys() {
+            let Ok(domain) = domain_label.parse::<DomainId>() else {
+                warn!(domain = %domain_label, "snapshot domain label failed to parse");
+                continue;
+            };
+            match AccountDomainSelector::from_domain(&domain) {
+                Ok(selector) => {
+                    if let Some(existing) = selectors.get(&selector) {
+                        if existing != &domain {
+                            warn!(
+                                selector = ?selector,
+                                existing = %existing,
+                                incoming = %domain,
+                                "snapshot domain selector collision detected"
+                            );
+                        }
+                        continue;
+                    }
+                    selectors.insert(selector, domain);
+                }
+                Err(err) => {
+                    warn!(domain = %domain, ?err, "snapshot domain selector derivation failed");
+                }
+            }
+        }
+    }
+    Some(selectors)
+}
+
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 fn try_read_snapshot_bundle(
@@ -681,6 +742,7 @@ fn try_read_snapshot_bundle(
             return Err(TryReadError::Serialization(err));
         }
     };
+    install_snapshot_domain_selector_resolver(&value);
     let seed = KuraSeed {
         kura: Arc::clone(kura),
         query_handle: live_query_store.clone(),
@@ -1120,10 +1182,15 @@ enum TryWriteError {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Write, num::NonZeroUsize};
+    use std::{
+        fs::File,
+        io::Write,
+        num::NonZeroUsize,
+        sync::{LazyLock, Mutex, MutexGuard},
+    };
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-    use iroha_data_model::{ChainId, peer::PeerId};
+    use iroha_data_model::{ChainId, account::clear_account_domain_selector_resolver, peer::PeerId};
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
     use tokio::test;
@@ -1146,6 +1213,25 @@ mod tests {
         );
         state.chain_id = ChainId::from(TEST_CHAIN_ID);
         state
+    }
+
+    struct DomainSelectorResolverGuard {
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl Drop for DomainSelectorResolverGuard {
+        fn drop(&mut self) {
+            clear_account_domain_selector_resolver();
+        }
+    }
+
+    fn guard_domain_selector_resolver() -> DomainSelectorResolverGuard {
+        static DOMAIN_SELECTOR_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+        let lock = DOMAIN_SELECTOR_GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clear_account_domain_selector_resolver();
+        DomainSelectorResolverGuard { _lock: lock }
     }
 
     #[test]
@@ -1191,6 +1277,31 @@ mod tests {
             StateTelemetry::new(<_>::default(), true),
         )
         .unwrap();
+        assert_eq!(snapshot_state.chain_id, expected_chain_id);
+    }
+
+    #[test]
+    async fn snapshot_read_installs_domain_selector_resolver() {
+        let _guard = guard_domain_selector_resolver();
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = KeyPair::random();
+        let expected_chain_id = state.chain_id.clone();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+        let snapshot_state = try_read_snapshot(
+            &store_dir,
+            &Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        )
+        .expect("snapshot read with selector resolver");
         assert_eq!(snapshot_state.chain_id, expected_chain_id);
     }
 
@@ -1386,6 +1497,7 @@ mod tests {
             );
         }
     }
+
 
     #[test]
     async fn snapshot_write_cleans_temp_files() {

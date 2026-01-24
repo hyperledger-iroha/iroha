@@ -2,6 +2,9 @@
 
 Last update: 2026-01-24
 
+- Sumeragi: dispatch background posts inline when `sumeragi.debug.disable_background_worker` is enabled; skip RBC availability gating once the block payload is local.
+- Integration tests: align DA/RBC + pacemaker config keys to nested schema, fix DA Kura eviction block-dir lookup, accept `FindError::Domain` root cause for failing triggers, and allow the `debug/ok` ZK backend to verify.
+- Tests: not run (not requested).
 - CLI offline petal: expose QR payload-kind labels for petal manifests and add unit coverage.
 - Tests: not run (not requested).
 - Sumeragi config: pacemaker block time now resolves from on-chain `SumeragiParameters.block_time_ms` (fallback to `sumeragi.npos.block_time_ms` pre-genesis), NPoS timeouts derive from that value, and deprecated `sumeragi_npos_parameters.block_time_ms` is warned/ignored; DA docs/templates now call availability evidence advisory (commit does not gate).
@@ -11,8 +14,9 @@ Last update: 2026-01-24
 - Petal stream: added Rust framing + CLI `ops offline petal` encode/decode + sakura wind renderer, JS/Swift/Android encoder/decoder + scan helpers (CameraX/AVFoundation), and docs for petal handoff.
 - Torii pipeline status: scope the state view during queue checks to avoid writer-preferred lock deadlocks before fallback state lookups.
 - Tests: not run (not requested).
-- Integration tests: remove snapshot mtime gating in `extra_functional::restart_peer` and clear snapshot files before restart while snapshot deserialization on startup is unresolved.
-- Tests: `cargo test -p integration_tests --test mod restarted_peer_should_restore_its_state -- --nocapture` (ok).
+- Snapshots: install domain-selector resolver during snapshot reads so IH58 account IDs for non-default domains deserialize; remove the restart-peer snapshot cleanup and add coverage for resolver install.
+- Tests: `cargo test -p iroha_core snapshot_read_installs_domain_selector_resolver -- --nocapture` (ok).
+- Tests: `IROHA_TEST_NETWORK_PARALLELISM=1 cargo test -p integration_tests --test mod restarted_peer_should_restore_its_state -- --nocapture` (ok).
 - Lane relay tests: seed consensus-key PoPs in lane relay fixtures so QC verification succeeds before conflict/merge checks.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Tests: `cargo test -p iroha_core record_lane_relay_rejects_conflicting_relay -- --nocapture` (ok).
