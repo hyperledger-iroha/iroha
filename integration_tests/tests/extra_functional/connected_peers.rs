@@ -234,6 +234,16 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
         return Ok(());
     }
     let expected_connected = expected_connected_peers(n_peers);
+    if sandbox::handle_result(
+        timeout(network.sync_timeout(), removed_peer.once_block(3))
+            .await
+            .map_err(eyre::Report::new),
+        context,
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
 
     if sandbox::handle_result(
         assert_peers_status(

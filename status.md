@@ -4,6 +4,14 @@ Last update: 2026-01-24
 
 - CLI offline: add top-level `iroha offline` command alias, refresh CLI help, and align QR/petal docs to the alias so preview commands match user expectations.
 - Petal stream: deepen sakura-wind preview (denser petals + subtle data glow) and add a PNG load roundtrip test.
+- Connected peers test: wait for the re-registered peer to observe block 3 before asserting status to avoid stale local-removed metrics.
+- Tests: `cargo test -p integration_tests --test mod connected_peers_with_f_1_0_1 -- --nocapture` (timed out after 20m).
+- DA cursor regression tests: hydrate DA indexes before manual cursor advances so lazy hydration does not reset in-memory updates.
+- Tests: `cargo test -p iroha_core da_shard_cursors_guard_regressions -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core --lib da_receipt_cursors_guard_regressions -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core --lib resharding_clears_stale_shard_cursors -- --nocapture` (ok).
+- Lane relay tests: seed consensus-key PoPs in emergency-override acceptance fixtures so QC verification succeeds.
+- Tests: not run (not requested).
 - Sumeragi tests: align observer local-index, commit inflight, new-view gossip targets, and RBC availability tests with the Topology/roster types.
 - Tests: not run (not requested).
 - Sumeragi: dispatch background posts inline when `sumeragi.debug.disable_background_worker` is enabled; skip RBC availability gating once the block payload is local.
