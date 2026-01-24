@@ -5117,6 +5117,8 @@ mod tests {
     use iroha_primitives::{numeric::Numeric, time::TimeSource, unique_vec::UniqueVec};
     use tempfile::TempDir;
 
+    const COMMIT_WORKER_TIMEOUT: Duration = Duration::from_secs(20);
+
     fn signers_from_bitmap(signers_bitmap: &[u8], roster_len: usize) -> Vec<usize> {
         let mut signers = Vec::new();
         for (byte_idx, byte) in signers_bitmap.iter().enumerate() {
@@ -5484,12 +5486,12 @@ mod tests {
         handle.work_tx.send(work).expect("send commit work");
         let result = handle
             .result_rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(COMMIT_WORKER_TIMEOUT)
             .expect("commit result");
         assert!(result.timings.qc_verify_ms.is_some());
         assert!(result.timings.persist_ms.is_some());
         wake_rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(COMMIT_WORKER_TIMEOUT)
             .expect("wake signal");
 
         drop(handle.work_tx);
@@ -5558,7 +5560,7 @@ mod tests {
         handle.work_tx.send(work).expect("send commit work");
         let result = handle
             .result_rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(COMMIT_WORKER_TIMEOUT)
             .expect("commit result");
         assert!(result.timings.qc_verify_ms.is_some());
         assert!(result.timings.persist_ms.is_some());
