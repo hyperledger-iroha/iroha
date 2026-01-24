@@ -255,9 +255,7 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
             })
             .await?
             .expect_err("should immediately result in error");
-            let Some(InstructionExecutionError::Find(FindError::Domain(_))) =
-                err.root_cause().downcast_ref::<InstructionExecutionError>()
-            else {
+            let Some(FindError::Domain(_)) = err.root_cause().downcast_ref::<FindError>() else {
                 return Err(err);
             };
 

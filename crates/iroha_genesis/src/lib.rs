@@ -23,7 +23,7 @@ use std::{
     io::BufReader,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 
@@ -37,7 +37,7 @@ use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey};
 #[cfg(test)]
 use iroha_data_model::isi::register::RegisterBox;
 use iroha_data_model::{
-    account::curve::CurveId,
+    account::{AccountDomainSelector, curve::CurveId},
     block::{
         SignedBlock,
         consensus::{ConsensusGenesisParams, NposGenesisParams},
@@ -3350,6 +3350,102 @@ mod tests2 {
 impl RawGenesisTransaction {
     const WARN_ON_GENESIS_GTE: u64 = 1024 * 1024 * 1024; // 1Gb
 
+    fn install_domain_selector_resolver_from_genesis(
+        raw_value: &norito::json::Value,
+    ) -> Result<(), norito::json::Error> {
+        let norito::json::Value::Object(root) = raw_value else {
+            return Ok(());
+        };
+        let Some(transactions_value) = root.get("transactions") else {
+            return Ok(());
+        };
+        let norito::json::Value::Array(transactions) = transactions_value else {
+            return Err(norito::json::Error::InvalidField {
+                field: "transactions".into(),
+                message: "expected array".into(),
+            });
+        };
+        let mut index = BTreeMap::new();
+        let genesis_domain_id = GENESIS_DOMAIN_ID.clone();
+        let selector = AccountDomainSelector::from_domain(&genesis_domain_id).map_err(|err| {
+            norito::json::Error::InvalidField {
+                field: "genesis".into(),
+                message: err.to_string(),
+            }
+        })?;
+        index.insert(selector, genesis_domain_id);
+        for tx in transactions {
+            let norito::json::Value::Object(tx_obj) = tx else {
+                continue;
+            };
+            let Some(instructions_value) = tx_obj.get("instructions") else {
+                continue;
+            };
+            let norito::json::Value::Array(instructions) = instructions_value else {
+                return Err(norito::json::Error::InvalidField {
+                    field: "transactions.instructions".into(),
+                    message: "expected array".into(),
+                });
+            };
+            for instruction in instructions {
+                let norito::json::Value::Object(instr_obj) = instruction else {
+                    continue;
+                };
+                let Some(register_value) = instr_obj.get("Register") else {
+                    continue;
+                };
+                let norito::json::Value::Object(register_obj) = register_value else {
+                    continue;
+                };
+                let Some(domain_value) = register_obj.get("Domain") else {
+                    continue;
+                };
+                let norito::json::Value::Object(domain_obj) = domain_value else {
+                    continue;
+                };
+                let Some(id_value) = domain_obj.get("id") else {
+                    continue;
+                };
+                let norito::json::Value::String(id_str) = id_value else {
+                    continue;
+                };
+                let domain_id: DomainId =
+                    id_str
+                        .parse()
+                        .map_err(|_| norito::json::Error::InvalidField {
+                            field: "transactions.instructions.Register.Domain.id".into(),
+                            message: format!("failed to parse domain id `{id_str}`"),
+                        })?;
+                let selector = AccountDomainSelector::from_domain(&domain_id).map_err(|err| {
+                    norito::json::Error::InvalidField {
+                        field: "transactions.instructions.Register.Domain.id".into(),
+                        message: err.to_string(),
+                    }
+                })?;
+                if let Some(existing) = index.get(&selector) {
+                    if existing != &domain_id {
+                        return Err(norito::json::Error::InvalidField {
+                            field: "transactions.instructions.Register.Domain.id".into(),
+                            message: format!(
+                                "Domain selector {selector:?} already bound to domain {existing}"
+                            ),
+                        });
+                    }
+                } else {
+                    index.insert(selector, domain_id);
+                }
+            }
+        }
+        if index.is_empty() {
+            return Ok(());
+        }
+        let index = Arc::new(index);
+        iroha_data_model::account::set_account_domain_selector_resolver(Arc::new(
+            move |selector| index.get(selector).cloned(),
+        ));
+        Ok(())
+    }
+
     /// Iterate over all instructions contained in this manifest.
     #[must_use]
     pub fn instructions(&self) -> impl Iterator<Item = &InstructionBox> {
@@ -3395,6 +3491,13 @@ impl RawGenesisTransaction {
         let raw_value: norito::json::Value = norito::json::from_str(&contents).map_err(|err| {
             eyre!(
                 "failed to deserialize raw genesis transaction from {}: {err}",
+                json_path.as_ref().display()
+            )
+        })?;
+
+        Self::install_domain_selector_resolver_from_genesis(&raw_value).map_err(|err| {
+            eyre!(
+                "failed to resolve domain selectors from {}: {err}",
                 json_path.as_ref().display()
             )
         })?;
@@ -4364,6 +4467,37 @@ mod tests {
         std::fs::write(&genesis_path, genesis).unwrap();
         let kp = KeyPair::random();
         RawGenesisTransaction::from_path(&genesis_path)?.build_and_sign(&kp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn parse_genesis_installs_domain_selector_resolver() -> Result<()> {
+        static DOMAIN_SELECTOR_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = DOMAIN_SELECTOR_GUARD.lock().expect("domain resolver guard");
+        iroha_data_model::account::clear_account_domain_selector_resolver();
+        init_instruction_registry();
+
+        let (tmp_dir, builder) = test_builder();
+        let (public_key, _) = KeyPair::random().into_parts();
+        let domain_name: Name = "wonderland".parse()?;
+        let domain_id = DomainId::new(domain_name.clone());
+        let account_id = AccountId::new(domain_id, public_key.clone());
+
+        let genesis = builder
+            .domain(domain_name)
+            .account(public_key)
+            .finish_domain()
+            .build_raw()
+            .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+        let json = norito::json::to_json_pretty(&genesis)?;
+        assert!(
+            json.contains(&account_id.to_string()),
+            "expected IH58 account id in genesis JSON"
+        );
+        let genesis_path = tmp_dir.path().join("genesis.json");
+        std::fs::write(&genesis_path, json)?;
+        RawGenesisTransaction::from_path(&genesis_path)?;
+        iroha_data_model::account::clear_account_domain_selector_resolver();
         Ok(())
     }
 

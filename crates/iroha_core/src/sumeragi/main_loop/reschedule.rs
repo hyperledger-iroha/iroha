@@ -13,6 +13,9 @@ impl Actor {
         if !self.runtime_da_enabled() {
             return false;
         }
+        if self.block_payload_available_locally(key.0) {
+            return false;
+        }
         if self.subsystems.da_rbc.rbc.pending.contains_key(&key) {
             return true;
         }
@@ -22,12 +25,14 @@ impl Actor {
         if session.is_invalid() {
             return false;
         }
+        if session.delivered {
+            return false;
+        }
         let missing_chunks =
             session.total_chunks() != 0 && session.received_chunks() < session.total_chunks();
         let required = self.rbc_deliver_quorum(commit_topology);
         let ready_quorum = session.ready_signatures.len() >= required;
-        let payload_available = self.block_payload_available_locally(key.0) || session.delivered;
-        missing_chunks || !ready_quorum || !payload_available
+        missing_chunks || !ready_quorum
     }
 
     #[allow(clippy::too_many_lines)]
