@@ -22382,6 +22382,15 @@ mod tests {
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
+        seed_consensus_keys_with_pops(
+            &state,
+            &[
+                base_1_kp.clone(),
+                base_2_kp.clone(),
+                extra_1_kp.clone(),
+                extra_2_kp.clone(),
+            ],
+        );
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -22525,6 +22534,15 @@ mod tests {
                 DataSpaceId::GLOBAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
+        );
+        seed_consensus_keys_with_pops(
+            &state,
+            &[
+                base_1_kp.clone(),
+                base_2_kp.clone(),
+                extra_1_kp.clone(),
+                extra_2_kp.clone(),
+            ],
         );
 
         let height = 1;
@@ -23160,6 +23178,9 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
+        state
+            .ensure_da_indexes_hydrated()
+            .expect("hydrate DA indexes before advancing");
 
         let advance = iroha_data_model::da::commitment::DaCommitmentRecord::new(
             LaneId::new(0),
@@ -23218,6 +23239,9 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
+        state
+            .ensure_da_indexes_hydrated()
+            .expect("hydrate DA indexes before advancing");
 
         let advance = iroha_data_model::da::commitment::DaCommitmentRecord::new(
             LaneId::new(1),
@@ -23711,6 +23735,9 @@ mod tests {
                 ..Default::default()
             })
             .expect("apply Nexus catalog before resharding");
+        state
+            .ensure_da_indexes_hydrated()
+            .expect("hydrate DA indexes before advancing");
 
         let advance = DaCommitmentRecord::new(
             LaneId::new(0),
