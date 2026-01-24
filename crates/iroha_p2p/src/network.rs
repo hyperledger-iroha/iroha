@@ -5624,6 +5624,22 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             );
             return;
         }
+        if matches!(
+            topic,
+            message::Topic::Consensus
+                | message::Topic::ConsensusPayload
+                | message::Topic::ConsensusChunk
+        ) {
+            iroha_logger::debug!(
+                from=%incoming_peer,
+                origin=%origin,
+                ?target,
+                high=matches!(priority, Priority::High),
+                size=size_bytes,
+                topic=?topic,
+                "received consensus frame"
+            );
+        }
         if matches!(topic, message::Topic::BlockSync) {
             iroha_logger::debug!(
                 from=%incoming_peer,
@@ -5669,6 +5685,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             ) {
                 iroha_logger::debug!(
                     peer=%deliver.peer,
+                    topic=?topic,
                     size_bytes,
                     "delivering consensus frame to subscribers"
                 );

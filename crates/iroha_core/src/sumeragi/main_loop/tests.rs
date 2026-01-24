@@ -46223,6 +46223,126 @@ async fn reschedule_defers_missing_local_data_until_availability_timeout() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn reschedule_skips_fast_timeout_with_da_enabled() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    assert!(actor.runtime_da_enabled(), "test requires DA to be enabled");
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let view_idx = block.header().view_change_index();
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let fast_timeout = {
+        let view = actor.state.view();
+        actor.pending_fast_path_timeout(&view, consensus_mode)
+    };
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    assert!(
+        fast_timeout < quorum_timeout,
+        "test requires fast timeout to be shorter than quorum timeout"
+    );
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.validation_status = ValidationStatus::Valid;
+    pending.inserted_at = Instant::now() - fast_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    assert!(
+        !actor.reschedule_stale_pending_blocks(),
+        "fast timeout should not reschedule while DA is enabled"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_none(),
+        "pending should not be quorum-rescheduled at fast timeout in DA mode"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reschedule_defers_fast_timeout_while_validation_inflight() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let view_idx = block.header().view_change_index();
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let fast_timeout = {
+        let view = actor.state.view();
+        actor.pending_fast_path_timeout(&view, consensus_mode)
+    };
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    assert!(
+        fast_timeout < quorum_timeout,
+        "test requires fast timeout to be shorter than quorum timeout"
+    );
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.validation_status = ValidationStatus::Pending;
+    pending.inserted_at = Instant::now() - fast_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.subsystems.validation.inflight.insert(block_hash, 1);
+
+    assert!(
+        !actor.reschedule_stale_pending_blocks(),
+        "fast timeout should not reschedule while validation is inflight"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_none(),
+        "pending should not be quorum-rescheduled while validation is inflight"
+    );
+
+    {
+        let pending = actor
+            .pending
+            .pending_blocks
+            .get_mut(&block_hash)
+            .expect("pending block");
+        pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    }
+
+    assert!(
+        actor.reschedule_stale_pending_blocks(),
+        "pending should reschedule once quorum timeout elapses even with validation inflight"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_some(),
+        "pending should be quorum-rescheduled after quorum timeout"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn reschedule_defers_quorum_timeout_while_rbc_incomplete() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -46873,6 +46993,56 @@ async fn commit_pipeline_defers_reschedule_until_availability_timeout() {
     assert!(
         pending_after.last_quorum_reschedule.is_some(),
         "commit pipeline should reschedule after availability timeout"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_skips_fast_timeout_with_da_enabled() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    super::status::reset_worker_loop_snapshot_for_tests();
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    assert!(actor.runtime_da_enabled(), "test requires DA to be enabled");
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let view_idx = block.header().view_change_index();
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let fast_timeout = {
+        let view = actor.state.view();
+        actor.pending_fast_path_timeout(&view, consensus_mode)
+    };
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    assert!(
+        fast_timeout < quorum_timeout,
+        "test requires fast timeout to be shorter than quorum timeout"
+    );
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.validation_status = ValidationStatus::Valid;
+    pending.parent_state_root = Some(zero_state_root());
+    pending.post_state_root = Some(zero_state_root());
+    pending.inserted_at = Instant::now() - fast_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_none(),
+        "commit pipeline should not reschedule at fast timeout in DA mode"
     );
 
     harness.shutdown.send();

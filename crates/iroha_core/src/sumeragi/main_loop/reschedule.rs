@@ -201,7 +201,10 @@ impl Actor {
             let has_votes = pending.precommit_vote_sent
                 || self.pending_block_has_votes(*hash, pending.height, pending.view);
             let has_qc = pending.commit_qc_seen || commit_qc_cached || qc_any.is_some();
-            let effective_quorum_timeout = if !has_votes && !has_qc {
+            let validation_inflight = pending.validation_status == ValidationStatus::Pending
+                && self.subsystems.validation.inflight.contains_key(hash);
+            let fast_path_allowed = !da_enabled && !has_votes && !has_qc && !validation_inflight;
+            let effective_quorum_timeout = if fast_path_allowed {
                 fast_timeout.min(quorum_timeout)
             } else {
                 quorum_timeout

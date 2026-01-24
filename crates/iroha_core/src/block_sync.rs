@@ -2992,10 +2992,38 @@ pub mod message {
                             total, "filtered invalid blocks from block sync batch"
                         );
                     }
+                    let accepted = filtered_blocks.len();
+                    if let (Some((first_block, _)), Some((last_block, _))) =
+                        (filtered_blocks.first(), filtered_blocks.last())
+                    {
+                        let first_height = first_block.header().height().get();
+                        let last_height = last_block.header().height().get();
+                        let first_hash = first_block.hash();
+                        let last_hash = last_block.hash();
+                        debug!(
+                            peer = %peer_id,
+                            total,
+                            accepted,
+                            dropped,
+                            first_height,
+                            last_height,
+                            first_hash = ?first_hash,
+                            last_hash = ?last_hash,
+                            "accepted block sync batch"
+                        );
+                    }
 
                     for (block, incoming_qc) in filtered_blocks {
                         let block_height = block.header().height().get();
+                        let block_view = block.header().view_change_index();
                         let block_hash = block.hash();
+                        debug!(
+                            peer = %peer_id,
+                            height = block_height,
+                            view = block_view,
+                            block = %block_hash,
+                            "forwarding block sync update to sumeragi"
+                        );
                         if let Some(nz_height) = NonZeroU64::new(block_height) {
                             block_sync.seen_blocks.insert((nz_height, block_hash));
                         } else {
