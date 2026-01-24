@@ -9722,6 +9722,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 
         let existing_policies: BTreeMap<_, _> = self
             .axt_policies
+            .view()
             .iter()
             .map(|(dsid, policy)| (*dsid, *policy))
             .collect();
@@ -9841,7 +9842,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             if had_active_manifest {
                 return None;
             }
-            let stale: Vec<_> = self.axt_policies.iter().map(|(dsid, _)| *dsid).collect();
+            let stale: Vec<_> = self
+                .axt_policies
+                .view()
+                .iter()
+                .map(|(dsid, _)| *dsid)
+                .collect();
             for dsid in stale {
                 self.axt_policies.remove(dsid);
             }
@@ -9849,7 +9855,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
 
         let mut snapshot_entries = Vec::with_capacity(bindings.len());
-        let mut stale: BTreeSet<_> = self.axt_policies.iter().map(|(dsid, _)| *dsid).collect();
+        let mut stale: BTreeSet<_> = self
+            .axt_policies
+            .view()
+            .iter()
+            .map(|(dsid, _)| *dsid)
+            .collect();
         for (dsid, (policy, _)) in &bindings {
             self.axt_policies.insert(*dsid, *policy);
             stale.remove(dsid);
@@ -11656,12 +11667,17 @@ impl State {
                 &self.view(),
             );
         let Some(snap) = snapshot.as_mut() else {
-            let has_directory_data = {
+            let (has_directory_data, has_active_manifest) = {
                 let manifests = self.world.space_directory_manifests.view();
                 let bindings = self.world.uaid_dataspaces.view();
-                manifests.iter().next().is_some() || bindings.iter().next().is_some()
+                let has_directory_data =
+                    manifests.iter().next().is_some() || bindings.iter().next().is_some();
+                let has_active_manifest = manifests
+                    .iter()
+                    .any(|(_, set)| set.iter().any(|(_, record)| record.is_active()));
+                (has_directory_data, has_active_manifest)
             };
-            if !has_directory_data {
+            if !has_directory_data || has_active_manifest {
                 return None;
             }
             let mut block = self.world.axt_policies.block();
@@ -21314,10 +21330,7 @@ mod tests {
         let oldest_spool_size = std::fs::metadata(soranet_spool.join("a-file.norito"))
             .expect("stat soranet spool file")
             .len();
-        let kura_used = state
-            .kura
-            .disk_usage_bytes()
-            .expect("measure kura bytes");
+        let kura_used = state.kura.disk_usage_bytes().expect("measure kura bytes");
         let soranet_used = dir_size(&soranet_spool).expect("measure soranet spool");
         let soravpn_used = dir_size(&soravpn_spool).expect("measure soravpn spool");
         let cold_used = {
@@ -30716,12 +30729,11 @@ mod tests {
     #[test]
     fn delta_merge_execute_trigger_by_call_respects_permissions() {
         use iroha_data_model::{
-            Level,
+            Level, ValidationFail,
             events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
             isi::Log,
             isi::error::InstructionExecutionError,
             transaction::error::TransactionRejectionReason,
-            ValidationFail,
         };
         use iroha_test_samples::{ALICE_ID, BOB_ID};
 

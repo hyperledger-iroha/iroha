@@ -1797,6 +1797,7 @@ where
     let mut ivm = executor
         .clone_runtime_for_gas_limit(gas_limit)
         .map_err(|err| ValidationFail::InternalError(err.to_string()))?;
+    ivm.set_host(ivm::host::DefaultHost::default());
 
     let len_size = core::mem::size_of::<usize>();
     let payload_bytes = payload.encode();
@@ -1883,6 +1884,7 @@ fn run_executor_migration(
     let mut ivm = executor
         .clone_runtime_for_gas_limit(gas_limit)
         .map_err(|err| ValidationFail::InternalError(err.to_string()))?;
+    ivm.set_host(ivm::host::DefaultHost::default());
 
     let len_size = core::mem::size_of::<usize>();
     let payload_bytes = context.encode();

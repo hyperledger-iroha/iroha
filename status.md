@@ -2,6 +2,16 @@
 
 Last update: 2026-01-24
 
+- Lane relay tests: commit emergency-override transactions before asserting stored state; fix missing `lane_id` in `da_pin_intents_drop_missing_owner_accounts`.
+- Executor validation: install a default IVM host before running executor validation/migration so validation does not panic without a host.
+- Tests: `cargo test -p iroha_core --lib state::tests::record_lane_relay_accepts_emergency_override_under_quorum -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core --lib state::tests::execute_called_trigger_respects_executor_validation -- --nocapture` (ok).
+- State tests: merge detached by-call triggers via `ExecuteTrigger::execute` so permission/filter/payload checks run; added detached permission coverage.
+- Tests: `cargo test -p iroha_core delta_merge_execute_trigger_by_call -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core state::tests::block_rejects_failing_execute_trigger_and_rolls_back -- --nocapture` (target test ok; command hit the 20m timeout while running filtered binaries).
+- State tests: compute the Nexus storage budget from measured Kura/spool/cold usage so only the oldest spool entry is evicted before cold snapshots.
+- Tests: `cargo test -p iroha_core enforce_nexus_storage_budget_prunes_spools_before_cold -- --nocapture` (ok).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-pipeline cargo test -p iroha_core sumeragi::main_loop::commit::tests::execute_commit_work_emits_pipeline_events_before_state_apply -- --nocapture` (ok).
 - Sumeragi commit-work tests: use deterministic mock timestamps for genesis transactions to avoid clock-skew rejections in `execute_commit_work_*` tests.
 - Tests: `cargo test -p iroha_core execute_commit_work_ -- --nocapture` (target tests ok; command hit the 20m timeout while running filtered binaries).
 - State tests: build `AssetId` directly in `capture_exec_witness_stashes_reads_and_writes` to avoid IH58 account parsing that depends on domain-selector resolution.
