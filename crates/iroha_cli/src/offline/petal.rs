@@ -738,7 +738,7 @@ mod tests {
         let image = render_petal_frame(&grid, 32, 0, 1, PetalRenderStyle::SakuraWind);
         write_png_rgba(&path, &image).expect("write");
         let file = fs::File::open(&path).expect("open");
-        let decoder = png::Decoder::new(file);
+        let decoder = png::Decoder::new(std::io::BufReader::new(file));
         let reader = decoder.read_info().expect("read info");
         assert_eq!(reader.info().color_type, png::ColorType::Rgba);
     }
