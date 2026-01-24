@@ -7720,49 +7720,21 @@ impl DetachedStateTransactionDelta {
                 }
             }
 
-            // Execute by‑call triggers recorded during detached apply
+            // Execute by-call triggers recorded during detached apply using the
+            // same validation path as ExecuteTrigger::execute.
             for evt in self.exec_by_call {
-                let id = evt.trigger_id().clone();
-                // Perform the same path as ExecuteTrigger::execute
-                if let Err(rej) = stx.execute_called_trigger(&id, &evt) {
-                    use iroha_data_model::isi::error::InstructionExecutionError;
-
-                    let vf = match rej {
-                        TransactionRejectionReason::Validation(vf) => vf,
-                        TransactionRejectionReason::InstructionExecution(fail) => {
-                            ValidationFail::InstructionFailed(
-                                InstructionExecutionError::Conversion(format!(
-                                    "Instruction execution: {fail}"
-                                )),
-                            )
-                        }
-                        TransactionRejectionReason::IvmExecution(err) => {
-                            ValidationFail::InstructionFailed(
-                                InstructionExecutionError::Conversion(format!(
-                                    "IVM execution: {err}"
-                                )),
-                            )
-                        }
-                        TransactionRejectionReason::TriggerExecution(err) => {
-                            ValidationFail::InstructionFailed(
-                                InstructionExecutionError::Conversion(format!(
-                                    "Trigger execution: {err:?}"
-                                )),
-                            )
-                        }
-                        TransactionRejectionReason::AccountDoesNotExist(err) => {
-                            ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
-                        }
-                        TransactionRejectionReason::LimitCheck(err) => {
-                            ValidationFail::InstructionFailed(
-                                InstructionExecutionError::Conversion(format!(
-                                    "Limit check: {err}"
-                                )),
-                            )
-                        }
-                    };
-
-                    return Err(vf);
+                let exec = iroha_data_model::isi::ExecuteTrigger {
+                    trigger: evt.trigger_id().clone(),
+                    args: evt.args().clone(),
+                };
+                if let Err(err) =
+                    <iroha_data_model::isi::ExecuteTrigger as crate::smartcontracts::Execute>::execute(
+                        exec,
+                        authority,
+                        &mut stx,
+                    )
+                {
+                    return Err(ValidationFail::InstructionFailed(err));
                 }
             }
             Ok(())
@@ -11676,12 +11648,22 @@ impl State {
     }
 
     /// Rebuild the committed AXT policy cache from Space Directory manifests and lane bindings.
+    ///
+    /// When the Space Directory is empty, existing explicit policies are preserved.
     pub fn refresh_axt_policies_from_directory(&self) -> Option<AxtPolicySnapshot> {
         let mut snapshot =
             crate::smartcontracts::ivm::host::CoreHost::derive_axt_policy_snapshot_from_directory(
                 &self.view(),
             );
         let Some(snap) = snapshot.as_mut() else {
+            let has_directory_data = {
+                let manifests = self.world.space_directory_manifests.view();
+                let bindings = self.world.uaid_dataspaces.view();
+                manifests.iter().next().is_some() || bindings.iter().next().is_some()
+            };
+            if !has_directory_data {
+                return None;
+            }
             let mut block = self.world.axt_policies.block();
             let mut tx = block.transaction();
             let stale: Vec<_> = tx.view().iter().map(|(dsid, _)| *dsid).collect();
@@ -21329,10 +21311,34 @@ mod tests {
             max_cold_bytes: iroha_config::base::util::Bytes(0),
         });
 
+        let oldest_spool_size = std::fs::metadata(soranet_spool.join("a-file.norito"))
+            .expect("stat soranet spool file")
+            .len();
+        let kura_used = state
+            .kura
+            .disk_usage_bytes()
+            .expect("measure kura bytes");
+        let soranet_used = dir_size(&soranet_spool).expect("measure soranet spool");
+        let soravpn_used = dir_size(&soravpn_spool).expect("measure soravpn spool");
+        let cold_used = {
+            let backend = state.tiered_backend.lock();
+            backend
+                .cold_store_bytes()
+                .expect("measure cold store bytes")
+                .unwrap_or(0)
+        };
+        let total_used = kura_used
+            .saturating_add(cold_used)
+            .saturating_add(soranet_used)
+            .saturating_add(soravpn_used);
+        // Leave a deficit smaller than one spool entry so only the oldest entry is evicted.
+        let desired_excess = oldest_spool_size.saturating_sub(1).max(1);
+        let max_disk_usage = total_used.saturating_sub(desired_excess);
+
         let nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
             storage: iroha_config::parameters::actual::NexusStorage {
-                max_disk_usage_bytes: iroha_config::base::util::Bytes(120),
+                max_disk_usage_bytes: iroha_config::base::util::Bytes(max_disk_usage),
                 ..Default::default()
             },
             ..Default::default()
@@ -22409,6 +22415,7 @@ mod tests {
         .execute(&emergency_authority, &mut stx)
         .expect("set emergency validators");
         stx.apply();
+        block.commit().expect("commit emergency override block");
         assert!(
             state
                 .world
@@ -25043,6 +25050,7 @@ mod tests {
         let catalog =
             LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let lane_id = lane_config.primary().lane_id;
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
                 lane_catalog: catalog,
@@ -25205,6 +25213,7 @@ mod tests {
         let catalog =
             LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let lane_id = lane_config.primary().lane_id;
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
                 lane_catalog: catalog,
@@ -25439,6 +25448,7 @@ mod tests {
         let catalog =
             LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let lane_id = lane_config.primary().lane_id;
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
                 lane_catalog: catalog,
@@ -25448,7 +25458,7 @@ mod tests {
             .expect("configure nexus");
 
         let mut missing_owner = DaPinIntent::new(
-            LaneId::new(1),
+            lane_id,
             6,
             0,
             StorageTicketId::new([0x10; 32]),
@@ -25457,7 +25467,7 @@ mod tests {
         missing_owner.owner = Some(ALICE_ID.clone());
 
         let mut valid = DaPinIntent::new(
-            LaneId::new(1),
+            lane_id,
             6,
             1,
             StorageTicketId::new([0x30; 32]),
@@ -25508,6 +25518,7 @@ mod tests {
         let catalog =
             LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let lane_id = lane_config.primary().lane_id;
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
                 lane_catalog: catalog,
@@ -25517,7 +25528,7 @@ mod tests {
             .expect("configure nexus");
 
         let mut intent = DaPinIntent::new(
-            LaneId::new(1),
+            lane_id,
             5,
             0,
             StorageTicketId::new([0xCC; 32]),
@@ -26588,6 +26599,34 @@ mod tests {
 
         assert_eq!(entry.min_handle_era, 3);
         assert_eq!(entry.min_sub_nonce, 5);
+    }
+
+    #[test]
+    fn axt_policy_refresh_preserves_explicit_entries_without_directory() {
+        let dsid = DataSpaceId::new(90);
+        let policy = AxtPolicyEntry {
+            manifest_root: [0x11; 32],
+            target_lane: LaneId::new(0),
+            min_handle_era: 1,
+            min_sub_nonce: 2,
+            current_slot: 0,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::new(), kura, query_handle);
+        state.set_axt_policy(dsid, policy);
+
+        assert_eq!(
+            state.world.axt_policies.view().get(&dsid).copied(),
+            Some(policy)
+        );
+        let snapshot = state.refresh_axt_policies_from_directory();
+        assert!(snapshot.is_none());
+        assert_eq!(
+            state.world.axt_policies.view().get(&dsid).copied(),
+            Some(policy)
+        );
     }
 
     #[test]
@@ -27972,7 +28011,7 @@ mod tests {
     fn capture_exec_witness_stashes_reads_and_writes() {
         use core::str::FromStr as _;
 
-        use iroha_data_model::{asset::AssetId, block::BlockHeader};
+        use iroha_data_model::{asset::AssetDefinitionId, asset::AssetId, block::BlockHeader};
 
         let world = World::default();
         let kura = Kura::blank_kura_for_testing();
@@ -27983,8 +28022,9 @@ mod tests {
 
         let _guard = crate::sumeragi::witness::exec_witness_guard();
         crate::sumeragi::witness::start_block();
-        let asset_id =
-            AssetId::from_str(&format!("rose#wonderland#{}", ALICE_ID.to_string())).unwrap();
+        let asset_def_id =
+            AssetDefinitionId::from_str("rose#wonderland").expect("asset definition id");
+        let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
         crate::sumeragi::witness::record_write_asset(
             &asset_id,
             &iroha_primitives::numeric::Numeric::from(42u32),
@@ -30670,6 +30710,73 @@ mod tests {
                 InstructionExecutionError::Find(FindError::Trigger(id)),
             )) => assert_eq!(id, trigger_id),
             other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn delta_merge_execute_trigger_by_call_respects_permissions() {
+        use iroha_data_model::{
+            Level,
+            events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
+            isi::Log,
+            isi::error::InstructionExecutionError,
+            transaction::error::TransactionRejectionReason,
+            ValidationFail,
+        };
+        use iroha_test_samples::{ALICE_ID, BOB_ID};
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&BOB_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&BOB_ID);
+        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+        let world = World::with([domain], [alice_account, bob_account], []);
+        let state = State::new(world, kura, query_handle);
+
+        let trigger_id: TriggerId = "permission_guard".parse().unwrap();
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "trigger".to_owned(),
+                ))],
+                Repeats::Indefinitely,
+                BOB_ID.clone(),
+                ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+            ),
+        );
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            Register::trigger(trigger)
+                .execute(&BOB_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        state_block.commit().unwrap();
+
+        let mut delta = DetachedStateTransactionDelta::default();
+        let event = ExecuteTriggerEvent {
+            trigger_id: trigger_id.clone(),
+            authority: ALICE_ID.clone(),
+            args: Json::default(),
+        };
+        delta.execute_trigger_by_call(event);
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let err = delta
+            .merge_into(&mut state_block, &ALICE_ID)
+            .expect_err("unauthorized execute-trigger should be rejected");
+
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                InstructionExecutionError::InvariantViolation(_),
+            )) => {}
+            other => panic!("unexpected rejection: {other:?}"),
         }
     }
 

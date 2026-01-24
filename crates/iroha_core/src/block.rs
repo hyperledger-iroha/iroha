@@ -4661,12 +4661,13 @@ pub(crate) mod valid {
                 }
 
                 if block.header().is_genesis() {
-                    AcceptedTransaction::validate_genesis(
+                    AcceptedTransaction::validate_genesis_with_now(
                         tx,
                         chain_id,
                         max_clock_drift,
                         genesis_account,
                         crypto_cfg.as_ref(),
+                        block_creation_time,
                     )?;
                 } else {
                     // Skip per-tx signature verification for schemes we preverified above.

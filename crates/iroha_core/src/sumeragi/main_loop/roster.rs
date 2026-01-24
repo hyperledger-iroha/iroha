@@ -198,6 +198,8 @@ pub(super) fn derive_active_topology_from_views(
 ) -> Vec<PeerId> {
     let world_peers = world.peers();
     let use_commit = !commit_topology.is_empty();
+    // Trusted peers are the only source when both commit and world rosters are empty.
+    let baseline_from_trusted = !use_commit && world_peers.is_empty();
     let mut baseline = if use_commit {
         commit_topology.to_vec()
     } else if !world_peers.is_empty() {
@@ -214,7 +216,7 @@ pub(super) fn derive_active_topology_from_views(
         baseline
     } else {
         let missing = missing_pops_for_roster(&baseline, &trusted.pops);
-        if missing > 0 {
+        if missing > 0 && !baseline_from_trusted {
             iroha_logger::warn!(
                 missing,
                 pops = trusted.pops.len(),
@@ -223,8 +225,20 @@ pub(super) fn derive_active_topology_from_views(
             );
             baseline
         } else {
+            if missing > 0 {
+                iroha_logger::warn!(
+                    missing,
+                    pops = trusted.pops.len(),
+                    baseline = baseline.len(),
+                    "PoP map incomplete for trusted roster; dropping peers without PoP"
+                );
+            }
             let filtered = filter_roster_with_pops(baseline.clone(), &trusted.pops);
-            guard_pop_quorum(filtered, &baseline, trusted.pops.len())
+            if baseline_from_trusted {
+                filtered
+            } else {
+                guard_pop_quorum(filtered, &baseline, trusted.pops.len())
+            }
         }
     };
 
@@ -254,13 +268,10 @@ pub(super) fn derive_active_topology_from_views(
                 missing,
                 pops = trusted.pops.len(),
                 baseline = baseline.len(),
-                "PoP map incomplete for trusted roster fallback; skipping PoP filtering"
+                "PoP map incomplete for trusted roster fallback; dropping peers without PoP"
             );
-            baseline
-        } else {
-            let filtered = filter_roster_with_pops(baseline.clone(), &trusted.pops);
-            guard_pop_quorum(filtered, &baseline, trusted.pops.len())
         }
+        filter_roster_with_pops(baseline, &trusted.pops)
     };
     canonicalize_roster(fallback)
 }

@@ -655,6 +655,29 @@ impl<'tx> AcceptedTransaction<'tx> {
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<(), AcceptTransactionFail> {
         let now = current_unix_time();
+        Self::validate_genesis_with_now(
+            tx,
+            expected_chain_id,
+            max_clock_drift,
+            genesis_account,
+            crypto,
+            now,
+        )
+    }
+
+    /// Like [`Self::validate_genesis`], but with a caller-provided "now" timestamp.
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`]
+    pub fn validate_genesis_with_now(
+        tx: &SignedTransaction,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        genesis_account: &AccountId,
+        crypto: &iroha_config::parameters::actual::Crypto,
+        now: Duration,
+    ) -> Result<(), AcceptTransactionFail> {
         Self::validate_common(tx, expected_chain_id, max_clock_drift, now)?;
 
         if genesis_account != tx.authority() {
@@ -2742,6 +2765,33 @@ pub mod tests {
             .unwrap_err();
         let actual = super::duration_since_epoch_with_fallback(Err(skew_error));
         assert_eq!(actual, Duration::ZERO);
+    }
+
+    #[test]
+    fn validate_genesis_with_now_uses_supplied_timestamp() {
+        let far_future = Duration::from_secs(10_000_000_000);
+        let (_handle, time_source) = TimeSource::new_mock(far_future);
+        let tx = TransactionBuilder::new_with_time_source(
+            CHAIN_ID.clone(),
+            GENESIS_ACCOUNT.id.clone(),
+            &time_source,
+        )
+        .with_instructions([Log::new(
+            Level::DEBUG,
+            "genesis timestamp check".to_string(),
+        )])
+        .sign(&GENESIS_ACCOUNT.key);
+
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        AcceptedTransaction::validate_genesis_with_now(
+            &tx,
+            &CHAIN_ID,
+            Duration::from_secs(1),
+            &GENESIS_ACCOUNT.id,
+            &crypto_cfg,
+            far_future,
+        )
+        .expect("genesis validation should use provided timestamp");
     }
 
     #[test]

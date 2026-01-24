@@ -954,6 +954,10 @@ impl Actor {
                     }
                 }
                 self.persist_roster_sidecar_for_commit(committed_block.as_ref(), &commit_topology);
+                if pending_height == 1 {
+                    // Seed the genesis roster after the block is durably persisted.
+                    self.ensure_genesis_commit_roster();
+                }
                 let tally = qc_signers.as_ref().map_or_else(
                     || {
                         crate::block::valid::commit_signature_tally(
@@ -5039,7 +5043,7 @@ mod tests {
         transaction::SignedTransaction,
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
-    use iroha_primitives::{numeric::Numeric, unique_vec::UniqueVec};
+    use iroha_primitives::{numeric::Numeric, time::TimeSource, unique_vec::UniqueVec};
     use tempfile::TempDir;
 
     fn signers_from_bitmap(signers_bitmap: &[u8], roster_len: usize) -> Vec<usize> {
@@ -5106,7 +5110,12 @@ mod tests {
         let state = State::new_for_testing(world, Arc::clone(&kura), query_handle);
         let chain_id = state.view().chain_id().clone();
 
-        let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(0));
+        let tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            &time_source,
+        )
             .with_instructions([Log::new(Level::DEBUG, "genesis commit test".to_string())])
             .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
@@ -5179,7 +5188,12 @@ mod tests {
         let state = State::new_for_testing(world, Arc::clone(&kura), query_handle);
         let chain_id = state.view().chain_id().clone();
 
-        let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(0));
+        let tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            &time_source,
+        )
             .with_instructions([Log::new(Level::DEBUG, "commit qc test".to_string())])
             .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
@@ -5252,21 +5266,25 @@ mod tests {
             }
         }
         let history = crate::sumeragi::status::commit_qc_history();
-        assert!(
-            history.iter().any(|qc| {
+        let commit_cert = history
+            .iter()
+            .find(|qc| {
                 qc.subject_block_hash == block_hash
                     && qc.height == height
                     && qc.view == view
                     && matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
-            }),
-            "commit QC should be recorded for the committed block"
-        );
-        let snapshot = state.commit_roster_snapshot_for_block(height, block_hash);
+            })
+            .expect("commit QC should be recorded for the committed block");
+        let view_snapshot = state.view();
+        let committed_topology: Vec<_> = view_snapshot.commit_topology.iter().cloned().collect();
         assert!(
-            snapshot.is_some(),
-            "commit roster should be recorded when commit QC is provided"
+            !committed_topology.is_empty(),
+            "commit topology should be recorded during apply"
         );
-
+        assert_eq!(
+            commit_cert.validator_set, committed_topology,
+            "commit QC validator set should match committed topology"
+        );
         crate::sumeragi::status::reset_commit_certs_for_tests();
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();
     }
@@ -5299,7 +5317,12 @@ mod tests {
         let state = State::new_for_testing(world, Arc::clone(&kura), query_handle);
         let chain_id = state.view().chain_id().clone();
 
-        let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(0));
+        let tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            &time_source,
+        )
             .with_instructions([Log::new(Level::DEBUG, "kura failure test".to_string())])
             .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
@@ -5359,7 +5382,12 @@ mod tests {
             1,
         );
 
-        let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(0));
+        let tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            &time_source,
+        )
             .with_instructions([Log::new(
                 Level::DEBUG,
                 "commit worker wake test".to_string(),
@@ -5428,7 +5456,12 @@ mod tests {
             1,
         );
 
-        let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(0));
+        let tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            &time_source,
+        )
             .with_instructions([Log::new(
                 Level::DEBUG,
                 "commit worker full wake test".to_string(),
