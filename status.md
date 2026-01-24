@@ -2,6 +2,8 @@
 
 Last update: 2026-01-24
 
+- Sumeragi tests: align observer local-index, commit inflight, new-view gossip targets, and RBC availability tests with the Topology/roster types.
+- Tests: not run (not requested).
 - Sumeragi: dispatch background posts inline when `sumeragi.debug.disable_background_worker` is enabled; skip RBC availability gating once the block payload is local.
 - Integration tests: align DA/RBC + pacemaker config keys to nested schema, fix DA Kura eviction block-dir lookup, accept `FindError::Domain` root cause for failing triggers, and allow the `debug/ok` ZK backend to verify.
 - Tests: not run (not requested).

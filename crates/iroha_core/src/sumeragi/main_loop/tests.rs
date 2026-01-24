@@ -794,14 +794,14 @@ async fn apply_mode_flip_defers_while_commit_pipeline_active() {
     let mut lock = sample_qc_ref(height, view);
     lock.phase = Phase::Commit;
     lock.subject_block_hash = block_hash;
-    let topology = actor.effective_commit_topology();
+    let commit_topology = actor.effective_commit_topology();
     actor.subsystems.commit.inflight = Some(CommitInFlight {
         id: 1,
         lock,
         block_hash,
         pending,
-        commit_topology: topology.clone(),
-        signature_topology: topology,
+        commit_topology: commit_topology.clone(),
+        signature_topology: commit_topology,
         qc_signers: None,
         allow_quorum_bypass: false,
         post_commit_qc: None,
@@ -28624,14 +28624,15 @@ async fn force_view_change_if_idle_skips_when_commit_inflight() {
     let mut lock = sample_qc_ref(height, current_view);
     lock.phase = Phase::Commit;
     lock.subject_block_hash = block_hash;
-    let topology = actor.effective_commit_topology();
+    let commit_topology = actor.effective_commit_topology();
+    let signature_topology = commit_topology.clone();
     actor.subsystems.commit.inflight = Some(CommitInFlight {
         id: 1,
         lock,
         block_hash,
         pending,
-        commit_topology: topology.clone(),
-        signature_topology: topology,
+        commit_topology,
+        signature_topology,
         qc_signers: None,
         allow_quorum_bypass: false,
         post_commit_qc: None,
@@ -34899,23 +34900,24 @@ async fn new_view_gossip_targets_excludes_sender_and_local() {
     let actor = &mut harness.actor;
     actor.block_sync_gossip_limit = 1;
 
-    let topology = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let signature_topology = super::network_topology::Topology::new(topology.clone());
     let local_idx = actor
         .local_validator_index_for_topology(&signature_topology)
         .expect("local peer in topology");
-    let sender = (0..topology.len())
+    let sender = (0..topology.as_ref().len())
         .filter_map(|idx| ValidatorIndex::try_from(idx).ok())
         .find(|idx| *idx != local_idx)
         .expect("remote sender available");
 
-    let targets = actor.new_view_gossip_targets(&topology, Some(sender));
+    let targets = actor.new_view_gossip_targets(topology.as_ref(), Some(sender));
     assert_eq!(targets.len(), 1);
     assert!(
         !targets.contains(actor.common_config.peer.id()),
         "gossip targets should exclude the local peer"
     );
     let sender_peer = topology
+        .as_ref()
         .get(usize::try_from(sender).expect("sender index fits usize"))
         .expect("sender present in topology");
     assert!(
@@ -44085,7 +44087,7 @@ async fn rbc_availability_gate_skips_when_payload_is_local() {
         .sessions
         .insert((block.hash(), 1, 0), session);
 
-    let topology = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     assert!(
         actor.block_payload_available_locally(block.hash()),
         "test requires a locally available payload"
