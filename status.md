@@ -2,6 +2,11 @@
 
 Last update: 2026-01-24
 
+- NPoS localnet 1 Hz rerun (release + FetchPendingBlock missing-INIT response, DEBUG rbc/block_sync, 4 peers): `/private/tmp/iroha-localnet-npos-1hz-20260124T190127Z` (ports 31080/35380); genesis `block_time_ms=1000`, `commit_time_ms=1500`, NPoS timeouts propose/prevote/precommit/commit/da/agg=500/800/1100/1500/1400/200, config `sumeragi.da.availability_timeout_multiplier=3` + `sumeragi.da.quorum_timeout_multiplier=3`, `sumeragi.rbc.pending_ttl_ms=120000`, `sumeragi.rbc.session_ttl_ms=240000`, `sumeragi.recovery.missing_block_signer_fallback_attempts=0`, `RUST_LOG=warn,iroha_core::sumeragi::main_loop::rbc=debug,iroha_core::sumeragi::main_loop::block_sync=debug`; 100x1 Hz `ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_missing_init_debug_20260124T190127Z.jsonl` (ping log `ping_1hz_missing_init_debug_20260124T190127Z.log`). `commit_qc.height` 2->58 (+56 over 100 samples), `view_change_install_total` +0 (`missing_qc_total` +0, `missing_payload_total` +0, `stake_quorum_timeout_total` +0), `missing_block_fetch.total` +24, `pending_rbc.bytes` max 220 (sessions max 1), `stash_ready_init_missing_total` 18, `stash_deliver_init_missing_total` 0; logs show missing BlockCreated fetches while awaiting RBC INIT plus queued INIT/chunk rebroadcasts.
+- Build: `cargo build --release --bin kagami --bin irohad --bin iroha` (ok).
+- Sumeragi missing-INIT recovery: include height/view hints in `FetchPendingBlock`, respond with RBC INIT/chunks even when the full block is unavailable, add `fetch_pending_block_serves_rbc_init_without_block` coverage, and update DA/RBC docs.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Tests: `cargo test --workspace` not run (long-running).
 - Sumeragi fast-path: disable fast-timeout quorum reschedules in DA mode (reschedule + commit pipeline); add unit coverage and update docs.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Tests: `cargo test -p iroha_core reschedule_skips_fast_timeout_with_da_enabled -- --nocapture` (ok).

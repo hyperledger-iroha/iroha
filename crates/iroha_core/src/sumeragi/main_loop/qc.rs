@@ -160,12 +160,16 @@ impl Actor {
     pub(super) fn request_missing_block(
         &self,
         block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
         targets: &[PeerId],
     ) {
         send_missing_block_request(
             &self.network,
             &self.common_config.peer.id,
             block_hash,
+            height,
+            view,
             targets,
         );
     }
@@ -234,7 +238,9 @@ impl Actor {
             self.config.recovery.missing_block_signer_fallback_attempts,
             &mut requests,
             telemetry,
-            move |targets| send_missing_block_request(&network, &peer_id, block_hash, targets),
+            move |targets| {
+                send_missing_block_request(&network, &peer_id, block_hash, height, view, targets);
+            },
         );
         self.pending.missing_block_requests = requests;
         if defer_view_change {
@@ -569,7 +575,12 @@ impl Actor {
                     targets,
                     target_kind,
                 } => {
-                    self.request_missing_block(block_hash, &targets);
+                    self.request_missing_block(
+                        block_hash,
+                        stats_snapshot.height,
+                        stats_snapshot.view,
+                        &targets,
+                    );
                     iroha_logger::info!(
                         height = stats_snapshot.height,
                         view = stats_snapshot.view,
@@ -1480,7 +1491,14 @@ impl Actor {
                         &mut requests,
                         self.telemetry_handle(),
                         move |targets| {
-                            send_missing_block_request(&network, &peer_id, locked_hash, targets)
+                            send_missing_block_request(
+                                &network,
+                                &peer_id,
+                                locked_hash,
+                                lock.height,
+                                lock.view,
+                                targets,
+                            )
                         },
                     );
                     self.pending.missing_block_requests = requests;
@@ -2239,7 +2257,7 @@ impl Actor {
                     targets,
                     target_kind,
                 } => {
-                    self.request_missing_block(qc.subject_block_hash, &targets);
+                    self.request_missing_block(qc.subject_block_hash, qc.height, qc.view, &targets);
                     iroha_logger::info!(
                         height = qc.height,
                         view = qc.view,
