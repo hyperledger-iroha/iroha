@@ -25,7 +25,6 @@ use iroha::{
         query::peer::prelude::FindPeers,
     },
 };
-use iroha_config::parameters::actual::LaneConfig;
 use iroha_config_base::toml::Writer as TomlWriter;
 use iroha_core::sumeragi::rbc_status;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
@@ -270,6 +269,23 @@ fn torii_max_content_len_for_payload(payload_bytes: usize) -> i64 {
     i64::try_from(target).unwrap_or(i64::MAX)
 }
 
+fn locate_blocks_dir(store_dir: &Path) -> Result<PathBuf> {
+    let legacy_index = store_dir.join("blocks.index");
+    if legacy_index.exists() {
+        return Ok(store_dir.to_path_buf());
+    }
+    let blocks_root = store_dir.join("blocks");
+    let entries = fs::read_dir(&blocks_root).wrap_err("read blocks dir")?;
+    for entry in entries {
+        let entry = entry.wrap_err("read blocks dir entry")?;
+        let path = entry.path();
+        if path.is_dir() && path.join("blocks.index").exists() {
+            return Ok(path);
+        }
+    }
+    Err(eyre!("no blocks.index found under {blocks_root:?}"))
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sumeragi_rbc_da_large_payload_four_peers() -> Result<()> {
     let result = run_sumeragi_da_scenario_with(
@@ -432,7 +448,7 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
                 P2P_TX_FRAME_BUDGET_BYTES,
             )
             .write(["sumeragi", "consensus_mode"], "npos")
-            .write(["sumeragi", "rbc_chunk_max_bytes"], rbc_chunk_max_bytes)
+            .write(["sumeragi", "rbc", "chunk_max_bytes"], rbc_chunk_max_bytes)
             .write(
                 ["sumeragi", "debug", "rbc", "force_deliver_quorum_one"],
                 true,
@@ -543,14 +559,7 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
 
         let peer = network.peer();
         let store_dir = peer.kura_store_dir();
-        let lane_config = LaneConfig::default();
-        let primary_lane = lane_config.primary();
-        let candidate_blocks_dir = primary_lane.blocks_dir(&store_dir);
-        let blocks_dir = if candidate_blocks_dir.join("blocks.index").exists() {
-            candidate_blocks_dir
-        } else {
-            store_dir.clone()
-        };
+        let blocks_dir = locate_blocks_dir(&store_dir)?;
 
         let index_path = blocks_dir.join("blocks.index");
         let hashes_path = blocks_dir.join("blocks.hashes");
@@ -678,9 +687,9 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
                 .write(["network", "p2p_queue_cap_high"], P2P_QUEUE_CAP_HIGH)
                 .write(["network", "p2p_queue_cap_low"], P2P_QUEUE_CAP_LOW)
                 .write(["network", "p2p_post_queue_cap"], P2P_POST_QUEUE_CAP)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], rbc_chunk_max_bytes)
-                .write(["sumeragi", "rbc_session_ttl_secs"], 600i64)
-                .write(["sumeragi", "rbc_disk_store_ttl_secs"], 600i64);
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], rbc_chunk_max_bytes)
+                .write(["sumeragi", "rbc", "session_ttl_ms"], 600_000i64)
+                .write(["sumeragi", "rbc", "disk_store_ttl_ms"], 600_000i64);
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -843,11 +852,11 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
                     torii_max_content_len_for_payload(payload_bytes),
                 )
                 .write(
-                    ["sumeragi", "rbc_chunk_max_bytes"],
+                    ["sumeragi", "rbc", "chunk_max_bytes"],
                     i64::from(rbc_chunk_max_bytes),
                 )
-                .write(["sumeragi", "rbc_session_ttl_secs"], 600i64)
-                .write(["sumeragi", "rbc_disk_store_ttl_secs"], 600i64);
+                .write(["sumeragi", "rbc", "session_ttl_ms"], 600_000i64)
+                .write(["sumeragi", "rbc", "disk_store_ttl_ms"], 600_000i64);
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -1041,8 +1050,8 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
                     ["network", "max_frame_bytes_tx_gossip"],
                     P2P_TX_FRAME_BUDGET_BYTES,
                 )
-                .write(["sumeragi", "da_enabled"], true)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], RBC_CHUNK_SIZE_BYTES)
+                .write(["sumeragi", "da", "enabled"], true)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], RBC_CHUNK_SIZE_BYTES)
                 // Shuffle and duplicate RBC broadcasts while deterministically dropping shards to
                 // block READY fan-outs on every validator.
                 .write(["sumeragi", "debug", "rbc", "shuffle_chunks"], true)
@@ -1213,8 +1222,8 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
                     ["torii", "max_content_len"],
                     torii_max_content_len_for_payload(payload_bytes),
                 )
-                .write(["sumeragi", "da_enabled"], true)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], RBC_CHUNK_SIZE_BYTES);
+                .write(["sumeragi", "da", "enabled"], true)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], RBC_CHUNK_SIZE_BYTES);
         });
 
     let Some(network) = sandbox::start_network_async_or_skip(builder, scenario_name).await? else {
@@ -1657,18 +1666,18 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
                     ["torii", "max_content_len"],
                     torii_max_content_len_for_payload(payload_bytes),
                 )
-                .write(["sumeragi", "rbc_payload_chunks_per_tick"], 1i64)
-                .write(["sumeragi", "rbc_rebroadcast_sessions_per_tick"], 1i64)
-                .write(["sumeragi", "rbc_store_max_sessions"], 2_048i64)
-                .write(["sumeragi", "rbc_store_soft_sessions"], 1_536i64)
-                .write(["sumeragi", "rbc_store_max_bytes"], 536_870_912i64)
-                .write(["sumeragi", "rbc_store_soft_bytes"], 402_653_184i64)
-                .write(["sumeragi", "rbc_pending_max_chunks"], 256i64)
-                .write(["sumeragi", "rbc_pending_max_bytes"], 16_777_216i64)
-                .write(["sumeragi", "rbc_disk_store_max_bytes"], 536_870_912i64)
-                .write(["sumeragi", "rbc_disk_store_ttl_secs"], 600i64)
-                .write(["sumeragi", "rbc_session_ttl_secs"], 600i64)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], rbc_chunk_max_bytes);
+                .write(["sumeragi", "rbc", "payload_chunks_per_tick"], 1i64)
+                .write(["sumeragi", "rbc", "rebroadcast_sessions_per_tick"], 1i64)
+                .write(["sumeragi", "rbc", "store_max_sessions"], 2_048i64)
+                .write(["sumeragi", "rbc", "store_soft_sessions"], 1_536i64)
+                .write(["sumeragi", "rbc", "store_max_bytes"], 536_870_912i64)
+                .write(["sumeragi", "rbc", "store_soft_bytes"], 402_653_184i64)
+                .write(["sumeragi", "rbc", "pending_max_chunks"], 256i64)
+                .write(["sumeragi", "rbc", "pending_max_bytes"], 16_777_216i64)
+                .write(["sumeragi", "rbc", "disk_store_max_bytes"], 536_870_912i64)
+                .write(["sumeragi", "rbc", "disk_store_ttl_ms"], 600_000i64)
+                .write(["sumeragi", "rbc", "session_ttl_ms"], 600_000i64)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], rbc_chunk_max_bytes);
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -1986,12 +1995,12 @@ where
                 P2P_TX_FRAME_BUDGET_BYTES,
             )
             .write(["sumeragi", "consensus_mode"], "npos")
-            .write(["sumeragi", "rbc_chunk_max_bytes"], rbc_chunk_max_bytes)
-            .write(["sumeragi", "rbc_store_max_sessions"], 2_048i64)
-            .write(["sumeragi", "rbc_store_soft_sessions"], 1_536i64)
-            .write(["sumeragi", "rbc_store_max_bytes"], 536_870_912i64)
-            .write(["sumeragi", "rbc_store_soft_bytes"], 402_653_184i64)
-            .write(["sumeragi", "rbc_session_ttl_secs"], 600i64)
+            .write(["sumeragi", "rbc", "chunk_max_bytes"], rbc_chunk_max_bytes)
+            .write(["sumeragi", "rbc", "store_max_sessions"], 2_048i64)
+            .write(["sumeragi", "rbc", "store_soft_sessions"], 1_536i64)
+            .write(["sumeragi", "rbc", "store_max_bytes"], 536_870_912i64)
+            .write(["sumeragi", "rbc", "store_soft_bytes"], 402_653_184i64)
+            .write(["sumeragi", "rbc", "session_ttl_ms"], 600_000i64)
             .write(
                 ["sumeragi", "debug", "rbc", "force_deliver_quorum_one"],
                 true,
@@ -3044,7 +3053,7 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
                     ["torii", "max_content_len"],
                     torii_max_content_len_for_payload(payload_bytes),
                 )
-                .write(["sumeragi", "da_enabled"], true)
+                .write(["sumeragi", "da", "enabled"], true)
                 .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "storage", "max_disk_usage_bytes"], 1_000_000i64)

@@ -6620,7 +6620,7 @@ impl NtsEnforcementMode {
 }
 
 #[cfg(test)]
-mod tests {
+mod tests_npos_timeouts {
     use std::{collections::BTreeMap, num::NonZeroU32};
 
     use iroha_data_model::nexus::{

@@ -4,6 +4,10 @@ Last update: 2026-01-24
 
 - CLI offline: add top-level `iroha offline` command alias, refresh CLI help, and align QR/petal docs to the alias so preview commands match user expectations.
 - Petal stream: deepen sakura-wind preview (denser petals + subtle data glow) and add a PNG load roundtrip test.
+- Sumeragi tests: align observer local-index, commit inflight, new-view gossip targets, and RBC availability tests with the Topology/roster types.
+- Tests: not run (not requested).
+- Sumeragi: dispatch background posts inline when `sumeragi.debug.disable_background_worker` is enabled; skip RBC availability gating once the block payload is local.
+- Integration tests: align DA/RBC + pacemaker config keys to nested schema, fix DA Kura eviction block-dir lookup, accept `FindError::Domain` root cause for failing triggers, and allow the `debug/ok` ZK backend to verify.
 - Tests: not run (not requested).
 - CLI offline petal: expose QR payload-kind labels for petal manifests and add unit coverage.
 - Tests: not run (not requested).
@@ -14,9 +18,9 @@ Last update: 2026-01-24
 - Petal stream: added Rust framing + CLI `ops offline petal` encode/decode + sakura wind renderer, JS/Swift/Android encoder/decoder + scan helpers (CameraX/AVFoundation), and docs for petal handoff.
 - Torii pipeline status: scope the state view during queue checks to avoid writer-preferred lock deadlocks before fallback state lookups.
 - Tests: not run (not requested).
-- Snapshot restart: install a domain-selector resolver from snapshot domains during load and remove the `extra_functional::restart_peer` snapshot cleanup now that deserialization succeeds.
-- Tests: `cargo test -p iroha_core --lib snapshot_read_sets_domain_selector_resolver -- --nocapture` (ok).
-- Tests: `cargo test -p integration_tests --test mod restarted_peer_should_restore_its_state -- --nocapture` (ok).
+- Snapshots: install domain-selector resolver during snapshot reads so IH58 account IDs for non-default domains deserialize; remove the restart-peer snapshot cleanup and add coverage for resolver install.
+- Tests: `cargo test -p iroha_core snapshot_read_installs_domain_selector_resolver -- --nocapture` (ok).
+- Tests: `IROHA_TEST_NETWORK_PARALLELISM=1 cargo test -p integration_tests --test mod restarted_peer_should_restore_its_state -- --nocapture` (ok).
 - Tests: `cargo test --workspace` failed (rustc E0428: duplicate `mod tests` in `crates/iroha_config/src/parameters/actual.rs`).
 - Lane relay tests: seed consensus-key PoPs in lane relay fixtures so QC verification succeeds before conflict/merge checks.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
@@ -46,6 +50,10 @@ Last update: 2026-01-24
 - Tests: not run (not requested).
 - Integration tests: seed alias-domain account in genesis for `accounts_query_accepts_alias_and_compressed_filter_literals` to avoid transaction confirmation timeouts.
 - Tests: `cargo test -p integration_tests --test address_canonicalisation accounts_query_accepts_alias_and_compressed_filter_literals -- --nocapture` (ok; duplicate metric registration warnings).
+- NPoS localnet 1 Hz rerun (release + NPoS timeouts/collectors, 4 peers): `/private/tmp/iroha-localnet-npos-1hz-20260124T065327Z` (ports 29680/33980); genesis NPoS timeouts propose/prevote/precommit/commit/da/agg=300/500/700/900/800/100, `collectors_k=4`, `redundant_send_r=4`, config `sumeragi.da.availability_timeout_multiplier=2` + `sumeragi.da.quorum_timeout_multiplier=2`; 100x1 Hz `ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_timeouts_collectors_20260124T065327Z.jsonl` (ping log `ping_1hz_timeouts_collectors_20260124T065327Z.log`). `commit_qc.height` 1->42 (+41 over 120 samples), `view_change_install_total` +7 (`missing_qc_total` +6), `missing_payload_total` +0, `missing_block_fetch.total` +14, `pending_rbc.bytes` max 220 (sessions max 1); cadence still below 1 Hz.
+- Genesis: install domain-selector resolver when loading genesis JSON so domainless IH58 account IDs parse; added unit coverage.
+- Tests: `cargo test -p iroha_genesis --lib parse_genesis_installs_domain_selector_resolver -- --nocapture` (ok).
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - NPoS localnet 1 Hz rerun (debug, 4 peers): `/tmp/iroha-localnet-npos-1hz-20260123T132039Z` (ports 29084/33341); 100x1 Hz `ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_20260123T132039Z.jsonl` (ping log `ping_1hz_20260123T132039Z.log`). `commit_qc.height` 1->14 (+13 over 363 samples), `view_change_install_total` +3 (stake_quorum_timeout/missing_qc), `pending_rbc.bytes` max 1260 (sessions max 2); cadence still below 1 Hz.
 - NPoS localnet 1 Hz rerun (release, 4 peers): `/tmp/iroha-localnet-npos-1hz-20260123T133537Z` (ports 29100/33400); 100x1 Hz `ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_20260123T133537Z.jsonl` (ping log `ping_1hz_20260123T133537Z.log`). `commit_qc.height` 1->17 (+16 over 136 samples), `view_change_install_total` +71 (missing_qc), `pending_rbc.bytes` max 2220 (sessions max 1); cadence still below 1 Hz.
 - NPoS localnet 1 Hz rerun (release + tuned config, 4 peers): `/tmp/iroha-localnet-npos-1hz-20260123T140944Z` (ports 29200/33500); set `sumeragi.collectors.redundant_send_r=3` + `sumeragi.da.availability_timeout_multiplier=2`, then ran 100x1 Hz `ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_tuned_20260123T140944Z.jsonl` (ping log `ping_1hz_tuned_20260123T140944Z.log`). `commit_qc.height` 0->7 over 146 samples, `view_change_install_total` +3 (missing_qc), `pending_rbc.bytes` max 0; cadence still below 1 Hz.

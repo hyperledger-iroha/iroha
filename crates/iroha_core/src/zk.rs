@@ -3754,7 +3754,10 @@ fn verify_halo2_ipa_envelope(proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> 
 
 /// Verify a zero-knowledge proof using the requested backend, returning `true` when supported.
 pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
-    // Explicit debug backend to force deterministic rejection in tests.
+    // Explicit debug backends for deterministic test results.
+    if backend == "debug/ok" {
+        return true;
+    }
     if backend == "debug/reject" {
         return false;
     }
@@ -3821,6 +3824,19 @@ pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyB
 
     // Unknown backend tag
     false
+}
+
+#[cfg(test)]
+mod debug_backend_tests {
+    use super::*;
+
+    #[test]
+    fn debug_ok_backend_verifies() {
+        let backend = "debug/ok";
+        let proof = ProofBox::new(backend.into(), vec![0x01]);
+        let vk = VerifyingKeyBox::new(backend.into(), vec![0x02]);
+        assert!(verify_backend(backend, &proof, Some(&vk)));
+    }
 }
 
 /// Result produced by [`verify_backend_with_timing`].

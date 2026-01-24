@@ -794,14 +794,14 @@ async fn apply_mode_flip_defers_while_commit_pipeline_active() {
     let mut lock = sample_qc_ref(height, view);
     lock.phase = Phase::Commit;
     lock.subject_block_hash = block_hash;
-    let topology = actor.effective_commit_topology();
+    let commit_topology = actor.effective_commit_topology();
     actor.subsystems.commit.inflight = Some(CommitInFlight {
         id: 1,
         lock,
         block_hash,
         pending,
-        commit_topology: topology.clone(),
-        signature_topology: topology,
+        commit_topology: commit_topology.clone(),
+        signature_topology: commit_topology,
         qc_signers: None,
         allow_quorum_bypass: false,
         post_commit_qc: None,
@@ -28625,14 +28625,15 @@ async fn force_view_change_if_idle_skips_when_commit_inflight() {
     let mut lock = sample_qc_ref(height, current_view);
     lock.phase = Phase::Commit;
     lock.subject_block_hash = block_hash;
-    let topology = actor.effective_commit_topology();
+    let commit_topology = actor.effective_commit_topology();
+    let signature_topology = commit_topology.clone();
     actor.subsystems.commit.inflight = Some(CommitInFlight {
         id: 1,
         lock,
         block_hash,
         pending,
-        commit_topology: topology.clone(),
-        signature_topology: topology,
+        commit_topology,
+        signature_topology,
         qc_signers: None,
         allow_quorum_bypass: false,
         post_commit_qc: None,
@@ -34900,23 +34901,24 @@ async fn new_view_gossip_targets_excludes_sender_and_local() {
     let actor = &mut harness.actor;
     actor.block_sync_gossip_limit = 1;
 
-    let topology = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let signature_topology = super::network_topology::Topology::new(topology.clone());
     let local_idx = actor
         .local_validator_index_for_topology(&signature_topology)
         .expect("local peer in topology");
-    let sender = (0..topology.len())
+    let sender = (0..topology.as_ref().len())
         .filter_map(|idx| ValidatorIndex::try_from(idx).ok())
         .find(|idx| *idx != local_idx)
         .expect("remote sender available");
 
-    let targets = actor.new_view_gossip_targets(&topology, Some(sender));
+    let targets = actor.new_view_gossip_targets(topology.as_ref(), Some(sender));
     assert_eq!(targets.len(), 1);
     assert!(
         !targets.contains(actor.common_config.peer.id()),
         "gossip targets should exclude the local peer"
     );
     let sender_peer = topology
+        .as_ref()
         .get(usize::try_from(sender).expect("sender index fits usize"))
         .expect("sender present in topology");
     assert!(
@@ -44141,6 +44143,39 @@ async fn rbc_ready_deferral_throttles_until_cooldown_or_progress() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rbc_availability_gate_skips_when_payload_is_local() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let block = sample_block(1, 0, None);
+    let payload_hash = Hash::prehashed([0x44; 32]);
+    let pending = PendingBlock::new(block.clone(), payload_hash, 1, 0);
+    actor.pending.pending_blocks.insert(block.hash(), pending);
+
+    let session = RbcSession::test_new(2, Some(payload_hash), None, 0);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert((block.hash(), 1, 0), session);
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    assert!(
+        actor.block_payload_available_locally(block.hash()),
+        "test requires a locally available payload"
+    );
+    assert!(
+        !actor.rbc_availability_unresolved_for_reschedule((block.hash(), 1, 0), &topology),
+        "local payload availability should resolve RBC gating"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn maybe_emit_rbc_deliver_throttles_repeated_deferral() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -44455,6 +44490,52 @@ async fn precommit_vote_broadcast_uses_background_queue() {
             })
         ),
         "precommit votes should be queued for background posting"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn background_posts_dispatch_inline_when_worker_disabled() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.debug.disable_background_worker = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+
+    let _ = harness.background_rx.try_iter().collect::<Vec<_>>();
+
+    let block = sample_block(1, 0, None);
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: crate::sumeragi::consensus::Phase::Commit,
+        block_hash: block.hash(),
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 1,
+        view: 0,
+        epoch: 0,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let preimage = super::vote_preimage(
+        &harness.actor.common_config.chain,
+        super::PERMISSIONED_TAG,
+        &vote,
+    );
+    let signature = Signature::new(
+        harness.actor.common_config.key_pair.private_key(),
+        &preimage,
+    );
+    vote.bls_sig = signature.payload().to_vec();
+
+    let msg = BlockMessage::QcVote(vote);
+    harness
+        .actor
+        .schedule_background(BackgroundRequest::Broadcast { msg });
+
+    let queued = harness.background_rx.try_iter().next();
+    assert!(
+        queued.is_none(),
+        "background posts should dispatch inline when the worker is disabled"
     );
 
     harness.shutdown.send();
