@@ -4149,7 +4149,7 @@ mod evidence_http_tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = {
             let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
+            move |snapshot: crate::http_default::RequestSnapshot| {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
@@ -4198,7 +4198,7 @@ mod evidence_http_tests {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = {
             let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
+            move |snapshot: crate::http_default::RequestSnapshot| {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
@@ -4251,7 +4251,7 @@ mod evidence_http_tests {
         let status_body = norito::json::to_string(&payload).expect("status payload");
         let responder = {
             let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
+            move |snapshot: crate::http_default::RequestSnapshot| {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
@@ -10657,6 +10657,7 @@ mod tests {
         *,
     };
     use crate::http::ws::conn_flow::Events as _;
+    use crate::http_default::RequestSnapshot;
     use crate::{
         config::{BasicAuth, Config},
         da::{DaSampledChunk, DaSamplingPlan, PDP_COMMITMENT_HEADER},
@@ -12463,7 +12464,7 @@ mod tests {
         let capabilities_body = format!(r#"{{"data_model_version":{DATA_MODEL_VERSION}}}"#);
         let responder = {
             let store = Arc::clone(&store);
-            move |snapshot| {
+            move |snapshot: RequestSnapshot| {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("snapshot lock").push(snapshot);
                 let response = if path == "/v1/node/capabilities" {
