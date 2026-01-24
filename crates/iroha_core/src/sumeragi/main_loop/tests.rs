@@ -8533,6 +8533,149 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn commit_outcome_seeds_genesis_commit_roster_after_commit() {
+    use iroha_data_model::prelude::{Level, Log};
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let (kura, _kura_dir) = persistent_kura_for_tests();
+    let mut harness = test_actor_harness_with_config_and_height_and_kura(
+        4,
+        consensus_cfg,
+        None,
+        0,
+        Arc::clone(&kura),
+    )
+    .await;
+    let actor = &mut harness.actor;
+
+    let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
+    let chain_id = actor.common_config.chain.clone();
+    let tx = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+        .with_instructions([Log::new(Level::DEBUG, "genesis roster seed".to_string())])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+    let block = SignedBlock::genesis(
+        vec![tx],
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+        None,
+        None,
+    );
+    let block_hash = block.hash();
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+
+    assert!(
+        actor
+            .state
+            .commit_roster_snapshot_for_block(height, block_hash)
+            .is_none(),
+        "commit roster snapshot should be missing before genesis commit"
+    );
+
+    let commit_topology = actor.effective_commit_topology();
+    assert!(
+        !commit_topology.is_empty(),
+        "test needs a non-empty commit topology"
+    );
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let pending = PendingBlock::new(block.clone(), payload_hash, height, view);
+    let lock = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+    };
+    let inflight = CommitInFlight {
+        id: 17,
+        lock,
+        block_hash,
+        pending,
+        commit_topology: commit_topology.clone(),
+        signature_topology: commit_topology.clone(),
+        qc_signers: None,
+        commit_qc: None,
+        allow_quorum_bypass: false,
+        post_commit_qc: None,
+        enqueue_time: Instant::now(),
+    };
+    actor.subsystems.commit.inflight = Some(inflight);
+
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    actor.subsystems.commit.result_rx = Some(result_rx);
+
+    let work = commit::CommitWork {
+        id: 17,
+        block,
+        commit_topology: commit_topology.clone(),
+        signature_topology: commit_topology.clone(),
+        qc_signers: None,
+        commit_qc: None,
+        allow_quorum_bypass: false,
+        persist_required: true,
+        events_sender: actor.events_sender.clone(),
+    };
+    let (outcome, timings) = commit::execute_commit_work(
+        actor.state.as_ref(),
+        actor.kura.as_ref(),
+        &actor.common_config.chain,
+        &actor.genesis_account,
+        work,
+    );
+    let (committed_block, exec_witness, pipeline_events, state_events) = match outcome {
+        commit::CommitOutcome::Success {
+            committed_block,
+            exec_witness,
+            pipeline_events,
+            state_events,
+        } => (committed_block, exec_witness, pipeline_events, state_events),
+        commit::CommitOutcome::Rejected { error, .. } => {
+            panic!("commit work should succeed: rejected with {error:?}");
+        }
+        commit::CommitOutcome::KuraStoreFailed { error, .. } => {
+            panic!("commit work should succeed: Kura store failed: {error:?}");
+        }
+        commit::CommitOutcome::StateCommitFailed { error, .. } => {
+            panic!("commit work should succeed: state commit failed: {error}");
+        }
+    };
+
+    result_tx
+        .send(commit::CommitResult {
+            id: 17,
+            outcome: commit::CommitOutcome::Success {
+                committed_block,
+                exec_witness,
+                pipeline_events,
+                state_events,
+            },
+            timings,
+        })
+        .expect("send commit result");
+    assert!(
+        actor.poll_commit_results(),
+        "commit outcome should be applied"
+    );
+
+    let snapshot = actor
+        .state
+        .commit_roster_snapshot_for_block(height, block_hash)
+        .expect("genesis commit roster should be seeded");
+    assert_eq!(snapshot.commit_qc.height, height);
+    assert_eq!(snapshot.commit_qc.subject_block_hash, block_hash);
+    assert!(
+        snapshot
+            .commit_qc
+            .aggregate
+            .bls_aggregate_signature
+            .is_empty(),
+        "genesis commit QC should be stubbed"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn finalize_pending_block_requires_commit_qc() {
     let mut harness = test_actor_harness(1).await;
 
