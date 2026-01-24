@@ -2,6 +2,10 @@
 
 Last update: 2026-01-24
 
+- AXT policy refresh: preserve cached minimums when active Space Directory manifests exist but the lane catalog does not overlap, so explicit policy minimums survive startup refresh.
+- Tests: `cargo test -p iroha_core state::tests::axt_policy_rebuild_preserves_minimum_nonce_and_era -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core state::tests::apply_without_execution_updates_commit_topology_from_world_peers -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core state::tests::axt_replay_ledger_persisted_from_block_rejects_reuse_on_validation -- --nocapture` (ok).
 - Lane relay tests: commit emergency-override transactions before asserting stored state; fix missing `lane_id` in `da_pin_intents_drop_missing_owner_accounts`.
 - Executor validation: install a default IVM host before running executor validation/migration so validation does not panic without a host.
 - Tests: `cargo test -p iroha_core --lib state::tests::record_lane_relay_accepts_emergency_override_under_quorum -- --nocapture` (ok).
