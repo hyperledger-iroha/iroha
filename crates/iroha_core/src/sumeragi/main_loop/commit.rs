@@ -1196,7 +1196,15 @@ impl Actor {
                     || self.pending_block_has_votes(block_hash, pending_height, pending_view);
                 let has_qc = pending.commit_qc_seen
                     || self.pending_block_has_qc(block_hash, pending_height, pending_view);
-                let effective_quorum_timeout = if !has_votes && !has_qc {
+                let validation_inflight = pending.validation_status == ValidationStatus::Pending
+                    && self
+                        .subsystems
+                        .validation
+                        .inflight
+                        .contains_key(&block_hash);
+                let fast_path_allowed =
+                    !da_enabled && !has_votes && !has_qc && !validation_inflight;
+                let effective_quorum_timeout = if fast_path_allowed {
                     fast_timeout.min(quorum_timeout)
                 } else {
                     quorum_timeout
@@ -2157,11 +2165,35 @@ impl Actor {
                 );
                 continue;
             }
+            let fast_timeout = {
+                let view = self.state.view();
+                self.pending_fast_path_timeout(&view, consensus_mode)
+            };
             let validation_outcome = self.validate_pending_block_for_voting(hash, &commit_topology);
             let validation_cost = validation_start.elapsed();
             match validation_outcome {
                 ValidationGateOutcome::Valid => {}
-                ValidationGateOutcome::Deferred => continue,
+                ValidationGateOutcome::Deferred => {
+                    if let Some(pending) = self.pending.pending_blocks.get(&hash) {
+                        let pending_age = pending.age();
+                        if pending_age >= fast_timeout {
+                            debug!(
+                                height = pending.height,
+                                view = pending.view,
+                                block = %hash,
+                                pending_age_ms = pending_age.as_millis(),
+                                fast_timeout_ms = fast_timeout.as_millis(),
+                                validation_status = ?pending.validation_status,
+                                inflight_validations = self.subsystems.validation.inflight.len(),
+                                validation_workers = self.subsystems.validation.work_txs.len(),
+                                commit_roster_len = commit_topology.len(),
+                                trigger = ?trigger,
+                                "commit pipeline defers validation past fast timeout"
+                            );
+                        }
+                    }
+                    continue;
+                }
                 ValidationGateOutcome::Invalid {
                     hash: invalid_hash,
                     height: invalid_height,
@@ -2238,6 +2270,7 @@ impl Actor {
             let mut abort_due_to_kura = false;
             let mut replay_msg: Option<BlockMessage> = None;
             let mut replay_rbc_init: Option<crate::sumeragi::consensus::RbcInit> = None;
+            let mut precommit_action: Option<&'static str> = None;
             let gate_start = Instant::now();
             let mut pending = match self.pending.pending_blocks.remove(&hash) {
                 Some(pending) => pending,
@@ -2274,6 +2307,7 @@ impl Actor {
                     "kura persistence retries exhausted; aborting pending block"
                 );
                 abort_due_to_kura = true;
+                precommit_action = Some("kura_aborted");
             } else if kura_ready {
                 if enable_qc_pipeline && !pending.precommit_vote_sent && !pending.commit_qc_seen {
                     emit_precommit = true;
@@ -2286,6 +2320,7 @@ impl Actor {
                     attempts = pending.kura_retry_attempts,
                     "deferring commit while awaiting kura retry window"
                 );
+                precommit_action = Some("kura_backoff");
             }
 
             let gate_cost = gate_start.elapsed();
@@ -2395,6 +2430,42 @@ impl Actor {
                             &vote,
                         );
                     }
+                    precommit_action = Some("emitted");
+                } else {
+                    precommit_action = Some("emit_failed");
+                }
+            }
+            if precommit_action.is_none() {
+                if !enable_qc_pipeline {
+                    precommit_action = Some("qc_pipeline_disabled");
+                } else if pending.commit_qc_seen {
+                    precommit_action = Some("commit_qc_seen");
+                } else if pending.precommit_vote_sent {
+                    precommit_action = Some("already_sent");
+                }
+            }
+            if let Some(action) = precommit_action {
+                if pending_age >= fast_timeout && !pending.commit_qc_seen {
+                    debug!(
+                        height = pending_height,
+                        view = pending_view,
+                        block = %hash,
+                        action,
+                        pending_age_ms = pending_age_ms,
+                        fast_timeout_ms = fast_timeout.as_millis(),
+                        kura_ready,
+                        kura_attempts = pending.kura_retry_attempts,
+                        precommit_sent = pending.precommit_vote_sent,
+                        commit_qc_seen = pending.commit_qc_seen,
+                        gate = ?gate_reason,
+                        gate_satisfied = ?gate.satisfaction,
+                        delivered,
+                        missing_local_data,
+                        roster_len,
+                        min_votes = min_votes_for_commit,
+                        trigger = ?trigger,
+                        "precommit gating past fast timeout"
+                    );
                 }
             }
 

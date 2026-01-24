@@ -141,6 +141,16 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             .with_data_availability_enabled(profile.da_enabled)
             .with_config_table(profile.config_layer.clone());
     }
+    if let Ok(filter) = std::env::var("RUST_LOG") {
+        let filter = filter.trim();
+        if !filter.is_empty() {
+            let filter = filter.to_string();
+            // Forward Izanami's RUST_LOG to peer logger filters for targeted debug runs.
+            builder = builder.with_config_layer(|layer| {
+                layer.write(["logger", "filter"], filter);
+            });
+        }
+    }
     // NPoS timing parameters live on-chain; inject Izanami overrides into genesis.
     let npos_timing = derive_npos_timing(config);
     if config.nexus.is_some() {
@@ -805,7 +815,7 @@ struct MetricsSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
+    use std::{env, io};
 
     use color_eyre::eyre::{WrapErr, eyre};
     use iroha_data_model::{isi::SetParameter, parameter::SumeragiParameter};
@@ -829,6 +839,29 @@ mod tests {
                 )
             })
             .unwrap_or(false)
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = env::var(key).ok();
+            env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                env::set_var(self.key, value);
+            } else {
+                env::remove_var(self.key);
+            }
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1401,6 +1434,70 @@ mod tests {
             lookup(&["sumeragi", "npos", "timeouts", "aggregator_ms"]),
             Some(npos_aggregator_ms)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn make_network_builder_forwards_rust_log() -> Result<()> {
+        init_instruction_registry();
+        let _env_guard = EnvGuard::set("RUST_LOG", "iroha_p2p=debug,iroha_core=debug");
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 2,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: Some(19),
+            tps: 1.0,
+            max_inflight: 4,
+            workload_profile: WorkloadProfile::Stable,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([false, false, false, false]),
+            nexus: None,
+        };
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos { genesis, .. } =
+            instructions::prepare_state(account_qty, None, config.workload_profile)?;
+        let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            make_network_builder(&config, genesis).build()
+        })) {
+            Ok(network) => network,
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
+                    .unwrap_or_default();
+                if msg.contains("Operation not permitted") || msg.contains("permission denied") {
+                    return Ok(());
+                }
+                std::panic::resume_unwind(payload);
+            }
+        };
+
+        let layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
+        let read_str = |layer: &Table, path: &[&str]| -> Option<String> {
+            let mut current = layer;
+            for (idx, key) in path.iter().enumerate() {
+                let value = current.get(*key)?;
+                if idx + 1 == path.len() {
+                    return value.as_str().map(ToString::to_string);
+                }
+                current = value.as_table()?;
+            }
+            None
+        };
+        let filter = layers
+            .iter()
+            .rev()
+            .find_map(|layer| read_str(layer, &["logger", "filter"]));
+        assert_eq!(filter.as_deref(), Some("iroha_p2p=debug,iroha_core=debug"));
+
         Ok(())
     }
 

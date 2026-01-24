@@ -2700,12 +2700,21 @@ impl Actor {
         chunk: RbcChunk,
         sender: Option<PeerId>,
     ) -> Result<()> {
-        if self.should_drop_stale_rbc_message(
-            chunk.height,
-            chunk.view,
-            &chunk.block_hash,
-            "RbcChunk",
-        ) {
+        let chunk_height = chunk.height;
+        let chunk_view = chunk.view;
+        let chunk_idx = chunk.idx;
+        let chunk_block = chunk.block_hash;
+        let chunk_bytes_len = chunk.bytes.len();
+        debug!(
+            height = chunk_height,
+            view = chunk_view,
+            idx = chunk_idx,
+            bytes = chunk_bytes_len,
+            block = %chunk_block,
+            sender = ?sender,
+            "received RBC chunk"
+        );
+        if self.should_drop_stale_rbc_message(chunk_height, chunk_view, &chunk_block, "RbcChunk") {
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::RbcChunk,
                 super::status::ConsensusMessageOutcome::Dropped,
@@ -2713,12 +2722,12 @@ impl Actor {
             );
             return Ok(());
         }
-        let expected_epoch = self.epoch_for_height(chunk.height);
+        let expected_epoch = self.epoch_for_height(chunk_height);
         if chunk.epoch != expected_epoch {
             warn!(
-                height = chunk.height,
-                view = chunk.view,
-                block = %chunk.block_hash,
+                height = chunk_height,
+                view = chunk_view,
+                block = %chunk_block,
                 expected = expected_epoch,
                 observed = chunk.epoch,
                 "dropping RBC chunk with mismatched epoch"
@@ -2731,12 +2740,12 @@ impl Actor {
             return Ok(());
         }
         let max_chunk_bytes = self.config.rbc.chunk_max_bytes.max(1);
-        if chunk.bytes.len() > max_chunk_bytes {
+        if chunk_bytes_len > max_chunk_bytes {
             warn!(
-                height = chunk.height,
-                view = chunk.view,
-                idx = chunk.idx,
-                chunk_len = chunk.bytes.len(),
+                height = chunk_height,
+                view = chunk_view,
+                idx = chunk_idx,
+                chunk_len = chunk_bytes_len,
                 max = max_chunk_bytes,
                 "dropping RBC chunk that exceeds configured size cap"
             );
@@ -2747,11 +2756,11 @@ impl Actor {
             );
             return Ok(());
         }
-        if self.rbc_message_stale(&chunk.block_hash, chunk.height) {
+        if self.rbc_message_stale(&chunk_block, chunk_height) {
             debug!(
-                height = chunk.height,
-                view = chunk.view,
-                block = %chunk.block_hash,
+                height = chunk_height,
+                view = chunk_view,
+                block = %chunk_block,
                 "dropping RBC chunk for committed block"
             );
             self.record_consensus_message_handling(
@@ -2761,10 +2770,17 @@ impl Actor {
             );
             return Ok(());
         }
-        let key = Self::session_key(&chunk.block_hash, chunk.height, chunk.view);
-        if !self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
-            if self.ensure_rbc_session_from_pending_block(key, true)? {
-                // Session reconstructed from pending block; continue to process chunk normally.
+        let key = Self::session_key(&chunk_block, chunk_height, chunk_view);
+        let had_session = self.subsystems.da_rbc.rbc.sessions.contains_key(&key);
+        if !had_session {
+            let rebuilt = self.ensure_rbc_session_from_pending_block(key, true)?;
+            if rebuilt {
+                debug!(
+                    height = chunk_height,
+                    view = chunk_view,
+                    block = %chunk_block,
+                    "reconstructed RBC session from pending block for incoming chunk"
+                );
             }
         }
         let mut chunk_digest_mismatch = false;
@@ -2781,6 +2797,18 @@ impl Actor {
             let accepted_chunk = matches!(outcome, super::ChunkIngestOutcome::Accepted);
             let is_complete =
                 session.total_chunks() != 0 && session.received_chunks() == session.total_chunks();
+            debug!(
+                height = chunk_height,
+                view = chunk_view,
+                idx = chunk_idx,
+                block = %chunk_block,
+                sender = ?sender,
+                outcome = ?outcome,
+                accepted_chunk,
+                received_chunks = session.received_chunks(),
+                total_chunks = session.total_chunks(),
+                "ingested RBC chunk"
+            );
             (
                 ready_sent_before,
                 !was_complete && is_complete,
@@ -2789,15 +2817,15 @@ impl Actor {
         } else {
             let (max_chunks, max_bytes) = self.pending_rbc_caps();
             let chunk_dedup_key = BlockPayloadDedupKey::RbcChunk {
-                height: chunk.height,
-                view: chunk.view,
+                height: chunk_height,
+                view: chunk_view,
                 epoch: chunk.epoch,
-                block_hash: chunk.block_hash,
-                idx: chunk.idx,
+                block_hash: chunk_block,
+                idx: chunk_idx,
                 bytes_hash: CryptoHash::new(&chunk.bytes),
             };
             let Some(pending) = self.pending_rbc_slot(key) else {
-                let dropped_bytes = u64::try_from(chunk.bytes.len()).unwrap_or(u64::MAX);
+                let dropped_bytes = u64::try_from(chunk_bytes_len).unwrap_or(u64::MAX);
                 Self::record_pending_drop_counts(
                     self.telemetry_handle(),
                     PendingRbcDropReason::SessionLimit,
@@ -2823,6 +2851,12 @@ impl Actor {
                 self.release_block_payload_dedup(&chunk_dedup_key);
                 return Ok(());
             };
+            debug!(
+                ?key,
+                sender = ?sender,
+                idx = chunk_idx,
+                "stashing RBC chunk before session init"
+            );
             let outcome =
                 pending.push_chunk_capped(chunk, sender, max_chunks, max_bytes, Instant::now());
             match outcome {
@@ -2902,32 +2936,32 @@ impl Actor {
             return Ok(());
         };
         if accepted_chunk {
-            self.touch_pending_progress(chunk.block_hash, chunk.height, chunk.view, Instant::now());
+            self.touch_pending_progress(chunk_block, chunk_height, chunk_view, Instant::now());
         }
         if chunk_digest_mismatch {
             let log_outcome = sender.as_ref().map(|peer| {
                 self.record_rbc_mismatch(
                     peer,
                     status::RbcMismatchKind::ChunkDigest,
-                    chunk.height,
-                    chunk.view,
+                    chunk_height,
+                    chunk_view,
                 )
             });
             if log_outcome.is_none_or(super::RbcMismatchLogOutcome::should_log) {
                 warn!(
-                    height = chunk.height,
-                    view = chunk.view,
-                    idx = chunk.idx,
-                    block = %chunk.block_hash,
+                    height = chunk_height,
+                    view = chunk_view,
+                    idx = chunk_idx,
+                    block = %chunk_block,
                     sender = ?sender,
                     "dropping RBC chunk with mismatched digest"
                 );
             } else {
                 debug!(
-                    height = chunk.height,
-                    view = chunk.view,
-                    idx = chunk.idx,
-                    block = %chunk.block_hash,
+                    height = chunk_height,
+                    view = chunk_view,
+                    idx = chunk_idx,
+                    block = %chunk_block,
                     sender = ?sender,
                     "suppressing repeated RBC chunk digest mismatch log"
                 );

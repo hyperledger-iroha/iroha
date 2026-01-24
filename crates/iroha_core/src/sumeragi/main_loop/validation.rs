@@ -154,6 +154,12 @@ impl Actor {
 
         if !self.subsystems.validation.work_txs.is_empty() {
             if self.subsystems.validation.inflight.contains_key(&hash) {
+                debug!(
+                    height = pending.height,
+                    view = pending.view,
+                    block = %hash,
+                    "deferring validation before voting: validation in progress"
+                );
                 pending.validation_status = ValidationStatus::Pending;
                 self.pending.pending_blocks.insert(hash, pending);
                 return ValidationGateOutcome::Deferred;
