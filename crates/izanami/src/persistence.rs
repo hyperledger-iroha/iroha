@@ -219,19 +219,30 @@ mod tests {
     }
 
     impl EnvGuard {
+        #[allow(unsafe_code)]
         fn set(key: &'static str, value: &str) -> Self {
             let previous = env::var(key).ok();
-            env::set_var(key, value);
+            // Safety: test-only environment changes are scoped to the guard.
+            unsafe {
+                env::set_var(key, value);
+            }
             Self { key, previous }
         }
     }
 
     impl Drop for EnvGuard {
+        #[allow(unsafe_code)]
         fn drop(&mut self) {
             if let Some(prev) = &self.previous {
-                env::set_var(self.key, prev);
+                // Safety: test-only environment changes are scoped to the guard.
+                unsafe {
+                    env::set_var(self.key, prev);
+                }
             } else {
-                env::remove_var(self.key);
+                // Safety: test-only environment changes are scoped to the guard.
+                unsafe {
+                    env::remove_var(self.key);
+                }
             }
         }
     }

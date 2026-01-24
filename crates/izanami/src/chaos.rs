@@ -847,19 +847,30 @@ mod tests {
     }
 
     impl EnvGuard {
+        #[allow(unsafe_code)]
         fn set(key: &'static str, value: &str) -> Self {
             let original = env::var(key).ok();
-            env::set_var(key, value);
+            // Safety: test-only environment changes are scoped to the guard.
+            unsafe {
+                env::set_var(key, value);
+            }
             Self { key, original }
         }
     }
 
     impl Drop for EnvGuard {
+        #[allow(unsafe_code)]
         fn drop(&mut self) {
             if let Some(value) = &self.original {
-                env::set_var(self.key, value);
+                // Safety: test-only environment changes are scoped to the guard.
+                unsafe {
+                    env::set_var(self.key, value);
+                }
             } else {
-                env::remove_var(self.key);
+                // Safety: test-only environment changes are scoped to the guard.
+                unsafe {
+                    env::remove_var(self.key);
+                }
             }
         }
     }

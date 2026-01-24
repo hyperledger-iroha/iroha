@@ -7,6 +7,10 @@ Last update: 2026-01-24
 - Sumeragi missing-INIT recovery: include height/view hints in `FetchPendingBlock`, respond with RBC INIT/chunks even when the full block is unavailable, add `fetch_pending_block_serves_rbc_init_without_block` coverage, and update DA/RBC docs.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Tests: `cargo test --workspace` not run (long-running).
+- Connected peers: filter active roster by live consensus keys so disabled peers are skipped for leader selection; added roster unit coverage.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Tests: `cargo test -p iroha_core active_topology_filters_inactive_consensus_keys -- --nocapture` (ok).
+- Tests: `cargo test -p integration_tests --test mod extra_functional::connected_peers::connected_peers_with_f_1_0_1 -- --nocapture` (ok; duplicate metric registration warnings).
 - Sumeragi fast-path: disable fast-timeout quorum reschedules in DA mode (reschedule + commit pipeline); add unit coverage and update docs.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Tests: `cargo test -p iroha_core reschedule_skips_fast_timeout_with_da_enabled -- --nocapture` (ok).
