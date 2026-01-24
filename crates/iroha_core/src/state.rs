@@ -19884,11 +19884,93 @@ mod range_bounds {
 }
 
 pub(crate) mod deserialize {
-    use std::marker::PhantomData;
+    use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
 
     use norito::json::{self, JsonDeserialize};
 
     use super::{default_oracle, *};
+
+    fn install_domain_selector_resolver(
+        domains: &Storage<DomainId, Domain>,
+    ) -> Result<(), json::Error> {
+        let mut index = BTreeMap::new();
+        let view = domains.view();
+        for (domain_id, _) in view.iter() {
+            let selector = AccountDomainSelector::from_domain(domain_id).map_err(|err| {
+                json::Error::InvalidField {
+                    field: "domains".into(),
+                    message: err.to_string(),
+                }
+            })?;
+            if let Some(existing) = index.get(&selector) {
+                if existing != domain_id {
+                    return Err(json::Error::InvalidField {
+                        field: "domains".into(),
+                        message: format!(
+                            "Domain selector {selector:?} already bound to domain {existing}"
+                        ),
+                    });
+                }
+                continue;
+            }
+            index.insert(selector, domain_id.clone());
+        }
+        let index = Arc::new(index);
+        iroha_data_model::account::set_account_domain_selector_resolver(Arc::new(
+            move |selector| index.get(selector).cloned(),
+        ));
+        Ok(())
+    }
+
+    fn install_domain_selector_resolver_from_snapshot(
+        domains_value: &json::Value,
+    ) -> Result<(), json::Error> {
+        let json::Value::Object(domains_map) = domains_value else {
+            return Err(json::Error::InvalidField {
+                field: "domains".into(),
+                message: "expected object".into(),
+            });
+        };
+        let Some(blocks_value) = domains_map.get("blocks") else {
+            return Err(json::Error::missing_field("domains.blocks"));
+        };
+        let json::Value::Object(blocks_map) = blocks_value else {
+            return Err(json::Error::InvalidField {
+                field: "domains.blocks".into(),
+                message: "expected object".into(),
+            });
+        };
+        let mut index = BTreeMap::new();
+        for key in blocks_map.keys() {
+            let domain_id: DomainId = key.parse().map_err(|_| json::Error::InvalidField {
+                field: "domains".into(),
+                message: format!("failed to parse domain id `{key}`"),
+            })?;
+            let selector = AccountDomainSelector::from_domain(&domain_id).map_err(|err| {
+                json::Error::InvalidField {
+                    field: "domains".into(),
+                    message: err.to_string(),
+                }
+            })?;
+            if let Some(existing) = index.get(&selector) {
+                if existing != &domain_id {
+                    return Err(json::Error::InvalidField {
+                        field: "domains".into(),
+                        message: format!(
+                            "Domain selector {selector:?} already bound to domain {existing}"
+                        ),
+                    });
+                }
+                continue;
+            }
+            index.insert(selector, domain_id);
+        }
+        let index = Arc::new(index);
+        iroha_data_model::account::set_account_domain_selector_resolver(Arc::new(
+            move |selector| index.get(selector).cloned(),
+        ));
+        Ok(())
+    }
 
     #[derive(Clone, Copy)]
     pub struct IvmSeed<'e, T> {
@@ -20014,7 +20096,12 @@ pub(crate) mod deserialize {
 
         let parameters: Cell<Parameters> = take_required(&mut map, "parameters")?;
         let peers: Cell<Peers> = take_required(&mut map, "peers")?;
+        if let Some(domains_value) = map.get("domains") {
+            // Install a resolver so domainless IH58 accounts parse during snapshot load.
+            install_domain_selector_resolver_from_snapshot(domains_value)?;
+        }
         let domains: Storage<DomainId, Domain> = take_required(&mut map, "domains")?;
+        install_domain_selector_resolver(&domains)?;
         let accounts: Storage<AccountId, AccountValue> = take_required(&mut map, "accounts")?;
         let asset_definitions: Storage<AssetDefinitionId, AssetDefinition> =
             take_required(&mut map, "asset_definitions")?;

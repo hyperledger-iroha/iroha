@@ -1469,6 +1469,41 @@ impl Actor {
         Ok(self.subsystems.da_rbc.rbc.sessions.contains_key(&key))
     }
 
+    pub(super) fn maybe_hydrate_rbc_session_from_pending_block(
+        &mut self,
+        key: SessionKey,
+        sender: Option<&PeerId>,
+    ) -> Result<bool> {
+        let should_hydrate = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(|session| {
+                !session.is_invalid() && session.received_chunks() != session.total_chunks()
+            });
+        if !should_hydrate {
+            return Ok(false);
+        }
+        let Some(pending) = self.pending.pending_blocks.get(&key.0) else {
+            return Ok(false);
+        };
+        if pending.height != key.1 || pending.view != key.2 {
+            return Ok(false);
+        }
+        if matches!(
+            pending.validation_status,
+            super::pending_block::ValidationStatus::Invalid
+        ) {
+            return Ok(false);
+        }
+        let payload_bytes = block_payload_bytes(&pending.block);
+        let payload_hash = pending.payload_hash;
+        self.hydrate_rbc_session_from_block(key, &payload_bytes, payload_hash, sender)?;
+        Ok(true)
+    }
+
     /// When a full block payload is available alongside a `BlockCreated` message, ingest it into
     /// the cached RBC session so availability tracking can proceed once RBC evidence arrives (READY/DELIVER).
     pub(super) fn hydrate_rbc_session_from_block(
@@ -2584,6 +2619,7 @@ impl Actor {
             session.block_header = Some(merged_header);
             session.leader_signature = Some(init.leader_signature);
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+            self.maybe_hydrate_rbc_session_from_pending_block(key, sender.as_ref())?;
             self.flush_pending_rbc(key)?;
             self.maybe_emit_rbc_ready(key)?;
             if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
@@ -2636,6 +2672,7 @@ impl Actor {
         {
             warn!(?key, "replacing existing RBC session on init");
         }
+        self.maybe_hydrate_rbc_session_from_pending_block(key, sender.as_ref())?;
         // Apply any messages that arrived before INIT once the session exists.
         self.flush_pending_rbc(key)?;
         self.maybe_emit_rbc_ready(key)?;

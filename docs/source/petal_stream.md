@@ -66,7 +66,7 @@ can shift hues.
 ## 6. CLI preview
 
 ```
-iroha ops offline petal encode --input payload.bin --output ./petal_out --format gif --fps 24
+iroha offline petal encode --input payload.bin --output ./petal_out --format gif --fps 24
 ```
 
 This command renders a sakura wind preview of Petal Stream frames.

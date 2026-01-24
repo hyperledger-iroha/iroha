@@ -179,11 +179,11 @@ Use `--check` to verify fixtures are up to date.
 Encode payloads into frames + images:
 
 ```
-iroha ops offline qr encode --input payload.bin --output ./qr_out --format gif --ecc m --fps 12 --style sakura-wind
+iroha offline qr encode --input payload.bin --output ./qr_out --format gif --ecc m --fps 12 --style sakura-wind
 ```
 
 Decode raw frame bytes:
 
 ```
-iroha ops offline qr decode --input-dir ./qr_out/frames --output payload.bin
+iroha offline qr decode --input-dir ./qr_out/frames --output payload.bin
 ```

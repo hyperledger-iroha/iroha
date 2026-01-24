@@ -576,7 +576,7 @@ mod query_errors_handling {
         collections::HashMap,
         num::NonZeroU64,
         sync::{
-            Arc,
+            Arc, Mutex,
             atomic::{AtomicBool, Ordering},
         },
         time::Duration,
@@ -596,7 +596,7 @@ mod query_errors_handling {
 
     use super::*;
     use crate::{
-        client::APPLICATION_NORITO,
+        client::{APPLICATION_NORITO, DataModelCompatibility},
         data_model::ValidationFail,
         http::StatusCode as HttpStatusCode,
         http_default::{RequestSnapshot, with_send_hook},
@@ -826,6 +826,7 @@ mod query_errors_handling {
             alias_cache_policy: sample_alias_policy(),
             default_anonymity_policy: AnonymityPolicy::GuardPq,
             rollout_phase: SorafsRolloutPhase::Default,
+            data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Unchecked)),
         };
 
         let encoded_response = norito::to_bytes(&QueryResponse::Iterable(QueryOutput {

@@ -140,6 +140,12 @@ This document contains the help content for the `iroha_cli` command-line program
 * [`iroha_cli ops offline revocation list`↴](#iroha_cli-ops-offline-revocation-list)
 * [`iroha_cli ops offline rejection`↴](#iroha_cli-ops-offline-rejection)
 * [`iroha_cli ops offline rejection stats`↴](#iroha_cli-ops-offline-rejection-stats)
+* [`iroha_cli ops offline qr`↴](#iroha_cli-ops-offline-qr)
+* [`iroha_cli ops offline qr encode`↴](#iroha_cli-ops-offline-qr-encode)
+* [`iroha_cli ops offline qr decode`↴](#iroha_cli-ops-offline-qr-decode)
+* [`iroha_cli ops offline petal`↴](#iroha_cli-ops-offline-petal)
+* [`iroha_cli ops offline petal encode`↴](#iroha_cli-ops-offline-petal-encode)
+* [`iroha_cli ops offline petal decode`↴](#iroha_cli-ops-offline-petal-decode)
 * [`iroha_cli ops executor`↴](#iroha_cli-ops-executor)
 * [`iroha_cli ops executor data-model`↴](#iroha_cli-ops-executor-data-model)
 * [`iroha_cli ops executor upgrade`↴](#iroha_cli-ops-executor-upgrade)
@@ -180,6 +186,29 @@ This document contains the help content for the `iroha_cli` command-line program
 * [`iroha_cli ops connect`↴](#iroha_cli-ops-connect)
 * [`iroha_cli ops connect queue`↴](#iroha_cli-ops-connect-queue)
 * [`iroha_cli ops connect queue inspect`↴](#iroha_cli-ops-connect-queue-inspect)
+* [`iroha_cli offline`↴](#iroha_cli-offline)
+* [`iroha_cli offline allowance`↴](#iroha_cli-offline-allowance)
+* [`iroha_cli offline allowance list`↴](#iroha_cli-offline-allowance-list)
+* [`iroha_cli offline allowance get`↴](#iroha_cli-offline-allowance-get)
+* [`iroha_cli offline transfer`↴](#iroha_cli-offline-transfer)
+* [`iroha_cli offline transfer list`↴](#iroha_cli-offline-transfer-list)
+* [`iroha_cli offline transfer get`↴](#iroha_cli-offline-transfer-get)
+* [`iroha_cli offline transfer proof`↴](#iroha_cli-offline-transfer-proof)
+* [`iroha_cli offline bundle`↴](#iroha_cli-offline-bundle)
+* [`iroha_cli offline bundle inspect`↴](#iroha_cli-offline-bundle-inspect)
+* [`iroha_cli offline summary`↴](#iroha_cli-offline-summary)
+* [`iroha_cli offline summary list`↴](#iroha_cli-offline-summary-list)
+* [`iroha_cli offline summary export`↴](#iroha_cli-offline-summary-export)
+* [`iroha_cli offline revocation`↴](#iroha_cli-offline-revocation)
+* [`iroha_cli offline revocation list`↴](#iroha_cli-offline-revocation-list)
+* [`iroha_cli offline rejection`↴](#iroha_cli-offline-rejection)
+* [`iroha_cli offline rejection stats`↴](#iroha_cli-offline-rejection-stats)
+* [`iroha_cli offline qr`↴](#iroha_cli-offline-qr)
+* [`iroha_cli offline qr encode`↴](#iroha_cli-offline-qr-encode)
+* [`iroha_cli offline qr decode`↴](#iroha_cli-offline-qr-decode)
+* [`iroha_cli offline petal`↴](#iroha_cli-offline-petal)
+* [`iroha_cli offline petal encode`↴](#iroha_cli-offline-petal-encode)
+* [`iroha_cli offline petal decode`↴](#iroha_cli-offline-petal-decode)
 * [`iroha_cli app`↴](#iroha_cli-app)
 * [`iroha_cli app gov`↴](#iroha_cli-app-gov)
 * [`iroha_cli app gov deploy`↴](#iroha_cli-app-gov-deploy)
@@ -480,6 +509,7 @@ Iroha Client CLI provides a simple way to interact with the Iroha Web API
 
 * `ledger` — Ledger data and transaction helpers
 * `ops` — Node and operator helpers
+* `offline` — Inspect offline allowances and offline-to-online bundles
 * `app` — App API helpers and product tooling
 * `tools` — Developer utilities and diagnostics
 
@@ -2273,6 +2303,8 @@ Inspect offline allowances and offline-to-online bundles
 * `summary` — Inspect derived counter summaries per offline certificate
 * `revocation` — Inspect recorded verdict revocations
 * `rejection` — Fetch offline rejection telemetry snapshots
+* `qr` — Encode/decode QR stream frames for offline payloads
+* `petal` — Encode/decode petal stream frames for offline payloads
 
 
 
@@ -2584,6 +2616,182 @@ Fetch aggregated offline rejection counters
 ###### **Options:**
 
 * `--telemetry-profile <PROFILE>` — Optional telemetry profile header used when fetching stats
+
+
+
+## `iroha_cli ops offline qr`
+
+Encode/decode QR stream frames for offline payloads
+
+**Usage:** `iroha_cli ops offline qr <COMMAND>`
+
+###### **Subcommands:**
+
+* `encode` — Encode a payload into QR stream frames
+* `decode` — Decode QR stream frames into the original payload
+
+
+
+## `iroha_cli ops offline qr encode`
+
+Encode a payload into QR stream frames
+
+**Usage:** `iroha_cli ops offline qr encode [OPTIONS] --input <FILE> --output <DIR>`
+
+###### **Options:**
+
+* `--input <FILE>` — Path to the payload bytes to encode
+* `--output <DIR>` — Output directory for generated frames and artifacts
+* `--payload-kind <PAYLOAD_KIND>` — Payload kind tag embedded in the envelope
+
+  Default value: `unspecified`
+
+  Possible values: `unspecified`, `offline-to-online-transfer`, `offline-spend-receipt`, `offline-envelope`
+
+* `--chunk-size <CHUNK_SIZE>` — Chunk size in bytes
+
+  Default value: `360`
+* `--parity-group <PARITY_GROUP>` — Parity group size (0 disables parity frames)
+
+  Default value: `0`
+* `--ecc <ECC>` — QR error correction level
+
+  Default value: `m`
+
+  Possible values: `l`, `m`, `q`, `h`
+
+* `--frame-encoding <FRAME_ENCODING>` — QR frame encoding mode
+
+  Default value: `binary`
+
+  Possible values: `binary`, `base64`
+
+* `--dimension <DIMENSION>` — Rendered QR image size in pixels
+
+  Default value: `512`
+* `--format <FORMAT>` — Output format for rendered frames
+
+  Default value: `frames`
+
+  Possible values: `frames`, `svg`, `png`, `gif`, `apng`
+
+* `--style <STYLE>` — Render style for preview images (ignored for --format frames)
+
+  Default value: `mono`
+
+  Possible values: `mono`, `sakura`, `sakura-wind`
+
+* `--fps <FPS>` — Frames per second for animated outputs
+
+  Default value: `12`
+
+
+
+## `iroha_cli ops offline qr decode`
+
+Decode QR stream frames into the original payload
+
+**Usage:** `iroha_cli ops offline qr decode [OPTIONS] --input-dir <DIR> --output <FILE>`
+
+###### **Options:**
+
+* `--input-dir <DIR>` — Directory containing raw frame bytes
+* `--output <FILE>` — Output file for the decoded payload
+* `--frame-encoding <FRAME_ENCODING>` — Frame encoding used in the input
+
+  Default value: `binary`
+
+  Possible values: `binary`, `base64`
+
+* `--output-manifest <FILE>` — Optional JSON manifest output path
+
+
+
+## `iroha_cli ops offline petal`
+
+Encode/decode petal stream frames for offline payloads
+
+**Usage:** `iroha_cli ops offline petal <COMMAND>`
+
+###### **Subcommands:**
+
+* `encode` — Encode a payload into petal stream frames
+* `decode` — Decode petal stream frames into the original payload
+
+
+
+## `iroha_cli ops offline petal encode`
+
+Encode a payload into petal stream frames
+
+**Usage:** `iroha_cli ops offline petal encode [OPTIONS] --input <FILE> --output <DIR>`
+
+###### **Options:**
+
+* `--input <FILE>` — Path to the payload bytes to encode
+* `--output <DIR>` — Output directory for generated frames and artifacts
+* `--payload-kind <PAYLOAD_KIND>` — Payload kind tag embedded in the envelope
+
+  Default value: `unspecified`
+
+  Possible values: `unspecified`, `offline-to-online-transfer`, `offline-spend-receipt`, `offline-envelope`
+
+* `--chunk-size <CHUNK_SIZE>` — Chunk size in bytes
+
+  Default value: `360`
+* `--parity-group <PARITY_GROUP>` — Parity group size (0 disables parity frames)
+
+  Default value: `0`
+* `--grid-size <GRID_SIZE>` — Grid size in cells (0 selects automatic sizing)
+
+  Default value: `0`
+* `--border <BORDER>` — Border thickness in cells
+
+  Default value: `1`
+* `--anchor-size <ANCHOR_SIZE>` — Anchor size in cells
+
+  Default value: `3`
+* `--dimension <DIMENSION>` — Rendered frame size in pixels
+
+  Default value: `512`
+* `--format <FORMAT>` — Output format for rendered frames
+
+  Default value: `frames`
+
+  Possible values: `frames`, `png`, `gif`, `apng`
+
+* `--fps <FPS>` — Frames per second for animated outputs
+
+  Default value: `24`
+* `--style <STYLE>` — Render style for preview images (ignored for --format frames)
+
+  Default value: `sakura-wind`
+
+  Possible values: `sakura-wind`
+
+
+
+
+## `iroha_cli ops offline petal decode`
+
+Decode petal stream frames into the original payload
+
+**Usage:** `iroha_cli ops offline petal decode [OPTIONS] --input-dir <DIR> --output <FILE>`
+
+###### **Options:**
+
+* `--input-dir <DIR>` — Directory containing PNG frames
+* `--output <FILE>` — Output file for the decoded payload
+* `--grid-size <GRID_SIZE>` — Grid size in cells (0 to auto-detect)
+
+  Default value: `0`
+* `--border <BORDER>` — Border thickness in cells
+
+  Default value: `1`
+* `--anchor-size <ANCHOR_SIZE>` — Anchor size in cells
+
+  Default value: `3`
+* `--output-manifest <FILE>` — Optional JSON manifest output path
 
 
 
@@ -3045,6 +3253,512 @@ Inspect on-disk queue diagnostics for a Connect session
 
   Possible values: `table`, `json`
 
+
+
+
+## `iroha_cli offline`
+
+Inspect offline allowances and offline-to-online bundles
+
+**Usage:** `iroha_cli offline <COMMAND>`
+
+###### **Subcommands:**
+
+* `allowance` — Inspect offline allowances registered on-ledger
+* `transfer` — Inspect pending offline-to-online transfer bundles
+* `bundle` — Inspect offline bundle fixtures and aggregate proofs
+* `summary` — Inspect derived counter summaries per offline certificate
+* `revocation` — Inspect recorded verdict revocations
+* `rejection` — Fetch offline rejection telemetry snapshots
+* `qr` — Encode/decode QR stream frames for offline payloads
+* `petal` — Encode/decode petal stream frames for offline payloads
+
+
+
+## `iroha_cli offline allowance`
+
+Inspect offline allowances registered on-ledger
+
+**Usage:** `iroha_cli offline allowance <COMMAND>`
+
+###### **Subcommands:**
+
+* `list` — List all registered offline allowances
+* `get` — Fetch a specific allowance by certificate id
+
+
+
+## `iroha_cli offline allowance list`
+
+List all registered offline allowances
+
+**Usage:** `iroha_cli offline allowance list [OPTIONS]`
+
+###### **Options:**
+
+* `-v`, `--verbose` — Display detailed entry information instead of just IDs (when supported)
+* `--sort-by-metadata-key <SORT_BY_METADATA_KEY>` — Sort by metadata key
+* `--order <ORDER>` — Sort order (asc or desc)
+
+  Possible values: `asc`, `desc`
+
+* `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
+* `--offset <OFFSET>` — Offset into the result set (server-side offset)
+
+  Default value: `0`
+* `--fetch-size <FETCH_SIZE>` — Batch fetch size for iterable queries
+* `--select <SELECT>` — Experimental selector (JSON). Currently ignored; reserved for future server-side projection
+* `--controller <ACCOUNT_ID>` — Optional controller filter (account identifier)
+* `--verdict-id <HEX>` — Optional verdict identifier filter (hex)
+* `--attestation-nonce <HEX>` — Optional attestation nonce filter (hex)
+* `--certificate-expires-before-ms <CERTIFICATE_EXPIRES_BEFORE_MS>` — Only show allowances whose certificate expiry is at or before this value
+* `--certificate-expires-after-ms <CERTIFICATE_EXPIRES_AFTER_MS>` — Only show allowances whose certificate expiry is at or after this value
+* `--policy-expires-before-ms <POLICY_EXPIRES_BEFORE_MS>` — Only show allowances whose policy expiry is at or before this value
+* `--policy-expires-after-ms <POLICY_EXPIRES_AFTER_MS>` — Only show allowances whose policy expiry is at or after this value
+* `--refresh-before-ms <REFRESH_BEFORE_MS>` — Only show allowances whose attestation refresh-by timestamp is at or before this value
+* `--refresh-after-ms <REFRESH_AFTER_MS>` — Only show allowances whose attestation refresh-by timestamp is at or after this value
+* `--summary` — Emit summary rows with expiry/verdict metadata instead of bare certificate ids
+* `--include-expired` — Include certificates that have already expired (default skips them)
+
+
+
+## `iroha_cli offline allowance get`
+
+Fetch a specific allowance by certificate id
+
+**Usage:** `iroha_cli offline allowance get --certificate-id <CERTIFICATE_ID>`
+
+###### **Options:**
+
+* `--certificate-id <CERTIFICATE_ID>` — Deterministic certificate identifier (hex)
+
+
+
+## `iroha_cli offline transfer`
+
+Inspect pending offline-to-online transfer bundles
+
+**Usage:** `iroha_cli offline transfer <COMMAND>`
+
+###### **Subcommands:**
+
+* `list` — List all pending offline-to-online transfer bundles
+* `get` — Fetch a specific transfer bundle by id
+* `proof` — Generate a FASTPQ witness request for a bundle payload
+
+
+
+## `iroha_cli offline transfer list`
+
+List all pending offline-to-online transfer bundles
+
+**Usage:** `iroha_cli offline transfer list [OPTIONS]`
+
+###### **Options:**
+
+* `-v`, `--verbose` — Display detailed entry information instead of just IDs (when supported)
+* `--sort-by-metadata-key <SORT_BY_METADATA_KEY>` — Sort by metadata key
+* `--order <ORDER>` — Sort order (asc or desc)
+
+  Possible values: `asc`, `desc`
+
+* `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
+* `--offset <OFFSET>` — Offset into the result set (server-side offset)
+
+  Default value: `0`
+* `--fetch-size <FETCH_SIZE>` — Batch fetch size for iterable queries
+* `--select <SELECT>` — Experimental selector (JSON). Currently ignored; reserved for future server-side projection
+* `--controller <ACCOUNT_ID>` — Optional controller filter (account identifier)
+* `--receiver <ACCOUNT_ID>` — Optional receiver filter (account identifier)
+* `--status <STATUS>` — Optional lifecycle status filter
+
+  Possible values: `settled`, `archived`
+
+* `--certificate-id <HEX>` — Only show bundles whose certificate id matches the provided hex value
+* `--certificate-expires-before-ms <CERTIFICATE_EXPIRES_BEFORE_MS>` — Only show bundles whose certificate expiry is at or before this value
+* `--certificate-expires-after-ms <CERTIFICATE_EXPIRES_AFTER_MS>` — Only show bundles whose certificate expiry is at or after this value
+* `--policy-expires-before-ms <POLICY_EXPIRES_BEFORE_MS>` — Only show bundles whose policy expiry is at or before this value
+* `--policy-expires-after-ms <POLICY_EXPIRES_AFTER_MS>` — Only show bundles whose policy expiry is at or after this value
+* `--refresh-before-ms <REFRESH_BEFORE_MS>` — Only show bundles whose attestation refresh deadline is at or before this value
+* `--refresh-after-ms <REFRESH_AFTER_MS>` — Only show bundles whose attestation refresh deadline is at or after this value
+* `--verdict-id <HEX>` — Optional verdict identifier filter (hex)
+* `--attestation-nonce <HEX>` — Optional attestation nonce filter (hex)
+* `--platform-policy <PLATFORM_POLICY>` — Restrict settled bundles to a specific Android integrity policy (requires Play Integrity or HMS tokens)
+
+  Possible values: `play-integrity`, `hms-safety-detect`
+
+* `--require-verdict` — Include only bundles that already carry verdict metadata
+* `--only-missing-verdict` — Include only bundles that are missing verdict metadata
+* `--audit-log <PATH>` — Write a canonical audit log JSON file containing `{tx_id,sender_id,receiver_id,asset_id,amount,timestamp_ms}` entries
+* `--summary` — Emit summary rows with certificate/verdict metadata instead of bare bundle ids
+
+
+
+## `iroha_cli offline transfer get`
+
+Fetch a specific transfer bundle by id
+
+**Usage:** `iroha_cli offline transfer get --bundle-id <BUNDLE_ID>`
+
+###### **Options:**
+
+* `--bundle-id <BUNDLE_ID>` — Deterministic bundle identifier (hex)
+
+
+
+## `iroha_cli offline transfer proof`
+
+Generate a FASTPQ witness request for a bundle payload
+
+**Usage:** `iroha_cli offline transfer proof [OPTIONS] --bundle <PATH> --kind <KIND>`
+
+###### **Options:**
+
+* `--bundle <PATH>` — Path to offline bundle payload (JSON or Norito)
+* `--encoding <ENCODING>` — Override the bundle encoding detection
+
+  Default value: `auto`
+
+  Possible values: `auto`, `json`, `norito`
+
+* `--kind <KIND>` — Witness type to build
+
+  Possible values: `sum`, `counter`, `replay`
+
+* `--counter-checkpoint <COUNTER_CHECKPOINT>` — Optional counter checkpoint (defaults to first counter - 1)
+* `--replay-log-head <REPLAY_LOG_HEAD>` — Replay log head hash (required for replay proofs)
+* `--replay-log-tail <REPLAY_LOG_TAIL>` — Replay log tail hash (required for replay proofs)
+
+
+
+## `iroha_cli offline bundle`
+
+Inspect offline bundle fixtures and aggregate proofs
+
+**Usage:** `iroha_cli offline bundle <COMMAND>`
+
+###### **Subcommands:**
+
+* `inspect` — Inspect offline bundle fixtures and compute Poseidon receipts roots
+
+
+
+## `iroha_cli offline bundle inspect`
+
+Inspect offline bundle fixtures and compute Poseidon receipts roots
+
+**Usage:** `iroha_cli offline bundle inspect [OPTIONS] <PATH>...`
+
+###### **Arguments:**
+
+* `<PATH>` — Paths to offline bundle fixtures (JSON or Norito)
+
+###### **Options:**
+
+* `--encoding <ENCODING>` — Override the bundle encoding detection
+
+  Default value: `auto`
+
+  Possible values: `auto`, `json`, `norito`
+
+* `--proofs` — Include aggregate proof byte counts and metadata keys
+
+
+
+## `iroha_cli offline summary`
+
+Inspect derived counter summaries per offline certificate
+
+**Usage:** `iroha_cli offline summary <COMMAND>`
+
+###### **Subcommands:**
+
+* `list` — List counter summaries derived from wallet allowances
+* `export` — Export counter summaries to a JSON digest for receiver sharing
+
+
+
+## `iroha_cli offline summary list`
+
+List counter summaries derived from wallet allowances
+
+**Usage:** `iroha_cli offline summary list [OPTIONS]`
+
+###### **Options:**
+
+* `-v`, `--verbose` — Display detailed entry information instead of just IDs (when supported)
+* `--sort-by-metadata-key <SORT_BY_METADATA_KEY>` — Sort by metadata key
+* `--order <ORDER>` — Sort order (asc or desc)
+
+  Possible values: `asc`, `desc`
+
+* `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
+* `--offset <OFFSET>` — Offset into the result set (server-side offset)
+
+  Default value: `0`
+* `--fetch-size <FETCH_SIZE>` — Batch fetch size for iterable queries
+* `--select <SELECT>` — Experimental selector (JSON). Currently ignored; reserved for future server-side projection
+
+
+
+## `iroha_cli offline summary export`
+
+Export counter summaries to a JSON digest for receiver sharing
+
+**Usage:** `iroha_cli offline summary export [OPTIONS] --output <PATH>`
+
+###### **Options:**
+
+* `--sort-by-metadata-key <SORT_BY_METADATA_KEY>` — Sort by metadata key
+* `--order <ORDER>` — Sort order (asc or desc)
+
+  Possible values: `asc`, `desc`
+
+* `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
+* `--offset <OFFSET>` — Offset into the result set (server-side offset)
+
+  Default value: `0`
+* `--fetch-size <FETCH_SIZE>` — Batch fetch size for iterable queries
+* `--select <SELECT>` — Experimental selector (JSON). Currently ignored; reserved for future server-side projection
+* `--output <PATH>` — Destination file for the digest (JSON)
+* `--pretty` — Pretty-print the JSON export instead of emitting a compact document
+
+  Default value: `false`
+
+
+
+## `iroha_cli offline revocation`
+
+Inspect recorded verdict revocations
+
+**Usage:** `iroha_cli offline revocation <COMMAND>`
+
+###### **Subcommands:**
+
+* `list` — List recorded verdict revocations
+
+
+
+## `iroha_cli offline revocation list`
+
+List recorded verdict revocations
+
+**Usage:** `iroha_cli offline revocation list [OPTIONS]`
+
+###### **Options:**
+
+* `-v`, `--verbose` — Display detailed entry information instead of just IDs (when supported)
+* `--sort-by-metadata-key <SORT_BY_METADATA_KEY>` — Sort by metadata key
+* `--order <ORDER>` — Sort order (asc or desc)
+
+  Possible values: `asc`, `desc`
+
+* `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
+* `--offset <OFFSET>` — Offset into the result set (server-side offset)
+
+  Default value: `0`
+* `--fetch-size <FETCH_SIZE>` — Batch fetch size for iterable queries
+* `--select <SELECT>` — Experimental selector (JSON). Currently ignored; reserved for future server-side projection
+
+
+
+## `iroha_cli offline rejection`
+
+Fetch offline rejection telemetry snapshots
+
+**Usage:** `iroha_cli offline rejection <COMMAND>`
+
+###### **Subcommands:**
+
+* `stats` — Fetch aggregated offline rejection counters
+
+
+
+## `iroha_cli offline rejection stats`
+
+Fetch aggregated offline rejection counters
+
+**Usage:** `iroha_cli offline rejection stats [OPTIONS]`
+
+###### **Options:**
+
+* `--telemetry-profile <PROFILE>` — Optional telemetry profile header used when fetching stats
+
+
+
+## `iroha_cli offline qr`
+
+Encode/decode QR stream frames for offline payloads
+
+**Usage:** `iroha_cli offline qr <COMMAND>`
+
+###### **Subcommands:**
+
+* `encode` — Encode a payload into QR stream frames
+* `decode` — Decode QR stream frames into the original payload
+
+
+
+## `iroha_cli offline qr encode`
+
+Encode a payload into QR stream frames
+
+**Usage:** `iroha_cli offline qr encode [OPTIONS] --input <FILE> --output <DIR>`
+
+###### **Options:**
+
+* `--input <FILE>` — Path to the payload bytes to encode
+* `--output <DIR>` — Output directory for generated frames and artifacts
+* `--payload-kind <PAYLOAD_KIND>` — Payload kind tag embedded in the envelope
+
+  Default value: `unspecified`
+
+  Possible values: `unspecified`, `offline-to-online-transfer`, `offline-spend-receipt`, `offline-envelope`
+
+* `--chunk-size <CHUNK_SIZE>` — Chunk size in bytes
+
+  Default value: `360`
+* `--parity-group <PARITY_GROUP>` — Parity group size (0 disables parity frames)
+
+  Default value: `0`
+* `--ecc <ECC>` — QR error correction level
+
+  Default value: `m`
+
+  Possible values: `l`, `m`, `q`, `h`
+
+* `--frame-encoding <FRAME_ENCODING>` — QR frame encoding mode
+
+  Default value: `binary`
+
+  Possible values: `binary`, `base64`
+
+* `--dimension <DIMENSION>` — Rendered QR image size in pixels
+
+  Default value: `512`
+* `--format <FORMAT>` — Output format for rendered frames
+
+  Default value: `frames`
+
+  Possible values: `frames`, `svg`, `png`, `gif`, `apng`
+
+* `--style <STYLE>` — Render style for preview images (ignored for --format frames)
+
+  Default value: `mono`
+
+  Possible values: `mono`, `sakura`, `sakura-wind`
+
+* `--fps <FPS>` — Frames per second for animated outputs
+
+  Default value: `12`
+
+
+
+## `iroha_cli offline qr decode`
+
+Decode QR stream frames into the original payload
+
+**Usage:** `iroha_cli offline qr decode [OPTIONS] --input-dir <DIR> --output <FILE>`
+
+###### **Options:**
+
+* `--input-dir <DIR>` — Directory containing raw frame bytes
+* `--output <FILE>` — Output file for the decoded payload
+* `--frame-encoding <FRAME_ENCODING>` — Frame encoding used in the input
+
+  Default value: `binary`
+
+  Possible values: `binary`, `base64`
+
+* `--output-manifest <FILE>` — Optional JSON manifest output path
+
+
+
+## `iroha_cli offline petal`
+
+Encode/decode petal stream frames for offline payloads
+
+**Usage:** `iroha_cli offline petal <COMMAND>`
+
+###### **Subcommands:**
+
+* `encode` — Encode a payload into petal stream frames
+* `decode` — Decode petal stream frames into the original payload
+
+
+
+## `iroha_cli offline petal encode`
+
+Encode a payload into petal stream frames
+
+**Usage:** `iroha_cli offline petal encode [OPTIONS] --input <FILE> --output <DIR>`
+
+###### **Options:**
+
+* `--input <FILE>` — Path to the payload bytes to encode
+* `--output <DIR>` — Output directory for generated frames and artifacts
+* `--payload-kind <PAYLOAD_KIND>` — Payload kind tag embedded in the envelope
+
+  Default value: `unspecified`
+
+  Possible values: `unspecified`, `offline-to-online-transfer`, `offline-spend-receipt`, `offline-envelope`
+
+* `--chunk-size <CHUNK_SIZE>` — Chunk size in bytes
+
+  Default value: `360`
+* `--parity-group <PARITY_GROUP>` — Parity group size (0 disables parity frames)
+
+  Default value: `0`
+* `--grid-size <GRID_SIZE>` — Grid size in cells (0 selects automatic sizing)
+
+  Default value: `0`
+* `--border <BORDER>` — Border thickness in cells
+
+  Default value: `1`
+* `--anchor-size <ANCHOR_SIZE>` — Anchor size in cells
+
+  Default value: `3`
+* `--dimension <DIMENSION>` — Rendered frame size in pixels
+
+  Default value: `512`
+* `--format <FORMAT>` — Output format for rendered frames
+
+  Default value: `frames`
+
+  Possible values: `frames`, `png`, `gif`, `apng`
+
+* `--fps <FPS>` — Frames per second for animated outputs
+
+  Default value: `24`
+* `--style <STYLE>` — Render style for preview images (ignored for --format frames)
+
+  Default value: `sakura-wind`
+
+  Possible values: `sakura-wind`
+
+
+
+
+## `iroha_cli offline petal decode`
+
+Decode petal stream frames into the original payload
+
+**Usage:** `iroha_cli offline petal decode [OPTIONS] --input-dir <DIR> --output <FILE>`
+
+###### **Options:**
+
+* `--input-dir <DIR>` — Directory containing PNG frames
+* `--output <FILE>` — Output file for the decoded payload
+* `--grid-size <GRID_SIZE>` — Grid size in cells (0 to auto-detect)
+
+  Default value: `0`
+* `--border <BORDER>` — Border thickness in cells
+
+  Default value: `1`
+* `--anchor-size <ANCHOR_SIZE>` — Anchor size in cells
+
+  Default value: `3`
+* `--output-manifest <FILE>` — Optional JSON manifest output path
 
 
 
