@@ -7,7 +7,10 @@ use std::{
 
 use iroha_config::parameters::actual::ConsensusMode;
 use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest, digest::Update as BlakeUpdate};
-use iroha_data_model::{ChainId, Encode as _, nexus::PublicLaneValidatorStatus, peer::PeerId};
+use iroha_data_model::{
+    ChainId, Encode as _, consensus::ConsensusKeyRole, nexus::PublicLaneValidatorStatus,
+    peer::PeerId,
+};
 use iroha_logger::prelude::*;
 use mv::storage::StorageReadOnly;
 
@@ -276,6 +279,67 @@ pub(super) fn derive_active_topology_from_views(
     canonicalize_roster(fallback)
 }
 
+fn roster_member_has_live_consensus_key(
+    world: &impl WorldReadOnly,
+    peer: &PeerId,
+    height: u64,
+    overlap_grace_blocks: u64,
+    expiry_grace_blocks: u64,
+) -> bool {
+    let pk = peer.public_key();
+    let pk_label = pk.to_string();
+    let mut found_index_record = false;
+    if let Some(ids) = world.consensus_keys_by_pk().get(&pk_label) {
+        for id in ids {
+            if let Some(record) = world.consensus_keys().get(id) {
+                found_index_record = true;
+                if record.id.role == ConsensusKeyRole::Validator
+                    && record.is_live_at(height, overlap_grace_blocks, expiry_grace_blocks)
+                {
+                    return true;
+                }
+            }
+        }
+        if found_index_record {
+            return false;
+        }
+    }
+    world.consensus_keys().iter().any(|(id, record)| {
+        id.role == ConsensusKeyRole::Validator
+            && record.public_key == *pk
+            && record.is_live_at(height, overlap_grace_blocks, expiry_grace_blocks)
+    })
+}
+
+fn filter_roster_with_live_consensus_keys(
+    view: &StateView<'_>,
+    roster: Vec<PeerId>,
+) -> Vec<PeerId> {
+    let world = view.world();
+    if world.consensus_keys().is_empty() {
+        return roster;
+    }
+    let params = world.parameters();
+    let sumeragi = params.sumeragi();
+    let overlap_grace_blocks = sumeragi.key_overlap_grace_blocks;
+    let expiry_grace_blocks = sumeragi.key_expiry_grace_blocks;
+    let height = u64::try_from(view.height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    roster
+        .into_iter()
+        .filter(|peer| {
+            roster_member_has_live_consensus_key(
+                world,
+                peer,
+                height,
+                overlap_grace_blocks,
+                expiry_grace_blocks,
+            )
+        })
+        .collect()
+}
+
 #[allow(clippy::if_not_else)]
 #[cfg(test)]
 pub(super) fn derive_active_topology(
@@ -283,7 +347,13 @@ pub(super) fn derive_active_topology(
     trusted: &iroha_config::parameters::actual::TrustedPeers,
     me: &PeerId,
 ) -> Vec<PeerId> {
-    derive_active_topology_from_views(view.world(), view.commit_topology().as_slice(), trusted, me)
+    let roster = derive_active_topology_from_views(
+        view.world(),
+        view.commit_topology().as_slice(),
+        trusted,
+        me,
+    );
+    filter_roster_with_live_consensus_keys(view, roster)
 }
 
 /// Mode-aware roster selection with `NPoS` staking bootstrap.
@@ -335,11 +405,13 @@ pub(super) fn derive_active_topology_for_mode(
             // NPoS needs a canonical roster order so signer indices stay consistent across peers.
             roster = canonicalize_roster(roster);
             if !roster.is_empty() {
-                return roster;
+                return filter_roster_with_live_consensus_keys(view, roster);
             }
         }
     }
-    derive_active_topology_from_views(view.world(), commit_topology.as_slice(), trusted, me)
+    let roster =
+        derive_active_topology_from_views(view.world(), commit_topology.as_slice(), trusted, me);
+    filter_roster_with_live_consensus_keys(view, roster)
 }
 
 #[cfg(test)]
@@ -436,12 +508,13 @@ mod tests {
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
-        state::{State, World},
+        state::{CellVecExt, State, World},
     };
     use iroha_config::parameters::actual::ConsensusMode;
     use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         account::AccountId,
+        consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
         metadata::Metadata,
         nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
         peer::Peer,
@@ -632,6 +705,83 @@ mod tests {
         let roster = derive_active_topology(&view, &trusted, &peers[0]);
 
         assert_eq!(roster, peers);
+    }
+
+    #[test]
+    fn active_topology_filters_inactive_consensus_keys() {
+        let keypairs: Vec<KeyPair> = (0..3)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let peers: Vec<PeerId> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let peers_cell = block.peers.get_mut();
+            for peer in &peers {
+                let _ = peers_cell.push(peer.clone());
+            }
+            for (idx, kp) in keypairs.iter().enumerate() {
+                let id = crate::state::derive_validator_key_id(kp.public_key());
+                let status = if idx == 2 {
+                    ConsensusKeyStatus::Disabled
+                } else {
+                    ConsensusKeyStatus::Active
+                };
+                let record = ConsensusKeyRecord {
+                    id: id.clone(),
+                    public_key: kp.public_key().clone(),
+                    pop: None,
+                    activation_height: 1,
+                    expiry_height: None,
+                    hsm: None,
+                    replaces: None,
+                    status,
+                };
+                block.consensus_keys.insert(id.clone(), record);
+                let pk_label = kp.public_key().to_string();
+                let mut by_pk = block
+                    .consensus_keys_by_pk
+                    .get(&pk_label)
+                    .cloned()
+                    .unwrap_or_default();
+                by_pk.push(id);
+                block.consensus_keys_by_pk.insert(pk_label, by_pk);
+            }
+            block.commit();
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = State::new_for_testing(world, kura, LiveQueryStore::start_test());
+        state.commit_topology.mutate_vec(|vec| *vec = peers.clone());
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: Peer::new("127.0.0.1:10000".parse().expect("addr"), peers[0].clone()),
+            others: peers
+                .iter()
+                .skip(1)
+                .enumerate()
+                .map(|(idx, peer_id)| {
+                    let port = 10_001 + u16::try_from(idx).expect("peer index fits u16");
+                    make_peer(peer_id.clone(), port)
+                })
+                .collect::<UniqueVec<_>>(),
+            pops: BTreeMap::new(),
+        };
+
+        let view = state.view();
+        let roster = derive_active_topology_for_mode(
+            &view,
+            &trusted,
+            &peers[0],
+            ConsensusMode::Permissioned,
+        );
+
+        let expected = peers[..2].to_vec();
+        assert_eq!(roster, expected);
     }
 
     #[test]
