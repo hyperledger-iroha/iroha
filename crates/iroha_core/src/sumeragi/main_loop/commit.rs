@@ -28,6 +28,7 @@ pub(super) struct CommitWork {
     pub(super) commit_topology: Vec<PeerId>,
     pub(super) signature_topology: Vec<PeerId>,
     pub(super) qc_signers: Option<BTreeSet<ValidatorIndex>>,
+    pub(super) commit_qc: Option<crate::sumeragi::consensus::Qc>,
     pub(super) allow_quorum_bypass: bool,
     pub(super) persist_required: bool,
     pub(super) events_sender: crate::EventsSender,
@@ -144,6 +145,7 @@ pub(super) fn execute_commit_work(
         commit_topology,
         signature_topology,
         qc_signers: _qc_signers,
+        commit_qc,
         allow_quorum_bypass: _allow_quorum_bypass,
         persist_required,
         events_sender,
@@ -198,6 +200,27 @@ pub(super) fn execute_commit_work(
             }
             // Emit pipeline events once durability is confirmed, before state apply.
             emit_pipeline_events(&events_sender, std::mem::take(&mut pipeline_events));
+            if let Some(qc) = commit_qc.as_ref() {
+                let header = committed_block.as_ref().header();
+                if qc.phase == crate::sumeragi::consensus::Phase::Commit
+                    && qc.subject_block_hash == committed_block.as_ref().hash()
+                    && qc.height == header.height().get()
+                    && qc.view == header.view_change_index()
+                {
+                    crate::sumeragi::status::record_commit_qc(qc.clone());
+                } else {
+                    warn!(
+                        qc_height = qc.height,
+                        qc_view = qc.view,
+                        qc_phase = ?qc.phase,
+                        qc_block = %qc.subject_block_hash,
+                        block_height = header.height().get(),
+                        block_view = header.view_change_index(),
+                        block = %committed_block.as_ref().hash(),
+                        "skipping commit QC record: mismatched metadata"
+                    );
+                }
+            }
             let state_events =
                 state_block.apply_without_execution(&committed_block, commit_topology);
             if let Err(err) = state_block.commit() {
@@ -534,6 +557,7 @@ impl Actor {
                             commit_topology: inflight.commit_topology.clone(),
                             signature_topology: inflight.signature_topology.clone(),
                             qc_signers: inflight.qc_signers.clone(),
+                            commit_qc: inflight.commit_qc.clone(),
                             allow_quorum_bypass: inflight.allow_quorum_bypass,
                             persist_required,
                             events_sender: self.events_sender.clone(),
@@ -653,6 +677,7 @@ impl Actor {
             commit_topology,
             signature_topology,
             qc_signers,
+            commit_qc,
             allow_quorum_bypass,
             post_commit_qc,
             ..
@@ -735,15 +760,17 @@ impl Actor {
                 );
                 let (consensus_mode, mode_tag, _) =
                     self.consensus_context_for_height(pending_height);
-                let mut cached_qc = commit_qc_from_cache_or_history(
-                    &self.qc_cache,
-                    block_hash,
-                    pending_height,
-                    pending_view,
-                    lock.epoch,
-                    mode_tag,
-                    &commit_topology,
-                );
+                let mut cached_qc = commit_qc.or_else(|| {
+                    commit_qc_from_cache_or_history(
+                        &self.qc_cache,
+                        block_hash,
+                        pending_height,
+                        pending_view,
+                        lock.epoch,
+                        mode_tag,
+                        &commit_topology,
+                    )
+                });
                 if let Some(qc) = cached_qc.as_ref() {
                     self.qc_cache.entry(qc_key).or_insert_with(|| qc.clone());
                 }
@@ -776,7 +803,7 @@ impl Actor {
                             ConsensusMode::Permissioned => None,
                             ConsensusMode::Npos => CommitStakeSnapshot::from_roster(
                                 self.state.view().world(),
-                                topology.as_ref(),
+                                &commit_topology,
                             ),
                         };
                         if let Some((parent_state_root, post_state_root)) =
@@ -789,7 +816,7 @@ impl Actor {
                                 lock.epoch,
                                 parent_state_root,
                                 post_state_root,
-                                topology.as_ref(),
+                                &commit_topology,
                                 consensus_mode,
                                 stake_snapshot.as_ref(),
                                 mode_tag,
@@ -1691,7 +1718,7 @@ impl Actor {
                 "DA availability missing; finalize continues"
             );
         }
-        let (consensus_mode, _, _) = self.consensus_context_for_height(pending_height);
+        let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(pending_height);
         let commit_topology = self.roster_for_vote_with_mode(
             block_hash,
             pending_height,
@@ -1752,6 +1779,92 @@ impl Actor {
                     .map(|parsed| parsed.voting)
             });
         let allow_quorum_bypass = false;
+        let view_signers = quorum_signers.as_ref().and_then(|signers| {
+            let mapped =
+                super::normalize_signer_indices_to_view(signers, &topology, &canonical_topology);
+            if mapped.len() == signers.len() {
+                Some(mapped)
+            } else {
+                warn!(
+                    height = pending_height,
+                    view = pending_view,
+                    signers = signers.len(),
+                    view_signers = mapped.len(),
+                    "skipping vote aggregation: signer mapping to view topology incomplete"
+                );
+                None
+            }
+        });
+        let mut commit_qc = commit_qc_from_cache_or_history(
+            &self.qc_cache,
+            block_hash,
+            pending_height,
+            pending_view,
+            lock.epoch,
+            mode_tag,
+            &commit_topology,
+        );
+        if !allow_quorum_bypass && commit_qc.is_none() {
+            if let (Some(signers), Some(view_signers)) =
+                (quorum_signers.as_ref(), view_signers.as_ref())
+            {
+                let aggregate_signature = match super::aggregate_vote_signatures(
+                    &self.vote_log,
+                    crate::sumeragi::consensus::Phase::Commit,
+                    block_hash,
+                    pending_height,
+                    pending_view,
+                    lock.epoch,
+                    view_signers,
+                ) {
+                    Ok(signature) => signature,
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            height = pending_height,
+                            view = pending_view,
+                            block = %block_hash,
+                            "failed to aggregate precommit signatures for cached QC"
+                        );
+                        Vec::new()
+                    }
+                };
+                let stake_snapshot = match consensus_mode {
+                    ConsensusMode::Permissioned => None,
+                    ConsensusMode::Npos => CommitStakeSnapshot::from_roster(
+                        self.state.view().world(),
+                        &commit_topology,
+                    ),
+                };
+                if let Some((parent_state_root, post_state_root)) =
+                    pending.parent_state_root.zip(pending.post_state_root)
+                {
+                    if let Some(derived_qc) = super::derive_block_sync_qc_from_signers(
+                        block_hash,
+                        pending_height,
+                        pending_view,
+                        lock.epoch,
+                        parent_state_root,
+                        post_state_root,
+                        &commit_topology,
+                        consensus_mode,
+                        stake_snapshot.as_ref(),
+                        mode_tag,
+                        signers,
+                        aggregate_signature,
+                    ) {
+                        commit_qc = Some(derived_qc);
+                    }
+                } else {
+                    warn!(
+                        height = pending_height,
+                        view = pending_view,
+                        block = %block_hash,
+                        "skipping derived QC cache: missing execution roots"
+                    );
+                }
+            }
+        }
 
         iroha_logger::info!(
             height = pending_height,
@@ -1769,6 +1882,7 @@ impl Actor {
             commit_topology: commit_topology.clone(),
             signature_topology: signature_topology.clone(),
             qc_signers: quorum_signers.clone(),
+            commit_qc: commit_qc.clone(),
             allow_quorum_bypass,
             persist_required,
             events_sender: self.events_sender.clone(),
@@ -1781,6 +1895,7 @@ impl Actor {
             commit_topology,
             signature_topology,
             qc_signers: quorum_signers,
+            commit_qc,
             allow_quorum_bypass,
             post_commit_qc,
             enqueue_time: now,
@@ -4967,7 +5082,22 @@ mod tests {
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
         let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
         let world = World::with([genesis_domain], [genesis_account], []);
-        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: FSYNC_INTERVAL,
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) =
+            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        let kura = Arc::new(kura);
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, Arc::clone(&kura), query_handle);
         let chain_id = state.view().chain_id().clone();
@@ -4987,6 +5117,7 @@ mod tests {
             commit_topology: topology.clone(),
             signature_topology: topology,
             qc_signers: None,
+            commit_qc: None,
             allow_quorum_bypass: false,
             persist_required: true,
             events_sender,
@@ -5025,6 +5156,115 @@ mod tests {
             }
         }
         assert!(got_pipeline_event, "expected pipeline event emission");
+    }
+
+    #[test]
+    fn execute_commit_work_records_commit_qc_for_state_apply() {
+        let _guard = crate::sumeragi::status::commit_history_test_guard();
+        crate::sumeragi::status::reset_commit_certs_for_tests();
+        crate::sumeragi::status::reset_validator_checkpoints_for_tests();
+
+        let genesis_key = KeyPair::random();
+        let genesis_account_id =
+            AccountId::new(GENESIS_DOMAIN_ID.clone(), genesis_key.public_key().clone());
+        let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
+        let world = World::with([genesis_domain], [genesis_account], []);
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, Arc::clone(&kura), query_handle);
+        let chain_id = state.view().chain_id().clone();
+
+        let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
+            .with_instructions([Log::new(Level::DEBUG, "commit qc test".to_string())])
+            .sign(genesis_key.private_key());
+        let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let epoch = 0_u64;
+
+        let consensus_key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let consensus_public_key = consensus_key.public_key().clone();
+        let keypairs = vec![consensus_key];
+        let peer_id = PeerId::new(consensus_public_key);
+        let topology = vec![peer_id.clone()];
+        let signers_bitmap = vec![0b0000_0001];
+        let aggregate_signature = aggregate_signature_for_bitmap(
+            &chain_id,
+            super::super::PERMISSIONED_TAG,
+            crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            &signers_bitmap,
+            &keypairs,
+        );
+        let qc = crate::sumeragi::consensus::Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            height,
+            view,
+            epoch,
+            mode_tag: super::super::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&topology),
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: topology.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap,
+                bls_aggregate_signature: aggregate_signature,
+            },
+        };
+
+        let (events_sender, _events_rx) = tokio::sync::broadcast::channel(4);
+        let work = CommitWork {
+            id: 7,
+            block,
+            commit_topology: topology.clone(),
+            signature_topology: topology,
+            qc_signers: None,
+            commit_qc: Some(qc),
+            allow_quorum_bypass: false,
+            persist_required: true,
+            events_sender,
+        };
+
+        let (outcome, _timings) =
+            execute_commit_work(&state, kura.as_ref(), &chain_id, &genesis_account_id, work);
+        match &outcome {
+            CommitOutcome::Success { .. } => {}
+            CommitOutcome::Rejected { error, .. } => {
+                panic!("commit rejected: {error:?}");
+            }
+            CommitOutcome::KuraStoreFailed { error, .. } => {
+                panic!("kura store failed: {error:?}");
+            }
+            CommitOutcome::StateCommitFailed { error, .. } => {
+                panic!("state commit failed: {error:?}");
+            }
+        }
+        let history = crate::sumeragi::status::commit_qc_history();
+        assert!(
+            history.iter().any(|qc| {
+                qc.subject_block_hash == block_hash
+                    && qc.height == height
+                    && qc.view == view
+                    && matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
+            }),
+            "commit QC should be recorded for the committed block"
+        );
+        let snapshot = state.commit_roster_snapshot_for_block(height, block_hash);
+        assert!(
+            snapshot.is_some(),
+            "commit roster should be recorded when commit QC is provided"
+        );
+
+        crate::sumeragi::status::reset_commit_certs_for_tests();
+        crate::sumeragi::status::reset_validator_checkpoints_for_tests();
     }
 
     #[test]
@@ -5070,6 +5310,7 @@ mod tests {
             commit_topology: topology.clone(),
             signature_topology: topology,
             qc_signers: None,
+            commit_qc: None,
             allow_quorum_bypass: false,
             persist_required: true,
             events_sender,
@@ -5131,6 +5372,7 @@ mod tests {
             commit_topology: topology.clone(),
             signature_topology: topology,
             qc_signers: None,
+            commit_qc: None,
             allow_quorum_bypass: false,
             persist_required: false,
             events_sender,
@@ -5199,6 +5441,7 @@ mod tests {
             commit_topology: topology.clone(),
             signature_topology: topology,
             qc_signers: None,
+            commit_qc: None,
             allow_quorum_bypass: false,
             persist_required: false,
             events_sender,
