@@ -188,6 +188,10 @@ pub struct FetchPendingBlock {
     pub requester: PeerId,
     /// Hash of the missing block.
     pub block_hash: HashOf<BlockHeader>,
+    /// Height hint for the missing block.
+    pub height: u64,
+    /// View hint for the missing block.
+    pub view: u64,
 }
 
 #[cfg(test)]
@@ -315,6 +319,8 @@ mod tests {
         let fetch = BlockMessage::FetchPendingBlock(FetchPendingBlock {
             requester,
             block_hash,
+            height: 1,
+            view: 0,
         });
         assert_eq!(fetch.priority(), iroha_p2p::Priority::High);
     }

@@ -866,6 +866,8 @@ impl Actor {
                     let request = super::message::FetchPendingBlock {
                         requester: self.common_config.peer.id.clone(),
                         block_hash,
+                        height: block_height,
+                        view: block_view,
                     };
                     let msg = BlockMessage::FetchPendingBlock(request);
                     for peer in targets {
@@ -1296,6 +1298,8 @@ impl Actor {
         request: super::message::FetchPendingBlock,
     ) -> Result<()> {
         let block_hash = request.block_hash;
+        let request_height = request.height;
+        let request_view = request.view;
         let peer = request.requester;
         let mut responded = false;
 
@@ -1464,6 +1468,29 @@ impl Actor {
                 };
                 self.send_fetch_pending_block_response(peer.clone(), msg);
                 self.send_fetch_pending_block_rbc_init(peer.clone(), block);
+                responded = true;
+            }
+        }
+
+        // If the block isn't available yet, still respond with RBC init/chunks when possible.
+        if !responded && self.runtime_da_enabled() {
+            let key = Self::session_key(&block_hash, request_height, request_view);
+            if let Some(init) = self.rebuild_rbc_init(key) {
+                self.send_fetch_pending_block_response(peer.clone(), BlockMessage::RbcInit(init));
+                let mut roster = self.rbc_session_roster(key);
+                if roster.is_empty() {
+                    roster = self.ensure_rbc_session_roster(key);
+                }
+                if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
+                    if let Some((_, chunks)) = Self::rbc_payload_bundle(key, session, &roster) {
+                        for chunk in chunks {
+                            self.send_fetch_pending_block_response(
+                                peer.clone(),
+                                BlockMessage::RbcChunk(chunk),
+                            );
+                        }
+                    }
+                }
                 responded = true;
             }
         }

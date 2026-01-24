@@ -5672,6 +5672,8 @@ async fn fetch_pending_block_attaches_cached_qc() {
     let request = super::message::FetchPendingBlock {
         requester: actor.common_config.peer.id.clone(),
         block_hash,
+        height: block.header().height().get(),
+        view: block.header().view_change_index(),
     };
     let _ = harness.background_rx.try_iter().count();
     actor
@@ -5797,6 +5799,8 @@ async fn fetch_pending_block_uses_block_sync_update_when_roster_available() {
     let request = super::message::FetchPendingBlock {
         requester: actor.common_config.peer.id.clone(),
         block_hash,
+        height,
+        view,
     };
     let _ = harness.background_rx.try_iter().count();
     actor
@@ -5920,6 +5924,8 @@ async fn fetch_pending_block_npos_falls_back_without_roster_hints() {
     let request = super::message::FetchPendingBlock {
         requester: actor.common_config.peer.id.clone(),
         block_hash,
+        height,
+        view,
     };
     let _ = harness.background_rx.try_iter().count();
     actor
@@ -5983,6 +5989,8 @@ async fn fetch_pending_block_sends_rbc_init_when_da_enabled() {
     let request = super::message::FetchPendingBlock {
         requester: actor.common_config.peer.id.clone(),
         block_hash,
+        height,
+        view,
     };
     let _ = harness.background_rx.try_iter().count();
     actor
@@ -6084,6 +6092,8 @@ async fn fetch_pending_block_falls_back_to_block_created_when_oversized() {
     let request = super::message::FetchPendingBlock {
         requester: actor.common_config.peer.id.clone(),
         block_hash,
+        height: block.header().height().get(),
+        view: block.header().view_change_index(),
     };
     let _ = harness.background_rx.try_iter().count();
     actor
@@ -6116,6 +6126,8 @@ async fn fetch_pending_block_records_not_found_when_missing() {
     let request = super::message::FetchPendingBlock {
         requester: actor.common_config.peer.id.clone(),
         block_hash,
+        height: 0,
+        view: 0,
     };
     actor
         .handle_fetch_pending_block(request)
@@ -6137,6 +6149,76 @@ async fn fetch_pending_block_records_not_found_when_missing() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn fetch_pending_block_serves_rbc_init_without_block() {
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 2u64;
+    let view = 0u64;
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    let mut topology = super::network_topology::Topology::new(roster.clone());
+    let leader_index = actor
+        .leader_index_for(&mut topology, height, view)
+        .expect("leader index available");
+    let leader_peer = topology
+        .as_ref()
+        .get(leader_index)
+        .expect("leader peer")
+        .clone();
+    let leader_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == leader_peer.public_key())
+        .expect("leader keypair");
+    let block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        height,
+        view,
+        None,
+        leader_kp,
+        u64::try_from(leader_index).expect("leader index fits u64"),
+    );
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let key = Actor::session_key(&block_hash, height, view);
+    actor
+        .seed_rbc_session_from_block(key, &block, payload_hash, false)
+        .expect("seed rbc session");
+    assert!(
+        actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
+        "expected RBC session to be seeded"
+    );
+
+    let request = super::message::FetchPendingBlock {
+        requester: actor.common_config.peer.id.clone(),
+        block_hash,
+        height,
+        view,
+    };
+    actor
+        .handle_fetch_pending_block(request)
+        .expect("fetch pending block");
+
+    let entries = super::status::snapshot().consensus_message_handling.entries;
+    assert!(
+        !entries.iter().any(|entry| {
+            entry.kind == super::status::ConsensusMessageKind::FetchPendingBlock
+                && entry.outcome == super::status::ConsensusMessageOutcome::Dropped
+                && entry.reason == super::status::ConsensusMessageReason::NotFound
+        }),
+        "missing-block fetch should be handled when RBC init is available"
+    );
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn fetch_pending_block_serves_aborted_pending() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -6151,6 +6233,8 @@ async fn fetch_pending_block_serves_aborted_pending() {
     let request = super::message::FetchPendingBlock {
         requester: actor.common_config.peer.id.clone(),
         block_hash,
+        height: 3,
+        view: 0,
     };
     let _ = harness.background_rx.try_iter().count();
     actor
@@ -6192,6 +6276,8 @@ async fn fetch_pending_block_skips_invalid_pending() {
     let request = super::message::FetchPendingBlock {
         requester: actor.common_config.peer.id.clone(),
         block_hash,
+        height: 3,
+        view: 0,
     };
     let _ = harness.background_rx.try_iter().count();
     actor

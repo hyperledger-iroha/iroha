@@ -2517,6 +2517,8 @@ fn send_missing_block_request(
     network: &IrohaNetwork,
     peer_id: &PeerId,
     block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
     targets: &[PeerId],
 ) {
     if targets.is_empty() {
@@ -2526,6 +2528,8 @@ fn send_missing_block_request(
     let request = super::message::FetchPendingBlock {
         requester: peer_id.clone(),
         block_hash,
+        height,
+        view,
     };
     let message = BlockMessage::FetchPendingBlock(request);
     let post = crate::NetworkMessage::SumeragiBlock(Box::new(message));
@@ -2806,7 +2810,7 @@ impl Actor {
                 targets,
                 target_kind,
             } => {
-                self.request_missing_block(parent_hash, &targets);
+                self.request_missing_block(parent_hash, parent_height, block_view, &targets);
                 info!(
                     height = block_height,
                     view = block_view,

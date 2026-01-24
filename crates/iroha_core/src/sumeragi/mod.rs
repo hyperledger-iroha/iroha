@@ -2885,6 +2885,8 @@ mod tests {
         let request = message::FetchPendingBlock {
             requester,
             block_hash,
+            height: 0,
+            view: 0,
         };
         handle.incoming_block_message(BlockMessage::FetchPendingBlock(request));
 
@@ -3486,6 +3488,8 @@ mod tests {
         let request = message::FetchPendingBlock {
             requester,
             block_hash,
+            height: 0,
+            view: 0,
         };
         block_payload_tx_fill
             .send(inbound(BlockMessage::FetchPendingBlock(request)))

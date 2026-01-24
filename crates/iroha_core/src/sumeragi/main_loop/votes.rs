@@ -639,7 +639,12 @@ impl Actor {
                 targets,
                 target_kind,
             } => {
-                self.request_missing_block(highest.subject_block_hash, &targets);
+                self.request_missing_block(
+                    highest.subject_block_hash,
+                    highest.height,
+                    highest.view,
+                    &targets,
+                );
                 iroha_logger::info!(
                     height = highest.height,
                     view = highest.view,
@@ -1220,7 +1225,7 @@ impl Actor {
                 targets,
                 target_kind,
             } => {
-                self.request_missing_block(vote.block_hash, &targets);
+                self.request_missing_block(vote.block_hash, vote.height, vote.view, &targets);
                 iroha_logger::info!(
                     height = vote.height,
                     view = vote.view,
