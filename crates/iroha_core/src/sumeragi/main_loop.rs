@@ -10761,6 +10761,63 @@ impl Actor {
         self.rebroadcast_rbc_payload_bundle(key, init, chunks, session.ready_signatures.len());
     }
 
+    fn rebroadcast_rbc_payload_for_missing_init(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        session: &RbcSession,
+    ) {
+        if self.is_observer() || !self.runtime_da_enabled() {
+            return;
+        }
+        if !self.rbc_rebroadcast_active(key) {
+            return;
+        }
+        let now = Instant::now();
+        let cooldown = self.payload_rebroadcast_cooldown();
+        let queue_drop = self.queue_drop_backpressure_active(now, cooldown);
+        let queue_block = self.queue_block_backpressure_active(now, cooldown);
+        if queue_drop || queue_block {
+            let queue_depths = super::status::worker_queue_depth_snapshot();
+            trace!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                queue_drop,
+                queue_block,
+                "skipping missing-INIT RBC rebroadcast due to consensus queue backpressure"
+            );
+            return;
+        }
+        let roster = self.rbc_session_roster(key);
+        if roster.is_empty() {
+            debug!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                "skipping missing-INIT RBC rebroadcast: roster missing"
+            );
+            return;
+        }
+        let Some((init, chunks)) = Self::rbc_payload_bundle(key, session, &roster) else {
+            debug!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                "skipping missing-INIT RBC rebroadcast: payload unavailable"
+            );
+            return;
+        };
+        debug!(
+            height = key.1,
+            view = key.2,
+            block = %key.0,
+            "rebroadcasting RBC INIT after reconstructing missing INIT"
+        );
+        self.rebroadcast_rbc_payload_bundle(key, init, chunks, session.ready_signatures.len());
+    }
+
     fn rbc_payload_rebroadcast_due(
         &self,
         key: &super::rbc_store::SessionKey,

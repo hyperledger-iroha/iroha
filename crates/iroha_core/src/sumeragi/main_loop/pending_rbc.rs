@@ -33,6 +33,7 @@ pub(super) struct PendingRbcMessages {
     dropped_ready: u64,
     dropped_deliver: u64,
     first_seen: Instant,
+    last_seen: Instant,
 }
 
 #[derive(Debug)]
@@ -62,12 +63,13 @@ impl PendingRbcMessages {
             dropped_ready: 0,
             dropped_deliver: 0,
             first_seen: now,
+            last_seen: now,
         }
     }
 
-    #[allow(clippy::unused_self)]
-    pub(super) fn touch(&mut self, _now: Instant) {
-        // TTL is anchored to `first_seen` for pre-INIT stashes; active sessions bypass TTL.
+    pub(super) fn touch(&mut self, now: Instant) {
+        // Extend the pending TTL on new pre-INIT traffic to retain payload evidence.
+        self.last_seen = now;
     }
 
     pub(super) fn pending_bytes(&self) -> usize {
@@ -106,7 +108,7 @@ impl PendingRbcMessages {
     }
 
     pub(super) fn expired(&self, ttl: Duration, now: Instant) -> bool {
-        ttl > Duration::ZERO && now.saturating_duration_since(self.first_seen) > ttl
+        ttl > Duration::ZERO && now.saturating_duration_since(self.last_seen) > ttl
     }
 
     fn record_drop(&mut self, bytes: usize, now: Instant) {

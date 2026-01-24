@@ -1371,11 +1371,14 @@ impl Actor {
         key: SessionKey,
         block: &SignedBlock,
         payload_hash: Hash,
+        rebroadcast_missing_init: bool,
     ) -> Result<()> {
         if self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
             return Ok(());
         }
 
+        let should_rebroadcast =
+            rebroadcast_missing_init || self.subsystems.da_rbc.rbc.pending.contains_key(&key);
         let payload_bytes = block_payload_bytes(block);
         let mut session = match Self::build_rbc_session_from_payload(
             &payload_bytes,
@@ -1440,12 +1443,18 @@ impl Actor {
         }
         self.publish_rbc_backlog_snapshot();
         self.maybe_emit_rbc_ready(key)?;
+        if should_rebroadcast {
+            if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
+                self.rebroadcast_rbc_payload_for_missing_init(key, &session);
+            }
+        }
         Ok(())
     }
 
     pub(super) fn ensure_rbc_session_from_pending_block(
         &mut self,
         key: SessionKey,
+        rebroadcast_missing_init: bool,
     ) -> Result<bool> {
         if self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
             return Ok(true);
@@ -1465,7 +1474,7 @@ impl Actor {
             }
             (pending.block.clone(), pending.payload_hash)
         };
-        self.seed_rbc_session_from_block(key, &block, payload_hash)?;
+        self.seed_rbc_session_from_block(key, &block, payload_hash, rebroadcast_missing_init)?;
         Ok(self.subsystems.da_rbc.rbc.sessions.contains_key(&key))
     }
 
@@ -2753,6 +2762,11 @@ impl Actor {
             return Ok(());
         }
         let key = Self::session_key(&chunk.block_hash, chunk.height, chunk.view);
+        if !self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
+            if self.ensure_rbc_session_from_pending_block(key, true)? {
+                // Session reconstructed from pending block; continue to process chunk normally.
+            }
+        }
         let mut chunk_digest_mismatch = false;
         let (ready_sent_before, became_complete, accepted_chunk) = if let Some(session) =
             self.subsystems.da_rbc.rbc.sessions.get_mut(&key)
@@ -3020,7 +3034,7 @@ impl Actor {
         let ready_sender = ready.sender;
         let ready_view = ready.view;
         if !self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
-            if self.ensure_rbc_session_from_pending_block(key)? {
+            if self.ensure_rbc_session_from_pending_block(key, true)? {
                 // Session reconstructed from pending block; continue to process READY normally.
             } else {
                 let max_bytes = self.pending_rbc_caps().1;
@@ -3827,7 +3841,7 @@ impl Actor {
         }
         let key = Self::session_key(&deliver.block_hash, deliver.height, deliver.view);
         if !self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
-            if self.ensure_rbc_session_from_pending_block(key)? {
+            if self.ensure_rbc_session_from_pending_block(key, true)? {
                 // Session reconstructed from pending block; continue to process DELIVER normally.
             } else {
                 let max_bytes = self.pending_rbc_caps().1;
