@@ -11,14 +11,14 @@ use iroha::data_model::{
 };
 use iroha_test_network::NetworkBuilder;
 
-fn halo2_attachment() -> ProofAttachment {
+fn halo2_attachment(nonce: u8) -> ProofAttachment {
     // Minimal Halo2 OpenVerifyEnvelope to satisfy verification invariants.
     let envelope = OpenVerifyEnvelope {
         backend: BackendTag::Halo2IpaPasta,
         circuit_id: "integration-test".to_string(),
         vk_hash: [0u8; 32],
-        public_inputs: vec![0xde, 0xad],
-        proof_bytes: vec![0xbe, 0xef],
+        public_inputs: vec![0xde, 0xad, nonce],
+        proof_bytes: vec![0xbe, 0xef, nonce],
         aux: Vec::new(),
     };
     let proof_payload =
@@ -53,7 +53,7 @@ fn proof_query_scenarios() -> Result<()> {
 
     // find_proof_records_lists_after_verify
     {
-        let attachment = halo2_attachment();
+        let attachment = halo2_attachment(0);
         client.submit_blocking(iroha::data_model::isi::zk::VerifyProof::new(attachment))?;
         rt.block_on(async { network.ensure_blocks(1).await })?;
 
@@ -66,7 +66,7 @@ fn proof_query_scenarios() -> Result<()> {
 
     // find_proof_records_by_backend_filters
     {
-        let att1 = halo2_attachment();
+        let att1 = halo2_attachment(1);
         let att2 = iroha::data_model::proof::ProofAttachment::new_inline(
             "groth16/bn254".into(),
             iroha::data_model::proof::ProofBox::new("groth16/bn254".into(), vec![0x03]),
@@ -150,4 +150,13 @@ fn retry_records_by_status(
         }
     }
     unreachable!()
+}
+
+#[test]
+fn halo2_attachment_nonce_changes_proof_hash() {
+    let a = halo2_attachment(0);
+    let b = halo2_attachment(1);
+    let hash_a = iroha_core::zk::hash_proof(&a.proof);
+    let hash_b = iroha_core::zk::hash_proof(&b.proof);
+    assert_ne!(hash_a, hash_b, "nonce should change proof hash");
 }

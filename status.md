@@ -2,6 +2,9 @@
 
 Last update: 2026-01-24
 
+- Sumeragi tests: extend commit worker wake/result timeouts to reduce flakiness under slower commit paths.
+- Tests: `cargo test -p iroha_core commit_worker_ -- --nocapture` (ok).
+- Sumeragi tests: make `execute_commit_work_reports_kura_store_failure` inject a Kura store failure instead of relying on storage-budget limits; `cargo test -p iroha_core execute_commit_work_reports_kura_store_failure -- --nocapture` (ok).
 - CLI offline: add top-level `iroha offline` command alias, refresh CLI help, and align QR/petal docs to the alias so preview commands match user expectations.
 - Petal stream: deepen sakura-wind preview (denser petals + subtle data glow) and add a PNG load roundtrip test.
 - Connected peers test: wait for the re-registered peer to observe block 3 before asserting status to avoid stale local-removed metrics.
