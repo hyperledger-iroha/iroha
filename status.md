@@ -2,6 +2,10 @@
 
 Last update: 2026-01-24
 
+- State tests: guard commit-history tests in `crates/iroha_core/src/state.rs` to prevent cross-test commit QC history contamination; stabilizes `apply_without_execution_canonicalizes_commit_roster_signatures`.
+- Tests: `cargo test -p iroha_core state::tests::apply_without_execution_canonicalizes_commit_roster_signatures -- --nocapture` (ok).
+- AXT policy refresh: prune cached entries that target lanes missing from the current catalog when no directory snapshot is available.
+- Tests: `cargo test -p iroha_core state::tests::axt_policy_refresh_clears_stale_entries_when_snapshot_missing -- --nocapture` (ok).
 - Sumeragi commit pipeline: add debug instrumentation for validation deferrals and precommit gating past fast timeout to pinpoint delayed votes.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Tests: `cargo test --workspace` not run (long-running).
