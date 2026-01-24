@@ -121,7 +121,7 @@ async fn configuration_endpoint_includes_transport_summary() {
         "consensus mode should be surfaced"
     );
     assert_eq!(
-        dto.consensus.mode_flip.enabled, cfg.sumeragi.mode_flip.enabled,
+        dto.consensus.mode_flip_enabled, cfg.sumeragi.mode_flip.enabled,
         "mode flip kill switch should propagate"
     );
 }
