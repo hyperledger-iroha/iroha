@@ -1049,7 +1049,7 @@ mod tests {
         };
         write_png(&path, &image, QrRenderStyle::Sakura, 0, 1).expect("write");
         let file = fs::File::open(&path).expect("open");
-        let decoder = png::Decoder::new(file);
+        let decoder = png::Decoder::new(std::io::BufReader::new(file));
         let reader = decoder.read_info().expect("read info");
         assert_eq!(reader.info().color_type, png::ColorType::Rgba);
     }
@@ -1090,7 +1090,7 @@ mod tests {
         let image = render_sakura_wind_rgba(&code, 64, 0, 1);
         write_png_rgba(&path, &image).expect("write");
         let file = fs::File::open(&path).expect("open");
-        let decoder = png::Decoder::new(file);
+        let decoder = png::Decoder::new(std::io::BufReader::new(file));
         let reader = decoder.read_info().expect("read info");
         assert_eq!(reader.info().color_type, png::ColorType::Rgba);
     }

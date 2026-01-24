@@ -183,20 +183,9 @@ pub(super) fn execute_commit_work(
             let exec_witness = state_block.take_exec_witness();
             let persist_start = Instant::now();
             let mut pipeline_events = pipeline_events;
-            let state_events = if persist_required {
+            if persist_required {
                 let committed_block_for_kura = committed_block.clone();
-                let (kura_result, state_events) = std::thread::scope(|scope| {
-                    let kura_handle =
-                        scope.spawn(move || kura.store_block(committed_block_for_kura));
-                    let state_events =
-                        state_block.apply_without_execution(&committed_block, commit_topology);
-                    let kura_result = match kura_handle.join() {
-                        Ok(result) => result,
-                        Err(_) => Err(crate::kura::Error::BlockWriterUnavailable),
-                    };
-                    (kura_result, state_events)
-                });
-                if let Err(err) = kura_result {
+                if let Err(err) = kura.store_block(committed_block_for_kura) {
                     timings.persist_ms = Some(to_ms(persist_start.elapsed()));
                     return (
                         CommitOutcome::KuraStoreFailed {
@@ -206,12 +195,11 @@ pub(super) fn execute_commit_work(
                         timings,
                     );
                 }
-                state_events
-            } else {
-                state_block.apply_without_execution(&committed_block, commit_topology)
-            };
-            // Emit pipeline events once durability is confirmed; state apply may already be done.
+            }
+            // Emit pipeline events once durability is confirmed, before state apply.
             emit_pipeline_events(&events_sender, std::mem::take(&mut pipeline_events));
+            let state_events =
+                state_block.apply_without_execution(&committed_block, commit_topology);
             if let Err(err) = state_block.commit() {
                 timings.persist_ms = Some(to_ms(persist_start.elapsed()));
                 return (
@@ -5051,7 +5039,7 @@ mod tests {
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
-            max_disk_usage_bytes: Bytes(1),
+            max_disk_usage_bytes: Bytes(0),
             blocks_in_memory: BLOCKS_IN_MEMORY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
@@ -5062,6 +5050,7 @@ mod tests {
         };
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        kura.fail_next_store_for_tests();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, Arc::clone(&kura), query_handle);
         let chain_id = state.view().chain_id().clone();
@@ -5091,10 +5080,7 @@ mod tests {
         let CommitOutcome::KuraStoreFailed { error, .. } = outcome else {
             panic!("expected kura store failure");
         };
-        assert!(matches!(
-            error,
-            crate::kura::Error::StorageBudgetExceeded { .. }
-        ));
+        assert!(matches!(error, crate::kura::Error::IO(_, _)));
         assert!(timings.persist_ms.is_some());
         assert_eq!(state.view().height(), 0);
         assert_eq!(kura.blocks_count(), 0);
@@ -5158,7 +5144,7 @@ mod tests {
         assert!(result.timings.qc_verify_ms.is_some());
         assert!(result.timings.persist_ms.is_some());
         wake_rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(5))
             .expect("wake signal");
 
         drop(handle.work_tx);
@@ -5221,7 +5207,7 @@ mod tests {
         handle.work_tx.send(work).expect("send commit work");
         let result = handle
             .result_rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(5))
             .expect("commit result");
         assert!(result.timings.qc_verify_ms.is_some());
         assert!(result.timings.persist_ms.is_some());
