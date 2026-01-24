@@ -9398,7 +9398,7 @@ async fn rebroadcast_rbc_payload_skips_when_queue_backpressured() {
     let key = insert_active_pending_block(&mut harness.actor, 0);
     let created = harness
         .actor
-        .ensure_rbc_session_from_pending_block(key)
+        .ensure_rbc_session_from_pending_block(key, false)
         .expect("rbc session should seed");
     assert!(created);
     let session = harness
@@ -16391,7 +16391,7 @@ async fn seed_rbc_session_from_block_records_roster_snapshot() {
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
 
     actor
-        .seed_rbc_session_from_block(key, &block, payload_hash)
+        .seed_rbc_session_from_block(key, &block, payload_hash, false)
         .expect("seed session");
 
     let roster = actor.rbc_roster_for_session(key);
@@ -16406,6 +16406,47 @@ async fn seed_rbc_session_from_block_records_roster_snapshot() {
     assert_eq!(
         stored, &roster,
         "seeded session should cache the roster snapshot"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn seed_rbc_session_from_block_rebroadcasts_init_when_requested() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let parent = actor.state.view().latest_block_hash();
+    let mut block = sample_block(height, view, parent);
+    let key = (block.hash(), height, view);
+    let roster = actor.rbc_roster_for_session(key);
+    assert!(!roster.is_empty(), "commit roster should be available");
+    let mut topology = super::network_topology::Topology::new(roster);
+    let leader_index = actor
+        .leader_index_for(&mut topology, height, view)
+        .expect("leader index");
+    let leader_index = u64::try_from(leader_index).unwrap_or(u64::MAX);
+    if leader_index != 0 {
+        block = sample_block_with_signature_index(height, view, parent, leader_index);
+    }
+    let block_hash = block.hash();
+    let key = (block_hash, height, view);
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+
+    actor
+        .seed_rbc_session_from_block(key, &block, payload_hash, true)
+        .expect("seed session");
+
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_rebroadcast_last_sent
+            .contains_key(&key),
+        "missing-init seed should schedule an INIT rebroadcast"
     );
 
     harness.shutdown.send();
@@ -18962,7 +19003,7 @@ async fn seed_rbc_session_flushes_pending_ready() {
 
     harness
         .actor
-        .seed_rbc_session_from_block(session_key, &block, payload_hash)
+        .seed_rbc_session_from_block(session_key, &block, payload_hash, false)
         .expect("seed rbc session");
 
     assert!(
@@ -18996,7 +19037,7 @@ async fn seed_rbc_session_uses_epoch_for_height() {
 
     harness
         .actor
-        .seed_rbc_session_from_block(session_key, &block, payload_hash)
+        .seed_rbc_session_from_block(session_key, &block, payload_hash, false)
         .expect("seed rbc session");
 
     let session = harness
@@ -19102,7 +19143,7 @@ async fn ensure_rbc_session_from_pending_block_seeds_session() {
 
     let seeded = harness
         .actor
-        .ensure_rbc_session_from_pending_block(session_key)
+        .ensure_rbc_session_from_pending_block(session_key, false)
         .expect("seed from pending");
     assert!(seeded, "pending block should seed the RBC session");
 
@@ -47750,6 +47791,15 @@ fn empty_block(height: u64, view: u64, parent: Option<HashOf<BlockHeader>>) -> S
 }
 
 fn sample_block(height: u64, view: u64, parent: Option<HashOf<BlockHeader>>) -> SignedBlock {
+    sample_block_with_signature_index(height, view, parent, 0)
+}
+
+fn sample_block_with_signature_index(
+    height: u64,
+    view: u64,
+    parent: Option<HashOf<BlockHeader>>,
+    signatory_index: u64,
+) -> SignedBlock {
     let chain: ChainId = "test-chain".parse().expect("chain id");
     let tx_params = TransactionParameters::default();
     let start_ms = height.saturating_sub(1);
@@ -47778,7 +47828,7 @@ fn sample_block(height: u64, view: u64, parent: Option<HashOf<BlockHeader>>) -> 
     };
     let mut builder = BlockBuilder::new(header);
     builder.push_transaction(heartbeat);
-    builder.build_with_signature(0, ALICE_KEYPAIR.private_key())
+    builder.build_with_signature(signatory_index, ALICE_KEYPAIR.private_key())
 }
 
 fn insert_pending_block(actor: &mut Actor, height: u64, view: u64) -> SessionKey {
@@ -51919,15 +51969,22 @@ fn pending_rbc_snapshot_includes_entry_drop_counts() {
 }
 
 #[test]
-fn pending_rbc_ttl_counts_from_first_seen() {
-    let now = Instant::now();
-    let created = now.checked_sub(Duration::from_millis(50)).unwrap_or(now);
+fn pending_rbc_ttl_counts_from_last_seen() {
+    let created = Instant::now();
     let mut pending = PendingRbcMessages::new(created);
-    pending.touch(Instant::now());
+    let touched = created + Duration::from_millis(50);
+    pending.touch(touched);
 
     assert!(
-        pending.expired(Duration::from_millis(10), Instant::now()),
-        "TTL should be measured from the first pending frame"
+        !pending.expired(Duration::from_millis(10), touched),
+        "TTL should be measured from the most recent pending frame"
+    );
+    assert!(
+        pending.expired(
+            Duration::from_millis(10),
+            touched + Duration::from_millis(11)
+        ),
+        "pending entry should expire after the last activity window"
     );
 }
 

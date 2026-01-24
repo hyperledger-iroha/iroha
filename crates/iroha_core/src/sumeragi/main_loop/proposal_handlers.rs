@@ -1012,7 +1012,18 @@ impl Actor {
                     .sessions
                     .contains_key(&session_key)
                 {
-                    self.seed_rbc_session_from_block(session_key, &block, payload_hash)?;
+                    let rebroadcast_missing_init = self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .pending
+                        .contains_key(&session_key);
+                    self.seed_rbc_session_from_block(
+                        session_key,
+                        &block,
+                        payload_hash,
+                        rebroadcast_missing_init,
+                    )?;
                 }
                 self.hydrate_rbc_session_from_block(
                     session_key,
@@ -1355,7 +1366,18 @@ impl Actor {
                     view,
                     "BlockCreated arrived before RBC session initialised; seeding local RBC snapshot"
                 );
-                self.seed_rbc_session_from_block(session_key, &block, payload_hash)?;
+                let rebroadcast_missing_init = self
+                    .subsystems
+                    .da_rbc
+                    .rbc
+                    .pending
+                    .contains_key(&session_key);
+                self.seed_rbc_session_from_block(
+                    session_key,
+                    &block,
+                    payload_hash,
+                    rebroadcast_missing_init,
+                )?;
             }
             self.hydrate_rbc_session_from_block(
                 session_key,
