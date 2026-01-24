@@ -44063,6 +44063,42 @@ async fn rbc_ready_deferral_throttles_until_cooldown_or_progress() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rbc_availability_gate_skips_when_payload_is_local() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let block = sample_block(1, 0, None);
+    let payload_hash = Hash::prehashed([0x44; 32]);
+    let pending = PendingBlock::new(block.clone(), payload_hash, 1, 0);
+    actor
+        .pending
+        .pending_blocks
+        .insert(block.hash(), pending);
+
+    let session = RbcSession::test_new(2, Some(payload_hash), None, 0);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert((block.hash(), 1, 0), session);
+
+    let topology = actor.effective_commit_topology();
+    assert!(
+        actor.block_payload_available_locally(block.hash()),
+        "test requires a locally available payload"
+    );
+    assert!(
+        !actor.rbc_availability_unresolved_for_reschedule((block.hash(), 1, 0), &topology),
+        "local payload availability should resolve RBC gating"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn maybe_emit_rbc_deliver_throttles_repeated_deferral() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -44377,6 +44413,52 @@ async fn precommit_vote_broadcast_uses_background_queue() {
             })
         ),
         "precommit votes should be queued for background posting"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn background_posts_dispatch_inline_when_worker_disabled() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.debug.disable_background_worker = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+
+    let _ = harness.background_rx.try_iter().collect::<Vec<_>>();
+
+    let block = sample_block(1, 0, None);
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: crate::sumeragi::consensus::Phase::Commit,
+        block_hash: block.hash(),
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 1,
+        view: 0,
+        epoch: 0,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let preimage = super::vote_preimage(
+        &harness.actor.common_config.chain,
+        super::PERMISSIONED_TAG,
+        &vote,
+    );
+    let signature = Signature::new(
+        harness.actor.common_config.key_pair.private_key(),
+        &preimage,
+    );
+    vote.bls_sig = signature.payload().to_vec();
+
+    let msg = BlockMessage::QcVote(vote);
+    harness
+        .actor
+        .schedule_background(BackgroundRequest::Broadcast { msg });
+
+    let queued = harness.background_rx.try_iter().next();
+    assert!(
+        queued.is_none(),
+        "background posts should dispatch inline when the worker is disabled"
     );
 
     harness.shutdown.send();

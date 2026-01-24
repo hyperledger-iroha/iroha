@@ -9488,6 +9488,10 @@ impl Actor {
             }
             other => other,
         };
+        if self.config.debug.disable_background_worker {
+            self.dispatch_background_inline(request);
+            return;
+        }
         let bypass_queue = matches!(
             &request,
             BackgroundRequest::Post {
@@ -9513,23 +9517,6 @@ impl Actor {
             }
         );
         if bypass_queue {
-            if self.config.debug.disable_background_worker {
-                #[cfg(test)]
-                {
-                    #[cfg(feature = "telemetry")]
-                    let _ = background::dispatch_background_request(
-                        self.background_post_tx.as_ref(),
-                        request,
-                        &self.telemetry,
-                    );
-                    #[cfg(not(feature = "telemetry"))]
-                    let _ = background::dispatch_background_request(
-                        self.background_post_tx.as_ref(),
-                        request,
-                    );
-                }
-                return;
-            }
             self.dispatch_background_fallback(request);
             return;
         }
@@ -9548,9 +9535,45 @@ impl Actor {
             }
         };
         if let Err(request) = dispatched {
-            if !self.config.debug.disable_background_worker {
-                self.dispatch_background_fallback(*request);
+            self.dispatch_background_fallback(*request);
+        }
+    }
+
+    fn dispatch_background_inline(&mut self, request: BackgroundRequest) {
+        #[cfg(feature = "telemetry")]
+        let enqueued_at = Instant::now();
+        #[cfg(feature = "telemetry")]
+        let (kind, peer_for_metrics, msg_for_metrics) = match &request {
+            BackgroundRequest::Post { peer, msg } => ("Post", Some(peer.clone()), Some(msg)),
+            BackgroundRequest::PostControlFlow { peer, .. } => {
+                ("PostControlFlow", Some(peer.clone()), None)
             }
+            BackgroundRequest::Broadcast { msg } => ("Broadcast", None, Some(msg)),
+            BackgroundRequest::BroadcastControlFlow { .. } => ("BroadcastControlFlow", None, None),
+        };
+
+        #[cfg(feature = "telemetry")]
+        {
+            self.telemetry.inc_bg_post_enqueued(kind);
+            if let Some(peer) = peer_for_metrics.as_ref() {
+                self.telemetry.inc_post_to_peer(peer);
+                self.telemetry.inc_bg_post_queue_depth_for_peer(peer);
+            }
+            if let Some(msg) = msg_for_metrics {
+                self.telemetry.note_consensus_message_sent(msg);
+            }
+        }
+
+        self.dispatch_background_fallback(request);
+
+        #[cfg(feature = "telemetry")]
+        {
+            self.telemetry.dec_bg_post_queue_depth();
+            if let Some(peer) = peer_for_metrics.as_ref() {
+                self.telemetry.dec_bg_post_queue_depth_for_peer(peer);
+            }
+            let age_ms = enqueued_at.elapsed().as_secs_f64() * 1000.0;
+            self.telemetry.observe_bg_post_age_ms(kind, age_ms);
         }
     }
 

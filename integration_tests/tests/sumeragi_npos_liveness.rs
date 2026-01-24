@@ -253,10 +253,10 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "consensus_mode"], "npos")
-                .write(["sumeragi", "pacemaker_backoff_multiplier"], 3_i64)
-                .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 2_i64)
-                .write(["sumeragi", "pacemaker_max_backoff_ms"], 5_000_i64)
-                .write(["sumeragi", "pacemaker_jitter_frac_permille"], 25_i64);
+                .write(["sumeragi", "pacemaker", "backoff_multiplier"], 3_i64)
+                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 2_i64)
+                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 5_000_i64)
+                .write(["sumeragi", "pacemaker", "jitter_frac_permille"], 25_i64);
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
