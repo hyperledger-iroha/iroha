@@ -11660,12 +11660,16 @@ impl State {
 
     /// Rebuild the committed AXT policy cache from Space Directory manifests and lane bindings.
     ///
-    /// When the Space Directory is empty, existing explicit policies are preserved.
+    /// When the Space Directory is empty, existing explicit policies are preserved unless they
+    /// target lanes that no longer exist in the current lane catalog.
     pub fn refresh_axt_policies_from_directory(&self) -> Option<AxtPolicySnapshot> {
+        let view = self.view();
+        let lane_config = view.nexus.lane_config.clone();
         let mut snapshot =
             crate::smartcontracts::ivm::host::CoreHost::derive_axt_policy_snapshot_from_directory(
-                &self.view(),
+                &view,
             );
+        drop(view);
         let Some(snap) = snapshot.as_mut() else {
             let (has_directory_data, has_active_manifest) = {
                 let manifests = self.world.space_directory_manifests.view();
@@ -11678,6 +11682,27 @@ impl State {
                 (has_directory_data, has_active_manifest)
             };
             if !has_directory_data || has_active_manifest {
+                let valid_lanes: BTreeSet<LaneId> = lane_config
+                    .entries()
+                    .iter()
+                    .map(|entry| entry.lane_id)
+                    .collect();
+                let mut block = self.world.axt_policies.block();
+                let mut tx = block.transaction();
+                let stale: Vec<_> = tx
+                    .view()
+                    .iter()
+                    .filter(|(_, policy)| !valid_lanes.contains(&policy.target_lane))
+                    .map(|(dsid, _)| *dsid)
+                    .collect();
+                if stale.is_empty() {
+                    return None;
+                }
+                for dsid in stale {
+                    tx.remove(dsid);
+                }
+                tx.apply();
+                block.commit();
                 return None;
             }
             let mut block = self.world.axt_policies.block();
@@ -24499,6 +24524,7 @@ mod tests {
 
     #[test]
     fn commit_roster_journal_restores_status_history() {
+        let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
         let state = State::new_for_testing(
@@ -24570,6 +24596,7 @@ mod tests {
 
     #[test]
     fn apply_without_execution_canonicalizes_commit_roster_signatures() {
+        let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
         let kura = Kura::blank_kura_for_testing();
@@ -24662,6 +24689,7 @@ mod tests {
 
     #[test]
     fn commit_roster_sidecar_persisted_to_kura() {
+        let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
         let temp_dir = tempfile::tempdir().expect("temp dir");
