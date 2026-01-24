@@ -4336,6 +4336,7 @@ struct CommitInFlight {
     commit_topology: Vec<PeerId>,
     signature_topology: Vec<PeerId>,
     qc_signers: Option<BTreeSet<ValidatorIndex>>,
+    commit_qc: Option<crate::sumeragi::consensus::Qc>,
     allow_quorum_bypass: bool,
     post_commit_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     enqueue_time: Instant,
