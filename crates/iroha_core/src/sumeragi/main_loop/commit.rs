@@ -5098,6 +5098,10 @@ mod tests {
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
         let kura = Arc::new(kura);
+        assert!(
+            !kura.store_root().as_os_str().is_empty(),
+            "kura store root should be set for commit roster persistence"
+        );
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, Arc::clone(&kura), query_handle);
         let chain_id = state.view().chain_id().clone();
