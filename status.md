@@ -2,6 +2,10 @@
 
 Last update: 2026-01-24
 
+- Connected peers: filter active roster by live consensus keys so disabled peers are skipped for leader selection; added roster unit coverage.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Tests: `cargo test -p iroha_core active_topology_filters_inactive_consensus_keys -- --nocapture` (ok).
+- Tests: `cargo test -p integration_tests --test mod extra_functional::connected_peers::connected_peers_with_f_1_0_1 -- --nocapture` (ok; duplicate metric registration warnings).
 - State tests: guard commit-history tests in `crates/iroha_core/src/state.rs` to prevent cross-test commit QC history contamination; stabilizes `apply_without_execution_canonicalizes_commit_roster_signatures`.
 - Tests: `cargo test -p iroha_core state::tests::apply_without_execution_canonicalizes_commit_roster_signatures -- --nocapture` (ok).
 - AXT policy refresh: prune cached entries that target lanes missing from the current catalog when no directory snapshot is available.
