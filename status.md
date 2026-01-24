@@ -10,6 +10,38 @@ Last update: 2026-01-24
 - Tests: `cargo test -p iroha_core reschedule_defers_fast_timeout_while_validation_inflight -- --nocapture` (ok).
 - NPoS localnet 1 Hz rerun (release + validation inflight fix, 4 peers): `/private/tmp/iroha-localnet-npos-1hz-20260124T130140Z`; 100x1 Hz `ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_fix_20260124T200000Z_20260124T194233Z.jsonl` (ping log `ping_1hz_fix_20260124T200000Z_20260124T194233Z.log`). `commit_qc.height` 1->58 (+57 over 120 samples), `view_change_install_total` +1 (no view_change_causes deltas), `missing_qc_total` +0, `missing_payload_total` +0, `stake_quorum_timeout_total` +0, `missing_block_fetch.total` +11, `pending_rbc.bytes` max 0 (sessions max 0); cadence still below 1 Hz.
 - NPoS localnet 1 Hz rerun (release + commit/validation debug filter, 4 peers): `/private/tmp/iroha-localnet-npos-1hz-20260124T130140Z`; 100x1 Hz `ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_debug_vote_20260124T190437Z.jsonl` (ping log `ping_1hz_debug_vote_20260124T190437Z.log`). `commit_qc.height` 1->43 (+42 over 120 samples), `view_change_install_total` +4 (`missing_qc_total` +4), `missing_payload_total` +0, `stake_quorum_timeout_total` +0, `missing_block_fetch.total` +43, `pending_rbc.bytes` max 5455 (sessions max 1). Debug logs show validation inflight deferrals and precommit gating firing past fast timeout (1s) across peers.
+- AXT policy refresh: preserve cached minimums when active Space Directory manifests exist but the lane catalog does not overlap, so explicit policy minimums survive startup refresh.
+- Tests: `cargo test -p iroha_core state::tests::axt_policy_rebuild_preserves_minimum_nonce_and_era -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core state::tests::apply_without_execution_updates_commit_topology_from_world_peers -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core state::tests::axt_replay_ledger_persisted_from_block_rejects_reuse_on_validation -- --nocapture` (ok).
+- Lane relay tests: commit emergency-override transactions before asserting stored state; fix missing `lane_id` in `da_pin_intents_drop_missing_owner_accounts`.
+- Executor validation: install a default IVM host before running executor validation/migration so validation does not panic without a host.
+- Tests: `cargo test -p iroha_core --lib state::tests::record_lane_relay_accepts_emergency_override_under_quorum -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core --lib state::tests::execute_called_trigger_respects_executor_validation -- --nocapture` (ok).
+- State tests: merge detached by-call triggers via `ExecuteTrigger::execute` so permission/filter/payload checks run; added detached permission coverage.
+- Tests: `cargo test -p iroha_core delta_merge_execute_trigger_by_call -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core state::tests::block_rejects_failing_execute_trigger_and_rolls_back -- --nocapture` (target test ok; command hit the 20m timeout while running filtered binaries).
+- State tests: compute the Nexus storage budget from measured Kura/spool/cold usage so only the oldest spool entry is evicted before cold snapshots.
+- Tests: `cargo test -p iroha_core enforce_nexus_storage_budget_prunes_spools_before_cold -- --nocapture` (ok).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-pipeline cargo test -p iroha_core sumeragi::main_loop::commit::tests::execute_commit_work_emits_pipeline_events_before_state_apply -- --nocapture` (ok).
+- Sumeragi commit-work tests: use deterministic mock timestamps for genesis transactions to avoid clock-skew rejections in `execute_commit_work_*` tests.
+- Tests: `cargo test -p iroha_core execute_commit_work_ -- --nocapture` (target tests ok; command hit the 20m timeout while running filtered binaries).
+- State tests: build `AssetId` directly in `capture_exec_witness_stashes_reads_and_writes` to avoid IH58 account parsing that depends on domain-selector resolution.
+- Tests: `cargo test -p iroha_core state::tests::capture_exec_witness_stashes_reads_and_writes -- --nocapture` (passed; command hit the 20m timeout while running filtered binaries; build directory lock from other active cargo tests).
+- Sumeragi: seed the genesis commit roster after block 1 commit so DA/RBC has roster evidence even when genesis is persisted after actor init; added `commit_outcome_seeds_genesis_commit_roster_after_commit` coverage.
+- State tests: fix `da_pin_intents_drop_missing_owner_accounts` to derive the primary `lane_id` from the runtime lane catalog.
+- Tests: `cargo test -p iroha_core commit_outcome_seeds_genesis_commit_roster_after_commit -- --nocapture` (timed out after 20m; build dir lock; warning about unused `lane_id` in `crates/iroha_core/src/state.rs:24871`).
+- Genesis transaction validation now uses the block timestamp during static checks to avoid clock-skew rejections; added `validate_genesis_with_now` coverage.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Tests: `CARGO_HOME=/tmp/codex-cargo-home CARGO_TARGET_DIR=/tmp/codex-target cargo test -p iroha_core sumeragi::main_loop::commit::tests::commit_worker_wakes_on_result -- --nocapture` (ok; warning about unused `lane_id` in `crates/iroha_core/src/state.rs`).
+- Tests: `CARGO_HOME=/tmp/codex-cargo-home CARGO_TARGET_DIR=/tmp/codex-target cargo test -p iroha_core validate_genesis_with_now_uses_supplied_timestamp -- --nocapture` (ok; same warning about unused `lane_id` in `crates/iroha_core/src/state.rs`).
+- DA pin intent state tests now use the configured primary lane id so intents are validated against the active lane catalog.
+- Tests: `cargo test -p iroha_core da_pin_intents_ -- --nocapture` (timed out after 20m; build directory locked by other active cargo tests; `da_pin_intents_hydrate_from_kura_block_log` + `da_pin_intents_replay_sanitizes_invalid_entries` ok before timeout).
+- AXT policy refresh now preserves explicit entries when the Space Directory is empty so replay-ledger checks survive state restarts; added `axt_policy_refresh_preserves_explicit_entries_without_directory` coverage.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-axt cargo test -p iroha_core axt_replay_ledger_survives_state_restart -- --nocapture` (ok; command hit the 20m timeout while running empty test binaries after the target test passed; warning about unused `lane_id` in `crates/iroha_core/src/state.rs:24871`).
+- Sumeragi roster: enforce strict PoP filtering when falling back to trusted peers so missing PoPs drop peers instead of preserving quorum.
+- Tests: `cargo test -p iroha_core active_topology_drops_trusted_peers_without_pop -- --nocapture` (blocked waiting for build directory lock).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-active-topology cargo test -p iroha_core active_topology_drops_trusted_peers_without_pop -- --nocapture` (ok).
 - Sumeragi RBC: rebroadcast INIT when reconstructing sessions from pending payloads, extend pending-RBC TTL on activity, and trigger missing-INIT payload rebroadcasts when pre-INIT traffic arrives; added unit coverage.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Tests: `cargo test -p iroha_core seed_rbc_session_from_block_rebroadcasts_init_when_requested -- --nocapture` (ok).
