@@ -5116,8 +5116,8 @@ mod tests {
             genesis_account_id.clone(),
             &time_source,
         )
-            .with_instructions([Log::new(Level::DEBUG, "genesis commit test".to_string())])
-            .sign(genesis_key.private_key());
+        .with_instructions([Log::new(Level::DEBUG, "genesis commit test".to_string())])
+        .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
 
         let peer_key = KeyPair::random();
@@ -5194,8 +5194,8 @@ mod tests {
             genesis_account_id.clone(),
             &time_source,
         )
-            .with_instructions([Log::new(Level::DEBUG, "commit qc test".to_string())])
-            .sign(genesis_key.private_key());
+        .with_instructions([Log::new(Level::DEBUG, "commit qc test".to_string())])
+        .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
         let block_hash = block.hash();
         let height = block.header().height().get();
@@ -5323,8 +5323,8 @@ mod tests {
             genesis_account_id.clone(),
             &time_source,
         )
-            .with_instructions([Log::new(Level::DEBUG, "kura failure test".to_string())])
-            .sign(genesis_key.private_key());
+        .with_instructions([Log::new(Level::DEBUG, "kura failure test".to_string())])
+        .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
 
         let peer_key = KeyPair::random();
@@ -5388,11 +5388,11 @@ mod tests {
             genesis_account_id.clone(),
             &time_source,
         )
-            .with_instructions([Log::new(
-                Level::DEBUG,
-                "commit worker wake test".to_string(),
-            )])
-            .sign(genesis_key.private_key());
+        .with_instructions([Log::new(
+            Level::DEBUG,
+            "commit worker wake test".to_string(),
+        )])
+        .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
         let peer_key = KeyPair::random();
         let peer_id = PeerId::new(peer_key.public_key().clone());
@@ -5462,11 +5462,11 @@ mod tests {
             genesis_account_id.clone(),
             &time_source,
         )
-            .with_instructions([Log::new(
-                Level::DEBUG,
-                "commit worker full wake test".to_string(),
-            )])
-            .sign(genesis_key.private_key());
+        .with_instructions([Log::new(
+            Level::DEBUG,
+            "commit worker full wake test".to_string(),
+        )])
+        .sign(genesis_key.private_key());
         let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
         let peer_key = KeyPair::random();
         let peer_id = PeerId::new(peer_key.public_key().clone());
