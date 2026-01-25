@@ -64,7 +64,36 @@ mod model {
     }
 }
 
-string_id!(AssetDefinitionId, AssetId);
+string_id!(AssetDefinitionId);
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for AssetId {
+    fn write_json(&self, out: &mut String) {
+        let ih58 = self
+            .account
+            .canonical_ih58()
+            .expect("AssetId account should encode to IH58 for JSON");
+        let account_literal = format!("{ih58}@{}", self.account.domain());
+        let literal = if self.definition.domain == self.account.domain {
+            format!("{}##{account_literal}", self.definition.name)
+        } else {
+            format!("{}#{account_literal}", self.definition)
+        };
+        norito::json::JsonSerialize::json_serialize(&literal, out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for AssetId {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = parser.parse_string()?;
+        value
+            .parse::<AssetId>()
+            .map_err(|err| norito::json::Error::Message(err.to_string()))
+    }
+}
 
 impl AssetId {
     /// Create a new [`AssetId`]

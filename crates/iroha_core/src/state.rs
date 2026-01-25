@@ -21046,11 +21046,6 @@ mod tests {
         vm.alloc_input_tlv(&tlv).expect("alloc input TLV")
     }
 
-    fn store_tlv_codec<T: norito::codec::Encode>(vm: &mut IVM, ty: PointerType, value: &T) -> u64 {
-        let payload = value.encode();
-        store_tlv_bytes(vm, ty, &payload)
-    }
-
     fn store_tlv_norito<T: norito::NoritoSerialize>(
         vm: &mut IVM,
         ty: PointerType,
@@ -26147,11 +26142,11 @@ mod tests {
 
         let mut host = CoreHost::from_state(authority.clone(), &restarted);
         let mut vm = IVM::new(100_000);
-        let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &ivm_descriptor);
+        let desc_ptr = store_tlv_norito(&mut vm, PointerType::AxtDescriptor, &ivm_descriptor);
         vm.set_register(10, desc_ptr);
         IVMHost::syscall(&mut host, syscalls::SYSCALL_AXT_BEGIN, &mut vm).expect("axt begin");
 
-        let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
+        let ds_ptr = store_tlv_norito(&mut vm, PointerType::DataSpaceId, &dsid);
         let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &ivm_manifest);
         vm.set_register(10, ds_ptr);
         vm.set_register(11, manifest_ptr);
@@ -26398,11 +26393,11 @@ mod tests {
 
         let mut host = CoreHost::from_state(authority.clone(), &state);
         let mut vm = IVM::new(100_000);
-        let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &ivm_descriptor);
+        let desc_ptr = store_tlv_norito(&mut vm, PointerType::AxtDescriptor, &ivm_descriptor);
         vm.set_register(10, desc_ptr);
         IVMHost::syscall(&mut host, syscalls::SYSCALL_AXT_BEGIN, &mut vm).expect("axt begin");
 
-        let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
+        let ds_ptr = store_tlv_norito(&mut vm, PointerType::DataSpaceId, &dsid);
         let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &ivm_manifest);
         vm.set_register(10, ds_ptr);
         vm.set_register(11, manifest_ptr);

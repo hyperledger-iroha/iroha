@@ -2,6 +2,22 @@
 
 Last update: 2026-01-25
 
+- DAG conflict graph: apply the global state wildcard (`state:*`) to state-map entries even when no per-map wildcard exists, so `state:*` correctly conflicts with `state:Foo/<entry>`.
+- Tests: `cargo test -p iroha_core block::dag_tests::state_global_wildcard_conflicts_with_state_entries -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
+
+- Block sync: cached QC validation now skips block-signer mismatch when using local precommit signer records so ShareBlocks filtering retains cached QCs even if block signatures differ.
+- Tests: `cargo test -p iroha_core block_sync::message::filter_tests::filter_blocks_retains_cached_qc_even_with_signer_mismatch` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
+
+- AXT replay-ledger state tests now encode `AxtDescriptor`/`DataSpaceId` TLVs with Norito headers so `AXT_BEGIN` decoding succeeds after restart/prune flows.
+- Tests: `cargo test -p iroha_core axt_replay_ledger -- --nocapture` (state replay-ledger tests ok; `axt_replay_ledger_persists_through_kura_replay` failed in `crates/iroha_core/tests/ivm_corehost_axt.rs` with `UnknownDataspace(DataSpaceId(99))`).
+
+- AccountId/AssetId JSON now serialize with explicit `@domain` suffixes (e.g., `IH58@domain`, `asset##IH58@domain`) so decoding no longer depends on a domain-selector resolver; updated Norito JSON migration notes and id-json regression expectations.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-offline cargo test -p iroha_data_model --features json summary_round_trips_through_norito_json -- --nocapture` (ok).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-offline cargo test -p iroha_data_model --features json summary_defaults_optional_fields_when_missing_in_json -- --nocapture` (ok).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-offline cargo test -p iroha_data_model --features json account_id_json_uses_explicit_domain_suffix -- --nocapture` (ok).
+
+- Commit-with-signers full-roster quorum test updated to use a six-node topology (min_votes_for_commit = 4) while still excluding leader/proxy tail from QC signer set.
+- Tests: `cargo test -p iroha_core commit_with_signers_accepts_full_roster_quorum -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
 - NPoS localnet 1 Hz rerun (debug + BlockCreated/FetchPendingBlock/RBC INIT via block queue, 4 peers): `/private/tmp/iroha-localnet-npos-1hz-20260125T082237Z` (ports 32080/36380); genesis `block_time_ms=1000`, `commit_time_ms=1500`, config defaults, `RUST_LOG=warn,iroha_core::sumeragi=debug`; 100x1 Hz `ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_20260125T082237Z.jsonl` (ping log `ping_1hz_20260125T082237Z.log`). `commit_qc.height` 0->10 (+10 over 120 samples), `view_change_install_total` +2 (`missing_qc_total` +1, `stake_quorum_timeout_total` +1), `missing_block_fetch.total` +21, `pending_rbc.bytes` max 0 (sessions max 0).
 - Sumeragi ingress: route BlockCreated/FetchPendingBlock/RBC INIT via the block queue and drain block traffic ahead of block-payload work to avoid missing-block stalls; update routing/priority unit coverage and queue docs.
 - Tests: `cargo test -p iroha_core incoming_block_message_ -- --nocapture` (ok).

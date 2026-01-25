@@ -338,7 +338,28 @@ mod model {
     }
 }
 
-string_id!(AccountId);
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for AccountId {
+    fn write_json(&self, out: &mut String) {
+        let ih58 = self
+            .canonical_ih58()
+            .expect("AccountId should encode to IH58 for JSON");
+        let literal = format!("{ih58}@{}", self.domain());
+        norito::json::JsonSerialize::json_serialize(&literal, out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for AccountId {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = parser.parse_string()?;
+        value
+            .parse::<AccountId>()
+            .map_err(|err| norito::json::Error::Message(err.to_string()))
+    }
+}
 
 /// Source that produced an [`AccountId`] when parsing textual account identifiers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1927,6 +1948,21 @@ mod json_tests {
     }
 
     #[test]
+    fn account_id_json_uses_explicit_domain_suffix() {
+        let domain: DomainId = "sbp".parse().expect("domain id");
+        let keypair = KeyPair::random();
+        let id = AccountId::new(domain, keypair.public_key().clone());
+
+        let json = norito::json::to_json(&id).expect("serialize account id");
+        let ih58 = id.canonical_ih58().expect("ih58 encoding");
+        let expected = format!("\"{ih58}@{}\"", id.domain());
+        assert_eq!(json, expected);
+
+        let decoded: AccountId = norito::json::from_json(&json).expect("deserialize account id");
+        assert_eq!(decoded, id);
+    }
+
+    #[test]
     fn new_account_json_roundtrip_defaults() {
         let domain: DomainId = "wonderland".parse().expect("domain id");
         let keypair = KeyPair::random();
@@ -1975,7 +2011,8 @@ mod json_tests {
         let domain: DomainId = "wonderland".parse().expect("domain id");
         let keypair = KeyPair::random();
         let id = AccountId::new(domain.clone(), keypair.public_key().clone());
-        let payload = format!("{{\"id\":\"{id}\"}}");
+        let ih58 = id.canonical_ih58().expect("ih58 encoding");
+        let payload = format!("{{\"id\":\"{ih58}@{}\"}}", id.domain());
 
         let decoded: NewAccount =
             norito::json::from_json(&payload).expect("deserialize with defaults");
@@ -1991,7 +2028,11 @@ mod json_tests {
         let domain: DomainId = "wonderland".parse().expect("domain id");
         let keypair = KeyPair::random();
         let id = AccountId::new(domain, keypair.public_key().clone());
-        let payload = format!("{{\"id\":\"{id}\",\"metadata\":{{}},\"extra\":true}}");
+        let ih58 = id.canonical_ih58().expect("ih58 encoding");
+        let payload = format!(
+            "{{\"id\":\"{ih58}@{}\",\"metadata\":{{}},\"extra\":true}}",
+            id.domain()
+        );
 
         let err = norito::json::from_json::<NewAccount>(&payload).expect_err("unknown field");
         match err {
