@@ -1,5 +1,7 @@
 //! Negative tests for Pointer‑ABI TLV validation.
-use ivm::{IVM, ProgramMetadata};
+use ivm::{IVM, PointerType, ProgramMetadata};
+
+mod common;
 
 fn build_tlv(type_id: u16, version: u8, payload: &[u8], corrupt_hash: bool) -> Vec<u8> {
     use iroha_crypto::Hash;
@@ -24,8 +26,8 @@ fn tlv_wrong_hash_is_rejected() {
     let meta = ProgramMetadata::default().encode();
     vm.load_program(&meta).unwrap();
     // Build a valid payload and a TLV with a corrupted hash
-    let payload = b"alice@wonderland";
-    let tlv = build_tlv(0x0001, 1, payload, true);
+    let payload = common::payload_for_type(PointerType::AccountId, b"alice@wonderland");
+    let tlv = build_tlv(PointerType::AccountId as u16, 1, &payload, true);
     vm.memory.preload_input(0, &tlv).expect("preload input");
     let addr = ivm::Memory::INPUT_START;
     let err = vm.memory.validate_tlv(addr).unwrap_err();
@@ -50,8 +52,8 @@ fn tlv_wrong_version_is_rejected() {
     let mut vm = IVM::new(0);
     let meta = ProgramMetadata::default().encode();
     vm.load_program(&meta).unwrap();
-    let payload = b"cursor";
-    let tlv = build_tlv(0x0003, 2, payload, false);
+    let payload = common::payload_for_type(PointerType::Name, b"cursor");
+    let tlv = build_tlv(PointerType::Name as u16, 2, &payload, false);
     vm.memory.preload_input(0, &tlv).expect("preload input");
     let addr = ivm::Memory::INPUT_START;
     let err = vm.memory.validate_tlv(addr).unwrap_err();

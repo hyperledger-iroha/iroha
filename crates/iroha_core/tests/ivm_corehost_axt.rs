@@ -87,8 +87,8 @@ fn store_tlv_bytes(vm: &mut IVM, ty: PointerType, payload: &[u8]) -> u64 {
     vm.alloc_input_tlv(&tlv).expect("alloc input TLV")
 }
 
-fn store_tlv_codec<T: norito::codec::Encode>(vm: &mut IVM, ty: PointerType, value: &T) -> u64 {
-    let payload = value.encode();
+fn store_tlv_codec<T: norito::NoritoSerialize>(vm: &mut IVM, ty: PointerType, value: &T) -> u64 {
+    let payload = norito::to_bytes(value).expect("serialize Norito payload");
     store_tlv_bytes(vm, ty, &payload)
 }
 

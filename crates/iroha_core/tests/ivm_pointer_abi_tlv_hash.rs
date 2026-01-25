@@ -3,7 +3,7 @@
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_data_model::prelude::*;
 use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
-use norito::codec::Encode as NoritoEncode;
+use norito::to_bytes;
 
 fn build_program() -> Vec<u8> {
     // Program: SCALL SET_ACCOUNT_DETAIL; HALT
@@ -56,9 +56,9 @@ fn tlv_zero_hash_rejected() {
     vm.set_host(CoreHost::new(authority.clone()));
 
     // Prepare TLV envelopes for (AccountId, Name, Json)
-    let acc_payload = authority.encode();
+    let acc_payload = to_bytes(&authority).expect("encode account");
     let name: Name = "cursor".parse().unwrap();
-    let name_payload = name.encode();
+    let name_payload = to_bytes(&name).expect("encode name");
     let json_value = norito::json::object([
         (
             "query",
@@ -71,7 +71,7 @@ fn tlv_zero_hash_rejected() {
     ])
     .expect("serialize query envelope");
     let json: iroha_primitives::json::Json = json_value.into();
-    let json_payload = json.encode();
+    let json_payload = to_bytes(&json).expect("encode json");
 
     let acc_tlv = tlv_envelope(1, &acc_payload, None);
     let name_tlv = tlv_envelope(3, &name_payload, None);
@@ -115,9 +115,9 @@ fn tlv_valid_hash_accepted() {
     vm.set_host(CoreHost::new(authority.clone()));
 
     // TLVs with valid hashes
-    let acc_payload = authority.encode();
+    let acc_payload = to_bytes(&authority).expect("encode account");
     let name: Name = "cursor".parse().unwrap();
-    let name_payload = name.encode();
+    let name_payload = to_bytes(&name).expect("encode name");
     let json_value = norito::json::object([
         (
             "query",
@@ -130,7 +130,7 @@ fn tlv_valid_hash_accepted() {
     ])
     .expect("serialize query envelope");
     let json: iroha_primitives::json::Json = json_value.into();
-    let json_payload = json.encode();
+    let json_payload = to_bytes(&json).expect("encode json");
     let acc_hash = iroha_crypto::Hash::new(&acc_payload);
     let name_hash = iroha_crypto::Hash::new(&name_payload);
     let json_hash = iroha_crypto::Hash::new(&json_payload);

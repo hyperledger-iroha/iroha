@@ -3,7 +3,7 @@
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_data_model::prelude::*;
 use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
-use norito::codec::Encode as NoritoEncode;
+use norito::to_bytes;
 
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -37,7 +37,7 @@ fn kotodama_set_account_detail_with_authority() {
             .unwrap();
     // Prepare TLVs for (&AccountId, &Name, &Json)
     let account_tlv = {
-        let payload = authority.encode();
+        let payload = to_bytes(&authority).expect("encode account");
         let mut blob = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
         blob.extend_from_slice(&(ivm::PointerType::AccountId as u16).to_be_bytes());
         blob.push(1);
@@ -48,7 +48,7 @@ fn kotodama_set_account_detail_with_authority() {
         blob
     };
     let name_tlv = {
-        let payload = "cursor".parse::<Name>().unwrap().encode();
+        let payload = to_bytes(&"cursor".parse::<Name>().unwrap()).expect("encode name");
         let mut blob = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
         blob.extend_from_slice(&(ivm::PointerType::Name as u16).to_be_bytes());
         blob.push(1);
@@ -71,7 +71,7 @@ fn kotodama_set_account_detail_with_authority() {
     .expect("serialize json");
     let json_payload: iroha_primitives::json::Json = json_value.clone().into();
     let json_tlv = {
-        let payload = json_payload.encode();
+        let payload = to_bytes(&json_payload).expect("encode json");
         let mut blob = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
         blob.extend_from_slice(&(ivm::PointerType::Json as u16).to_be_bytes());
         blob.push(1);

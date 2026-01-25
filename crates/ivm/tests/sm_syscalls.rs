@@ -11,16 +11,17 @@ const TEST_CALLER_ID: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
 
 mod common;
-use common::assemble;
+use common::{assemble, payload_for_type};
 
 fn make_tlv(kind: PointerType, payload: &[u8]) -> Vec<u8> {
     use iroha_crypto::Hash;
+    let payload = payload_for_type(kind, payload);
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&(kind as u16).to_be_bytes());
     out.push(1);
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(payload);
-    let h: [u8; 32] = Hash::new(payload).into();
+    out.extend_from_slice(&payload);
+    let h: [u8; 32] = Hash::new(&payload).into();
     out.extend_from_slice(&h);
     out
 }

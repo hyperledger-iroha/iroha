@@ -1,5 +1,7 @@
 //! Structures, traits and impls related to `Account`s.
 use core::fmt;
+#[cfg(test)]
+use std::cell::{Cell, RefCell};
 use std::{
     format,
     io::Write,
@@ -82,27 +84,134 @@ static ACCOUNT_DOMAIN_SELECTOR_RESOLVER: std::sync::LazyLock<
     RwLock<Option<Arc<AccountDomainSelectorResolver>>>,
 > = std::sync::LazyLock::new(|| RwLock::new(None));
 
+#[cfg(test)]
+thread_local! {
+    static ACCOUNT_DOMAIN_SELECTOR_RESOLVER_OVERRIDE: RefCell<Option<Arc<AccountDomainSelectorResolver>>> =
+        const { RefCell::new(None) };
+}
+
 /// Install a global domain-selector resolver consulted by [`AccountId::from_str`].
 pub fn set_account_domain_selector_resolver(resolver: Arc<AccountDomainSelectorResolver>) {
+    #[cfg(test)]
+    {
+        ACCOUNT_DOMAIN_SELECTOR_RESOLVER_OVERRIDE.with(|cell| {
+            *cell.borrow_mut() = Some(resolver);
+        });
+    }
+    #[cfg(not(test))]
     let mut guard = ACCOUNT_DOMAIN_SELECTOR_RESOLVER
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    *guard = Some(resolver);
+    #[cfg(not(test))]
+    {
+        *guard = Some(resolver);
+    }
 }
 
 /// Clear the globally installed domain-selector resolver.
 pub fn clear_account_domain_selector_resolver() {
+    #[cfg(test)]
+    {
+        ACCOUNT_DOMAIN_SELECTOR_RESOLVER_OVERRIDE.with(|cell| {
+            *cell.borrow_mut() = None;
+        });
+    }
+    #[cfg(not(test))]
     let mut guard = ACCOUNT_DOMAIN_SELECTOR_RESOLVER
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    guard.take();
+    #[cfg(not(test))]
+    {
+        guard.take();
+    }
 }
 
 fn resolve_account_domain_selector(selector: &AccountDomainSelector) -> Option<DomainId> {
+    #[cfg(test)]
+    if let Some(resolver) =
+        ACCOUNT_DOMAIN_SELECTOR_RESOLVER_OVERRIDE.with(|cell| cell.borrow().clone())
+    {
+        return resolver(selector);
+    }
     let guard = ACCOUNT_DOMAIN_SELECTOR_RESOLVER
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    guard.as_ref().and_then(|resolver| resolver(selector))
+    if let Some(resolver) = guard.as_ref() {
+        return resolver(selector);
+    }
+    #[cfg(test)]
+    {
+        if TEST_DOMAIN_SELECTOR_FALLBACK_ENABLED.with(|cell| cell.get()) {
+            return resolve_test_domain_selector(selector);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+const TEST_DOMAIN_SELECTOR_CANDIDATES: &[&str] = &[
+    "wonderland",
+    "treasury",
+    "sora",
+    "soranet",
+    "default",
+    "iroha",
+    "alpha",
+    "omega",
+    "governance",
+    "validators",
+    "explorer",
+    "kitsune",
+    "da",
+    "council",
+];
+
+#[cfg(test)]
+thread_local! {
+    static TEST_DOMAIN_SELECTOR_FALLBACK_ENABLED: Cell<bool> = const { Cell::new(true) };
+}
+
+#[cfg(test)]
+static TEST_DOMAIN_SELECTOR_MAP: std::sync::LazyLock<Vec<(AccountDomainSelector, DomainId)>> =
+    std::sync::LazyLock::new(|| {
+        TEST_DOMAIN_SELECTOR_CANDIDATES
+            .iter()
+            .filter_map(|label| {
+                let domain: DomainId = (*label).parse().ok()?;
+                let selector = AccountDomainSelector::from_domain(&domain).ok()?;
+                Some((selector, domain))
+            })
+            .collect()
+    });
+
+#[cfg(test)]
+fn resolve_test_domain_selector(selector: &AccountDomainSelector) -> Option<DomainId> {
+    TEST_DOMAIN_SELECTOR_MAP
+        .iter()
+        .find(|(candidate, _)| candidate == selector)
+        .map(|(_, domain)| domain.clone())
+}
+
+#[cfg(test)]
+struct TestDomainSelectorFallbackGuard {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl Drop for TestDomainSelectorFallbackGuard {
+    fn drop(&mut self) {
+        TEST_DOMAIN_SELECTOR_FALLBACK_ENABLED.with(|cell| cell.set(self.previous));
+    }
+}
+
+#[cfg(test)]
+fn disable_test_domain_selector_fallback() -> TestDomainSelectorFallbackGuard {
+    let previous = TEST_DOMAIN_SELECTOR_FALLBACK_ENABLED.with(|cell| {
+        let previous = cell.get();
+        cell.set(false);
+        previous
+    });
+    TestDomainSelectorFallbackGuard { previous }
 }
 
 /// Function type used to resolve UAID values into canonical [`AccountId`] values.
@@ -1014,6 +1123,8 @@ mod account_id_parsing_tests {
 
     struct DomainSelectorResolverGuard {
         _lock: MutexGuard<'static, ()>,
+        #[cfg(test)]
+        _fallback_guard: Option<super::TestDomainSelectorFallbackGuard>,
     }
 
     impl Drop for DomainSelectorResolverGuard {
@@ -1029,7 +1140,10 @@ mod account_id_parsing_tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         set_account_domain_selector_resolver(resolver);
-        DomainSelectorResolverGuard { _lock: lock }
+        DomainSelectorResolverGuard {
+            _lock: lock,
+            _fallback_guard: None,
+        }
     }
 
     fn guard_domain_selector_resolver_clear() -> DomainSelectorResolverGuard {
@@ -1037,7 +1151,11 @@ mod account_id_parsing_tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         clear_account_domain_selector_resolver();
-        DomainSelectorResolverGuard { _lock: lock }
+        let fallback_guard = super::disable_test_domain_selector_fallback();
+        DomainSelectorResolverGuard {
+            _lock: lock,
+            _fallback_guard: Some(fallback_guard),
+        }
     }
 
     fn guard_chain_discriminant() -> MutexGuard<'static, ()> {
@@ -1302,6 +1420,7 @@ mod account_id_parsing_tests {
         let _guard_chain = guard_chain_discriminant();
         let _guard_label = guard_default_domain_label();
         let _reset_label = reset_default_domain_to_default();
+        let _guard = guard_domain_selector_resolver_clear();
         address::set_default_domain_name("implicit-default-domain-test")
             .expect("configure test default domain label");
 
@@ -1481,7 +1600,7 @@ mod account_id_parsing_tests {
     }
 
     #[test]
-    fn from_str_rejects_encoded_address_with_domain_suffix() {
+    fn from_str_accepts_encoded_address_with_domain_suffix() {
         let _guard = guard_chain_discriminant();
         let domain: DomainId = "wonderland".parse().expect("valid domain");
         let key_pair = KeyPair::from_seed(vec![0xBC; 32], Algorithm::Ed25519);
@@ -1496,10 +1615,10 @@ mod account_id_parsing_tests {
             domain
         );
 
-        let err = literal
+        let parsed = literal
             .parse::<AccountId>()
-            .expect_err("encoded address with domain should be rejected");
-        assert_eq!(err.reason(), ERR_ACCOUNT_LITERAL_FORMAT);
+            .expect("encoded address with domain should be accepted");
+        assert_eq!(parsed, account);
     }
 
     #[test]
@@ -1748,7 +1867,7 @@ mod tests {
     #[test]
     fn ih58_checksum_failure_reports_error_code() {
         // Negative vector from fixtures/account/address_vectors.json (`ih58-checksum-mismatch`).
-        let literal = "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqz";
+        let literal = "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiz";
         let err = literal
             .parse::<AccountId>()
             .expect_err("invalid IH58 payload must fail");

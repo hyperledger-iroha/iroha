@@ -442,7 +442,6 @@ pub mod action {
             parser.consume_char(b'{')?;
             parser.skip_ws();
             let key = parser.parse_key()?;
-            parser.consume_char(b':')?;
             let result = match key.as_str() {
                 "Indefinitely" => {
                     parser.parse_null()?;
@@ -567,5 +566,19 @@ mod tests {
         assert!(!Repeats::Indefinitely.is_depleted());
         assert!(!Repeats::Exactly(1).is_depleted());
         assert!(Repeats::Exactly(0).is_depleted());
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn repeats_json_roundtrip() {
+        let exact = Repeats::Exactly(3);
+        let json = norito::json::to_json(&exact).expect("serialize exactly");
+        let decoded: Repeats = norito::json::from_str(&json).expect("deserialize exactly");
+        assert_eq!(exact, decoded);
+
+        let indefinite = Repeats::Indefinitely;
+        let json = norito::json::to_json(&indefinite).expect("serialize indefinitely");
+        let decoded: Repeats = norito::json::from_str(&json).expect("deserialize indefinitely");
+        assert_eq!(indefinite, decoded);
     }
 }

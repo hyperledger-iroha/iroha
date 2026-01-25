@@ -1189,7 +1189,7 @@ type VersionError = iroha_version::error::Error;
 fn decode_signed_block_exact(bytes: &[u8]) -> Result<SignedBlock, iroha_version::error::Error> {
     norito::core::set_decode_root(bytes);
     let _root_guard = RootGuard;
-    let (block, used) = norito::core::decode_field_canonical::<SignedBlock>(bytes)
+    let (block, used) = <SignedBlock as norito::core::DecodeFromSlice>::decode_from_slice(bytes)
         .map_err(|err| VersionError::NoritoCodec(err.to_string()))?;
     let remaining = bytes.len().saturating_sub(used);
     if remaining != 0 {
@@ -1577,6 +1577,12 @@ mod tests {
         match err {
             iroha_version::error::Error::ExtraBytesLeft(remaining) => {
                 assert_eq!(remaining, 1);
+            }
+            iroha_version::error::Error::NoritoCodec(reason) => {
+                assert!(
+                    reason.contains("length mismatch"),
+                    "unexpected norito error: {reason}"
+                );
             }
             other => panic!("unexpected error: {other}"),
         }

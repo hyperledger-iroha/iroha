@@ -7,10 +7,10 @@ use ivm::{
     CoreHost, IVM, PointerType, encoding, instruction,
     kotodama::compiler::Compiler as KotodamaCompiler, syscalls,
 };
-use norito::codec::Encode as NoritoEncode;
 mod common;
 
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
+    let payload = common::payload_for_type(pty, payload);
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
     v.extend_from_slice(&(pty as u16).to_be_bytes());
     v.push(1);
@@ -43,7 +43,7 @@ fn dynamic_map_set_uses_durable_state() {
 
     // Verify durable state via STATE_GET("M/2") == "5"
     let path = Name::from_str("M/2").expect("valid path");
-    let path_tlv = make_tlv(PointerType::Name, &path.encode());
+    let path_tlv = make_tlv(PointerType::Name, path.as_ref().as_bytes());
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let mut get_prog = Vec::with_capacity(8);
     get_prog.extend_from_slice(

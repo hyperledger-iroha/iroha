@@ -2075,8 +2075,12 @@ mod chained {
             self
         }
 
-        /// Sign this block and get [`NewBlock`].
-        pub fn sign(self, private_key: &PrivateKey) -> WithEvents<NewBlock> {
+        /// Sign this block and get [`NewBlock`] using the provided validator index.
+        pub fn sign_with_index(
+            self,
+            private_key: &PrivateKey,
+            signatory_idx: u64,
+        ) -> WithEvents<NewBlock> {
             let mut builder = self;
             if builder.0.da_proof_policies.is_none()
                 && builder.0.header.da_proof_policies_hash().is_none()
@@ -2087,7 +2091,7 @@ mod chained {
                 builder = builder.with_da_proof_policies(Some(default_policies));
             }
             let signature = BlockSignature::new(
-                0,
+                signatory_idx,
                 SignatureOf::from_hash(private_key, builder.0.header.hash()),
             );
 
@@ -2099,6 +2103,11 @@ mod chained {
                 da_proof_policies: builder.0.da_proof_policies,
                 da_pin_intents: builder.0.da_pin_intents,
             })
+        }
+
+        /// Sign this block and get [`NewBlock`] using validator index 0.
+        pub fn sign(self, private_key: &PrivateKey) -> WithEvents<NewBlock> {
+            self.sign_with_index(private_key, 0)
         }
     }
 }
@@ -2247,6 +2256,27 @@ mod new {
 
             let signed_block: SignedBlock = new_block.into();
             assert_eq!(signed_block.transactions_vec(), &expected);
+        }
+
+        #[test]
+        fn block_builder_sign_with_index_sets_signature_index() {
+            let chain: ChainId = "new-block-sign-index".parse().expect("valid chain id");
+            let (authority, keypair) = gen_account_in("wonderland");
+            let tx = TransactionBuilder::new(chain, authority)
+                .with_instructions([Log::new(Level::INFO, "signed".to_owned())])
+                .sign(keypair.private_key());
+
+            let accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(tx))];
+            let builder = BlockBuilder::new(accepted);
+            let signer = KeyPair::random();
+            let signatory_idx = 7_u64;
+
+            let new_block = builder
+                .chain(0, None)
+                .sign_with_index(signer.private_key(), signatory_idx)
+                .unpack(|_| {});
+
+            assert_eq!(new_block.signature().index(), signatory_idx);
         }
 
         #[test]

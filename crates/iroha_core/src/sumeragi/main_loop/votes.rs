@@ -1460,6 +1460,26 @@ impl Actor {
         let target_parent = height.checked_sub(1)?;
         let view = self.state.view();
         let committed_height = u64::try_from(view.height()).unwrap_or(0);
+        // For the active height, prefer the live roster derived from world keys so
+        // membership changes (register/unregister) take effect immediately.
+        let active_roster = if height <= committed_height.saturating_add(1) {
+            let active = super::roster::derive_active_topology_for_mode(
+                &view,
+                self.common_config.trusted_peers.value(),
+                self.common_config.peer.id(),
+                consensus_mode,
+            );
+            if active.is_empty() {
+                None
+            } else {
+                Some(super::roster::canonicalize_roster_for_mode(
+                    active,
+                    consensus_mode,
+                ))
+            }
+        } else {
+            None
+        };
         let hashes = view.block_hashes();
         let pending_hashes = target_parent_hash.and_then(|hash| {
             self.pending_chain_hashes_for_parent(hash, target_parent, committed_height)
@@ -1544,6 +1564,9 @@ impl Actor {
                     return None;
                 }
                 roster = super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
+                if let Some(active) = active_roster.as_ref() {
+                    return Some(active.clone());
+                }
                 return Some(roster);
             }
             current_hash = hash_for_height(current_height)?;

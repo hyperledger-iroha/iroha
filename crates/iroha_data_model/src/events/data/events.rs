@@ -144,7 +144,6 @@ where
             }
 
             let field = parser.parse_key()?;
-            parser.consume_char(b':')?;
             match field.as_str() {
                 "target" => {
                     if target.is_some() {
@@ -2064,6 +2063,26 @@ impl DataEvent {
             Self::Governance(_) => None,
             _ => None,
         }
+    }
+}
+
+#[cfg(all(test, feature = "json"))]
+mod tests {
+    use super::MetadataChanged;
+    use crate::domain::DomainId;
+    use iroha_primitives::json::Json;
+
+    #[test]
+    fn metadata_changed_json_roundtrip() {
+        let changed = MetadataChanged {
+            target: "default".parse().expect("valid domain"),
+            key: "metadata_key".parse().expect("valid name"),
+            value: Json::from("metadata_value"),
+        };
+        let json = norito::json::to_json(&changed).expect("serialize");
+        let decoded: MetadataChanged<DomainId> =
+            norito::json::from_str(&json).expect("deserialize");
+        assert_eq!(changed, decoded);
     }
 }
 

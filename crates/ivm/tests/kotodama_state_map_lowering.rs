@@ -9,10 +9,10 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
-use norito::codec::Encode as NoritoEncode;
 mod common;
 
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
+    let payload = common::payload_for_type(pty, payload);
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
     v.extend_from_slice(&(pty as u16).to_be_bytes());
     v.push(1);
@@ -48,7 +48,7 @@ fn kotodama_state_map_set_writes_corehost_state() {
 
     // Query CoreHost state via STATE_GET for namespaced path "M/1" and expect payload "7"
     let path = Name::from_str("M/1").expect("valid path");
-    let path_tlv = make_tlv(PointerType::Name, &path.encode());
+    let path_tlv = make_tlv(PointerType::Name, path.as_ref().as_bytes());
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let mut get_prog_bytes = Vec::new();
     let scall = encoding::wide::encode_sys(

@@ -91,25 +91,37 @@ fn ivm_syscall_data_events_follow_order() {
 
     // Prepare TLVs for account id, metadata keys/values, and asset definition id.
     let mut cursor = 0u64;
-    let acct_bytes = authority_id.encode();
+    let acct_bytes = norito::to_bytes(&authority_id).expect("encode account id");
     let ptr_account = store_tlv(&mut vm, &mut cursor, PointerType::AccountId, &acct_bytes);
 
     let key1 = Name::from_str("account_key").expect("name");
-    let ptr_key1 = store_tlv(&mut vm, &mut cursor, PointerType::Name, &key1.encode());
+    let key1_bytes = norito::to_bytes(&key1).expect("encode key");
+    let ptr_key1 = store_tlv(&mut vm, &mut cursor, PointerType::Name, &key1_bytes);
     let val1 = Json::new(norito::json!({"kind": "alpha"}));
-    let ptr_val1 = store_tlv(&mut vm, &mut cursor, PointerType::Json, &val1.encode());
+    let val1_bytes = norito::to_bytes(&val1).expect("encode json");
+    let ptr_val1 = store_tlv(&mut vm, &mut cursor, PointerType::Json, &val1_bytes);
 
     let key2 = Name::from_str("account_second_key").expect("name");
-    let ptr_key2 = store_tlv(&mut vm, &mut cursor, PointerType::Name, &key2.encode());
+    let key2_bytes = norito::to_bytes(&key2).expect("encode key");
+    let ptr_key2 = store_tlv(&mut vm, &mut cursor, PointerType::Name, &key2_bytes);
     let val2 = Json::new(norito::json!({"kind": "beta"}));
-    let ptr_val2 = store_tlv(&mut vm, &mut cursor, PointerType::Json, &val2.encode());
+    let val2_bytes = norito::to_bytes(&val2).expect("encode json");
+    let ptr_val2 = store_tlv(&mut vm, &mut cursor, PointerType::Json, &val2_bytes);
 
     let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset def id");
+    let asset_bytes = norito::to_bytes(&asset_def_id).expect("encode asset definition");
     let ptr_asset_def = store_tlv(
         &mut vm,
         &mut cursor,
         PointerType::AssetDefinitionId,
-        &asset_def_id.encode(),
+        &asset_bytes,
+    );
+    let amount_payload = norito::to_bytes(&Numeric::from(5_u64)).expect("encode amount");
+    let ptr_amount = store_tlv(
+        &mut vm,
+        &mut cursor,
+        PointerType::NoritoBytes,
+        &amount_payload,
     );
 
     let prog_set_detail = encode_prog_syscall(syscalls::SYSCALL_SET_ACCOUNT_DETAIL);
@@ -134,7 +146,7 @@ fn ivm_syscall_data_events_follow_order() {
     // 3) Mint asset into the authority account
     vm.set_register(10, ptr_account);
     vm.set_register(11, ptr_asset_def);
-    vm.set_register(12, 5);
+    vm.set_register(12, ptr_amount);
     vm.load_program(&prog_mint).expect("load mint program");
     vm.run().expect("mint asset");
 

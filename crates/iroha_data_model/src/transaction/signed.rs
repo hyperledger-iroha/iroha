@@ -688,7 +688,6 @@ impl norito::json::JsonDeserialize for TransactionEntrypoint {
         parser.skip_ws();
         parser.consume_char(b'{')?;
         let key = parser.parse_key()?;
-        parser.consume_char(b':')?;
         let value = match key.as_str() {
             "External" => {
                 let tx = SignedTransaction::json_deserialize(parser)?;
@@ -739,7 +738,6 @@ impl norito::json::JsonDeserialize for TransactionResult {
         parser.consume_char(b'{')?;
         parser.skip_ws();
         let key = parser.parse_key()?;
-        parser.consume_char(b':')?;
         let inner = match key.as_str() {
             "Ok" => TransactionResultInner::Ok(DataTriggerSequence::json_deserialize(parser)?),
             "Err" => TransactionResultInner::Err(
@@ -1413,6 +1411,62 @@ mod tests {
             TransactionResult::hash_from_inner(&err_inner)
         );
     }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn transaction_entrypoint_json_roundtrip() {
+        let chain: ChainId = "json-chain".parse().unwrap();
+        let domain: DomainId = "default".parse().unwrap();
+        let public_key: iroha_crypto::PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .unwrap();
+        let private_key: iroha_crypto::PrivateKey =
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .unwrap();
+        let authority = AccountId::new(domain, public_key);
+
+        let tx = TransactionBuilder::new(chain, authority.clone())
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(&private_key);
+        let entry = TransactionEntrypoint::External(tx);
+        let json = norito::json::to_json(&entry).expect("serialize external entrypoint");
+        let decoded: TransactionEntrypoint =
+            norito::json::from_str(&json).expect("deserialize external entrypoint");
+        assert_eq!(entry, decoded);
+
+        let time_entry = TimeTriggerEntrypoint {
+            id: "trigger".parse().unwrap(),
+            instructions: ExecutionStep(Vec::new().into()),
+            authority,
+        };
+        let entry = TransactionEntrypoint::Time(time_entry);
+        let json = norito::json::to_json(&entry).expect("serialize time entrypoint");
+        let decoded: TransactionEntrypoint =
+            norito::json::from_str(&json).expect("deserialize time entrypoint");
+        assert_eq!(entry, decoded);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn transaction_result_json_roundtrip() {
+        let ok_result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let json = norito::json::to_json(&ok_result).expect("serialize ok result");
+        let decoded: TransactionResult =
+            norito::json::from_str(&json).expect("deserialize ok result");
+        assert_eq!(ok_result, decoded);
+
+        let err_reason =
+            error::TransactionRejectionReason::LimitCheck(error::TransactionLimitError {
+                reason: "limit exceeded".into(),
+            });
+        let err_result = TransactionResult(Err(err_reason));
+        let json = norito::json::to_json(&err_result).expect("serialize err result");
+        let decoded: TransactionResult =
+            norito::json::from_str(&json).expect("deserialize err result");
+        assert_eq!(err_result, decoded);
+    }
 }
 
 #[cfg(test)]
@@ -1793,9 +1847,12 @@ mod norito_rpc_fixture_tests {
                 "{name}: signed transaction has trailing bytes"
             );
             assert_eq!(signed_tx.chain().as_str(), chain, "{name}: chain mismatch");
+            let expected_authority: AccountId = authority
+                .parse()
+                .unwrap_or_else(|err| panic!("{name}: authority parse failed: {err}"));
             assert_eq!(
-                signed_tx.authority().to_string(),
-                authority,
+                signed_tx.authority(),
+                &expected_authority,
                 "{name}: authority mismatch"
             );
             let creation_ms = u64::try_from(signed_tx.creation_time().as_millis())

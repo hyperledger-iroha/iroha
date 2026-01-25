@@ -169,12 +169,12 @@ test("account address golden vectors round-trip", () => {
 
   assert.equal(
     canonical,
-    "0x0200000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201",
+    "0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
   );
-  assert.equal(ih58, "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS");
+  assert.equal(ih58, "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA");
   assert.equal(
     compressed,
-    "snx12QGﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5E5",
+    "snx12QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8",
   );
 
   const { address: parsedIH58, format: formatIH58 } = AccountAddress.parseAny(ih58, 753);

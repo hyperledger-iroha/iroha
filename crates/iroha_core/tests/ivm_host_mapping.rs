@@ -18,14 +18,14 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{account::NewAccount, metadata::Metadata, nft::NftId, prelude::*};
 use ivm::{IVM, PointerType, encoding, instruction, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
-use norito::codec::Encode as NoritoEncode;
+use norito::NoritoSerialize;
 
 fn with_core_host<R>(vm: &mut IVM, f: impl FnOnce(&mut CoreHost) -> R) -> R {
     CoreHost::with_host(vm, f)
 }
 
-fn tlv_blob<T: NoritoEncode>(val: &T, type_id: u16) -> Vec<u8> {
-    let payload = val.encode();
+fn tlv_blob<T: NoritoSerialize>(val: &T, type_id: u16) -> Vec<u8> {
+    let payload = norito::to_bytes(val).expect("encode payload");
     tlv_from_payload(&payload, type_id)
 }
 
@@ -214,6 +214,7 @@ fn host_rejects_insufficient_asset_transfer() {
     let from_tlv = tlv_blob(&from, PointerType::AccountId as u16);
     let to_tlv = tlv_blob(&to, PointerType::AccountId as u16);
     let asset_tlv = tlv_blob(&asset_def, PointerType::AssetDefinitionId as u16);
+    let amount_tlv = norito_bytes_tlv(&Numeric::from(1000_u64));
 
     let mut vm = IVM::new(50_000);
     vm.set_host(CoreHost::new(from.clone()));
@@ -221,10 +222,16 @@ fn host_rejects_insufficient_asset_transfer() {
     let ptr_from = load_input_blob(&mut vm, &mut cursor, &from_tlv);
     let ptr_to = load_input_blob(&mut vm, &mut cursor, &to_tlv);
     let ptr_asset = load_input_blob(&mut vm, &mut cursor, &asset_tlv);
+    let ptr_amount = load_input_blob(&mut vm, &mut cursor, &amount_tlv);
     run_syscall(
         &mut vm,
         ivm_sys::SYSCALL_TRANSFER_ASSET,
-        &[(10, ptr_from), (11, ptr_to), (12, ptr_asset), (13, 1000)],
+        &[
+            (10, ptr_from),
+            (11, ptr_to),
+            (12, ptr_asset),
+            (13, ptr_amount),
+        ],
     );
 
     // Setup world: domain, accounts, asset def, mint only 100
@@ -318,6 +325,8 @@ fn host_batches_transfer_v1_calls() {
     let first_recipient_tlv = tlv_blob(&to_a, PointerType::AccountId as u16);
     let second_recipient_tlv = tlv_blob(&to_b, PointerType::AccountId as u16);
     let asset_tlv = tlv_blob(&asset_def_id, PointerType::AssetDefinitionId as u16);
+    let amount_a_tlv = norito_bytes_tlv(&Numeric::from(7_u64));
+    let amount_b_tlv = norito_bytes_tlv(&Numeric::from(4_u64));
     let mut vm = IVM::new(50_000);
     vm.set_host(CoreHost::new(from.clone()));
     let mut cursor = 0;
@@ -325,17 +334,29 @@ fn host_batches_transfer_v1_calls() {
     let ptr_to_a = load_input_blob(&mut vm, &mut cursor, &first_recipient_tlv);
     let ptr_to_b = load_input_blob(&mut vm, &mut cursor, &second_recipient_tlv);
     let ptr_asset = load_input_blob(&mut vm, &mut cursor, &asset_tlv);
+    let ptr_amount_a = load_input_blob(&mut vm, &mut cursor, &amount_a_tlv);
+    let ptr_amount_b = load_input_blob(&mut vm, &mut cursor, &amount_b_tlv);
 
     run_syscall(&mut vm, ivm_sys::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &[]);
     run_syscall(
         &mut vm,
         ivm_sys::SYSCALL_TRANSFER_ASSET,
-        &[(10, ptr_from), (11, ptr_to_a), (12, ptr_asset), (13, 7)],
+        &[
+            (10, ptr_from),
+            (11, ptr_to_a),
+            (12, ptr_asset),
+            (13, ptr_amount_a),
+        ],
     );
     run_syscall(
         &mut vm,
         ivm_sys::SYSCALL_TRANSFER_ASSET,
-        &[(10, ptr_from), (11, ptr_to_b), (12, ptr_asset), (13, 4)],
+        &[
+            (10, ptr_from),
+            (11, ptr_to_b),
+            (12, ptr_asset),
+            (13, ptr_amount_b),
+        ],
     );
     run_syscall(&mut vm, ivm_sys::SYSCALL_TRANSFER_V1_BATCH_END, &[]);
 
@@ -520,16 +541,18 @@ fn host_bridges_mint_asset() {
     let asset_def: AssetDefinitionId = "coin#wonder".parse().unwrap();
     let authority_tlv = tlv_blob(&authority, PointerType::AccountId as u16);
     let asset_tlv = tlv_blob(&asset_def, PointerType::AssetDefinitionId as u16);
+    let amount_tlv = norito_bytes_tlv(&Numeric::from(123_u64));
 
     let mut vm = IVM::new(100_000);
     vm.set_host(CoreHost::new(authority.clone()));
     let mut cursor = 0;
     let ptr_authority = load_input_blob(&mut vm, &mut cursor, &authority_tlv);
     let ptr_asset = load_input_blob(&mut vm, &mut cursor, &asset_tlv);
+    let ptr_amount = load_input_blob(&mut vm, &mut cursor, &amount_tlv);
     run_syscall(
         &mut vm,
         ivm_sys::SYSCALL_MINT_ASSET,
-        &[(10, ptr_authority), (11, ptr_asset), (12, 123)],
+        &[(10, ptr_authority), (11, ptr_asset), (12, ptr_amount)],
     );
 
     // Minimal world setup: domain, account, asset def

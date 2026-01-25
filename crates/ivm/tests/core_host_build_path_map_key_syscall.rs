@@ -1,13 +1,11 @@
 //! CoreHost: build path from base Name and int key via SYSCALL_BUILD_PATH_MAP_KEY.
 
-use std::io::Cursor;
-
 use iroha_data_model::prelude::Name;
 use ivm::{CoreHost, IVM, PointerType, encoding, syscalls};
-use norito::codec::Decode as NoritoDecode;
 mod common;
 
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
+    let payload = common::payload_for_type(pty, payload);
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
     v.extend_from_slice(&(pty as u16).to_be_bytes());
     v.push(1);
@@ -51,7 +49,6 @@ fn core_host_build_path_map_key() {
     let p_path = vm.register(10);
     let tlv = vm.memory.validate_tlv(p_path).expect("validate");
     assert_eq!(tlv.type_id, PointerType::Name);
-    let mut cursor = Cursor::new(tlv.payload);
-    let name: Name = NoritoDecode::decode(&mut cursor).expect("decode name");
+    let name: Name = norito::decode_from_bytes(tlv.payload).expect("decode name");
     assert_eq!(name.as_ref(), "M/42");
 }

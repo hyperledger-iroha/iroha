@@ -11703,6 +11703,8 @@ pub mod isi {
                 Grant::account_permission(perm, ALICE_ID.clone())
                     .execute(&ALICE_ID, &mut stx)
                     .expect("grant manage consensus keys");
+                let params = stx.world.parameters.get_mut();
+                params.sumeragi.key_require_hsm = true;
                 let params = stx.world.parameters.get().sumeragi.clone();
                 stx.apply();
                 params
@@ -12028,6 +12030,8 @@ pub mod isi {
                 Grant::account_permission(perm, ALICE_ID.clone())
                     .execute(&ALICE_ID, &mut stx)
                     .expect("grant manage consensus keys");
+                let params = stx.world.parameters.get_mut();
+                params.sumeragi.key_require_hsm = true;
                 let params = stx.world.parameters.get().sumeragi.clone();
                 stx.apply();
                 params
