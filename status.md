@@ -5,6 +5,12 @@ Last update: 2026-01-25
 - Sumeragi RBC: queue BlockCreated seed work onto the RBC seed worker, insert stub sessions, and merge results asynchronously to cut per-message latency; add `rbc_seed_result_merges_stub_session` coverage.
 - Tests: not run (not requested).
 
+- Sumeragi block sync: add BlockSyncUpdate sub-step timers (Kura checks, roster selection, QC fallback) and cap vote bursts when blocks are queued to reduce block-queue latency; add `run_worker_iteration_limits_vote_burst_when_blocks_pending` coverage.
+- Tests: not run (not requested).
+
+- Izanami run (tps=1, 300s, 4 peers) after RBC seed offload: stopped before target blocks; committed height 13 (lane_000_core blocks.index), logs in `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_IggGS1`. Worker slow lines: 558; mean elapsed 2119ms with pre/tick/post means 648/896/487ms (~96%). Pre-tick per-tier means: votes 224ms, payloads 267ms, blocks 144ms; post-tick per-tier means: votes 248ms, payloads 86ms, blocks 145ms. Message timings: BlockCreated mean 347ms (p95 806ms), BlockSyncUpdate mean 1680ms (p95 3945ms). Queue latency: Blocks mean 7558ms (p95 24014ms), BlockPayload mean 3502ms (p95 11184ms). Queue depths: block_rx mean 4.3 (max 38), vote_rx mean 1.3 (max 13). Duplicate metric registration warnings observed.
+- Tests: not run (Izanami run only).
+
 - P2P ingress: use configured `p2p_queue_cap_high/low` for inbound peer dispatch buffers to avoid control-plane stalls; add unit coverage for peer-message channel capacity and update P2P queue docs.
 - Tests: not run (not requested).
 

@@ -4862,6 +4862,105 @@ mod tests {
     }
 
     #[test]
+    fn run_worker_iteration_limits_vote_burst_when_blocks_pending() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        let vote_total = VOTE_BURST_CAP_WITH_BLOCKS + 1;
+        for _ in 0..vote_total {
+            let vote = Vote {
+                phase: Phase::Prepare,
+                block_hash,
+                parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+                post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: None,
+                signer: 0,
+                bls_sig: Vec::new(),
+            };
+            vote_tx
+                .send(inbound(BlockMessage::QcVote(vote)))
+                .expect("send prevote");
+            status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
+        }
+
+        block_tx
+            .send(inbound(BlockMessage::ConsensusParams(
+                message::ConsensusParamsAdvert {
+                    collectors_k: 1,
+                    redundant_send_r: 1,
+                    membership: None,
+                },
+            )))
+            .expect("send consensus params");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::Blocks);
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_secs(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let now = Instant::now();
+        let mut loop_state = WorkerLoopState {
+            last_tick: now,
+            last_served: [now; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = RecordingActor::default();
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        let block_index = actor
+            .events
+            .iter()
+            .position(|entry| *entry == "block")
+            .expect("block should be drained");
+        assert_eq!(block_index, VOTE_BURST_CAP_WITH_BLOCKS);
+        assert!(actor.events[..block_index]
+            .iter()
+            .all(|entry| *entry == "vote"));
+        assert_eq!(actor.events.len(), vote_total + 1);
+        assert_eq!(stats.votes_handled, vote_total);
+        assert_eq!(stats.blocks_handled, 1);
+        assert_eq!(actor.tick_calls, 0);
+    }
+
+    #[test]
     fn run_worker_iteration_tracks_drain_times_for_votes_and_payloads() {
         status::reset_worker_loop_snapshot_for_tests();
 
@@ -8765,6 +8864,8 @@ impl WorkerActor for crate::sumeragi::main_loop::Actor {
 const PRIORITY_TIER_COUNT: usize = 7;
 // Keep vote processing ahead of payload tiers; drain fast-path block messages before heavy payloads.
 const VOTE_BURST_CAP: usize = 32;
+// Shorten vote bursts when blocks are queued to reduce block-queue latency.
+const VOTE_BURST_CAP_WITH_BLOCKS: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PriorityTier {
@@ -9093,7 +9194,12 @@ fn drain_mailbox<A: WorkerActor>(
     phase: DrainPhase,
     tick_deadline: Option<Instant>,
 ) {
-    let vote_burst = cfg.vote_rx_drain_max_messages.min(VOTE_BURST_CAP).max(1);
+    let vote_burst_cap = if mailbox.has_pending(PriorityTier::Blocks) {
+        VOTE_BURST_CAP_WITH_BLOCKS.min(VOTE_BURST_CAP)
+    } else {
+        VOTE_BURST_CAP
+    };
+    let vote_burst = cfg.vote_rx_drain_max_messages.min(vote_burst_cap).max(1);
     // Cap per-iteration draining so ticks cannot be starved by long queue backlogs.
     let drain_budget = cfg
         .time_budget
