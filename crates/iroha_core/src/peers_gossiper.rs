@@ -267,6 +267,20 @@ impl PeersGossiperHandle {
             iroha_logger::warn!(?err, "Peers gossiper dropped topology update");
         }
     }
+
+    /// Build a handle that drops all gossip messages, for unit tests that do not need a live
+    /// gossiper task.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub(crate) fn closed_for_tests() -> Self {
+        let (message_sender, message_receiver) = mpsc::channel(1);
+        drop(message_receiver);
+        let (update_topology_sender, update_topology_receiver) = mpsc::unbounded_channel();
+        drop(update_topology_receiver);
+        Self {
+            message_sender,
+            update_topology_sender,
+        }
+    }
 }
 
 /// Actor which gossips peers addresses.
@@ -1020,15 +1034,7 @@ mod tests {
 
     #[test]
     fn gossiper_handle_drops_messages_when_receiver_closed() {
-        let (message_sender, message_receiver) = mpsc::channel(1);
-        drop(message_receiver);
-        let (update_topology_sender, update_topology_receiver) = mpsc::unbounded_channel();
-        drop(update_topology_receiver);
-
-        let handle = PeersGossiperHandle {
-            message_sender,
-            update_topology_sender,
-        };
+        let handle = PeersGossiperHandle::closed_for_tests();
         let kp = KeyPair::from_seed(vec![99, 98, 97, 96], Algorithm::Ed25519);
         let peer = Peer::new(
             "127.0.0.1:9999".parse().expect("addr"),

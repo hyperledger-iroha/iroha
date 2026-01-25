@@ -3,6 +3,8 @@ use iroha_primitives::numeric::Numeric;
 use ivm::{CoreHost, IVM, Memory, PointerType, encoding, instruction::wide, syscalls};
 use norito::to_bytes;
 
+mod common;
+
 fn assemble(code: &[u8]) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
@@ -26,6 +28,9 @@ fn encode_prog_syscall(num: u32) -> Vec<u8> {
 }
 
 fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
+    let payload = PointerType::from_u16(type_id)
+        .map(|pty| common::payload_for_type(pty, payload))
+        .unwrap_or_else(|| payload.to_vec());
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
     out.push(version);

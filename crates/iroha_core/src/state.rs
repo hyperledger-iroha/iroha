@@ -11823,7 +11823,7 @@ impl State {
                 "storage migration refreshed UAID dataspace bindings from manifest records"
             );
         }
-        let _ = self.refresh_axt_policies_from_directory();
+        // Defer AXT policy refresh until the runtime lane catalog is applied.
     }
 
     /// Insert a commit QC for testing/telemetry scaffolding.
@@ -17232,16 +17232,17 @@ mod replay_validation_tests {
     #[test]
     #[allow(clippy::too_many_lines)]
     fn replay_uses_commit_roster_journal_for_signature_order() {
-        use std::borrow::Cow;
+        use std::{borrow::Cow, collections::BTreeSet};
 
         use iroha_config::{
             base::WithOrigin,
             kura::InitMode,
             parameters::actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
         };
-        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
         use iroha_data_model::{
-            consensus::VALIDATOR_SET_HASH_VERSION_V1, name::Name, peer::PeerId,
+            block::BlockSignature, consensus::VALIDATOR_SET_HASH_VERSION_V1, name::Name,
+            peer::PeerId,
         };
         use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
         use iroha_test_samples::{
@@ -17302,23 +17303,6 @@ mod replay_validation_tests {
         kura.store_block(Arc::clone(&genesis_arc))
             .expect("store genesis");
 
-        let tx = TransactionBuilder::new(chain_id.clone(), user_id.clone())
-            .with_instructions([Log::new(
-                iroha_logger::Level::INFO,
-                "replay roster journal".to_owned(),
-            )])
-            .sign(user_keypair.private_key());
-        let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let new_block = crate::block::BlockBuilder::new(vec![accepted])
-            .chain(0, Some(&genesis_signed))
-            .sign(peer_b.private_key())
-            .unpack(|_| {});
-        let signed_block: SignedBlock = new_block.into();
-
-        let block_arc = Arc::new(signed_block.clone());
-        kura.store_block(Arc::clone(&block_arc))
-            .expect("store block");
-
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
         let world = World::with(
             [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
@@ -17337,6 +17321,49 @@ mod replay_validation_tests {
             params_block.commit();
         }
 
+        let tx = TransactionBuilder::new(chain_id.clone(), user_id.clone())
+            .with_instructions([Log::new(
+                iroha_logger::Level::INFO,
+                "replay roster journal".to_owned(),
+            )])
+            .sign(user_keypair.private_key());
+        let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let new_block = crate::block::BlockBuilder::new(vec![accepted])
+            .chain(0, Some(&genesis_signed))
+            .sign(peer_b.private_key())
+            .unpack(|_| {});
+        let mut signed_block: SignedBlock = new_block.into();
+        let height = signed_block.header().height().get();
+        let view = signed_block.header().view_change_index();
+        let prf_seed = {
+            let view = state.view();
+            crate::sumeragi::prf_seed_for_height(&view, height)
+        };
+        // Align the block signature with replay's PRF-rotated topology.
+        let mut signature_topology =
+            crate::sumeragi::network_topology::Topology::new(roster.clone());
+        signature_topology.canonicalize_order();
+        signature_topology.shuffle_prf(prf_seed, height);
+        signature_topology.nth_rotation(view);
+        let signer_key = if signature_topology.leader().public_key() == peer_a.public_key() {
+            peer_a.private_key()
+        } else {
+            peer_b.private_key()
+        };
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(signer_key, signed_block.header().hash()),
+        );
+        let mut signature_set = BTreeSet::new();
+        signature_set.insert(signature);
+        signed_block
+            .replace_signatures(signature_set)
+            .expect("replace signatures");
+
+        let block_arc = Arc::new(signed_block.clone());
+        kura.store_block(Arc::clone(&block_arc))
+            .expect("store block");
+
         let signatures: Vec<_> = signed_block.signatures().cloned().collect();
         let mut signers_bitmap = vec![0u8; roster.len().div_ceil(8)];
         for signature in &signatures {
@@ -17352,8 +17379,8 @@ mod replay_validation_tests {
             subject_block_hash: block_hash,
             parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            height: 2,
-            view: 0,
+            height,
+            view,
             epoch: 0,
             mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
             highest_qc: None,
@@ -17366,8 +17393,8 @@ mod replay_validation_tests {
             },
         };
         let checkpoint = ValidatorSetCheckpoint::new(
-            2,
-            commit_cert.view,
+            height,
+            view,
             block_hash,
             commit_cert.parent_state_root,
             commit_cert.post_state_root,
@@ -26601,19 +26628,17 @@ mod tests {
 
         let mut manifest_root = [0u8; 32];
         manifest_root.copy_from_slice(record.manifest_hash.as_ref());
+        let expected_policy = AxtPolicyEntry {
+            manifest_root,
+            target_lane: lane_id,
+            min_handle_era: 3,
+            min_sub_nonce: 5,
+            current_slot: 0,
+        };
         {
             let mut block = world.axt_policies.block();
             let mut tx = block.transaction();
-            tx.insert(
-                dataspace,
-                AxtPolicyEntry {
-                    manifest_root,
-                    target_lane: lane_id,
-                    min_handle_era: 3,
-                    min_sub_nonce: 5,
-                    current_slot: 0,
-                },
-            );
+            tx.insert(dataspace, expected_policy);
             tx.apply();
             block.commit();
         }
@@ -26621,6 +26646,10 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(world, kura, query_handle);
+        assert_eq!(
+            state.world.axt_policies.view().get(&dataspace).copied(),
+            Some(expected_policy)
+        );
         {
             let nexus = state.nexus.get_mut();
             nexus.lane_config = lane_config;

@@ -207,8 +207,8 @@ Canonical hex examples that wallet tooling can link or embed in docs/tests:
 
 | Selector kind | Canonical hex |
 |---------------|---------------|
-| Implicit default | `0x0200000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201` |
-| Local digest (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8` |
+| Implicit default | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| Local digest (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` |
 | Global registry (`registry_id = 42`) | `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201` |
 
 Linking this quick reference from SDK docs keeps binary and UX guidance in one place and lets operators

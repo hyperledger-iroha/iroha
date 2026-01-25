@@ -118,13 +118,14 @@ Domains / Peers
 - 0x12 TRANSFER_DOMAIN — Args: `r10=&DomainId, r11=&AccountId` → 0 — Gas: G_xfer_domain
 - 0x15 REGISTER_PEER — Args: `r10=&Json` (RegisterPeerWithPop) → 0 — Gas: G_reg_peer
   - JSON object: `{ "peer": "<public_key or public_key@addr>", "pop": [..], "activation_at": <u64?>, "expiry_at": <u64?>, "hsm": <HsmBinding?> }`
-- 0x16 UNREGISTER_PEER — Args: `r10=&Json` (peer id string or `{ "peer": "..." }`) → 0 — Gas: G_unreg_peer
+  - `peer` may be a string or an object with `public_key`/`publicKey`/`peer_id`/`peerId`/`key`; those keys are also accepted at top level.
+- 0x16 UNREGISTER_PEER — Args: `r10=&Json` (peer id string or object with `peer`/`peer_id`/`peerId`/`public_key`/`publicKey`/`key`) → 0 — Gas: G_unreg_peer
 
 Accounts
 - 0x13 REGISTER_ACCOUNT — Args: `r10=&AccountId` → 0 — Gas: G_reg_acct
 - 0x14 UNREGISTER_ACCOUNT — Args: `r10=&AccountId` → 0 — Gas: G_unreg_acct
-- 0x17 ADD_SIGNATORY — Args: `r10=&AccountId, r11=&Json` (pubkey) → 0 — Gas: G_add_sig
-- 0x18 REMOVE_SIGNATORY — Args: `r10=&AccountId, r11=&Json` → 0 — Gas: G_rm_sig
+- 0x17 ADD_SIGNATORY — Args: `r10=&AccountId, r11=&Json` (pubkey string or object with `public_key`/`publicKey`/`key`) → 0 — Gas: G_add_sig
+- 0x18 REMOVE_SIGNATORY — Args: `r10=&AccountId, r11=&Json` (pubkey string or object with `public_key`/`publicKey`/`key`) → 0 — Gas: G_rm_sig
 - 0x19 SET_ACCOUNT_QUORUM — Args: `r10=&AccountId, r11=quorum:u64` → 0 — Gas: G_set_quorum
 - 0x1A SET_ACCOUNT_DETAIL — Args: `r10=&AccountId, r11=&Name, r12=&Json` → 0 — Gas: G_set_detail + bytes(val)
 
@@ -338,16 +339,16 @@ but they must not change the host ABI.
 | 0x50 | STATE_GET | r10=&Name | r10=ptr (&NoritoBytes) or 0 | - |
 | 0x51 | STATE_SET | r10=&Name, r11=&NoritoBytes | u64=0 | - |
 | 0x52 | STATE_DEL | r10=&Name | u64=0 | - |
-| 0x53 | DECODE_INT | r10=&NoritoBytes(ASCII decimal) or r10=&Blob(ASCII decimal) | r10=i64 | - |
+| 0x53 | DECODE_INT | r10=&NoritoBytes(Norito-framed i64) | r10=i64 | - |
 | 0x54 | BUILD_PATH_MAP_KEY | r10=&Name(base), r11=key:i64 | r10=ptr (&Name) | - |
-| 0x55 | ENCODE_INT | r10=value:i64 | r10=ptr (&NoritoBytes(ASCII decimal)) | - |
+| 0x55 | ENCODE_INT | r10=value:i64 | r10=ptr (&NoritoBytes(Norito-framed i64)) | - |
 | 0x56 | BUILD_PATH_KEY_NORITO | r10=&Name(base), r11=&NoritoBytes(key) | r10=ptr (&Name) | - |
-| 0x57 | JSON_ENCODE | r10=&Json | ptr (&NoritoBytes) | asset:gas/G_json_encode@ivm.core/v1 |
-| 0x58 | JSON_DECODE | r10=&NoritoBytes(JSON bytes) | ptr (&Json) | asset:gas/G_json_decode@ivm.core/v1 |
-| 0x59 | SCHEMA_ENCODE | r10=&Name(schema), r11=&Json | ptr (&NoritoBytes) | - |
-| 0x5A | SCHEMA_DECODE | r10=&Name(schema), r11=&NoritoBytes | ptr (&Json) | - |
+| 0x57 | JSON_ENCODE | r10=&Json | ptr (&NoritoBytes(Json)) | asset:gas/G_json_encode@ivm.core/v1 |
+| 0x58 | JSON_DECODE | r10=&NoritoBytes(Json) | ptr (&Json) | asset:gas/G_json_decode@ivm.core/v1 |
+| 0x59 | SCHEMA_ENCODE | r10=&Name(schema), r11=&Json | ptr (&NoritoBytes(Json)) | - |
+| 0x5A | SCHEMA_DECODE | r10=&Name(schema), r11=&NoritoBytes(Json) | ptr (&Json) | - |
 | 0x5B | SCHEMA_INFO | r10=&Name(schema) | ptr (&Json{"id":...,"version":...}) | - |
-| 0x5C | NAME_DECODE | r10=&NoritoBytes(UTF-8 string) | ptr (&Name) | asset:gas/G_name_decode@ivm.core/v1 |
+| 0x5C | NAME_DECODE | r10=&NoritoBytes(Name) | ptr (&Name) | asset:gas/G_name_decode@ivm.core/v1 |
 | 0x5D | POINTER_TO_NORITO | r10=&PointerType<T> | ptr (&NoritoBytes(TLV envelope)) | - |
 | 0x5E | POINTER_FROM_NORITO | r10=&NoritoBytes(TLV envelope), r11=expected?:u16 | ptr (&PointerType<T>) | - |
 | 0x5F | TLV_EQ | r10=&Tlv, r11=&Tlv | r10=1/0 | - |
@@ -431,12 +432,12 @@ but they must not change the host ABI.
 
 
 Codec helpers
-- 0x53 DECODE_INT — Args: `r10=&NoritoBytes(ASCII decimal)` or `r10=&Blob(ASCII decimal)` → Return: `r10=i64`
-- 0x57 JSON_ENCODE — Args: `r10=&Json` → Return: `ptr (&NoritoBytes)` — Gas: G_json_encode
-- 0x58 JSON_DECODE — Args: `r10=&NoritoBytes(JSON bytes)` or `r10=&Blob(JSON bytes)` → Return: `ptr (&Json)` — Gas: G_json_decode
-- 0x5A SCHEMA_DECODE — Args: `r10=&Name(schema), r11=&NoritoBytes` or `r11=&Blob` → Return: `ptr (&Json)`
+- 0x53 DECODE_INT — Args: `r10=&NoritoBytes(Norito-framed i64)` → Return: `r10=i64`
+- 0x57 JSON_ENCODE — Args: `r10=&Json` → Return: `ptr (&NoritoBytes(Json))` — Gas: G_json_encode
+- 0x58 JSON_DECODE — Args: `r10=&NoritoBytes(Json)` → Return: `ptr (&Json)` — Gas: G_json_decode
+- 0x5A SCHEMA_DECODE — Args: `r10=&Name(schema), r11=&NoritoBytes(Json)` → Return: `ptr (&Json)`
 - 0x5F TLV_EQ — Args: `r10=&Tlv, r11=&Tlv` → Return: `r10=1 if equal else 0` — Gas: -
-- 0x5C NAME_DECODE — Args: `r10=&NoritoBytes(UTF-8 string)` → Return: `ptr (&Name)` — Gas: G_name_decode
+- 0x5C NAME_DECODE — Args: `r10=&NoritoBytes(Name)` → Return: `ptr (&Name)` — Gas: G_name_decode
 - NAME_DECODE validates Name grammar (non-empty, no whitespace or `@/#/$`) and normalizes the output.
 - 0x5D POINTER_TO_NORITO — Args: `r10=&PointerType<T>` → Return: `ptr (&NoritoBytes(TLV envelope))`
 - 0x5E POINTER_FROM_NORITO — Args: `r10=&NoritoBytes(TLV envelope), r11=expected?:u16` → Return: `ptr (&PointerType<T>)`

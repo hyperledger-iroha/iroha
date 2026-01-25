@@ -249,6 +249,7 @@ impl Actor {
             validator_checkpoint,
             stake_snapshot,
         } = update;
+        let mut incoming_qc = incoming_qc;
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
@@ -573,6 +574,18 @@ impl Actor {
                 "skipping block sync update for already known block"
             );
             process_commit_votes(self);
+            // Known blocks may still be waiting on a commit QC (e.g., persisted before QC arrival).
+            if let Some(qc) = incoming_qc.take().or_else(|| selection.commit_qc.clone()) {
+                if let Err(err) = self.handle_qc(qc) {
+                    warn!(
+                        ?err,
+                        height = block_height,
+                        view = block_view,
+                        block = %block_hash,
+                        "failed to apply block sync QC for known block"
+                    );
+                }
+            }
             self.clear_missing_block_request(
                 &block_hash,
                 MissingBlockClearReason::PayloadAvailable,

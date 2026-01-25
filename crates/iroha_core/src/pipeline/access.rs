@@ -24,7 +24,7 @@ use iroha_data_model::{
     permission,
     prelude::*,
     role::RoleId,
-    smart_contract::manifest::{ContractManifest, EntrypointDescriptor},
+    smart_contract::manifest::{ContractManifest, EntrypointDescriptor, MANIFEST_METADATA_KEY},
     state::{
         AccountMetadataKey, AccountRoleKey, AssetDefinitionMetadataKey, AssetMetadataKey,
         CanonicalStateKey, DomainMetadataKey, NftMetadataKey, StateAccessSetAdvisory,
@@ -149,6 +149,59 @@ fn manifest_signature_hash(manifest: &ContractManifest) -> IrohaHash {
     IrohaHash::new(manifest.signature_payload_bytes())
 }
 
+fn manifest_from_metadata(tx: &SignedTransaction) -> Option<ContractManifest> {
+    let key: Name = MANIFEST_METADATA_KEY.parse().ok()?;
+    tx.metadata()
+        .get(&key)
+        .and_then(|json| json.clone().try_into_any_norito::<ContractManifest>().ok())
+}
+
+fn manifest_access_set(
+    manifest: &ContractManifest,
+    code_hash: IrohaHash,
+    bytecode: &[u8],
+    cache_enabled: bool,
+) -> Option<(AccessSet, AccessSetSource)> {
+    let manifest_hash = cache_enabled.then(|| manifest_signature_hash(manifest));
+    if let Some(hints) = manifest.access_set_hints.as_ref() {
+        let key = AccessSetCacheKey {
+            code_hash,
+            entrypoint: None,
+        };
+        if let Some(hash) = manifest_hash.as_ref() {
+            if let Some(set) = access_set_cache_get(&key, hash) {
+                return Some((set, AccessSetSource::ManifestHints));
+            }
+        }
+        if let Some(set) = access_set_from_hint_keys(&hints.read_keys, &hints.write_keys) {
+            if let Some(hash) = manifest_hash {
+                access_set_cache_put(key, hash, set.clone());
+            }
+            return Some((set, AccessSetSource::ManifestHints));
+        }
+    }
+    if let Some(entrypoints) = manifest.entrypoints.as_deref()
+        && let Some(entrypoint) = select_entrypoint(entrypoints)
+    {
+        let key = AccessSetCacheKey {
+            code_hash,
+            entrypoint: Some(entrypoint.name.clone()),
+        };
+        if let Some(hash) = manifest_hash.as_ref() {
+            if let Some(set) = access_set_cache_get(&key, hash) {
+                return Some((set, AccessSetSource::EntrypointHints));
+            }
+        }
+        if let Some(set) = entrypoint_access_set_if_safe(bytecode, entrypoint) {
+            if let Some(hash) = manifest_hash {
+                access_set_cache_put(key, hash, set.clone());
+            }
+            return Some((set, AccessSetSource::EntrypointHints));
+        }
+    }
+    None
+}
+
 /// Derivation strategy for IVM executables.
 #[derive(Debug, Copy, Clone)]
 pub enum IvmStrategy {
@@ -187,54 +240,29 @@ where
     match tx.instructions() {
         Executable::Instructions(batch) => (derive_from_isi_batch(batch.as_ref()), None),
         Executable::Ivm(bytecode) => {
-            // 1) Try static hints from on-chain manifest (by code_hash)
             let bytecode_ref = bytecode.as_ref();
-            if let Some(view) = state_ro {
-                if let Ok(parsed) = ivm::ProgramMetadata::parse(bytecode_ref) {
-                    let code_hash = IrohaHash::new(&bytecode_ref[parsed.header_len..]);
+            if let Ok(parsed) = ivm::ProgramMetadata::parse(bytecode_ref) {
+                let code_hash = IrohaHash::new(&bytecode_ref[parsed.header_len..]);
+                // 1) Try static hints from on-chain manifest (by code_hash)
+                if let Some(view) = state_ro {
                     if let Some(manifest) = view.world().contract_manifests().get(&code_hash) {
-                        let cache_enabled = view.pipeline().access_set_cache_enabled;
-                        let manifest_hash =
-                            cache_enabled.then(|| manifest_signature_hash(manifest));
-                        if let Some(hints) = manifest.access_set_hints.as_ref() {
-                            let key = AccessSetCacheKey {
-                                code_hash,
-                                entrypoint: None,
-                            };
-                            if let Some(hash) = manifest_hash.as_ref() {
-                                if let Some(set) = access_set_cache_get(&key, hash) {
-                                    return (set, Some(AccessSetSource::ManifestHints));
-                                }
-                            }
-                            if let Some(set) =
-                                access_set_from_hint_keys(&hints.read_keys, &hints.write_keys)
-                            {
-                                if let Some(hash) = manifest_hash {
-                                    access_set_cache_put(key, hash, set.clone());
-                                }
-                                return (set, Some(AccessSetSource::ManifestHints));
-                            }
+                        if let Some((set, source)) = manifest_access_set(
+                            manifest,
+                            code_hash,
+                            bytecode_ref,
+                            view.pipeline().access_set_cache_enabled,
+                        ) {
+                            return (set, Some(source));
                         }
-                        if let Some(entrypoints) = manifest.entrypoints.as_deref()
-                            && let Some(entrypoint) = select_entrypoint(entrypoints)
+                    }
+                }
+                // 1b) Fallback to manifest provided in transaction metadata.
+                if let Some(manifest) = manifest_from_metadata(tx) {
+                    if manifest.code_hash == Some(code_hash) {
+                        if let Some((set, source)) =
+                            manifest_access_set(&manifest, code_hash, bytecode_ref, false)
                         {
-                            let key = AccessSetCacheKey {
-                                code_hash,
-                                entrypoint: Some(entrypoint.name.clone()),
-                            };
-                            if let Some(hash) = manifest_hash.as_ref() {
-                                if let Some(set) = access_set_cache_get(&key, hash) {
-                                    return (set, Some(AccessSetSource::EntrypointHints));
-                                }
-                            }
-                            if let Some(set) =
-                                entrypoint_access_set_if_safe(bytecode_ref, entrypoint)
-                            {
-                                if let Some(hash) = manifest_hash {
-                                    access_set_cache_put(key, hash, set.clone());
-                                }
-                                return (set, Some(AccessSetSource::EntrypointHints));
-                            }
+                            return (set, Some(source));
                         }
                     }
                 }
@@ -310,7 +338,8 @@ fn select_entrypoint(entrypoints: &[EntrypointDescriptor]) -> Option<&Entrypoint
     None
 }
 
-/// Normalize manifest/entrypoint hint keys into canonical WSV keys plus state keys.
+/// Normalize manifest/entrypoint hint keys into canonical WSV keys plus state keys,
+/// preserving literal WSV keys when account selectors cannot be resolved.
 #[allow(clippy::too_many_lines)]
 fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Option<AccessSet> {
     if read_keys.iter().any(|key| key == "*") || write_keys.iter().any(|key| key == "*") {
@@ -319,6 +348,21 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
     let mut advisory = StateAccessSetAdvisory::default();
     let mut state_reads: BTreeSet<String> = BTreeSet::new();
     let mut state_writes: BTreeSet<String> = BTreeSet::new();
+    let account_parse_unresolved = |err: &iroha_data_model::error::ParseError| -> bool {
+        matches!(
+            err.reason(),
+            "ERR_DOMAIN_SELECTOR_UNRESOLVED" | "ERR_UAID_UNRESOLVED" | "ERR_OPAQUE_ID_UNRESOLVED"
+        )
+    };
+    let asset_has_unresolved_account = |raw_asset: &str| -> bool {
+        let Some((_, account_part)) = raw_asset.rsplit_once('#') else {
+            return false;
+        };
+        match account_part.parse::<AccountId>() {
+            Ok(_) => false,
+            Err(err) => account_parse_unresolved(&err),
+        }
+    };
 
     let ingest = |raw: &str,
                   canonical: &mut Vec<CanonicalStateKey>,
@@ -332,13 +376,35 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("account.detail:") {
-            let (id, key) = rest.split_once(':')?;
-            let id: AccountId = id.parse().ok()?;
-            let key: Name = key.parse().ok()?;
-            canonical.push(CanonicalStateKey::AccountMetadata(AccountMetadataKey {
-                id,
-                key,
-            }));
+            let mut parsed = None;
+            for split in [rest.split_once(':'), rest.rsplit_once(':')] {
+                let Some((id_raw, key_raw)) = split else {
+                    continue;
+                };
+                let Ok(key) = key_raw.parse::<Name>() else {
+                    continue;
+                };
+                match id_raw.parse::<AccountId>() {
+                    Ok(id) => {
+                        parsed = Some(Ok(AccountMetadataKey { id, key }));
+                        break;
+                    }
+                    Err(err) if account_parse_unresolved(&err) => {
+                        parsed = Some(Err(()));
+                        break;
+                    }
+                    Err(_) => continue,
+                }
+            }
+            match parsed {
+                Some(Ok(key)) => {
+                    canonical.push(CanonicalStateKey::AccountMetadata(key));
+                }
+                Some(Err(())) => {
+                    state_keys.insert(raw.to_owned());
+                }
+                None => return None,
+            }
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("domain.detail:") {
@@ -361,13 +427,35 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("asset.detail:") {
-            let (id, key) = rest.split_once(':')?;
-            let id: AssetId = id.parse().ok()?;
-            let key: Name = key.parse().ok()?;
-            canonical.push(CanonicalStateKey::AssetMetadata(AssetMetadataKey {
-                id,
-                key,
-            }));
+            let mut parsed = None;
+            for split in [rest.split_once(':'), rest.rsplit_once(':')] {
+                let Some((id_raw, key_raw)) = split else {
+                    continue;
+                };
+                let Ok(key) = key_raw.parse::<Name>() else {
+                    continue;
+                };
+                match id_raw.parse::<AssetId>() {
+                    Ok(id) => {
+                        parsed = Some(Ok(AssetMetadataKey { id, key }));
+                        break;
+                    }
+                    Err(_) if asset_has_unresolved_account(id_raw) => {
+                        parsed = Some(Err(()));
+                        break;
+                    }
+                    Err(_) => continue,
+                }
+            }
+            match parsed {
+                Some(Ok(key)) => {
+                    canonical.push(CanonicalStateKey::AssetMetadata(key));
+                }
+                Some(Err(())) => {
+                    state_keys.insert(raw.to_owned());
+                }
+                None => return None,
+            }
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("nft.detail:") {
@@ -388,18 +476,45 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("role.binding:") {
-            let (account, role) = rest.split_once(':')?;
-            let account: AccountId = account.parse().ok()?;
-            let role: RoleId = role.parse().ok()?;
-            canonical.push(CanonicalStateKey::AccountRole(AccountRoleKey {
-                account,
-                role,
-            }));
+            let mut parsed = None;
+            for split in [rest.split_once(':'), rest.rsplit_once(':')] {
+                let Some((account_raw, role_raw)) = split else {
+                    continue;
+                };
+                let Ok(role) = role_raw.parse::<RoleId>() else {
+                    continue;
+                };
+                match account_raw.parse::<AccountId>() {
+                    Ok(account) => {
+                        parsed = Some(Ok(AccountRoleKey { account, role }));
+                        break;
+                    }
+                    Err(err) if account_parse_unresolved(&err) => {
+                        parsed = Some(Err(()));
+                        break;
+                    }
+                    Err(_) => continue,
+                }
+            }
+            match parsed {
+                Some(Ok(key)) => {
+                    canonical.push(CanonicalStateKey::AccountRole(key));
+                }
+                Some(Err(())) => {
+                    state_keys.insert(raw.to_owned());
+                }
+                None => return None,
+            }
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("account:") {
-            let id: AccountId = rest.parse().ok()?;
-            canonical.push(CanonicalStateKey::Account(id));
+            match rest.parse::<AccountId>() {
+                Ok(id) => canonical.push(CanonicalStateKey::Account(id)),
+                Err(err) if account_parse_unresolved(&err) => {
+                    state_keys.insert(raw.to_owned());
+                }
+                Err(_) => return None,
+            }
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("domain:") {
@@ -413,8 +528,13 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("asset:") {
-            let id: AssetId = rest.parse().ok()?;
-            canonical.push(CanonicalStateKey::Asset(id));
+            match rest.parse::<AssetId>() {
+                Ok(id) => canonical.push(CanonicalStateKey::Asset(id)),
+                Err(_) if asset_has_unresolved_account(rest) => {
+                    state_keys.insert(raw.to_owned());
+                }
+                Err(_) => return None,
+            }
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("nft:") {
@@ -1103,6 +1223,19 @@ mod tests {
         );
     }
 
+    fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
+        let mut v = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
+        v.extend_from_slice(&type_id.to_be_bytes());
+        v.push(1u8); // version
+        let payload_len =
+            u32::try_from(payload.len()).expect("payload length must fit into u32 for TLV");
+        v.extend_from_slice(&payload_len.to_be_bytes());
+        v.extend_from_slice(payload);
+        let h: [u8; 32] = IrohaHash::new(payload).into();
+        v.extend_from_slice(&h);
+        v
+    }
+
     #[test]
     fn isi_access_transfer_and_mint() {
         let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
@@ -1202,14 +1335,72 @@ mod tests {
         let state = State::new(world, kura, query);
         let view = state.view();
 
-        // Program: SCALL SET_ACCOUNT_DETAIL (sentinel account/key/value); HALT
+        // Program: GET_AUTHORITY; INPUT_PUBLISH_TLV (key/value); SET_ACCOUNT_DETAIL; HALT
+        const LITERAL_DATA_START: i16 = 16;
+        let key: Name = "cursor".parse().expect("key name");
+        let key_payload = norito::to_bytes(&key).expect("encode key");
+        let value_json = iroha_primitives::json::Json::new(1u64);
+        let value_payload = norito::to_bytes(&value_json).expect("encode value");
+        let key_tlv = make_tlv(ivm::PointerType::Name as u16, &key_payload);
+        let value_tlv = make_tlv(ivm::PointerType::Json as u16, &value_payload);
+        let value_ptr = LITERAL_DATA_START
+            + i16::try_from(key_tlv.len()).expect("literal data offset fits in i16");
+
         let mut code = Vec::new();
-        for rd in [10_u8, 11, 12] {
-            code.extend_from_slice(
-                &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, rd, 0, 0)
-                    .to_le_bytes(),
-            );
-        }
+        code.extend_from_slice(
+            &ivm::encoding::wide::encode_sys(
+                ivm::instruction::wide::system::SCALL,
+                u8::try_from(ivm::syscalls::SYSCALL_GET_AUTHORITY)
+                    .expect("syscall identifier fits in 8 bits"),
+            )
+            .to_le_bytes(),
+        );
+        code.extend_from_slice(
+            &ivm::kotodama::compiler::encode_addi(13, 10, 0)
+                .expect("encode addi")
+                .to_le_bytes(),
+        ); // save account ptr
+        code.extend_from_slice(
+            &ivm::kotodama::compiler::encode_addi(10, 0, LITERAL_DATA_START)
+                .expect("encode addi")
+                .to_le_bytes(),
+        );
+        code.extend_from_slice(
+            &ivm::encoding::wide::encode_sys(
+                ivm::instruction::wide::system::SCALL,
+                u8::try_from(ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)
+                    .expect("syscall identifier fits in 8 bits"),
+            )
+            .to_le_bytes(),
+        );
+        code.extend_from_slice(
+            &ivm::kotodama::compiler::encode_addi(11, 10, 0)
+                .expect("encode addi")
+                .to_le_bytes(),
+        ); // r11 = key ptr
+        code.extend_from_slice(
+            &ivm::kotodama::compiler::encode_addi(10, 0, value_ptr)
+                .expect("encode addi")
+                .to_le_bytes(),
+        );
+        code.extend_from_slice(
+            &ivm::encoding::wide::encode_sys(
+                ivm::instruction::wide::system::SCALL,
+                u8::try_from(ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)
+                    .expect("syscall identifier fits in 8 bits"),
+            )
+            .to_le_bytes(),
+        );
+        code.extend_from_slice(
+            &ivm::kotodama::compiler::encode_addi(12, 10, 0)
+                .expect("encode addi")
+                .to_le_bytes(),
+        ); // r12 = value ptr
+        code.extend_from_slice(
+            &ivm::kotodama::compiler::encode_addi(10, 13, 0)
+                .expect("encode addi")
+                .to_le_bytes(),
+        ); // r10 = account ptr
         code.extend_from_slice(
             &ivm::encoding::wide::encode_sys(
                 ivm::instruction::wide::system::SCALL,
@@ -1228,10 +1419,14 @@ mod tests {
             abi_version: 1,
         };
         let mut prog = meta.encode();
+        let mut literal_data = Vec::with_capacity(key_tlv.len() + value_tlv.len());
+        literal_data.extend_from_slice(&key_tlv);
+        literal_data.extend_from_slice(&value_tlv);
         prog.extend_from_slice(&LITERAL_SECTION_MAGIC);
         prog.extend_from_slice(&0u32.to_le_bytes()); // literal entries
         prog.extend_from_slice(&0u32.to_le_bytes()); // post-pad bytes
-        prog.extend_from_slice(&0u32.to_le_bytes()); // literal size
+        prog.extend_from_slice(&(literal_data.len() as u32).to_le_bytes()); // literal size
+        prog.extend_from_slice(&literal_data);
         prog.extend_from_slice(&code);
 
         let mut md = iroha_data_model::metadata::Metadata::default();
@@ -1246,7 +1441,7 @@ mod tests {
             Some(&view),
             IvmStrategy::DynamicThenConservative,
         );
-        // Expect an account.detail access for the authority under sentinel key "cursor".
+        // Expect an account.detail access for the authority under key "cursor".
         let k = key_account_detail(&alice, &"cursor".parse().unwrap());
         assert!(set.read_keys.contains(&k) && set.write_keys.contains(&k));
         assert_eq!(source, Some(AccessSetSource::PrepassMerge));
@@ -1425,6 +1620,64 @@ mod tests {
             IvmStrategy::DynamicThenConservative,
         );
         // Expect keys exactly from hints
+        assert!(set.read_keys.contains(&hints.read_keys[0]));
+        assert!(set.write_keys.contains(&hints.write_keys[0]));
+        assert_eq!(source, Some(AccessSetSource::ManifestHints));
+    }
+
+    #[test]
+    fn ivm_access_uses_manifest_hints_from_metadata_when_missing_in_wsv() {
+        use iroha_data_model::{
+            asset::{AssetDefinitionId, AssetId},
+            smart_contract::manifest::{AccessSetHints, ContractManifest, MANIFEST_METADATA_KEY},
+        };
+        use iroha_primitives::json::Json;
+
+        access_set_cache_clear();
+
+        let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
+        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let account = Account::new(alice.clone()).build(&alice);
+        let world = World::with([domain], [account], []);
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query);
+
+        let mut prog = ivm::ProgramMetadata::default().encode();
+        prog.extend_from_slice(b"metadata-hints");
+        let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
+        let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
+
+        let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition");
+        let asset_id = AssetId::of(asset_def, alice.clone());
+        let hints = AccessSetHints {
+            read_keys: vec![format!("account:{alice}")],
+            write_keys: vec![format!("asset:{asset_id}")],
+        };
+        let manifest = ContractManifest {
+            code_hash: Some(code_hash),
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: Some(hints.clone()),
+            entrypoints: None,
+            kotoba: None,
+            provenance: None,
+        }
+        .signed(&kp);
+
+        let mut md = iroha_data_model::metadata::Metadata::default();
+        md.insert(MANIFEST_METADATA_KEY.parse().unwrap(), Json::new(manifest));
+        let tx = TransactionBuilder::new("chain".parse().unwrap(), alice.clone())
+            .with_metadata(md)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+            .sign(kp.private_key());
+
+        let (set, source) = derive_for_transaction_with_source(
+            &tx,
+            Some(&state.view()),
+            IvmStrategy::DynamicThenConservative,
+        );
         assert!(set.read_keys.contains(&hints.read_keys[0]));
         assert!(set.write_keys.contains(&hints.write_keys[0]));
         assert_eq!(source, Some(AccessSetSource::ManifestHints));

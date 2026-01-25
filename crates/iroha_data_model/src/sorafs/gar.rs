@@ -319,7 +319,7 @@ mod tests {
             policy_version: None,
             policy_digest: None,
             operator: AccountId::from_str(
-                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C",
+                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C@wonderland",
             )
             .expect("account id"),
             reason: "Taikai stream purge drill".to_string(),

@@ -8,7 +8,7 @@
         },
         "expected_prefix": 753,
         "format": "ih58",
-        "input": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqz",
+        "input": "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiz",
         "note": "Checksum tampering on IH58 alias for the default-domain vector."
       },
       {
@@ -20,7 +20,7 @@
         },
         "expected_prefix": 753,
         "format": "ih58",
-        "input": "S1dLN3FoMHr7ZvCRt5Md6m3GJwpXaKWWZpHjuKx3R1Eqw1mApmMGCXs1",
+        "input": "S1dLN3FoMGvocmBZkeTG8sPbANJybe36z2Hq66mh9iBWmb7dCt71Ko9F",
         "note": "Encoded with prefix NETWORK_PREFIX + 1 while validators expect NETWORK_PREFIX."
       },
       {
@@ -29,7 +29,7 @@
           "kind": "MissingCompressedSentinel"
         },
         "format": "compressed",
-        "input": "2QGﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5E5",
+        "input": "2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8",
         "note": "Missing required snx1 sentinel prefix."
       },
       {
@@ -38,7 +38,7 @@
           "kind": "ChecksumMismatch"
         },
         "format": "compressed",
-        "input": "snx12QAﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5E5",
+        "input": "snx12QAﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8",
         "note": "Introduces ASCII 'A' outside the Sora compressed alphabet."
       },
       {
@@ -47,7 +47,7 @@
           "kind": "ChecksumMismatch"
         },
         "format": "compressed",
-        "input": "snx12QGﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5Eﾇ",
+        "input": "snx12QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VFﾇ",
         "note": "Checksum nibble replaced to trigger Bech32m verification failure."
       },
       {
@@ -56,7 +56,7 @@
           "kind": "InvalidHexAddress"
         },
         "format": "canonical_hex",
-        "input": "0x0200000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c20G",
+        "input": "0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da2G",
         "note": "Invalid hex digit injected into canonical representation."
       },
       {
@@ -65,7 +65,7 @@
           "kind": "UnexpectedTrailingBytes"
         },
         "format": "canonical_hex",
-        "input": "0x0200000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c20100",
+        "input": "0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da2900",
         "note": "Extra zero byte appended past the canonical payload."
       },
       {
@@ -74,7 +74,7 @@
           "kind": "InvalidLength"
         },
         "format": "canonical_hex",
-        "input": "0x0A014B5D81318D0CDF5559258C8E01010003030100010020591B509F4A1B29C9D8CADA0F876EE97041CBD43C0DE3251B1E6C77BB621F40B0010002002062FFA8DE6DA654EFEBFA3D80FDEF8F188034CFA3E211859346E41A5FEA06532B0100010020D4ABAFC1F385826A8EBC60DF90568C52CCFBF91E0B134DC66E42731A",
+        "input": "0x0A014B5D81318D0CDF5559258C8E0101000303010001002068F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F9601000100207EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E4130100020020884B8857F4EAA1613C61504DB34D4BEAF346517A0E31DE3CDDD4D9B4",
         "note": "Canonical multisig payload truncated after removing final member bytes."
       }
     ],
@@ -85,17 +85,17 @@
         "controller": {
           "curve": "ed25519",
           "kind": "single",
-          "public_key_hex": "641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201",
-          "public_key_multihash": "ed0120641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201",
-          "public_key_prefixed": "ed25519:ed0120641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201"
+          "public_key_hex": "3B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
+          "public_key_multihash": "ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
+          "public_key_prefixed": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29"
         },
         "encodings": {
-          "canonical_hex": "0x0200000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201",
-          "compressed": "snx12QGﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5E5",
-          "compressed_fullwidth": "snx12QGネkタアレiノリuロWRヱマxチSuチepnhスvカrモカ9Tケソp3ヌVWウイセU4N5E5",
+          "canonical_hex": "0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+          "compressed": "snx12QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8",
+          "compressed_fullwidth": "snx12QGネkタヘrNメBホwヘwルwラXHwワCリツY8ryGUネホyQイHyヰD8イチYVY9VF8",
           "ih58": {
             "prefix": 753,
-            "string": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS"
+            "string": "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA"
           }
         },
         "input": {
@@ -114,17 +114,17 @@
         "controller": {
           "curve": "ed25519",
           "kind": "single",
-          "public_key_hex": "3B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8",
-          "public_key_multihash": "ed01203B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8",
-          "public_key_prefixed": "ed25519:ed01203B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8"
+          "public_key_hex": "8A88E3DD7409F195FD52DB2D3CBA5D72CA6709BF1D94121BF3748801B40F6F5C",
+          "public_key_multihash": "ed01208A88E3DD7409F195FD52DB2D3CBA5D72CA6709BF1D94121BF3748801B40F6F5C",
+          "public_key_prefixed": "ed25519:ed01208A88E3DD7409F195FD52DB2D3CBA5D72CA6709BF1D94121BF3748801B40F6F5C"
         },
         "encodings": {
-          "canonical_hex": "0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8",
-          "compressed": "snx15ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾘｻYﾃhﾓMQ9CBEﾅﾊﾈｷﾉVRｺnKRwTﾋｼqﾅWrﾎU7ｼiﾍQt1TPGNJ",
-          "compressed_fullwidth": "snx15サu6rタCヰTGwマ1ナヱフQイヨリサYテhモMQ9CBEナハネキノVRコnKRwTヒシqナWrホU7シiヘQt1TPGNJ",
+          "canonical_hex": "0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "compressed": "snx15ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU",
+          "compressed_fullwidth": "snx15サu6rタCヰTGwマ1ナヱフQイヨヌqCヲヰモZQCZRDSSナMアルヱケチク8セeトロ6C8bZuwラケCZヲRSLQFU",
           "ih58": {
             "prefix": 753,
-            "string": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"
+            "string": "34mSYnCXkCzHXm31UDHh7SJfGvDr5J6dmRfd2uSV4p9c6R8J4RtERSzJskHar6uZsUVTKSKNU"
           }
         },
         "input": {
@@ -144,17 +144,17 @@
         "controller": {
           "curve": "ed25519",
           "kind": "single",
-          "public_key_hex": "3B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8",
-          "public_key_multihash": "ed01203B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8",
-          "public_key_prefixed": "ed25519:ed01203B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8"
+          "public_key_hex": "8A88E3DD7409F195FD52DB2D3CBA5D72CA6709BF1D94121BF3748801B40F6F5C",
+          "public_key_multihash": "ed01208A88E3DD7409F195FD52DB2D3CBA5D72CA6709BF1D94121BF3748801B40F6F5C",
+          "public_key_prefixed": "ed25519:ed01208A88E3DD7409F195FD52DB2D3CBA5D72CA6709BF1D94121BF3748801B40F6F5C"
         },
         "encodings": {
-          "canonical_hex": "0x02020000002a0001203b77a042f1de02f6d5f418f36a20fd68c8329fe3bbfbecd26a2d72878cd827f8",
-          "compressed": "snx1kXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP",
-          "compressed_fullwidth": "snx1kXケ6NサヘタヨSワヨア3レ5WリヒQナキヲxgロクcチオヒkヒvマ8SPモタケdエエイW9iCM6AEP",
+          "canonical_hex": "0x02020000002a0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "compressed": "snx1kXｹ6NｻﾍﾀﾖTRuﾜmﾚHWﾜJeﾈjbxｦﾜN7ﾄ1ﾍUnﾄrｶﾔﾊﾑｲｲﾎbｶｽヰJﾛM7PUK8",
+          "compressed_fullwidth": "snx1kXケ6NサヘタヨTRuワmレHWワJeネjbxヲワN7ト1ヘUnトrカヤハムイイホbカスヰJロM7PUK8",
           "ih58": {
             "prefix": 753,
-            "string": "3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF"
+            "string": "3oE9sLeRGP49Cu7oBgh6zmbDeoohgTqtabbjxhm7bTpTLxu3tWf6LKQsWoH8Wd"
           }
         },
         "input": {
@@ -174,54 +174,54 @@
         "case_id": "addr-multisig-council-threshold3",
         "category": "multisig",
         "controller": {
-          "ctap2_cbor_hex": "0xA3010102030383A301010201035820591B509F4A1B29C9D8CADA0F876EE97041CBD43C0DE3251B1E6C77BB621F40B0A30101020203582062FFA8DE6DA654EFEBFA3D80FDEF8F188034CFA3E211859346E41A5FEA06532BA301010201035820D4ABAFC1F385826A8EBC60DF90568C52CCFBF91E0B134DC66E42731A7561E4DA",
-          "digest_blake2b256_hex": "0x24E6E8231BC3DCF93DA43F2ABAE739419340B0D532F671808A59239CB2E7A4D6",
+          "ctap2_cbor_hex": "0xA3010102030383A30101020103582068F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96A3010102010358207EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E413A301010202035820884B8857F4EAA1613C61504DB34D4BEAF346517A0E31DE3CDDD4D9B4201D9D0B",
+          "digest_blake2b256_hex": "0x3CA0D464D52713DD60DDAA55B3B3F49A6EF114574864E2AADE63114C4DB06B9F",
           "kind": "multisig",
           "members": [
             {
               "curve": "ed25519",
-              "public_key_hex": "591B509F4A1B29C9D8CADA0F876EE97041CBD43C0DE3251B1E6C77BB621F40B0",
-              "public_key_multihash": "ed0120591B509F4A1B29C9D8CADA0F876EE97041CBD43C0DE3251B1E6C77BB621F40B0",
-              "public_key_prefixed": "ed25519:ed0120591B509F4A1B29C9D8CADA0F876EE97041CBD43C0DE3251B1E6C77BB621F40B0",
+              "public_key_hex": "68F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96",
+              "public_key_multihash": "ed012068F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96",
+              "public_key_prefixed": "ed25519:ed012068F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96",
               "weight": 1
             },
             {
               "curve": "ed25519",
-              "public_key_hex": "62FFA8DE6DA654EFEBFA3D80FDEF8F188034CFA3E211859346E41A5FEA06532B",
-              "public_key_multihash": "ed012062FFA8DE6DA654EFEBFA3D80FDEF8F188034CFA3E211859346E41A5FEA06532B",
-              "public_key_prefixed": "ed25519:ed012062FFA8DE6DA654EFEBFA3D80FDEF8F188034CFA3E211859346E41A5FEA06532B",
+              "public_key_hex": "7EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E413",
+              "public_key_multihash": "ed01207EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E413",
+              "public_key_prefixed": "ed25519:ed01207EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E413",
+              "weight": 1
+            },
+            {
+              "curve": "ed25519",
+              "public_key_hex": "884B8857F4EAA1613C61504DB34D4BEAF346517A0E31DE3CDDD4D9B4201D9D0B",
+              "public_key_multihash": "ed0120884B8857F4EAA1613C61504DB34D4BEAF346517A0E31DE3CDDD4D9B4201D9D0B",
+              "public_key_prefixed": "ed25519:ed0120884B8857F4EAA1613C61504DB34D4BEAF346517A0E31DE3CDDD4D9B4201D9D0B",
               "weight": 2
-            },
-            {
-              "curve": "ed25519",
-              "public_key_hex": "D4ABAFC1F385826A8EBC60DF90568C52CCFBF91E0B134DC66E42731A7561E4DA",
-              "public_key_multihash": "ed0120D4ABAFC1F385826A8EBC60DF90568C52CCFBF91E0B134DC66E42731A7561E4DA",
-              "public_key_prefixed": "ed25519:ed0120D4ABAFC1F385826A8EBC60DF90568C52CCFBF91E0B134DC66E42731A7561E4DA",
-              "weight": 1
             }
           ],
           "threshold": 3,
           "version": 1
         },
         "encodings": {
-          "canonical_hex": "0x0a014b5d81318d0cdf5559258c8e01010003030100010020591b509f4a1b29c9d8cada0f876ee97041cbd43c0de3251b1e6c77bb621f40b0010002002062ffa8de6da654efebfa3d80fdef8f188034cfa3e211859346e41a5fea06532b0100010020d4abafc1f385826a8ebc60df90568c52ccfbf91e0b134dc66e42731a7561e4da",
-          "compressed": "snx13vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnoWﾛYicaUr3ﾔｲﾖ2Ado3TﾘYQﾉJqﾜﾇｳﾑﾐd8dDjRGｦ3Vﾃ9HcﾀMヰR8ﾎﾖgEqGｵEｾDyc5ﾁ1ﾔﾉ31sUﾑﾀﾖaｸxﾘ3ｲｷMEuFｺｿﾉBQSVQnxﾈeJzrXLヰhｿｹ5SEEﾅPﾂﾗｸdヰﾋ1bUGHｲVXBWNNJ6K",
-          "compressed_fullwidth": "snx13vム2zkaoUwヒナGリレyツe3ヨfルヰカリノwキnoWロYicaUr3ヤイヨ2Ado3TリYQノJqワヌウムミd8dDjRGヲ3Vテ9HcタMヰR8ホヨgEqGオEセDyc5チ1ヤノ31sUムタヨaクxリ3イキMEuFコソノBQSVQnxネeJzrXLヰhソケ5SEEナPツラクdヰヒ1bUGHイVXBWNNJ6K",
+          "canonical_hex": "0x0a014b5d81318d0cdf5559258c8e0101000303010001002068f4b6017d0f876a55c80a82b8388a54aad264d367269e2de8be079c935b5f9601000100207ea0e3bd52e207c9d3b0eba65c0704e66fca2d8e165a175218b174fc4160e4130100020020884b8857f4eaa1613c61504db34d4beaf346517a0e31de3cddd4d9b4201d9d0b",
+          "compressed": "snx13vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnﾖgoGdgQyjVVezjﾁｽkｲtﾌn8ｵvﾉ9ﾃﾘDｶPﾜｳtKpzｾyヰaﾂｼQｦ9hｳヱSXDﾕｷbqLh3ﾛJTMﾔﾓZﾆﾏｸMﾃJKﾃtｻヱﾃ4uBﾂxﾂヱ5BﾐwaﾇﾒkYﾐquhgヰｹHﾗｶdJNvEﾊXc9ﾇJｺXﾆﾔUｼY6ﾄEyTMMVPR",
+          "compressed_fullwidth": "snx13vム2zkaoUwヒナGリレyツe3ヨfルヰカリノwキnヨgoGdgQyjVVezjチスkイtフn8オvノ9テリDカPワウtKpzセyヰaツシQヲ9hウヱSXDユキbqLh3ロJTMヤモZニマクMテJKテtサヱテ4uBツxツヱ5BミwaヌメkYミquhgヰケHラカdJNvEハXc9ヌJコXニヤUシY6トEyTMMVPR",
           "ih58": {
             "prefix": 753,
-            "string": "SRfSHsrH3tEmYaaAYyD248F3vfT1oQ3WEGS22MaD8W9bLefF7rsoKLYGcpbcM9EcSus5ZhCAZU7ztn2BCsyeCAdfRncAVmVsipd4ibk6CBLF3Nrzcw8P7VKJg6mtFgEhWVTjfDkUMoc63oeEmaWyV6cyiphwk8ZgKAJUe4TyVtmKm1WWcg7qZ6i"
+            "string": "SRfSHsrH3tEmYaaAYyD248F3vfT1oQ3WEGS2UjLZqBxT5poRc8tQJCPkhpsauft2f9VjRBqE3UnhEjMCp2WZR9FDAQzDpQJRzrZPPqwnSQ9vfDJXANTFyiWFcz67g1JaqjXZbnUiYyURRCLA2ty39PsAAVPvmjfCgpnUmB6aH48eaCpGJW9PeHh"
           }
         },
         "input": {
           "member_keys_hex": [
-            "591B509F4A1B29C9D8CADA0F876EE97041CBD43C0DE3251B1E6C77BB621F40B0",
-            "62FFA8DE6DA654EFEBFA3D80FDEF8F188034CFA3E211859346E41A5FEA06532B",
-            "D4ABAFC1F385826A8EBC60DF90568C52CCFBF91E0B134DC66E42731A7561E4DA"
+            "68F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96",
+            "7EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E413",
+            "884B8857F4EAA1613C61504DB34D4BEAF346517A0E31DE3CDDD4D9B4201D9D0B"
           ],
           "member_weights": [
             1,
-            2,
-            1
+            1,
+            2
           ],
           "normalized_domain": "council",
           "raw_domain": "council",
@@ -237,22 +237,22 @@
         "case_id": "addr-multisig-wonderland-threshold2",
         "category": "multisig",
         "controller": {
-          "ctap2_cbor_hex": "0xA3010102020382A301010201035820590E3F8A4263537D1AECA330EDAADB5722597ACD54807B3B1C5A7F2CCAB13D45A3010102020358208C9C7A57B25A194205E227E1FE67780A0E8D54C9AEC7ABD9439CF69B5CFCCCB5",
-          "digest_blake2b256_hex": "0x13F157FB9400EF6B096A5D50EE1AAD30E89EF523C22FCF845631F21089130F12",
+          "ctap2_cbor_hex": "0xA3010102020382A3010102010358205C9C6DF261C9CB840475776AAEFCD944B405328FAB28F9B3A95EF40490D3DE84A301010202035820D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737",
+          "digest_blake2b256_hex": "0xCDEFCDA0C30A91D0B2F2E4A9885A86A990D285B4E200AA0131E545C865C2E563",
           "kind": "multisig",
           "members": [
             {
               "curve": "ed25519",
-              "public_key_hex": "590E3F8A4263537D1AECA330EDAADB5722597ACD54807B3B1C5A7F2CCAB13D45",
-              "public_key_multihash": "ed0120590E3F8A4263537D1AECA330EDAADB5722597ACD54807B3B1C5A7F2CCAB13D45",
-              "public_key_prefixed": "ed25519:ed0120590E3F8A4263537D1AECA330EDAADB5722597ACD54807B3B1C5A7F2CCAB13D45",
+              "public_key_hex": "5C9C6DF261C9CB840475776AAEFCD944B405328FAB28F9B3A95EF40490D3DE84",
+              "public_key_multihash": "ed01205C9C6DF261C9CB840475776AAEFCD944B405328FAB28F9B3A95EF40490D3DE84",
+              "public_key_prefixed": "ed25519:ed01205C9C6DF261C9CB840475776AAEFCD944B405328FAB28F9B3A95EF40490D3DE84",
               "weight": 1
             },
             {
               "curve": "ed25519",
-              "public_key_hex": "8C9C7A57B25A194205E227E1FE67780A0E8D54C9AEC7ABD9439CF69B5CFCCCB5",
-              "public_key_multihash": "ed01208C9C7A57B25A194205E227E1FE67780A0E8D54C9AEC7ABD9439CF69B5CFCCCB5",
-              "public_key_prefixed": "ed25519:ed01208C9C7A57B25A194205E227E1FE67780A0E8D54C9AEC7ABD9439CF69B5CFCCCB5",
+              "public_key_hex": "D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737",
+              "public_key_multihash": "ed0120D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737",
+              "public_key_prefixed": "ed25519:ed0120D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737",
               "weight": 2
             }
           ],
@@ -260,18 +260,18 @@
           "version": 1
         },
         "encodings": {
-          "canonical_hex": "0x0a01b8ae571b79c5a80f5834da2b01010002020100010020590e3f8a4263537d1aeca330edaadb5722597acd54807b3b1c5a7f2ccab13d4501000200208c9c7a57b25a194205e227e1fe67780a0e8d54c9aec7abd9439cf69b5cfcccb5",
-          "compressed": "snx12ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐmﾊvEﾐCﾏﾎｦ1ﾑHﾋso2GKﾔﾕﾁwﾂﾃP6ﾁｼﾙﾖｺ9ｻｦbﾈ4wFdﾑFヰ3HaﾘｼMｷﾌHWtｷﾋLﾙﾖQ4D3XﾊﾜXmpktﾚｻ5ﾅﾅﾇ1gkﾏsCFQGH9",
-          "compressed_fullwidth": "snx12ヨZリeエAdx3ツノヤXhnケタ2ノアヒxナトフヱwミmハvEミCマホヲ1ムHヒso2GKヤユチwツテP6チシルヨコ9サヲbネ4wFdムFヰ3HaリシMキフHWtキヒLルヨQ4D3XハワXmpktレサ5ナナヌ1gkマsCFQGH9",
+          "canonical_hex": "0x0a01b8ae571b79c5a80f5834da2b010100020201000100205c9c6df261c9cb840475776aaefcd944b405328fab28f9b3a95ef40490d3de840100020020d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+          "compressed": "snx12ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐqvﾄWBﾅnJqｻｷk6ﾖｼ5ﾛｲﾐYﾘPafcHヰﾆヰﾏVTﾙﾆ1LjﾇcuﾌヱcCTnﾗWJヱﾖﾛﾙcﾕdwｿfﾂﾚE5eg2GﾛmFAxtﾇﾗs5ｲｽBqdSW41JA",
+          "compressed_fullwidth": "snx12ヨZリeエAdx3ツノヤXhnケタ2ノアヒxナトフヱwミqvトWBナnJqサキk6ヨシ5ロイミYリPafcHヰニヰマVTルニ1LjヌcuフヱcCTnラWJヱヨロルcユdwソfツレE5eg2GロmFAxtヌラs5イスBqdSW41JA",
           "ih58": {
             "prefix": 753,
-            "string": "3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt"
+            "string": "3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9r3qxjrVwQQSrRbAiCMs2j6v2sVEFe56jgfyepc188oJVkv5iKJtzzrfnR8euecsLkut93ACQGdkFvo9eqt8WDJgeE5MPrSFA"
           }
         },
         "input": {
           "member_keys_hex": [
-            "590E3F8A4263537D1AECA330EDAADB5722597ACD54807B3B1C5A7F2CCAB13D45",
-            "8C9C7A57B25A194205E227E1FE67780A0E8D54C9AEC7ABD9439CF69B5CFCCCB5"
+            "5C9C6DF261C9CB840475776AAEFCD944B405328FAB28F9B3A95EF40490D3DE84",
+            "D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737"
           ],
           "member_weights": [
             1,
@@ -291,36 +291,36 @@
         "case_id": "addr-multisig-default-quorum3",
         "category": "multisig",
         "controller": {
-          "ctap2_cbor_hex": "0xA3010102030384A3010102010358200DCE150576DC9D2677EBC1B5EE02C019CA69EB1892732157F7D551D2F83976C4A30101020103582032708B35523549F429E95F7AF11F7C8320B9BA29163D2F27AF7D81C1C5991041A301010201035820683BA155CD7E73B91FA9B0E61722DF50AE625E7F5DA9CF5013162891439C2C3FA301010201035820BEF1E6A19FC053B29945A3F1D2A4759B5297F9ADD0A5C3961405804EFD1780BB",
-          "digest_blake2b256_hex": "0xD596346A497D45B9954EEE3BC71C82C8D4B33E9AC9A8A226D626C45891CD2378",
+          "ctap2_cbor_hex": "0xA3010102030384A30101020103582065E8F9B0BC6EAE124169F0576F97362D295A8CF5F770B45E14357CE647D33EECA301010201035820ACF12B4ACC1C660A8326AED34039EFB728A5E496488240F50A932AB7ABA51751A301010201035820B533D8AD9FCFBDDE0B481C1B334DDC3C53412FD614564E7E5AFD020368D382C3A301010201035820BC7CBCB5636375FA1D82434D466724D92377F53B980695DD49D26D0CE12205A5",
+          "digest_blake2b256_hex": "0xB32B7CEA6AE24A0E6746B5450392814A6E0A00CF645CD2FB9D2ECF03D88C0C1D",
           "kind": "multisig",
           "members": [
             {
               "curve": "ed25519",
-              "public_key_hex": "0DCE150576DC9D2677EBC1B5EE02C019CA69EB1892732157F7D551D2F83976C4",
-              "public_key_multihash": "ed01200DCE150576DC9D2677EBC1B5EE02C019CA69EB1892732157F7D551D2F83976C4",
-              "public_key_prefixed": "ed25519:ed01200DCE150576DC9D2677EBC1B5EE02C019CA69EB1892732157F7D551D2F83976C4",
+              "public_key_hex": "65E8F9B0BC6EAE124169F0576F97362D295A8CF5F770B45E14357CE647D33EEC",
+              "public_key_multihash": "ed012065E8F9B0BC6EAE124169F0576F97362D295A8CF5F770B45E14357CE647D33EEC",
+              "public_key_prefixed": "ed25519:ed012065E8F9B0BC6EAE124169F0576F97362D295A8CF5F770B45E14357CE647D33EEC",
               "weight": 1
             },
             {
               "curve": "ed25519",
-              "public_key_hex": "32708B35523549F429E95F7AF11F7C8320B9BA29163D2F27AF7D81C1C5991041",
-              "public_key_multihash": "ed012032708B35523549F429E95F7AF11F7C8320B9BA29163D2F27AF7D81C1C5991041",
-              "public_key_prefixed": "ed25519:ed012032708B35523549F429E95F7AF11F7C8320B9BA29163D2F27AF7D81C1C5991041",
+              "public_key_hex": "ACF12B4ACC1C660A8326AED34039EFB728A5E496488240F50A932AB7ABA51751",
+              "public_key_multihash": "ed0120ACF12B4ACC1C660A8326AED34039EFB728A5E496488240F50A932AB7ABA51751",
+              "public_key_prefixed": "ed25519:ed0120ACF12B4ACC1C660A8326AED34039EFB728A5E496488240F50A932AB7ABA51751",
               "weight": 1
             },
             {
               "curve": "ed25519",
-              "public_key_hex": "683BA155CD7E73B91FA9B0E61722DF50AE625E7F5DA9CF5013162891439C2C3F",
-              "public_key_multihash": "ed0120683BA155CD7E73B91FA9B0E61722DF50AE625E7F5DA9CF5013162891439C2C3F",
-              "public_key_prefixed": "ed25519:ed0120683BA155CD7E73B91FA9B0E61722DF50AE625E7F5DA9CF5013162891439C2C3F",
+              "public_key_hex": "B533D8AD9FCFBDDE0B481C1B334DDC3C53412FD614564E7E5AFD020368D382C3",
+              "public_key_multihash": "ed0120B533D8AD9FCFBDDE0B481C1B334DDC3C53412FD614564E7E5AFD020368D382C3",
+              "public_key_prefixed": "ed25519:ed0120B533D8AD9FCFBDDE0B481C1B334DDC3C53412FD614564E7E5AFD020368D382C3",
               "weight": 1
             },
             {
               "curve": "ed25519",
-              "public_key_hex": "BEF1E6A19FC053B29945A3F1D2A4759B5297F9ADD0A5C3961405804EFD1780BB",
-              "public_key_multihash": "ed0120BEF1E6A19FC053B29945A3F1D2A4759B5297F9ADD0A5C3961405804EFD1780BB",
-              "public_key_prefixed": "ed25519:ed0120BEF1E6A19FC053B29945A3F1D2A4759B5297F9ADD0A5C3961405804EFD1780BB",
+              "public_key_hex": "BC7CBCB5636375FA1D82434D466724D92377F53B980695DD49D26D0CE12205A5",
+              "public_key_multihash": "ed0120BC7CBCB5636375FA1D82434D466724D92377F53B980695DD49D26D0CE12205A5",
+              "public_key_prefixed": "ed25519:ed0120BC7CBCB5636375FA1D82434D466724D92377F53B980695DD49D26D0CE12205A5",
               "weight": 1
             }
           ],
@@ -328,20 +328,20 @@
           "version": 1
         },
         "encodings": {
-          "canonical_hex": "0x0a00010100030401000100200dce150576dc9d2677ebc1b5ee02c019ca69eb1892732157f7d551d2f83976c4010001002032708b35523549f429e95f7af11f7c8320b9ba29163d2f27af7d81c1c59910410100010020683ba155cd7e73b91fa9b0e61722df50ae625e7f5da9cf5013162891439c2c3f0100010020bef1e6a19fc053b29945a3f1d2a4759b5297f9add0a5c3961405804efd1780bb",
-          "compressed": "snx1ﾐ38ﾅｴｸﾜ8ﾃzwBrqﾘｺ4yﾄv6kqJp1ｳｱﾛｿrzﾄﾃﾘﾒRﾗtV9ｼﾔPｽcヱEﾌVVVｼﾘｲZAｦﾓﾅｦeﾒN76vﾈcuｶuﾛL54rzﾙﾏX2zMﾌRLﾃﾋpﾚpｲcHﾑﾅﾃﾔzｵｲVfAﾃﾚﾎﾚCヰﾔｲｽｦw9ﾔﾕ8bGGkﾁ6sNｼaｻRﾖﾜYﾕﾚU18ﾅHヰﾌuMeﾊtﾂrｿj95Ft8ﾜ3fﾄkNiｴuﾈrCﾐQt8ヱｸｸmﾙﾒgUbﾑEKTTCM",
-          "compressed_fullwidth": "snx1ミ38ナエクワ8テzwBrqリコ4yトv6kqJp1ウアロソrzトテリメRラtV9シヤPスcヱEフVVVシリイZAヲモナヲeメN76vネcuカuロL54rzルマX2zMフRLテヒpレpイcHムナテヤzオイVfAテレホレCヰヤイスヲw9ヤユ8bGGkチ6sNシaサRヨワYユレU18ナHヰフuMeハtツrソj95Ft8ワ3fトkNiエuネrCミQt8ヱククmルメgUbムEKTTCM",
+          "canonical_hex": "0x0a000101000304010001002065e8f9b0bc6eae124169f0576f97362d295a8cf5f770b45e14357ce647d33eec0100010020acf12b4acc1c660a8326aed34039efb728a5e496488240f50a932ab7aba517510100010020b533d8ad9fcfbdde0b481c1b334ddc3c53412fd614564e7e5afd020368d382c30100010020bc7cbcb5636375fa1d82434d466724d92377f53b980695dd49d26d0ce12205a5",
+          "compressed": "snx1ﾐ38ﾅｴｸﾜ8ﾃzwBrsﾖﾜﾅﾉ1ﾆ8ｼｷﾉﾖｳｽLwXVｿ54DUinvｷJﾕﾀﾔｺ9zx4ｲNﾙｲwﾖﾗYｽｦVｷ6ﾊtk8vﾄﾓVqﾛ9ｴDheiuﾔbヰｦ4ﾊヱRﾍﾈﾗpbﾋﾈPcﾐﾔMﾊoﾐﾎxVヰﾓｳPﾚcﾋ2ｾﾁﾏｿﾔMoﾆﾈｱtYNfﾉMﾙAﾑeWﾜﾕﾁeaﾆbﾜﾋw1GｱgqJﾁﾇrKﾃ1ﾜﾎS9sﾔﾎFXヰﾔxumｶ5ciﾇヰcﾐﾎｹXrﾎﾛ5SS4X8",
+          "compressed_fullwidth": "snx1ミ38ナエクワ8テzwBrsヨワナノ1ニ8シキノヨウスLwXVソ54DUinvキJユタヤコ9zx4イNルイwヨラYスヲVキ6ハtk8vトモVqロ9エDheiuヤbヰヲ4ハヱRヘネラpbヒネPcミヤMハoミホxVヰモウPレcヒ2セチマソヤMoニネアtYNfノMルAムeWワユチeaニbワヒw1GアgqJチヌrKテ1ワホS9sヤホFXヰヤxumカ5ciヌヰcミホケXrホロ5SS4X8",
           "ih58": {
             "prefix": 753,
-            "string": "nA2bDNhMqXz7ERkHNoEWbvJGyR1aDRsw32LaUWLgbK3vcpzohmdFCLvdotxUWWDY3aZeX4ptLk4Z6TjF5ossnJm8VrNo6daxmGTkqUyP4MxJxiNyPFxsEE5DLnsoLWUcxaWNpZ76tmkbiGS31Gv8tejKpuiHUMaQ1s5ohWyZvDnpycNkBK8AEfGJqn5yc9zAzfWbVhpDwkPj8ScnzvH1Echr5"
+            "string": "nA2bDNhMqXz7ERkHNoEtHtMbMcSzLGsDGAHYE6LN3nRXMXcN8a5U8MqJvUg47xd8rf4kaxej9qcziwF1Fo8n62TeyGrysCTAhzUaRSHZ3TgrxL9jhdAJbUnvi7dtjEYXR4RyMYj6DuYpcDK3PeJy7aDkKJpU2Bwytfb4dwiopfN28HANpTaTx5aavNeR26FdUsipAPLnbsMq8gQ2TMWVd4Wxx"
           }
         },
         "input": {
           "member_keys_hex": [
-            "0DCE150576DC9D2677EBC1B5EE02C019CA69EB1892732157F7D551D2F83976C4",
-            "32708B35523549F429E95F7AF11F7C8320B9BA29163D2F27AF7D81C1C5991041",
-            "683BA155CD7E73B91FA9B0E61722DF50AE625E7F5DA9CF5013162891439C2C3F",
-            "BEF1E6A19FC053B29945A3F1D2A4759B5297F9ADD0A5C3961405804EFD1780BB"
+            "65E8F9B0BC6EAE124169F0576F97362D295A8CF5F770B45E14357CE647D33EEC",
+            "ACF12B4ACC1C660A8326AED34039EFB728A5E496488240F50A932AB7ABA51751",
+            "B533D8AD9FCFBDDE0B481C1B334DDC3C53412FD614564E7E5AFD020368D382C3",
+            "BC7CBCB5636375FA1D82434D466724D92377F53B980695DD49D26D0CE12205A5"
           ],
           "member_weights": [
             1,

@@ -4532,35 +4532,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                 }
                 Some(UpdateTrustedPeers(trusted)) = self.update_trusted_peers_receiver.recv() => {
                     self.peer_reputations.set_trusted(&trusted);
-                    let allow_trusted_observers = self.is_permissioned_consensus()
-                        && !matches!(
-                            self.relay_mode,
-                            iroha_config::parameters::actual::RelayMode::Spoke
-                        );
-                    if allow_trusted_observers {
-                        let mut updated = self.current_topology.clone();
-                        updated.retain(|peer_id| {
-                            let pk = peer_id.public_key();
-                            !self.deny_keys.contains(pk)
-                                && (!self.allowlist_only || self.allow_keys.contains(pk))
-                        });
-                        for peer_id in &trusted {
-                            if peer_id.public_key() == self.key_pair.public_key() {
-                                continue;
-                            }
-                            let pk = peer_id.public_key();
-                            if self.deny_keys.contains(pk) {
-                                continue;
-                            }
-                            if self.allowlist_only && !self.allow_keys.contains(pk) {
-                                continue;
-                            }
-                            updated.insert(peer_id.clone());
-                        }
-                        if updated != self.current_topology {
-                            self.current_topology = updated;
-                            self.update_topology();
-                        }
+                    if self.apply_trusted_observers() {
+                        self.update_topology();
                     }
                 }
                 // Process staggered connect attempts
@@ -4826,7 +4799,45 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             }
         }
         self.current_topology = topology;
+        self.apply_trusted_observers();
         self.update_topology()
+    }
+
+    fn allow_trusted_observers(&self) -> bool {
+        self.is_permissioned_consensus()
+            && !matches!(
+                self.relay_mode,
+                iroha_config::parameters::actual::RelayMode::Spoke
+            )
+    }
+
+    fn apply_trusted_observers(&mut self) -> bool {
+        if !self.allow_trusted_observers() {
+            return false;
+        }
+        let mut updated = self.current_topology.clone();
+        updated.retain(|peer_id| {
+            let pk = peer_id.public_key();
+            !self.deny_keys.contains(pk) && (!self.allowlist_only || self.allow_keys.contains(pk))
+        });
+        for peer_id in self.peer_reputations.trusted_peers() {
+            if peer_id.public_key() == self.key_pair.public_key() {
+                continue;
+            }
+            let pk = peer_id.public_key();
+            if self.deny_keys.contains(pk) {
+                continue;
+            }
+            if self.allowlist_only && !self.allow_keys.contains(pk) {
+                continue;
+            }
+            updated.insert(peer_id);
+        }
+        if updated != self.current_topology {
+            self.current_topology = updated;
+            return true;
+        }
+        false
     }
 
     fn set_current_peers_addresses(&mut self, UpdatePeers(peers): UpdatePeers) {
@@ -5992,6 +6003,7 @@ fn apply_connect_startup_delay(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::sync::{Mutex, OnceLock};
 
     use iroha_crypto::{KeyPair, encryption::ChaCha20Poly1305, kex::X25519Sha256};
@@ -6435,6 +6447,29 @@ mod tests {
                 .iter()
                 .all(|(when, _)| *when >= delay_until),
             "scheduled connect attempts must honor startup delay"
+        );
+    }
+
+    #[test]
+    fn trusted_observers_survive_topology_updates() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        let peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let trusted_id = PeerId::from(KeyPair::random().public_key().clone());
+        let mut trusted = HashSet::new();
+        trusted.insert(trusted_id.clone());
+        network.peer_reputations.set_trusted(&trusted);
+
+        network.set_current_topology(UpdateTopology([peer_id.clone()].into_iter().collect()));
+
+        assert!(
+            network.current_topology.contains(&peer_id),
+            "topology should retain peers from update"
+        );
+        assert!(
+            network.current_topology.contains(&trusted_id),
+            "trusted observers should remain connected across topology updates"
         );
     }
 

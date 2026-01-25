@@ -8,7 +8,7 @@
 
 use core::{convert::TryInto, mem, ops::RangeFrom};
 
-use norito::codec::{DecodeAll, Encode};
+use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 
 /// Encode the given value with a `usize` length prefix.
 ///
@@ -16,9 +16,9 @@ use norito::codec::{DecodeAll, Encode};
 /// across the IVM FFI boundary where the callee reads the prefix to determine
 /// how many bytes follow.
 #[must_use]
-pub fn encode_with_length_prefix<T: Encode>(value: &T) -> Box<[u8]> {
+pub fn encode_with_length_prefix<T: NoritoSerialize>(value: &T) -> Box<[u8]> {
     let len_size_bytes = mem::size_of::<usize>();
-    let encoded = value.encode();
+    let encoded = to_bytes(value).expect("Norito serialization must succeed");
     let total_len = len_size_bytes
         .checked_add(encoded.len())
         .expect("encoded payload length must fit in usize");
@@ -35,7 +35,9 @@ pub fn encode_with_length_prefix<T: Encode>(value: &T) -> Box<[u8]> {
 ///
 /// - `ptr` must point to a heap allocation created by [`encode_with_length_prefix`].
 /// - The caller must not use `ptr` after calling this function.
-pub unsafe fn decode_with_length_prefix_from_raw<T: DecodeAll>(ptr: *const u8) -> T {
+pub unsafe fn decode_with_length_prefix_from_raw<T: for<'de> NoritoDeserialize<'de>>(
+    ptr: *const u8,
+) -> T {
     let len_size_bytes = mem::size_of::<usize>();
     let len_bytes = unsafe { core::slice::from_raw_parts(ptr, len_size_bytes) };
     let len = usize::from_le_bytes(
@@ -47,7 +49,7 @@ pub unsafe fn decode_with_length_prefix_from_raw<T: DecodeAll>(ptr: *const u8) -
     unsafe { decode_from_raw_in_range(ptr, len, len_size_bytes..) }
 }
 
-unsafe fn decode_from_raw_in_range<T: DecodeAll>(
+unsafe fn decode_from_raw_in_range<T: for<'de> NoritoDeserialize<'de>>(
     ptr: *const u8,
     len: usize,
     range: RangeFrom<usize>,
@@ -55,19 +57,13 @@ unsafe fn decode_from_raw_in_range<T: DecodeAll>(
     let bytes = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr.cast_mut(), len)) };
     let payload = &bytes[range];
 
-    // Try Norito header-framed decode first for robustness; fall back to bare decode.
-    norito::from_bytes::<T>(payload).map_or_else(
-        |_| {
-            #[allow(clippy::expect_fun_call)]
-            T::decode_all(&mut &*payload).expect(
-                format!(
-                    "Decoding of {} failed. This is a bug",
-                    core::any::type_name::<T>()
-                )
-                .as_str(),
-            )
-        },
-        |archived| <T as norito::core::NoritoDeserialize>::deserialize(archived),
+    #[allow(clippy::expect_fun_call)]
+    decode_from_bytes::<T>(payload).expect(
+        format!(
+            "Decoding of {} failed. This is a bug",
+            core::any::type_name::<T>()
+        )
+        .as_str(),
     )
 }
 
@@ -75,7 +71,7 @@ unsafe fn decode_from_raw_in_range<T: DecodeAll>(
 mod tests {
     use super::*;
 
-    #[derive(Debug, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode)]
+    #[derive(Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
     struct Dummy {
         a: u32,
         b: bool,

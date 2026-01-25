@@ -3,6 +3,7 @@
 use iroha_crypto::Hash as IrohaHash;
 use iroha_data_model::prelude::*;
 use ivm::{CoreHost, IVM, IVMHost, PointerType, VMError, pointer_abi, syscalls};
+use norito::to_bytes;
 
 fn encode_pointer_tlv(ty: PointerType, payload: Vec<u8>) -> Vec<u8> {
     let mut out = Vec::with_capacity(2 + 1 + 4 + payload.len() + IrohaHash::LENGTH);
@@ -19,7 +20,7 @@ fn encode_account_id_pointer(id: &str) -> Vec<u8> {
     let parsed: AccountId = id.parse().expect("valid AccountId literal");
     let raw = encode_pointer_tlv(
         PointerType::AccountId,
-        <AccountId as norito::codec::Encode>::encode(&parsed),
+        to_bytes(&parsed).expect("encode id"),
     );
     encode_pointer_tlv(PointerType::NoritoBytes, raw)
 }
@@ -28,7 +29,7 @@ fn encode_account_id_pointer_without_inner_hash(id: &str) -> Vec<u8> {
     use iroha_crypto::Hash as IrohaHash;
 
     let parsed: AccountId = id.parse().expect("valid AccountId literal");
-    let payload = <AccountId as norito::codec::Encode>::encode(&parsed);
+    let payload = to_bytes(&parsed).expect("encode id");
     // Build an inner TLV without the trailing hash (invalid layout).
     let mut inner = Vec::with_capacity(2 + 1 + 4 + payload.len());
     inner.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());

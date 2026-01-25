@@ -6,6 +6,7 @@ use ivm::{
     mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
+mod common;
 
 fn json_value<T: norito::json::JsonSerialize + ?Sized>(value: &T) -> norito::json::Value {
     norito::json::to_value(value).expect("serialize json value")
@@ -22,6 +23,9 @@ fn json_array<const N: usize>(items: [norito::json::Value; N]) -> norito::json::
 }
 
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
+    let payload = PointerType::from_u16(type_id)
+        .map(|pty| common::payload_for_type(pty, payload))
+        .unwrap_or_else(|| payload.to_vec());
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
     out.push(1);

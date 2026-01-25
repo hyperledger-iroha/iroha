@@ -11,7 +11,6 @@
 use std::{
     any::Any,
     collections::{BTreeMap, VecDeque},
-    io::Cursor,
     mem,
     num::{NonZeroU16, NonZeroU64, NonZeroUsize},
     str::FromStr,
@@ -62,7 +61,7 @@ use ivm::{
 };
 use mv::storage::StorageReadOnly;
 use norito::{
-    codec::Decode as NoritoDecode,
+    NoritoDeserialize,
     core::{Archived, Header, NoritoSerialize},
     decode_from_bytes, json,
     streaming::CapabilityFlags,
@@ -74,9 +73,7 @@ use crate::telemetry::StateTelemetry;
 use crate::{
     smartcontracts::isi::{
         query::{IvmQueryValidator, QueryLimits, ValidQueryRequest},
-        triggers::{
-            TRIGGER_ENABLED_METADATA_KEY, set::SetReadOnly, specialized::SpecializedAction,
-        },
+        triggers::{TRIGGER_ENABLED_METADATA_KEY, set::SetReadOnly},
     },
     state::{
         StateBlock, StateReadOnly, StateTransaction, StateView, WorldReadOnly,
@@ -2215,12 +2212,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn decode_name_payload(payload: &[u8]) -> Result<Name, ivm::VMError> {
-        let mut reader = Cursor::new(payload);
-        if let Ok(name) = Name::decode(&mut reader) {
-            return Ok(name);
-        }
-        let s = core::str::from_utf8(payload).map_err(|_| ivm::VMError::NoritoInvalid)?;
-        Name::from_str(s).map_err(|_| ivm::VMError::NoritoInvalid)
+        decode_from_bytes(payload).map_err(|_| ivm::VMError::DecodeError)
     }
 
     fn load_state_value(vm: &mut IVM, stored: &[u8]) -> Result<(), ivm::VMError> {
@@ -2245,37 +2237,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(())
     }
 
-    #[allow(clippy::unused_self, dead_code)]
-    fn read_norito_payload<'a>(&self, vm: &'a IVM, ptr: u64) -> Result<&'a [u8], ivm::VMError> {
-        // Try TLV envelope first: [type_id:u16][version:u8][len:be u32][payload][hash:32]
-        // If TLV appears present but is invalid, do NOT silently fall back.
-        match vm.memory.validate_tlv(ptr) {
-            Ok(tlv) => {
-                if !is_type_allowed_for_policy(vm.syscall_policy(), tlv.type_id) {
-                    return Err(ivm::VMError::AbiTypeNotAllowed {
-                        abi: vm.abi_version(),
-                        type_id: tlv.type_id as u16,
-                    });
-                }
-                return Ok(tlv.payload);
-            }
-            Err(ivm::VMError::NoritoInvalid | ivm::VMError::DecodeError) => {
-                return Err(ivm::VMError::NoritoInvalid);
-            }
-            Err(_) => {
-                // Not a valid TLV envelope; fall back to u32 length-prefixed blob.
-            }
-        }
-        let len = u64::from(vm.memory.load_u32(ptr)?);
-        vm.memory.load_region(ptr + 4, len)
-    }
-
-    #[allow(dead_code)]
-    fn decode_at<T: NoritoDecode>(&self, vm: &IVM, ptr: u64) -> Result<T, ivm::VMError> {
-        let bytes = self.read_norito_payload(vm, ptr)?;
-        T::decode(&mut &*bytes).map_err(|_| ivm::VMError::DecodeError)
-    }
-
     /// Decode a typed TLV envelope from the VM INPUT region enforcing the pointer‑ABI type.
     ///
     /// - `ptr` points to the start of the TLV envelope.
@@ -2287,11 +2248,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// # Errors
     /// Returns an error if the pointer type does not match, the type is not allowed
     /// by the current syscall policy, or the Norito payload cannot be decoded.
-    pub fn decode_tlv_typed<T: NoritoDecode>(
-        vm: &IVM,
-        ptr: u64,
-        expected: PointerType,
-    ) -> Result<T, ivm::VMError> {
+    pub fn decode_tlv_typed<T>(vm: &IVM, ptr: u64, expected: PointerType) -> Result<T, ivm::VMError>
+    where
+        T: for<'de> NoritoDeserialize<'de>,
+    {
         let tlv = vm.memory.validate_tlv(ptr)?;
         if tlv.type_id != expected {
             return Err(ivm::VMError::NoritoInvalid);
@@ -2302,14 +2262,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 type_id: expected as u16,
             });
         }
-        let mut payload = tlv.payload;
-        decode_from_bytes(payload)
-            .or_else(|_| T::decode(&mut payload))
-            .map_err(|_| ivm::VMError::DecodeError)
+        decode_from_bytes(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
     }
 
-    /// Decode a JSON pointer-ABI TLV. Accepts both Norito-encoded payloads and
-    /// raw UTF-8 JSON strings to match Kotodama literal emission.
+    /// Decode a JSON pointer-ABI TLV containing Norito-framed JSON.
     ///
     /// # Errors
     /// Returns an error if the pointer is invalid for the active ABI policy or the payload fails to decode.
@@ -2325,11 +2281,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             });
         }
 
-        if let Ok(value) = norito::decode_from_bytes(tlv.payload) {
-            return Ok(value);
-        }
-        let s = core::str::from_utf8(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
-        s.parse::<Json>().map_err(|_| ivm::VMError::DecodeError)
+        decode_from_bytes(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
     }
 
     fn permission_from_name(name: &Name) -> Permission {
@@ -2397,6 +2349,34 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Self::permissions_from_value(&value)
     }
 
+    fn public_key_from_value(value: &json::Value) -> Result<PublicKey, ivm::VMError> {
+        if let Some(key_str) = value.as_str() {
+            return key_str
+                .parse::<PublicKey>()
+                .map_err(|_| ivm::VMError::DecodeError);
+        }
+        if let Some(map) = value.as_object() {
+            if let Some(key_value) = map
+                .get("public_key")
+                .or_else(|| map.get("publicKey"))
+                .or_else(|| map.get("key"))
+            {
+                return Self::public_key_from_value(key_value);
+            }
+        }
+        Err(ivm::VMError::DecodeError)
+    }
+
+    fn public_key_from_json(value: &Json) -> Result<PublicKey, ivm::VMError> {
+        if let Ok(key) = value.try_into_any_norito::<PublicKey>() {
+            return Ok(key);
+        }
+        let value: json::Value = value
+            .try_into_any_norito::<json::Value>()
+            .map_err(|_| ivm::VMError::DecodeError)?;
+        Self::public_key_from_value(&value)
+    }
+
     fn peer_id_from_value(value: &json::Value) -> Result<PeerId, ivm::VMError> {
         if let Some(peer_str) = value.as_str() {
             if let Ok(peer_id) = PeerId::from_str(peer_str) {
@@ -2407,12 +2387,34 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             }
             return Err(ivm::VMError::DecodeError);
         }
-        if let Some(map) = value.as_object()
-            && let Some(peer_value) = map.get("peer")
-        {
-            return Self::peer_id_from_value(peer_value);
+        if let Some(map) = value.as_object() {
+            if let Some(peer_value) = map
+                .get("peer")
+                .or_else(|| map.get("peer_id"))
+                .or_else(|| map.get("peerId"))
+            {
+                return Self::peer_id_from_value(peer_value);
+            }
+            if let Some(key_value) = map
+                .get("public_key")
+                .or_else(|| map.get("publicKey"))
+                .or_else(|| map.get("key"))
+            {
+                let key = Self::public_key_from_value(key_value)?;
+                return Ok(PeerId::from(key));
+            }
         }
         Err(ivm::VMError::DecodeError)
+    }
+
+    fn register_peer_from_json(value: &Json) -> Result<RegisterPeerWithPop, ivm::VMError> {
+        if let Ok(request) = value.try_into_any_norito::<RegisterPeerWithPop>() {
+            return Ok(request);
+        }
+        let value: json::Value = value
+            .try_into_any_norito::<json::Value>()
+            .map_err(|_| ivm::VMError::DecodeError)?;
+        Self::register_peer_from_value(&value)
     }
 
     fn register_peer_from_value(value: &json::Value) -> Result<RegisterPeerWithPop, ivm::VMError> {
@@ -2420,7 +2422,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             return Ok(request);
         }
         let map = value.as_object().ok_or(ivm::VMError::DecodeError)?;
-        let peer_value = map.get("peer").ok_or(ivm::VMError::DecodeError)?;
+        let peer_value = map
+            .get("peer")
+            .or_else(|| map.get("peer_id"))
+            .or_else(|| map.get("peerId"))
+            .or_else(|| map.get("public_key"))
+            .or_else(|| map.get("publicKey"))
+            .or_else(|| map.get("key"))
+            .ok_or(ivm::VMError::DecodeError)?;
         let peer_id = Self::peer_id_from_value(peer_value)?;
         let pop_value = map.get("pop").ok_or(ivm::VMError::DecodeError)?;
         let pop: Vec<u8> =
@@ -2456,13 +2465,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
-    fn decode_header_or_bare<T: NoritoDecode>(payload: &[u8]) -> Result<T, ivm::VMError> {
-        decode_from_bytes(payload)
-            .or_else(|_| {
-                let mut bytes = payload;
-                T::decode(&mut bytes)
-            })
-            .map_err(|_| ivm::VMError::NoritoInvalid)
+    fn decode_header<T>(payload: &[u8]) -> Result<T, ivm::VMError>
+    where
+        T: for<'de> NoritoDeserialize<'de>,
+    {
+        decode_from_bytes(payload).map_err(|_| ivm::VMError::NoritoInvalid)
     }
 
     fn expect_tlv(vm: &IVM, ptr: u64, expected: PointerType) -> Result<ivm::Tlv<'_>, ivm::VMError> {
@@ -3573,7 +3580,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             }
         } else {
             let manifest_tlv = Self::expect_tlv(vm, manifest_ptr, PointerType::NoritoBytes)?;
-            Self::decode_header_or_bare(manifest_tlv.payload)?
+            Self::decode_header(manifest_tlv.payload)?
         };
         if let Err(err) = self.axt_policy.allow_touch(dsid, &manifest) {
             let lane = self.policy_entry_for(dsid).map(|policy| policy.target_lane);
@@ -3889,7 +3896,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         let handle_ptr = vm.register(10);
         let handle_tlv = Self::expect_tlv(vm, handle_ptr, PointerType::AssetHandle)?;
-        let handle: AssetHandle = Self::decode_header_or_bare(handle_tlv.payload)?;
+        let handle: AssetHandle = Self::decode_header(handle_tlv.payload)?;
         let binding = handle.binding_array().ok_or_else(|| {
             self.record_axt_reject(
                 AxtRejectReason::Descriptor,
@@ -3910,7 +3917,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         let intent_ptr = vm.register(11);
         let intent_tlv = Self::expect_tlv(vm, intent_ptr, PointerType::NoritoBytes)?;
-        let intent: RemoteSpendIntent = Self::decode_header_or_bare(intent_tlv.payload)?;
+        let intent: RemoteSpendIntent = Self::decode_header(intent_tlv.payload)?;
         let (state_binding, dsid_expected, has_touch) = {
             let state_ref = self.axt_state.as_ref().expect("axt_state checked above");
             (
@@ -4060,15 +4067,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             None
         } else {
             let proof_tlv = Self::expect_tlv(vm, proof_ptr, PointerType::ProofBlob)?;
-            let blob: ProofBlob =
-                Self::decode_header_or_bare(proof_tlv.payload).inspect_err(|_| {
-                    self.record_axt_reject(
-                        AxtRejectReason::Proof,
-                        Some(intent.asset_dsid),
-                        Some(handle.target_lane),
-                        "proof payload failed to decode",
-                    );
-                })?;
+            let blob: ProofBlob = Self::decode_header(proof_tlv.payload).inspect_err(|_| {
+                self.record_axt_reject(
+                    AxtRejectReason::Proof,
+                    Some(intent.asset_dsid),
+                    Some(handle.target_lane),
+                    "proof payload failed to decode",
+                );
+            })?;
             Some(blob)
         };
         if let Some(blob) = proof.as_ref() {
@@ -4332,6 +4338,69 @@ impl<QS> CoreHostImpl<QS> {
         self.current_block_time_ms = Some(time_ms);
     }
 
+    fn take_json_field<T: json::JsonDeserialize>(
+        map: &mut BTreeMap<String, json::Value>,
+        key: &str,
+    ) -> Result<T, ivm::VMError> {
+        let value = map.remove(key).ok_or(ivm::VMError::DecodeError)?;
+        json::from_value(value).map_err(|_| ivm::VMError::DecodeError)
+    }
+
+    fn decode_trigger_filter(value: json::Value) -> Result<EventFilterBox, ivm::VMError> {
+        use iroha_data_model::events::{
+            data::DataEventFilter, execute_trigger::ExecuteTriggerEventFilter,
+            pipeline::PipelineEventFilterBox, time::TimeEventFilter,
+            trigger_completed::TriggerCompletedEventFilter,
+        };
+
+        if let Ok(filter) = json::from_value::<EventFilterBox>(value.clone()) {
+            return Ok(filter);
+        }
+        if let Ok(filter) = json::from_value::<DataEventFilter>(value.clone()) {
+            return Ok(EventFilterBox::Data(filter));
+        }
+        if let Ok(filter) = json::from_value::<PipelineEventFilterBox>(value.clone()) {
+            return Ok(EventFilterBox::Pipeline(filter));
+        }
+        if let Ok(filter) = json::from_value::<TimeEventFilter>(value.clone()) {
+            return Ok(EventFilterBox::Time(filter));
+        }
+        if let Ok(filter) = json::from_value::<ExecuteTriggerEventFilter>(value.clone()) {
+            return Ok(EventFilterBox::ExecuteTrigger(filter));
+        }
+        if let Ok(filter) = json::from_value::<TriggerCompletedEventFilter>(value) {
+            return Ok(EventFilterBox::TriggerCompleted(filter));
+        }
+        Err(ivm::VMError::DecodeError)
+    }
+
+    fn decode_trigger_action_spec(value: json::Value) -> Result<Action, ivm::VMError> {
+        if let Ok(action) = json::from_value::<Action>(value.clone()) {
+            return Ok(action);
+        }
+
+        let mut map = match value {
+            json::Value::Object(map) => map,
+            _ => return Err(ivm::VMError::DecodeError),
+        };
+
+        let executable: Executable = Self::take_json_field(&mut map, "executable")?;
+        let repeats: Repeats = Self::take_json_field(&mut map, "repeats")?;
+        let authority: AccountId = Self::take_json_field(&mut map, "authority")?;
+        let filter_value = map.remove("filter").ok_or(ivm::VMError::DecodeError)?;
+        let metadata = match map.remove("metadata") {
+            Some(value) => json::from_value(value).map_err(|_| ivm::VMError::DecodeError)?,
+            None => Metadata::default(),
+        };
+
+        let filter = Self::decode_trigger_filter(filter_value)?;
+        if matches!(filter, EventFilterBox::TriggerCompleted(_)) {
+            return Err(ivm::VMError::DecodeError);
+        }
+
+        Ok(Action::new(executable, repeats, authority, filter).with_metadata(metadata))
+    }
+
     fn amount_from_trigger_args(&self) -> Option<Numeric> {
         fn parse_numeric(value: &json::Value) -> Option<Numeric> {
             match value {
@@ -4391,10 +4460,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_REGISTER_PEER => {
                 let ptr = vm.register(10);
                 let payload: Json = Self::decode_tlv_json(vm, ptr)?;
-                let value: json::Value = payload
-                    .try_into_any_norito::<json::Value>()
-                    .map_err(|_| ivm::VMError::DecodeError)?;
-                let request = Self::register_peer_from_value(&value)?;
+                let request = Self::register_peer_from_json(&payload)?;
                 let instr = InstructionBox::from(request);
                 Ok(self.queue_instruction(instr))
             }
@@ -4430,9 +4496,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let account: AccountId =
                     Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                 let payload: Json = Self::decode_tlv_json(vm, signatory_ptr)?;
-                let signatory: PublicKey = payload
-                    .try_into_any_norito::<PublicKey>()
-                    .map_err(|_| ivm::VMError::DecodeError)?;
+                let signatory = Self::public_key_from_json(&payload)?;
                 let isi = AddSignatory::new(account, signatory);
                 let instr = InstructionBox::from(isi);
                 Ok(self.queue_instruction(instr))
@@ -4443,9 +4507,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let account: AccountId =
                     Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                 let payload: Json = Self::decode_tlv_json(vm, signatory_ptr)?;
-                let signatory: PublicKey = payload
-                    .try_into_any_norito::<PublicKey>()
-                    .map_err(|_| ivm::VMError::DecodeError)?;
+                let signatory = Self::public_key_from_json(&payload)?;
                 let isi = RemoveSignatory::new(account, signatory);
                 let instr = InstructionBox::from(isi);
                 Ok(self.queue_instruction(instr))
@@ -4631,26 +4693,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     let id_str = id_value.as_str().ok_or(ivm::VMError::DecodeError)?;
                     let id: TriggerId = id_str.parse().map_err(|_| ivm::VMError::DecodeError)?;
                     let action_value = map.remove("action").ok_or(ivm::VMError::DecodeError)?;
-                    let action = if let Ok(action) =
-                        json::from_value::<Action>(action_value.clone())
-                    {
-                        action
-                    } else {
-                        let spec_action: SpecializedAction<EventFilterBox> =
-                            json::from_value(action_value)
-                                .map_err(|_| ivm::VMError::DecodeError)?;
-                        let SpecializedAction {
-                            executable,
-                            repeats,
-                            authority,
-                            filter,
-                            metadata,
-                        } = spec_action;
-                        if matches!(filter, EventFilterBox::TriggerCompleted(_)) {
-                            return Err(ivm::VMError::DecodeError);
-                        }
-                        Action::new(executable, repeats, authority, filter).with_metadata(metadata)
-                    };
+                    let action = Self::decode_trigger_action_spec(action_value)?;
                     Trigger::new(id, action)
                 };
                 let instr = InstructionBox::from(Register::trigger(trigger));
@@ -4963,7 +5006,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     QueryResponse::Singular(SingularQueryOutputBox::Asset(asset)) => asset,
                     _ => return Err(ivm::VMError::DecodeError),
                 };
-                let payload = asset.value().encode();
+                let payload =
+                    norito::to_bytes(asset.value()).map_err(|_| ivm::VMError::NoritoInvalid)?;
                 let payload_len = Self::len_to_u32(payload.len())?;
                 let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
                 out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
@@ -5417,9 +5461,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             // New format: TLV (type_id:u16, version:u8, len:be u32, payload, hash:32).
             // Historical len-prefixed payloads are no longer emitted.
             ivm::syscalls::SYSCALL_GET_AUTHORITY => {
-                use norito::codec::Encode as NoritoEncode;
                 // Encode authority payload
-                let payload = self.authority.encode();
+                let payload =
+                    norito::to_bytes(&self.authority).map_err(|_| ivm::VMError::NoritoInvalid)?;
                 let payload_len = Self::len_to_u32(payload.len())?;
                 // Build TLV envelope (AccountId: type_id=1, version=1)
                 let type_id: u16 = 1;
@@ -5495,6 +5539,7 @@ mod pointer_abi_tests {
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
+        smartcontracts::isi::triggers::specialized::SpecializedAction,
         state::{State, World},
     };
 
@@ -5526,7 +5571,7 @@ mod pointer_abi_tests {
         vm.load_program(&meta.encode()).expect("load meta");
         // DomainId TLV payload
         let did: DomainId = "wonder".parse().unwrap();
-        let payload = did.encode();
+        let payload = norito::to_bytes(&did).expect("encode domain id");
         let tlv = make_tlv(8u16, &payload); // PointerType::DomainId = 0x0008
         vm.memory.preload_input(0, &tlv).expect("preload input");
         let decoded = CoreHost::decode_tlv_typed::<DomainId>(
@@ -5543,29 +5588,47 @@ mod pointer_abi_tests {
         let mut vm = ivm::IVM::new(1_000_000);
         // Prepare a valid TLV for AccountId("alice@wonderland") at INPUT_START
         let acc: AccountId = "alice@wonderland".parse().expect("valid AccountId");
-        let payload = acc.encode();
+        let payload = norito::to_bytes(&acc).expect("encode account id");
         let tlv = make_tlv(1u16, &payload);
         vm.memory.preload_input(0, &tlv).expect("preload input");
 
-        let host = CoreHost::new(acc.clone());
-        // SAFETY: call private decode helper via submodule access
-        let decoded: AccountId = host
-            .decode_at(&vm, ivm::Memory::INPUT_START)
-            .expect("decode TLV");
+        let decoded: AccountId =
+            CoreHost::decode_tlv_typed(&vm, ivm::Memory::INPUT_START, PointerType::AccountId)
+                .expect("decode TLV");
         assert_eq!(decoded, acc);
     }
 
     #[test]
-    fn json_tlv_decodes_raw_payload() {
+    fn json_tlv_rejects_invalid_norito_payload() {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000_000);
-        let payload = b"1";
-        let tlv = make_tlv(PointerType::Json as u16, payload);
+        let mut payload = norito_blob(&Json::new("hello"));
+        if let Some(first) = payload.first_mut() {
+            *first ^= 0xFF;
+        }
+        let tlv = make_tlv(PointerType::Json as u16, &payload);
+        vm.memory.preload_input(0, &tlv).expect("preload json tlv");
+
+        let err = CoreHost::decode_tlv_json(&vm, ivm::Memory::INPUT_START)
+            .expect_err("invalid norito json payload should be rejected");
+        assert!(matches!(
+            err,
+            ivm::VMError::DecodeError | ivm::VMError::NoritoInvalid
+        ));
+    }
+
+    #[test]
+    fn json_tlv_decodes_norito_payload() {
+        crate::test_alias::ensure();
+        let mut vm = ivm::IVM::new(1_000_000);
+        let expected = Json::new("hello");
+        let payload = norito_blob(&expected);
+        let tlv = make_tlv(PointerType::Json as u16, &payload);
         vm.memory.preload_input(0, &tlv).expect("preload json tlv");
 
         let decoded = CoreHost::decode_tlv_json(&vm, ivm::Memory::INPUT_START)
-            .expect("raw json payload should decode");
-        assert_eq!(decoded, Json::new(1_u64));
+            .expect("norito json payload should decode");
+        assert_eq!(decoded, expected);
     }
 
     #[test]
@@ -5573,17 +5636,19 @@ mod pointer_abi_tests {
         crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000_000);
         let acc: AccountId = "alice@wonderland".parse().expect("valid AccountId");
-        let payload = acc.encode();
+        let payload = norito::to_bytes(&acc).expect("encode account id");
         let mut tlv = make_tlv(1u16, &payload);
         // Corrupt one byte of the hash (last byte)
         let last = tlv.len() - 1;
         tlv[last] ^= 0xFF;
         vm.memory.preload_input(0, &tlv).expect("preload input");
 
-        let host = CoreHost::new(acc.clone());
-        let err = host
-            .decode_at::<AccountId>(&vm, ivm::Memory::INPUT_START)
-            .expect_err("invalid hash must be rejected");
+        let err = CoreHost::decode_tlv_typed::<AccountId>(
+            &vm,
+            ivm::Memory::INPUT_START,
+            PointerType::AccountId,
+        )
+        .expect_err("invalid hash must be rejected");
         assert!(matches!(err, ivm::VMError::NoritoInvalid));
     }
 
@@ -5594,7 +5659,7 @@ mod pointer_abi_tests {
         let authority = ALICE_ID.clone();
         let mut host = CoreHost::new(authority);
 
-        let name_payload = Name::from_str("rose").unwrap().encode();
+        let name_payload = norito::to_bytes(&Name::from_str("rose").unwrap()).expect("encode name");
         let inner = make_tlv(PointerType::Name as u16, &name_payload);
         let outer = make_tlv(PointerType::NoritoBytes as u16, &inner);
         vm.memory
@@ -5632,21 +5697,17 @@ mod pointer_abi_tests {
             payload: vec![0x01, 0x02, 0x03],
             expiry_slot: Some(20),
         };
-        let decoded = ProofBlob::decode(&mut norito_blob(&mismatched_proof).as_slice())
-            .expect("decode proof blob");
+        let proof_bytes = norito_blob(&mismatched_proof);
+        let decoded: ProofBlob =
+            norito::decode_from_bytes(&proof_bytes).expect("decode proof blob");
         assert_eq!(decoded.payload, mismatched_proof.payload);
-        let proof_ptr = store_tlv(
-            &mut vm,
-            PointerType::ProofBlob,
-            &norito_blob(&mismatched_proof),
-        );
+        let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &proof_bytes);
         let proof_tlv = vm
             .memory
             .validate_tlv(proof_ptr)
             .expect("proof TLV should decode");
-        let mut tlv_payload = proof_tlv.payload;
         assert!(
-            ProofBlob::decode(&mut tlv_payload).is_ok(),
+            norito::decode_from_bytes::<ProofBlob>(proof_tlv.payload).is_ok(),
             "proof payload must decode"
         );
         vm.set_register(11, proof_ptr);
@@ -5691,7 +5752,7 @@ mod pointer_abi_tests {
             touches: Vec::new(),
         };
         let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority = ALICE_ID.clone();
         let mut host = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
         let mut vm = IVM::new(10_000);
         begin_axt_envelope(&mut host, &mut vm, &descriptor);
@@ -7004,7 +7065,7 @@ mod pointer_abi_tests {
             code_hash,
             code: vec![0xAA, 0xBB, 0xCC],
         };
-        let payload = request.encode();
+        let payload = norito::to_bytes(&request).expect("encode request");
         let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
         vm.memory.preload_input(0, &tlv).expect("preload tlv");
         vm.set_register(10, ivm::Memory::INPUT_START);
@@ -7033,7 +7094,7 @@ mod pointer_abi_tests {
             contract_id: "payments".into(),
             code_hash: IrohaHash::new(b"payments-code"),
         };
-        let payload = request.encode();
+        let payload = norito::to_bytes(&request).expect("encode request");
         let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
         vm.memory.preload_input(0, &tlv).expect("preload tlv");
         vm.set_register(10, ivm::Memory::INPUT_START);
@@ -7059,7 +7120,7 @@ mod pointer_abi_tests {
             contract_id: "settlement".to_owned(),
             reason: Some("compromised deployment".to_owned()),
         };
-        let payload = request.encode();
+        let payload = norito::to_bytes(&request).expect("encode request");
         let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
         vm.memory.preload_input(0, &tlv).expect("preload tlv");
         vm.set_register(10, ivm::Memory::INPUT_START);
@@ -7085,7 +7146,7 @@ mod pointer_abi_tests {
             code_hash,
             reason: None,
         };
-        let payload = request.encode();
+        let payload = norito::to_bytes(&request).expect("encode request");
         let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
         vm.memory.preload_input(0, &tlv).expect("preload tlv");
         vm.set_register(10, ivm::Memory::INPUT_START);
@@ -7177,6 +7238,7 @@ mod pointer_abi_tests {
 
     #[test]
     fn register_peer_syscall_queues_instruction() {
+        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
         let mut host = CoreHost::new(authority);
@@ -7195,7 +7257,41 @@ mod pointer_abi_tests {
     }
 
     #[test]
+    fn register_peer_syscall_accepts_object_peer() {
+        crate::test_alias::ensure();
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let mut peer_map = BTreeMap::new();
+        peer_map.insert(
+            "public_key".to_string(),
+            norito::json::Value::String(peer_id.public_key().to_string()),
+        );
+        let mut request_map = BTreeMap::new();
+        request_map.insert("peer".to_string(), norito::json::Value::Object(peer_map));
+        request_map.insert(
+            "pop".to_string(),
+            norito::json::Value::Array(vec![
+                norito::json::Value::from(0xAB_u64),
+                norito::json::Value::from(0xCD_u64),
+            ]),
+        );
+        let json = Json::from(&norito::json::Value::Object(request_map));
+        let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&json));
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_PEER, &mut vm);
+        let expected = InstructionBox::from(RegisterPeerWithPop::new(peer_id, vec![0xAB, 0xCD]));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
     fn unregister_peer_syscall_queues_instruction() {
+        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
         let mut host = CoreHost::new(authority);
@@ -7212,10 +7308,8 @@ mod pointer_abi_tests {
         assert_eq!(host.queued, vec![expected]);
     }
 
-    #[test]
-    fn create_role_syscall_queues_instruction() {
+    fn assert_create_role_syscall_queues_instruction(authority: AccountId) {
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
         let mut host = CoreHost::new(authority.clone());
 
         let role_name: Name = "auditor".parse().unwrap();
@@ -7240,6 +7334,19 @@ mod pointer_abi_tests {
         let expected_gas = crate::gas::meter_instruction(&expected);
         assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn create_role_syscall_queues_instruction_alias() {
+        crate::test_alias::ensure();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        assert_create_role_syscall_queues_instruction(authority);
+    }
+
+    #[test]
+    fn create_role_syscall_queues_instruction_account_id() {
+        let authority = ALICE_ID.clone();
+        assert_create_role_syscall_queues_instruction(authority);
     }
 
     #[test]
@@ -7345,6 +7452,7 @@ mod pointer_abi_tests {
 
     #[test]
     fn add_signatory_syscall_queues_instruction() {
+        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
         let mut host = CoreHost::new(authority);
@@ -7366,6 +7474,7 @@ mod pointer_abi_tests {
 
     #[test]
     fn remove_signatory_syscall_queues_instruction() {
+        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
         let mut host = CoreHost::new(authority);
@@ -7386,7 +7495,35 @@ mod pointer_abi_tests {
     }
 
     #[test]
+    fn remove_signatory_syscall_accepts_object_public_key() {
+        crate::test_alias::ensure();
+        let mut vm = ivm::IVM::new(1_000);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+
+        let account: AccountId = "bob@wonderland".parse().unwrap();
+        let public_key = KeyPair::random().public_key().clone();
+        let mut key_map = BTreeMap::new();
+        key_map.insert(
+            "public_key".to_string(),
+            norito::json::Value::String(public_key.to_string()),
+        );
+        let pk_json = Json::from(&norito::json::Value::Object(key_map));
+        let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+        let pk_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&pk_json));
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, pk_ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_REMOVE_SIGNATORY, &mut vm);
+        let expected = InstructionBox::from(RemoveSignatory::new(account, public_key));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
     fn set_account_quorum_syscall_queues_instruction() {
+        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
         let mut host = CoreHost::new(authority);
@@ -7407,7 +7544,7 @@ mod pointer_abi_tests {
     #[test]
     fn create_trigger_syscall_queues_instruction() {
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority = ALICE_ID.clone();
         let mut host = CoreHost::new(authority.clone());
 
         let trigger_id: TriggerId = "trigger_base64".parse().unwrap();
@@ -7436,9 +7573,12 @@ mod pointer_abi_tests {
 
     #[test]
     fn create_trigger_syscall_object_spec_queues_instruction() {
+        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
-        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let authority = ALICE_ID.clone();
         let mut host = CoreHost::new(authority.clone());
+        let domain = Domain::new(authority.domain().clone()).build(&authority);
+        let _domain_selector_guard = super::tests::install_domain_selector_resolver(&[domain]);
 
         let trigger_id: TriggerId = "trigger_object".parse().unwrap();
         let action = SpecializedAction::new(
@@ -7451,6 +7591,62 @@ mod pointer_abi_tests {
             EventFilterBox::Data(DataEventFilter::Any),
         );
         let action_value = norito::json::to_value(&action).expect("serialize specialized action");
+        let mut map = BTreeMap::new();
+        map.insert(
+            "id".to_string(),
+            norito::json::Value::String(trigger_id.to_string()),
+        );
+        map.insert("action".to_string(), action_value);
+        let spec = Json::from(&norito::json::Value::Object(map));
+
+        let ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&spec));
+        vm.set_register(10, ptr);
+
+        let res = host.syscall(ivm::syscalls::SYSCALL_CREATE_TRIGGER, &mut vm);
+        let expected_action = Action::new(
+            action.executable.clone(),
+            action.repeats,
+            action.authority.clone(),
+            action.filter.clone(),
+        )
+        .with_metadata(action.metadata.clone());
+        let expected =
+            InstructionBox::from(Register::trigger(Trigger::new(trigger_id, expected_action)));
+        let expected_gas = crate::gas::meter_instruction(&expected);
+        assert_eq!(res, Ok(expected_gas));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn create_trigger_syscall_object_spec_defaults_metadata_and_filter() {
+        crate::test_alias::ensure();
+        let mut vm = ivm::IVM::new(1_000);
+        let authority = ALICE_ID.clone();
+        let mut host = CoreHost::new(authority.clone());
+        let domain = Domain::new(authority.domain().clone()).build(&authority);
+        let _domain_selector_guard = super::tests::install_domain_selector_resolver(&[domain]);
+
+        let trigger_id: TriggerId = "trigger_object_fallback".parse().unwrap();
+        let action = SpecializedAction::new(
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "object".to_owned(),
+            ))],
+            Repeats::Exactly(1),
+            authority.clone(),
+            EventFilterBox::Data(DataEventFilter::Any),
+        );
+        let mut action_value =
+            norito::json::to_value(&action).expect("serialize specialized action");
+        let filter_value =
+            norito::json::to_value(&DataEventFilter::Any).expect("serialize data filter");
+        match &mut action_value {
+            norito::json::Value::Object(map) => {
+                map.insert("filter".to_string(), filter_value);
+                map.remove("metadata");
+            }
+            _ => panic!("expected action object"),
+        }
         let mut map = BTreeMap::new();
         map.insert(
             "id".to_string(),
@@ -7521,15 +7717,21 @@ mod pointer_abi_tests {
 
     #[test]
     fn mint_asset_syscall_returns_metered_gas() {
+        crate::test_alias::ensure();
         let mut vm = ivm::IVM::new(1_000);
         let authority: AccountId = "alice@wonderland".parse().unwrap();
         let mut host = CoreHost::new(authority.clone());
         vm.load_program(&ivm::ProgramMetadata::default().encode())
             .expect("load header");
 
-        let account_tlv = make_tlv(PointerType::AccountId as u16, &authority.encode());
+        let account_payload = norito::to_bytes(&authority).expect("encode account");
+        let account_tlv = make_tlv(PointerType::AccountId as u16, &account_payload);
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-        let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_def.encode());
+        let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
+        let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
+        let amount = Numeric::from(5u64);
+        let amount_payload = norito::to_bytes(&amount).expect("encode amount");
+        let amount_tlv = make_tlv(PointerType::NoritoBytes as u16, &amount_payload);
 
         vm.memory
             .preload_input(0, &account_tlv)
@@ -7537,9 +7739,12 @@ mod pointer_abi_tests {
         vm.memory
             .preload_input(256, &asset_tlv)
             .expect("preload asset def");
+        vm.memory
+            .preload_input(512, &amount_tlv)
+            .expect("preload amount");
         vm.set_register(10, ivm::Memory::INPUT_START);
         vm.set_register(11, ivm::Memory::INPUT_START + 256);
-        vm.set_register(12, 5);
+        vm.set_register(12, ivm::Memory::INPUT_START + 512);
 
         let gas = host
             .syscall(ivm::syscalls::SYSCALL_MINT_ASSET, &mut vm)
@@ -7563,9 +7768,11 @@ mod pointer_abi_tests {
         vm.load_program(&ivm::ProgramMetadata::default().encode())
             .expect("load header");
 
-        let account_tlv = make_tlv(PointerType::AccountId as u16, &authority.encode());
+        let account_payload = norito::to_bytes(&authority).expect("encode account");
+        let account_tlv = make_tlv(PointerType::AccountId as u16, &account_payload);
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-        let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_def.encode());
+        let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
+        let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
 
         vm.memory
             .preload_input(0, &account_tlv)
@@ -7601,9 +7808,11 @@ mod pointer_abi_tests {
         vm.load_program(&ivm::ProgramMetadata::default().encode())
             .expect("load header");
 
-        let account_tlv = make_tlv(PointerType::AccountId as u16, &authority.encode());
+        let account_payload = norito::to_bytes(&authority).expect("encode account");
+        let account_tlv = make_tlv(PointerType::AccountId as u16, &account_payload);
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-        let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_def.encode());
+        let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
+        let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
 
         vm.memory
             .preload_input(0, &account_tlv)
@@ -7655,9 +7864,9 @@ mod pointer_abi_tests {
         let nft_id = NftId::of("wonderland".parse().unwrap(), "n1".parse().unwrap());
         let key: iroha_data_model::name::Name = "k".parse().unwrap();
         let value = iroha_primitives::json::Json::new("v");
-        let nft_blob = nft_id.encode();
-        let key_blob = key.encode();
-        let val_blob = value.encode();
+        let nft_blob = norito::to_bytes(&nft_id).expect("encode nft id");
+        let key_blob = norito::to_bytes(&key).expect("encode name");
+        let val_blob = norito::to_bytes(&value).expect("encode json");
         // type ids: AccountId=1, AssetDefinitionId=2, Name=3, Json=4, NftId=5 (see pointer_abi)
         let tlv_nft = make_tlv(0x0005, &nft_blob);
         let tlv_key_wrong = make_tlv(0x0004, &key_blob); // should be Name (0x0003)
@@ -7713,7 +7922,7 @@ mod pointer_abi_tests {
         vm.load_program(&program).unwrap();
         // payload is a Name
         let key: iroha_data_model::name::Name = "k".parse().unwrap();
-        let key_blob = key.encode();
+        let key_blob = norito::to_bytes(&key).expect("encode key");
         // Wrong version
         let mut tlv_wrong_ver = Vec::new();
         tlv_wrong_ver.extend_from_slice(&0x0003u16.to_be_bytes());
@@ -7763,19 +7972,19 @@ fn build_program(code: &[u8], vector_length: u8) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, sync::Arc};
+    use std::{
+        collections::BTreeMap,
+        sync::{Arc, LazyLock, Mutex, MutexGuard},
+    };
 
+    #[cfg(not(feature = "fast_dsl"))]
+    use iroha_data_model::query::account::prelude::FindAccounts;
     use iroha_data_model::{
         parameter::{CustomParameter, Parameter},
         proof::{VerifyingKeyBox, VerifyingKeyId},
         query::{QueryRequest, QueryResponse, SingularQueryBox, prelude::FindParameters},
         zk::BackendTag,
     };
-    use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
-    use norito::codec::Encode as NoritoEncode;
-
-    #[cfg(not(feature = "fast_dsl"))]
-    use iroha_data_model::query::account::prelude::FindAccounts;
     use iroha_data_model::{
         prelude::*,
         query::{
@@ -7785,6 +7994,7 @@ mod tests {
         },
     };
     use iroha_test_samples::ALICE_ID;
+    use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
     use nonzero_ext::nonzero;
 
     use super::*;
@@ -7831,13 +8041,48 @@ mod tests {
         }
     }
 
-    pub(super) fn norito_blob<T: NoritoEncode>(val: &T) -> Vec<u8> {
-        val.encode()
+    pub(super) fn norito_blob<T: NoritoSerialize>(val: &T) -> Vec<u8> {
+        norito::to_bytes(val).expect("encode Norito payload")
     }
 
     pub(super) fn store_tlv(vm: &mut IVM, ty: PointerType, payload: &[u8]) -> u64 {
         let tlv = make_tlv(ty as u16, payload);
         vm.alloc_input_tlv(&tlv).expect("allocate TLV input")
+    }
+
+    pub(super) struct DomainSelectorResolverGuard {
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl Drop for DomainSelectorResolverGuard {
+        fn drop(&mut self) {
+            iroha_data_model::account::clear_account_domain_selector_resolver();
+        }
+    }
+
+    pub(super) fn install_domain_selector_resolver(
+        domains: &[Domain],
+    ) -> DomainSelectorResolverGuard {
+        static DOMAIN_SELECTOR_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+        let lock = DOMAIN_SELECTOR_GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut index = BTreeMap::new();
+        for domain in domains {
+            let selector =
+                iroha_data_model::account::AccountDomainSelector::from_domain(domain.id())
+                    .expect("domain selector");
+            if let Some(existing) = index.get(&selector) {
+                assert_eq!(existing, domain.id(), "domain selector collision");
+                continue;
+            }
+            index.insert(selector, domain.id().clone());
+        }
+        let index = Arc::new(index);
+        iroha_data_model::account::set_account_domain_selector_resolver(Arc::new(
+            move |selector| index.get(selector).cloned(),
+        ));
+        DomainSelectorResolverGuard { _lock: lock }
     }
 
     #[test]
@@ -8215,6 +8460,7 @@ mod tests {
             Domain::new("pay".parse().unwrap()).build(&provider),
             Domain::new("subscriptions".parse().unwrap()).build(&provider),
         ];
+        let _domain_selector_guard = install_domain_selector_resolver(&domains);
         let accounts = vec![
             Account::new(provider.clone()).build(&provider),
             Account::new(subscriber.clone()).build(&provider),
@@ -8419,6 +8665,7 @@ mod tests {
             Domain::new("pay".parse().unwrap()).build(&provider),
             Domain::new("subscriptions".parse().unwrap()).build(&provider),
         ];
+        let _domain_selector_guard = install_domain_selector_resolver(&domains);
         let accounts = vec![
             Account::new(provider.clone()).build(&provider),
             Account::new(subscriber.clone()).build(&provider),
@@ -8501,7 +8748,7 @@ mod tests {
         let mut plan_def =
             AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
-        plan_def.metadata.insert(plan_key, Json::new(plan));
+        plan_def.metadata.insert(plan_key, Json::new(plan.clone()));
         let charge_def =
             AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
         let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
@@ -8536,6 +8783,7 @@ mod tests {
             Domain::new("pay".parse().unwrap()).build(&provider),
             Domain::new("subscriptions".parse().unwrap()).build(&provider),
         ];
+        let _domain_selector_guard = install_domain_selector_resolver(&domains);
         let accounts = vec![
             Account::new(provider.clone()).build(&provider),
             Account::new(subscriber.clone()).build(&provider),
@@ -8675,7 +8923,7 @@ mod tests {
         let mut plan_def =
             AssetDefinition::new(plan_id.clone(), NumericSpec::integer()).build(&provider);
         let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse().unwrap();
-        plan_def.metadata.insert(plan_key, Json::new(plan));
+        plan_def.metadata.insert(plan_key, Json::new(plan.clone()));
         let charge_def =
             AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
 
@@ -8708,6 +8956,7 @@ mod tests {
             Domain::new("pay".parse().unwrap()).build(&provider),
             Domain::new("subscriptions".parse().unwrap()).build(&provider),
         ];
+        let _domain_selector_guard = install_domain_selector_resolver(&domains);
         let accounts = vec![
             Account::new(provider.clone()).build(&provider),
             Account::new(subscriber.clone()).build(&provider),
@@ -8837,18 +9086,27 @@ mod tests {
         let asset_def: AssetDefinitionId = "xor#wonderland".parse().unwrap();
         let amount = 7_u64;
 
-        let from_tlv = make_tlv(PointerType::AccountId as u16, &from.encode());
-        let to_tlv = make_tlv(PointerType::AccountId as u16, &to.encode());
-        let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_def.encode());
+        let from_payload = norito::to_bytes(&from).expect("encode from account");
+        let to_payload = norito::to_bytes(&to).expect("encode to account");
+        let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
+        let from_tlv = make_tlv(PointerType::AccountId as u16, &from_payload);
+        let to_tlv = make_tlv(PointerType::AccountId as u16, &to_payload);
+        let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
+        let amount_payload = norito::to_bytes(&Numeric::from(amount)).expect("encode amount");
+        let amount_tlv = make_tlv(PointerType::NoritoBytes as u16, &amount_payload);
+        let amount_offset = 768u64;
         vm.memory.preload_input(0, &from_tlv).expect("preload from");
         vm.memory.preload_input(256, &to_tlv).expect("preload to");
         vm.memory
             .preload_input(512, &asset_tlv)
             .expect("preload asset");
+        vm.memory
+            .preload_input(amount_offset, &amount_tlv)
+            .expect("preload amount");
         vm.set_register(10, ivm::Memory::INPUT_START);
         vm.set_register(11, ivm::Memory::INPUT_START + 256);
         vm.set_register(12, ivm::Memory::INPUT_START + 512);
-        vm.set_register(13, amount);
+        vm.set_register(13, ivm::Memory::INPUT_START + amount_offset);
 
         let gas = host
             .syscall(ivm_sys::SYSCALL_TRANSFER_ASSET, &mut vm)
@@ -8940,23 +9198,15 @@ mod tests {
     }
 
     #[test]
-    fn norito_blob_roundtrips_with_header_and_bare_decoders() {
+    fn norito_blob_roundtrips_with_header_decoder() {
         let proof = ProofBlob {
             payload: vec![1, 2, 3],
             expiry_slot: Some(42),
         };
         let bytes = norito_blob(&proof);
-        let decoded_bare: ProofBlob =
-            ProofBlob::decode(&mut bytes.as_slice()).expect("decode via bare adapter");
-        assert_eq!(decoded_bare, proof);
-        let framed = norito::core::frame_bare_with_header_flags::<ProofBlob>(
-            &bytes,
-            norito::core::default_encode_flags(),
-        )
-        .expect("frame header");
-        let decoded_header: ProofBlob =
-            norito::decode_from_bytes(&framed).expect("decode via header framing");
-        assert_eq!(decoded_header, proof);
+        let decoded: ProofBlob =
+            norito::decode_from_bytes(&bytes).expect("decode via header framing");
+        assert_eq!(decoded, proof);
     }
 
     #[test]
@@ -8975,9 +9225,9 @@ mod tests {
         let marker: Name = "marker".parse().unwrap();
         let _marker_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&marker));
 
-        let decoded: AccountId = host
-            .decode_at(&vm, authority_ptr)
-            .expect("authority TLV should remain intact");
+        let decoded: AccountId =
+            CoreHost::decode_tlv_typed(&vm, authority_ptr, PointerType::AccountId)
+                .expect("authority TLV should remain intact");
         assert_eq!(decoded, authority);
     }
 
@@ -9029,8 +9279,9 @@ mod tests {
         let mut vm = IVM::new(10_000);
 
         let path: Name = "counter".parse().unwrap();
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &path.encode());
-        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, b"1");
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
+        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value_bytes);
         vm.set_register(10, path_ptr);
         vm.set_register(11, value_ptr);
 
@@ -9048,7 +9299,8 @@ mod tests {
         let out_ptr = vm.register(10);
         let tlv = vm.memory.validate_tlv(out_ptr).expect("state get tlv");
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        assert_eq!(tlv.payload, b"1");
+        let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode state value");
+        assert_eq!(value, 1);
     }
 
     #[test]
@@ -9063,7 +9315,8 @@ mod tests {
         let ptr = vm.register(10);
         let tlv = vm.memory.validate_tlv(ptr).expect("encode tlv");
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        assert_eq!(tlv.payload, b"42");
+        let encoded: i64 = norito::decode_from_bytes(tlv.payload).expect("decode int payload");
+        assert_eq!(encoded, 42);
 
         vm.set_register(10, ptr);
         assert_eq!(host.syscall(ivm_sys::SYSCALL_DECODE_INT, &mut vm), Ok(0));
@@ -9078,8 +9331,9 @@ mod tests {
         let mut vm = IVM::new(10_000);
 
         let path: Name = "counter".parse().unwrap();
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &path.encode());
-        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, b"1");
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
+        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value_bytes);
         vm.set_register(10, path_ptr);
         vm.set_register(11, value_ptr);
 
@@ -9100,9 +9354,10 @@ mod tests {
         crate::test_alias::ensure();
         let mut world = World::new();
         let path: Name = "counter".parse().unwrap();
+        let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
         world
             .smart_contract_state
-            .insert(path.clone(), b"1".to_vec());
+            .insert(path.clone(), value_bytes.clone());
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
@@ -9110,7 +9365,7 @@ mod tests {
         let mut host = CoreHost::from_state(authority, &state);
         let mut vm = IVM::new(10_000);
 
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &path.encode());
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
         vm.set_register(10, path_ptr);
         assert_eq!(
             host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
@@ -9120,7 +9375,8 @@ mod tests {
         let out_ptr = vm.register(10);
         let tlv = vm.memory.validate_tlv(out_ptr).expect("snapshot tlv");
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        assert_eq!(tlv.payload, b"1");
+        let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode state value");
+        assert_eq!(value, 1);
     }
 
     #[test]
@@ -9146,8 +9402,9 @@ mod tests {
 
         let mut vm = IVM::new(10_000);
         let path: Name = "counter".parse().unwrap();
-        let path_ptr = store_tlv(&mut vm, PointerType::Name, &path.encode());
-        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, b"1");
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
+        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value_bytes);
         vm.set_register(10, path_ptr);
         vm.set_register(11, value_ptr);
         assert_eq!(
@@ -9165,7 +9422,8 @@ mod tests {
             .expect("stored value");
         let tlv = ivm::pointer_abi::validate_tlv_bytes(stored).expect("stored tlv");
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        assert_eq!(tlv.payload, b"1");
+        let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode state value");
+        assert_eq!(value, 1);
     }
 
     fn dummy_env(
@@ -9664,7 +9922,7 @@ mod tests {
 
         let mut vm = ivm::IVM::new(1_000_000);
         let did: DomainId = "wonder".parse().unwrap();
-        let payload = did.encode();
+        let payload = norito::to_bytes(&did).expect("encode domain id");
         let tlv = make_tlv(PointerType::DomainId as u16, &payload);
         vm.memory.preload_input(0, &tlv).expect("preload input");
 
@@ -9697,6 +9955,7 @@ mod tests {
                 .parse()
                 .unwrap();
         let asset_def: AssetDefinitionId = "coin#wonder".parse().unwrap();
+        let amount = Numeric::from(1234_u64);
         let from_bytes = norito_blob(&from);
         let to_bytes = norito_blob(&to);
         let asset_bytes = norito_blob(&asset_def);
@@ -9704,14 +9963,19 @@ mod tests {
         let to_tlv = pointer_abi_tests::make_tlv(ivm::PointerType::AccountId as u16, &to_bytes);
         let asset_tlv =
             pointer_abi_tests::make_tlv(ivm::PointerType::AssetDefinitionId as u16, &asset_bytes);
+        let amount_payload = norito::to_bytes(&amount).expect("encode amount");
+        let amount_tlv =
+            pointer_abi_tests::make_tlv(ivm::PointerType::NoritoBytes as u16, &amount_payload);
 
         // Offsets in INPUT region
         let off_from = 0u64;
         let off_to = 256u64;
         let off_asset = 512u64;
+        let off_amount = 768u64;
         let ptr_from = ivm::Memory::INPUT_START + off_from;
         let ptr_to = ivm::Memory::INPUT_START + off_to;
         let ptr_asset = ivm::Memory::INPUT_START + off_asset;
+        let ptr_amount = ivm::Memory::INPUT_START + off_amount;
 
         // Assemble: SCALL TRANSFER_ASSET; HALT (set arg registers from host side)
         let mut code = Vec::new();
@@ -9738,6 +10002,9 @@ mod tests {
         vm.memory
             .preload_input(off_asset, &asset_tlv)
             .expect("preload input");
+        vm.memory
+            .preload_input(off_amount, &amount_tlv)
+            .expect("preload input");
 
         // Attach CoreHost and load program
         vm.set_host(CoreHost::new(from.clone()));
@@ -9747,7 +10014,7 @@ mod tests {
         vm.set_register(10, ptr_from);
         vm.set_register(11, ptr_to);
         vm.set_register(12, ptr_asset);
-        vm.set_register(13, 1234);
+        vm.set_register(13, ptr_amount);
 
         // Run and inspect queued ISIs
         vm.run().unwrap();
@@ -9763,6 +10030,7 @@ mod tests {
                     assert_eq!(inner.destination, to);
                     assert_eq!(inner.source.account, from);
                     assert_eq!(inner.source.definition, asset_def);
+                    assert_eq!(inner.object, amount);
                 }
                 _ => panic!("expected asset transfer"),
             }

@@ -17,8 +17,11 @@ fn tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
 fn name_decode_rejects_invalid_utf8() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
-    // Build NoritoBytes TLV with invalid UTF-8 (0xFF)
-    let bad = [0xFFu8, 0xFE, 0xFF];
+    // Build NoritoBytes TLV with an invalid UTF-8 byte inside a Norito string payload.
+    let mut bad = norito::to_bytes("ok").expect("encode string");
+    if let Some(last) = bad.last_mut() {
+        *last = 0xFF;
+    }
     let p_nb = vm
         .alloc_input_tlv(&tlv(PointerType::NoritoBytes, &bad))
         .unwrap();
@@ -50,9 +53,9 @@ fn name_decode_rejects_invalid_name_utf8_valid() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     // Valid UTF-8 but invalid Name (contains space)
-    let bad = b"bad name";
+    let bad = norito::to_bytes("bad name").expect("encode string");
     let p_nb = vm
-        .alloc_input_tlv(&tlv(PointerType::NoritoBytes, bad))
+        .alloc_input_tlv(&tlv(PointerType::NoritoBytes, &bad))
         .unwrap();
     let prog = common::assemble(
         &[
@@ -81,9 +84,9 @@ fn name_decode_rejects_reserved_chars() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     // Valid UTF-8 but invalid Name (reserved delimiter)
-    let bad = b"alice@wonderland";
+    let bad = norito::to_bytes("alice@wonderland").expect("encode string");
     let p_nb = vm
-        .alloc_input_tlv(&tlv(PointerType::NoritoBytes, bad))
+        .alloc_input_tlv(&tlv(PointerType::NoritoBytes, &bad))
         .unwrap();
     let prog = common::assemble(
         &[
@@ -113,9 +116,10 @@ fn name_decode_rejects_reserved_chars() {
 fn name_decode_accepts_valid_utf8() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
-    let good = b"wonderland";
+    let name: iroha_data_model::prelude::Name = "wonderland".parse().expect("name");
+    let good = norito::to_bytes(&name).expect("encode name");
     let p_nb = vm
-        .alloc_input_tlv(&tlv(PointerType::NoritoBytes, good))
+        .alloc_input_tlv(&tlv(PointerType::NoritoBytes, &good))
         .unwrap();
     let prog = common::assemble(
         &[
@@ -139,8 +143,7 @@ fn name_decode_accepts_valid_utf8() {
     let p = vm.register(10);
     let tlv_name = vm.memory.validate_tlv(p).unwrap();
     assert_eq!(tlv_name.type_id, PointerType::Name);
-    assert_eq!(
-        core::str::from_utf8(tlv_name.payload).unwrap(),
-        "wonderland"
-    );
+    let decoded: iroha_data_model::prelude::Name =
+        norito::decode_from_bytes(tlv_name.payload).expect("decode name");
+    assert_eq!(decoded.as_ref(), "wonderland");
 }

@@ -3,7 +3,7 @@
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_data_model::prelude::*;
 use ivm::{PointerType, ProgramMetadata};
-use norito::codec::Encode as NoritoEncode;
+use norito::to_bytes;
 
 fn tlv_envelope(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut blob = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
@@ -32,7 +32,8 @@ fn domainid_allowed_under_abi_v1() {
 
     // Prepare DomainId TLV
     let did: DomainId = "wonder".parse().unwrap();
-    let tlv = tlv_envelope(PointerType::DomainId as u16, &did.encode());
+    let payload = to_bytes(&did).expect("encode DomainId");
+    let tlv = tlv_envelope(PointerType::DomainId as u16, &payload);
     vm.memory.preload_input(0, &tlv).expect("preload input");
 
     // Node CoreHost decode should accept DomainId under abi v1
