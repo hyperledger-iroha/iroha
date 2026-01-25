@@ -7153,11 +7153,11 @@ pub mod message {
     /// basic prioritization.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub enum Topic {
-        /// Consensus data plane (votes, hints).
+        /// Consensus data plane (votes, hints, and critical block-payload control signals).
         Consensus,
         /// Consensus payload chunks (RBC chunk data).
         ConsensusChunk,
-        /// Consensus payload plane (blocks, READY/DELIVER bundles).
+        /// Consensus payload plane (block sync updates and proposal payloads).
         ConsensusPayload,
         /// Consensus control plane (view changes, coordination).
         Control,

@@ -2,6 +2,11 @@
 
 Last update: 2026-01-25
 
+- P2P relay ingress: classify BlockCreated/FetchPendingBlock/RbcInit/RbcReady/RbcDeliver as `Consensus` topic so high-priority relay queues drain them ahead of payload traffic; updated topic classification coverage and P2P frame-cap docs.
+- Tests: not run (not requested).
+
+- NPoS localnet 1 Hz rerun (debug + ingress topic reclass, 4 peers): `/private/tmp/iroha-localnet-npos-1hz-20260125T142728Z` (ports 38080/39337); genesis `block_time_ms=1000`, `commit_time_ms=1500`, config defaults, `RUST_LOG=warn,iroha_core::sumeragi=debug`; 100x1 Hz `ledger transaction ping --msg 1hz-profile --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_20260125T143015Z.jsonl` (ping log `ping_1hz_20260125T143015Z.log`). `commit_qc.height` 1->7 (+6 over 120 samples), `view_change_install_total` +5 (`stake_quorum_timeout_total` +2), `missing_block_fetch.total` +94, `pending_rbc.bytes` max 165676 (sessions max 4), `stash_ready_init_missing_total` +20, `stash_deliver_init_missing_total` +8. BlockCreated v0 height=5: leader peer1 recv 14:31:09.982; peer0 missing req 14:31:12.813 -> recv v0 14:31:18.336 (+5.52s, +8.35s from leader), peer2 missing req 14:31:11.048 -> recv v0 14:31:21.391 (+10.34s, +11.41s from leader), peer3 missing req 14:31:11.410 -> recv v0 14:31:14.126 (+2.72s, +4.14s from leader). No inbound high-priority dispatch stalls logged; RBC INIT enqueue/dequeue debug logs not emitted (no DEBUG lines in peer logs).
+
 - SoraFS telemetry cooldown penalty test: `record_capacity_telemetry_respects_cooldown_between_penalties` passes when run in an isolated build dir; earlier failure likely from concurrent cargo/build-dir locks rather than logic regressions.
 - Tests: `CARGO_HOME=/tmp/iroha-codex-cargo CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core record_capacity_telemetry_respects_cooldown_between_penalties -- --nocapture` (ok; command hit timeout after running filtered binaries, but the target test passed).
 
