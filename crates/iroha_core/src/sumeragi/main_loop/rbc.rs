@@ -2731,22 +2731,46 @@ impl Actor {
             return Ok(());
         }
 
-        if derived_roster.is_empty() {
+        let (roster, roster_source) = if derived_roster.is_empty() {
             let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
             let committed_epoch = self.epoch_for_height(committed_height);
-            debug!(
-                height = init.height,
-                view = init.view,
-                block = %init.block_hash,
-                roster_len = init.roster.len(),
-                committed_height,
-                committed_epoch,
-                session_epoch = expected_epoch,
-                "using init roster for RBC session; derived roster unavailable"
-            );
-        }
-        let (roster, roster_source) = if derived_roster.is_empty() {
-            (init.roster.clone(), RbcRosterSource::Init)
+            let (consensus_mode, _, _) = self.consensus_context_for_height(init.height);
+            let fallback_roster = {
+                let view = self.state.view();
+                let roster = super::roster::derive_active_topology_for_mode(
+                    &view,
+                    self.common_config.trusted_peers.value(),
+                    self.common_config.peer.id(),
+                    consensus_mode,
+                );
+                drop(view);
+                super::roster::canonicalize_roster_for_mode(roster, consensus_mode)
+            };
+            if !fallback_roster.is_empty() && fallback_roster == init.roster {
+                debug!(
+                    height = init.height,
+                    view = init.view,
+                    block = %init.block_hash,
+                    roster_len = init.roster.len(),
+                    committed_height,
+                    committed_epoch,
+                    session_epoch = expected_epoch,
+                    "using active topology for RBC session; derived roster unavailable but matches init roster"
+                );
+                (init.roster.clone(), RbcRosterSource::Derived)
+            } else {
+                debug!(
+                    height = init.height,
+                    view = init.view,
+                    block = %init.block_hash,
+                    roster_len = init.roster.len(),
+                    committed_height,
+                    committed_epoch,
+                    session_epoch = expected_epoch,
+                    "using init roster for RBC session; derived roster unavailable"
+                );
+                (init.roster.clone(), RbcRosterSource::Init)
+            }
         } else {
             (derived_roster, RbcRosterSource::Derived)
         };

@@ -17221,6 +17221,67 @@ async fn handle_rbc_init_caches_vote_roster() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_init_uses_active_roster_when_derived_missing() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+
+    super::status::reset_commit_certs_for_tests();
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = {
+        let view = actor.state.view();
+        u64::try_from(view.height()).unwrap_or(u64::MAX)
+    };
+    let height = committed_height.saturating_add(2).max(2);
+    let view = 0_u64;
+    let roster = actor.effective_commit_topology();
+    assert!(
+        !roster.is_empty(),
+        "test requires a non-empty active topology"
+    );
+
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
+    let block_hash = block_header.hash();
+    let key = (block_hash, height, view);
+    assert!(
+        actor.rbc_roster_for_session(key).is_empty(),
+        "derived roster should be empty for future height without history"
+    );
+
+    let digests = vec![[0x22; 32]];
+    let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone())
+        .root()
+        .map(Hash::from)
+        .expect("chunk root");
+    let init = crate::sumeragi::consensus::RbcInit {
+        block_hash,
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+        roster: roster.clone(),
+        roster_hash: roster_hash(&roster),
+        total_chunks: u32::try_from(digests.len()).expect("chunk count fits u32"),
+        chunk_digests: digests,
+        payload_hash: Hash::prehashed([0x33; 32]),
+        chunk_root,
+        block_header,
+        leader_signature,
+    };
+
+    actor.handle_rbc_init(init, None).expect("init handled");
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Derived),
+        "matching active roster should be treated as authoritative"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_init_ignores_result_merkle_root_mismatch() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
