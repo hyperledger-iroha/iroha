@@ -460,8 +460,13 @@ pub struct AxtReplayRecord {
 
 impl AxtReplayRecord {
     /// Determine whether the replay guard has expired for a given slot and retention window.
+    ///
+    /// Records with zeroed slots are treated as stale and expired.
     #[must_use]
     pub fn is_expired(&self, current_slot: u64, retention_slots: u64) -> bool {
+        if self.used_slot == 0 && self.retain_until_slot == 0 {
+            return true;
+        }
         let retention_cutoff = self.used_slot.saturating_add(retention_slots);
         let effective_until = core::cmp::max(self.retain_until_slot, retention_cutoff);
         current_slot >= effective_until
@@ -830,6 +835,17 @@ mod tests {
             validate_descriptor(&dup_touch),
             Err(AxtValidationError::DuplicateTouch(_))
         ));
+    }
+
+    #[test]
+    fn replay_record_zeroed_slots_are_expired() {
+        let record = AxtReplayRecord {
+            dataspace: DataSpaceId::new(1),
+            used_slot: 0,
+            retain_until_slot: 0,
+        };
+        assert!(record.is_expired(0, 1));
+        assert!(record.is_expired(5, 10));
     }
 
     #[test]

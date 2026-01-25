@@ -1440,6 +1440,13 @@ async fn start_network_or_closed(
     chain_id: Option<ChainId>,
     shutdown: iroha_futures::supervisor::ShutdownSignal,
 ) -> (crate::IrohaNetwork, iroha_futures::supervisor::Child) {
+    // Unit tests do not need a live P2P network and concurrent sockets can introduce flakiness.
+    // Opt in to real networking only when explicitly requested.
+    if std::env::var_os("IROHA_TEST_REAL_NETWORK").is_none() {
+        let handle = crate::IrohaNetwork::closed_for_tests();
+        let child = iroha_futures::supervisor::Child::from(tokio::spawn(async {}));
+        return (handle, child);
+    }
     let start = tokio::time::timeout(
         NETWORK_START_TIMEOUT,
         crate::IrohaNetwork::start(key_pair, network_cfg, chain_id, None, None, shutdown),
@@ -1683,20 +1690,8 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         shutdown.clone(),
     )
     .await;
-    let (peers_gossiper, gossiper_child) = crate::peers_gossiper::PeersGossiper::start(
-        peer_id.clone(),
-        trusted_peers,
-        key_pair.clone(),
-        network_cfg.peer_gossip_period,
-        network_cfg.peer_gossip_max_period,
-        consensus_cfg.consensus_mode,
-        network_cfg.trust_decay_half_life,
-        network_cfg.trust_penalty_bad_gossip,
-        network_cfg.trust_penalty_unknown_peer,
-        network_cfg.trust_min_score,
-        network.clone(),
-        shutdown.clone(),
-    );
+    let peers_gossiper = crate::peers_gossiper::PeersGossiperHandle::closed_for_tests();
+    let gossiper_child = iroha_futures::supervisor::Child::from(tokio::spawn(async {}));
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
@@ -5162,6 +5157,86 @@ async fn block_sync_update_known_block_records_commit_qc() {
 
     status::reset_commit_certs_for_tests();
     status::reset_validator_checkpoints_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_known_block_applies_commit_qc_to_pending() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let (committed_height, committed_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(u64::MAX),
+            view.latest_block_hash(),
+        )
+    };
+    let block_height = committed_height.saturating_add(1).max(1);
+    let view = 0_u64;
+    let block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        block_height,
+        view,
+        committed_hash,
+    );
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block.clone(), payload_hash, block_height, view),
+    );
+    actor.kura.store_block(block.clone()).expect("store block");
+
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "test requires commit roster");
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    let mut signers = BTreeSet::new();
+    for idx in 0..required {
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+    let epoch = actor.epoch_for_height(block_height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        block_height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let roster_cache =
+        roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
+    let mut update = super::block_sync_update_with_roster(
+        &block,
+        actor.state.as_ref(),
+        actor.kura.as_ref(),
+        ConsensusMode::Permissioned,
+        actor.common_config.trusted_peers.value(),
+        actor.common_config.peer.id(),
+        &roster_cache,
+    );
+    update.commit_qc = Some(qc);
+    update.validator_checkpoint = None;
+    update.stake_snapshot = None;
+    update.commit_votes.clear();
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+
+    let inflight = actor.subsystems.commit.inflight.as_ref();
+    assert!(
+        inflight.is_some_and(|inflight| inflight.block_hash == block_hash),
+        "commit should start for known pending block when QC arrives"
+    );
+
     harness.shutdown.send();
 }
 
@@ -21034,20 +21109,7 @@ async fn stale_pending_block_requeues_transactions() {
         shutdown.clone(),
     )
     .await;
-    let (peers_gossiper, _gossiper_child) = crate::peers_gossiper::PeersGossiper::start(
-        peer_id.clone(),
-        trusted_peers,
-        key_pair.clone(),
-        network_cfg.peer_gossip_period,
-        network_cfg.peer_gossip_max_period,
-        consensus_cfg.consensus_mode,
-        network_cfg.trust_decay_half_life,
-        network_cfg.trust_penalty_bad_gossip,
-        network_cfg.trust_penalty_unknown_peer,
-        network_cfg.trust_min_score,
-        network.clone(),
-        shutdown.clone(),
-    );
+    let peers_gossiper = crate::peers_gossiper::PeersGossiperHandle::closed_for_tests();
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
@@ -36308,6 +36370,108 @@ async fn npos_commit_qc_roster_roll_forward_canonicalizes_order() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn commit_qc_roll_forward_prefers_active_roster_when_keys_disabled() {
+    use crate::sumeragi::status;
+    use iroha_data_model::consensus::ConsensusKeyStatus;
+
+    status::reset_commit_certs_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let block1 = sample_block(1, 0, None);
+    let block2 = sample_block(2, 0, Some(block1.hash()));
+    actor
+        .kura
+        .store_block(block1.clone())
+        .expect("store block 1");
+    actor
+        .kura
+        .store_block(block2.clone())
+        .expect("store block 2");
+    let validator_set = actor.effective_commit_topology();
+    let local = actor.common_config.peer.id().clone();
+    let removed = validator_set
+        .iter()
+        .find(|peer| *peer != &local)
+        .cloned()
+        .expect("validator roster should include non-local peers");
+    let parent_hash = block2.hash();
+
+    let mut signers = BTreeSet::new();
+    for idx in 0..validator_set.len() {
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, validator_set.len());
+    let topology = super::network_topology::Topology::new(validator_set.clone());
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        parent_hash,
+        2,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    status::record_commit_qc(Qc {
+        phase: Phase::Commit,
+        subject_block_hash: parent_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 2,
+        view: 0,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: validator_set.clone(),
+        aggregate: QcAggregate {
+            signers_bitmap,
+            bls_aggregate_signature,
+        },
+    });
+
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        state.push_block_hash_for_testing(block1.hash());
+        state.push_block_hash_for_testing(block2.hash());
+        let mut block = state.world.block();
+        if let Some(index) = block.peers.iter().position(|id| id == &removed) {
+            block.peers.remove(index);
+        }
+        let key_id = crate::state::derive_validator_key_id(removed.public_key());
+        if let Some(mut record) = block.consensus_keys.get(&key_id).cloned() {
+            record.status = ConsensusKeyStatus::Disabled;
+            record.expiry_height = Some(2);
+            block.consensus_keys.insert(key_id, record);
+        }
+        block.commit();
+    }
+
+    let roll_forward = actor
+        .roster_from_commit_qc_history_roll_forward(3, Some(parent_hash))
+        .expect("roll-forward roster");
+    assert!(
+        !roll_forward.contains(&removed),
+        "roll-forward roster should drop disabled peer"
+    );
+    let canonical_roll_forward = super::roster::canonicalize_roster(roll_forward.clone());
+    assert_eq!(
+        roll_forward, canonical_roll_forward,
+        "roll-forward roster should remain canonical"
+    );
+
+    status::reset_commit_certs_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn pacemaker_bootstraps_with_commit_qc_when_active_roster_empty() {
     use crate::sumeragi::status;
 
@@ -45306,20 +45470,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
         shutdown.clone(),
     )
     .await;
-    let (peers_gossiper, _gossiper_child) = crate::peers_gossiper::PeersGossiper::start(
-        peer_id.clone(),
-        trusted_peers.clone(),
-        key_pair.clone(),
-        network_cfg.peer_gossip_period,
-        network_cfg.peer_gossip_max_period,
-        consensus_mode,
-        network_cfg.trust_decay_half_life,
-        network_cfg.trust_penalty_bad_gossip,
-        network_cfg.trust_penalty_unknown_peer,
-        network_cfg.trust_min_score,
-        network.clone(),
-        shutdown.clone(),
-    );
+    let peers_gossiper = crate::peers_gossiper::PeersGossiperHandle::closed_for_tests();
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);

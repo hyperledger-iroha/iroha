@@ -1,4 +1,4 @@
-//! CoreHost: decode ASCII integer from NoritoBytes/Blob via SYSCALL_DECODE_INT.
+//! CoreHost: decode Norito-framed i64 from NoritoBytes via SYSCALL_DECODE_INT.
 
 use ivm::{CoreHost, IVM, PointerType, encoding, syscalls};
 mod common;
@@ -19,7 +19,8 @@ fn core_host_decode_int_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     assert!(vm.host_mut_any().expect("host configured").is::<CoreHost>());
-    let tlv = make_tlv(PointerType::NoritoBytes, b"12345");
+    let payload = norito::to_bytes(&12345_i64).expect("encode i64");
+    let tlv = make_tlv(PointerType::NoritoBytes, &payload);
     let p = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
     // Program: SCALL DECODE_INT; HALT
     let mut code = Vec::new();
@@ -39,7 +40,7 @@ fn core_host_decode_int_roundtrip() {
 }
 
 #[test]
-fn core_host_decode_int_accepts_blob() {
+fn core_host_decode_int_rejects_blob() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let tlv = make_tlv(PointerType::Blob, b"-42");
@@ -56,6 +57,6 @@ fn core_host_decode_int_accepts_blob() {
     let prog = common::assemble(&code);
     vm.load_program(&prog).expect("load");
     vm.set_register(10, p);
-    vm.run().expect("run");
-    assert_eq!(vm.register(10) as i64, -42);
+    let err = vm.run().unwrap_err();
+    assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }

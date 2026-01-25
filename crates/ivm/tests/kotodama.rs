@@ -3148,7 +3148,7 @@ fn vrf_and_pointer_syscalls_present() {
 
 #[test]
 fn axt_intrinsics_lower_to_syscalls() {
-    use norito::codec::Encode as _;
+    use norito::to_bytes;
 
     let dsid = DataSpaceId::new(7);
     let desc = axt::AxtDescriptor {
@@ -3185,9 +3185,9 @@ fn axt_intrinsics_lower_to_syscalls() {
         payload: vec![1, 2, 3, 4],
         expiry_slot: None,
     };
-    let desc_hex = hex(&desc.encode());
-    let handle_hex = hex(&handle.encode());
-    let proof_hex = hex(&proof.encode());
+    let desc_hex = hex(&to_bytes(&desc).expect("encode descriptor"));
+    let handle_hex = hex(&to_bytes(&handle).expect("encode handle"));
+    let proof_hex = hex(&to_bytes(&proof).expect("encode proof"));
     let src = format!(
         r#"
         fn main() {{

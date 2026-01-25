@@ -390,14 +390,27 @@ fn convert_volatility_bucket(volatility: GasVolatility) -> VolatilityBucket {
     }
 }
 
-fn parse_fee_sponsor(metadata: &Metadata) -> Result<Option<AccountId>, ValidationFail> {
-    if let Some(raw) = metadata.get("fee_sponsor") {
-        let sponsor = raw.try_into_any_norito::<AccountId>().map_err(|err| {
-            ValidationFail::NotPermitted(format!("invalid fee_sponsor metadata: {err}"))
-        })?;
-        return Ok(Some(sponsor));
+fn parse_fee_sponsor(
+    world: &impl WorldReadOnly,
+    metadata: &Metadata,
+) -> Result<Option<AccountId>, ValidationFail> {
+    let Some(raw) = metadata.get("fee_sponsor") else {
+        return Ok(None);
+    };
+    match raw.try_into_any_norito::<AccountId>() {
+        Ok(sponsor) => Ok(Some(sponsor)),
+        Err(err) => {
+            if let Ok(literal) = raw.try_into_any_norito::<String>()
+                && let Some(sponsor) =
+                    crate::block::parse_account_literal_with_world(world, &literal)
+            {
+                return Ok(Some(sponsor));
+            }
+            Err(ValidationFail::NotPermitted(format!(
+                "invalid fee_sponsor metadata: {err}"
+            )))
+        }
     }
-    Ok(None)
 }
 
 /// Parse optional `gas_limit` from transaction metadata.
@@ -569,7 +582,12 @@ impl Executor {
             authority.clone()
         };
 
-        let sink_account: AccountId = cfg.fee_sink_account_id.parse().map_err(|_| {
+        let sink_account = crate::block::parse_account_literal_with_world(
+            &state_transaction.world,
+            &cfg.fee_sink_account_id,
+        )
+        .or_else(|| cfg.fee_sink_account_id.parse().ok())
+        .ok_or_else(|| {
             let reason =
                 "invalid nexus fee sink account id; expected account identifier".to_owned();
             sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
@@ -746,7 +764,7 @@ impl Executor {
             Executable::Instructions(steps) => steps.len(),
             _ => 0,
         };
-        let fee_sponsor = parse_fee_sponsor(transaction.metadata())?;
+        let fee_sponsor = parse_fee_sponsor(&state_transaction.world, transaction.metadata())?;
         // Bind the transaction call_hash for ISI event emitters to use in audit fields
         let call_hash = transaction.hash_as_entrypoint();
         state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));

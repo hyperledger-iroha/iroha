@@ -10,7 +10,7 @@ use ivm::{
         ProofBlob,
     },
 };
-use norito::codec::{DecodeAll, Encode};
+use norito::{decode_from_bytes, to_bytes};
 
 fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
@@ -142,7 +142,7 @@ fn tlv_nftid_structure() {
 #[test]
 fn tlv_dataspace_id_roundtrip() {
     let dsid = DataSpaceId::new(0xDEAD_BEEF_CAFE_BABE);
-    let payload = dsid.encode();
+    let payload = to_bytes(&dsid).expect("encode DataSpaceId");
     let type_id = PointerType::DataSpaceId as u16;
     let tlv = make_tlv(type_id, 1, &payload);
 
@@ -151,10 +151,9 @@ fn tlv_dataspace_id_roundtrip() {
         u32::from_be_bytes(tlv[3..7].try_into().unwrap()),
         payload.len() as u32
     );
-    let mut slice = &tlv[7..7 + payload.len()];
-    let decoded = DataSpaceId::decode_all(&mut slice).expect("decode DataSpaceId payload");
+    let decoded: DataSpaceId =
+        decode_from_bytes(&tlv[7..7 + payload.len()]).expect("decode DataSpaceId payload");
     assert_eq!(decoded, dsid);
-    assert_eq!(slice.len(), 0, "payload should be fully consumed");
 
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
@@ -166,7 +165,7 @@ fn tlv_dataspace_id_roundtrip() {
 #[test]
 fn tlv_axt_descriptor_roundtrip() {
     let descriptor = sample_descriptor();
-    let payload = descriptor.encode();
+    let payload = to_bytes(&descriptor).expect("encode descriptor");
     let type_id = PointerType::AxtDescriptor as u16;
     let tlv = make_tlv(type_id, 1, &payload);
 
@@ -176,10 +175,9 @@ fn tlv_axt_descriptor_roundtrip() {
         payload.len() as u32
     );
 
-    let mut slice = &tlv[7..7 + payload.len()];
-    let decoded = AxtDescriptor::decode_all(&mut slice).expect("decode AxtDescriptor payload");
+    let decoded: AxtDescriptor =
+        decode_from_bytes(&tlv[7..7 + payload.len()]).expect("decode AxtDescriptor payload");
     assert_eq!(decoded, descriptor);
-    assert_eq!(slice.len(), 0);
 
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
@@ -216,7 +214,7 @@ fn tlv_asset_handle_roundtrip() {
         max_clock_skew_ms: Some(500),
     };
 
-    let payload = handle.encode();
+    let payload = to_bytes(&handle).expect("encode handle");
     let type_id = PointerType::AssetHandle as u16;
     let tlv = make_tlv(type_id, 1, &payload);
 
@@ -225,10 +223,9 @@ fn tlv_asset_handle_roundtrip() {
         u32::from_be_bytes(tlv[3..7].try_into().unwrap()),
         payload.len() as u32
     );
-    let mut slice = &tlv[7..7 + payload.len()];
-    let decoded = AssetHandle::decode_all(&mut slice).expect("decode AssetHandle payload");
+    let decoded: AssetHandle =
+        decode_from_bytes(&tlv[7..7 + payload.len()]).expect("decode AssetHandle payload");
     assert_eq!(decoded, handle);
-    assert_eq!(slice.len(), 0);
 
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
@@ -243,7 +240,7 @@ fn tlv_proof_blob_roundtrip() {
         payload: vec![0xDE, 0xAD, 0xBE, 0xEF],
         expiry_slot: None,
     };
-    let payload = proof.encode();
+    let payload = to_bytes(&proof).expect("encode proof");
     let type_id = PointerType::ProofBlob as u16;
     let tlv = make_tlv(type_id, 1, &payload);
 
@@ -252,10 +249,9 @@ fn tlv_proof_blob_roundtrip() {
         u32::from_be_bytes(tlv[3..7].try_into().unwrap()),
         payload.len() as u32
     );
-    let mut slice = &tlv[7..7 + payload.len()];
-    let decoded = ProofBlob::decode_all(&mut slice).expect("decode ProofBlob payload");
+    let decoded: ProofBlob =
+        decode_from_bytes(&tlv[7..7 + payload.len()]).expect("decode ProofBlob payload");
     assert_eq!(decoded, proof);
-    assert_eq!(slice.len(), 0);
 
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()

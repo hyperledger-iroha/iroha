@@ -14,6 +14,7 @@ use ivm::{
     mock_wsv::{MockWorldStateView, PermissionToken, WsvHost, ZkAssetMode, ZkPolicyConfig},
     syscalls,
 };
+mod common;
 
 fn json_value<T: norito::json::JsonSerialize + ?Sized>(value: &T) -> norito::json::Value {
     norito::json::to_value(value).expect("serialize json value")
@@ -26,6 +27,9 @@ fn json_object<const N: usize>(
 }
 
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
+    let payload = PointerType::from_u16(type_id)
+        .map(|pty| common::payload_for_type(pty, payload))
+        .unwrap_or_else(|| payload.to_vec());
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
     out.push(1);
@@ -202,7 +206,7 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
     let p_out = vm.register(10);
     let tlv_out = vm.memory.validate_tlv(p_out).expect("out tlv");
     assert_eq!(tlv_out.type_id, PointerType::Json);
-    let val: norito::json::Value = norito::json::from_slice(tlv_out.payload).unwrap();
+    let val: norito::json::Value = common::json_from_payload(tlv_out.payload);
     let bal = val
         .get("balance")
         .and_then(|v| v.as_u64())

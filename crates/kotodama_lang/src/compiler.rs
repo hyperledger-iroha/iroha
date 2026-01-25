@@ -387,80 +387,64 @@ fn decode_hex_or_raw_bytes(raw: &str) -> Result<Vec<u8>, String> {
 
 fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>> {
     use ir::DataRefKind as DRK;
-    use norito::codec::{DecodeAll, Encode as NoritoEncode};
+    use iroha_primitives::json::Json;
+    use norito::{decode_from_bytes, to_bytes};
 
     let (type_id, payload) = match kind {
         DRK::Account => {
             let id: iroha_data_model::account::AccountId = raw.parse().ok()?;
-            (PointerType::AccountId, id.encode())
+            (PointerType::AccountId, to_bytes(&id).ok()?)
         }
         DRK::AssetDef => {
             let id: iroha_data_model::asset::AssetDefinitionId = raw.parse().ok()?;
-            (PointerType::AssetDefinitionId, id.encode())
+            (PointerType::AssetDefinitionId, to_bytes(&id).ok()?)
         }
         DRK::AssetId => {
             let id: iroha_data_model::asset::AssetId = raw.parse().ok()?;
-            (PointerType::AssetId, id.encode())
+            (PointerType::AssetId, to_bytes(&id).ok()?)
         }
         DRK::NftId => {
             let id: iroha_data_model::nft::NftId = raw.parse().ok()?;
-            (PointerType::NftId, id.encode())
+            (PointerType::NftId, to_bytes(&id).ok()?)
         }
         DRK::Name => {
             let nm: iroha_data_model::name::Name = raw.parse().ok()?;
-            (PointerType::Name, nm.encode())
+            (PointerType::Name, to_bytes(&nm).ok()?)
         }
         DRK::Domain => {
             let id: iroha_data_model::domain::DomainId = raw.parse().ok()?;
-            (PointerType::DomainId, id.encode())
+            (PointerType::DomainId, to_bytes(&id).ok()?)
         }
         DRK::Json => {
-            let value = norito::json::parse_value(raw).ok()?;
-            let minified = norito::json::to_string(&value).ok()?;
-            (PointerType::Json, minified.into_bytes())
+            let json = Json::from_str_norito(raw).ok()?;
+            (PointerType::Json, to_bytes(&json).ok()?)
         }
         DRK::Blob => (PointerType::Blob, decode_hex_or_raw_bytes(raw).ok()?),
         DRK::NoritoBytes => (PointerType::NoritoBytes, decode_hex_or_raw_bytes(raw).ok()?),
         DRK::DataSpaceId => {
             if let Some(raw_id) = parse_u64_literal(raw) {
                 let id = iroha_data_model::nexus::DataSpaceId::new(raw_id);
-                (PointerType::DataSpaceId, id.encode())
+                (PointerType::DataSpaceId, to_bytes(&id).ok()?)
             } else {
                 let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-                let mut slice = bytes.as_slice();
-                iroha_data_model::nexus::DataSpaceId::decode_all(&mut slice).ok()?;
-                if !slice.is_empty() {
-                    return None;
-                }
-                (PointerType::DataSpaceId, bytes)
+                let value: iroha_data_model::nexus::DataSpaceId = decode_from_bytes(&bytes).ok()?;
+                (PointerType::DataSpaceId, to_bytes(&value).ok()?)
             }
         }
         DRK::AxtDescriptor => {
             let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-            let mut slice = bytes.as_slice();
-            crate::axt::AxtDescriptor::decode_all(&mut slice).ok()?;
-            if !slice.is_empty() {
-                return None;
-            }
-            (PointerType::AxtDescriptor, bytes)
+            let value: crate::axt::AxtDescriptor = decode_from_bytes(&bytes).ok()?;
+            (PointerType::AxtDescriptor, to_bytes(&value).ok()?)
         }
         DRK::AssetHandle => {
             let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-            let mut slice = bytes.as_slice();
-            crate::axt::AssetHandle::decode_all(&mut slice).ok()?;
-            if !slice.is_empty() {
-                return None;
-            }
-            (PointerType::AssetHandle, bytes)
+            let value: crate::axt::AssetHandle = decode_from_bytes(&bytes).ok()?;
+            (PointerType::AssetHandle, to_bytes(&value).ok()?)
         }
         DRK::ProofBlob => {
             let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-            let mut slice = bytes.as_slice();
-            crate::axt::ProofBlob::decode_all(&mut slice).ok()?;
-            if !slice.is_empty() {
-                return None;
-            }
-            (PointerType::ProofBlob, bytes)
+            let value: crate::axt::ProofBlob = decode_from_bytes(&bytes).ok()?;
+            (PointerType::ProofBlob, to_bytes(&value).ok()?)
         }
     };
 
@@ -1360,7 +1344,7 @@ seiyaku Test {
             .access_set_hints
             .expect("expected access_set_hints");
         let numeric = iroha_primitives::numeric::Numeric::new(7_u128, 0);
-        let payload = numeric.encode();
+        let payload = norito::to_bytes(&numeric).expect("encode numeric");
         let raw = format!("0x{}", hex::encode(payload));
         let path = super::state_path_for_norito_key("Foo", &raw).expect("path");
         let expected = format!("state:{path}");
@@ -1779,7 +1763,7 @@ impl Compiler {
                         && let Some(raw) = int_const_map.get(&(func_idx, *value)).copied()
                     {
                         let numeric = iroha_primitives::numeric::Numeric::new(raw, 0);
-                        let payload = numeric.encode();
+                        let payload = norito::to_bytes(&numeric).expect("encode numeric");
                         norito_literal_map
                             .insert((func_idx, *dest), format!("0x{}", hex::encode(payload)));
                     }
@@ -5593,7 +5577,8 @@ impl Compiler {
         // Build data section from collected keys and pointer literal table.
         use iroha_crypto::Hash as IrohaHash;
         use iroha_data_model::prelude::*;
-        use norito::codec::DecodeAll;
+        use iroha_primitives::json::Json;
+        use norito::{decode_from_bytes, to_bytes};
         // Stable key order based on first occurrence in fixups. Also include datarefs seen even if unused
         // in emitted code to ensure TLVs are generated (useful for constructor-only samples/tests).
         let mut key_order: IndexSet<DataKey> = IndexSet::new();
@@ -5629,53 +5614,91 @@ impl Compiler {
                         let err = format!("invalid AccountId literal `{s}`: {e}");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
-                    (1u16, id.encode())
+                    (
+                        1u16,
+                        to_bytes(&id).map_err(|e| e.to_string()).map_err(|e| {
+                            let err = format!("invalid AccountId literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?,
+                    )
                 }
                 DataKey(DataKind::AssetDef, s) => {
                     let id: AssetDefinitionId = s.parse().map_err(|e| {
                         let err = format!("invalid AssetDefinitionId literal `{s}`: {e}");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
-                    (2u16, id.encode())
+                    (
+                        2u16,
+                        to_bytes(&id).map_err(|e| e.to_string()).map_err(|e| {
+                            let err = format!("invalid AssetDefinitionId literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?,
+                    )
                 }
                 DataKey(DataKind::NftId, s) => {
                     let id: iroha_data_model::nft::NftId = s.parse().map_err(|e| {
                         let err = format!("invalid NftId literal `{s}`: {e}");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
-                    (5u16, id.encode())
+                    (
+                        5u16,
+                        to_bytes(&id).map_err(|e| e.to_string()).map_err(|e| {
+                            let err = format!("invalid NftId literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?,
+                    )
                 }
                 DataKey(DataKind::AssetId, s) => {
                     let id: iroha_data_model::asset::AssetId = s.parse().map_err(|e| {
                         let err = format!("invalid AssetId literal `{s}`: {e}");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
-                    (7u16, id.encode())
+                    (
+                        7u16,
+                        to_bytes(&id).map_err(|e| e.to_string()).map_err(|e| {
+                            let err = format!("invalid AssetId literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?,
+                    )
                 }
                 DataKey(DataKind::Name, s) => {
                     let nm: Name = s.parse().map_err(|e| {
                         let err = format!("invalid Name literal `{s}`: {e}");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
-                    (3u16, nm.encode())
+                    (
+                        3u16,
+                        to_bytes(&nm).map_err(|e| e.to_string()).map_err(|e| {
+                            let err = format!("invalid Name literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?,
+                    )
                 }
                 DataKey(DataKind::Json, s) => {
-                    let value = norito::json::parse_value(s).map_err(|e| {
+                    let json = Json::from_str_norito(s).map_err(|e| {
                         let err = format!("invalid JSON literal `{s}`: {e}");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
-                    let minified = norito::json::to_string(&value).map_err(|e| {
-                        let err = format!("invalid JSON literal `{s}`: {e}");
-                        i18n::translate(self.lang, Message::SemanticError(&err))
-                    })?;
-                    (4u16, minified.into_bytes())
+                    (
+                        4u16,
+                        to_bytes(&json).map_err(|e| e.to_string()).map_err(|e| {
+                            let err = format!("invalid JSON literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?,
+                    )
                 }
                 DataKey(DataKind::Domain, s) => {
                     let id: iroha_data_model::domain::DomainId = s.parse().map_err(|e| {
                         let err = format!("invalid DomainId literal `{s}`: {e}");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
-                    (8u16, id.encode())
+                    (
+                        8u16,
+                        to_bytes(&id).map_err(|e| e.to_string()).map_err(|e| {
+                            let err = format!("invalid DomainId literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?,
+                    )
                 }
                 DataKey(DataKind::Blob, s) => (
                     6u16,
@@ -5694,26 +5717,32 @@ impl Compiler {
                 DataKey(DataKind::DataSpaceId, s) => {
                     if let Some(raw) = parse_u64_literal(s) {
                         let id = iroha_data_model::nexus::DataSpaceId::new(raw);
-                        (PointerType::DataSpaceId as u16, id.encode())
+                        (
+                            PointerType::DataSpaceId as u16,
+                            to_bytes(&id).map_err(|e| e.to_string()).map_err(|e| {
+                                let err = format!("invalid DataSpaceId literal `{s}`: {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?,
+                        )
                     } else {
                         let bytes = decode_hex_or_raw_bytes(s).map_err(|e| {
                             let err = format!("invalid DataSpaceId literal `{s}`: {e}");
                             i18n::translate(self.lang, Message::SemanticError(&err))
                         })?;
-                        let mut slice = bytes.as_slice();
-                        iroha_data_model::nexus::DataSpaceId::decode_all(&mut slice).map_err(
-                            |e| {
+                        let value: iroha_data_model::nexus::DataSpaceId = decode_from_bytes(&bytes)
+                            .map_err(|e| {
                                 let err = format!(
                                     "invalid DataSpaceId literal `{s}`: cannot decode ({e})"
                                 );
                                 i18n::translate(self.lang, Message::SemanticError(&err))
-                            },
-                        )?;
-                        if !slice.is_empty() {
-                            let err = format!("invalid DataSpaceId literal `{s}`: trailing bytes");
-                            return Err(i18n::translate(self.lang, Message::SemanticError(&err)));
-                        }
-                        (PointerType::DataSpaceId as u16, bytes)
+                            })?;
+                        (
+                            PointerType::DataSpaceId as u16,
+                            to_bytes(&value).map_err(|e| e.to_string()).map_err(|e| {
+                                let err = format!("invalid DataSpaceId literal `{s}`: {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?,
+                        )
                     }
                 }
                 DataKey(DataKind::AxtDescriptor, s) => {
@@ -5721,49 +5750,55 @@ impl Compiler {
                         let err = format!("invalid AxtDescriptor literal `{s}`: {e}");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
-                    let mut slice = bytes.as_slice();
-                    crate::axt::AxtDescriptor::decode_all(&mut slice).map_err(|e| {
-                        let err =
-                            format!("invalid AxtDescriptor literal `{s}`: cannot decode ({e})");
-                        i18n::translate(self.lang, Message::SemanticError(&err))
-                    })?;
-                    if !slice.is_empty() {
-                        let err = format!("invalid AxtDescriptor literal `{s}`: trailing bytes");
-                        return Err(i18n::translate(self.lang, Message::SemanticError(&err)));
-                    }
-                    (PointerType::AxtDescriptor as u16, bytes)
+                    let value: crate::axt::AxtDescriptor =
+                        decode_from_bytes(&bytes).map_err(|e| {
+                            let err =
+                                format!("invalid AxtDescriptor literal `{s}`: cannot decode ({e})");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?;
+                    (
+                        PointerType::AxtDescriptor as u16,
+                        to_bytes(&value).map_err(|e| e.to_string()).map_err(|e| {
+                            let err = format!("invalid AxtDescriptor literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?,
+                    )
                 }
                 DataKey(DataKind::AssetHandle, s) => {
                     let bytes = decode_hex_or_raw_bytes(s).map_err(|e| {
                         let err = format!("invalid AssetHandle literal `{s}`: {e}");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
-                    let mut slice = bytes.as_slice();
-                    crate::axt::AssetHandle::decode_all(&mut slice).map_err(|e| {
-                        let err = format!("invalid AssetHandle literal `{s}`: cannot decode ({e})");
-                        i18n::translate(self.lang, Message::SemanticError(&err))
-                    })?;
-                    if !slice.is_empty() {
-                        let err = format!("invalid AssetHandle literal `{s}`: trailing bytes");
-                        return Err(i18n::translate(self.lang, Message::SemanticError(&err)));
-                    }
-                    (PointerType::AssetHandle as u16, bytes)
+                    let value: crate::axt::AssetHandle =
+                        decode_from_bytes(&bytes).map_err(|e| {
+                            let err =
+                                format!("invalid AssetHandle literal `{s}`: cannot decode ({e})");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?;
+                    (
+                        PointerType::AssetHandle as u16,
+                        to_bytes(&value).map_err(|e| e.to_string()).map_err(|e| {
+                            let err = format!("invalid AssetHandle literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?,
+                    )
                 }
                 DataKey(DataKind::ProofBlob, s) => {
                     let bytes = decode_hex_or_raw_bytes(s).map_err(|e| {
                         let err = format!("invalid ProofBlob literal `{s}`: {e}");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
-                    let mut slice = bytes.as_slice();
-                    crate::axt::ProofBlob::decode_all(&mut slice).map_err(|e| {
+                    let value: crate::axt::ProofBlob = decode_from_bytes(&bytes).map_err(|e| {
                         let err = format!("invalid ProofBlob literal `{s}`: cannot decode ({e})");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
-                    if !slice.is_empty() {
-                        let err = format!("invalid ProofBlob literal `{s}`: trailing bytes");
-                        return Err(i18n::translate(self.lang, Message::SemanticError(&err)));
-                    }
-                    (PointerType::ProofBlob as u16, bytes)
+                    (
+                        PointerType::ProofBlob as u16,
+                        to_bytes(&value).map_err(|e| e.to_string()).map_err(|e| {
+                            let err = format!("invalid ProofBlob literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?,
+                    )
                 }
             };
             // TLV envelope: type_id (be), version=1, len (be u32), payload, hash (32 bytes blake2b-32)

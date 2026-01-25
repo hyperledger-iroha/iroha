@@ -434,8 +434,29 @@ mod tests {
         let payload = b"petal-stream-payload";
         let mut grid = PetalStreamEncoder::encode_grid(payload, PetalStreamOptions::default())
             .expect("encode");
-        let idx = grid.cells.iter().position(|bit| *bit).expect("bit");
-        grid.cells[idx] = !grid.cells[idx];
+        let header_bits = PETAL_STREAM_HEADER_LEN * 8;
+        let mut flipped = false;
+        let mut bit_idx = 0usize;
+        for y in 0..grid.grid_size {
+            for x in 0..grid.grid_size {
+                if cell_role(x, y, grid.grid_size, PetalStreamOptions::default()) != CellRole::Data
+                {
+                    continue;
+                }
+                if bit_idx < header_bits {
+                    bit_idx += 1;
+                    continue;
+                }
+                let idx = y as usize * grid.grid_size as usize + x as usize;
+                grid.cells[idx] = !grid.cells[idx];
+                flipped = true;
+                break;
+            }
+            if flipped {
+                break;
+            }
+        }
+        assert!(flipped, "must flip a data cell");
         let err = PetalStreamDecoder::decode_grid(&grid, PetalStreamOptions::default())
             .expect_err("decode should fail");
         assert_eq!(err, PetalStreamError::ChecksumMismatch);

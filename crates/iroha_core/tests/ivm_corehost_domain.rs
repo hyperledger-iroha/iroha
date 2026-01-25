@@ -5,9 +5,9 @@ use iroha_test_samples::{ALICE_ID, BOB_ID};
 use ivm::IVMHost; // bring trait into scope for `.syscall()`
 use ivm::{IVM, Memory, ProgramMetadata, syscalls};
 
-fn build_tlv<T: norito::codec::Encode>(type_id: u16, val: &T) -> Vec<u8> {
+fn build_tlv<T: norito::NoritoSerialize>(type_id: u16, val: &T) -> Vec<u8> {
     use iroha_crypto::Hash;
-    let payload = val.encode();
+    let payload = norito::to_bytes(val).expect("encode payload");
     let mut v = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
     v.extend_from_slice(&type_id.to_be_bytes());
     v.push(1u8);
@@ -95,7 +95,7 @@ fn register_domain_rejects_corrupted_hash() {
         .unwrap();
 
     let did: DomainId = "wonderland".parse().unwrap();
-    let payload = did.encode();
+    let payload = norito::to_bytes(&did).expect("encode domain id");
     let mut blob = Vec::new();
     blob.extend_from_slice(&0x0008u16.to_be_bytes());
     blob.push(1);

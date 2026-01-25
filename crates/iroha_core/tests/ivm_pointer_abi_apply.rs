@@ -10,10 +10,10 @@ use iroha_core::{
 use iroha_data_model::{account::NewAccount, prelude::*};
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
-use norito::codec::Encode as NoritoEncode;
+use norito::NoritoSerialize;
 
-fn tlv_envelope<T: NoritoEncode>(type_id: PointerType, val: &T) -> Vec<u8> {
-    let payload = val.encode();
+fn tlv_envelope<T: NoritoSerialize>(type_id: PointerType, val: &T) -> Vec<u8> {
+    let payload = norito::to_bytes(val).expect("encode payload");
     let mut blob = Vec::with_capacity(2 + 1 + 4 + payload.len() + iroha_crypto::Hash::LENGTH);
     blob.extend_from_slice(&(type_id as u16).to_be_bytes());
     blob.push(1u8); // version
@@ -39,13 +39,17 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     let from_bytes = tlv_envelope(PointerType::AccountId, &from);
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
+    let amount = Numeric::from(500_u64);
+    let amount_bytes = tlv_envelope(PointerType::NoritoBytes, &amount);
     let align8 = |n: u64| (n + 7) & !7;
     let off_from = 0u64;
     let off_to = align8(off_from + from_bytes.len() as u64);
     let off_asset = align8(off_to + to_bytes.len() as u64);
+    let off_amount = align8(off_asset + asset_bytes.len() as u64);
     let ptr_from = ivm::Memory::INPUT_START + off_from;
     let ptr_to = ivm::Memory::INPUT_START + off_to;
     let ptr_asset = ivm::Memory::INPUT_START + off_asset;
+    let ptr_amount = ivm::Memory::INPUT_START + off_amount;
 
     let mut code = Vec::new();
     // SCALL transfer + HALT
@@ -82,11 +86,14 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     vm.memory
         .preload_input(off_asset, &asset_bytes)
         .expect("preload input");
+    vm.memory
+        .preload_input(off_amount, &amount_bytes)
+        .expect("preload input");
     vm.load_program(&program).unwrap();
     vm.set_register(10, ptr_from);
     vm.set_register(11, ptr_to);
     vm.set_register(12, ptr_asset);
-    vm.set_register(13, 500);
+    vm.set_register(13, ptr_amount);
     vm.run().unwrap();
 
     // Build a minimal State and apply setup ISIs (register domain/accounts/asset, mint initial balance)

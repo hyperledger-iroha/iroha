@@ -15,6 +15,7 @@ use ivm::{
     },
     mock_wsv::{DataspaceAxtPolicy, MockWorldStateView, SpaceDirectoryAxtPolicy},
 };
+mod common;
 
 #[test]
 fn core_host_rejects_unknown_syscalls() {
@@ -26,6 +27,7 @@ fn core_host_rejects_unknown_syscalls() {
 }
 
 fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
+    let payload = common::payload_for_type(ty, payload);
     let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
     tlv.extend_from_slice(&(ty as u16).to_be_bytes());
     tlv.push(1);

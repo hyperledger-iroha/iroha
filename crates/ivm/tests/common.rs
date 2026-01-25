@@ -2,7 +2,9 @@
 use std::vec::Vec;
 
 // --- CompactProofBundle helpers via syscalls (test-only utilities) ---
-use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls};
+use iroha_data_model::prelude::*;
+use iroha_primitives::json::Json;
+use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls};
 
 const HALT_WORD: u32 = encoding::wide::encode_halt();
 pub const HALT: [u8; 4] = HALT_WORD.to_le_bytes();
@@ -141,4 +143,42 @@ pub fn assemble_zk(code: &[u8], max_cycles: u64) -> Vec<u8> {
     // overwrite max_cycles in header (bytes 8..16)
     header[8..16].copy_from_slice(&max_cycles.to_le_bytes());
     header
+}
+
+pub fn payload_for_type(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
+    match pointer_type {
+        PointerType::AccountId => encode_from_str::<AccountId>(payload, "AccountId"),
+        PointerType::AssetDefinitionId => {
+            encode_from_str::<AssetDefinitionId>(payload, "AssetDefinitionId")
+        }
+        PointerType::AssetId => encode_from_str::<AssetId>(payload, "AssetId"),
+        PointerType::DomainId => encode_from_str::<DomainId>(payload, "DomainId"),
+        PointerType::Name => encode_from_str::<Name>(payload, "Name"),
+        PointerType::NftId => encode_from_str::<NftId>(payload, "NftId"),
+        PointerType::Json => encode_json_payload(payload),
+        _ => payload.to_vec(),
+    }
+}
+
+pub fn json_from_payload(payload: &[u8]) -> norito::json::Value {
+    let json: Json = norito::decode_from_bytes(payload).expect("decode Json payload");
+    norito::json::from_str(json.get()).expect("parse Json payload")
+}
+
+fn encode_from_str<T>(payload: &[u8], label: &str) -> Vec<u8>
+where
+    T: core::str::FromStr + norito::NoritoSerialize,
+    <T as core::str::FromStr>::Err: core::fmt::Display,
+{
+    let raw = core::str::from_utf8(payload).expect("payload must be utf-8");
+    let value: T = raw
+        .parse()
+        .unwrap_or_else(|e| panic!("{label} literal `{raw}` failed to parse: {e}"));
+    norito::to_bytes(&value).expect("encode payload")
+}
+
+fn encode_json_payload(payload: &[u8]) -> Vec<u8> {
+    let raw = core::str::from_utf8(payload).expect("json payload must be utf-8");
+    let json = Json::from_str_norito(raw).expect("parse json payload");
+    norito::to_bytes(&json).expect("encode json payload")
 }

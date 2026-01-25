@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use iroha_crypto::{Hash, HashOf, MerkleProof};
 use iroha_data_model::{name::Name, prelude::AccountId};
 use ivm::{IVM, PointerType, VMError, encoding, instruction, syscalls};
-use norito::codec::Encode as NoritoEncode;
 mod common;
 use common::assemble;
 
@@ -18,6 +17,9 @@ fn assemble_syscall(syscall: u8) -> Vec<u8> {
 }
 
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
+    let payload = PointerType::from_u16(type_id)
+        .map(|pty| common::payload_for_type(pty, payload))
+        .unwrap_or_else(|| payload.to_vec());
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
     out.push(1);
@@ -111,8 +113,7 @@ fn get_public_input_returns_named_tlv() {
     host.set_public_inputs(inputs);
     vm.set_host(host);
 
-    let name_payload = name.encode();
-    let name_tlv = make_tlv(PointerType::Name as u16, &name_payload);
+    let name_tlv = make_tlv(PointerType::Name as u16, name.as_ref().as_bytes());
     let ptr = vm.alloc_input_tlv(&name_tlv).expect("alloc tlv");
     vm.set_register(10, ptr);
     let prog = assemble_syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT as u8);
@@ -131,8 +132,7 @@ fn get_public_input_missing_name_errors() {
     let name: Name = "missing_key".parse().unwrap();
     vm.set_host(ivm::host::DefaultHost::new());
 
-    let name_payload = name.encode();
-    let name_tlv = make_tlv(PointerType::Name as u16, &name_payload);
+    let name_tlv = make_tlv(PointerType::Name as u16, name.as_ref().as_bytes());
     let ptr = vm.alloc_input_tlv(&name_tlv).expect("alloc tlv");
     vm.set_register(10, ptr);
     let prog = assemble_syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT as u8);
@@ -160,7 +160,8 @@ fn add_signatory_syscall_accepts_account_and_json() {
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
             .parse()
             .unwrap();
-    let account_tlv = make_tlv(PointerType::AccountId as u16, &account.encode());
+    let account_raw = account.to_string();
+    let account_tlv = make_tlv(PointerType::AccountId as u16, account_raw.as_bytes());
     let account_ptr = vm.alloc_input_tlv(&account_tlv).expect("alloc account");
     let signatory_key = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
     let signatory_json = format!("\"{signatory_key}\"");
@@ -181,7 +182,8 @@ fn remove_signatory_syscall_accepts_account_and_json() {
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
             .parse()
             .unwrap();
-    let account_tlv = make_tlv(PointerType::AccountId as u16, &account.encode());
+    let account_raw = account.to_string();
+    let account_tlv = make_tlv(PointerType::AccountId as u16, account_raw.as_bytes());
     let account_ptr = vm.alloc_input_tlv(&account_tlv).expect("alloc account");
     let signatory_key = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
     let signatory_json = format!("\"{signatory_key}\"");
@@ -202,7 +204,8 @@ fn set_account_quorum_accepts_nonzero() {
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
             .parse()
             .unwrap();
-    let account_tlv = make_tlv(PointerType::AccountId as u16, &account.encode());
+    let account_raw = account.to_string();
+    let account_tlv = make_tlv(PointerType::AccountId as u16, account_raw.as_bytes());
     let account_ptr = vm.alloc_input_tlv(&account_tlv).expect("alloc account");
     vm.set_register(10, account_ptr);
     vm.set_register(11, 2);
@@ -219,7 +222,8 @@ fn set_account_quorum_rejects_zero() {
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@domain"
             .parse()
             .unwrap();
-    let account_tlv = make_tlv(PointerType::AccountId as u16, &account.encode());
+    let account_raw = account.to_string();
+    let account_tlv = make_tlv(PointerType::AccountId as u16, account_raw.as_bytes());
     let account_ptr = vm.alloc_input_tlv(&account_tlv).expect("alloc account");
     vm.set_register(10, account_ptr);
     vm.set_register(11, 0);

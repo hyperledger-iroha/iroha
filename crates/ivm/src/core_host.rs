@@ -4,7 +4,7 @@
 //! arguments and returns success. It is intended for end-to-end tests that
 //! exercise TLV validation from VM bytecode through host dispatch.
 
-use std::{collections::BTreeMap, io::Cursor, num::NonZeroU64, str::FromStr, sync::Arc};
+use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr, sync::Arc};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{Hash as IrohaHash, Sm3Digest};
@@ -17,10 +17,7 @@ use iroha_primitives::{
     json::Json,
     numeric::{Numeric, NumericSpec},
 };
-use norito::{
-    codec::{Decode as NoritoDecode, Encode as NoritoEncode},
-    decode_from_bytes, json as njson,
-};
+use norito::{decode_from_bytes, json as njson, to_bytes};
 use sha2::{Digest as Sha2Digest, Sha256};
 use sha3_hash::{Digest as Sha3Digest, Sha3_256};
 
@@ -237,12 +234,7 @@ impl CoreHost {
     }
 
     fn decode_name_payload(&self, payload: &[u8]) -> Result<Name, VMError> {
-        let mut reader = Cursor::new(payload);
-        if let Ok(name) = Name::decode(&mut reader) {
-            return Ok(name);
-        }
-        let s = core::str::from_utf8(payload).map_err(|_| VMError::NoritoInvalid)?;
-        Name::from_str(s).map_err(|_| VMError::NoritoInvalid)
+        decode_from_bytes(payload).map_err(|_| VMError::DecodeError)
     }
 
     fn policy_entry_for(&self, dsid: DataSpaceId) -> Option<AxtPolicyEntry> {
@@ -909,8 +901,8 @@ impl CoreHost {
 
     fn decode_numeric(&self, vm: &IVM, ptr: u64) -> Result<Numeric, VMError> {
         let tlv = self.decode_tlv(vm, ptr, PointerType::NoritoBytes)?;
-        let mut cursor = Cursor::new(tlv.payload);
-        let numeric = Numeric::decode(&mut cursor).map_err(|_| VMError::DecodeError)?;
+        let numeric =
+            decode_from_bytes::<Numeric>(tlv.payload).map_err(|_| VMError::DecodeError)?;
         Self::ensure_unsigned_scale0(numeric)
     }
 }
@@ -1021,7 +1013,7 @@ impl IVMHost for CoreHost {
                 Ok(0)
             }
             syscalls::SYSCALL_DECODE_INT => {
-                // r10 = &NoritoBytes or &Blob (ASCII decimal); return r10 = parsed i64
+                // r10 = &NoritoBytes (Norito-framed i64); return r10 = parsed i64
                 let addr = vm.register(10);
                 if addr == 0 {
                     if crate::dev_env::decode_trace_enabled() {
@@ -1031,7 +1023,7 @@ impl IVMHost for CoreHost {
                     return Ok(0);
                 }
                 let tlv = vm.memory.validate_tlv(addr)?;
-                if !matches!(tlv.type_id, PointerType::NoritoBytes | PointerType::Blob) {
+                if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
                 // Enforce ABI policy allows the input pointer type.
@@ -1042,8 +1034,7 @@ impl IVMHost for CoreHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                let s = core::str::from_utf8(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-                let val: i64 = s.parse().map_err(|_| VMError::NoritoInvalid)?;
+                let val: i64 = decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
                 vm.set_register(10, val as u64);
                 Ok(0)
             }
@@ -1073,7 +1064,7 @@ impl IVMHost for CoreHost {
                 }
                 let path_name = Name::from_str(&s).map_err(|_| VMError::NoritoInvalid)?;
                 // Build Name TLV and allocate in INPUT
-                let body = path_name.encode();
+                let body = to_bytes(&path_name).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Name as u16).to_be_bytes());
                 out.push(1);
@@ -1085,22 +1076,25 @@ impl IVMHost for CoreHost {
                 vm.set_register(10, p);
                 if crate::dev_env::decode_trace_enabled() {
                     let tlv2 = vm.memory.validate_tlv(p)?;
-                    let s = core::str::from_utf8(tlv2.payload).unwrap_or("");
-                    eprintln!("[CoreHost] BUILD_PATH_MAP_KEY exit r10=0x{p:08x} -> {s}");
+                    if let Ok(name) = decode_from_bytes::<Name>(tlv2.payload) {
+                        eprintln!(
+                            "[CoreHost] BUILD_PATH_MAP_KEY exit r10=0x{p:08x} -> {}",
+                            name.as_ref()
+                        );
+                    }
                 }
                 Ok(0)
             }
             syscalls::SYSCALL_ENCODE_INT => {
-                // r10 = value (i64) -> r10 = &NoritoBytes (ASCII decimal)
+                // r10 = value (i64) -> r10 = &NoritoBytes (Norito-framed i64)
                 let val = vm.register(10) as i64;
-                let s = val.to_string();
-                let body = s.as_bytes();
+                let body = to_bytes(&val).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
                 out.push(1);
                 out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                out.extend_from_slice(body);
-                let h: [u8; 32] = IrohaHash::new(body).into();
+                out.extend_from_slice(&body);
+                let h: [u8; 32] = IrohaHash::new(&body).into();
                 out.extend_from_slice(&h);
                 let p = vm.alloc_input_tlv(&out)?;
                 vm.set_register(10, p);
@@ -1111,7 +1105,8 @@ impl IVMHost for CoreHost {
                 if val < 0 {
                     return Err(VMError::AssertionFailed);
                 }
-                let payload = Numeric::new(val, 0).encode();
+                let payload =
+                    to_bytes(&Numeric::new(val, 0)).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)
@@ -1135,7 +1130,7 @@ impl IVMHost for CoreHost {
                 let lhs = self.decode_numeric(vm, vm.register(10))?;
                 let rhs = self.decode_numeric(vm, vm.register(11))?;
                 let out = lhs.checked_add(rhs).ok_or(VMError::AssertionFailed)?;
-                let payload = out.encode();
+                let payload = to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)
@@ -1147,7 +1142,7 @@ impl IVMHost for CoreHost {
                 if out.mantissa().is_negative() {
                     return Err(VMError::AssertionFailed);
                 }
-                let payload = out.encode();
+                let payload = to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)
@@ -1158,7 +1153,7 @@ impl IVMHost for CoreHost {
                 let out = lhs
                     .checked_mul(rhs, NumericSpec::unconstrained())
                     .ok_or(VMError::AssertionFailed)?;
-                let payload = out.encode();
+                let payload = to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)
@@ -1169,7 +1164,7 @@ impl IVMHost for CoreHost {
                 let out = lhs
                     .checked_div(rhs, NumericSpec::unconstrained())
                     .ok_or(VMError::AssertionFailed)?;
-                let payload = out.encode();
+                let payload = to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)
@@ -1180,7 +1175,7 @@ impl IVMHost for CoreHost {
                 let out = lhs
                     .checked_rem(rhs, NumericSpec::unconstrained())
                     .ok_or(VMError::AssertionFailed)?;
-                let payload = out.encode();
+                let payload = to_bytes(&out).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)
@@ -1190,7 +1185,7 @@ impl IVMHost for CoreHost {
                 if !val.is_zero() {
                     return Err(VMError::AssertionFailed);
                 }
-                let payload = val.encode();
+                let payload = to_bytes(&val).map_err(|_| VMError::NoritoInvalid)?;
                 let p = Self::alloc_norito_bytes_tlv(vm, &payload)?;
                 vm.set_register(10, p);
                 Ok(0)
@@ -1240,7 +1235,7 @@ impl IVMHost for CoreHost {
                     let _ = write!(&mut s, "{b:02x}");
                 }
                 let path_name = Name::from_str(&s).map_err(|_| VMError::NoritoInvalid)?;
-                let body = path_name.encode();
+                let body = to_bytes(&path_name).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Name as u16).to_be_bytes());
                 out.push(1);
@@ -1253,44 +1248,13 @@ impl IVMHost for CoreHost {
                 Ok(0)
             }
             syscalls::SYSCALL_JSON_ENCODE => {
-                // r10 = &Json -> r10 = &NoritoBytes (minified bytes)
+                // r10 = &Json (Norito-framed) -> r10 = &NoritoBytes (same payload)
                 let r10_before = vm.register(10);
                 if crate::dev_env::decode_trace_enabled() {
                     eprintln!("[CoreHost] JSON_ENCODE enter r10=0x{r10_before:08x}");
                 }
                 let tlv = vm.memory.validate_tlv(r10_before)?;
                 if tlv.type_id != PointerType::Json {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let v: njson::Value =
-                    njson::from_slice(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-                let min = njson::to_vec(&v).map_err(|_| VMError::NoritoInvalid)?;
-                let mut out = Vec::with_capacity(7 + min.len() + 32);
-                out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-                out.push(1);
-                out.extend_from_slice(&(min.len() as u32).to_be_bytes());
-                out.extend_from_slice(&min);
-                let h: [u8; 32] = IrohaHash::new(&min).into();
-                out.extend_from_slice(&h);
-                let p = vm.alloc_input_tlv(&out)?;
-                vm.set_register(10, p);
-                if crate::dev_env::decode_trace_enabled() {
-                    eprintln!("[CoreHost] JSON_ENCODE exit r10=0x{p:08x}");
-                }
-                Ok(0)
-            }
-            syscalls::SYSCALL_JSON_DECODE => {
-                // r10 = &NoritoBytes or &Blob -> r10 = &Json (minified)
-                let r10_before = vm.register(10);
-                if crate::dev_env::decode_trace_enabled() {
-                    eprintln!("[CoreHost] JSON_DECODE enter r10=0x{r10_before:08x}");
-                }
-                if r10_before == 0 {
-                    vm.set_register(10, 0);
-                    return Ok(0);
-                }
-                let tlv = vm.memory.validate_tlv(r10_before)?;
-                if !matches!(tlv.type_id, PointerType::NoritoBytes | PointerType::Blob) {
                     return Err(VMError::NoritoInvalid);
                 }
                 let policy = vm.syscall_policy();
@@ -1300,15 +1264,53 @@ impl IVMHost for CoreHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                let v: njson::Value =
-                    njson::from_slice(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-                let min = njson::to_vec(&v).map_err(|_| VMError::NoritoInvalid)?;
-                let mut out = Vec::with_capacity(7 + min.len() + 32);
+                let json: Json =
+                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
+                let mut out = Vec::with_capacity(7 + body.len() + 32);
+                out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+                out.push(1);
+                out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                out.extend_from_slice(&body);
+                let h: [u8; 32] = IrohaHash::new(&body).into();
+                out.extend_from_slice(&h);
+                let p = vm.alloc_input_tlv(&out)?;
+                vm.set_register(10, p);
+                if crate::dev_env::decode_trace_enabled() {
+                    eprintln!("[CoreHost] JSON_ENCODE exit r10=0x{p:08x}");
+                }
+                Ok(0)
+            }
+            syscalls::SYSCALL_JSON_DECODE => {
+                // r10 = &NoritoBytes (Norito-framed Json) -> r10 = &Json
+                let r10_before = vm.register(10);
+                if crate::dev_env::decode_trace_enabled() {
+                    eprintln!("[CoreHost] JSON_DECODE enter r10=0x{r10_before:08x}");
+                }
+                if r10_before == 0 {
+                    vm.set_register(10, 0);
+                    return Ok(0);
+                }
+                let tlv = vm.memory.validate_tlv(r10_before)?;
+                if tlv.type_id != PointerType::NoritoBytes {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: tlv.type_id as u16,
+                    });
+                }
+                let json: Json =
+                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
+                let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
                 out.push(1);
-                out.extend_from_slice(&(min.len() as u32).to_be_bytes());
-                out.extend_from_slice(&min);
-                let h: [u8; 32] = IrohaHash::new(&min).into();
+                out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                out.extend_from_slice(&body);
+                let h: [u8; 32] = IrohaHash::new(&body).into();
                 out.extend_from_slice(&h);
                 let p = vm.alloc_input_tlv(&out)?;
                 vm.set_register(10, p);
@@ -1325,7 +1327,9 @@ impl IVMHost for CoreHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 let schema = self.decode_name_payload(s_tlv.payload)?.to_string();
-                if let Some(bytes) = self.schema.encode_json(&schema, v_tlv.payload) {
+                let json: Json =
+                    decode_from_bytes(v_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                if let Some(bytes) = self.schema.encode_json(&schema, json.get().as_bytes()) {
                     if crate::dev_env::decode_trace_enabled() {
                         // Try immediate roundtrip for known schemas to validate encoding
                         let roundtrip_ok = match schema.as_str() {
@@ -1374,14 +1378,12 @@ impl IVMHost for CoreHost {
                 }
             }
             syscalls::SYSCALL_SCHEMA_DECODE => {
-                // r10 = &Name schema; r11 = &NoritoBytes or &Blob -> r10 = &Json (minified)
+                // r10 = &Name schema; r11 = &NoritoBytes -> r10 = &Json (Norito-framed)
                 let s_ptr = vm.register(10);
                 let b_ptr = vm.register(11);
                 let s_tlv = vm.memory.validate_tlv(s_ptr)?;
                 let b_tlv = vm.memory.validate_tlv(b_ptr)?;
-                if s_tlv.type_id != PointerType::Name
-                    || !matches!(b_tlv.type_id, PointerType::NoritoBytes | PointerType::Blob)
-                {
+                if s_tlv.type_id != PointerType::Name || b_tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
                 let policy = vm.syscall_policy();
@@ -1406,19 +1408,25 @@ impl IVMHost for CoreHost {
                     );
                 }
                 if let Some(min) = self.schema.decode_to_json(&schema, b_tlv.payload) {
-                    let mut out = Vec::with_capacity(7 + min.len() + 32);
+                    let json_str =
+                        core::str::from_utf8(&min).map_err(|_| VMError::NoritoInvalid)?;
+                    let json =
+                        Json::from_str_norito(json_str).map_err(|_| VMError::NoritoInvalid)?;
+                    let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
+                    let mut out = Vec::with_capacity(7 + body.len() + 32);
                     out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
                     out.push(1);
-                    out.extend_from_slice(&(min.len() as u32).to_be_bytes());
-                    out.extend_from_slice(&min);
-                    let h: [u8; 32] = IrohaHash::new(&min).into();
+                    out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                    out.extend_from_slice(&body);
+                    let h: [u8; 32] = IrohaHash::new(&body).into();
                     out.extend_from_slice(&h);
                     let p = vm.alloc_input_tlv(&out)?;
                     vm.set_register(10, p);
                     Ok(0)
                 } else {
                     let fallback = self.build_schema_fallback(&schema, b_tlv.payload);
-                    let body = njson::to_vec(&fallback).map_err(|_| VMError::NoritoInvalid)?;
+                    let json = Json::from(&fallback);
+                    let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
                     let mut out = Vec::with_capacity(7 + body.len() + 32);
                     out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
                     out.push(1);
@@ -1466,13 +1474,14 @@ impl IVMHost for CoreHost {
                     map.insert("version".to_owned(), njson::Value::from(i.version));
                     vers.push(njson::Value::Object(map));
                 }
-                let body = njson::to_vec(&{
+                let body_value = {
                     let mut map = njson::Map::new();
                     map.insert("current".to_owned(), current);
                     map.insert("versions".to_owned(), njson::Value::Array(vers));
                     njson::Value::Object(map)
-                })
-                .map_err(|_| VMError::NoritoInvalid)?;
+                };
+                let json = Json::from(&body_value);
+                let body = to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
                 out.push(1);
@@ -1485,7 +1494,7 @@ impl IVMHost for CoreHost {
                 Ok(0)
             }
             syscalls::SYSCALL_NAME_DECODE => {
-                // r10 = &NoritoBytes (UTF-8) -> r10 = &Name (minified string)
+                // r10 = &NoritoBytes (Norito-framed Name) -> r10 = &Name
                 let r10_before = vm.register(10);
                 if r10_before == 0 {
                     vm.set_register(10, 0);
@@ -1503,16 +1512,16 @@ impl IVMHost for CoreHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                let s = core::str::from_utf8(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-                let name = Name::from_str(s).map_err(|_| VMError::NoritoInvalid)?;
+                let name: Name =
+                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
                 // Build Name TLV and mirror into INPUT using the normalized form.
-                let body = name.as_ref().as_bytes();
+                let body = to_bytes(&name).map_err(|_| VMError::NoritoInvalid)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Name as u16).to_be_bytes());
                 out.push(1);
                 out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                out.extend_from_slice(body);
-                let h: [u8; 32] = IrohaHash::new(body).into();
+                out.extend_from_slice(&body);
+                let h: [u8; 32] = IrohaHash::new(&body).into();
                 out.extend_from_slice(&h);
                 let p = vm.alloc_input_tlv(&out)?;
                 vm.set_register(10, p);

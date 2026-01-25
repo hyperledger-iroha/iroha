@@ -1181,6 +1181,7 @@ mod tests {
         GovernanceCatalog, GovernanceModule as ConfigGovernanceModule, LaneRegistry,
     };
     use iroha_data_model::{
+        account::{address, AccountAddress, AccountId},
         nexus::{LaneCatalog, LaneConfig},
         prelude::Name,
     };
@@ -1189,6 +1190,13 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    fn account_id_literal(account: &AccountId) -> String {
+        let address = AccountAddress::from_account_id(account)
+            .and_then(|addr| addr.to_ih58(address::chain_discriminant()))
+            .expect("account id should encode as IH58 address");
+        format!("{address}@{}", account.domain())
+    }
 
     #[test]
     fn builder_requires_manifest_components() {
@@ -1532,7 +1540,7 @@ mod tests {
             .insert("parliament".to_string(), ConfigGovernanceModule::default());
         let dir = tempdir().expect("tmp dir");
         let path = dir.path().join("gov.manifest.json");
-        let alice = ALICE_ID.to_string();
+        let alice = account_id_literal(&ALICE_ID);
         fs::write(
             &path,
             format!(
@@ -1568,8 +1576,8 @@ mod tests {
             .insert("parliament".to_string(), ConfigGovernanceModule::default());
         let dir = tempdir().expect("tmp dir");
         let path = dir.path().join("gov.manifest.json");
-        let alice = ALICE_ID.to_string();
-        let bob = BOB_ID.to_string();
+        let alice = account_id_literal(&ALICE_ID);
+        let bob = account_id_literal(&BOB_ID);
         fs::write(
             &path,
             format!(
@@ -1655,8 +1663,8 @@ mod tests {
             .insert("parliament".to_string(), ConfigGovernanceModule::default());
 
         let dir = tempdir().expect("tmp dir");
-        let alice = ALICE_ID.to_string();
-        let bob = BOB_ID.to_string();
+        let alice = account_id_literal(&ALICE_ID);
+        let bob = account_id_literal(&BOB_ID);
         let manifest_body = format!(
             r#"{{
             "lane": "%ALIAS%",

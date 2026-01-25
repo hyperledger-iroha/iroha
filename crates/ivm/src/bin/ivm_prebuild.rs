@@ -155,10 +155,9 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
         PointerType, encoding, instruction::wide, kotodama::compiler::encode_addi,
         syscalls as ivm_sys,
     };
-    use norito::codec::Encode as _;
 
     let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition");
-    let asset_payload = asset_def.encode();
+    let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
     let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
 
     let mut code = Vec::new();
@@ -242,23 +241,26 @@ fn build_program_set_sc_exec_depth(depth: u8) -> Vec<u8> {
 
 fn build_program_set_account_detail_defaults() -> Vec<u8> {
     use iroha_data_model::{prelude::Name, query::parameters::ForwardCursor};
+    use iroha_primitives::json::Json;
     use ivm::{
         PointerType, encoding, instruction::wide, kotodama::compiler::encode_addi,
         syscalls as ivm_sys,
     };
     use nonzero_ext::nonzero;
-    use norito::{codec::Encode as _, json};
+    use norito::json;
 
     let key: Name = "cursor".parse().expect("key name");
-    let key_payload = key.encode();
+    let key_payload = norito::to_bytes(&key).expect("encode key name");
     let cursor = ForwardCursor {
         query: "sc_dummy".to_owned(),
         cursor: nonzero!(1_u64),
         gas_budget: None,
     };
-    let value_json = json::to_vec(&cursor).expect("encode ForwardCursor");
+    let value_value = json::to_value(&cursor).expect("encode ForwardCursor");
+    let value_json = Json::from(&value_value);
+    let value_payload = norito::to_bytes(&value_json).expect("encode cursor json");
     let key_tlv = make_tlv(PointerType::Name as u16, &key_payload);
-    let value_tlv = make_tlv(PointerType::Json as u16, &value_json);
+    let value_tlv = make_tlv(PointerType::Json as u16, &value_payload);
     let value_ptr = LITERAL_DATA_START + i16::try_from(key_tlv.len()).unwrap_or(0);
 
     let mut code = Vec::new();

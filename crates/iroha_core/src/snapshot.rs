@@ -889,29 +889,66 @@ pub fn try_read_snapshot(
         None => attempt_tmp(tmp_bytes.as_deref().expect("temp snapshot bytes exist"))?,
     };
 
+    let used_tmp = outcome.data_used_tmp
+        || outcome.digest_used_tmp
+        || outcome.signature_used_tmp
+        || outcome.merkle_used_tmp;
     let mut promoted = false;
+    let mut promotion_failed = false;
     if outcome.data_used_tmp {
-        promoted |= promote_tmp_file(&tmp_path, &path, "snapshot data");
+        let ok = promote_tmp_file(&tmp_path, &path, "snapshot data");
+        promoted |= ok;
+        promotion_failed |= !ok;
     }
     if outcome.digest_used_tmp {
         let digest_path = store_dir.join(SNAPSHOT_DIGEST_FILE_NAME);
         let digest_tmp_path = store_dir.join(SNAPSHOT_DIGEST_TMP_FILE_NAME);
-        promoted |= promote_tmp_file(&digest_tmp_path, &digest_path, "snapshot digest");
+        let ok = promote_tmp_file(&digest_tmp_path, &digest_path, "snapshot digest");
+        promoted |= ok;
+        promotion_failed |= !ok;
     }
     if outcome.signature_used_tmp {
         let sig_path = store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME);
         let sig_tmp_path = store_dir.join(SNAPSHOT_SIGNATURE_TMP_FILE_NAME);
-        promoted |= promote_tmp_file(&sig_tmp_path, &sig_path, "snapshot signature");
+        let ok = promote_tmp_file(&sig_tmp_path, &sig_path, "snapshot signature");
+        promoted |= ok;
+        promotion_failed |= !ok;
     }
     if outcome.merkle_used_tmp {
         let merkle_path = store_dir.join(SNAPSHOT_MERKLE_FILE_NAME);
         let merkle_tmp_path = store_dir.join(SNAPSHOT_MERKLE_TMP_FILE_NAME);
-        promoted |= promote_tmp_file(&merkle_tmp_path, &merkle_path, "snapshot merkle metadata");
+        let ok = promote_tmp_file(&merkle_tmp_path, &merkle_path, "snapshot merkle metadata");
+        promoted |= ok;
+        promotion_failed |= !ok;
     }
-    if promoted {
+    let mut cleaned = false;
+    if used_tmp && !promotion_failed {
+        cleaned |= cleanup_tmp_snapshot_files(store_dir);
+    }
+    if promoted || cleaned {
         sync_dir_best_effort(store_dir);
     }
     Ok(outcome.state)
+}
+
+fn cleanup_tmp_snapshot_files(store_dir: &Path) -> bool {
+    let tmp_paths = [
+        store_dir.join(SNAPSHOT_TMP_FILE_NAME),
+        store_dir.join(SNAPSHOT_DIGEST_TMP_FILE_NAME),
+        store_dir.join(SNAPSHOT_SIGNATURE_TMP_FILE_NAME),
+        store_dir.join(SNAPSHOT_MERKLE_TMP_FILE_NAME),
+    ];
+    let mut removed = false;
+    for path in tmp_paths {
+        match std::fs::remove_file(&path) {
+            Ok(()) => removed = true,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                iroha_logger::warn!(?err, ?path, "failed to remove snapshot temp file");
+            }
+        }
+    }
+    removed
 }
 
 /// Serialize and write snapshot to file,

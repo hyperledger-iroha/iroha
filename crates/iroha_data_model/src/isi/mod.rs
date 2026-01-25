@@ -15,13 +15,15 @@
 //!   closed, visitable set. Despite the name, they are not heap boxes; they are
 //!   plain tagged unions that implement [`crate::isi::Instruction`].
 
+#[cfg(test)]
+use std::cell::RefCell;
 use std::{
     any::Any,
     cmp::Ordering,
     fmt::Debug,
     format,
     string::String,
-    sync::{OnceLock, RwLock, RwLockReadGuard},
+    sync::{Arc, OnceLock, RwLock},
     vec::Vec,
 };
 
@@ -809,7 +811,7 @@ impl IntoSchema for InstructionBox {
 pub type InstructionConstructor = fn(u8, &[u8]) -> Result<InstructionBox, norito::Error>;
 
 /// Registry storing constructors for [`crate::isi::Instruction`] types keyed by their type names.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct InstructionRegistry {
     /// Concrete Rust `type_name` -> entry with preferred wire id.
     entries: HashMap<&'static str, RegistryEntry>,
@@ -1015,10 +1017,24 @@ macro_rules! instruction_registry_with_ids {
     }};
 }
 
-static INSTRUCTION_REGISTRY: OnceLock<RwLock<InstructionRegistry>> = OnceLock::new();
+static INSTRUCTION_REGISTRY: OnceLock<RwLock<Arc<InstructionRegistry>>> = OnceLock::new();
+
+#[cfg(test)]
+thread_local! {
+    static INSTRUCTION_REGISTRY_OVERRIDE: RefCell<Option<Arc<InstructionRegistry>>> =
+        const { RefCell::new(None) };
+}
 
 /// Set global [`InstructionRegistry`] used for deserializing [`crate::isi::InstructionBox`].
 pub fn set_instruction_registry(registry: InstructionRegistry) {
+    let registry = Arc::new(registry);
+    #[cfg(test)]
+    {
+        INSTRUCTION_REGISTRY_OVERRIDE.with(|cell| {
+            *cell.borrow_mut() = Some(Arc::clone(&registry));
+        });
+    }
+    #[cfg(not(test))]
     if let Some(lock) = INSTRUCTION_REGISTRY.get() {
         *lock.write().expect("instruction registry lock poisoned") = registry;
     } else {
@@ -1026,14 +1042,37 @@ pub fn set_instruction_registry(registry: InstructionRegistry) {
     }
 }
 
-fn instruction_registry() -> RwLockReadGuard<'static, InstructionRegistry> {
+enum InstructionRegistryReadGuard {
+    Global(Arc<InstructionRegistry>),
+    #[cfg(test)]
+    Local(Arc<InstructionRegistry>),
+}
+
+impl std::ops::Deref for InstructionRegistryReadGuard {
+    type Target = InstructionRegistry;
+
+    fn deref(&self) -> &InstructionRegistry {
+        match self {
+            Self::Global(registry) => registry,
+            #[cfg(test)]
+            Self::Local(registry) => registry,
+        }
+    }
+}
+
+fn instruction_registry() -> InstructionRegistryReadGuard {
+    #[cfg(test)]
+    if let Some(local) = INSTRUCTION_REGISTRY_OVERRIDE.with(|cell| cell.borrow().clone()) {
+        return InstructionRegistryReadGuard::Local(local);
+    }
     // Lazily initialize with the built-in default registry if not explicitly set.
     // This makes binaries and tools robust even if they forgot to call an
     // explicit initializer before deserializing InstructionBox values (e.g., while reading genesis).
-    INSTRUCTION_REGISTRY
-        .get_or_init(|| RwLock::new(crate::instruction_registry::default()))
+    let registry = INSTRUCTION_REGISTRY
+        .get_or_init(|| RwLock::new(Arc::new(crate::instruction_registry::default())))
         .read()
-        .expect("instruction registry lock poisoned")
+        .expect("instruction registry lock poisoned");
+    InstructionRegistryReadGuard::Global(Arc::clone(&registry))
 }
 
 macro_rules! isi {
@@ -2049,9 +2088,24 @@ mod tests {
         };
     }
 
+    struct RegistryGuard;
+
+    impl RegistryGuard {
+        fn set(registry: InstructionRegistry) -> Self {
+            set_instruction_registry(registry);
+            Self
+        }
+    }
+
+    impl Drop for RegistryGuard {
+        fn drop(&mut self) {
+            set_instruction_registry(crate::instruction_registry::default());
+        }
+    }
+
     #[test]
     fn aa_setup_instruction_registry() {
-        set_instruction_registry(instruction_registry![Log]);
+        let _guard = RegistryGuard::set(instruction_registry![Log]);
     }
 
     #[test]
@@ -2163,7 +2217,7 @@ mod tests {
         let archived = norito::core::from_bytes::<(String, Vec<u8>)>(&bytes).expect("from_bytes");
         let (name, payload) =
             norito::core::NoritoDeserialize::try_deserialize(archived).expect("deserialize");
-        assert_eq!(name, Instruction::id(&log));
+        assert_eq!(name, Log::WIRE_ID);
         let bare = Instruction::dyn_encode(&log);
         let payload_slice = payload.as_slice();
         assert!(
@@ -2192,7 +2246,7 @@ mod tests {
             level: Level::INFO,
             msg: "deserialize".to_string(),
         };
-        set_instruction_registry(instruction_registry![Log]);
+        let _guard = RegistryGuard::set(instruction_registry![Log]);
         let boxed = InstructionBox::from(log.clone());
         let bytes = norito::core::to_bytes(&boxed).expect("serialize");
         let archived = norito::core::from_bytes::<InstructionBox>(&bytes).expect("from_bytes");
@@ -2234,7 +2288,7 @@ mod tests {
 
     #[test]
     fn const_vec_instruction_box_decodes_with_varint_tail() {
-        set_instruction_registry(instruction_registry![Log]);
+        let _guard = RegistryGuard::set(instruction_registry![Log]);
 
         let instruction = InstructionBox::from(Log {
             level: Level::INFO,
@@ -2301,7 +2355,7 @@ mod tests {
             return;
         }
         // Install default registry covering built-ins and keep a local handle
-        set_instruction_registry(crate::instruction_registry::default());
+        let _guard = RegistryGuard::set(crate::instruction_registry::default());
         let local_registry = crate::instruction_registry::default();
 
         // Build a small suite of representative instructions
@@ -2441,7 +2495,7 @@ mod tests {
             return;
         }
         // Ensure the total ordering of InstructionBox is stable after Norito roundtrip.
-        set_instruction_registry(crate::instruction_registry::default());
+        let _guard = RegistryGuard::set(crate::instruction_registry::default());
 
         let domain_id: DomainId = "alice".parse().unwrap();
         let account_id: AccountId =
@@ -2486,7 +2540,7 @@ mod tests {
             return;
         }
         // Expand coverage across instruction families and variants
-        set_instruction_registry(crate::instruction_registry::default());
+        let _guard = RegistryGuard::set(crate::instruction_registry::default());
         let local_registry = crate::instruction_registry::default();
 
         // Common fixtures

@@ -1330,7 +1330,7 @@ pub mod asset {
     use iroha_smart_contract::data_model::isi::{
         BuiltInInstruction, RemoveAssetKeyValue, SetAssetKeyValue,
     };
-    use iroha_smart_contract_utils::Encode;
+    use norito::NoritoSerialize;
 
     use super::*;
     use crate::permission::{asset::is_asset_owner, asset_definition::is_asset_definition_owner};
@@ -1339,7 +1339,7 @@ pub mod asset {
     where
         V: Execute + Visit + ?Sized,
         Q: Into<Numeric>,
-        Mint<Q, Asset>: BuiltInInstruction + Encode,
+        Mint<Q, Asset>: BuiltInInstruction + NoritoSerialize,
     {
         let asset_id = isi.destination();
         if executor.context().curr_block.is_genesis() {
@@ -1387,7 +1387,7 @@ pub mod asset {
     where
         V: Execute + Visit + ?Sized,
         Q: Into<Numeric>,
-        Burn<Q, Asset>: BuiltInInstruction + Encode,
+        Burn<Q, Asset>: BuiltInInstruction + NoritoSerialize,
     {
         let asset_id = isi.destination();
         if executor.context().curr_block.is_genesis() {
@@ -1816,7 +1816,7 @@ pub mod nft {
     use iroha_executor_data_model::permission::nft::{
         CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft,
     };
-    use iroha_smart_contract_utils::Encode;
+    use norito::NoritoSerialize;
 
     use super::*;
     use crate::{
@@ -1955,7 +1955,7 @@ pub mod nft {
     fn execute_modify_nft_key_value<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         nft_id: &NftId,
-        isi: &(impl BuiltInInstruction + Encode),
+        isi: &(impl BuiltInInstruction + NoritoSerialize),
     ) {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);

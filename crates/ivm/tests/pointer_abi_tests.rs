@@ -6,12 +6,13 @@ use ivm::{CoreHost, IVM, PointerType, encoding, syscalls};
 mod common;
 
 fn tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
+    let payload = common::payload_for_type(pty, payload);
     let mut v = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     v.extend_from_slice(&(pty as u16).to_be_bytes());
     v.push(1);
     v.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    v.extend_from_slice(payload);
-    let h: [u8; Hash::LENGTH] = Hash::new(payload).into();
+    v.extend_from_slice(&payload);
+    let h: [u8; Hash::LENGTH] = Hash::new(&payload).into();
     v.extend_from_slice(&h);
     v
 }

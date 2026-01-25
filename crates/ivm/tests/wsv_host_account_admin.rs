@@ -8,12 +8,12 @@ use ivm::{
     mock_wsv::{AccountId, DomainId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
-use norito::codec::Encode as NoritoEncode;
 
 mod common;
 use common::assemble_syscalls;
 
 fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
+    let payload = common::payload_for_type(type_id, payload);
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&(type_id as u16).to_be_bytes());
     out.push(1);
@@ -25,14 +25,12 @@ fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
 }
 
 fn make_domain_tlv(name: &str) -> Vec<u8> {
-    let domain: DomainId = name.parse().expect("valid domain id");
-    let payload = domain.encode();
-    make_tlv(PointerType::DomainId, &payload)
+    make_tlv(PointerType::DomainId, name.as_bytes())
 }
 
 fn make_account_tlv(account: &AccountId) -> Vec<u8> {
-    let payload = account.encode();
-    make_tlv(PointerType::AccountId, &payload)
+    let payload = account.to_string();
+    make_tlv(PointerType::AccountId, payload.as_bytes())
 }
 
 fn load_and_run(vm: &mut IVM, program: &[u8]) -> Result<(), ivm::VMError> {

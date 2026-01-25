@@ -159,37 +159,8 @@ impl Iroha {
             let bytes = Box::from_raw(core::ptr::slice_from_raw_parts_mut(ptr.cast_mut(), len));
             let payload = &bytes[len_size_bytes..];
 
-            // 1) Try bare Norito decode (codec::Decode) first for robust interop.
-            if let Ok(val) =
-                <Result<QueryResponse, ValidationFail> as norito::codec::DecodeAll>::decode_all(
-                    &mut &*payload,
-                )
-            {
-                return val;
-            }
-
-            // 2) Fallback to header-framed Norito decode guarded against panics from
-            //    hybrid layout invariants. If this still fails, surface a decode error.
-            let framed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                norito::from_bytes::<Result<QueryResponse, ValidationFail>>(payload).map(|archived| {
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        <Result<QueryResponse, ValidationFail> as norito::core::NoritoDeserialize>::deserialize(
-                            archived,
-                        )
-                    }))
-                })
-            }));
-
-            match framed {
-                Ok(Ok(Ok(val))) => val,
-                _ => {
-                    // Final attempt: strict bare decode with error context
-                    <Result<QueryResponse, ValidationFail> as norito::codec::DecodeAll>::decode_all(
-                        &mut &*payload,
-                    )
-                    .expect("Decoding of Result<QueryResponse, ValidationFail> failed")
-                }
-            }
+            norito::decode_from_bytes::<Result<QueryResponse, ValidationFail>>(payload)
+                .expect("Decoding of Result<QueryResponse, ValidationFail> failed")
         }
     }
 }

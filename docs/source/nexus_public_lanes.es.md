@@ -107,7 +107,7 @@ Las distribuciones de recompensas usan `PublicLaneRewardRecord` y `PublicLaneRew
   "asset": "xor#wonderland",
   "total_reward": "250.0000",
   "shares": [
-    { "account": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS", "role": "Validator", "amount": "150" },
+    { "account": "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA", "role": "Validator", "amount": "150" },
     { "account": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", "role": "Nominator", "amount": "100" }
   ],
   "metadata": {
@@ -141,8 +141,8 @@ Registra un validador y bond un stake inicial:
 ```norito
 {
   "lane_id": 1,
-  "validator": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS",
-  "stake_account": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS",
+  "validator": "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA",
+  "stake_account": "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA",
   "initial_stake": "150000",
   "metadata": {
     "commission_bps": 750,
@@ -247,11 +247,11 @@ Este ISI es idempotente por `(lane_id, epoch)` y sustenta la contabilidad noctur
 
     ```jsonc
     [
-      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS" } },
+      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA" } },
       {
         "ExitPublicLaneValidator": {
           "lane_id": 1,
-          "validator": "RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS",
+          "validator": "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA",
           "release_at_ms": 1730000000000
         }
       }
