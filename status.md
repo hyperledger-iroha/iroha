@@ -2,6 +2,33 @@
 
 Last update: 2026-01-25
 
+- Staking: resolve `stake_escrow_account_id`/`slash_sink_account_id` via world-aware account literal parsing (accepts IH58-only literals once domain selectors are registered); added stake-context coverage to lock this in.
+- Tests: `cargo test -p iroha_core unregister_peer -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+
+- Data-model test stabilization: share default-domain guard across tests, add thread-local chain-discriminant guards for JSON/id tests, decode block-header roundtrip with bare Norito decode, fix deterministic fuzz chunk digests, make AssetId constructor test parse explicit-domain accounts, resolve oracle fixture selectors in tests and regenerate oracle fixtures, and update AccountId doctest to parse explicit-domain literals.
+- Tests: `cargo test -p iroha_data_model` (ok).
+- Tests: `cargo test -p iroha_data_model --doc` (ok).
+- Tests: `cargo test -p iroha_data_model --test oracle_reference_fixtures -- --ignored` (ok; regenerated `fixtures/oracle/*`).
+
+- World ISI lead-time tests now use non-genesis dummy blocks with BLS-normal leaders so lead-time policy checks exercise non-genesis paths; added a non-genesis dummy block helper in the ISI world test module.
+- Tests: `cargo test -p iroha_core register_peer_rejects_activation_before_lead_time -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
+- Tests: `cargo test --workspace` (failed: `crates/ivm/tests/core_host_policy.rs:35` `extend_from_slice` expected `&[u8]` but got `Vec<u8>`).
+
+- World ISI tests: explicitly enable Nexus in `next_mode_rejected_when_nexus_enabled` to match the default disabled config and keep staged cutover rejection covered.
+- Tests: `cargo test -p iroha_core --lib smartcontracts::isi::world::isi::tests::next_mode_rejected_when_nexus_enabled` (ok; warning about unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
+- Tests: `cargo test -p iroha_core smartcontracts::isi::world::isi::tests::next_mode_rejected_when_nexus_enabled` (failed: `crates/iroha_core/tests/ivm_corehost_domain.rs` test binary killed by SIGKILL after rebuild; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
+
+- Permission summary account parsing: accept IH58-with-domain literals in `parse_account_literal_with_world` so permission payloads resolve account IDs; added coverage for the IH58 `@domain` literal path.
+- Tests: `cargo test -p iroha_core permission_summary_resolves_accounts_from_payload` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
+- Tests: `cargo test -p iroha_core parse_account_literal_accepts_ih58_with_domain_suffix` (ok; same warnings).
+
+- AccountId parsing: guard the chain discriminant in the encoded-literals-with-domain test to avoid cross-test IH58 prefix races.
+- Tests: `cargo test -p iroha_data_model account_id_parsing_tests::encoded_literals_with_domain_parse_without_resolver -- --nocapture` (ok).
+
+- Curve registry alignment test now accepts the `bls` feature gate listed in the published registry.
+- Tests: `cargo test --workspace` (failed: `crates/ivm/tests/wsv_host_grant_revoke_tlv.rs:22` and `crates/ivm/tests/wsv_host_account_admin.rs:21` `extend_from_slice` expected `&[u8]` but got `Vec<u8>`; warning about unused `DomainId` import in `crates/ivm/tests/wsv_host_account_admin.rs:8`).
+
 - DAG conflict graph: apply the global state wildcard (`state:*`) to state-map entries even when no per-map wildcard exists, so `state:*` correctly conflicts with `state:Foo/<entry>`.
 - Tests: `cargo test -p iroha_core block::dag_tests::state_global_wildcard_conflicts_with_state_entries -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
 

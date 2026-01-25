@@ -205,12 +205,7 @@ impl Actor {
         {
             return false;
         }
-        let Some(key) = self
-            .deferred_block_sync_updates
-            .keys()
-            .next()
-            .cloned()
-        else {
+        let Some(key) = self.deferred_block_sync_updates.keys().next().cloned() else {
             return false;
         };
         let (height, view, block_hash) = key;
@@ -1636,7 +1631,10 @@ impl Actor {
                 );
                 self.send_fetch_pending_block_response(peer.clone(), BlockMessage::RbcInit(init));
                 for chunk in chunks {
-                    self.send_fetch_pending_block_response(peer.clone(), BlockMessage::RbcChunk(chunk));
+                    self.send_fetch_pending_block_response(
+                        peer.clone(),
+                        BlockMessage::RbcChunk(chunk),
+                    );
                 }
                 responded = true;
             }

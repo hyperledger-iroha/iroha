@@ -799,8 +799,16 @@ pub(crate) fn parse_account_literal_with_world(
     ) {
         let domain: DomainId = domain_part.parse().ok()?;
 
-        if AccountAddress::parse_any(address_part, None).is_ok() {
-            return None;
+        let expected_prefix = address::chain_discriminant();
+        match AccountAddress::parse_any(address_part, Some(expected_prefix)) {
+            Ok((address, _format)) => {
+                return address.to_account_id(&domain).ok();
+            }
+            Err(
+                address::AccountAddressError::UnsupportedAddressFormat
+                | address::AccountAddressError::ChecksumMismatch,
+            ) => {}
+            Err(_) => return None,
         }
 
         if let Ok(label) = iroha_data_model::name::Name::from_str(address_part) {
@@ -910,9 +918,11 @@ fn prefetch_account_stores(state_block: &StateBlock<'_>, account_id: &AccountId)
 #[cfg(test)]
 mod prefetch_tests {
     use iroha_data_model::{
-        account::{AccountDetails, AccountDomainSelector, AccountId, AccountValue},
+        Registrable,
+        account::{Account, AccountDetails, AccountDomainSelector, AccountId, AccountValue},
         asset::AssetDefinitionId,
         block::BlockHeader,
+        domain::Domain,
         isi::{InstructionBox, Log},
         name::Name,
         nexus::LaneConfig,
@@ -950,6 +960,22 @@ mod prefetch_tests {
             Some(alice.clone())
         );
         assert!(parse_account_from_access_key(&world_view, "asset:coin#wonderland").is_none());
+    }
+
+    #[test]
+    fn parse_account_literal_accepts_ih58_with_domain_suffix() {
+        let alice: AccountId = (*ALICE_ID).clone();
+        let domain = Domain::new(alice.domain().clone()).build(&alice);
+        let account = Account::new(alice.clone()).build(&alice);
+        let world = World::with([domain], [account], []);
+        let world_view = world.view();
+
+        let ih58 = alice.canonical_ih58().expect("ih58 encoding");
+        let literal = format!("{ih58}@{}", alice.domain());
+        assert_eq!(
+            parse_account_literal_with_world(&world_view, &literal),
+            Some(alice)
+        );
     }
 
     #[test]

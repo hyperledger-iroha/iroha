@@ -57,7 +57,7 @@ fn curve_registry_aligns_with_runtime() {
 
         if let Some(feature) = entry.feature.as_deref() {
             match feature {
-                "ml-dsa" | "gost" | "sm" => {}
+                "ml-dsa" | "gost" | "sm" | "bls" => {}
                 other => panic!("unknown feature gate '{other}' in curve registry"),
             }
         }

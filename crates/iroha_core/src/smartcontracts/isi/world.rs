@@ -9750,17 +9750,25 @@ pub mod isi {
             zk::{hash_proof, hash_vk},
         };
 
-        fn new_dummy_block() -> crate::block::CommittedBlock {
+        fn new_dummy_block_at_height(height: NonZeroU64) -> crate::block::CommittedBlock {
             let (leader_public_key, leader_private_key) =
-                iroha_crypto::KeyPair::random().into_parts();
+                iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
             let peer_id = crate::PeerId::new(leader_public_key);
             let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
             ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
-                h.set_height(NonZeroU64::new(1).unwrap());
+                h.set_height(height);
             })
             .commit(&topology)
             .unpack(|_| {})
             .unwrap()
+        }
+
+        fn new_dummy_block() -> crate::block::CommittedBlock {
+            new_dummy_block_at_height(NonZeroU64::new(1).unwrap())
+        }
+
+        fn new_dummy_block_non_genesis() -> crate::block::CommittedBlock {
+            new_dummy_block_at_height(NonZeroU64::new(2).unwrap())
         }
 
         #[test]
@@ -11155,7 +11163,7 @@ pub mod isi {
             pipeline.signature_batch_max_bls = 4;
             state.set_pipeline(pipeline);
 
-            let block = new_dummy_block();
+            let block = new_dummy_block_non_genesis();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
@@ -11412,7 +11420,7 @@ pub mod isi {
             pipeline.signature_batch_max_bls = 4;
             state.set_pipeline(pipeline);
 
-            let block = new_dummy_block();
+            let block = new_dummy_block_non_genesis();
             let mut state_block = state.block(block.as_ref().header());
             {
                 let mut stx = state_block.transaction();
@@ -11592,7 +11600,7 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let block = new_dummy_block();
+            let block = new_dummy_block_non_genesis();
             let mut state_block = state.block(block.as_ref().header());
             let params = {
                 let mut stx = state_block.transaction();
@@ -12546,7 +12554,8 @@ pub mod isi {
         fn next_mode_rejected_when_nexus_enabled() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
+            let mut state = State::new(World::default(), kura, query_handle);
+            state.nexus.get_mut().enabled = true;
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
