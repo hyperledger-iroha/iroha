@@ -28,9 +28,9 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "pacemaker_backoff_multiplier"], 2_i64)
-                .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 1_i64)
-                .write(["sumeragi", "pacemaker_max_backoff_ms"], 2_000_i64);
+                .write(["sumeragi", "pacemaker", "backoff_multiplier"], 2_i64)
+                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 1_i64)
+                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 2_000_i64);
         });
 
     let Some(network) = sandbox::start_network_async_or_skip(

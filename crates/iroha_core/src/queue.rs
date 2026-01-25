@@ -691,10 +691,10 @@ impl Queue {
         }
 
         let approvals = Self::collect_manifest_approvals(alias, tx)?;
-        let validators: BTreeSet<_> = rules.validators.iter().cloned().collect();
+        let validators = Self::canonical_manifest_validators(alias, rules)?;
         let approved = approvals
-            .into_iter()
-            .filter(|account| validators.contains(account))
+            .iter()
+            .filter(|account| validators.contains(*account))
             .count();
         let required = usize::try_from(quorum).unwrap_or(usize::MAX);
         if approved < required {
@@ -711,10 +711,17 @@ impl Queue {
     fn collect_manifest_approvals(
         alias: &str,
         tx: &CheckedTransaction<'_>,
-    ) -> Result<BTreeSet<AccountId>, Error> {
+    ) -> Result<BTreeSet<String>, Error> {
         let mut approvals = BTreeSet::new();
         let signed = tx.as_ref().as_ref();
-        approvals.insert(signed.authority().clone());
+        let authority = signed.authority();
+        let authority_ih58 = authority.canonical_ih58().map_err(|err| {
+            Self::enforcement_error(
+                alias,
+                format!("failed to encode authority `{authority}` as ih58: {err}"),
+            )
+        })?;
+        approvals.insert(authority_ih58);
 
         let metadata = signed.metadata();
         let Some(raw) = metadata.get(&*GOV_APPROVERS_METADATA_KEY) else {
@@ -734,15 +741,58 @@ impl Queue {
                     "`gov_manifest_approvers` metadata entries must not be blank",
                 ));
             }
-            let account = AccountId::from_str(trimmed).map_err(|err| {
-                Self::enforcement_error(
-                    alias,
-                    format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
+            let canonical = if let Ok(account) = AccountId::from_str(trimmed) {
+                account.canonical_ih58().map_err(|err| {
+                    Self::enforcement_error(
+                        alias,
+                        format!(
+                            "invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"
+                        ),
+                    )
+                })?
+            } else {
+                let prefix = iroha_data_model::account::address::chain_discriminant();
+                let (address, _) = iroha_data_model::account::address::AccountAddress::parse_any(
+                    trimmed,
+                    Some(prefix),
                 )
-            })?;
-            approvals.insert(account);
+                .map_err(|err| {
+                    Self::enforcement_error(
+                        alias,
+                        format!(
+                            "invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"
+                        ),
+                    )
+                })?;
+                address.to_ih58(prefix).map_err(|err| {
+                    Self::enforcement_error(
+                        alias,
+                        format!(
+                            "invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"
+                        ),
+                    )
+                })?
+            };
+            approvals.insert(canonical);
         }
         Ok(approvals)
+    }
+
+    fn canonical_manifest_validators(
+        alias: &str,
+        rules: &GovernanceRules,
+    ) -> Result<BTreeSet<String>, Error> {
+        let mut validators = BTreeSet::new();
+        for validator in &rules.validators {
+            let ih58 = validator.canonical_ih58().map_err(|err| {
+                Self::enforcement_error(
+                    alias,
+                    format!("failed to encode validator `{validator}` as ih58: {err}"),
+                )
+            })?;
+            validators.insert(ih58);
+        }
+        Ok(validators)
     }
 
     #[allow(clippy::too_many_lines)]

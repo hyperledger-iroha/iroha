@@ -73,7 +73,8 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
   `sorafs_pricing.md`; updates should be rolled out with the `SetPricingSchedule` instruction so all
   peers replay the same changes.
 - `[governance.sorafs_telemetry]`: Capacity telemetry authz/replay guardrails. `require_submitter` and
-  `require_nonce` default to `true`; `submitters` defines the global allow-list, while
+  `require_nonce` default to `true`; when `require_nonce=false`, windows without a nonce are accepted
+  but provided nonces are still checked for replay. `submitters` defines the global allow-list, while
   `per_provider_submitters` overrides the list for specific providers (overrides take precedence over
   the global list). `max_window_gap_secs` and `reject_zero_capacity` enforce window hygiene. Configure
   per-provider overrides whenever the submitting account differs from the global defaults; the authz
