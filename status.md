@@ -42,12 +42,14 @@ Last update: 2026-01-25
 
 - SoraFS telemetry tests: seed the default telemetry submitter in the test state so Alice is authorised under the allow-list and capacity telemetry rejection tests exercise the intended validation paths.
 - Tests: `cargo test -p iroha_core smartcontracts::isi::sorafs::sorafs_tests::record_capacity_telemetry_rejects_overcommit_and_zero_capacity -- --nocapture` (timed out after 40m; process killed by signal 15 during build).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs CARGO_BUILD_JOBS=2 cargo test -p iroha_core smartcontracts::isi::sorafs::sorafs_tests::record_capacity_telemetry_rejects_overcommit_and_zero_capacity -- --nocapture` (timed out after 20m during build; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
 
 - Kura budget test: include baseline on-disk overhead when setting the storage limit in `store_block_reclaims_retired_storage_when_budget_exceeded` so retired bytes are the only overage.
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core kura::tests::store_block_reclaims_retired_storage_when_budget_exceeded -- --nocapture` (killed by signal 15 in this environment).
 - Governance manifest quorum approvals now accept IH58-only `gov_manifest_approvers` entries by canonicalizing approvals/validators to IH58 and matching without requiring a domain-selector resolver.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Tests: `cargo test -p iroha_core queue::tests::governance_manifest_enforces_quorum_metadata -- --nocapture` (timed out after 20m; process killed by signal 15 during build).
+- Tests: `cargo test -p iroha_core queue::tests::governance_manifest_enforces_quorum_metadata -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45535`).
 
 - Staking ISI: apply the transaction before committing the block so CancelConsensusEvidencePenalty persists `penalty_cancelled`.
 - Tests: `cargo test -p iroha_core smartcontracts::isi::staking::tests::cancel_consensus_evidence_penalty_marks_record -- --nocapture` (not rerun after resolving the `crates/iroha_core/src/kura.rs:6103` compile error; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).

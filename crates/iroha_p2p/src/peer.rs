@@ -1908,7 +1908,7 @@ mod run {
                         }
                     }
                     msg = message_reader.read_message() => {
-                        let (message, encoded_len) = match msg {
+                        let (message, encoded_len): (Message<T>, usize) = match msg {
                             Ok(Some((msg, encoded_len))) => (msg, encoded_len),
                             Ok(None) => {
                                 iroha_logger::debug!("Peer send whole message and close connection");
@@ -4611,7 +4611,9 @@ pub mod message {
 
     /// High/low priority senders for inbound peer messages.
     pub struct PeerMessageSenders<T: Pload> {
+        /// Sender for high-priority inbound peer messages.
         pub high: mpsc::Sender<PeerMessage<T>>,
+        /// Sender for low-priority inbound peer messages.
         pub low: mpsc::Sender<PeerMessage<T>>,
     }
 
