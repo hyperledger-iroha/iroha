@@ -7815,10 +7815,12 @@ pub struct Network {
     /// for Host addresses. This is primarily for constrained envs and tests.
     #[config(default)]
     pub prefer_ws_fallback: bool,
-    /// Capacity for the high-priority network message queue (bounded mode only).
+    /// Capacity for the high-priority network message queue and inbound peer dispatch buffer
+    /// (bounded mode only).
     #[config(default = "defaults::network::P2P_QUEUE_CAP_HIGH")]
     pub p2p_queue_cap_high: NonZeroUsize,
-    /// Capacity for the low-priority network message queue (bounded mode only).
+    /// Capacity for the low-priority network message queue and inbound peer dispatch buffer
+    /// (bounded mode only).
     #[config(default = "defaults::network::P2P_QUEUE_CAP_LOW")]
     pub p2p_queue_cap_low: NonZeroUsize,
     /// Capacity for the per-peer post queue (bounded mode only).

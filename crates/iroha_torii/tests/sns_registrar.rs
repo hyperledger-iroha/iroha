@@ -22,6 +22,7 @@ use iroha_crypto::PublicKey;
 use iroha_data_model::{
     account::{AccountAddress, AccountId},
     metadata::Metadata,
+    peer::PeerId,
     sns::{
         FreezeNameRequestV1, GovernanceHookV1, NameControllerV1, NameRecordV1, NameSelectorV1,
         NameStatus, PaymentProofV1, RegisterNameRequestV1, RegisterNameResponseV1,
@@ -42,11 +43,12 @@ fn test_router() -> Router {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(
-        World::default(),
-        kura.clone(),
-        query,
-    ));
+    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
+    let mut world = World::default();
+    world.peers.mutate_vec(|peers| {
+        let _ = peers.push(local_peer_id.clone());
+    });
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -68,6 +70,7 @@ fn test_router() -> Router {
             kura.clone(),
             queue.clone(),
             peers_rx.clone(),
+            local_peer_id,
             ts,
             false,
         )

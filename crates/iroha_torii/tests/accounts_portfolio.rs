@@ -20,6 +20,7 @@ use iroha_data_model::{
     block::BlockHeader,
     isi::{Mint, Register},
     nexus::UniversalAccountId,
+    peer::PeerId,
     prelude::*,
 };
 use iroha_test_samples::ALICE_ID;
@@ -103,11 +104,12 @@ where
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(
-        World::default(),
-        kura.clone(),
-        query,
-    ));
+    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
+    let mut world = World::default();
+    world.peers.mutate_vec(|peers| {
+        let _ = peers.push(local_peer_id.clone());
+    });
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let uaid = seed_fn(&state);
 
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -130,6 +132,7 @@ where
             kura.clone(),
             queue.clone(),
             peers_rx.clone(),
+            local_peer_id,
             ts,
             false,
         )

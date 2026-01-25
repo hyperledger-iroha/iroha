@@ -14814,8 +14814,7 @@ fn rbc_session_needs_payload_skips_full_payload() {
 #[test]
 fn rbc_session_needs_payload_requires_hydration_for_partial_payload() {
     let payload_hash = Hash::new(b"payload");
-    let mut session =
-        RbcSession::new(2, Some(payload_hash), None, None, 0).expect("session");
+    let mut session = RbcSession::new(2, Some(payload_hash), None, None, 0).expect("session");
     session.ingest_chunk(0, b"chunk-0".to_vec(), None);
 
     assert!(super::rbc_session_needs_payload(&session, payload_hash));
@@ -28379,10 +28378,10 @@ async fn commit_topology_change_preserves_state_on_reorder() {
         actor.subsystems.propose.forced_view_after_timeout.is_none(),
         "membership change should clear forced view"
     );
-    actor.reset_consensus_state_for_roster_change(false);
+    actor.reset_consensus_state_for_roster_change(true);
     assert!(
-        !actor.subsystems.propose.proposals_seen.contains(&view_key),
-        "membership change should clear proposals_seen"
+        actor.subsystems.propose.proposals_seen.contains(&view_key),
+        "membership change should preserve proposals_seen"
     );
 
     harness.shutdown.send();
@@ -28432,6 +28431,41 @@ async fn on_block_commit_keeps_pending_on_order_only_topology_change() {
     assert!(
         actor.subsystems.propose.proposals_seen.contains(&(3, 0)),
         "order-only topology change should retain proposals_seen"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn on_block_commit_preserves_proposals_seen_on_membership_change() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let roster = actor.effective_commit_topology();
+    assert!(
+        roster.len() > 1,
+        "test requires at least two validators to reorder"
+    );
+
+    actor.last_commit_topology_hash = Some(HashOf::new(&roster));
+    let mut membership = roster.clone();
+    membership.sort();
+    actor.last_commit_topology_membership_hash = Some(HashOf::new(&membership));
+
+    let mut reduced = roster.clone();
+    reduced.pop();
+    {
+        let mut topo = actor.state.commit_topology.block();
+        topo.mutate_vec(|vec| *vec = reduced);
+        topo.commit();
+    }
+
+    actor.subsystems.propose.proposals_seen.insert((3, 0));
+
+    actor.on_block_commit(1).expect("commit should succeed");
+
+    assert!(
+        actor.subsystems.propose.proposals_seen.contains(&(3, 0)),
+        "membership change should preserve proposals_seen"
     );
 
     harness.shutdown.send();

@@ -6,9 +6,11 @@ This section describes the peer-to-peer (P2P) queue capacities and the metrics e
 
 
 - `p2p_queue_cap_high` (usize, default: 8192)
-  - Capacity of the high-priority network message queue (consensus/control messages).
+  - Capacity of the high-priority network message queue and inbound peer dispatch buffer
+    (consensus/control messages).
 - `p2p_queue_cap_low` (usize, default: 32768)
-  - Capacity of the low-priority network message queue (gossip/sync messages).
+  - Capacity of the low-priority network message queue and inbound peer dispatch buffer
+    (gossip/sync messages).
 - `p2p_post_queue_cap` (usize, default: 2048)
   - Capacity of the per-peer post channel (outbound messages to a specific peer).
 - `p2p_subscriber_queue_cap` (usize, default: 8192)

@@ -24,6 +24,7 @@ use iroha_data_model::{
         BlockHeader,
         consensus::{SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiStatusWire},
     },
+    peer::PeerId,
 };
 use iroha_primitives::time::TimeSource;
 use tower::ServiceExt as _;
@@ -36,11 +37,12 @@ fn build_status_router() -> Router {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(
-        World::default(),
-        kura.clone(),
-        query.clone(),
-    ));
+    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
+    let mut world = World::default();
+    world.peers.mutate_vec(|peers| {
+        let _ = peers.push(local_peer_id.clone());
+    });
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query.clone()));
     let queue_cfg = Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -59,6 +61,7 @@ fn build_status_router() -> Router {
             kura.clone(),
             queue.clone(),
             peers_rx.clone(),
+            local_peer_id,
             ts,
             true,
         )
