@@ -125,7 +125,7 @@ pub(super) struct RbcSeedWork {
 pub(super) struct RbcSeedResult {
     pub(super) key: SessionKey,
     pub(super) payload_hash: Hash,
-    pub(super) outcome: Result<RbcSession, RbcError>,
+    pub(super) outcome: Result<RbcSession>,
 }
 
 #[derive(Debug)]
@@ -136,7 +136,7 @@ pub(super) struct RbcSeedWorkerHandle {
 }
 
 #[derive(Debug)]
-enum RbcError {
+pub(super) enum RbcError {
     TransactionPayloadTooLarge { len: usize },
     EmptyPayload,
     ChunkCountOverflow { count: usize },
@@ -243,7 +243,8 @@ fn spawn_rbc_seed_worker(
                     payload_hash,
                     work.chunk_size,
                     work.epoch,
-                );
+                )
+                .map_err(eyre::Report::from);
                 if result_tx
                     .send(RbcSeedResult {
                         key,
@@ -1384,10 +1385,10 @@ impl Actor {
         payload_hash: Hash,
         chunk_size: usize,
         epoch: u64,
-    ) -> Result<RbcSession> {
+    ) -> std::result::Result<RbcSession, RbcError> {
         let chunk_bytes = chunk_payload_bytes(payload_bytes, chunk_size);
         if chunk_bytes.is_empty() {
-            return Err(RbcError::EmptyPayload.into());
+            return Err(RbcError::EmptyPayload);
         }
 
         let total_chunks =
@@ -1398,8 +1399,7 @@ impl Actor {
             return Err(RbcError::ChunkCountExceedsCap {
                 count: total_chunks,
                 cap: RBC_MAX_TOTAL_CHUNKS,
-            }
-            .into());
+            });
         }
 
         let mut digests = Vec::with_capacity(chunk_bytes.len());
