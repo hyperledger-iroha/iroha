@@ -347,7 +347,7 @@ async fn sumeragi_commit_qc_with_tight_block_queue_four_peers() -> Result<()> {
         LARGE_PAYLOAD_BYTES,
         false,
         |layer| {
-            layer.write(["sumeragi", "msg_channel_cap_blocks"], 2i64);
+            layer.write(["sumeragi", "queues", "blocks"], 2i64);
         },
         |_| Ok(()),
     )
@@ -1463,8 +1463,8 @@ async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()
                 .write(["sumeragi", "npos", "timeouts", "precommit_ms"], 600_i64)
                 .write(["sumeragi", "npos", "timeouts", "commit_ms"], 800_i64)
                 .write(["sumeragi", "npos", "timeouts", "da_ms"], 400_i64)
-                .write(["sumeragi", "pacemaker_max_backoff_ms"], 2_000_i64)
-                .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 1_i64);
+                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 2_000_i64)
+                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 1_i64);
         });
 
     let Some(network) = sandbox::start_network_async_or_skip(builder, scenario_name).await? else {

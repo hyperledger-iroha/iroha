@@ -181,9 +181,9 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "consensus_mode"], "npos")
-                .write(["sumeragi", "collectors_k"], i64::from(COLLECTORS_K))
+                .write(["sumeragi", "collectors", "k"], i64::from(COLLECTORS_K))
                 .write(
-                    ["sumeragi", "collectors_redundant_send_r"],
+                    ["sumeragi", "collectors", "redundant_send_r"],
                     i64::from(REDUNDANT_SEND_R),
                 );
         })
@@ -511,24 +511,27 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "consensus_mode"], "npos")
-                .write(["sumeragi", "collectors_k"], i64::from(collectors_k))
+                .write(["sumeragi", "collectors", "k"], i64::from(collectors_k))
                 .write(
-                    ["sumeragi", "collectors_redundant_send_r"],
+                    ["sumeragi", "collectors", "redundant_send_r"],
                     i64::from(redundant_send_r),
                 )
-                .write(["sumeragi", "da_enabled"], true)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], 16_i64 * 1024)
+                .write(["sumeragi", "da", "enabled"], true)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
                 .write(
-                    ["sumeragi", "rbc_store_max_sessions"],
+                    ["sumeragi", "rbc", "store_max_sessions"],
                     RBC_STORE_MAX_SESSIONS,
                 )
                 .write(
-                    ["sumeragi", "rbc_store_soft_sessions"],
+                    ["sumeragi", "rbc", "store_soft_sessions"],
                     RBC_STORE_SOFT_SESSIONS,
                 )
-                .write(["sumeragi", "rbc_store_max_bytes"], RBC_STORE_MAX_BYTES)
-                .write(["sumeragi", "rbc_store_soft_bytes"], RBC_STORE_SOFT_BYTES)
-                .write(["sumeragi", "rbc_session_ttl_secs"], 900_i64)
+                .write(["sumeragi", "rbc", "store_max_bytes"], RBC_STORE_MAX_BYTES)
+                .write(
+                    ["sumeragi", "rbc", "store_soft_bytes"],
+                    RBC_STORE_SOFT_BYTES,
+                )
+                .write(["sumeragi", "rbc", "session_ttl_ms"], 900_000i64)
                 .write(["queue", "capacity"], QUEUE_CAPACITY)
                 .write(["queue", "capacity_per_user"], QUEUE_CAPACITY_PER_USER);
         })
@@ -744,12 +747,12 @@ async fn npos_pacemaker_jitter_within_band() -> Result<()> {
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "consensus_mode"], "npos")
                 .write(
-                    ["sumeragi", "pacemaker_jitter_frac_permille"],
+                    ["sumeragi", "pacemaker", "jitter_frac_permille"],
                     PACEMAKER_JITTER_PERMILLE,
                 )
-                .write(["sumeragi", "pacemaker_backoff_multiplier"], 2_i64)
-                .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 2_i64)
-                .write(["sumeragi", "pacemaker_max_backoff_ms"], 4_000_i64);
+                .write(["sumeragi", "pacemaker", "backoff_multiplier"], 2_i64)
+                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 2_i64)
+                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 4_000_i64);
         })
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::BlockTimeMs(1_500),
@@ -908,24 +911,27 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "consensus_mode"], "npos")
-                .write(["sumeragi", "collectors_k"], i64::from(collectors_k))
+                .write(["sumeragi", "collectors", "k"], i64::from(collectors_k))
                 .write(
-                    ["sumeragi", "collectors_redundant_send_r"],
+                    ["sumeragi", "collectors", "redundant_send_r"],
                     i64::from(redundant_send_r),
                 )
-                .write(["sumeragi", "da_enabled"], true)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], 16_i64 * 1024)
+                .write(["sumeragi", "da", "enabled"], true)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
                 .write(
-                    ["sumeragi", "rbc_store_max_sessions"],
+                    ["sumeragi", "rbc", "store_max_sessions"],
                     RBC_STORE_MAX_SESSIONS,
                 )
                 .write(
-                    ["sumeragi", "rbc_store_soft_sessions"],
+                    ["sumeragi", "rbc", "store_soft_sessions"],
                     RBC_STORE_SOFT_SESSIONS,
                 )
-                .write(["sumeragi", "rbc_store_max_bytes"], RBC_STORE_MAX_BYTES)
-                .write(["sumeragi", "rbc_store_soft_bytes"], RBC_STORE_SOFT_BYTES)
-                .write(["sumeragi", "rbc_session_ttl_secs"], 900_i64);
+                .write(["sumeragi", "rbc", "store_max_bytes"], RBC_STORE_MAX_BYTES)
+                .write(
+                    ["sumeragi", "rbc", "store_soft_bytes"],
+                    RBC_STORE_SOFT_BYTES,
+                )
+                .write(["sumeragi", "rbc", "session_ttl_ms"], 900_000i64);
         })
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::DaEnabled(true),
@@ -1075,24 +1081,27 @@ async fn npos_redundant_send_retries_update_metrics() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "consensus_mode"], "npos")
-                .write(["sumeragi", "collectors_k"], i64::from(collectors_k))
+                .write(["sumeragi", "collectors", "k"], i64::from(collectors_k))
                 .write(
-                    ["sumeragi", "collectors_redundant_send_r"],
+                    ["sumeragi", "collectors", "redundant_send_r"],
                     i64::from(redundant_send_r),
                 )
-                .write(["sumeragi", "da_enabled"], true)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], 16_i64 * 1024)
+                .write(["sumeragi", "da", "enabled"], true)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
                 .write(
-                    ["sumeragi", "rbc_store_max_sessions"],
+                    ["sumeragi", "rbc", "store_max_sessions"],
                     RBC_STORE_MAX_SESSIONS,
                 )
                 .write(
-                    ["sumeragi", "rbc_store_soft_sessions"],
+                    ["sumeragi", "rbc", "store_soft_sessions"],
                     RBC_STORE_SOFT_SESSIONS,
                 )
-                .write(["sumeragi", "rbc_store_max_bytes"], RBC_STORE_MAX_BYTES)
-                .write(["sumeragi", "rbc_store_soft_bytes"], RBC_STORE_SOFT_BYTES)
-                .write(["sumeragi", "rbc_session_ttl_secs"], 900_i64)
+                .write(["sumeragi", "rbc", "store_max_bytes"], RBC_STORE_MAX_BYTES)
+                .write(
+                    ["sumeragi", "rbc", "store_soft_bytes"],
+                    RBC_STORE_SOFT_BYTES,
+                )
+                .write(["sumeragi", "rbc", "session_ttl_ms"], 900_000i64)
                 .write(
                     ["sumeragi", "debug", "rbc", "drop_validator_mask"],
                     0xFF_i64,
@@ -1216,13 +1225,13 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "consensus_mode"], "npos")
-                .write(["sumeragi", "collectors_k"], i64::from(collectors_k))
+                .write(["sumeragi", "collectors", "k"], i64::from(collectors_k))
                 .write(
-                    ["sumeragi", "collectors_redundant_send_r"],
+                    ["sumeragi", "collectors", "redundant_send_r"],
                     i64::from(redundant_send_r),
                 )
-                .write(["sumeragi", "da_enabled"], true)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], 16_i64 * 1024)
+                .write(["sumeragi", "da", "enabled"], true)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
                 .write(
                     ["sumeragi", "debug", "rbc", "drop_every_nth_chunk"],
                     CHUNK_LOSS_DROP_INTERVAL,

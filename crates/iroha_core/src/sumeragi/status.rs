@@ -3397,6 +3397,8 @@ pub fn commit_qc_history() -> Vec<Qc> {
 
 /// Record precommit signer set for a block (best-effort), retaining a bounded history.
 pub fn record_precommit_signers(record: PrecommitSignerRecord) {
+    #[cfg(test)]
+    let _guard = commit_history_test_guard();
     let mut guard = precommit_signer_history_slot()
         .lock()
         .expect("precommit signer history mutex poisoned");
@@ -3414,6 +3416,8 @@ pub fn record_precommit_signers(record: PrecommitSignerRecord) {
 /// Return precommit signer records in newest-first order.
 #[must_use]
 pub fn precommit_signer_history() -> Vec<PrecommitSignerRecord> {
+    #[cfg(test)]
+    let _guard = commit_history_test_guard();
     let mut entries: Vec<_> = precommit_signer_history_slot()
         .lock()
         .expect("precommit signer history mutex poisoned")
@@ -4647,6 +4651,7 @@ pub(crate) fn reset_block_sync_counters_for_tests() {
 /// Reset the cached precommit signer history for unit tests.
 #[cfg(test)]
 pub(crate) fn reset_precommit_signer_history_for_tests() {
+    let _guard = commit_history_test_guard();
     let mut guard = precommit_signer_history_slot()
         .lock()
         .expect("precommit signer history mutex poisoned");

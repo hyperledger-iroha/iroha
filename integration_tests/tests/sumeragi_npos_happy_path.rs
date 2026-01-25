@@ -47,12 +47,12 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "consensus_mode"], "npos")
-                .write(["sumeragi", "collectors_k"], 2_i64)
-                .write(["sumeragi", "collectors_redundant_send_r"], 1_i64)
-                .write(["sumeragi", "pacemaker_backoff_multiplier"], 2_i64)
-                .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 2_i64)
-                .write(["sumeragi", "pacemaker_max_backoff_ms"], 8_000_i64)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], 16_i64 * 1024);
+                .write(["sumeragi", "collectors", "k"], 2_i64)
+                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
+                .write(["sumeragi", "pacemaker", "backoff_multiplier"], 2_i64)
+                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 2_i64)
+                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 8_000_i64)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024);
         })
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::DaEnabled(true),
@@ -127,12 +127,12 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "consensus_mode"], "npos")
-                .write(["sumeragi", "collectors_k"], 2_i64)
-                .write(["sumeragi", "collectors_redundant_send_r"], 1_i64)
-                .write(["sumeragi", "pacemaker_backoff_multiplier"], 2_i64)
-                .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 2_i64)
-                .write(["sumeragi", "pacemaker_max_backoff_ms"], 8_000_i64)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], 16_i64 * 1024);
+                .write(["sumeragi", "collectors", "k"], 2_i64)
+                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
+                .write(["sumeragi", "pacemaker", "backoff_multiplier"], 2_i64)
+                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 2_i64)
+                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 8_000_i64)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024);
         })
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::DaEnabled(true),
@@ -367,12 +367,12 @@ fn large_payload_npos_builder() -> NetworkBuilder {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "consensus_mode"], "npos")
-                .write(["sumeragi", "collectors_k"], 2_i64)
-                .write(["sumeragi", "collectors_redundant_send_r"], 1_i64)
-                .write(["sumeragi", "pacemaker_backoff_multiplier"], 2_i64)
-                .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 2_i64)
-                .write(["sumeragi", "pacemaker_max_backoff_ms"], 8_000_i64)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], 16_i64 * 1024);
+                .write(["sumeragi", "collectors", "k"], 2_i64)
+                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
+                .write(["sumeragi", "pacemaker", "backoff_multiplier"], 2_i64)
+                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 2_i64)
+                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 8_000_i64)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024);
         })
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::DaEnabled(true),

@@ -1495,6 +1495,7 @@ pub struct SorafsTelemetryPolicy {
     )]
     pub require_submitter: bool,
     /// Require a nonce per telemetry window for replay detection.
+    /// When disabled, windows without a nonce are accepted but provided nonces are still checked.
     #[config(
         env = "SORAFS_TELEMETRY_REQUIRE_NONCE",
         default = "defaults::governance::sorafs_telemetry::REQUIRE_NONCE"
