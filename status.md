@@ -2,6 +2,12 @@
 
 Last update: 2026-01-25
 
+- SoraFS telemetry cooldown penalty test: `record_capacity_telemetry_respects_cooldown_between_penalties` passes when run in an isolated build dir; earlier failure likely from concurrent cargo/build-dir locks rather than logic regressions.
+- Tests: `CARGO_HOME=/tmp/iroha-codex-cargo CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core record_capacity_telemetry_respects_cooldown_between_penalties -- --nocapture` (ok; command hit timeout after running filtered binaries, but the target test passed).
+
+- SoraFS telemetry submitter test: remove the redundant `drop(stx)` after `apply()` in staking tests and inline the Kura budget limit assignment so `record_capacity_telemetry_requires_authorised_submitter` compiles cleanly.
+- Tests: `cargo test -p iroha_core --lib smartcontracts::isi::sorafs::sorafs_tests::record_capacity_telemetry_requires_authorised_submitter -- --nocapture` (ok; warning about unused `consensus_mode` persists).
+
 - SoraFS telemetry: treat PDP/PoTR failure counters as authoritative even when challenge/window counts are zero; add coverage for PDP failures reported without challenge counts so proof-health penalties/alerts aren’t suppressed.
 - Tests: not run (local `cargo test` invocations were terminated with SIGTERM in this environment).
 
@@ -22,7 +28,7 @@ Last update: 2026-01-25
 - Tests: not run (local cargo invocations were terminated with SIGTERM in this environment; no other processes were stopped).
 
 - SoraFS capacity declarations: resolve owner metadata via world-aware account literal parsing with canonical-literal fallback; add IH58-owner regression coverage for selector-free state.
-- Tests: not run (cargo tests already running in this environment; no processes were terminated).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-sorafs-owner CARGO_BUILD_JOBS=1 cargo test -p iroha_core --lib smartcontracts::isi::sorafs::sorafs_tests::register_capacity_declaration_inserts_record -- --nocapture` (killed by signal 15 in this environment; other cargo tests were already running).
 
 - SoraFS telemetry: enforce replay protection whenever a nonce is provided (even when `require_nonce=false`), add coverage for optional-nonce replays, and clarify nonce policy semantics in config/docs.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
@@ -59,7 +65,7 @@ Last update: 2026-01-25
 - Offline balance proof: explicitly validate claimed-delta/resulting-value scales before building proofs so fractional values are rejected deterministically, and assert smart-contract errors via the inner message instead of relying on the generic display string.
 - Tests: `cargo test -p iroha_core build_balance_proof_rejects_fractional_value -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
 - SoraFS capacity disputes: validate replication-order requirements using the decoded payload (replication shortfall must specify an order; unknown orders are rejected) and persist the payload’s replication-order id into the stored record.
-- Tests: not run (other `cargo test` processes are active; avoiding interference).
+- Tests: `cargo test -p iroha_core smartcontracts::isi::sorafs::sorafs_tests::register_capacity_dispute_rejects_unknown_replication_order -- --nocapture` (terminated by SIGTERM while other `cargo test` processes were running).
 - NFT ISI tests: update NftId literals to `name$domain` and reset `domain_selectors` with `Default::default()` so missing-domain and selector-free paths align with the current Storage API; audited for other `Storage::clear()` uses in tests and found none.
 - Tests: `cargo test -p iroha_core smartcontracts::isi::nft::isi::tests::unregister_nft_rejects_missing_domain -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
 - Tests: `cargo test -p iroha_core build_balance_proof_rejects_fractional_value -- --nocapture` (failed to compile: borrow checker error in `crates/iroha_core/src/smartcontracts/isi/world.rs:11190` about mutable borrow of `stx` while `params` is borrowed; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
