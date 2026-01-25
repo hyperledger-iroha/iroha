@@ -2121,7 +2121,7 @@ where
 
     let submit_client = client.clone();
     let submit_handle = tokio::task::spawn_blocking(move || {
-        submit_client.submit_blocking(Log::new(Level::INFO, heavy_message))
+        submit_client.submit(Log::new(Level::INFO, heavy_message))
     });
     let submit_hash = submit_handle.await.wrap_err("submit join")??;
     println!(
