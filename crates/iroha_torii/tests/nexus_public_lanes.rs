@@ -68,7 +68,8 @@ async fn nexus_public_lane_endpoints_exist() {
     enable_nexus(&mut state, &escrow);
     relax_consensus_key_activation_for_tests(&mut state);
     seed_public_lane_state(&state, &validator_keypair, &validator, &delegator);
-    let router = build_test_router(Arc::new(state), &kura);
+    let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
+    let router = build_test_router(Arc::new(state), &kura, local_peer_id);
 
     let resp = router
         .clone()
@@ -103,7 +104,8 @@ async fn nexus_public_lane_endpoints_list_records() {
     enable_nexus(&mut state, &escrow);
     relax_consensus_key_activation_for_tests(&mut state);
     seed_public_lane_state(&state, &validator_keypair, &validator, &delegator);
-    let router = build_test_router(Arc::new(state), &kura);
+    let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
+    let router = build_test_router(Arc::new(state), &kura, local_peer_id);
 
     let resp = router
         .clone()
@@ -157,10 +159,11 @@ async fn nexus_public_lane_endpoints_list_records() {
 
 #[tokio::test]
 async fn nexus_public_lane_endpoints_reject_when_nexus_disabled() {
-    let (world, _validator_keypair, _validator, _delegator, _escrow) = sample_world();
+    let (world, validator_keypair, _validator, _delegator, _escrow) = sample_world();
     let kura = Kura::blank_kura_for_testing();
     let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
-    let router = build_test_router(Arc::new(state), &kura);
+    let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
+    let router = build_test_router(Arc::new(state), &kura, local_peer_id);
 
     let resp = router
         .clone()
@@ -187,10 +190,11 @@ async fn nexus_public_lane_endpoints_reject_when_nexus_disabled() {
 
 #[tokio::test]
 async fn da_commitments_reject_when_nexus_disabled() {
-    let (world, _validator_keypair, _validator, _delegator, _escrow) = sample_world();
+    let (world, validator_keypair, _validator, _delegator, _escrow) = sample_world();
     let kura = Kura::blank_kura_for_testing();
     let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
-    let router = build_test_router(Arc::new(state), &kura);
+    let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
+    let router = build_test_router(Arc::new(state), &kura, local_peer_id);
 
     let resp = router
         .oneshot(
@@ -240,13 +244,17 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
     let validator_asset = Asset::new(validator_asset_id, Numeric::new(10_000, 0));
     let delegator_asset = Asset::new(delegator_asset_id, Numeric::new(10_000, 0));
 
-    let world = World::with_assets(
+    let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
+    let mut world = World::with_assets(
         [domain],
         [validator, delegator, escrow],
         [asset_definition],
         [validator_asset, delegator_asset],
         [],
     );
+    world.peers.mutate_vec(|peers| {
+        let _ = peers.push(local_peer_id);
+    });
     (
         world,
         validator_keypair,
@@ -336,13 +344,15 @@ fn seed_public_lane_state(
     block.commit().expect("commit block");
 }
 
-fn build_test_router(state: Arc<State>, kura: &Arc<Kura>) -> axum::Router {
+fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId) -> axum::Router {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = iroha_core::kiso::KisoHandle::start(cfg.clone());
     let queue_cfg = Queue::default();
     let (events_tx, _events_rx) = broadcast::channel(1);
     let queue = Arc::new(iroha_core::queue::Queue::from_config(queue_cfg, events_tx));
     let (_peers_tx, peers_rx) = watch::channel(HashSet::default());
+    #[cfg(not(feature = "telemetry"))]
+    let _ = local_peer_id;
 
     #[cfg(feature = "telemetry")]
     let telemetry = {
@@ -357,6 +367,7 @@ fn build_test_router(state: Arc<State>, kura: &Arc<Kura>) -> axum::Router {
             Arc::clone(kura),
             Arc::clone(&queue),
             peers_rx.clone(),
+            local_peer_id,
             mock_time,
             false,
         )

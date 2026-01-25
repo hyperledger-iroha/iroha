@@ -1409,7 +1409,11 @@ pub mod handles {
 
     /// Start Peer in `state::ConnectedFrom` state
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn connected_from<T: Pload + crate::network::message::ClassifyTopic, K: Kex, E: Enc>(
+    pub(crate) fn connected_from<
+        T: Pload + crate::network::message::ClassifyTopic,
+        K: Kex,
+        E: Enc,
+    >(
         our_public_address: SocketAddr,
         key_pair: KeyPair,
         connection: Connection,
@@ -1525,8 +1529,8 @@ mod run {
     use tokio::time::Instant;
     use tracing;
 
-    use crate::{Priority, sampler::LogSampler};
     use crate::network::message::{ClassifyTopic, Topic};
+    use crate::{Priority, sampler::LogSampler};
 
     use super::{
         cryptographer::Cryptographer,

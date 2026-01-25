@@ -19,6 +19,7 @@ use iroha_data_model::{
         kaigi_relay_feedback_key, kaigi_relay_metadata_key,
     },
     metadata::Metadata,
+    peer::PeerId,
     prelude::{AccountId, DomainId, Name},
 };
 use iroha_primitives::{json::Json, time::TimeSource};
@@ -32,6 +33,7 @@ fn build_app() -> (axum::Router, AccountId, AccountId) {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
+    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
     // Prepare domain, accounts, and metadata.
     let domain_id: DomainId = "kaigi".parse().expect("domain id");
@@ -75,11 +77,14 @@ fn build_app() -> (axum::Router, AccountId, AccountId) {
         .with_metadata(metadata)
         .build(&owner_id);
 
-    let world = iroha_core::prelude::World::with(
+    let mut world = iroha_core::prelude::World::with(
         [domain],
         [owner, relay],
         Vec::<iroha_data_model::asset::AssetDefinition>::new(),
     );
+    world.peers.mutate_vec(|peers| {
+        let _ = peers.push(local_peer_id.clone());
+    });
 
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
 
@@ -114,6 +119,7 @@ fn build_app() -> (axum::Router, AccountId, AccountId) {
         kura.clone(),
         queue.clone(),
         peers_rx.clone(),
+        local_peer_id,
         time_source,
         false,
     )

@@ -2,6 +2,16 @@
 
 Last update: 2026-01-25
 
+- Consensus roster changes: preserve `proposals_seen` across membership changes to avoid re-proposing the same view after peer unregister; add `on_block_commit_preserves_proposals_seen_on_membership_change` coverage and update topology-change expectations.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Tests: not run (logic change only).
+
+- Telemetry: recompute local-peer removal from the world state during sync so `connected_peers` and Sumeragi status recover after peer re-registration; seed the local peer into Torii telemetry test worlds and add a guard test for missing-local-peer metrics.
+- Tests: not run (local changes only).
+
+- Unstable network tests: submit asset-definition + mint ISIs via blocking confirmation (with status/TTL bounds) and await mint completion after relay resume to avoid silent rejects under multi-fault partitions.
+- Tests: `cargo test -p integration_tests unstable_network_9_peers_3_faults -- --nocapture` (ok; duplicate metrics registration warnings observed during the run).
+
 - SoraFS dispute helper now uses `UptimeBreach` (no replication order required); P2P peer loop annotates inbound message type and documents peer-message sender fields to satisfy Rust 2024 inference + missing-docs lints.
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-capacity-dup3 CARGO_BUILD_JOBS=1 cargo test -p iroha_core smartcontracts::isi::sorafs::sorafs_tests::register_capacity_dispute_rejects_duplicate -- --nocapture` (test passed; command timed out after 20m while continuing to build/run filtered binaries; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
 
