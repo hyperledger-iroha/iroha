@@ -23,6 +23,7 @@ use iroha_data_model::{
         DataSpaceId, DataSpaceMetadata, ManifestEffect, ManifestEntry, ManifestVersion,
         UniversalAccountId,
     },
+    peer::PeerId,
 };
 use iroha_primitives::numeric::Numeric;
 use iroha_torii::Torii;
@@ -39,6 +40,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
+    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let dataspace = DataSpaceId::new(11);
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::space_directory"));
     let account_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -51,6 +53,9 @@ async fn space_directory_manifest_endpoint_returns_records() {
     };
 
     let mut world = World::default();
+    world.peers.mutate_vec(|peers| {
+        let _ = peers.push(local_peer_id.clone());
+    });
     let mut bindings = iroha_core::nexus::space_directory::UaidDataspaceBindings::default();
     bindings.bind_account(dataspace, account_id.clone());
     world
@@ -123,6 +128,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
             kura.clone(),
             queue.clone(),
             peers_rx.clone(),
+            local_peer_id,
             ts,
             false,
         )
@@ -311,7 +317,12 @@ async fn space_directory_manifest_endpoint_returns_records() {
     );
 
     // Build a revoked + second manifest world to test inactive/pagination.
+    let cfg_rev = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let local_peer_id_rev = PeerId::new(cfg_rev.common.key_pair.public_key().clone());
     let mut world_revoked = World::default();
+    world_revoked.peers.mutate_vec(|peers| {
+        let _ = peers.push(local_peer_id_rev.clone());
+    });
     let mut bindings = iroha_core::nexus::space_directory::UaidDataspaceBindings::default();
     let dataspace_two = DataSpaceId::new(13);
     bindings.bind_account(dataspace, account_id.clone());
@@ -373,7 +384,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
     .expect("dataspace catalog");
     let state_revoked = Arc::new(state_revoked);
 
-    let cfg_rev = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso_rev, _child_rev) = KisoHandle::start(cfg_rev.clone());
     let queue_cfg_rev = iroha_config::parameters::actual::Queue::default();
     let events_sender_rev: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
@@ -395,6 +405,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
             kura_rev.clone(),
             queue_rev.clone(),
             revoked_peers_rx.clone(),
+            local_peer_id_rev,
             ts,
             false,
         )

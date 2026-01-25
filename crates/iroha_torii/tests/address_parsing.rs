@@ -20,6 +20,7 @@ use iroha_data_model::{
     account::{Account, AccountAddressErrorCode, AccountId},
     asset::AssetDefinition,
     domain::{Domain, DomainId},
+    peer::PeerId,
 };
 #[cfg(feature = "telemetry")]
 use iroha_primitives::time::TimeSource;
@@ -2956,12 +2957,16 @@ fn build_test_router() -> (Router, Arc<Metrics>) {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
+    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let domain_id: DomainId = "wonderland".parse().expect("domain parses");
     let signatory: PublicKey = ACCOUNT_SIGNATORY.parse().expect("key parses");
     let account_id = AccountId::new(domain_id.clone(), signatory);
     let account = Account::new(account_id.clone()).build(&account_id);
     let domain = Domain::new(domain_id).build(&account_id);
-    let world = World::with([domain], [account], Vec::<AssetDefinition>::new());
+    let mut world = World::with([domain], [account], Vec::<AssetDefinition>::new());
+    world.peers.mutate_vec(|peers| {
+        let _ = peers.push(local_peer_id.clone());
+    });
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
@@ -2985,6 +2990,7 @@ fn build_test_router() -> (Router, Arc<Metrics>) {
             kura.clone(),
             queue.clone(),
             peers_rx.clone(),
+            local_peer_id,
             ts,
             true,
         )

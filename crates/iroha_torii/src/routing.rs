@@ -1851,8 +1851,14 @@ impl MaybeTelemetry {
             let metrics = iroha_telemetry::metrics::global_or_default();
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
+            let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+            let mut world = World::default();
+            let mut world_block = world.block();
+            let peers = world_block.peers_mut_for_testing().get_mut();
+            let _ = peers.push(local_peer_id.clone());
+            world_block.commit();
             let state = Arc::new(State::new(
-                World::default(),
+                world,
                 kura.clone(),
                 query,
                 core_telemetry::StateTelemetry::new(metrics.clone(), true),
@@ -1867,8 +1873,16 @@ impl MaybeTelemetry {
             };
             let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
             let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
-            let (tel, _child) =
-                core_telemetry::start(metrics, state, kura, queue, peers_rx, time_source, true);
+            let (tel, _child) = core_telemetry::start(
+                metrics,
+                state,
+                kura,
+                queue,
+                peers_rx,
+                local_peer_id,
+                time_source,
+                true,
+            );
             let _ = peers_tx;
             MaybeTelemetry::from_profile(Some(tel), TelemetryProfile::Operator)
         }
