@@ -8,8 +8,12 @@ use ivm::{
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, WsvHost},
     syscalls,
 };
+mod common;
 
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
+    let payload = PointerType::from_u16(type_id)
+        .map(|pty| common::payload_for_type(pty, payload))
+        .unwrap_or_else(|| payload.to_vec());
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
     out.push(1);
@@ -105,7 +109,7 @@ fn query_get_balance_returns_json_tlv() {
     // Validate returned TLV and JSON content
     let tlv = vm.memory.validate_tlv(p).expect("valid output TLV");
     assert_eq!(tlv.type_id as u16, PointerType::Json as u16);
-    let v: norito::json::Value = norito::json::from_slice(tlv.payload).expect("parse json");
+    let v: norito::json::Value = common::json_from_payload(tlv.payload);
     let bal = v.get("balance").and_then(|v| v.as_str()).unwrap();
     let bal: Numeric = bal.parse().expect("parse numeric balance");
     assert_eq!(bal, Numeric::from(42_u64));
@@ -181,7 +185,7 @@ fn query_list_triggers_returns_all() {
     let p = run_query(&mut vm, env);
     let tlv = vm.memory.validate_tlv(p).expect("valid output TLV");
     assert_eq!(tlv.type_id as u16, PointerType::Json as u16);
-    let v: norito::json::Value = norito::json::from_slice(tlv.payload).expect("parse json");
+    let v: norito::json::Value = common::json_from_payload(tlv.payload);
     let arr = v
         .get("triggers")
         .and_then(|v| v.as_array())

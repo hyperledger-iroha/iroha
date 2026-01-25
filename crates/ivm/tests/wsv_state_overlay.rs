@@ -14,6 +14,7 @@ use ivm::{
 mod common;
 
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
+    let payload = common::payload_for_type(pty, payload);
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
     v.extend_from_slice(&(pty as u16).to_be_bytes());
     v.push(1);

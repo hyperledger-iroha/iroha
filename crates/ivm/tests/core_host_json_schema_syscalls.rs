@@ -5,6 +5,7 @@ use ivm::{CoreHost, IVM, PointerType, encoding, instruction::wide, syscalls};
 mod common;
 
 fn tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
+    let payload = common::payload_for_type(pty, payload);
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
     v.extend_from_slice(&(pty as u16).to_be_bytes());
     v.push(1);
@@ -64,7 +65,7 @@ fn json_encode_decode_roundtrip() {
 }
 
 #[test]
-fn json_decode_accepts_blob() {
+fn json_decode_rejects_blob() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let json = br#"{"a":1,"b":[2,3]}"#;
@@ -84,10 +85,8 @@ fn json_decode_accepts_blob() {
     );
     vm.set_register(10, p_blob);
     vm.load_program(&dec_prog).unwrap();
-    vm.run().unwrap();
-    let p_out = vm.register(10);
-    let tlv_j = vm.memory.validate_tlv(p_out).unwrap();
-    assert_eq!(tlv_j.type_id, PointerType::Json);
+    let err = vm.run().unwrap_err();
+    assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }
 
 #[test]
@@ -133,7 +132,7 @@ fn schema_encode_decode_roundtrip() {
 }
 
 #[test]
-fn schema_decode_accepts_blob() {
+fn schema_decode_rejects_blob() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     let schema = b"Order";
@@ -169,10 +168,8 @@ fn schema_decode_accepts_blob() {
     vm.set_register(10, p_schema);
     vm.set_register(11, p_blob_alt);
     vm.load_program(&dec).unwrap();
-    vm.run().unwrap();
-    let p_out = vm.register(10);
-    let tlv_j = vm.memory.validate_tlv(p_out).unwrap();
-    assert_eq!(tlv_j.type_id, PointerType::Json);
+    let err = vm.run().unwrap_err();
+    assert!(matches!(err, ivm::VMError::NoritoInvalid));
 }
 
 #[test]
@@ -203,7 +200,7 @@ fn schema_decode_unknown_schema_exposes_metadata() {
     let tlv_j = vm.memory.validate_tlv(p_out).unwrap();
     assert_eq!(tlv_j.type_id, PointerType::Json);
 
-    let value: norito::json::Value = norito::json::from_slice(tlv_j.payload).unwrap();
+    let value: norito::json::Value = common::json_from_payload(tlv_j.payload);
     let obj = value.as_object().expect("fallback json object");
 
     let schema_obj = obj

@@ -6162,8 +6162,12 @@ mod tests {
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
         };
-        let (kura, _) =
+        let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        let baseline = kura.kura_disk_usage_bytes().expect("baseline usage");
+        Arc::get_mut(&mut kura)
+            .expect("exclusive kura handle")
+            .max_disk_usage_bytes = baseline.saturating_add(block_required);
         kura.store_block(block).expect("budgeted store block");
 
         let temp_dir = TempDir::new().expect("create temp dir");
@@ -6188,8 +6192,12 @@ mod tests {
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
         };
-        let (kura, _) =
+        let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        let baseline = kura.kura_disk_usage_bytes().expect("baseline usage");
+        Arc::get_mut(&mut kura)
+            .expect("exclusive kura handle")
+            .max_disk_usage_bytes = baseline.saturating_add(block_required);
         let entry = sample_merge_entry(7);
         let err = kura
             .store_block_with_merge_entry(block, &entry)
@@ -6217,8 +6225,12 @@ mod tests {
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
         };
-        let (kura, _) =
+        let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        let baseline = kura.kura_disk_usage_bytes().expect("baseline usage");
+        Arc::get_mut(&mut kura)
+            .expect("exclusive kura handle")
+            .max_disk_usage_bytes = baseline.saturating_add(budget_limit);
 
         kura.store_block(block1).expect("store first block");
 
@@ -6552,9 +6564,11 @@ mod tests {
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
 
-        let retired_root = temp_dir.path().join("retired").join("blocks");
-        std::fs::create_dir_all(&retired_root).expect("create retired dir");
-        std::fs::write(retired_root.join("stale.bin"), [0u8; 1]).expect("seed retired file");
+        let retired_root = temp_dir.path().join("retired");
+        let lane_cfg = RuntimeLaneConfig::default();
+        let retired_dir = lane_cfg.primary().blocks_dir(&retired_root);
+        std::fs::create_dir_all(&retired_dir).expect("create retired dir");
+        std::fs::write(retired_dir.join(DATA_FILE_NAME), [0u8; 1]).expect("seed retired file");
 
         kura.store_block(block)
             .expect("store block after retired purge");
@@ -7643,6 +7657,21 @@ mod tests {
             blocks.push(block_next.clone());
             kura.store_block(block_next).expect("store block");
             wait_for_block_hash(&kura, 3, next_hash);
+        }
+
+        {
+            let expected_count = kura.blocks_count() as u64;
+            let mut store = kura.block_store.lock();
+            store
+                .flush_pending_fsync(true)
+                .expect("flush pending block data for strict reload");
+            let durable = store
+                .read_durable_index_count()
+                .expect("read durable block count");
+            assert_eq!(
+                durable, expected_count,
+                "durable block count should match in-memory block count before reload"
+            );
         }
 
         blocks

@@ -144,7 +144,6 @@ impl norito::json::JsonDeserialize for Executable {
         parser.consume_char(b'{')?;
         parser.skip_ws();
         let key = parser.parse_key()?;
-        parser.consume_char(b':')?;
         let exec = match key.as_str() {
             "Instructions" => {
                 let instrs =
@@ -251,5 +250,21 @@ mod tests {
         let json = norito::json::to_json(&bytecode).expect("serialize");
         let deserialized: IvmBytecode = norito::json::from_str(&json).expect("deserialize");
         assert_eq!(bytecode, deserialized);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn executable_json_roundtrip_for_instructions_and_ivm() {
+        let instruction: InstructionBox =
+            crate::isi::Log::new(crate::Level::INFO, "json executable".into()).into();
+        let executable = Executable::from_iter([instruction]);
+        let json = norito::json::to_json(&executable).expect("serialize instructions");
+        let deserialized: Executable = norito::json::from_str(&json).expect("deserialize");
+        assert_eq!(executable, deserialized);
+
+        let ivm_executable = Executable::Ivm(IvmBytecode::from_compiled(vec![9, 8, 7]));
+        let json = norito::json::to_json(&ivm_executable).expect("serialize ivm");
+        let deserialized: Executable = norito::json::from_str(&json).expect("deserialize ivm");
+        assert_eq!(ivm_executable, deserialized);
     }
 }

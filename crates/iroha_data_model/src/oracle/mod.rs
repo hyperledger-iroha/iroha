@@ -2932,7 +2932,7 @@ mod tests {
         let member = committee.members.first().expect("committee member");
         let member_plan = plan_committee_fetches(&committee, member, 10, policy, &request_hash);
         assert!(member_plan.is_allowed());
-        assert_eq!(vec![10, 12, 14], member_plan.attempts);
+        assert_eq!(vec![10, 13, 15], member_plan.attempts);
 
         // Non-member gets a denied plan.
         let dave = oracle("dave", "validators");
@@ -3124,7 +3124,12 @@ mod tests {
 
         observation.body.request_hash = sample_request_hash();
         observation.body.outcome = ObservationOutcome::Value(ObservationValue::new(1_000, 4));
-        let second = observation_with_value(&oracle("bob", "validators"), 1_000, 5);
+        let second_provider = config
+            .providers
+            .get(1)
+            .cloned()
+            .expect("fixture provides at least two providers");
+        let second = observation_with_value(&second_provider, 1_000, 5);
         let err = aggregate_observations(
             &config,
             10,

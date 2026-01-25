@@ -3271,7 +3271,7 @@ pub mod message {
             kura::Kura,
             query::store::LiveQueryStore,
             state::{State, World},
-            sumeragi::test_sumeragi_handle,
+            sumeragi::{test_sumeragi_handle, test_sumeragi_handle_with_payload_cap},
         };
 
         #[test]
@@ -3282,7 +3282,7 @@ pub mod message {
                 .expect("tokio runtime");
 
             runtime.block_on(async {
-                let (sumeragi, block_rx) = test_sumeragi_handle(0);
+                let (sumeragi, block_payload_rx) = test_sumeragi_handle_with_payload_cap(0, 0);
                 let kura = Kura::blank_kura_for_testing();
                 let state = Arc::new(State::new_for_testing(
                     World::new(),
@@ -3351,7 +3351,7 @@ pub mod message {
                     unblock_rx
                         .recv_timeout(Duration::from_secs(4))
                         .expect("unblock signal");
-                    block_rx
+                    block_payload_rx
                         .recv_timeout(Duration::from_secs(2))
                         .expect("expected block sync update");
                 });

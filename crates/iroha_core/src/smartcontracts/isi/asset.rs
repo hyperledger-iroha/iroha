@@ -697,6 +697,109 @@ pub mod query {
         }
     }
 
+    fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+        if path.is_empty() {
+            return None;
+        }
+        let mut current = value;
+        for segment in path.split('.') {
+            if segment.is_empty() {
+                return None;
+            }
+            match current {
+                Value::Object(map) => {
+                    current = map.get(segment)?;
+                }
+                _ => return None,
+            }
+        }
+        Some(current)
+    }
+
+    fn asset_alias_value(asset: &Asset, field: &str) -> Option<String> {
+        match field {
+            "account" | "account_id" | "owner" | "id.account" => {
+                Some(asset.id().account().to_string())
+            }
+            "definition"
+            | "asset_definition"
+            | "asset_definition_id"
+            | "definition_id"
+            | "id.definition" => Some(asset.id().definition().to_string()),
+            "domain" | "account.domain" | "id.account.domain" => {
+                Some(asset.id().account().domain().to_string())
+            }
+            _ => None,
+        }
+    }
+
+    fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
+        matches!(value, Value::String(raw) if raw == expected)
+    }
+
+    fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
+        values
+            .iter()
+            .any(|value| matches!(value, Value::String(raw) if raw == expected))
+    }
+
+    fn predicate_matches_asset(predicate: &PredicateJson, asset: &Asset) -> bool {
+        let asset_json = norito::json::to_value(asset).ok();
+
+        for cond in &predicate.equals {
+            if let Some(alias) = asset_alias_value(asset, &cond.field) {
+                if !predicate_value_equals_str(&cond.value, &alias) {
+                    return false;
+                }
+                continue;
+            }
+            let Some(value) = asset_json.as_ref() else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+                return false;
+            };
+            if actual != &cond.value {
+                return false;
+            }
+        }
+
+        for cond in &predicate.r#in {
+            if let Some(alias) = asset_alias_value(asset, &cond.field) {
+                if !predicate_values_contain_str(&cond.values, &alias) {
+                    return false;
+                }
+                continue;
+            }
+            let Some(value) = asset_json.as_ref() else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+                return false;
+            };
+            if !cond.values.iter().any(|candidate| candidate == actual) {
+                return false;
+            }
+        }
+
+        for field in &predicate.exists {
+            if asset_alias_value(asset, field).is_some() {
+                continue;
+            }
+            let Some(value) = asset_json.as_ref() else {
+                continue;
+            };
+            let Some(actual) = predicate_value_at_path(value, field) else {
+                return false;
+            };
+            if actual.is_null() {
+                return false;
+            }
+        }
+
+        true
+    }
+
     #[derive(Debug)]
     enum AssetQueryPlan {
         AssetIds(Vec<AssetId>),
@@ -720,6 +823,10 @@ pub mod query {
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = Asset>, Error> {
             let predicate_view = AssetPredicateView::from_predicate(&filter);
+            let predicate_json = filter
+                .json_payload()
+                .and_then(|raw| norito::json::from_str(raw).ok())
+                .and_then(AssetPredicateView::parse_predicate_value);
             let plan = predicate_view.plan();
             let world = state_ro.world();
 
@@ -820,7 +927,15 @@ pub mod query {
                 AssetQueryPlan::Full => Box::new(world.assets_iter().map(entry_to_asset)),
             };
 
-            Ok(iter.filter(move |asset| predicate_view.matches(asset) && filter.applies(asset)))
+            Ok(iter.filter(move |asset| {
+                if !predicate_view.matches(asset) {
+                    return false;
+                }
+                if let Some(predicate) = predicate_json.as_ref() {
+                    return predicate_matches_asset(predicate, asset);
+                }
+                filter.applies(asset)
+            }))
         }
     }
 

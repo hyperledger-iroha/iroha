@@ -1,8 +1,8 @@
 import React, {useState} from 'react';
 
 const SAMPLE_ADDRESS = {
-  ih58: 'RnuaJGGDL9CghX9U4iqYRMghp31xkGuCvqQTzXu9AF8kzt7etZdZeGqS',
-  compressed: 'snx12QGﾈkﾀｱﾚiﾉﾘuﾛWRヱﾏxﾁSuﾁepnhｽvｶrﾓｶ9Tｹｿp3ﾇVWｳｲｾU4N5E5',
+  ih58: 'RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA',
+  compressed: 'snx12QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8',
   warning: 'Compressed addresses are Sora-only and second-best; prefer IH58.',
   domain: 'default',
   implicitDefault: true,

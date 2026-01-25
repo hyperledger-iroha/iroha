@@ -583,9 +583,6 @@ where
                 .summarize_program(bytecode.as_ref())
                 .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
             let gas_limit = require_tx_gas_limit(tx)?;
-            let mut vm = ivm_cache
-                .clone_runtime(&summary, bytecode.as_ref(), gas_limit)
-                .map_err(OverlayBuildError::IvmLoad)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
             // ABI gating is handled in validate_header_policy (v1-only release).
@@ -605,6 +602,10 @@ where
                 bytecode.as_ref(),
             )?;
             validate_contract_binding(state_ro, tx, &summary)?;
+
+            let mut vm = ivm_cache
+                .clone_runtime(&summary, bytecode.as_ref(), gas_limit)
+                .map_err(OverlayBuildError::IvmLoad)?;
 
             // Run CoreHost to collect queued ISIs
             // Snapshot of accounts for deterministic helpers
@@ -1273,6 +1274,7 @@ mod tests {
             Json::new(contract_id.clone()),
         );
         insert_gas_limit(&mut metadata);
+        insert_gas_limit(&mut metadata);
 
         let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
             .with_metadata(metadata)
@@ -1615,6 +1617,7 @@ mod tests {
             Name::from_str("contract_id").expect("static name"),
             Json::new(contract_id.clone()),
         );
+        insert_gas_limit(&mut metadata);
 
         let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
             .with_metadata(metadata)
@@ -1672,6 +1675,7 @@ mod tests {
             Name::from_str("contract_id").expect("static name"),
             Json::new(contract_id.clone()),
         );
+        insert_gas_limit(&mut metadata);
 
         let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
             .with_metadata(metadata)
@@ -1742,6 +1746,7 @@ mod tests {
             Name::from_str("contract_id").expect("static name"),
             Json::new(contract_id.clone()),
         );
+        insert_gas_limit(&mut metadata);
 
         let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
             .with_metadata(metadata)

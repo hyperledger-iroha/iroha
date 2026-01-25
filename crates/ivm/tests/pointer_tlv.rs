@@ -1,6 +1,8 @@
 use iroha_crypto::Hash;
 use ivm::{Memory, PointerType};
 
+mod common;
+
 fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
@@ -14,28 +16,29 @@ fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
 
 #[test]
 fn validate_known_types_ok() {
-    let cases: &[(u16, &[u8])] = &[
-        (PointerType::AccountId as u16, b"alice@wonderland"),
-        (PointerType::AssetDefinitionId as u16, b"rose#wonderland"),
-        (PointerType::Name as u16, b"cursor"),
-        (PointerType::Json as u16, br#"{"q":1}"#),
-        (PointerType::NftId as u16, b"rose:uuid:0123"),
+    let cases: &[(PointerType, &[u8])] = &[
+        (PointerType::AccountId, b"alice@wonderland"),
+        (PointerType::AssetDefinitionId, b"rose#wonderland"),
+        (PointerType::Name, b"cursor"),
+        (PointerType::Json, br#"{"q":1}"#),
+        (PointerType::NftId, b"rose:uuid:0123"),
     ];
-    for (type_id, payload) in cases.iter().copied() {
-        let tlv = make_tlv(type_id, 1, payload);
+    for (pty, raw) in cases.iter().copied() {
+        let payload = common::payload_for_type(pty, raw);
+        let tlv = make_tlv(pty as u16, 1, &payload);
         let mut mem = Memory::new(0);
         mem.preload_input(0, &tlv).expect("preload input");
         let v = mem.validate_tlv(Memory::INPUT_START).expect("valid tlv");
-        assert_eq!(v.type_id as u16, type_id);
+        assert_eq!(v.type_id as u16, pty as u16);
         assert_eq!(v.version, 1);
-        assert_eq!(v.payload, payload);
+        assert_eq!(v.payload, payload.as_slice());
     }
 }
 
 #[test]
 fn reject_hash_mismatch() {
-    let payload = b"alice@wonderland";
-    let mut tlv = make_tlv(PointerType::AccountId as u16, 1, payload);
+    let payload = common::payload_for_type(PointerType::AccountId, b"alice@wonderland");
+    let mut tlv = make_tlv(PointerType::AccountId as u16, 1, &payload);
     // Flip one byte in the stored hash
     let off = 7 + payload.len();
     tlv[off] ^= 0xFF;
@@ -77,7 +80,8 @@ fn reject_unknown_type() {
 
 #[test]
 fn reject_wrong_version() {
-    let tlv = make_tlv(PointerType::Name as u16, 2, b"cursor");
+    let payload = common::payload_for_type(PointerType::Name, b"cursor");
+    let tlv = make_tlv(PointerType::Name as u16, 2, &payload);
     let mut mem = Memory::new(0);
     mem.preload_input(0, &tlv).expect("preload input");
     assert!(matches!(
@@ -88,7 +92,8 @@ fn reject_wrong_version() {
 
 #[test]
 fn reject_wrong_region() {
-    let tlv = make_tlv(PointerType::Name as u16, 1, b"cursor");
+    let payload = common::payload_for_type(PointerType::Name, b"cursor");
+    let tlv = make_tlv(PointerType::Name as u16, 1, &payload);
     let mut mem = Memory::new(0);
     // Place TLV into HEAP region (writes allowed) but validator should enforce INPUT-only
     let heap_addr = Memory::HEAP_START;

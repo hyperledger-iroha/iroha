@@ -36,6 +36,10 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 ## Current Open Work
 
+0. **TEST-HARNESS-DETERMINISM — Validate Sumeragi unit tests under parallel execution** (QA/Consensus, Line: Shared, Owner: Core WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
+ - [ ] Run `cargo test -p iroha_core sumeragi::main_loop::tests::block_created_ -- --nocapture` with default test threads and confirm no hangs.
+ - [ ] Decide whether any unit tests should opt in to real P2P via `IROHA_TEST_REAL_NETWORK` and document the criteria.
+
 0. **KOTODAMA-LANG-PARITY — Close remaining Kotodama gaps** (IVM/Kotodama, Line: Shared, Owner: IVM WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
  - [x] Add access-list attributes and wire permission/read/write hints into entrypoint manifests.
  - [x] Add DSL trigger declarations and wire trigger metadata into entrypoint manifests.
@@ -70,6 +74,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 3. **INTEGRATION-TEST-REVALIDATION — Re-run integration tests after Sumeragi drain-order fix** (QA/Consensus, Line: Shared, Owner: QA WG, Priority: High, Status: 🈺 In Progress, target TBD)
 - [ ] Re-run remaining `tmp_failures.txt` cases (proof events/queries, extra_functional suites, sumeragi_da) after seeding the genesis commit roster on commit to confirm consensus recovery.
+- [ ] Re-run the `sumeragi_da_*` failures after aligning proposal block signatures with the local validator index (RBC INIT leader signature should now match non-zero leaders).
  - [x] Re-run `cargo test -p integration_tests sumeragi_rbc_da_large_payload_four_peers -- --nocapture` to confirm DA large-payload RBC flow completes after READY/DELIVER queue routing.
  - [x] Re-run `cargo test -p integration_tests sumeragi_rbc_da_large_payload_six_peers -- --nocapture` after wiring `sumeragi.debug.rbc.force_deliver_quorum_one` to confirm the 6-peer large-payload scenario stays within delivery budgets.
  - [x] Re-run `cargo test -p integration_tests --test address_canonicalisation -- --nocapture` to confirm the suite completes without timeouts (latest attempt with `IROHA_TEST_NETWORK_PARALLELISM=5` timed out after ~12m with tests still running and permit waits; sandbox run with `IROHA_TEST_NETWORK_PARALLELISM=4` skipped network startup due to loopback bind denial; rerun timed out after ~16m with network guard stuck at 4/4 permits; serialized rerun failed to compile `iroha_genesis` due to missing Norito JSON traits for `RegisterPublicLaneValidator`/`ActivatePublicLaneValidator`; fixes landed, but the subsequent rerun terminated by SIGKILL).

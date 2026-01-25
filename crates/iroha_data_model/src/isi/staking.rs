@@ -245,18 +245,21 @@ impl crate::seal::Instruction for ClaimPublicLaneRewards {}
 mod json_tests {
     use super::{ActivatePublicLaneValidator, RegisterPublicLaneValidator};
     use crate::{account::AccountId, metadata::Metadata, nexus::LaneId};
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::json::value::{from_value, to_value};
 
     #[test]
     fn register_public_lane_validator_json_roundtrip() {
-        let validator: AccountId = "validator@wonderland"
-            .parse()
-            .expect("validator account id");
+        let domain: crate::domain::DomainId = "wonderland".parse().expect("domain id");
+        let validator_key = KeyPair::from_seed(vec![0xA1; 32], Algorithm::Ed25519);
+        let stake_key = KeyPair::from_seed(vec![0xA2; 32], Algorithm::Ed25519);
+        let validator = AccountId::new(domain.clone(), validator_key.public_key().clone());
+        let stake_account = AccountId::new(domain, stake_key.public_key().clone());
         let isi = RegisterPublicLaneValidator::new(
             LaneId::new(1),
             validator.clone(),
-            "stake@wonderland".parse().expect("stake account id"),
+            stake_account,
             Numeric::from(42u32),
             Metadata::default(),
         );
@@ -270,9 +273,9 @@ mod json_tests {
 
     #[test]
     fn activate_public_lane_validator_json_roundtrip() {
-        let validator: AccountId = "validator@wonderland"
-            .parse()
-            .expect("validator account id");
+        let domain: crate::domain::DomainId = "wonderland".parse().expect("domain id");
+        let validator_key = KeyPair::from_seed(vec![0xB1; 32], Algorithm::Ed25519);
+        let validator = AccountId::new(domain, validator_key.public_key().clone());
         let isi = ActivatePublicLaneValidator::new(LaneId::new(2), validator);
 
         let encoded = to_value(&isi).expect("encode ActivatePublicLaneValidator");

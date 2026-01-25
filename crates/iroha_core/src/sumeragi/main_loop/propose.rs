@@ -927,7 +927,10 @@ impl Actor {
 
                 let new_block = builder
                     .with_confidential_features(conf_features)
-                    .sign(self.common_config.key_pair.private_key())
+                    .sign_with_index(
+                        self.common_config.key_pair.private_key(),
+                        u64::from(local_validator_index),
+                    )
                     .unpack(|event| self.emit_pipeline_event(event));
                 let block_created_msg =
                     BlockMessage::BlockCreated(super::message::BlockCreated::from(&new_block));

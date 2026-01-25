@@ -7,7 +7,7 @@ pub use getrandom;
 pub use iroha_smart_contract_codec::{
     decode_with_length_prefix_from_raw, encode_with_length_prefix,
 };
-pub use norito::codec::{DecodeAll, Encode};
+pub use norito::{NoritoDeserialize, NoritoSerialize};
 
 mod dbg;
 pub mod log;
@@ -77,13 +77,13 @@ macro_rules! register_getrandom_err_callback {
 ///
 /// The given function must not take ownership of the pointer argument
 #[doc(hidden)]
-pub unsafe fn encode_and_execute<T: Encode, O>(
+pub unsafe fn encode_and_execute<T: NoritoSerialize, O>(
     obj: &T,
     fun: unsafe extern "C" fn(*const u8, usize) -> O,
 ) -> O {
     // NOTE: It's imperative that encoded object is stored on the heap
     // because heap corresponds to linear memory when compiled for the IVM
-    let bytes = obj.encode();
+    let bytes = norito::to_bytes(obj).expect("Norito serialization must succeed");
 
     unsafe { fun(bytes.as_ptr(), bytes.len()) }
 }
@@ -102,7 +102,7 @@ mod tests {
     // Silence unexpected-cfgs emitted from norito derives inside tests where
     // the workspace enables strict cfg checking for feature names.
     #[allow(unexpected_cfgs)]
-    #[derive(Debug, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode)]
+    #[derive(Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
     struct Dummy {
         a: u32,
         b: bool,
