@@ -3900,6 +3900,7 @@ pub(super) struct Actor {
         BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
     >,
     deferred_qcs: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
+    deferred_block_sync_updates: BTreeMap<DeferredBlockSyncKey, DeferredBlockSyncUpdate>,
     vote_roster_cache: BTreeMap<HashOf<BlockHeader>, VoteRosterCacheEntry>,
     qc_cache: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     qc_signer_tally: BTreeMap<QcVoteKey, QcSignerTally>,
@@ -3931,6 +3932,14 @@ struct VoteRosterCacheEntry {
     roster: Vec<PeerId>,
     height: u64,
     view: u64,
+}
+
+type DeferredBlockSyncKey = (u64, u64, HashOf<BlockHeader>);
+
+#[derive(Debug)]
+struct DeferredBlockSyncUpdate {
+    update: super::message::BlockSyncUpdate,
+    sender: Option<PeerId>,
 }
 
 struct ActorSubsystems {
@@ -7621,6 +7630,7 @@ impl Actor {
             vote_log: BTreeMap::new(),
             deferred_votes: BTreeMap::new(),
             deferred_qcs: BTreeMap::new(),
+            deferred_block_sync_updates: BTreeMap::new(),
             vote_roster_cache: BTreeMap::new(),
             qc_cache: BTreeMap::new(),
             qc_signer_tally: BTreeMap::new(),
@@ -8432,7 +8442,10 @@ impl Actor {
         }
         let mut next_due = Self::merge_deadline(None, self.pending_block_next_due(now));
 
-        if !self.deferred_votes.is_empty() || !self.deferred_qcs.is_empty() {
+        if !self.deferred_votes.is_empty()
+            || !self.deferred_qcs.is_empty()
+            || !self.deferred_block_sync_updates.is_empty()
+        {
             return Some(now);
         }
 
@@ -8519,6 +8532,11 @@ impl Actor {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.replay_deferred_votes");
             self.try_replay_deferred_votes()
         };
+        let deferred_block_sync_progress = {
+            let _view_ctx =
+                StateViewContextGuard::new("sumeragi.tick.replay_deferred_block_sync");
+            self.try_replay_deferred_block_sync_updates()
+        };
         let (missing_block_progress, missing_block_cost) = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.retry_missing_block");
             let step_start = Instant::now();
@@ -8548,6 +8566,7 @@ impl Actor {
             || committed_progress
             || deferred_qc_progress
             || deferred_vote_progress
+            || deferred_block_sync_progress
             || missing_block_progress
             || reschedule_progress
             || idle_view_progress

@@ -5226,7 +5226,7 @@ pub struct SumeragiQueues {
     /// Capacity for the RBC chunk channel.
     #[config(default = "defaults::sumeragi::MSG_CHANNEL_CAP_RBC_CHUNKS")]
     pub rbc_chunks: usize,
-    /// Capacity for the block message channel (block sync updates, params, etc.).
+    /// Capacity for the fast-path block message channel (BlockCreated, FetchPendingBlock, RBC INIT, params).
     #[config(default = "defaults::sumeragi::MSG_CHANNEL_CAP_BLOCKS")]
     pub blocks: usize,
     /// Capacity for Sumeragi control-message channel.

@@ -133,6 +133,109 @@ impl Actor {
         self.should_drop_future_consensus_message(height, view, "BlockSyncUpdate")
     }
 
+    fn block_sync_update_deferral_reason(&self) -> Option<&'static str> {
+        if self.subsystems.commit.inflight.is_some() {
+            return Some("commit_inflight");
+        }
+        if !self.subsystems.validation.inflight.is_empty() {
+            return Some("validation_inflight");
+        }
+        None
+    }
+
+    fn merge_deferred_block_sync_update(
+        existing: &mut super::DeferredBlockSyncUpdate,
+        mut incoming: super::DeferredBlockSyncUpdate,
+    ) {
+        if existing.update.commit_qc.is_none() {
+            existing.update.commit_qc = incoming.update.commit_qc.take();
+        }
+        if existing.update.validator_checkpoint.is_none() {
+            existing.update.validator_checkpoint = incoming.update.validator_checkpoint.take();
+        }
+        if existing.update.stake_snapshot.is_none() {
+            existing.update.stake_snapshot = incoming.update.stake_snapshot.take();
+        }
+        if incoming.sender.is_some() {
+            existing.sender = incoming.sender;
+        }
+    }
+
+    fn defer_block_sync_update(
+        &mut self,
+        mut update: super::message::BlockSyncUpdate,
+        sender: Option<PeerId>,
+        block_hash: HashOf<BlockHeader>,
+        block_height: u64,
+        block_view: u64,
+        reason: &'static str,
+    ) {
+        update.commit_votes.clear();
+        let entry = super::DeferredBlockSyncUpdate { update, sender };
+        let key = (block_height, block_view, block_hash);
+        if let Some(existing) = self.deferred_block_sync_updates.get_mut(&key) {
+            Self::merge_deferred_block_sync_update(existing, entry);
+        } else {
+            self.deferred_block_sync_updates.insert(key, entry);
+        }
+        self.record_consensus_message_handling(
+            super::status::ConsensusMessageKind::BlockSyncUpdate,
+            super::status::ConsensusMessageOutcome::Deferred,
+            super::status::ConsensusMessageReason::CommitPipelineActive,
+        );
+        debug!(
+            height = block_height,
+            view = block_view,
+            block = %block_hash,
+            deferred = self.deferred_block_sync_updates.len(),
+            reason,
+            commit_inflight = self.subsystems.commit.inflight.is_some(),
+            validation_inflight = self.subsystems.validation.inflight.len(),
+            "deferring block sync update while commit/validation work is in flight"
+        );
+    }
+
+    /// Replay deferred block-sync updates once commit/validation work is idle.
+    pub(super) fn try_replay_deferred_block_sync_updates(&mut self) -> bool {
+        if self.deferred_block_sync_updates.is_empty() {
+            return false;
+        }
+        if self.subsystems.commit.inflight.is_some()
+            || !self.subsystems.validation.inflight.is_empty()
+        {
+            return false;
+        }
+        let Some(key) = self
+            .deferred_block_sync_updates
+            .keys()
+            .next()
+            .cloned()
+        else {
+            return false;
+        };
+        let (height, view, block_hash) = key;
+        let Some(entry) = self.deferred_block_sync_updates.remove(&key) else {
+            return false;
+        };
+        debug!(
+            height,
+            view,
+            block = %block_hash,
+            deferred = self.deferred_block_sync_updates.len(),
+            "replaying deferred block sync update"
+        );
+        if let Err(err) = self.handle_block_sync_update(entry.update, entry.sender) {
+            warn!(
+                ?err,
+                height,
+                view,
+                block = %block_hash,
+                "failed to replay deferred block sync update"
+            );
+        }
+        true
+    }
+
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
     pub(super) fn handle_block_sync_update(
         &mut self,
@@ -312,6 +415,24 @@ impl Actor {
                 );
             }
         };
+        process_commit_votes(self);
+        if let Some(reason) = self.block_sync_update_deferral_reason() {
+            self.defer_block_sync_update(
+                super::message::BlockSyncUpdate {
+                    block,
+                    commit_votes: Vec::new(),
+                    commit_qc: incoming_qc,
+                    validator_checkpoint,
+                    stake_snapshot,
+                },
+                sender,
+                block_hash,
+                block_height,
+                block_view,
+                reason,
+            );
+            return Ok(());
+        }
         let persisted_roster = persisted_roster_for_block(
             self.state.as_ref(),
             &self.kura,
@@ -1476,20 +1597,33 @@ impl Actor {
         if !responded && self.runtime_da_enabled() {
             let key = Self::session_key(&block_hash, request_height, request_view);
             if let Some(init) = self.rebuild_rbc_init(key) {
-                self.send_fetch_pending_block_response(peer.clone(), BlockMessage::RbcInit(init));
+                let init_total_chunks = init.total_chunks;
                 let mut roster = self.rbc_session_roster(key);
                 if roster.is_empty() {
                     roster = self.ensure_rbc_session_roster(key);
                 }
-                if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
-                    if let Some((_, chunks)) = Self::rbc_payload_bundle(key, session, &roster) {
-                        for chunk in chunks {
-                            self.send_fetch_pending_block_response(
-                                peer.clone(),
-                                BlockMessage::RbcChunk(chunk),
-                            );
-                        }
-                    }
+                let chunks = self
+                    .subsystems
+                    .da_rbc
+                    .rbc
+                    .sessions
+                    .get(&key)
+                    .and_then(|session| Self::rbc_payload_bundle(key, session, &roster))
+                    .map(|(_, chunks)| chunks)
+                    .unwrap_or_default();
+                debug!(
+                    height = request_height,
+                    view = request_view,
+                    block = %block_hash,
+                    peer = %peer,
+                    roster_len = roster.len(),
+                    init_total_chunks,
+                    chunk_count = chunks.len(),
+                    "serving RBC INIT/chunks for missing-block fetch"
+                );
+                self.send_fetch_pending_block_response(peer.clone(), BlockMessage::RbcInit(init));
+                for chunk in chunks {
+                    self.send_fetch_pending_block_response(peer.clone(), BlockMessage::RbcChunk(chunk));
                 }
                 responded = true;
             }

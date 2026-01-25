@@ -54,6 +54,18 @@ const IZANAMI_FUTURE_VIEW_WINDOW: i64 = 2;
 const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 1_500;
 const IZANAMI_NPOS_TIMEOUT_COMMIT_MS: i64 = 2_000;
 const IZANAMI_NPOS_TIMEOUT_DA_MS: i64 = 2_000;
+const IZANAMI_PIPELINE_DYNAMIC_PREPASS: bool = true;
+const IZANAMI_PIPELINE_ACCESS_SET_CACHE_ENABLED: bool = true;
+const IZANAMI_PIPELINE_PARALLEL_OVERLAY: bool = true;
+const IZANAMI_PIPELINE_PARALLEL_APPLY: bool = true;
+const IZANAMI_PIPELINE_WORKERS: i64 = 8;
+const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_ED25519: i64 = 64;
+const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_SECP256K1: i64 = 64;
+const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_PQC: i64 = 32;
+const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_BLS: i64 = 16;
+const IZANAMI_VALIDATION_WORKER_THREADS: i64 = 4;
+const IZANAMI_VALIDATION_WORK_QUEUE_CAP: i64 = 16;
+const IZANAMI_VALIDATION_RESULT_QUEUE_CAP: i64 = 16;
 
 #[derive(Clone, Copy, Debug)]
 struct NposTiming {
@@ -183,15 +195,60 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             }
         }
     }
-    // Raise payload/RBC budgets and consensus timeouts to keep long Izanami runs stable.
+    // Tune pipeline/validation throughput and raise payload/RBC budgets to keep long Izanami runs stable.
     builder = builder.with_config_layer(|layer| {
         let as_i64 = |value: u64| -> i64 {
             i64::try_from(value).expect("NPoS timing fits into i64 milliseconds")
         };
         layer
             .write(
+                ["pipeline", "dynamic_prepass"],
+                IZANAMI_PIPELINE_DYNAMIC_PREPASS,
+            )
+            .write(
+                ["pipeline", "access_set_cache_enabled"],
+                IZANAMI_PIPELINE_ACCESS_SET_CACHE_ENABLED,
+            )
+            .write(
+                ["pipeline", "parallel_overlay"],
+                IZANAMI_PIPELINE_PARALLEL_OVERLAY,
+            )
+            .write(
+                ["pipeline", "parallel_apply"],
+                IZANAMI_PIPELINE_PARALLEL_APPLY,
+            )
+            .write(["pipeline", "workers"], IZANAMI_PIPELINE_WORKERS)
+            .write(
+                ["pipeline", "signature_batch_max_ed25519"],
+                IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_ED25519,
+            )
+            .write(
+                ["pipeline", "signature_batch_max_secp256k1"],
+                IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_SECP256K1,
+            )
+            .write(
+                ["pipeline", "signature_batch_max_pqc"],
+                IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_PQC,
+            )
+            .write(
+                ["pipeline", "signature_batch_max_bls"],
+                IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_BLS,
+            )
+            .write(
                 ["sumeragi", "queues", "block_payload"],
                 IZANAMI_BLOCK_PAYLOAD_QUEUE,
+            )
+            .write(
+                ["sumeragi", "worker", "validation_worker_threads"],
+                IZANAMI_VALIDATION_WORKER_THREADS,
+            )
+            .write(
+                ["sumeragi", "worker", "validation_work_queue_cap"],
+                IZANAMI_VALIDATION_WORK_QUEUE_CAP,
+            )
+            .write(
+                ["sumeragi", "worker", "validation_result_queue_cap"],
+                IZANAMI_VALIDATION_RESULT_QUEUE_CAP,
             )
             .write(
                 ["sumeragi", "pacemaker", "pending_stall_grace_ms"],
@@ -1338,7 +1395,19 @@ mod tests {
             }
             None
         };
-        let lookup = |path| layers.iter().find_map(|layer| read_i64(layer, path));
+        let read_bool = |layer: &Table, path: &[&str]| -> Option<bool> {
+            let mut current = layer;
+            for (idx, key) in path.iter().enumerate() {
+                let value = current.get(*key)?;
+                if idx + 1 == path.len() {
+                    return value.as_bool();
+                }
+                current = value.as_table()?;
+            }
+            None
+        };
+        let lookup = |path| layers.iter().rev().find_map(|layer| read_i64(layer, path));
+        let lookup_bool = |path| layers.iter().rev().find_map(|layer| read_bool(layer, path));
         let npos_timing = derive_npos_timing(&config);
         let npos_block_ms =
             i64::try_from(npos_timing.block_ms).expect("npos block time fits into i64");
@@ -1354,8 +1423,56 @@ mod tests {
         let npos_aggregator_ms = i64::try_from(npos_timing.aggregator_ms)
             .expect("npos aggregator timeout fits into i64");
         assert_eq!(
+            lookup_bool(&["pipeline", "dynamic_prepass"]),
+            Some(IZANAMI_PIPELINE_DYNAMIC_PREPASS)
+        );
+        assert_eq!(
+            lookup_bool(&["pipeline", "access_set_cache_enabled"]),
+            Some(IZANAMI_PIPELINE_ACCESS_SET_CACHE_ENABLED)
+        );
+        assert_eq!(
+            lookup_bool(&["pipeline", "parallel_overlay"]),
+            Some(IZANAMI_PIPELINE_PARALLEL_OVERLAY)
+        );
+        assert_eq!(
+            lookup_bool(&["pipeline", "parallel_apply"]),
+            Some(IZANAMI_PIPELINE_PARALLEL_APPLY)
+        );
+        assert_eq!(
+            lookup(&["pipeline", "workers"]),
+            Some(IZANAMI_PIPELINE_WORKERS)
+        );
+        assert_eq!(
+            lookup(&["pipeline", "signature_batch_max_ed25519"]),
+            Some(IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_ED25519)
+        );
+        assert_eq!(
+            lookup(&["pipeline", "signature_batch_max_secp256k1"]),
+            Some(IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_SECP256K1)
+        );
+        assert_eq!(
+            lookup(&["pipeline", "signature_batch_max_pqc"]),
+            Some(IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_PQC)
+        );
+        assert_eq!(
+            lookup(&["pipeline", "signature_batch_max_bls"]),
+            Some(IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_BLS)
+        );
+        assert_eq!(
             lookup(&["sumeragi", "queues", "block_payload"]),
             Some(IZANAMI_BLOCK_PAYLOAD_QUEUE)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "worker", "validation_worker_threads"]),
+            Some(IZANAMI_VALIDATION_WORKER_THREADS)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "worker", "validation_work_queue_cap"]),
+            Some(IZANAMI_VALIDATION_WORK_QUEUE_CAP)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "worker", "validation_result_queue_cap"]),
+            Some(IZANAMI_VALIDATION_RESULT_QUEUE_CAP)
         );
         assert_eq!(
             lookup(&["sumeragi", "pacemaker", "pending_stall_grace_ms"]),

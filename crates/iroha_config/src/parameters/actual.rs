@@ -3564,7 +3564,7 @@ pub struct SumeragiQueues {
     pub block_payload: usize,
     /// Capacity for the RBC chunk channel.
     pub rbc_chunks: usize,
-    /// Capacity for the block message channel (block sync updates, params, etc.).
+    /// Capacity for the fast-path block message channel (BlockCreated, FetchPendingBlock, RBC INIT, params).
     pub blocks: usize,
     /// Capacity for Sumeragi control-message channel.
     pub control: usize,
