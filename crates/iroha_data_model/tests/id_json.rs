@@ -17,7 +17,7 @@ fn account_id_json_roundtrip() {
     let (account_id, canonical, _) = parsed.into_parts();
 
     let json = norito::json::to_json(&account_id).expect("serialize account id");
-    assert_eq!(json, format!("\"{canonical}\""));
+    assert_eq!(json, format!("\"{canonical}@{}\"", account_id.domain()));
 
     let decoded: AccountId = norito::json::from_json(&json).expect("deserialize account id");
     assert_eq!(decoded, account_id);

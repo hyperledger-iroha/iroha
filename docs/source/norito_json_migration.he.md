@@ -49,7 +49,9 @@ translator: manual
 | `#[serde(flatten)]` | `#[norito(flatten)]` |
 | מבקר מותאם אישית | ליישם `NoritoDeserialize` ידנית או להשתמש ב-`MapVisitor` / `SeqVisitor` |
 
-> **סטטוס (7 בנובמבר 2025):** newtypes של מזהים טקסטואליים (כגון `AccountId`, ‏`AssetId`, ‏`DomainId`, ‏`NftId`, ‏`TriggerId`) מיישמים כעת `FastJsonWrite` + `JsonDeserialize` באמצעות המאקרו `string_id!`, כך ש-`norito::json::to_json` / `from_json` נותרים מקוריים ל-`IH58`.
+> **סטטוס (7 בנובמבר 2025):** newtypes של מזהים טקסטואליים (כגון `DomainId`, ‏`AssetDefinitionId`, ‏`NftId`, ‏`TriggerId`) מיישמים כעת `FastJsonWrite` + `JsonDeserialize` באמצעות המאקרו `string_id!`, כך ש-`norito::json::to_json` / `from_json` נשארים עקביים לייצוגים קנוניים.
+>
+> **סטטוס (25 בינואר 2026):** `AccountId`/`AssetId` JSON כולל כעת סיומת `@domain` מפורשת (למשל `IH58@domain`, `asset##IH58@domain`) כדי שהפענוח לא יישען על domain‑selector resolver. קלטי alias כגון `label@domain` עדיין נתמכים כאשר resolvers מוגדרים.
 
 > **סטטוס (7 בנובמבר 2025):** `IpfsPath` קיבל `FastJsonWrite` ו-`JsonDeserialize` של Norito, עם בדיקות רגרסיה לזוגות תקפים ופסילה של מסלולים לא חוקיים. מימושי Serde נשארים זמנית.
 

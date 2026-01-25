@@ -54,13 +54,17 @@ Serde derives, visitors, JSON DOM helpers, and config loaders.
 | `#[serde(flatten)]` | Supported via `#[norito(flatten)]` on structs and flattened enums. |
 | Custom deserialize visitor | Implement `norito::NoritoDeserialize` manually or use `json::MapVisitor` / `json::SeqVisitor`. |
 
-> **Status (Nov 7, 2025):** String-backed identifier newtypes (`AccountId`,
-> `AssetId`, `DomainId`, `NftId`, `TriggerId`, …) now implement Norito
+> **Status (Nov 7, 2025):** String-backed identifier newtypes (`DomainId`,
+> `AssetDefinitionId`, `NftId`, `TriggerId`, …) now implement Norito
 > `FastJsonWrite` + `JsonDeserialize` through the shared `string_id!` macro.
-> Downstream callers can rely on `norito::json::to_json` / `from_json` for the
-> canonical IH58 formatting (no `@domain` suffix). Alias inputs such as
-> `label@domain` remain parseable via resolvers where configured while Serde
-> implementations remain temporarily for migration paths.
+> Downstream callers can rely on `norito::json::to_json` / `from_json` for
+> canonical string formatting while Serde implementations remain temporarily for
+> migration paths.
+>
+> **Status (Jan 25, 2026):** `AccountId`/`AssetId` JSON now includes an explicit
+> `@domain` suffix (e.g., `IH58@domain`, `asset##IH58@domain`) so decoding does
+> not rely on a domain-selector resolver. Alias inputs such as `label@domain`
+> remain parseable via resolvers where configured.
 
 > **Status (Nov 7, 2025):** `IpfsPath` gained Norito `FastJsonWrite` and
 > `JsonDeserialize` impls backed by the existing parser, with regression tests
