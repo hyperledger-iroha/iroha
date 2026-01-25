@@ -841,11 +841,12 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::BlockCreated(_) => IngressPolicy::critical(),
                 BlockMessage::RbcInit(_)
                 | BlockMessage::RbcReady(_)
-                | BlockMessage::RbcDeliver(_) => IngressPolicy::critical_with_rbc_sessions(),
+                | BlockMessage::RbcDeliver(_)
+                | BlockMessage::RbcChunk(_) => IngressPolicy::critical_with_rbc_sessions(),
                 BlockMessage::ConsensusParams(_) => IngressPolicy::limited(),
-                BlockMessage::BlockSyncUpdate(_)
-                | BlockMessage::ExecWitness(_)
-                | BlockMessage::RbcChunk(_) => IngressPolicy::bulk(),
+                BlockMessage::BlockSyncUpdate(_) | BlockMessage::ExecWitness(_) => {
+                    IngressPolicy::bulk()
+                }
             },
             iroha_core::NetworkMessage::SumeragiControlFlow(_) => IngressPolicy::critical(),
             iroha_core::NetworkMessage::BlockSync(_) => IngressPolicy::bulk(),
@@ -2472,6 +2473,7 @@ mod network_relay_tests {
         let proposal = proposal_msg();
         let control_flow = control_flow_msg();
         let init = rbc_init_msg(0x01, 2, 0);
+        let chunk = rbc_chunk_msg(0x01, 2, 0);
         let ready = rbc_ready_msg(0x01, 2, 0);
         let deliver = rbc_deliver_msg(0x01, 2, 0);
         let mut limiter = ConsensusIngressLimiter::new(
@@ -2509,6 +2511,7 @@ mod network_relay_tests {
         assert_eq!(limiter.should_drop(&peer, &proposal, 1), None);
         assert_eq!(limiter.should_drop(&peer, &control_flow, 1), None);
         assert_eq!(limiter.should_drop(&peer, &init, 1), None);
+        assert_eq!(limiter.should_drop(&peer, &chunk, 1), None);
         assert_eq!(limiter.should_drop(&peer, &ready, 1), None);
         assert_eq!(limiter.should_drop(&peer, &deliver, 1), None);
     }
@@ -2668,7 +2671,6 @@ mod network_relay_tests {
         let peer = sample_peer();
         assert_bulk(&peer, &block_sync_update_msg());
         assert_bulk(&peer, &exec_witness_msg());
-        assert_bulk(&peer, &rbc_chunk_msg(0x01, 2, 0));
     }
 
     #[test]
@@ -2784,6 +2786,7 @@ mod network_relay_tests {
         let hint = proposal_hint_msg();
         let proposal = proposal_msg();
         let control_flow = control_flow_msg();
+        let chunk = rbc_chunk_msg(0x01, 2, 0);
         let ready = rbc_ready_msg(0x01, 2, 0);
         let deliver = rbc_deliver_msg(0x01, 2, 0);
         let mut limiter = ConsensusIngressLimiter::new(
@@ -2820,6 +2823,7 @@ mod network_relay_tests {
         assert_eq!(limiter.should_drop(&peer, &hint, 8), None);
         assert_eq!(limiter.should_drop(&peer, &proposal, 8), None);
         assert_eq!(limiter.should_drop(&peer, &control_flow, 8), None);
+        assert_eq!(limiter.should_drop(&peer, &chunk, 8), None);
         assert_eq!(limiter.should_drop(&peer, &ready, 8), None);
         assert_eq!(limiter.should_drop(&peer, &deliver, 8), None);
     }

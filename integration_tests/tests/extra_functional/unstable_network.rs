@@ -384,6 +384,22 @@ fn scaled_timeout(base: Duration, peer_count: usize) -> Duration {
     base.saturating_mul(scale)
 }
 
+fn non_faulty_sync_timeout(
+    sync_timeout: Duration,
+    pipeline_time: Duration,
+    faulty_peers: usize,
+) -> Duration {
+    if faulty_peers <= 1 {
+        return sync_timeout;
+    }
+    // Keep relay partitions shorter than RBC session TTLs and idle P2P timeouts,
+    // otherwise non-faulty peers can churn through view changes without progress.
+    let cap = pipeline_time
+        .saturating_mul(6)
+        .saturating_add(Duration::from_secs(5));
+    sync_timeout.min(cap)
+}
+
 async fn start_network_under_relay(
     network: &Network,
     relay: &P2pRelay,
@@ -914,6 +930,11 @@ impl UnstableNetwork {
         }
 
         let sync_timeout = scaled_timeout(network.sync_timeout(), peers.len());
+        let relay_pause = non_faulty_sync_timeout(
+            sync_timeout,
+            network.pipeline_time(),
+            self.n_faulty_peers,
+        );
         let mint_asset = Mint::asset_numeric(
             Numeric::one(),
             AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone()),
@@ -943,7 +964,7 @@ impl UnstableNetwork {
 
         let target_height = ctx.init_blocks + (round_index as u64) + 1;
         let non_faulty_sync = timeout(
-            sync_timeout,
+            relay_pause,
             once_blocks_sync(
                 network.peers().iter().filter(|x| !faulty.contains(x)),
                 BlockHeight::predicate_non_empty(target_height),
@@ -1067,6 +1088,17 @@ mod tests {
         let commit_quorum = commit_quorum_from_len(peer_count);
         let fault_budget = UnstableNetwork::fault_budget_for_peer_count(peer_count);
         assert_eq!(fault_budget, peer_count - commit_quorum);
+    }
+
+    #[test]
+    fn non_faulty_sync_timeout_caps_multi_faults() {
+        let sync_timeout = Duration::from_secs(180);
+        let pipeline_time = Duration::from_secs(9);
+        let capped = non_faulty_sync_timeout(sync_timeout, pipeline_time, 2);
+        assert!(capped < sync_timeout);
+        assert!(capped <= pipeline_time * 6 + Duration::from_secs(5));
+        let uncapped = non_faulty_sync_timeout(sync_timeout, pipeline_time, 1);
+        assert_eq!(uncapped, sync_timeout);
     }
 }
 
