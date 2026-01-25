@@ -1512,10 +1512,10 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
             credit_record.track_low_balance(low_balance_threshold, record.window_end_epoch);
 
             let penalty_policy = &state_transaction.gov.sorafs_penalty;
-            let pdp_fail =
-                record.pdp_challenges > 0 && record.pdp_failures > penalty_policy.max_pdp_failures;
-            let potr_fail =
-                record.potr_windows > 0 && record.potr_breaches > penalty_policy.max_potr_breaches;
+            // Treat failure counters as authoritative even when challenge/window counters are
+            // missing, so we don't suppress proof-failure penalties and alerts.
+            let pdp_fail = record.pdp_failures > penalty_policy.max_pdp_failures;
+            let potr_fail = record.potr_breaches > penalty_policy.max_potr_breaches;
             let proof_failure = pdp_fail || potr_fail;
             let penalties_enabled =
                 penalty_policy.penalty_bond_bps > 0 && penalty_policy.strike_threshold > 0;
@@ -5038,6 +5038,98 @@ mod sorafs_tests {
         assert_eq!(credit_snapshot.under_delivery_strikes, 0);
         assert_eq!(credit_snapshot.last_penalty_epoch, Some(window));
 
+        let ledger_snapshot = stx
+            .world
+            .capacity_fee_ledger
+            .get(&provider)
+            .expect("ledger snapshot");
+        assert_eq!(ledger_snapshot.penalty_events, 1);
+        assert_eq!(
+            ledger_snapshot.penalty_slashed_nano,
+            credit_snapshot.slashed_nano
+        );
+    }
+
+    #[test]
+    fn record_capacity_telemetry_penalises_pdp_failures_without_challenge_count() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+
+        stx.gov.sorafs_penalty = iroha_config::parameters::actual::SorafsPenaltyPolicy {
+            utilisation_floor_bps: 7_500,
+            uptime_floor_bps: 9_000,
+            por_success_floor_bps: 9_000,
+            strike_threshold: 3,
+            penalty_bond_bps: 5_000,
+            cooldown_windows: 1,
+            max_pdp_failures: 0,
+            max_potr_breaches: 0,
+        };
+
+        let (provider, record) = sample_capacity_record();
+        RegisterCapacityDeclaration { record }
+            .execute(&alice(), &mut stx)
+            .expect("register capacity declaration");
+
+        let mut schedule = PricingScheduleRecord::launch_default();
+        schedule.credit = CreditPolicy {
+            settlement_window_secs: SECONDS_PER_BILLING_MONTH,
+            settlement_grace_secs: 0,
+            low_balance_alert_bps: 1_000,
+        };
+        schedule.collateral = CollateralPolicy {
+            multiplier_bps: 20_000,
+            onboarding_discount_bps: 1,
+            onboarding_period_secs: 0,
+        };
+        SetPricingSchedule { schedule }
+            .execute(&alice(), &mut stx)
+            .expect("set pricing schedule");
+
+        let credit = ProviderCreditRecord::new(
+            provider,
+            10_000_000_000,
+            6_000_000_000,
+            0,
+            0,
+            0,
+            0,
+            Metadata::default(),
+        );
+        UpsertProviderCredit { record: credit }
+            .execute(&alice(), &mut stx)
+            .expect("seed provider credit");
+
+        let window = SECONDS_PER_BILLING_MONTH;
+        record_capacity_window_with_proofs(
+            &mut stx,
+            provider,
+            0,
+            window,
+            100,
+            100,
+            80,
+            10_000,
+            10_000,
+            0,
+            ProofWindowCounters {
+                pdp_challenges: 0,
+                pdp_failures: 1,
+                ..ProofWindowCounters::default()
+            },
+        );
+
+        let credit_snapshot = stx
+            .world
+            .provider_credit_ledger
+            .get(&provider)
+            .expect("credit snapshot");
+        assert!(
+            credit_snapshot.slashed_nano > 0,
+            "PDP failure without challenges should still slash collateral"
+        );
+        assert_eq!(credit_snapshot.last_penalty_epoch, Some(window));
         let ledger_snapshot = stx
             .world
             .capacity_fee_ledger

@@ -2,6 +2,12 @@
 
 Last update: 2026-01-25
 
+- SoraFS telemetry: treat PDP/PoTR failure counters as authoritative even when challenge/window counts are zero; add coverage for PDP failures reported without challenge counts so proof-health penalties/alerts aren’t suppressed.
+- Tests: not run (local `cargo test` invocations were terminated with SIGTERM in this environment).
+
+- Staking ISI: apply the transaction before committing the block so CancelConsensusEvidencePenalty persists `penalty_cancelled`; fix Kura budget test compile by restoring `budget_limit` from config in `store_block_rejects_when_budget_exceeded`.
+- Tests: `cargo test -p iroha_core smartcontracts::isi::staking::tests::cancel_consensus_evidence_penalty_marks_record -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
+
 - SoraFS dispute test helper now uses `UptimeBreach` (no replication order required) so duplicate/insert dispute tests stay valid after enforcing replication-order IDs for `ReplicationShortfall`.
 - Tests: not run (local cargo invocations were terminated with SIGTERM in this environment; no other processes were stopped).
 
