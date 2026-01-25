@@ -728,6 +728,16 @@ impl Actor {
                     .observe_commit_stage_ms(crate::telemetry::CommitStage::Persist, ms);
             }
         }
+        if timings.qc_verify_ms.is_some() || timings.persist_ms.is_some() {
+            debug!(
+                height = pending_height,
+                view = pending_view,
+                block = %block_hash,
+                qc_verify_ms = ?timings.qc_verify_ms,
+                kura_persist_ms = ?timings.persist_ms,
+                "commit stage timings"
+            );
+        }
 
         match outcome {
             CommitOutcome::Success {

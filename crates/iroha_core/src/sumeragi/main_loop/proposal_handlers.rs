@@ -1074,9 +1074,14 @@ impl Actor {
             committed_height,
             "received BlockCreated"
         );
-        if let Some(bundle) = block.da_commitments() {
+        let da_bundle_ms = if let Some(bundle) = block.da_commitments() {
+            let da_start = Instant::now();
             self.validate_da_bundle(bundle)?;
-        }
+            u64::try_from(da_start.elapsed().as_millis()).unwrap_or(u64::MAX)
+        } else {
+            0
+        };
+        let hint_start = Instant::now();
         let mut cached_hint = self
             .subsystems
             .propose
@@ -1091,6 +1096,8 @@ impl Actor {
             .copied();
         let mut payload_bytes = None;
         let mut payload_hash = None;
+        let mut payload_bytes_ms = 0u64;
+        let mut payload_hash_ms = 0u64;
         let mut proposal_mismatch = None;
         let parent_view = header
             .prev_block_hash()
@@ -1151,8 +1158,14 @@ impl Actor {
         }
         if cached_hint.is_none() {
             if let Some(proposal) = cached_proposal.as_ref() {
+                let bytes_start = Instant::now();
                 let computed_bytes = block_payload_bytes(&block);
+                payload_bytes_ms =
+                    u64::try_from(bytes_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let hash_start = Instant::now();
                 let computed_hash = Hash::new(&computed_bytes);
+                payload_hash_ms =
+                    u64::try_from(hash_start.elapsed().as_millis()).unwrap_or(u64::MAX);
                 payload_bytes = Some(computed_bytes);
                 payload_hash = Some(computed_hash);
                 let mismatch = detect_proposal_mismatch(proposal, &header, &computed_hash);
@@ -1333,10 +1346,10 @@ impl Actor {
                                 view,
                                 block = %block_hash,
                                 "accepting BlockCreated without hint: locked ancestry unknown"
-                            );
-                        }
-                    }
-                } else {
+                    );
+                }
+            }
+        } else {
                     debug!(
                         locked_qc_height = lock.height,
                         locked_qc_view = lock.view,
@@ -1349,8 +1362,28 @@ impl Actor {
                 }
             }
         }
-        let payload_bytes = payload_bytes.unwrap_or_else(|| block_payload_bytes(&block));
-        let payload_hash = payload_hash.unwrap_or_else(|| Hash::new(&payload_bytes));
+        let hint_validation_ms =
+            u64::try_from(hint_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let payload_bytes = match payload_bytes {
+            Some(payload_bytes) => payload_bytes,
+            None => {
+                let bytes_start = Instant::now();
+                let computed_bytes = block_payload_bytes(&block);
+                payload_bytes_ms =
+                    u64::try_from(bytes_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                computed_bytes
+            }
+        };
+        let payload_hash = match payload_hash {
+            Some(payload_hash) => payload_hash,
+            None => {
+                let hash_start = Instant::now();
+                let computed_hash = Hash::new(&payload_bytes);
+                payload_hash_ms =
+                    u64::try_from(hash_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                computed_hash
+            }
+        };
         if let Some(reason) = proposal_mismatch
             .or_else(|| {
                 cached_proposal
@@ -1363,7 +1396,8 @@ impl Actor {
             // Keep processing the payload after invalidating a stale proposal.
         }
         let session_key = Self::session_key(&block_hash, height, view);
-        if da_enabled {
+        let (rbc_seed_ms, rbc_hydrate_ms) = if da_enabled {
+            let mut seed_ms = 0u64;
             if !self
                 .subsystems
                 .da_rbc
@@ -1382,20 +1416,28 @@ impl Actor {
                     .rbc
                     .pending
                     .contains_key(&session_key);
+                let seed_start = Instant::now();
                 self.seed_rbc_session_from_block(
                     session_key,
                     &block,
                     payload_hash,
                     rebroadcast_missing_init,
                 )?;
+                seed_ms = u64::try_from(seed_start.elapsed().as_millis()).unwrap_or(u64::MAX);
             }
+            let hydrate_start = Instant::now();
             self.hydrate_rbc_session_from_block(
                 session_key,
                 &payload_bytes,
                 payload_hash,
                 sender.as_ref(),
             )?;
-        }
+            let hydrate_ms =
+                u64::try_from(hydrate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+            (seed_ms, hydrate_ms)
+        } else {
+            (0, 0)
+        };
         if self
             .pending
             .pending_processing
@@ -1575,6 +1617,7 @@ impl Actor {
         let (consensus_mode, _, _) = self.consensus_context_for_height(height);
         let commit_topology =
             self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+        let qc_replay_start = Instant::now();
         if !commit_topology.is_empty() {
             let topology = super::network_topology::Topology::new(commit_topology.clone());
             let epochs = distinct_epochs_for_block_votes(
@@ -1605,7 +1648,22 @@ impl Actor {
                 let _ = self.handle_qc(qc);
             }
         }
+        let qc_replay_ms =
+            u64::try_from(qc_replay_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.request_commit_pipeline();
+        debug!(
+            height,
+            view,
+            block = %block_hash,
+            da_bundle_ms,
+            hint_validation_ms,
+            payload_bytes_ms,
+            payload_hash_ms,
+            rbc_seed_ms,
+            rbc_hydrate_ms,
+            qc_replay_ms,
+            "block created substep timings"
+        );
         Ok(())
     }
     pub(super) fn invalidate_proposal(

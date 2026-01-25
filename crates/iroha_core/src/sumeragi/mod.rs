@@ -590,6 +590,23 @@ mod tests {
         InboundBlockMessage::new(msg, None)
     }
 
+    #[test]
+    fn inbound_block_message_tracks_queue_latency() {
+        let msg = BlockMessage::ConsensusParams(message::ConsensusParamsAdvert {
+            collectors_k: 1,
+            redundant_send_r: 1,
+            membership: None,
+        });
+        let inbound = InboundBlockMessage::new(msg, None);
+        assert!(inbound.queue_latency_ms().is_none());
+
+        let queued = inbound.with_enqueue_metadata(status::WorkerQueueKind::Blocks);
+        let (queue, _latency_ms) = queued
+            .queue_latency_ms()
+            .expect("queue metadata should be present");
+        assert_eq!(queue, status::WorkerQueueKind::Blocks);
+    }
+
     fn backdate(now: Instant, duration: Duration) -> Instant {
         now.checked_sub(duration).unwrap_or(now)
     }
@@ -7373,11 +7390,31 @@ enum IngressMode {
 pub(crate) struct InboundBlockMessage {
     message: BlockMessage,
     sender: Option<PeerId>,
+    enqueued_at: Option<Instant>,
+    queue: Option<status::WorkerQueueKind>,
 }
 
 impl InboundBlockMessage {
     fn new(message: BlockMessage, sender: Option<PeerId>) -> Self {
-        Self { message, sender }
+        Self {
+            message,
+            sender,
+            enqueued_at: None,
+            queue: None,
+        }
+    }
+
+    fn with_enqueue_metadata(mut self, queue: status::WorkerQueueKind) -> Self {
+        self.enqueued_at = Some(Instant::now());
+        self.queue = Some(queue);
+        self
+    }
+
+    fn queue_latency_ms(&self) -> Option<(status::WorkerQueueKind, u64)> {
+        let enqueued_at = self.enqueued_at?;
+        let queue = self.queue?;
+        let elapsed_ms = u64::try_from(enqueued_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+        Some((queue, elapsed_ms))
     }
 }
 
@@ -7649,44 +7686,48 @@ impl SumeragiHandle {
                                  msg: InboundBlockMessage,
                                  kind: &'static str,
                                  queue: status::WorkerQueueKind,
-                                 mode: IngressMode| match mode {
-            IngressMode::Blocking => {
-                wake();
-                let start = Instant::now();
-                match tx.send(msg) {
+                                 mode: IngressMode| {
+            let msg = msg.with_enqueue_metadata(queue);
+            match mode {
+                IngressMode::Blocking => {
+                    wake();
+                    let start = Instant::now();
+                    match tx.send(msg) {
+                        Ok(()) => {
+                            status::record_worker_queue_enqueue(queue);
+                            status::record_worker_queue_blocked(queue, start.elapsed());
+                            true
+                        }
+                        Err(err) => {
+                            status::record_worker_queue_drop(queue);
+                            iroha_logger::warn!(?err, kind, "Sumeragi actor dropped block message");
+                            false
+                        }
+                    }
+                }
+                IngressMode::NonBlocking => match tx.try_send(msg) {
                     Ok(()) => {
                         status::record_worker_queue_enqueue(queue);
-                        status::record_worker_queue_blocked(queue, start.elapsed());
+                        wake();
                         true
                     }
-                    Err(err) => {
+                    Err(mpsc::TrySendError::Full(msg)) => {
                         status::record_worker_queue_drop(queue);
-                        iroha_logger::warn!(?err, kind, "Sumeragi actor dropped block message");
+                        log_drop(kind, queue, &msg, "channel_full");
                         false
                     }
-                }
+                    Err(mpsc::TrySendError::Disconnected(msg)) => {
+                        status::record_worker_queue_drop(queue);
+                        log_drop(kind, queue, &msg, "channel_disconnected");
+                        false
+                    }
+                },
             }
-            IngressMode::NonBlocking => match tx.try_send(msg) {
-                Ok(()) => {
-                    status::record_worker_queue_enqueue(queue);
-                    wake();
-                    true
-                }
-                Err(mpsc::TrySendError::Full(msg)) => {
-                    status::record_worker_queue_drop(queue);
-                    log_drop(kind, queue, &msg, "channel_full");
-                    false
-                }
-                Err(mpsc::TrySendError::Disconnected(msg)) => {
-                    status::record_worker_queue_drop(queue);
-                    log_drop(kind, queue, &msg, "channel_disconnected");
-                    false
-                }
-            },
         };
         let InboundBlockMessage {
             message: msg,
             sender,
+            ..
         } = inbound;
         match msg {
             BlockMessage::QcVote(vote) => {
