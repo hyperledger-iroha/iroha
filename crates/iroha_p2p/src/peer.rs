@@ -1354,7 +1354,7 @@ pub mod handles {
 
     /// Start Peer in `state::Connecting` state
     #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
-    pub(crate) fn connecting<T: Pload, K: Kex, E: Enc>(
+    pub(crate) fn connecting<T: Pload + crate::network::message::ClassifyTopic, K: Kex, E: Enc>(
         peer_addr: SocketAddr,
         our_public_address: SocketAddr,
         key_pair: KeyPair,
@@ -1409,7 +1409,7 @@ pub mod handles {
 
     /// Start Peer in `state::ConnectedFrom` state
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn connected_from<T: Pload, K: Kex, E: Enc>(
+    pub(crate) fn connected_from<T: Pload + crate::network::message::ClassifyTopic, K: Kex, E: Enc>(
         our_public_address: SocketAddr,
         key_pair: KeyPair,
         connection: Connection,
@@ -1525,7 +1525,8 @@ mod run {
     use tokio::time::Instant;
     use tracing;
 
-    use crate::Priority;
+    use crate::{Priority, sampler::LogSampler};
+    use crate::network::message::{ClassifyTopic, Topic};
 
     use super::{
         cryptographer::Cryptographer,
@@ -1547,6 +1548,7 @@ mod run {
     const LOW_TOPIC_COUNT: usize = 6;
     const HI_BUDGET_RESET: u8 = 32;
     const HI_BUDGET_FALLBACK: u8 = 1;
+    const INBOUND_SEND_WARN_MS: u64 = 250;
 
     fn low_topic_label(topic: LowTopic) -> &'static str {
         match topic {
@@ -1562,6 +1564,20 @@ mod run {
     fn bump_low_rr(low_rr: &mut u8, served_idx: usize) {
         *low_rr = u8::try_from((served_idx + 1) % LOW_TOPIC_COUNT)
             .expect("LOW_TOPIC_COUNT must fit in u8");
+    }
+
+    fn inbound_priority_from_topic(topic: Topic) -> Priority {
+        match topic {
+            Topic::Consensus | Topic::ConsensusPayload | Topic::Control => Priority::High,
+            Topic::ConsensusChunk
+            | Topic::BlockSync
+            | Topic::TxGossip
+            | Topic::TxGossipRestricted
+            | Topic::PeerGossip
+            | Topic::TrustGossip
+            | Topic::Health
+            | Topic::Other => Priority::Low,
+        }
     }
 
     fn try_recv_low_rr<T>(
@@ -1678,7 +1694,7 @@ mod run {
     /// Peer task.
     #[allow(clippy::too_many_lines)]
     #[log(skip_all, fields(connection = &peer.log_description(), conn_id = peer.connection_id(), peer, disambiguator))]
-    pub(super) async fn run<T: Pload, K: Kex, E: Enc, P: Entrypoint<K, E>>(
+    pub(super) async fn run<T: Pload + ClassifyTopic, K: Kex, E: Enc, P: Entrypoint<K, E>>(
         RunPeerArgs {
             peer,
             service_message_sender,
@@ -1785,7 +1801,7 @@ mod run {
                 );
                 return;
             }
-            let Ok(peer_message_sender) = peer_message_receiver.await else {
+            let Ok(peer_message_senders) = peer_message_receiver.await else {
                 // NOTE: this is not considered as error, because network might decide not to connect peer.
                 iroha_logger::debug!(
                     "Network decide not to connect peer."
@@ -1798,6 +1814,7 @@ mod run {
             let mut message_reader = MessageReader::new(read, cryptographer.clone(), max_frame_bytes);
             // Sampler for repeated read/parse errors to avoid log floods from malformed peers
             let mut read_err_sampler = LogSampler::new();
+            let mut recv_backpressure_sampler = LogSampler::new();
             let mut message_sender = MessageSender::new(write, cryptographer, max_frame_bytes);
 
             let mut idle_interval = tokio::time::interval_at(Instant::now() + idle_timeout, idle_timeout);
@@ -1919,12 +1936,38 @@ mod run {
                             }
                             Message::Data(payload) => {
                                 iroha_logger::trace!("Received peer message");
+                                let topic = payload.topic();
+                                let inbound_priority = inbound_priority_from_topic(topic);
                                 let peer_message = PeerMessage {
                                     peer: peer_id.clone(),
                                     payload,
                                     payload_bytes: encoded_len,
                                 };
-                                if peer_message_sender.send(peer_message).await.is_err() {
+                                let send_start = Instant::now();
+                                let send_result = match inbound_priority {
+                                    Priority::High => peer_message_senders.high.send(peer_message).await,
+                                    Priority::Low => peer_message_senders.low.send(peer_message).await,
+                                };
+                                let send_wait_ms =
+                                    u64::try_from(send_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                                if matches!(inbound_priority, Priority::High)
+                                    && send_wait_ms >= INBOUND_SEND_WARN_MS
+                                {
+                                    if let Some(suppressed) = recv_backpressure_sampler
+                                        .should_log(tokio::time::Duration::from_millis(500))
+                                    {
+                                        iroha_logger::warn!(
+                                            peer = %peer_id,
+                                            conn_id,
+                                            ?topic,
+                                            wait_ms = send_wait_ms,
+                                            payload_bytes = encoded_len,
+                                            suppressed,
+                                            "Inbound high-priority frame waited on dispatch channel"
+                                        );
+                                    }
+                                }
+                                if send_result.is_err() {
                                     iroha_logger::error!("Network dropped peer message channel.");
                                     break;
                                 }
@@ -2504,6 +2547,32 @@ mod run {
 
             assert!(msg.is_none());
             assert_eq!(hi_budget, HI_BUDGET_FALLBACK);
+        }
+
+        #[test]
+        fn inbound_priority_marks_control_planes_high() {
+            assert_eq!(
+                super::inbound_priority_from_topic(crate::network::message::Topic::Consensus),
+                Priority::High
+            );
+            assert_eq!(
+                super::inbound_priority_from_topic(
+                    crate::network::message::Topic::ConsensusPayload
+                ),
+                Priority::High
+            );
+            assert_eq!(
+                super::inbound_priority_from_topic(crate::network::message::Topic::Control),
+                Priority::High
+            );
+            assert_eq!(
+                super::inbound_priority_from_topic(crate::network::message::Topic::ConsensusChunk),
+                Priority::Low
+            );
+            assert_eq!(
+                super::inbound_priority_from_topic(crate::network::message::Topic::TxGossip),
+                Priority::Low
+            );
         }
 
         struct FakeRead {
@@ -4531,13 +4600,19 @@ pub mod message {
         /// Handle for peer to send messages and terminate command
         pub ready_peer_handle: handles::PeerHandle<T>,
         /// Channel to send peer messages channel
-        pub peer_message_sender: oneshot::Sender<mpsc::Sender<PeerMessage<T>>>,
+        pub peer_message_sender: oneshot::Sender<PeerMessageSenders<T>>,
         /// Disambiguator of connection (equal for both peers)
         pub disambiguator: u64,
         /// Relay role advertised during handshake.
         pub relay_role: RelayRole,
         /// Whether the remote supports trust gossip.
         pub trust_gossip: bool,
+    }
+
+    /// High/low priority senders for inbound peer messages.
+    pub struct PeerMessageSenders<T: Pload> {
+        pub high: mpsc::Sender<PeerMessage<T>>,
+        pub low: mpsc::Sender<PeerMessage<T>>,
     }
 
     /// Messages received from Peer along with their encoded size (in bytes).
