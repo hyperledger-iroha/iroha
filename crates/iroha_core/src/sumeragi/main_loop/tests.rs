@@ -19659,6 +19659,163 @@ async fn ensure_rbc_session_from_pending_block_seeds_session() {
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_seed_result_merges_stub_session() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let height = harness
+        .actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0u64;
+    let parent = harness.actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let session_key = Actor::session_key(&block_hash, height, view);
+    let pending = PendingBlock::new(block.clone(), payload_hash, height, view);
+    harness
+        .actor
+        .pending
+        .pending_blocks
+        .insert(block_hash, pending);
+
+    let (work_tx, work_rx) = mpsc::sync_channel(1);
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    harness.actor.subsystems.da_rbc.rbc.seed_tx = Some(work_tx);
+    harness.actor.subsystems.da_rbc.rbc.seed_rx = Some(result_rx);
+
+    let seeded = harness
+        .actor
+        .ensure_rbc_session_from_pending_block(session_key, false)
+        .expect("seed from pending");
+    assert!(seeded, "pending block should enqueue seed work");
+
+    let session = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&session_key)
+        .expect("stub session");
+    assert!(
+        session.expected_chunk_digests.is_none(),
+        "stub session should not include digests"
+    );
+    assert_eq!(session.payload_hash(), Some(payload_hash));
+
+    let work = work_rx.try_recv().expect("seed work queued");
+    assert_eq!(work.key, session_key);
+    let seeded_session = Actor::build_rbc_session_from_payload(
+        &work.payload_bytes,
+        work.payload_hash,
+        work.chunk_size,
+        work.epoch,
+    )
+    .expect("seed session");
+    result_tx
+        .send(super::rbc::RbcSeedResult {
+            key: work.key,
+            payload_hash: work.payload_hash,
+            outcome: Ok(seeded_session),
+        })
+        .expect("send seed result");
+
+    assert!(
+        harness.actor.poll_rbc_seed_results_inner(),
+        "seed polling should report progress"
+    );
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .seed_inflight
+            .contains_key(&session_key),
+        "seed inflight should be cleared after merge"
+    );
+    let session = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&session_key)
+        .expect("seeded session");
+    assert_eq!(session.payload_hash(), Some(payload_hash));
+    assert!(
+        session.expected_chunk_digests.is_some(),
+        "seeded session should include digests"
+    );
+    assert_eq!(
+        session.received_chunks(),
+        session.total_chunks(),
+        "seeded session should contain the full payload"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn clean_rbc_sessions_for_block_clears_seed_inflight() {
+    let mut harness = test_actor_harness(4).await;
+    let height = harness
+        .actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0u64;
+    let parent = harness.actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let session_key = Actor::session_key(&block_hash, height, view);
+
+    harness.actor.subsystems.da_rbc.rbc.seed_inflight.insert(
+        session_key,
+        RbcSeedIntent {
+            rebroadcast_missing_init: false,
+        },
+    );
+    assert!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .seed_inflight
+            .contains_key(&session_key),
+        "seed inflight should be present before cleanup"
+    );
+
+    harness
+        .actor
+        .clean_rbc_sessions_for_block(block_hash, height);
+
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .seed_inflight
+            .contains_key(&session_key),
+        "seed inflight should be cleared for stale blocks"
+    );
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn kura_and_state_alignment_requires_matching_tip() {
     let pending_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32]));

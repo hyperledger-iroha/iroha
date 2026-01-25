@@ -2,6 +2,9 @@
 
 Last update: 2026-01-25
 
+- Sumeragi RBC: queue BlockCreated seed work onto the RBC seed worker, insert stub sessions, and merge results asynchronously to cut per-message latency; add `rbc_seed_result_merges_stub_session` coverage.
+- Tests: not run (not requested).
+
 - P2P ingress: use configured `p2p_queue_cap_high/low` for inbound peer dispatch buffers to avoid control-plane stalls; add unit coverage for peer-message channel capacity and update P2P queue docs.
 - Tests: not run (not requested).
 

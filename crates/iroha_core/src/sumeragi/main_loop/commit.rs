@@ -4297,6 +4297,11 @@ impl Actor {
             .rbc
             .persist_inflight
             .retain(|(hash, _, _)| *hash != block_hash);
+        self.subsystems
+            .da_rbc
+            .rbc
+            .seed_inflight
+            .retain(|(hash, _, _), _| *hash != block_hash);
 
         let telemetry_ref = self.telemetry_handle();
         if !lane_totals.is_empty() || !dataspace_totals.is_empty() {
