@@ -2,6 +2,12 @@
 
 Last update: 2026-01-25
 
+- Consensus ingress: classify RBC chunks as critical (with RBC-session tracking) so chunk delivery is not throttled by bulk caps; updated ingress limiter tests.
+- Tests: not run (not requested).
+
+- Sumeragi DA: make the large-payload six-peer scenario submit the heavy log transaction non-blocking (commit/RBC waits still gate pass/fail) to avoid tx-confirmation stream stalls.
+- Tests: `cargo test -p integration_tests --test sumeragi_da sumeragi_rbc_da_large_payload_six_peers -- --nocapture`
+
 - Sumeragi RBC: queue BlockCreated seed work onto the RBC seed worker, insert stub sessions, and merge results asynchronously to cut per-message latency; add `rbc_seed_result_merges_stub_session` coverage.
 - Tests: not run (not requested).
 
@@ -29,6 +35,8 @@ Last update: 2026-01-25
 
 - Unstable network tests: submit asset-definition + mint ISIs via blocking confirmation (with status/TTL bounds) and await mint completion after relay resume to avoid silent rejects under multi-fault partitions.
 - Tests: `cargo test -p integration_tests unstable_network_9_peers_3_faults -- --nocapture` (ok; duplicate metrics registration warnings observed during the run).
+- Torii telemetry test handle now seeds the world peer list via a WorldBlock accessor; RBC seed worker now reports `eyre::Report` outcomes to match the threaded build path.
+- Tests: `cargo check -p iroha_core` (ok; warning about unused `PeersGossiperHandle::closed_for_tests` persists). `cargo test -p integration_tests unstable_network_9_peers_2_faults -- --nocapture` (timed out at 20m while the test was still running; relay connection-refused warnings during peer startup).
 - SoraFS dispute helper now uses `UptimeBreach` (no replication order required); P2P peer loop annotates inbound message type and documents peer-message sender fields to satisfy Rust 2024 inference + missing-docs lints.
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-capacity-dup3 CARGO_BUILD_JOBS=1 cargo test -p iroha_core smartcontracts::isi::sorafs::sorafs_tests::register_capacity_dispute_rejects_duplicate -- --nocapture` (test passed; command timed out after 20m while continuing to build/run filtered binaries; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
 
