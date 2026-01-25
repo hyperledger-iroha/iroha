@@ -5759,6 +5759,52 @@ fn topology_refresh_decision(
     }
 }
 
+struct MessageTimingGuard {
+    kind: &'static str,
+    height: u64,
+    view: u64,
+    start: Instant,
+}
+
+impl MessageTimingGuard {
+    fn for_message(msg: &BlockMessage) -> Option<Self> {
+        match msg {
+            BlockMessage::BlockCreated(created) => {
+                let header = created.block.header();
+                Some(Self {
+                    kind: "BlockCreated",
+                    height: header.height().get(),
+                    view: header.view_change_index(),
+                    start: Instant::now(),
+                })
+            }
+            BlockMessage::BlockSyncUpdate(update) => {
+                let header = update.block.header();
+                Some(Self {
+                    kind: "BlockSyncUpdate",
+                    height: header.height().get(),
+                    view: header.view_change_index(),
+                    start: Instant::now(),
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+impl Drop for MessageTimingGuard {
+    fn drop(&mut self) {
+        let elapsed_ms = u64::try_from(self.start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        debug!(
+            kind = self.kind,
+            height = self.height,
+            view = self.view,
+            elapsed_ms,
+            "handled consensus block message"
+        );
+    }
+}
+
 #[allow(
     dead_code,
     clippy::large_types_passed_by_value,
@@ -8876,6 +8922,7 @@ impl Actor {
             message: msg,
             sender,
         } = msg;
+        let _message_timing = MessageTimingGuard::for_message(&msg);
         debug!(message=%Self::block_message_kind(&msg), "received consensus block message");
         self.note_message_received(&msg);
         if let Some((height, view)) = Self::block_message_height_view(&msg) {
@@ -12982,6 +13029,21 @@ fn rbc_payload_matches(
         }
     }
     handle.delivered_payload_matches(block_hash, height, payload_hash)
+}
+
+fn rbc_session_needs_payload(session: &RbcSession, payload_hash: Hash) -> bool {
+    if session.is_invalid() {
+        return false;
+    }
+    if session.delivered_payload_matches(&payload_hash) {
+        return false;
+    }
+    if session.payload_hash() == Some(payload_hash)
+        && session.received_chunks() == session.total_chunks()
+    {
+        return false;
+    }
+    true
 }
 
 #[derive(Clone, Debug)]

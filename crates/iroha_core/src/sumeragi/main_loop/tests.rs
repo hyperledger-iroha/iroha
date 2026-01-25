@@ -14801,6 +14801,26 @@ async fn handle_rbc_ready_refreshes_roster_when_unverified() {
     harness.shutdown.send();
 }
 
+#[test]
+fn rbc_session_needs_payload_skips_full_payload() {
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let session =
+        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0).expect("session");
+
+    assert!(!super::rbc_session_needs_payload(&session, payload_hash));
+}
+
+#[test]
+fn rbc_session_needs_payload_requires_hydration_for_partial_payload() {
+    let payload_hash = Hash::new(b"payload");
+    let mut session =
+        RbcSession::new(2, Some(payload_hash), None, None, 0).expect("session");
+    session.ingest_chunk(0, b"chunk-0".to_vec(), None);
+
+    assert!(super::rbc_session_needs_payload(&session, payload_hash));
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_ready_requests_missing_block_on_stash_cap_drop() {
     let mut harness = test_actor_harness(4).await;
@@ -27194,6 +27214,31 @@ fn block_message_kind_reports_variant() {
         membership: None,
     });
     assert_eq!(Actor::block_message_kind(&msg), "ConsensusParams");
+}
+
+#[test]
+fn message_timing_guard_tracks_block_payloads() {
+    let block = sample_block(1, 0, None);
+    let created = BlockMessage::BlockCreated(super::message::BlockCreated::from(&block));
+    let update = BlockMessage::BlockSyncUpdate(super::message::BlockSyncUpdate::from(&block));
+    let other = BlockMessage::ConsensusParams(super::message::ConsensusParamsAdvert {
+        collectors_k: 1,
+        redundant_send_r: 1,
+        membership: None,
+    });
+
+    let created_guard =
+        MessageTimingGuard::for_message(&created).expect("block-created timing guard");
+    assert_eq!(created_guard.kind, "BlockCreated");
+    assert_eq!(created_guard.height, 1);
+    assert_eq!(created_guard.view, 0);
+
+    let update_guard = MessageTimingGuard::for_message(&update).expect("block-sync timing guard");
+    assert_eq!(update_guard.kind, "BlockSyncUpdate");
+    assert_eq!(update_guard.height, 1);
+    assert_eq!(update_guard.view, 0);
+
+    assert!(MessageTimingGuard::for_message(&other).is_none());
 }
 
 #[test]
