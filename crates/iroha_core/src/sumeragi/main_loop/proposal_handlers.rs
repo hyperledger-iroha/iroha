@@ -1003,15 +1003,22 @@ impl Actor {
         if pending_status.is_some() && !revive_aborted {
             if da_enabled {
                 let session_key = Self::session_key(&block_hash, height, view);
-                let payload_bytes = super::proposals::block_payload_bytes(&block);
-                let payload_hash = Hash::new(&payload_bytes);
-                if !self
+                let payload_hash = self
+                    .pending
+                    .pending_blocks
+                    .get(&block_hash)
+                    .map(|pending| pending.payload_hash)
+                    .unwrap_or_else(|| Hash::new(&super::proposals::block_payload_bytes(&block)));
+                let (needs_seed, needs_hydrate) = self
                     .subsystems
                     .da_rbc
                     .rbc
                     .sessions
-                    .contains_key(&session_key)
-                {
+                    .get(&session_key)
+                    .map_or((true, false), |session| {
+                        (false, super::rbc_session_needs_payload(session, payload_hash))
+                    });
+                if needs_seed {
                     let rebroadcast_missing_init = self
                         .subsystems
                         .da_rbc
@@ -1025,12 +1032,15 @@ impl Actor {
                         rebroadcast_missing_init,
                     )?;
                 }
-                self.hydrate_rbc_session_from_block(
-                    session_key,
-                    &payload_bytes,
-                    payload_hash,
-                    sender.as_ref(),
-                )?;
+                if needs_hydrate {
+                    let payload_bytes = super::proposals::block_payload_bytes(&block);
+                    self.hydrate_rbc_session_from_block(
+                        session_key,
+                        &payload_bytes,
+                        payload_hash,
+                        sender.as_ref(),
+                    )?;
+                }
             }
             debug!(
                 height,
