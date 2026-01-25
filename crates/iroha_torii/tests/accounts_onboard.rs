@@ -19,6 +19,7 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::DomainId,
     nexus::DataSpaceId,
+    peer::PeerId,
     permission::Permission,
     prelude::{Account, Domain, ExposedPrivateKey},
 };
@@ -36,13 +37,17 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
+    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
     let domain_id: DomainId = "wonderland".parse().expect("domain id");
     let authority_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let authority_id = AccountId::new(domain_id.clone(), authority_kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let authority_account = Account::new(authority_id.clone()).build(&authority_id);
-    let world = World::with([domain], [authority_account], []);
+    let mut world = World::with([domain], [authority_account], []);
+    world.peers.mutate_vec(|peers| {
+        let _ = peers.push(local_peer_id.clone());
+    });
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     {
         let height_u64 = u64::try_from(state.view().height())
@@ -91,6 +96,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
             kura.clone(),
             queue.clone(),
             peers_rx.clone(),
+            local_peer_id,
             ts,
             false,
         )

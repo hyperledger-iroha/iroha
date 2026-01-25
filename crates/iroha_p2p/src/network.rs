@@ -535,6 +535,15 @@ impl<T: message::ClassifyTopic> message::ClassifyTopic for RelayMessage<T> {
     }
 }
 
+fn peer_message_channel<T: Pload>(
+    cap: core::num::NonZeroUsize,
+) -> (
+    mpsc::Sender<PeerMessage<WireMessage<T>>>,
+    mpsc::Receiver<PeerMessage<WireMessage<T>>>,
+) {
+    mpsc::channel(cap.get())
+}
+
 #[cfg(test)]
 mod data_frame_wire_len_tests {
     use iroha_crypto::KeyPair;
@@ -1798,9 +1807,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         let (network_message_low_sender, network_message_low_receiver) =
             net_channel::channel_with_capacity(p2p_queue_cap_low.get());
         let (peer_message_high_sender, peer_message_high_receiver) =
-            mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
+            peer_message_channel::<T>(p2p_queue_cap_high);
         let (peer_message_low_sender, peer_message_low_receiver) =
-            mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
+            peer_message_channel::<T>(p2p_queue_cap_low);
         let (service_message_sender, service_message_receiver) =
             mpsc::channel::<ServiceMessage<WireMessage<T>>>(1);
         // Clone a handle for the returned NetworkBaseHandle before moving the sender into the actor.
@@ -6152,6 +6161,37 @@ mod tests {
         });
         assert!(matches!(peer_rx.try_recv(), Ok(msg) if matches!(msg.payload, TopicMsg::Peer)));
         assert!(matches!(trust_rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn peer_message_channel_honors_capacity() {
+        let cap = core::num::NonZeroUsize::new(2).expect("nonzero");
+        let (tx, _rx) = peer_message_channel::<DummyMsg>(cap);
+
+        let peer = Peer::new(
+            socket_addr!(127.0.0.1:0),
+            KeyPair::random().public_key().clone(),
+        );
+        let origin = PeerId::from(KeyPair::random().public_key().clone());
+        let payload = RelayMessage::new(
+            origin,
+            RelayTarget::Broadcast,
+            DEFAULT_RELAY_TTL,
+            Priority::High,
+            DummyMsg,
+        );
+        let msg = PeerMessage {
+            peer,
+            payload,
+            payload_bytes: 1,
+        };
+
+        assert!(tx.try_send(msg.clone()).is_ok());
+        assert!(tx.try_send(msg.clone()).is_ok());
+        assert!(matches!(
+            tx.try_send(msg),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_))
+        ));
     }
 
     #[test]

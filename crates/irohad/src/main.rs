@@ -3869,6 +3869,7 @@ impl Iroha {
                 kura.clone(),
                 queue.clone(),
                 network.online_peers_receiver(),
+                config.common.peer.id.clone(),
                 TimeSource::new_system(),
                 telemetry_capabilities.metrics_enabled(),
             );

@@ -4464,7 +4464,9 @@ impl Actor {
         match self.refresh_commit_topology_state(&commit_topology) {
             CommitTopologyChange::None => {}
             CommitTopologyChange::Membership => {
-                self.reset_consensus_state_for_roster_change(false);
+                // Preserve proposals_seen to avoid re-proposing the same (height, view) after
+                // a roster change clears consensus caches.
+                self.reset_consensus_state_for_roster_change(true);
                 debug!(
                     height,
                     roster_len = commit_topology.len(),

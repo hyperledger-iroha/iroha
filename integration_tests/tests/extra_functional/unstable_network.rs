@@ -868,9 +868,19 @@ impl UnstableNetwork {
         network: &Network,
         asset_definition_id: &AssetDefinitionId,
     ) -> Result<()> {
-        let client = network.client();
+        let status_timeout = scaled_timeout(network.sync_timeout(), network.peers().len());
+        let mut client = network.client();
+        if client.transaction_status_timeout < status_timeout {
+            client.transaction_status_timeout = status_timeout;
+        }
+        if let Some(ttl) = client.transaction_ttl {
+            let min_ttl = status_timeout + Duration::from_secs(120);
+            if ttl < min_ttl {
+                client.transaction_ttl = Some(min_ttl);
+            }
+        }
         let isi = Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
-        spawn_blocking(move || client.submit(isi)).await??;
+        spawn_blocking(move || client.submit_blocking(isi)).await??;
         Ok(())
     }
 
@@ -903,6 +913,7 @@ impl UnstableNetwork {
             iroha_logger::info!(peer = peer.mnemonic(), "Suspended");
         }
 
+        let sync_timeout = scaled_timeout(network.sync_timeout(), peers.len());
         let mint_asset = Mint::asset_numeric(
             Numeric::one(),
             AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone()),
@@ -918,11 +929,19 @@ impl UnstableNetwork {
                 .clone()
         };
         iroha_logger::info!(via_peer = some_peer.mnemonic(), "Submit transaction");
-        let client = some_peer.client();
-        spawn_blocking(move || client.submit(mint_asset)).await??;
+        let mut client = some_peer.client();
+        if client.transaction_status_timeout < sync_timeout {
+            client.transaction_status_timeout = sync_timeout;
+        }
+        if let Some(ttl) = client.transaction_ttl {
+            let min_ttl = sync_timeout + Duration::from_secs(120);
+            if ttl < min_ttl {
+                client.transaction_ttl = Some(min_ttl);
+            }
+        }
+        let submit_handle = spawn_blocking(move || client.submit_blocking(mint_asset));
 
         let target_height = ctx.init_blocks + (round_index as u64) + 1;
-        let sync_timeout = scaled_timeout(network.sync_timeout(), peers.len());
         let non_faulty_sync = timeout(
             sync_timeout,
             once_blocks_sync(
@@ -972,6 +991,8 @@ impl UnstableNetwork {
         .await
         .map_err(eyre::Report::new)
         .wrap_err("faulty peers did not catch up")??;
+
+        submit_handle.await??;
 
         Ok(())
     }

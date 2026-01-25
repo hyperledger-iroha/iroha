@@ -8243,6 +8243,7 @@ struct Actor {
     last_sync_block: usize,
     last_online_peers: BTreeSet<PeerId>,
     online_peers: watch::Receiver<OnlinePeers>,
+    local_peer_id: PeerId,
     metrics: Arc<Metrics>,
     state: Arc<State>,
     kura: Arc<Kura>,
@@ -8279,6 +8280,17 @@ impl Actor {
         if !self.enabled.load(Ordering::Relaxed) {
             return;
         }
+        let local_removed = {
+            let view = self.state.view();
+            !view
+                .world()
+                .peers()
+                .iter()
+                .any(|peer| peer == &self.local_peer_id)
+        };
+        if crate::sumeragi::status::local_peer_removed() != local_removed {
+            crate::sumeragi::status::set_local_removed_from_world(local_removed);
+        }
         let mut peer_count;
         let mut current_online;
         {
@@ -8289,7 +8301,7 @@ impl Actor {
                 .map(|peer| peer.id().clone())
                 .collect::<BTreeSet<_>>();
         }
-        if crate::sumeragi::status::local_peer_removed() {
+        if local_removed {
             peer_count = 0;
             current_online.clear();
         }
@@ -8802,6 +8814,7 @@ pub fn start(
     kura: Arc<Kura>,
     queue: Arc<Queue>,
     online_peers: watch::Receiver<OnlinePeers>,
+    local_peer_id: PeerId,
     time_source: TimeSource,
     enabled: bool,
 ) -> (Telemetry, Child) {
@@ -8838,6 +8851,7 @@ pub fn start(
                     last_online_peers: BTreeSet::new(),
                     last_reported_block,
                     online_peers,
+                    local_peer_id,
                     enabled: enabled_arc,
                     time_source,
                 }
@@ -12006,8 +12020,15 @@ mod tests {
 
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
+            let (leader_public_key, leader_private_key) =
+                KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
+            let local_peer_id = PeerId::new(leader_public_key);
+            let mut world = World::default();
+            world.peers.mutate_vec(|peers| {
+                let _ = peers.push(local_peer_id.clone());
+            });
             let state = Arc::new(State::with_telemetry(
-                World::default(),
+                world,
                 kura.clone(),
                 query_handle,
                 StateTelemetry::new(metrics.clone(), true),
@@ -12030,15 +12051,13 @@ mod tests {
                 kura.clone(),
                 queue,
                 peers_rx,
+                local_peer_id.clone(),
                 time_source.clone(),
                 true,
             );
 
             let chain_id = state.chain_id.clone();
-            let (leader_public_key, leader_private_key) =
-                KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
-            let peer_id = PeerId::new(leader_public_key);
-            let topology = Topology::new(vec![peer_id]);
+            let topology = Topology::new(vec![local_peer_id.clone()]);
             let (account_id, account_keypair) = gen_account_in("wonderland");
 
             Self {
@@ -12155,8 +12174,14 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
+        let (local_pk, _) = KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
+        let local_peer_id = PeerId::new(local_pk);
+        let mut world = World::default();
+        world.peers.mutate_vec(|peers| {
+            let _ = peers.push(local_peer_id.clone());
+        });
         let state = Arc::new(State::with_telemetry(
-            World::default(),
+            world,
             kura.clone(),
             query,
             StateTelemetry::new(metrics.clone(), false),
@@ -12179,6 +12204,7 @@ mod tests {
             kura,
             queue,
             peers_rx,
+            local_peer_id,
             time_source,
             false, // disabled
         );
@@ -12476,6 +12502,54 @@ mod tests {
                 .get(),
             2
         );
+    }
+
+    #[tokio::test]
+    async fn connected_peers_zero_when_local_peer_missing_from_world() {
+        use tokio::sync::watch;
+        let metrics = Arc::new(Metrics::default());
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let world = World::default();
+        let state = Arc::new(State::with_telemetry(
+            world,
+            kura.clone(),
+            query_handle,
+            StateTelemetry::new(metrics.clone(), true),
+        ));
+        let (peers_tx, peers_rx) = watch::channel(<_>::default());
+        let (_mh, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue {
+                capacity: nonzero_ext::nonzero!(10usize),
+                capacity_per_user: nonzero_ext::nonzero!(10usize),
+                transaction_time_to_live: Duration::from_secs(100),
+                ..Default::default()
+            },
+            &time_source,
+        ));
+        let (local_pk, _) = KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
+        let local_peer_id = PeerId::new(local_pk);
+        let (telemetry, _child) = start(
+            metrics,
+            state,
+            kura,
+            queue,
+            peers_rx,
+            local_peer_id,
+            time_source,
+            true,
+        );
+        let peers: HashSet<_> = vec![
+            random_peer(socket_addr!(100.100.100.100:80)),
+            random_peer(socket_addr!(200.100.30.1:9001)),
+        ]
+        .into_iter()
+        .collect();
+        peers_tx.send(peers).unwrap();
+
+        let metrics = telemetry.metrics().await;
+        assert_eq!(metrics.connected_peers.get(), 0);
     }
 
     #[tokio::test]

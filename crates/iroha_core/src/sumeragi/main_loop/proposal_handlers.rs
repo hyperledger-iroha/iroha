@@ -1016,7 +1016,10 @@ impl Actor {
                     .sessions
                     .get(&session_key)
                     .map_or((true, false), |session| {
-                        (false, super::rbc_session_needs_payload(session, payload_hash))
+                        (
+                            false,
+                            super::rbc_session_needs_payload(session, payload_hash),
+                        )
                     });
                 if needs_seed {
                     let rebroadcast_missing_init = self

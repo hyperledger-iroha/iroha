@@ -1215,9 +1215,11 @@ pub struct Network {
     /// Prefer WebSocket fallback for outbound dials when available (feature `p2p_ws`).
     /// Useful for constrained environments and tests that need deterministic WS dialing.
     pub prefer_ws_fallback: bool,
-    /// Capacity for the high-priority network message queue (bounded mode only).
+    /// Capacity for the high-priority network message queue and inbound peer dispatch buffer
+    /// (bounded mode only).
     pub p2p_queue_cap_high: NonZeroUsize,
-    /// Capacity for the low-priority network message queue (bounded mode only).
+    /// Capacity for the low-priority network message queue and inbound peer dispatch buffer
+    /// (bounded mode only).
     pub p2p_queue_cap_low: NonZeroUsize,
     /// Capacity for the per-peer post queue (bounded mode only).
     pub p2p_post_queue_cap: NonZeroUsize,

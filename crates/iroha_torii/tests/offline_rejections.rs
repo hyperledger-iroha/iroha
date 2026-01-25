@@ -12,6 +12,7 @@ use http_body_util::BodyExt as _;
 use iroha_core::{
     kiso::KisoHandle, kura::Kura, query::store::LiveQueryStore, queue::Queue, state::State,
 };
+use iroha_data_model::peer::PeerId;
 use iroha_primitives::time::TimeSource;
 use iroha_telemetry::metrics::Metrics;
 use iroha_torii::Torii;
@@ -29,11 +30,15 @@ fn build_app_with_metrics(metrics: Arc<Metrics>, telemetry_enabled: bool) -> Rou
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let world = iroha_core::prelude::World::with(
+    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
+    let mut world = iroha_core::prelude::World::with(
         Vec::new(),
         Vec::new(),
         Vec::<iroha_data_model::asset::AssetDefinition>::new(),
     );
+    world.peers.mutate_vec(|peers| {
+        let _ = peers.push(local_peer_id.clone());
+    });
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
 
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -49,6 +54,7 @@ fn build_app_with_metrics(metrics: Arc<Metrics>, telemetry_enabled: bool) -> Rou
         kura.clone(),
         queue.clone(),
         peers_rx.clone(),
+        local_peer_id,
         time_source,
         false,
     )
