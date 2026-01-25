@@ -8918,9 +8918,11 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn on_block_message(&mut self, msg: super::InboundBlockMessage) -> Result<()> {
+        let queue_latency = msg.queue_latency_ms();
         let super::InboundBlockMessage {
             message: msg,
             sender,
+            ..
         } = msg;
         if let BlockMessage::RbcInit(init) = &msg {
             debug!(
@@ -8931,7 +8933,20 @@ impl Actor {
                 "dequeued RBC INIT"
             );
         }
-        let _message_timing = MessageTimingGuard::for_message(&msg);
+        let message_timing = MessageTimingGuard::for_message(&msg);
+        if let (Some((queue, latency_ms)), Some(timing)) =
+            (queue_latency, message_timing.as_ref())
+        {
+            debug!(
+                kind = timing.kind,
+                height = timing.height,
+                view = timing.view,
+                queue = ?queue,
+                latency_ms,
+                "dequeued consensus block message"
+            );
+        }
+        let _message_timing = message_timing;
         debug!(message=%Self::block_message_kind(&msg), "received consensus block message");
         self.note_message_received(&msg);
         if let Some((height, view)) = Self::block_message_height_view(&msg) {

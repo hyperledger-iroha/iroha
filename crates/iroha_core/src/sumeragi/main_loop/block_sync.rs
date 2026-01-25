@@ -429,6 +429,7 @@ impl Actor {
             );
             return Ok(());
         }
+        let roster_start = Instant::now();
         let persisted_roster = persisted_roster_for_block(
             self.state.as_ref(),
             &self.kura,
@@ -450,7 +451,7 @@ impl Actor {
                 block_height == local_height.saturating_add(1) || requested_missing_block
             }
         };
-        let Some(selection) = select_block_sync_roster(
+        let selection = select_block_sync_roster(
             &block,
             block_hash,
             block_height,
@@ -465,7 +466,10 @@ impl Actor {
             mode_tag,
             allow_uncertified,
             &self.roster_validation_cache,
-        ) else {
+        );
+        let roster_ms = u64::try_from(roster_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let roster_validate_ms = roster_ms;
+        let Some(selection) = selection else {
             if block_known
                 && cert_hint.is_none()
                 && checkpoint_hint.is_none()
@@ -497,6 +501,7 @@ impl Actor {
                 checkpoint_hint = checkpoint_hint.is_some(),
                 requested_missing_block,
                 roster_snapshot,
+                roster_validate_ms = roster_ms,
                 "dropping block sync update: no verifiable roster available"
             );
             super::status::inc_block_sync_drop_invalid_signatures();
@@ -588,10 +593,13 @@ impl Actor {
             return Ok(());
         }
         let had_incoming_qc = incoming_qc.is_some();
+        let signature_start = Instant::now();
         let block_signers_result = {
             let state_view = self.state.view();
             validated_block_signers(&block, &topology, &state_view, mode_tag, prf_seed)
         };
+        let signature_verify_ms =
+            u64::try_from(signature_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let block_signers = match block_signers_result {
             Ok(signers) => signers,
             Err(err) => {
@@ -664,6 +672,7 @@ impl Actor {
                 return Ok(());
             }
         };
+        let qc_validate_start = Instant::now();
         let commit_quorum = topology.min_votes_for_commit().max(1);
         let mut candidate_qc = {
             let state_view = self.state.view();
@@ -904,6 +913,8 @@ impl Actor {
                 }
             }
         }
+        let qc_validate_ms =
+            u64::try_from(qc_validate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let qc_evidence_present = incoming_qc.is_some();
         if !block_sync_quorum_available(
             block_signer_count,
@@ -1035,7 +1046,10 @@ impl Actor {
         );
 
         let created = super::message::BlockCreated { block };
+        let block_apply_start = Instant::now();
         let creation_result = self.handle_block_created(created, sender.clone());
+        let block_apply_ms =
+            u64::try_from(block_apply_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let block_known_after_creation = self.block_known_locally(block_hash);
         let creation_ok = creation_result.is_ok();
         let ready_for_qc = block_sync_ready_for_qc(block_known_after_creation, &creation_result);
@@ -1076,7 +1090,8 @@ impl Actor {
             None
         };
 
-        block_sync_apply_qc_after_block(
+        let qc_apply_start = Instant::now();
+        let qc_apply_result = block_sync_apply_qc_after_block(
             creation_result,
             block_known_after_creation,
             qc_to_apply,
@@ -1254,7 +1269,9 @@ impl Actor {
                 }
                 Ok(())
             },
-        )?;
+        );
+        let qc_apply_ms = u64::try_from(qc_apply_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        qc_apply_result?;
 
         if creation_ok && !block_known_after_creation {
             if let Some(qc) = incoming_qc.take() {
@@ -1274,6 +1291,18 @@ impl Actor {
                 );
             }
         }
+
+        debug!(
+            height = block_height,
+            view = block_view,
+            block = %block_hash,
+            roster_validate_ms,
+            signature_verify_ms,
+            qc_validate_ms,
+            block_apply_ms,
+            qc_apply_ms,
+            "block sync update substep timings"
+        );
 
         Ok(())
     }
