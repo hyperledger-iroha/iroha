@@ -1,5 +1,7 @@
 //! Proposal- and block-created message handling.
 
+use std::sync::mpsc;
+
 use iroha_logger::prelude::*;
 
 use crate::sumeragi::rbc_store::SessionKey;
@@ -1009,40 +1011,155 @@ impl Actor {
                     .get(&block_hash)
                     .map(|pending| pending.payload_hash)
                     .unwrap_or_else(|| Hash::new(&super::proposals::block_payload_bytes(&block)));
-                let (needs_seed, needs_hydrate) = self
+                let rebroadcast_missing_init = self
                     .subsystems
                     .da_rbc
                     .rbc
-                    .sessions
-                    .get(&session_key)
-                    .map_or((true, false), |session| {
-                        (
-                            false,
-                            super::rbc_session_needs_payload(session, payload_hash),
-                        )
-                    });
-                if needs_seed {
-                    let rebroadcast_missing_init = self
+                    .pending
+                    .contains_key(&session_key);
+                let mut seed_inflight = false;
+                if let Some(intent) = self
+                    .subsystems
+                    .da_rbc
+                    .rbc
+                    .seed_inflight
+                    .get_mut(&session_key)
+                {
+                    if rebroadcast_missing_init {
+                        intent.rebroadcast_missing_init = true;
+                    }
+                    seed_inflight = true;
+                }
+                let mut queued_seed = false;
+                if !seed_inflight
+                    && !self
                         .subsystems
                         .da_rbc
                         .rbc
-                        .pending
-                        .contains_key(&session_key);
-                    self.seed_rbc_session_from_block(
-                        session_key,
-                        &block,
-                        payload_hash,
-                        rebroadcast_missing_init,
-                    )?;
+                        .sessions
+                        .contains_key(&session_key)
+                {
+                    if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
+                        let payload_bytes = super::proposals::block_payload_bytes(&block);
+                        let payload_len = payload_bytes.len();
+                        let work = super::rbc::RbcSeedWork {
+                            key: session_key,
+                            payload_hash,
+                            payload_bytes,
+                            chunk_size: self.config.rbc.chunk_max_bytes,
+                            epoch: self.epoch_for_height(height),
+                        };
+                        match seed_tx.try_send(work) {
+                            Ok(()) => {
+                                self.subsystems.da_rbc.rbc.seed_inflight.insert(
+                                    session_key,
+                                    super::RbcSeedIntent {
+                                        rebroadcast_missing_init,
+                                    },
+                                );
+                                match self.insert_stub_rbc_session_from_block(
+                                    session_key,
+                                    &block,
+                                    payload_hash,
+                                    payload_len,
+                                ) {
+                                    Ok(_) => {
+                                        queued_seed = true;
+                                        seed_inflight = true;
+                                    }
+                                    Err(err) => {
+                                        warn!(
+                                            height,
+                                            view,
+                                            block = %block_hash,
+                                            error = %err,
+                                            "failed to insert stub RBC session after seed enqueue"
+                                        );
+                                        self.subsystems
+                                            .da_rbc
+                                            .rbc
+                                            .seed_inflight
+                                            .remove(&session_key);
+                                    }
+                                }
+                            }
+                            Err(mpsc::TrySendError::Full(_work)) => {
+                                debug!(?session_key, "RBC seed queue full; seeding synchronously");
+                            }
+                            Err(mpsc::TrySendError::Disconnected(_work)) => {
+                                warn!(
+                                    ?session_key,
+                                    "RBC seed worker disconnected; seeding synchronously"
+                                );
+                                self.subsystems.da_rbc.rbc.seed_tx = None;
+                                self.subsystems.da_rbc.rbc.seed_rx = None;
+                                self.subsystems.da_rbc.rbc.seed_inflight.clear();
+                            }
+                        }
+                    }
+                    if !queued_seed {
+                        self.seed_rbc_session_from_block(
+                            session_key,
+                            &block,
+                            payload_hash,
+                            rebroadcast_missing_init,
+                        )?;
+                    }
                 }
-                if needs_hydrate {
-                    let payload_bytes = super::proposals::block_payload_bytes(&block);
-                    self.hydrate_rbc_session_from_block(
-                        session_key,
-                        &payload_bytes,
-                        payload_hash,
-                        sender.as_ref(),
-                    )?;
+                if !seed_inflight
+                    && self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .sessions
+                        .get(&session_key)
+                        .is_some_and(|session| super::rbc_session_needs_payload(session, payload_hash))
+                {
+                    if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
+                        let payload_bytes = super::proposals::block_payload_bytes(&block);
+                        let work = super::rbc::RbcSeedWork {
+                            key: session_key,
+                            payload_hash,
+                            payload_bytes,
+                            chunk_size: self.config.rbc.chunk_max_bytes,
+                            epoch: self.epoch_for_height(height),
+                        };
+                        match seed_tx.try_send(work) {
+                            Ok(()) => {
+                                self.subsystems.da_rbc.rbc.seed_inflight.insert(
+                                    session_key,
+                                    super::RbcSeedIntent {
+                                        rebroadcast_missing_init,
+                                    },
+                                );
+                                queued_seed = true;
+                            }
+                            Err(mpsc::TrySendError::Full(_work)) => {
+                                debug!(
+                                    ?session_key,
+                                    "RBC seed queue full; hydrating synchronously"
+                                );
+                            }
+                            Err(mpsc::TrySendError::Disconnected(_work)) => {
+                                warn!(
+                                    ?session_key,
+                                    "RBC seed worker disconnected; hydrating synchronously"
+                                );
+                                self.subsystems.da_rbc.rbc.seed_tx = None;
+                                self.subsystems.da_rbc.rbc.seed_rx = None;
+                                self.subsystems.da_rbc.rbc.seed_inflight.clear();
+                            }
+                        }
+                    }
+                    if !queued_seed {
+                        let payload_bytes = super::proposals::block_payload_bytes(&block);
+                        self.hydrate_rbc_session_from_block(
+                            session_key,
+                            &payload_bytes,
+                            payload_hash,
+                            sender.as_ref(),
+                        )?;
+                    }
                 }
             }
             debug!(
@@ -1401,42 +1518,168 @@ impl Actor {
         let session_key = Self::session_key(&block_hash, height, view);
         let (rbc_seed_ms, rbc_hydrate_ms) = if da_enabled {
             let mut seed_ms = 0u64;
-            if !self
+            let mut hydrate_ms = 0u64;
+            let rebroadcast_missing_init = self
                 .subsystems
                 .da_rbc
                 .rbc
-                .sessions
-                .contains_key(&session_key)
+                .pending
+                .contains_key(&session_key);
+            let mut seed_inflight = false;
+            if let Some(intent) = self
+                .subsystems
+                .da_rbc
+                .rbc
+                .seed_inflight
+                .get_mut(&session_key)
             {
-                debug!(
-                    height,
-                    view,
-                    "BlockCreated arrived before RBC session initialised; seeding local RBC snapshot"
-                );
-                let rebroadcast_missing_init = self
+                if rebroadcast_missing_init {
+                    intent.rebroadcast_missing_init = true;
+                }
+                seed_inflight = true;
+            }
+            if !seed_inflight {
+                if !self
                     .subsystems
                     .da_rbc
                     .rbc
-                    .pending
-                    .contains_key(&session_key);
-                let seed_start = Instant::now();
-                self.seed_rbc_session_from_block(
-                    session_key,
-                    &block,
-                    payload_hash,
-                    rebroadcast_missing_init,
-                )?;
-                seed_ms = u64::try_from(seed_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    .sessions
+                    .contains_key(&session_key)
+                {
+                    debug!(
+                        height,
+                        view,
+                        "BlockCreated arrived before RBC session initialised; queuing seed work"
+                    );
+                    let seed_start = Instant::now();
+                    let mut queued_seed = false;
+                    if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
+                        let payload_len = payload_bytes.len();
+                        let work = super::rbc::RbcSeedWork {
+                            key: session_key,
+                            payload_hash,
+                            payload_bytes: payload_bytes.clone(),
+                            chunk_size: self.config.rbc.chunk_max_bytes,
+                            epoch: self.epoch_for_height(height),
+                        };
+                        match seed_tx.try_send(work) {
+                            Ok(()) => {
+                                self.subsystems.da_rbc.rbc.seed_inflight.insert(
+                                    session_key,
+                                    super::RbcSeedIntent {
+                                        rebroadcast_missing_init,
+                                    },
+                                );
+                                match self.insert_stub_rbc_session_from_block(
+                                    session_key,
+                                    &block,
+                                    payload_hash,
+                                    payload_len,
+                                ) {
+                                    Ok(_) => {
+                                        queued_seed = true;
+                                    }
+                                    Err(err) => {
+                                        warn!(
+                                            height,
+                                            view,
+                                            block = %block_hash,
+                                            error = %err,
+                                            "failed to insert stub RBC session after seed enqueue"
+                                        );
+                                        self.subsystems
+                                            .da_rbc
+                                            .rbc
+                                            .seed_inflight
+                                            .remove(&session_key);
+                                    }
+                                }
+                            }
+                            Err(mpsc::TrySendError::Full(_work)) => {
+                                debug!(
+                                    ?session_key,
+                                    "RBC seed queue full; seeding synchronously"
+                                );
+                            }
+                            Err(mpsc::TrySendError::Disconnected(_work)) => {
+                                warn!(
+                                    ?session_key,
+                                    "RBC seed worker disconnected; seeding synchronously"
+                                );
+                                self.subsystems.da_rbc.rbc.seed_tx = None;
+                                self.subsystems.da_rbc.rbc.seed_rx = None;
+                                self.subsystems.da_rbc.rbc.seed_inflight.clear();
+                            }
+                        }
+                    }
+                    if !queued_seed {
+                        self.seed_rbc_session_from_block(
+                            session_key,
+                            &block,
+                            payload_hash,
+                            rebroadcast_missing_init,
+                        )?;
+                    }
+                    seed_ms = u64::try_from(seed_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                } else if self
+                    .subsystems
+                    .da_rbc
+                    .rbc
+                    .sessions
+                    .get(&session_key)
+                    .is_some_and(|session| super::rbc_session_needs_payload(session, payload_hash))
+                {
+                    let seed_start = Instant::now();
+                    let mut queued_seed = false;
+                    if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
+                        let work = super::rbc::RbcSeedWork {
+                            key: session_key,
+                            payload_hash,
+                            payload_bytes: payload_bytes.clone(),
+                            chunk_size: self.config.rbc.chunk_max_bytes,
+                            epoch: self.epoch_for_height(height),
+                        };
+                        match seed_tx.try_send(work) {
+                            Ok(()) => {
+                                self.subsystems.da_rbc.rbc.seed_inflight.insert(
+                                    session_key,
+                                    super::RbcSeedIntent {
+                                        rebroadcast_missing_init,
+                                    },
+                                );
+                                queued_seed = true;
+                            }
+                            Err(mpsc::TrySendError::Full(_work)) => {
+                                debug!(
+                                    ?session_key,
+                                    "RBC seed queue full; hydrating synchronously"
+                                );
+                            }
+                            Err(mpsc::TrySendError::Disconnected(_work)) => {
+                                warn!(
+                                    ?session_key,
+                                    "RBC seed worker disconnected; hydrating synchronously"
+                                );
+                                self.subsystems.da_rbc.rbc.seed_tx = None;
+                                self.subsystems.da_rbc.rbc.seed_rx = None;
+                                self.subsystems.da_rbc.rbc.seed_inflight.clear();
+                            }
+                        }
+                    }
+                    seed_ms = u64::try_from(seed_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    if !queued_seed {
+                        let hydrate_start = Instant::now();
+                        self.hydrate_rbc_session_from_block(
+                            session_key,
+                            &payload_bytes,
+                            payload_hash,
+                            sender.as_ref(),
+                        )?;
+                        hydrate_ms =
+                            u64::try_from(hydrate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    }
+                }
             }
-            let hydrate_start = Instant::now();
-            self.hydrate_rbc_session_from_block(
-                session_key,
-                &payload_bytes,
-                payload_hash,
-                sender.as_ref(),
-            )?;
-            let hydrate_ms =
-                u64::try_from(hydrate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
             (seed_ms, hydrate_ms)
         } else {
             (0, 0)

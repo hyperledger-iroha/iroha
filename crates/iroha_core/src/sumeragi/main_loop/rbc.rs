@@ -125,7 +125,7 @@ pub(super) struct RbcSeedWork {
 pub(super) struct RbcSeedResult {
     pub(super) key: SessionKey,
     pub(super) payload_hash: Hash,
-    pub(super) outcome: Result<RbcSession, RbcError>,
+    pub(super) outcome: Result<RbcSession>,
 }
 
 #[derive(Debug)]
