@@ -240,20 +240,19 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         match self {
             NetworkMessage::SumeragiBlock(msg) => match msg.as_ref() {
                 BlockMessage::BlockCreated(_)
-                | BlockMessage::BlockSyncUpdate(_)
                 | BlockMessage::FetchPendingBlock(_)
-                | BlockMessage::Proposal(_)
                 | BlockMessage::RbcInit(_)
                 | BlockMessage::RbcReady(_)
-                | BlockMessage::RbcDeliver(_) => T::ConsensusPayload,
-                BlockMessage::RbcChunk(_) => T::ConsensusChunk,
-                BlockMessage::ConsensusParams(_)
+                | BlockMessage::RbcDeliver(_)
+                | BlockMessage::ConsensusParams(_)
                 | BlockMessage::ExecWitness(_)
                 | BlockMessage::ProposalHint(_)
                 | BlockMessage::Qc(_)
                 | BlockMessage::QcVote(_)
                 | BlockMessage::VrfCommit(_)
                 | BlockMessage::VrfReveal(_) => T::Consensus,
+                BlockMessage::BlockSyncUpdate(_) | BlockMessage::Proposal(_) => T::ConsensusPayload,
+                BlockMessage::RbcChunk(_) => T::ConsensusChunk,
             },
             NetworkMessage::SumeragiControlFlow(_)
             | NetworkMessage::LaneRelay(_)
@@ -440,10 +439,11 @@ pub mod prelude {
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::Ordering;
+    use std::{cmp::Ordering, collections::BTreeSet, num::NonZeroU64};
 
-    use iroha_crypto::{Hash, HashOf};
-    use iroha_data_model::block::BlockHeader;
+    use iroha_crypto::{Hash, KeyPair, SignatureOf};
+    use iroha_data_model::block::{BlockHeader, BlockSignature, builder::BlockBuilder};
+    use iroha_data_model::peer::PeerId;
     use iroha_data_model::role::RoleId;
     use iroha_p2p::{ClassifyTopic, network::message::Topic as NetworkTopic};
     use iroha_test_samples::gen_account_in;
@@ -453,8 +453,8 @@ mod tests {
         NetworkMessage, PeerTrustGossip, SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
         role::RoleIdWithOwner,
         sumeragi::{
-            consensus::{RbcChunk, RbcDeliver, RbcReady},
-            message::{BlockMessage, ConsensusParamsAdvert},
+            consensus::{RbcChunk, RbcDeliver, RbcInit, RbcReady},
+            message::{BlockCreated, BlockMessage, BlockSyncUpdate, ConsensusParamsAdvert, FetchPendingBlock},
         },
     };
 
@@ -515,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn sumeragi_block_classifies_payload_topic() {
+    fn sumeragi_block_classifies_topics() {
         let params = ConsensusParamsAdvert {
             collectors_k: 1,
             redundant_send_r: 1,
@@ -524,7 +524,56 @@ mod tests {
         let msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessage::ConsensusParams(params)));
         assert_eq!(msg.topic(), NetworkTopic::Consensus);
 
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; 32]));
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero block height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let block_hash = header.hash();
+        let block = BlockBuilder::new(header.clone()).build(BTreeSet::new());
+        let created = NetworkMessage::SumeragiBlock(Box::new(BlockMessage::BlockCreated(
+            BlockCreated { block: block.clone() },
+        )));
+        assert_eq!(created.topic(), NetworkTopic::Consensus);
+
+        let fetch = FetchPendingBlock {
+            requester: PeerId::from(KeyPair::random().public_key().clone()),
+            block_hash,
+            height: 1,
+            view: 0,
+        };
+        let fetch_msg =
+            NetworkMessage::SumeragiBlock(Box::new(BlockMessage::FetchPendingBlock(fetch)));
+        assert_eq!(fetch_msg.topic(), NetworkTopic::Consensus);
+
+        let roster_hash = Hash::prehashed([1; 32]);
+        let chunk_root = Hash::prehashed([2; 32]);
+        let payload_hash = Hash::prehashed([3; 32]);
+        let leader_keypair = KeyPair::random();
+        let leader_signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(leader_keypair.private_key(), block_hash),
+        );
+        let init = RbcInit {
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            roster: Vec::new(),
+            roster_hash,
+            total_chunks: 0,
+            chunk_digests: Vec::new(),
+            payload_hash,
+            chunk_root,
+            block_header: header.clone(),
+            leader_signature,
+        };
+        let init_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcInit(init)));
+        assert_eq!(init_msg.topic(), NetworkTopic::Consensus);
+
         let chunk = RbcChunk {
             block_hash,
             height: 1,
@@ -536,8 +585,11 @@ mod tests {
         let payload = NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcChunk(chunk)));
         assert_eq!(payload.topic(), NetworkTopic::ConsensusChunk);
 
-        let roster_hash = Hash::prehashed([1; 32]);
-        let chunk_root = Hash::prehashed([2; 32]);
+        let sync = BlockSyncUpdate::from(&block);
+        let sync_msg =
+            NetworkMessage::SumeragiBlock(Box::new(BlockMessage::BlockSyncUpdate(sync)));
+        assert_eq!(sync_msg.topic(), NetworkTopic::ConsensusPayload);
+
         let ready = RbcReady {
             block_hash,
             height: 1,
@@ -549,7 +601,7 @@ mod tests {
             signature: vec![7],
         };
         let ready_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcReady(ready)));
-        assert_eq!(ready_msg.topic(), NetworkTopic::ConsensusPayload);
+        assert_eq!(ready_msg.topic(), NetworkTopic::Consensus);
 
         let deliver = RbcDeliver {
             block_hash,
@@ -564,7 +616,7 @@ mod tests {
         };
         let deliver_msg =
             NetworkMessage::SumeragiBlock(Box::new(BlockMessage::RbcDeliver(deliver)));
-        assert_eq!(deliver_msg.topic(), NetworkTopic::ConsensusPayload);
+        assert_eq!(deliver_msg.topic(), NetworkTopic::Consensus);
     }
 
     #[test]
