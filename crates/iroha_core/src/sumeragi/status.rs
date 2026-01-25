@@ -2360,6 +2360,8 @@ pub enum ConsensusMessageReason {
     PayloadUnapplied,
     /// Signature mismatch deferred while the node catches up.
     SignatureMismatchDeferred,
+    /// Payload deferred while commit/validation work is in flight.
+    CommitPipelineActive,
     /// Delivery channel is unavailable.
     EnqueueFailed,
     /// Sender is currently penalized.
@@ -2419,6 +2421,7 @@ impl ConsensusMessageReason {
             ConsensusMessageReason::QuorumMissing => "quorum_missing",
             ConsensusMessageReason::PayloadUnapplied => "payload_unapplied",
             ConsensusMessageReason::SignatureMismatchDeferred => "signature_mismatch_deferred",
+            ConsensusMessageReason::CommitPipelineActive => "commit_pipeline_active",
             ConsensusMessageReason::EnqueueFailed => "enqueue_failed",
             ConsensusMessageReason::PenalizedSender => "penalized_sender",
             ConsensusMessageReason::EpochMismatch => "epoch_mismatch",

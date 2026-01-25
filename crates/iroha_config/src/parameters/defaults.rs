@@ -2328,7 +2328,7 @@ pub mod sumeragi {
     pub const MSG_CHANNEL_CAP_BLOCK_PAYLOAD: usize = 128;
     /// Default capacity for the RBC chunk channel.
     pub const MSG_CHANNEL_CAP_RBC_CHUNKS: usize = 1_024;
-    /// Default capacity for the block message channel (block sync updates, params, etc.).
+    /// Default capacity for the fast-path block message channel (BlockCreated, FetchPendingBlock, RBC INIT, params).
     pub const MSG_CHANNEL_CAP_BLOCKS: usize = 256;
     /// Default capacity for Sumeragi control/background/lane channels.
     pub const CONTROL_MSG_CHANNEL_CAP: usize = 1_024;

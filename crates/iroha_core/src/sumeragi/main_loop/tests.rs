@@ -1920,6 +1920,43 @@ async fn actor_should_tick_tracks_missing_block_requests() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn actor_should_tick_tracks_deferred_block_sync_updates() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    assert!(
+        !actor.should_tick(),
+        "fresh actor with empty queues should be idle"
+    );
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    let block_hash = block.hash();
+    let update = super::message::BlockSyncUpdate::from(&block);
+    actor.deferred_block_sync_updates.insert(
+        (height, view, block_hash),
+        super::DeferredBlockSyncUpdate {
+            update,
+            sender: None,
+        },
+    );
+
+    assert!(
+        actor.should_tick(),
+        "deferred block sync updates should require ticks"
+    );
+
+    actor.deferred_block_sync_updates.clear();
+    assert!(
+        !actor.should_tick(),
+        "clearing deferred block sync updates should return to idle"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn actor_next_tick_deadline_tracks_missing_block_windows() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
@@ -4212,6 +4249,118 @@ async fn block_sync_update_defers_signature_mismatch_when_parent_missing() {
             .missing_block_requests
             .contains_key(&missing_parent),
         "signature mismatch should still trigger a missing-parent request"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_defers_while_commit_inflight_and_replays() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let committed_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let height = committed_height.saturating_add(1).max(1);
+    let view_idx = 0_u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view_idx, parent);
+    let block_hash = block.hash();
+
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "test requires commit roster");
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let epoch = actor.epoch_for_height(height);
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: view_idx,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let chain = actor.common_config.chain.clone();
+    sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
+
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_votes = vec![vote.clone()];
+
+    let now = Instant::now();
+    let retry_window = Duration::from_secs(1);
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view: view_idx,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window,
+            view_change_window: Some(retry_window),
+            first_seen: now,
+            last_requested: now,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let pending = PendingBlock::new(block.clone(), payload_hash, height, view_idx);
+    let lock = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        height,
+        view: view_idx,
+        epoch,
+    };
+    let inflight = CommitInFlight {
+        id: 1,
+        lock,
+        block_hash,
+        pending,
+        commit_topology: roster.clone(),
+        signature_topology: roster,
+        qc_signers: None,
+        commit_qc: None,
+        allow_quorum_bypass: false,
+        post_commit_qc: None,
+        enqueue_time: Instant::now(),
+    };
+    actor.subsystems.commit.inflight = Some(inflight);
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+
+    let vote_key = (Phase::Commit, height, view_idx, epoch, vote.signer);
+    assert!(
+        actor.vote_log.contains_key(&vote_key),
+        "commit vote should be processed even when block sync update is deferred"
+    );
+    assert!(
+        actor
+            .deferred_block_sync_updates
+            .contains_key(&(height, view_idx, block_hash)),
+        "block sync update should be deferred while commit pipeline is inflight"
+    );
+    assert!(
+        actor.pending.pending_blocks.get(&block_hash).is_none(),
+        "deferred block sync update should not insert a pending block"
+    );
+
+    actor.subsystems.commit.inflight = None;
+    let progressed = actor.tick();
+    assert!(progressed, "tick should replay deferred block sync updates");
+    assert!(
+        !actor
+            .deferred_block_sync_updates
+            .contains_key(&(height, view_idx, block_hash)),
+        "deferred block sync update should be replayed"
     );
 
     harness.shutdown.send();
