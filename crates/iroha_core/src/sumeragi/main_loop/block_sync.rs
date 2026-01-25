@@ -249,6 +249,14 @@ impl Actor {
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
         let parent_hash = block.header().prev_block_hash();
+        let mut kura_committed_ms = 0u64;
+        let mut kura_known_ms = 0u64;
+        let mut commit_votes_pre_ms = 0u64;
+        let mut commit_votes_post_ms = 0u64;
+        let mut roster_persisted_ms = 0u64;
+        let mut roster_select_ms = 0u64;
+        let mut qc_candidate_ms = 0u64;
+        let mut qc_fallback_ms = 0u64;
         let mut requested_missing_block = self
             .pending
             .missing_block_requests
@@ -321,28 +329,34 @@ impl Actor {
                 "accepting BlockSyncUpdate for stale view"
             );
         }
+        let kura_committed_start = Instant::now();
         if let Ok(height_usize) = usize::try_from(block_height)
             && let Some(nz_height) = NonZeroUsize::new(height_usize)
-            && let Some(committed) = self.kura.get_block(nz_height)
         {
-            let committed_hash = committed.hash();
-            if committed_hash != block_hash {
-                info!(
-                    committed_height = height_usize,
-                    committed_hash = %committed_hash,
-                    incoming_hash = %block_hash,
-                    "dropping block sync update that conflicts with committed block"
-                );
-                self.record_consensus_message_handling(
-                    super::status::ConsensusMessageKind::BlockSyncUpdate,
-                    super::status::ConsensusMessageOutcome::Dropped,
-                    super::status::ConsensusMessageReason::CommitConflict,
-                );
-                self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
-                return Ok(());
+            if let Some(committed) = self.kura.get_block(nz_height) {
+                let committed_hash = committed.hash();
+                if committed_hash != block_hash {
+                    info!(
+                        committed_height = height_usize,
+                        committed_hash = %committed_hash,
+                        incoming_hash = %block_hash,
+                        "dropping block sync update that conflicts with committed block"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::BlockSyncUpdate,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::CommitConflict,
+                    );
+                    self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+                    return Ok(());
+                }
             }
         }
+        kura_committed_ms =
+            u64::try_from(kura_committed_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let kura_known_start = Instant::now();
         let block_known = self.kura.get_block_height_by_hash(block_hash).is_some();
+        kura_known_ms = u64::try_from(kura_known_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let has_roster_hint = incoming_qc.is_some()
             || validator_checkpoint.is_some()
             || stake_snapshot.is_some()
@@ -411,7 +425,10 @@ impl Actor {
                 );
             }
         };
+        let commit_votes_start = Instant::now();
         process_commit_votes(self);
+        commit_votes_pre_ms =
+            u64::try_from(commit_votes_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         if let Some(reason) = self.block_sync_update_deferral_reason() {
             self.defer_block_sync_update(
                 super::message::BlockSyncUpdate {
@@ -430,6 +447,7 @@ impl Actor {
             return Ok(());
         }
         let roster_start = Instant::now();
+        let persisted_roster_start = Instant::now();
         let persisted_roster = persisted_roster_for_block(
             self.state.as_ref(),
             &self.kura,
@@ -439,6 +457,8 @@ impl Actor {
             Some(block_view),
             &self.roster_validation_cache,
         );
+        roster_persisted_ms =
+            u64::try_from(persisted_roster_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let cert_hint = incoming_qc.as_ref();
         let checkpoint_hint = validator_checkpoint.as_ref();
         // Allow next-height block sync updates without roster artifacts; missing-block requests
@@ -451,6 +471,7 @@ impl Actor {
                 block_height == local_height.saturating_add(1) || requested_missing_block
             }
         };
+        let selection_start = Instant::now();
         let selection = select_block_sync_roster(
             &block,
             block_hash,
@@ -467,6 +488,8 @@ impl Actor {
             allow_uncertified,
             &self.roster_validation_cache,
         );
+        roster_select_ms =
+            u64::try_from(selection_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let roster_ms = u64::try_from(roster_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let roster_validate_ms = roster_ms;
         let Some(selection) = selection else {
@@ -672,7 +695,7 @@ impl Actor {
                 return Ok(());
             }
         };
-        let qc_validate_start = Instant::now();
+        let qc_candidate_start = Instant::now();
         let commit_quorum = topology.min_votes_for_commit().max(1);
         let mut candidate_qc = {
             let state_view = self.state.view();
@@ -720,7 +743,10 @@ impl Actor {
             Some(qc)
         });
         let original_candidate_qc = candidate_qc.clone();
+        qc_candidate_ms =
+            u64::try_from(qc_candidate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
+        let qc_validate_start = Instant::now();
         let commit_cert_present = selection.commit_qc.is_some();
         let checkpoint_present = selection.checkpoint.is_some();
         let candidate_qc_present = candidate_qc.is_some();
@@ -842,6 +868,7 @@ impl Actor {
             (Some(_), None) => (None, false),
         };
         if incoming_qc.is_none() && had_incoming_qc {
+            let qc_fallback_start = Instant::now();
             if let Some(qc) = original_candidate_qc {
                 let aggregate_ok = super::qc_aggregate_consistent(
                     &qc,
@@ -912,6 +939,8 @@ impl Actor {
                     }
                 }
             }
+            qc_fallback_ms =
+                u64::try_from(qc_fallback_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         }
         let qc_validate_ms =
             u64::try_from(qc_validate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -1082,7 +1111,10 @@ impl Actor {
                 super::status::ConsensusMessageReason::PayloadUnapplied,
             );
         }
+        let commit_votes_post_start = Instant::now();
         process_commit_votes(self);
+        commit_votes_post_ms =
+            u64::try_from(commit_votes_post_start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
         let qc_to_apply = if ready_for_qc {
             incoming_qc.take()
@@ -1296,9 +1328,17 @@ impl Actor {
             height = block_height,
             view = block_view,
             block = %block_hash,
+            kura_committed_ms,
+            kura_known_ms,
             roster_validate_ms,
+            roster_persisted_ms,
+            roster_select_ms,
             signature_verify_ms,
+            commit_votes_pre_ms,
+            commit_votes_post_ms,
+            qc_candidate_ms,
             qc_validate_ms,
+            qc_fallback_ms,
             block_apply_ms,
             qc_apply_ms,
             "block sync update substep timings"

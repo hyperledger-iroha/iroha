@@ -36,6 +36,9 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 ## Current Open Work
 
+0. **SUMERAGI-BLOCK-SYNC-PROFILING - Re-run Izanami tps=1 with block-sync sub-step timers** (QA/Consensus, Line: Shared, Owner: Core WG, Priority: High, Status: 🈳 Not Started, target TBD)
+ - [ ] Run Izanami at tps=1 (300s, 4 peers) with main_loop debug and record BlockSyncUpdate sub-step timings plus queue latency in `status.md`.
+
 0. **TEST-HARNESS-DETERMINISM — Validate Sumeragi unit tests under parallel execution** (QA/Consensus, Line: Shared, Owner: Core WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
  - [ ] Run `cargo test -p iroha_core sumeragi::main_loop::tests::block_created_ -- --nocapture` with default test threads and confirm no hangs.
  - [ ] Decide whether any unit tests should opt in to real P2P via `IROHA_TEST_REAL_NETWORK` and document the criteria.
@@ -118,7 +121,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 4. **LOCALNET-10K-TPS — 7-peer localnet throughput + stall resilience** (Consensus/Performance/Tooling, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈺 In Progress, target TBD)
 - [ ] Use the new pending-block/commit-inflight metrics to isolate pacemaker backpressure during 100 TPS localnet runs (run151 NPoS: avg slot 5.68s, view changes 11, proposal_gap 1, pending/inflight <=4/1; run152 permissioned + commit_time_ms=300: avg slot 10.69s, view changes 18, pending/inflight <=4/1; run153 NPoS 7-peer 753ms soft limits: height 5, view changes 42, tx_queue depth 4796, pending max 5/inflight 0, missing_qc/stake_quorum timeouts; run154 permissioned 7-peer 753ms: height 5, view changes 9, tx_queue depth 11522, pending/inflight 0, missing_qc/quorum timeouts). Identify the proposal-gap root cause and re-test.
 - [ ] Validate worker-iteration drain-cap impact with a load generator that sustains 50 TPS (current CLI batch loop undershoots per-second pacing) and correlate view-change spikes with proposal gaps vs queue backpressure.
-- [ ] Re-run the Izanami 1 TPS (300s) profile after RBC seed-worker offload to confirm BlockCreated handling latency drops and capture the updated metrics in `status.md`.
+- [x] Re-run the Izanami 1 TPS (300s) profile after RBC seed-worker offload to confirm BlockCreated handling latency drops and capture the updated metrics in `status.md` (2026-01-25 run recorded).
 - [x] Enable expensive-metrics capture for throughput runs (telemetry profile/config) or surface pending-block + commit-inflight gauges in `/v1/sumeragi/status`; current `/metrics` scrapes are empty under the test-network defaults.
 - [ ] Investigate skewed NEW_VIEW participation during throughput stalls (recent NPoS/permissioned runs show `new_view_slots` max < quorum with per-peer NEW_VIEW vote traffic heavily skewed).
  - [x] NPoS roster selection now appends active validators missing from the commit topology so the full validator set participates; unit coverage added.
