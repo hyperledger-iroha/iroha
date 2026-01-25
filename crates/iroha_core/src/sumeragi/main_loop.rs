@@ -4269,6 +4269,9 @@ struct RbcState {
     persist_tx: Option<mpsc::SyncSender<rbc::RbcPersistWork>>,
     persist_rx: Option<mpsc::Receiver<rbc::RbcPersistResult>>,
     persist_inflight: BTreeSet<super::rbc_store::SessionKey>,
+    seed_tx: Option<mpsc::SyncSender<rbc::RbcSeedWork>>,
+    seed_rx: Option<mpsc::Receiver<rbc::RbcSeedResult>>,
+    seed_inflight: BTreeMap<super::rbc_store::SessionKey, RbcSeedIntent>,
 }
 
 #[derive(Debug)]
@@ -4276,6 +4279,11 @@ struct RbcOutboundChunks {
     chunks: Vec<crate::sumeragi::consensus::RbcChunk>,
     cursor: usize,
     targets: Vec<(usize, PeerId)>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RbcSeedIntent {
+    rebroadcast_missing_init: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -7585,6 +7593,9 @@ impl Actor {
             persist_tx: None,
             persist_rx: None,
             persist_inflight: BTreeSet::new(),
+            seed_tx: None,
+            seed_rx: None,
+            seed_inflight: BTreeMap::new(),
         };
         let propose_state = ProposeState {
             backpressure_gate,
@@ -8554,6 +8565,7 @@ impl Actor {
             progress = true;
         }
         let rbc_persist_progress = self.poll_rbc_persist_results_inner();
+        let rbc_seed_progress = self.poll_rbc_seed_results_inner();
         let now = tick_start;
         let tick_deadline = self.tick_work_budget_deadline(tick_start);
         let queue_len = self.queue.active_len();
@@ -8606,6 +8618,7 @@ impl Actor {
         let mut commit_pipeline_cost = Duration::ZERO;
         let mut propose_cost = Duration::ZERO;
         progress |= rbc_persist_progress
+            || rbc_seed_progress
             || adaptive_progress
             || refresh_progress
             || committed_progress

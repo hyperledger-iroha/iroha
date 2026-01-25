@@ -70,6 +70,8 @@ pub(super) struct RbcPlan {
 
 const RBC_PERSIST_WORK_QUEUE_CAP: usize = 8;
 const RBC_PERSIST_RESULT_QUEUE_CAP: usize = 8;
+const RBC_SEED_WORK_QUEUE_CAP: usize = 4;
+const RBC_SEED_RESULT_QUEUE_CAP: usize = 4;
 
 pub(super) fn rbc_roster_hash(roster: &[PeerId]) -> Hash {
     Hash::new(roster.to_vec().encode())
@@ -107,6 +109,29 @@ pub(super) struct RbcPersistResult {
 pub(super) struct RbcPersistWorkerHandle {
     pub(super) work_tx: mpsc::SyncSender<RbcPersistWork>,
     pub(super) result_rx: mpsc::Receiver<RbcPersistResult>,
+    pub(super) join_handle: std::thread::JoinHandle<()>,
+}
+
+#[derive(Debug)]
+pub(super) struct RbcSeedWork {
+    pub(super) key: SessionKey,
+    pub(super) payload_hash: Hash,
+    pub(super) payload_bytes: Vec<u8>,
+    pub(super) chunk_size: usize,
+    pub(super) epoch: u64,
+}
+
+#[derive(Debug)]
+pub(super) struct RbcSeedResult {
+    pub(super) key: SessionKey,
+    pub(super) payload_hash: Hash,
+    pub(super) outcome: Result<RbcSession, RbcError>,
+}
+
+#[derive(Debug)]
+pub(super) struct RbcSeedWorkerHandle {
+    pub(super) work_tx: mpsc::SyncSender<RbcSeedWork>,
+    pub(super) result_rx: mpsc::Receiver<RbcSeedResult>,
     pub(super) join_handle: std::thread::JoinHandle<()>,
 }
 
@@ -196,6 +221,45 @@ fn spawn_rbc_persist_worker(
             }
         })?;
     Ok(RbcPersistWorkerHandle {
+        work_tx,
+        result_rx,
+        join_handle,
+    })
+}
+
+fn spawn_rbc_seed_worker(
+    wake_tx: Option<mpsc::SyncSender<()>>,
+) -> io::Result<RbcSeedWorkerHandle> {
+    let (work_tx, work_rx) = mpsc::sync_channel::<RbcSeedWork>(RBC_SEED_WORK_QUEUE_CAP);
+    let (result_tx, result_rx) = mpsc::sync_channel::<RbcSeedResult>(RBC_SEED_RESULT_QUEUE_CAP);
+    let join_handle = std::thread::Builder::new()
+        .name("sumeragi-rbc-seed".to_owned())
+        .spawn(move || {
+            while let Ok(work) = work_rx.recv() {
+                let key = work.key;
+                let payload_hash = work.payload_hash;
+                let outcome = Actor::build_rbc_session_from_payload(
+                    &work.payload_bytes,
+                    payload_hash,
+                    work.chunk_size,
+                    work.epoch,
+                );
+                if result_tx
+                    .send(RbcSeedResult {
+                        key,
+                        payload_hash,
+                        outcome,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+                if let Some(wake) = wake_tx.as_ref() {
+                    let _ = wake.try_send(());
+                }
+            }
+        })?;
+    Ok(RbcSeedWorkerHandle {
         work_tx,
         result_rx,
         join_handle,
@@ -1451,6 +1515,82 @@ impl Actor {
         Ok(())
     }
 
+    pub(super) fn insert_stub_rbc_session_from_block(
+        &mut self,
+        key: SessionKey,
+        block: &SignedBlock,
+        payload_hash: Hash,
+        payload_len: usize,
+    ) -> Result<bool> {
+        if self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
+            return Ok(false);
+        }
+
+        let total_chunks = chunk_count(payload_len, self.config.rbc.chunk_max_bytes);
+        let total_chunks =
+            u32::try_from(total_chunks).map_err(|_| RbcError::ChunkCountOverflow {
+                count: total_chunks,
+            })?;
+        if total_chunks > RBC_MAX_TOTAL_CHUNKS {
+            return Err(RbcError::ChunkCountExceedsCap {
+                count: total_chunks,
+                cap: RBC_MAX_TOTAL_CHUNKS,
+            }
+            .into());
+        }
+
+        let mut session = RbcSession::new(
+            total_chunks,
+            Some(payload_hash),
+            None,
+            None,
+            self.epoch_for_height(key.1),
+        )
+        .map_err(RbcError::from)?;
+        session.block_header = Some(block.header());
+        let roster = self.rbc_roster_for_session(key);
+        if !roster.is_empty() {
+            let mut topology = super::network_topology::Topology::new(roster.clone());
+            match self.leader_index_for(&mut topology, key.1, key.2) {
+                Ok(leader_index) => {
+                    let leader_index = u64::try_from(leader_index).unwrap_or(u64::MAX);
+                    if let Some(signature) = block
+                        .signatures()
+                        .find(|signature| signature.index() == leader_index)
+                    {
+                        session.leader_signature = Some(signature.clone());
+                    } else {
+                        debug!(
+                            height = key.1,
+                            view = key.2,
+                            expected = leader_index,
+                            "leader signature missing while inserting stub RBC session"
+                        );
+                    }
+                }
+                Err(err) => {
+                    debug!(
+                        height = key.1,
+                        view = key.2,
+                        ?err,
+                        "failed to derive leader index while inserting stub RBC session"
+                    );
+                }
+            }
+        }
+        self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+        if roster.is_empty() {
+            self.ensure_rbc_session_roster(key);
+        } else {
+            self.record_rbc_session_roster(key, roster, RbcRosterSource::Derived);
+        }
+        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
+            self.update_rbc_status_entry(key, &session, false);
+        }
+        self.publish_rbc_backlog_snapshot();
+        Ok(true)
+    }
+
     pub(super) fn ensure_rbc_session_from_pending_block(
         &mut self,
         key: SessionKey,
@@ -1458,6 +1598,12 @@ impl Actor {
     ) -> Result<bool> {
         if self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
             return Ok(true);
+        }
+        if let Some(intent) = self.subsystems.da_rbc.rbc.seed_inflight.get_mut(&key) {
+            if rebroadcast_missing_init {
+                intent.rebroadcast_missing_init = true;
+            }
+            return Ok(self.subsystems.da_rbc.rbc.sessions.contains_key(&key));
         }
         let (block, payload_hash) = {
             let Some(pending) = self.pending.pending_blocks.get(&key.0) else {
@@ -1474,6 +1620,53 @@ impl Actor {
             }
             (pending.block.clone(), pending.payload_hash)
         };
+        if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
+            let payload_bytes = block_payload_bytes(&block);
+            let payload_len = payload_bytes.len();
+            let work = RbcSeedWork {
+                key,
+                payload_hash,
+                payload_bytes,
+                chunk_size: self.config.rbc.chunk_max_bytes,
+                epoch: self.epoch_for_height(key.1),
+            };
+            match seed_tx.try_send(work) {
+                Ok(()) => {
+                    self.subsystems.da_rbc.rbc.seed_inflight.insert(
+                        key,
+                        super::RbcSeedIntent {
+                            rebroadcast_missing_init,
+                        },
+                    );
+                    if let Err(err) = self.insert_stub_rbc_session_from_block(
+                        key,
+                        &block,
+                        payload_hash,
+                        payload_len,
+                    ) {
+                        warn!(
+                            height = key.1,
+                            view = key.2,
+                            block = %key.0,
+                            error = %err,
+                            "failed to insert stub RBC session after seed enqueue"
+                        );
+                        self.subsystems.da_rbc.rbc.seed_inflight.remove(&key);
+                        return Ok(false);
+                    }
+                    return Ok(self.subsystems.da_rbc.rbc.sessions.contains_key(&key));
+                }
+                Err(mpsc::TrySendError::Full(_work)) => {
+                    debug!(?key, "RBC seed queue full; falling back to sync seeding");
+                }
+                Err(mpsc::TrySendError::Disconnected(_work)) => {
+                    warn!(?key, "RBC seed worker disconnected; falling back to sync seeding");
+                    self.subsystems.da_rbc.rbc.seed_tx = None;
+                    self.subsystems.da_rbc.rbc.seed_rx = None;
+                    self.subsystems.da_rbc.rbc.seed_inflight.clear();
+                }
+            }
+        }
         self.seed_rbc_session_from_block(key, &block, payload_hash, rebroadcast_missing_init)?;
         Ok(self.subsystems.da_rbc.rbc.sessions.contains_key(&key))
     }
@@ -4816,6 +5009,24 @@ impl Actor {
         }
     }
 
+    pub(crate) fn attach_rbc_seed_worker(&mut self) -> Option<std::thread::JoinHandle<()>> {
+        if self.subsystems.da_rbc.rbc.seed_tx.is_some() {
+            return None;
+        }
+        match spawn_rbc_seed_worker(self.wake_tx.clone()) {
+            Ok(handle) => {
+                self.subsystems.da_rbc.rbc.seed_tx = Some(handle.work_tx);
+                self.subsystems.da_rbc.rbc.seed_rx = Some(handle.result_rx);
+                self.subsystems.da_rbc.rbc.seed_inflight.clear();
+                Some(handle.join_handle)
+            }
+            Err(err) => {
+                warn!(?err, "failed to spawn RBC seed worker thread");
+                None
+            }
+        }
+    }
+
     pub(in crate::sumeragi) fn poll_rbc_persist_results_inner(&mut self) -> bool {
         let Some(rx) = self.subsystems.da_rbc.rbc.persist_rx.as_ref() else {
             return false;
@@ -4870,6 +5081,199 @@ impl Actor {
             }
         }
         true
+    }
+
+    pub(in crate::sumeragi) fn poll_rbc_seed_results_inner(&mut self) -> bool {
+        let Some(rx) = self.subsystems.da_rbc.rbc.seed_rx.as_ref() else {
+            return false;
+        };
+        let mut drained = Vec::new();
+        let mut disconnected = false;
+        loop {
+            match rx.try_recv() {
+                Ok(result) => drained.push(result),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+        if disconnected {
+            self.subsystems.da_rbc.rbc.seed_tx = None;
+            self.subsystems.da_rbc.rbc.seed_rx = None;
+            self.subsystems.da_rbc.rbc.seed_inflight.clear();
+        }
+        if drained.is_empty() {
+            return false;
+        }
+        let mut progress = false;
+        for result in drained {
+            let Some(intent) = self.subsystems.da_rbc.rbc.seed_inflight.remove(&result.key) else {
+                continue;
+            };
+            progress = true;
+            let key = result.key;
+            match result.outcome {
+                Ok(mut seeded) => {
+                    if seeded.payload_hash.is_none() {
+                        seeded.payload_hash = Some(result.payload_hash);
+                    }
+                    let mut session = if let Some(existing) =
+                        self.subsystems.da_rbc.rbc.sessions.remove(&key)
+                    {
+                        let mut mismatch = existing.total_chunks != seeded.total_chunks;
+                        if existing.epoch != seeded.epoch {
+                            mismatch = true;
+                        }
+                        if let Some(existing_hash) = existing.payload_hash() {
+                            if seeded.payload_hash != Some(existing_hash) {
+                                mismatch = true;
+                            }
+                        }
+                        if let (Some(expected), Some(seed_digests)) = (
+                            existing.expected_chunk_digests.as_ref(),
+                            seeded.expected_chunk_digests.as_ref(),
+                        ) {
+                            if expected != seed_digests {
+                                mismatch = true;
+                            }
+                        }
+                        if let (Some(expected), Some(seed_root)) =
+                            (existing.expected_chunk_root, seeded.expected_chunk_root)
+                        {
+                            if expected != seed_root {
+                                mismatch = true;
+                            }
+                        }
+                        if mismatch {
+                            warn!(
+                                height = key.1,
+                                view = key.2,
+                                block = %key.0,
+                                "seeded RBC session mismatched existing metadata; marking invalid"
+                            );
+                            let mut existing = existing;
+                            existing.invalid = true;
+                            existing
+                        } else {
+                            let mut existing = existing;
+                            if existing.payload_hash.is_none() {
+                                existing.payload_hash = seeded.payload_hash;
+                            }
+                            if existing.expected_chunk_digests.is_none() {
+                                existing.expected_chunk_digests = seeded.expected_chunk_digests;
+                            }
+                            if existing.expected_chunk_root.is_none() {
+                                existing.expected_chunk_root = seeded.expected_chunk_root;
+                            }
+                            if existing.received_chunks < existing.total_chunks {
+                                existing.chunks = seeded.chunks;
+                                existing.received_chunks = seeded.received_chunks;
+                            }
+                            existing
+                        }
+                    } else {
+                        seeded
+                    };
+
+                    if session.block_header.is_none() || session.leader_signature.is_none() {
+                        if let Some(pending) = self.pending.pending_blocks.get(&key.0) {
+                            if session.block_header.is_none() {
+                                session.block_header = Some(pending.block.header());
+                            }
+                            if session.leader_signature.is_none() {
+                                let roster = self.rbc_roster_for_session(key);
+                                if !roster.is_empty() {
+                                    let mut topology =
+                                        super::network_topology::Topology::new(roster);
+                                    match self.leader_index_for(&mut topology, key.1, key.2) {
+                                        Ok(leader_index) => {
+                                            let leader_index =
+                                                u64::try_from(leader_index).unwrap_or(u64::MAX);
+                                            if let Some(signature) = pending
+                                                .block
+                                                .signatures()
+                                                .find(|signature| signature.index() == leader_index)
+                                            {
+                                                session.leader_signature = Some(signature.clone());
+                                            } else {
+                                                debug!(
+                                                    height = key.1,
+                                                    view = key.2,
+                                                    expected = leader_index,
+                                                    "leader signature missing after RBC seed"
+                                                );
+                                            }
+                                        }
+                                        Err(err) => {
+                                            debug!(
+                                                height = key.1,
+                                                view = key.2,
+                                                ?err,
+                                                "failed to derive leader index after RBC seed"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+                    let roster = self.rbc_roster_for_session(key);
+                    if roster.is_empty() {
+                        self.ensure_rbc_session_roster(key);
+                    } else {
+                        self.record_rbc_session_roster(key, roster, RbcRosterSource::Derived);
+                    }
+
+                    let invalid = self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .sessions
+                        .get(&key)
+                        .is_some_and(RbcSession::is_invalid);
+                    if invalid {
+                        self.clear_pending_rbc(&key);
+                    } else if let Err(err) = self.flush_pending_rbc(key) {
+                        warn!(?err, ?key, "failed to flush pending RBC after seed completion");
+                    }
+
+                    if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
+                        self.update_rbc_status_entry(key, &session, false);
+                        self.persist_rbc_session(key, &session);
+                    }
+                    self.publish_rbc_backlog_snapshot();
+                    if let Err(err) = self.maybe_emit_rbc_ready(key) {
+                        debug!(
+                            height = key.1,
+                            view = key.2,
+                            ?err,
+                            "failed to emit RBC READY after seed completion"
+                        );
+                    }
+                    if intent.rebroadcast_missing_init {
+                        if let Some(session) =
+                            self.subsystems.da_rbc.rbc.sessions.get(&key).cloned()
+                        {
+                            self.rebroadcast_rbc_payload_for_missing_init(key, &session);
+                        }
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        height = key.1,
+                        view = key.2,
+                        block = %key.0,
+                        error = %err,
+                        "failed to seed RBC session from payload"
+                    );
+                }
+            }
+        }
+        progress
     }
 
     pub(super) fn persist_rbc_session(&mut self, key: SessionKey, session: &RbcSession) {
