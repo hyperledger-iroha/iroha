@@ -1,6 +1,7 @@
 //! Tokio actor Peer
 
 use std::{
+    collections::VecDeque,
     net::SocketAddr,
     panic,
     sync::{
@@ -10,7 +11,7 @@ use std::{
     time::SystemTime,
 };
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 #[cfg(not(feature = "noise_handshake"))]
 use iroha_crypto::SessionKey;
 #[cfg(feature = "noise_handshake")]
@@ -1524,6 +1525,8 @@ mod run {
     use tokio::time::Instant;
     use tracing;
 
+    use crate::Priority;
+
     use super::{
         cryptographer::Cryptographer,
         handshake_flow::Handshake,
@@ -1818,7 +1821,9 @@ mod run {
                     &mut lo_other_rx,
                 ) {
                     iroha_logger::trace!("Post message ({})", low_topic_label(topic));
-                    if let Err(error) = message_sender.prepare_message(&Message::Data(msg)) {
+                    if let Err(error) =
+                        message_sender.prepare_message(&Message::Data(msg), Priority::Low)
+                    {
                         iroha_logger::error!(%error, "Failed to encrypt message.");
                         break;
                     }
@@ -1832,7 +1837,9 @@ mod run {
                             ping_period=?ping_interval.period(),
                             "The connection has been idle, pinging to check if it's alive"
                         );
-                        if let Err(error) = message_sender.prepare_message(&Message::<T>::Ping) {
+                        if let Err(error) =
+                            message_sender.prepare_message(&Message::<T>::Ping, Priority::High)
+                        {
                             iroha_logger::error!(%error, "Failed to encrypt message.");
                             break;
                         }
@@ -1845,10 +1852,24 @@ mod run {
                         break;
                     }
                     msg = hi_consensus_rx.recv(), if hi_budget > 0 => {
-                        if let Some(m) = msg { iroha_logger::trace!("Post message (hi:consensus)"); if let Err(error) = message_sender.prepare_message(&Message::Data(m)) { iroha_logger::error!(%error, "Failed to encrypt message."); break; } hi_budget = hi_budget.saturating_sub(1); }
+                        if let Some(m) = msg {
+                            iroha_logger::trace!("Post message (hi:consensus)");
+                            if let Err(error) = message_sender.prepare_message(&Message::Data(m), Priority::High) {
+                                iroha_logger::error!(%error, "Failed to encrypt message.");
+                                break;
+                            }
+                            hi_budget = hi_budget.saturating_sub(1);
+                        }
                     }
                     msg = hi_control_rx.recv(), if hi_budget > 0 => {
-                        if let Some(m) = msg { iroha_logger::trace!("Post message (hi:control)"); if let Err(error) = message_sender.prepare_message(&Message::Data(m)) { iroha_logger::error!(%error, "Failed to encrypt message."); break; } hi_budget = hi_budget.saturating_sub(1); }
+                        if let Some(m) = msg {
+                            iroha_logger::trace!("Post message (hi:control)");
+                            if let Err(error) = message_sender.prepare_message(&Message::Data(m), Priority::High) {
+                                iroha_logger::error!(%error, "Failed to encrypt message.");
+                                break;
+                            }
+                            hi_budget = hi_budget.saturating_sub(1);
+                        }
                     }
                     // Low-priority topics
                     low = recv_low_rr(
@@ -1862,7 +1883,10 @@ mod run {
                     ) => {
                         if let Some((topic, msg)) = low {
                             iroha_logger::trace!("Post message ({})", low_topic_label(topic));
-                            if let Err(error) = message_sender.prepare_message(&Message::Data(msg)) { iroha_logger::error!(%error, "Failed to encrypt message."); break; }
+                            if let Err(error) = message_sender.prepare_message(&Message::Data(msg), Priority::Low) {
+                                iroha_logger::error!(%error, "Failed to encrypt message.");
+                                break;
+                            }
                             hi_budget = HI_BUDGET_RESET;
                         }
                     }
@@ -1883,7 +1907,9 @@ mod run {
                         match message {
                             Message::Ping => {
                                 iroha_logger::trace!("Received peer ping");
-                                if let Err(error) = message_sender.prepare_message(&Message::<T>::Pong) {
+                                if let Err(error) =
+                                    message_sender.prepare_message(&Message::<T>::Pong, Priority::High)
+                                {
                                     iroha_logger::error!(%error, "Failed to encrypt message.");
                                     break;
                                 }
@@ -1933,7 +1959,7 @@ mod run {
                         &mut lo_health_rx,
                         &mut lo_other_rx,
                     ) {
-                        if let Err(error) = message_sender.prepare_message(&Message::Data(m)) {
+                        if let Err(error) = message_sender.prepare_message(&Message::Data(m), Priority::Low) {
                             iroha_logger::error!(%error, "Failed to encrypt message.");
                             break;
                         }
@@ -2100,8 +2126,12 @@ mod run {
         cryptographer: Cryptographer<E>,
         /// Reusable buffer to encode messages
         buffer: Vec<u8>,
-        /// Queue of encrypted messages waiting to be sent
-        queue: BytesMut,
+        /// Queue of encrypted messages waiting to be sent (high priority).
+        queue_high: VecDeque<Bytes>,
+        /// Queue of encrypted messages waiting to be sent (low priority).
+        queue_low: VecDeque<Bytes>,
+        /// In-flight frame currently being written to the socket.
+        inflight: Option<Bytes>,
         /// Maximum payload size accepted per encrypted frame
         max_frame_bytes: usize,
     }
@@ -2118,7 +2148,9 @@ mod run {
                 write,
                 cryptographer,
                 buffer: Vec::with_capacity(DEFAULT_BUFFER_CAPACITY),
-                queue: BytesMut::with_capacity(DEFAULT_BUFFER_CAPACITY),
+                queue_high: VecDeque::new(),
+                queue_low: VecDeque::new(),
+                inflight: None,
                 max_frame_bytes,
             }
         }
@@ -2127,7 +2159,7 @@ mod run {
         ///
         /// # Errors
         /// - If encryption fail.
-        fn prepare_message<T: Pload>(&mut self, msg: &T) -> Result<(), Error> {
+        fn prepare_message<T: Pload>(&mut self, msg: &T, priority: Priority) -> Result<(), Error> {
             // Start with fresh buffer
             self.buffer.clear();
             msg.encode_to(&mut self.buffer);
@@ -2137,10 +2169,15 @@ mod run {
             if size > self.max_frame_bytes {
                 return Err(Error::FrameTooLarge);
             }
-            self.queue.reserve(size + Self::U32_SIZE);
+            let mut frame = BytesMut::with_capacity(size + Self::U32_SIZE);
             #[allow(clippy::cast_possible_truncation)]
-            self.queue.put_u32(size as u32);
-            self.queue.put_slice(encrypted.as_slice());
+            frame.put_u32(size as u32);
+            frame.put_slice(encrypted.as_slice());
+            let frame = frame.freeze();
+            match priority {
+                Priority::High => self.queue_high.push_back(frame),
+                Priority::Low => self.queue_low.push_back(frame),
+            }
             Ok(())
         }
 
@@ -2153,18 +2190,30 @@ mod run {
         /// # Errors
         /// - If write to `stream` fail.
         async fn send(&mut self) -> Result<(), Error> {
-            let chunk = self.queue.chunk();
+            if self.inflight.is_none() {
+                self.inflight = self
+                    .queue_high
+                    .pop_front()
+                    .or_else(|| self.queue_low.pop_front());
+            }
+            let Some(frame) = self.inflight.as_mut() else {
+                return Ok(());
+            };
+            let chunk = frame.as_ref();
             if !chunk.is_empty() {
                 let n = self.write.write(chunk).await?;
-                self.queue.advance(n);
+                frame.advance(n);
                 self.write.flush().await?;
+            }
+            if frame.is_empty() {
+                self.inflight = None;
             }
             Ok(())
         }
 
         /// Check if message sender has data ready to be sent.
         fn ready(&self) -> bool {
-            !self.queue.is_empty()
+            self.inflight.is_some() || !self.queue_high.is_empty() || !self.queue_low.is_empty()
         }
     }
 
@@ -2193,6 +2242,8 @@ mod run {
         use norito::codec::{Decode, Encode};
         use tokio::io::{AsyncRead, AsyncWrite};
 
+        use crate::Priority;
+
         use super::*;
 
         #[derive(Encode, Decode, Clone, Debug)]
@@ -2209,6 +2260,10 @@ mod run {
 
         struct TrackingWrite {
             stats: Arc<Mutex<WriteStats>>,
+        }
+
+        struct CollectingWrite {
+            buffer: Arc<Mutex<Vec<u8>>>,
         }
 
         impl AsyncWrite for TrackingWrite {
@@ -2239,6 +2294,32 @@ mod run {
             }
         }
 
+        impl AsyncWrite for CollectingWrite {
+            fn poll_write(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                buf: &[u8],
+            ) -> Poll<std::io::Result<usize>> {
+                let mut buffer = self.buffer.lock().expect("buffer lock");
+                buffer.extend_from_slice(buf);
+                Poll::Ready(Ok(buf.len()))
+            }
+
+            fn poll_flush(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+
+            fn poll_shutdown(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
         #[tokio::test(flavor = "current_thread")]
         async fn message_sender_flushes_after_send() {
             let stats = Arc::new(Mutex::new(WriteStats::default()));
@@ -2251,7 +2332,7 @@ mod run {
             let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
 
             sender
-                .prepare_message(&Message::Data(Dummy))
+                .prepare_message(&Message::Data(Dummy), Priority::High)
                 .expect("prepare message");
             assert!(sender.ready(), "message sender should have queued data");
             sender.send().await.expect("send");
@@ -2260,6 +2341,59 @@ mod run {
             let stats = stats.lock().expect("stats lock");
             assert!(stats.writes > 0, "expected at least one write");
             assert!(stats.flushes > 0, "expected at least one flush");
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_prioritizes_high_frames() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[9u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            let low = Blob(vec![1u8]);
+            sender
+                .prepare_message(&Message::Data(low), Priority::Low)
+                .expect("prepare low message");
+            let high = Blob(vec![2u8]);
+            sender
+                .prepare_message(&Message::Data(high), Priority::High)
+                .expect("prepare high message");
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader = MessageReader::new(read, reader_cryptographer, 1024);
+
+            let (first, _) = reader
+                .read_message::<Message<Blob>>()
+                .await
+                .expect("read first")
+                .expect("first frame");
+            let (second, _) = reader
+                .read_message::<Message<Blob>>()
+                .await
+                .expect("read second")
+                .expect("second frame");
+
+            match first {
+                Message::Data(blob) => assert_eq!(blob.0, vec![2u8]),
+                _ => panic!("expected high data frame"),
+            }
+            match second {
+                Message::Data(blob) => assert_eq!(blob.0, vec![1u8]),
+                _ => panic!("expected low data frame"),
+            }
         }
 
         #[tokio::test(flavor = "current_thread")]
@@ -2464,7 +2598,9 @@ mod run {
         fn assert_large_payload_rejected(max_frame_bytes: usize) {
             let mut sender = make_sender(max_frame_bytes);
             let payload = Blob(vec![0u8; max_frame_bytes.saturating_add(128)]);
-            let err = sender.prepare_message(&payload).unwrap_err();
+            let err = sender
+                .prepare_message(&payload, Priority::High)
+                .unwrap_err();
             assert!(matches!(err, Error::FrameTooLarge));
             assert!(!sender.ready(), "rejected frame should not queue data");
         }
@@ -2474,7 +2610,7 @@ mod run {
             let mut sender = make_sender(512);
             let small = Blob(vec![0u8; 8]);
             sender
-                .prepare_message(&small)
+                .prepare_message(&small, Priority::High)
                 .expect("small payload must be accepted");
             assert!(sender.ready(), "accepted frame should be queued");
         }
