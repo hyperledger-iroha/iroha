@@ -1181,7 +1181,7 @@ mod tests {
         GovernanceCatalog, GovernanceModule as ConfigGovernanceModule, LaneRegistry,
     };
     use iroha_data_model::{
-        account::{address, AccountAddress, AccountId},
+        account::{AccountAddress, AccountId, address},
         nexus::{LaneCatalog, LaneConfig},
         prelude::Name,
     };

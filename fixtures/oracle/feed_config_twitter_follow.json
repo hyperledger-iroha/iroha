@@ -6,8 +6,8 @@
     1
   ],
   "providers": [
-    "34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA",
-    "34mSYnLrmfrui7Ba2h9RbAPY1hHNEQje517tbXn44vUUkA7F8361DR6aQeHKSaNSKFruciKzA"
+    "34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA@validators",
+    "34mSYnLrmfrui7Ba2h9RbAPY1hHNEQje517tbXn44vUUkA7F8361DR6aQeHKSaNSKFruciKzA@validators"
   ],
   "connector_id": "twitter-follow",
   "connector_version": 1,

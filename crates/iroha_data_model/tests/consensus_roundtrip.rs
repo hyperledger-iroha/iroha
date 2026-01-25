@@ -412,9 +412,7 @@ fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
     let total_chunks = u32::try_from(rng.range_inclusive(1, 8)).expect("range bound fits u32");
     let mut chunk_digests = Vec::with_capacity(total_chunks as usize);
     for _ in 0..total_chunks {
-        let mut digest = [0u8; 32];
-        digest.copy_from_slice(&rng.bytes(32));
-        chunk_digests.push(digest);
+        chunk_digests.push(rng.array32());
     }
     let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(chunk_digests.clone())
         .root()
