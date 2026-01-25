@@ -4596,6 +4596,122 @@ mod tests {
         }
     }
 
+    struct TickEnqueueActorWithDelays {
+        events: Vec<&'static str>,
+        block_payload_tx: mpsc::SyncSender<InboundBlockMessage>,
+        block_tx: mpsc::SyncSender<InboundBlockMessage>,
+        block_created: message::BlockCreated,
+        payload_sleep: Duration,
+        block_sleep: Duration,
+    }
+
+    impl WorkerActor for TickEnqueueActorWithDelays {
+        fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
+            match msg.message {
+                BlockMessage::Proposal(_) => {
+                    std::thread::sleep(self.payload_sleep);
+                    self.events.push("payload");
+                }
+                BlockMessage::BlockCreated(_) => {
+                    std::thread::sleep(self.block_sleep);
+                    self.events.push("block");
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            Ok(())
+        }
+
+        fn tick(&mut self) -> bool {
+            self.events.push("tick");
+            let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+            let proposal = Proposal {
+                header: ConsensusBlockHeader {
+                    parent_hash: block_hash,
+                    tx_root: Hash::new(b"tx"),
+                    state_root: Hash::new(b"state"),
+                    proposer: 0,
+                    height: 1,
+                    view: 0,
+                    epoch: 0,
+                    highest_qc: QcHeaderRef {
+                        height: 0,
+                        view: 0,
+                        epoch: 0,
+                        subject_block_hash: block_hash,
+                        phase: Phase::Prepare,
+                    },
+                },
+                payload_hash: Hash::new(b"payload"),
+            };
+            self.block_payload_tx
+                .send(InboundBlockMessage::new(
+                    BlockMessage::Proposal(proposal),
+                    None,
+                ))
+                .expect("send proposal");
+            status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
+
+            self.block_tx
+                .send(InboundBlockMessage::new(
+                    BlockMessage::BlockCreated(self.block_created.clone()),
+                    None,
+                ))
+                .expect("send block created");
+            status::record_worker_queue_enqueue(status::WorkerQueueKind::Blocks);
+            true
+        }
+    }
+
+    struct PreTickDrainActor {
+        vote_sleep: Duration,
+        payload_sleep: Duration,
+        block_sleep: Duration,
+    }
+
+    impl WorkerActor for PreTickDrainActor {
+        fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
+            match msg.message {
+                BlockMessage::QcVote(_) => std::thread::sleep(self.vote_sleep),
+                BlockMessage::Proposal(_) => std::thread::sleep(self.payload_sleep),
+                BlockMessage::BlockCreated(_) => std::thread::sleep(self.block_sleep),
+                _ => {}
+            }
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            Ok(())
+        }
+
+        fn should_tick(&self) -> bool {
+            false
+        }
+
+        fn tick(&mut self) -> bool {
+            false
+        }
+    }
+
     #[test]
     #[allow(clippy::too_many_lines)]
     fn run_worker_iteration_drains_in_priority_order() {
@@ -6030,6 +6146,223 @@ mod tests {
         assert!(stats.progress);
         let depths = status::worker_queue_depth_snapshot();
         assert_eq!(depths.block_payload_rx, 0);
+    }
+
+    #[test]
+    fn run_worker_iteration_records_post_tick_tier_timings() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let header = BlockHeader {
+            height: NonZeroU64::new(1).expect("non-zero"),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            creation_time_ms: 0,
+            view_change_index: 0,
+            confidential_features: None,
+        };
+        let key_pair = KeyPair::random();
+        let (_, private_key) = key_pair.into_parts();
+        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let block_signature = BlockSignature::new(0, signature);
+        let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
+        let block_created = message::BlockCreated { block };
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let past = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        let mut loop_state = WorkerLoopState {
+            last_tick: past,
+            last_served: [past; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = TickEnqueueActorWithDelays {
+            events: Vec::new(),
+            block_payload_tx,
+            block_tx,
+            block_created,
+            payload_sleep: Duration::from_millis(5),
+            block_sleep: Duration::from_millis(5),
+        };
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(stats.block_payloads_handled, 1);
+        assert_eq!(stats.blocks_handled, 1);
+        assert!(stats.post_tick_block_payload_drain_ms > 0);
+        assert!(stats.post_tick_blocks_drain_ms > 0);
+    }
+
+    #[test]
+    fn run_worker_iteration_records_pre_tick_tier_timings() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        let vote = Vote {
+            phase: Phase::Prepare,
+            block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        vote_tx
+            .send(inbound(BlockMessage::QcVote(vote)))
+            .expect("send vote");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
+
+        let proposal = Proposal {
+            header: ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::new(b"tx"),
+                state_root: Hash::new(b"state"),
+                proposer: 0,
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: QcHeaderRef {
+                    height: 0,
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: block_hash,
+                    phase: Phase::Prepare,
+                },
+            },
+            payload_hash: Hash::new(b"payload"),
+        };
+        block_payload_tx
+            .send(inbound(BlockMessage::Proposal(proposal)))
+            .expect("send proposal");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
+
+        let header = BlockHeader {
+            height: NonZeroU64::new(1).expect("non-zero"),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            creation_time_ms: 0,
+            view_change_index: 0,
+            confidential_features: None,
+        };
+        let key_pair = KeyPair::random();
+        let (_, private_key) = key_pair.into_parts();
+        let signature = SignatureOf::from_hash(&private_key, header.hash());
+        let block_signature = BlockSignature::new(0, signature);
+        let block = SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
+        let block_created = message::BlockCreated { block };
+        block_tx
+            .send(inbound(BlockMessage::BlockCreated(block_created)))
+            .expect("send block");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::Blocks);
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let past = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        let mut loop_state = WorkerLoopState {
+            last_tick: past,
+            last_served: [past; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = PreTickDrainActor {
+            vote_sleep: Duration::from_millis(5),
+            payload_sleep: Duration::from_millis(5),
+            block_sleep: Duration::from_millis(5),
+        };
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(stats.votes_handled, 1);
+        assert_eq!(stats.block_payloads_handled, 1);
+        assert_eq!(stats.blocks_handled, 1);
+        assert!(stats.pre_tick_votes_drain_ms > 0);
+        assert!(stats.pre_tick_block_payload_drain_ms > 0);
+        assert!(stats.pre_tick_blocks_drain_ms > 0);
     }
 
     #[test]
@@ -8646,6 +8979,12 @@ struct WorkerIterationStats {
     votes_handled: usize,
     vote_drain_ms: u64,
     block_payload_drain_ms: u64,
+    pre_tick_votes_drain_ms: u64,
+    pre_tick_block_payload_drain_ms: u64,
+    pre_tick_blocks_drain_ms: u64,
+    post_tick_votes_drain_ms: u64,
+    post_tick_block_payload_drain_ms: u64,
+    post_tick_blocks_drain_ms: u64,
     precommit_votes_handled: usize,
     last_precommit_vote: Option<(u64, u64, u64, HashOf<BlockHeader>)>,
     consensus_handled: usize,
@@ -8685,6 +9024,12 @@ fn should_warn_slow_iteration(stats: &WorkerIterationStats) -> bool {
         || has_pending_queue_depths(stats.queue_depths)
 }
 
+#[derive(Clone, Copy, Debug)]
+enum DrainPhase {
+    PreTick,
+    PostTick,
+}
+
 fn drain_mailbox<A: WorkerActor>(
     actor: &mut A,
     cfg: &WorkerLoopConfig,
@@ -8693,6 +9038,7 @@ fn drain_mailbox<A: WorkerActor>(
     budgets: &mut TierBudgets,
     stats: &mut WorkerIterationStats,
     last_served: &mut [Instant; PRIORITY_TIER_COUNT],
+    phase: DrainPhase,
     tick_deadline: Option<Instant>,
 ) {
     let vote_burst = cfg.vote_rx_drain_max_messages.min(VOTE_BURST_CAP).max(1);
@@ -8741,8 +9087,11 @@ fn drain_mailbox<A: WorkerActor>(
         status::set_worker_stage(tier.stage());
         match envelope.message {
             WorkerMessage::Block(msg) => {
-                let drain_start = matches!(tier, PriorityTier::Votes | PriorityTier::BlockPayload)
-                    .then(Instant::now);
+                let drain_start = matches!(
+                    tier,
+                    PriorityTier::Votes | PriorityTier::BlockPayload | PriorityTier::Blocks
+                )
+                .then(Instant::now);
                 if let BlockMessage::QcVote(vote) = &msg.message {
                     stats.precommit_votes_handled = stats.precommit_votes_handled.saturating_add(1);
                     stats.last_precommit_vote =
@@ -8767,10 +9116,38 @@ fn drain_mailbox<A: WorkerActor>(
                         PriorityTier::Votes => {
                             stats.vote_drain_ms =
                                 stats.vote_drain_ms.saturating_add(elapsed_ms);
+                            if matches!(phase, DrainPhase::PreTick) {
+                                stats.pre_tick_votes_drain_ms =
+                                    stats.pre_tick_votes_drain_ms.saturating_add(elapsed_ms);
+                            }
+                            if matches!(phase, DrainPhase::PostTick) {
+                                stats.post_tick_votes_drain_ms =
+                                    stats.post_tick_votes_drain_ms.saturating_add(elapsed_ms);
+                            }
                         }
                         PriorityTier::BlockPayload => {
                             stats.block_payload_drain_ms =
                                 stats.block_payload_drain_ms.saturating_add(elapsed_ms);
+                            if matches!(phase, DrainPhase::PreTick) {
+                                stats.pre_tick_block_payload_drain_ms = stats
+                                    .pre_tick_block_payload_drain_ms
+                                    .saturating_add(elapsed_ms);
+                            }
+                            if matches!(phase, DrainPhase::PostTick) {
+                                stats.post_tick_block_payload_drain_ms = stats
+                                    .post_tick_block_payload_drain_ms
+                                    .saturating_add(elapsed_ms);
+                            }
+                        }
+                        PriorityTier::Blocks => {
+                            if matches!(phase, DrainPhase::PreTick) {
+                                stats.pre_tick_blocks_drain_ms =
+                                    stats.pre_tick_blocks_drain_ms.saturating_add(elapsed_ms);
+                            }
+                            if matches!(phase, DrainPhase::PostTick) {
+                                stats.post_tick_blocks_drain_ms =
+                                    stats.post_tick_blocks_drain_ms.saturating_add(elapsed_ms);
+                            }
                         }
                         _ => {}
                     }
@@ -8845,6 +9222,12 @@ fn run_worker_iteration<A: WorkerActor>(
         votes_handled: 0,
         vote_drain_ms: 0,
         block_payload_drain_ms: 0,
+        pre_tick_votes_drain_ms: 0,
+        pre_tick_block_payload_drain_ms: 0,
+        pre_tick_blocks_drain_ms: 0,
+        post_tick_votes_drain_ms: 0,
+        post_tick_block_payload_drain_ms: 0,
+        post_tick_blocks_drain_ms: 0,
         precommit_votes_handled: 0,
         last_precommit_vote: None,
         consensus_handled: 0,
@@ -8891,6 +9274,7 @@ fn run_worker_iteration<A: WorkerActor>(
         &mut budgets,
         &mut stats,
         last_served,
+        DrainPhase::PreTick,
         pre_tick_deadline,
     );
     stats.pre_tick_drain_ms = u64::try_from(drain_start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -8958,6 +9342,7 @@ fn run_worker_iteration<A: WorkerActor>(
             &mut budgets,
             &mut stats,
             last_served,
+            DrainPhase::PostTick,
             None,
         );
         stats.post_tick_drain_ms =
@@ -8975,13 +9360,20 @@ fn run_worker_iteration<A: WorkerActor>(
         budgets.remaining(PriorityTier::Blocks) == 0 && post_tick_depths.block_rx > 0;
 
     stats.queue_depths = post_tick_depths;
-    if stats.votes_handled > 0 || stats.block_payloads_handled > 0 {
+    if stats.votes_handled > 0 || stats.block_payloads_handled > 0 || stats.blocks_handled > 0 {
         iroha_logger::debug!(
             votes_handled = stats.votes_handled,
             vote_drain_ms = stats.vote_drain_ms,
             block_payloads_handled = stats.block_payloads_handled,
             block_payload_drain_ms = stats.block_payload_drain_ms,
-            "sumeragi worker drain timings for vote/payload tiers"
+            blocks_handled = stats.blocks_handled,
+            pre_tick_votes_drain_ms = stats.pre_tick_votes_drain_ms,
+            pre_tick_block_payload_drain_ms = stats.pre_tick_block_payload_drain_ms,
+            pre_tick_blocks_drain_ms = stats.pre_tick_blocks_drain_ms,
+            post_tick_votes_drain_ms = stats.post_tick_votes_drain_ms,
+            post_tick_block_payload_drain_ms = stats.post_tick_block_payload_drain_ms,
+            post_tick_blocks_drain_ms = stats.post_tick_blocks_drain_ms,
+            "sumeragi worker drain timings by tier"
         );
     }
     stats
@@ -9170,6 +9562,12 @@ fn run_worker_loop<A: WorkerActor>(
                 pre_tick_drain_ms = stats.pre_tick_drain_ms,
                 tick_elapsed_ms = stats.tick_elapsed_ms,
                 post_tick_drain_ms = stats.post_tick_drain_ms,
+                pre_tick_votes_drain_ms = stats.pre_tick_votes_drain_ms,
+                pre_tick_block_payload_drain_ms = stats.pre_tick_block_payload_drain_ms,
+                pre_tick_blocks_drain_ms = stats.pre_tick_blocks_drain_ms,
+                post_tick_votes_drain_ms = stats.post_tick_votes_drain_ms,
+                post_tick_block_payload_drain_ms = stats.post_tick_block_payload_drain_ms,
+                post_tick_blocks_drain_ms = stats.post_tick_blocks_drain_ms,
                 vote_rx_depth = stats.queue_depths.vote_rx,
                 block_payload_rx_depth = stats.queue_depths.block_payload_rx,
                 rbc_chunk_rx_depth = stats.queue_depths.rbc_chunk_rx,
@@ -9201,6 +9599,12 @@ mod worker_iteration_warn_tests {
             votes_handled: 0,
             vote_drain_ms: 0,
             block_payload_drain_ms: 0,
+            pre_tick_votes_drain_ms: 0,
+            pre_tick_block_payload_drain_ms: 0,
+            pre_tick_blocks_drain_ms: 0,
+            post_tick_votes_drain_ms: 0,
+            post_tick_block_payload_drain_ms: 0,
+            post_tick_blocks_drain_ms: 0,
             precommit_votes_handled: 0,
             last_precommit_vote: None,
             consensus_handled: 0,
