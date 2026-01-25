@@ -470,6 +470,7 @@ static POST_OVERFLOWS_LO_OTHER: AtomicU64 = AtomicU64::new(0);
 // Jittered exponential backoff for reconnect attempts.
 const BACKOFF_INITIAL: Duration = Duration::from_millis(100);
 const BACKOFF_MAX: Duration = Duration::from_secs(5);
+const INBOUND_PEER_HIGH_BUDGET: usize = 32;
 /// Default hop limit for relay forwarding (origin hub hop + spoke hop).
 #[cfg(test)]
 const DEFAULT_RELAY_TTL: u8 = 8;
@@ -1796,7 +1797,9 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             net_channel::channel_with_capacity(p2p_queue_cap_high.get());
         let (network_message_low_sender, network_message_low_receiver) =
             net_channel::channel_with_capacity(p2p_queue_cap_low.get());
-        let (peer_message_sender, peer_message_receiver) =
+        let (peer_message_high_sender, peer_message_high_receiver) =
+            mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
+        let (peer_message_low_sender, peer_message_low_receiver) =
             mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
         let (service_message_sender, service_message_receiver) =
             mpsc::channel::<ServiceMessage<WireMessage<T>>>(1);
@@ -1900,8 +1903,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             update_consensus_caps_receiver,
             network_message_high_receiver,
             network_message_low_receiver,
-            peer_message_receiver,
-            peer_message_sender,
+            peer_message_high_receiver,
+            peer_message_low_receiver,
+            peer_message_high_sender,
+            peer_message_low_sender,
             service_message_receiver,
             service_message_sender,
             current_conn_id: 0,
@@ -2923,7 +2928,9 @@ mod accept_stream_tests {
             mpsc::unbounded_channel::<super::message::UpdateHandshake>();
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
             mpsc::unbounded_channel::<super::message::UpdateConsensusCaps>();
-        let (peer_message_tx, peer_message_rx) =
+        let (peer_message_hi_tx, peer_message_hi_rx) =
+            mpsc::channel::<super::PeerMessage<WireMessage<Dummy>>>(1);
+        let (peer_message_lo_tx, peer_message_lo_rx) =
             mpsc::channel::<super::PeerMessage<WireMessage<Dummy>>>(1);
         let (service_message_tx, service_message_rx) =
             mpsc::channel::<super::ServiceMessage<WireMessage<Dummy>>>(4);
@@ -2960,8 +2967,10 @@ mod accept_stream_tests {
             update_acl_receiver: update_acl_rx,
             network_message_high_receiver: network_message_high_rx,
             network_message_low_receiver: network_message_low_rx,
-            peer_message_receiver: peer_message_rx,
-            peer_message_sender: peer_message_tx,
+            peer_message_high_receiver: peer_message_hi_rx,
+            peer_message_low_receiver: peer_message_lo_rx,
+            peer_message_high_sender: peer_message_hi_tx,
+            peer_message_low_sender: peer_message_lo_tx,
             service_message_receiver: service_message_rx,
             service_message_sender: service_message_tx,
             update_handshake_receiver: update_handshake_rx,
@@ -3242,7 +3251,9 @@ mod accept_stream_tests {
             mpsc::unbounded_channel::<super::message::UpdateHandshake>();
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
             mpsc::unbounded_channel::<super::message::UpdateConsensusCaps>();
-        let (peer_message_tx, peer_message_rx) =
+        let (peer_message_hi_tx, peer_message_hi_rx) =
+            mpsc::channel::<super::PeerMessage<WireMessage<DummyConsensus>>>(1);
+        let (peer_message_lo_tx, peer_message_lo_rx) =
             mpsc::channel::<super::PeerMessage<WireMessage<DummyConsensus>>>(1);
         let (service_message_tx, service_message_rx) =
             mpsc::channel::<super::ServiceMessage<WireMessage<DummyConsensus>>>(4);
@@ -3279,8 +3290,10 @@ mod accept_stream_tests {
             update_acl_receiver: update_acl_rx,
             network_message_high_receiver: network_message_high_rx,
             network_message_low_receiver: network_message_low_rx,
-            peer_message_receiver: peer_message_rx,
-            peer_message_sender: peer_message_tx,
+            peer_message_high_receiver: peer_message_hi_rx,
+            peer_message_low_receiver: peer_message_lo_rx,
+            peer_message_high_sender: peer_message_hi_tx,
+            peer_message_low_sender: peer_message_lo_tx,
             service_message_receiver: service_message_rx,
             service_message_sender: service_message_tx,
             update_handshake_receiver: update_handshake_rx,
@@ -3430,7 +3443,9 @@ mod accept_stream_tests {
             mpsc::unbounded_channel::<super::message::UpdateHandshake>();
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
             mpsc::unbounded_channel::<super::message::UpdateConsensusCaps>();
-        let (peer_message_tx, peer_message_rx) =
+        let (peer_message_hi_tx, peer_message_hi_rx) =
+            mpsc::channel::<super::PeerMessage<WireMessage<DummyPayload>>>(1);
+        let (peer_message_lo_tx, peer_message_lo_rx) =
             mpsc::channel::<super::PeerMessage<WireMessage<DummyPayload>>>(1);
         let (service_message_tx, service_message_rx) =
             mpsc::channel::<super::ServiceMessage<WireMessage<DummyPayload>>>(4);
@@ -3467,8 +3482,10 @@ mod accept_stream_tests {
             update_acl_receiver: update_acl_rx,
             network_message_high_receiver: network_message_high_rx,
             network_message_low_receiver: network_message_low_rx,
-            peer_message_receiver: peer_message_rx,
-            peer_message_sender: peer_message_tx,
+            peer_message_high_receiver: peer_message_hi_rx,
+            peer_message_low_receiver: peer_message_lo_rx,
+            peer_message_high_sender: peer_message_hi_tx,
+            peer_message_low_sender: peer_message_lo_tx,
             service_message_receiver: service_message_rx,
             service_message_sender: service_message_tx,
             update_handshake_receiver: update_handshake_rx,
@@ -3634,7 +3651,9 @@ mod accept_stream_tests {
             mpsc::unbounded_channel::<super::message::UpdateHandshake>();
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
             mpsc::unbounded_channel::<super::message::UpdateConsensusCaps>();
-        let (peer_message_tx, peer_message_rx) =
+        let (peer_message_hi_tx, peer_message_hi_rx) =
+            mpsc::channel::<super::PeerMessage<WireMessage<DummyPayload>>>(1);
+        let (peer_message_lo_tx, peer_message_lo_rx) =
             mpsc::channel::<super::PeerMessage<WireMessage<DummyPayload>>>(1);
         let (service_message_tx, service_message_rx) =
             mpsc::channel::<super::ServiceMessage<WireMessage<DummyPayload>>>(4);
@@ -3671,8 +3690,10 @@ mod accept_stream_tests {
             update_acl_receiver: update_acl_rx,
             network_message_high_receiver: network_message_high_rx,
             network_message_low_receiver: network_message_low_rx,
-            peer_message_receiver: peer_message_rx,
-            peer_message_sender: peer_message_tx,
+            peer_message_high_receiver: peer_message_hi_rx,
+            peer_message_low_receiver: peer_message_lo_rx,
+            peer_message_high_sender: peer_message_hi_tx,
+            peer_message_low_sender: peer_message_lo_tx,
             service_message_receiver: service_message_rx,
             service_message_sender: service_message_tx,
             update_handshake_receiver: update_handshake_rx,
@@ -3960,7 +3981,7 @@ async fn start_quic_listener<T, K, E>(
     relay_role: RelayRole,
 ) -> Result<(), Error>
 where
-    T: Pload,
+    T: Pload + message::ClassifyTopic,
     K: Kex,
     E: Enc,
 {
@@ -4139,7 +4160,7 @@ async fn start_tls_listener<T, K, E>(
     trust_gossip: bool,
 ) -> Result<(), Error>
 where
-    T: boilerplate::Pload,
+    T: boilerplate::Pload + message::ClassifyTopic,
     K: boilerplate::Kex,
     E: boilerplate::Enc,
 {
@@ -4294,10 +4315,14 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     network_message_high_receiver: net_channel::Receiver<NetworkMessage<T>>,
     /// Receiver of low priority [`NetworkMessage`]
     network_message_low_receiver: net_channel::Receiver<NetworkMessage<T>>,
-    /// Channel to gather messages from all peers
-    peer_message_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
-    /// Sender for peer messages to provide clone of sender inside peer
-    peer_message_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
+    /// High-priority inbound peer messages (consensus/control).
+    peer_message_high_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
+    /// Low-priority inbound peer messages (gossip/sync).
+    peer_message_low_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
+    /// Sender for high-priority peer messages to provide clone inside peer.
+    peer_message_high_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
+    /// Sender for low-priority peer messages to provide clone inside peer.
+    peer_message_low_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
     /// Channel to gather service messages from all peers
     service_message_receiver: mpsc::Receiver<ServiceMessage<WireMessage<T>>>,
     /// Sender for service peer messages to provide clone of sender inside peer
@@ -4449,6 +4474,17 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             None
         };
         loop {
+            let mut high_drained = 0usize;
+            while high_drained < INBOUND_PEER_HIGH_BUDGET {
+                match self.peer_message_high_receiver.try_recv() {
+                    Ok(peer_message) => {
+                        self.peer_message(peer_message).await;
+                        high_drained = high_drained.saturating_add(1);
+                    }
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
+                }
+            }
             tokio::select! {
                 // Select is biased because we want to service messages to take priority over data messages.
                 biased;
@@ -4622,6 +4658,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         NetworkMessage::Broadcast(broadcast) => self.broadcast(broadcast),
                     }
                 }
+                // High-priority inbound peer messages (consensus/control)
+                Some(peer_message) = self.peer_message_high_receiver.recv() => {
+                    self.peer_message(peer_message).await;
+                }
                 // Low-priority network messages (gossip)
                 network_message = self.network_message_low_receiver.recv() => {
                     let Some(network_message) = network_message else {
@@ -4680,8 +4720,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         }
                     }
                 }
-                // Messages from other peers has lowest priority because we can't control their frequency
-                Some(peer_message) = self.peer_message_receiver.recv() => {
+                // Low-priority inbound peer messages (gossip/sync)
+                Some(peer_message) = self.peer_message_low_receiver.recv() => {
                     self.peer_message(peer_message).await;
                 }
                 () = shutdown_signal.receive() => {
@@ -5396,7 +5436,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             relay_role,
             trust_gossip,
         };
-        let _ = peer_message_sender.send(self.peer_message_sender.clone());
+        let _ = peer_message_sender.send(crate::peer::message::PeerMessageSenders {
+            high: self.peer_message_high_sender.clone(),
+            low: self.peer_message_low_sender.clone(),
+        });
         self.peers.insert(peer.id().clone(), ref_peer);
         if self.dns_refresh_interval.is_some() || self.dns_refresh_ttl.is_some() {
             if self.dns_pending_refresh.remove(peer.id()) {
@@ -6252,7 +6295,10 @@ mod tests {
             mpsc::unbounded_channel::<message::UpdateHandshake>();
         let (_update_consensus_caps_tx, update_consensus_caps_receiver) =
             mpsc::unbounded_channel::<message::UpdateConsensusCaps>();
-        let (peer_message_tx, peer_message_rx) = mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
+        let (peer_message_hi_tx, peer_message_hi_rx) =
+            mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
+        let (peer_message_lo_tx, peer_message_lo_rx) =
+            mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
         let (service_message_tx, service_message_rx) =
             mpsc::channel::<ServiceMessage<WireMessage<T>>>(4);
         let (_network_hi_tx, network_message_high_rx) = net_channel::channel_with_capacity(1);
@@ -6290,8 +6336,10 @@ mod tests {
             update_consensus_caps_receiver,
             network_message_high_receiver: network_message_high_rx,
             network_message_low_receiver: network_message_low_rx,
-            peer_message_receiver: peer_message_rx,
-            peer_message_sender: peer_message_tx,
+            peer_message_high_receiver: peer_message_hi_rx,
+            peer_message_low_receiver: peer_message_lo_rx,
+            peer_message_high_sender: peer_message_hi_tx,
+            peer_message_low_sender: peer_message_lo_tx,
             service_message_receiver: service_message_rx,
             service_message_sender: service_message_tx,
             current_conn_id: 0,

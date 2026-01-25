@@ -8922,6 +8922,15 @@ impl Actor {
             message: msg,
             sender,
         } = msg;
+        if let BlockMessage::RbcInit(init) = &msg {
+            debug!(
+                height = init.height,
+                view = init.view,
+                block = %init.block_hash,
+                sender = ?sender,
+                "dequeued RBC INIT"
+            );
+        }
         let _message_timing = MessageTimingGuard::for_message(&msg);
         debug!(message=%Self::block_message_kind(&msg), "received consensus block message");
         self.note_message_received(&msg);

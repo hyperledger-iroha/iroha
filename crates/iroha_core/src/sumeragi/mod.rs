@@ -7898,7 +7898,18 @@ impl SumeragiHandle {
             }
             BlockMessage::RbcInit(init) => enqueue_with_mode(
                 &self.block,
-                InboundBlockMessage::new(BlockMessage::RbcInit(init), sender),
+                {
+                    iroha_logger::debug!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        total_chunks = init.total_chunks,
+                        mode = ?mode,
+                        queue = ?status::WorkerQueueKind::Blocks,
+                        "enqueueing RBC INIT"
+                    );
+                    InboundBlockMessage::new(BlockMessage::RbcInit(init), sender)
+                },
                 "RbcInit",
                 status::WorkerQueueKind::Blocks,
                 mode,
