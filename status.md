@@ -2,6 +2,9 @@
 
 Last update: 2026-01-25
 
+- Sumeragi RBC: when the derived commit roster is unavailable, treat the INIT roster as authoritative if it matches the active topology to unblock READY emission under NPoS; added `handle_rbc_init_uses_active_roster_when_derived_missing` coverage.
+- Tests: `cargo test -p iroha_core handle_rbc_init_uses_active_roster_when_derived_missing -- --nocapture` (warnings about unused assignments in `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and unused `PeersGossiperHandle::closed_for_tests`/`consensus_mode` persist).
+
 - Consensus ingress: classify RBC chunks as critical (with RBC-session tracking) so chunk delivery is not throttled by bulk caps; updated ingress limiter tests.
 - Tests: not run (not requested).
 
