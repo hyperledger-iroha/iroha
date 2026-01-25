@@ -6095,8 +6095,12 @@ mod tests {
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
         };
-        let (kura, _) =
+        let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        let baseline = kura.kura_disk_usage_bytes().expect("baseline usage");
+        Arc::get_mut(&mut kura)
+            .expect("exclusive kura handle")
+            .max_disk_usage_bytes = baseline.saturating_add(kura_cfg.max_disk_usage_bytes.get());
         let block: SignedBlock = ValidBlock::new_dummy(KeyPair::random().private_key()).into();
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
@@ -6561,8 +6565,12 @@ mod tests {
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
         };
-        let (kura, _) =
+        let (mut kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
+        let baseline = kura.kura_disk_usage_bytes().expect("baseline usage");
+        Arc::get_mut(&mut kura)
+            .expect("exclusive kura handle")
+            .max_disk_usage_bytes = baseline.saturating_add(budget_limit);
 
         let retired_root = temp_dir.path().join("retired");
         let lane_cfg = RuntimeLaneConfig::default();

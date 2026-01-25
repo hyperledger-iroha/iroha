@@ -197,8 +197,8 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
                 .write(["sumeragi", "npos", "timeouts", "precommit_ms"], 1_200_i64)
                 .write(["sumeragi", "npos", "timeouts", "commit_ms"], 1_600_i64)
                 .write(["sumeragi", "npos", "timeouts", "da_ms"], 800_i64)
-                .write(["sumeragi", "pacemaker_max_backoff_ms"], 2_000_i64)
-                .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 1_i64);
+                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 2_000_i64)
+                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 1_i64);
         });
 
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -328,8 +328,8 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
                 .write(["sumeragi", "npos", "timeouts", "precommit_ms"], 600_i64)
                 .write(["sumeragi", "npos", "timeouts", "commit_ms"], 800_i64)
                 .write(["sumeragi", "npos", "timeouts", "da_ms"], 400_i64)
-                .write(["sumeragi", "pacemaker_max_backoff_ms"], 2_000_i64)
-                .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 1_i64);
+                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 2_000_i64)
+                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 1_i64);
         });
 
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -460,10 +460,10 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                 .write(["sumeragi", "npos", "timeouts", "commit_ms"], 800_i64)
                 .write(["sumeragi", "npos", "timeouts", "da_ms"], 400_i64)
                 // Give DA quorum extra breathing room under sustained load.
-                .write(["sumeragi", "da_quorum_timeout_multiplier"], 7_i64)
-                .write(["sumeragi", "da_availability_timeout_multiplier"], 3_i64)
-                .write(["sumeragi", "pacemaker_max_backoff_ms"], 10_000_i64)
-                .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 2_i64);
+                .write(["sumeragi", "da", "quorum_timeout_multiplier"], 7_i64)
+                .write(["sumeragi", "da", "availability_timeout_multiplier"], 3_i64)
+                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 10_000_i64)
+                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 2_i64);
         });
 
     let result: Result<()> = async {
@@ -617,8 +617,8 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         .with_config_layer(|layer| {
             layer
                 .write(["sumeragi", "consensus_mode"], "permissioned")
-                .write(["sumeragi", "collectors_k"], 3_i64)
-                .write(["sumeragi", "collectors_redundant_send_r"], 2_i64)
+                .write(["sumeragi", "collectors", "k"], 3_i64)
+                .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
                 .write(
                     ["network", "transaction_gossip_restricted_fallback"],
@@ -635,10 +635,10 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                 .write(["sumeragi", "npos", "timeouts", "commit_ms"], 800_i64)
                 .write(["sumeragi", "npos", "timeouts", "da_ms"], 400_i64)
                 // Give DA quorum extra breathing room under sustained load.
-                .write(["sumeragi", "da_quorum_timeout_multiplier"], 7_i64)
-                .write(["sumeragi", "da_availability_timeout_multiplier"], 3_i64)
-                .write(["sumeragi", "pacemaker_max_backoff_ms"], 5_000_i64)
-                .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 1_i64);
+                .write(["sumeragi", "da", "quorum_timeout_multiplier"], 7_i64)
+                .write(["sumeragi", "da", "availability_timeout_multiplier"], 3_i64)
+                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 5_000_i64)
+                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 1_i64);
         });
 
     let result: Result<()> = async {
@@ -1216,8 +1216,8 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         .with_config_layer(|layer| {
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
-                .write(["sumeragi", "collectors_k"], 3_i64)
-                .write(["sumeragi", "collectors_redundant_send_r"], 2_i64)
+                .write(["sumeragi", "collectors", "k"], 3_i64)
+                .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
                 .write(
                     ["network", "transaction_gossip_restricted_fallback"],
@@ -1228,10 +1228,10 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                     "forward",
                 )
                 // Give DA quorum extra breathing room under sustained load.
-                .write(["sumeragi", "da_quorum_timeout_multiplier"], 7_i64)
-                .write(["sumeragi", "da_availability_timeout_multiplier"], 3_i64)
-                .write(["sumeragi", "pacemaker_max_backoff_ms"], 5_000_i64)
-                .write(["sumeragi", "pacemaker_rtt_floor_multiplier"], 1_i64);
+                .write(["sumeragi", "da", "quorum_timeout_multiplier"], 7_i64)
+                .write(["sumeragi", "da", "availability_timeout_multiplier"], 3_i64)
+                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 5_000_i64)
+                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 1_i64);
         });
 
     let result: Result<()> = async {

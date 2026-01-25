@@ -103,6 +103,22 @@ pub fn build_balance_proof(
     initial_blinding: &[u8],
     resulting_blinding: &[u8],
 ) -> Result<Vec<u8>, InstructionExecutionError> {
+    let claimed_delta_scale = claimed_delta.scale();
+    if claimed_delta_scale != expected_scale {
+        return Err(BalanceProofError::DeltaScaleMismatch {
+            expected: expected_scale,
+            actual: claimed_delta_scale,
+        }
+        .into());
+    }
+    let resulting_value_scale = resulting_value.scale();
+    if resulting_value_scale != expected_scale {
+        return Err(BalanceProofError::ValueScaleMismatch {
+            expected: expected_scale,
+            actual: resulting_value_scale,
+        }
+        .into());
+    }
     let c_init = decode_commitment(initial_commitment)?;
     let c_res = decode_commitment(resulting_commitment)?;
     let delta_scalar = numeric_to_scalar_delta(claimed_delta, expected_scale)?;
@@ -651,6 +667,16 @@ mod tests {
         proof
     }
 
+    fn assert_smart_contract_error(err: &InstructionExecutionError, expected: &str) {
+        let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            message,
+        )) = err
+        else {
+            panic!("unexpected error: {err}");
+        };
+        assert!(message.contains(expected), "unexpected error: {message}");
+    }
+
     #[test]
     fn verify_accepts_valid_proof() {
         let value = 42;
@@ -740,10 +766,7 @@ mod tests {
         let value = Numeric::new(1, 0);
         let err = compute_commitment(&value, 0, &[0u8; 31])
             .expect_err("invalid blinding length should be rejected");
-        assert!(
-            err.to_string().contains("scalar must be 32 bytes"),
-            "unexpected error: {err}"
-        );
+        assert_smart_contract_error(&err, "scalar must be 32 bytes");
     }
 
     #[test]
@@ -779,10 +802,7 @@ mod tests {
             &resulting_blinding,
         )
         .expect_err("invalid blinding length should be rejected");
-        assert!(
-            err.to_string().contains("scalar must be 32 bytes"),
-            "unexpected error: {err}"
-        );
+        assert_smart_contract_error(&err, "scalar must be 32 bytes");
     }
 
     #[test]
@@ -816,10 +836,7 @@ mod tests {
             &resulting_blinding,
         )
         .expect_err("fractional delta should be rejected");
-        assert!(
-            err.to_string().contains("claimed delta must use scale 0"),
-            "unexpected error: {err}"
-        );
+        assert_smart_contract_error(&err, "claimed delta must use scale 0");
     }
 
     #[test]
@@ -853,10 +870,7 @@ mod tests {
             &resulting_blinding,
         )
         .expect_err("fractional value should be rejected");
-        assert!(
-            err.to_string().contains("value must use scale 0"),
-            "unexpected error: {err}"
-        );
+        assert_smart_contract_error(&err, "value must use scale 0");
     }
 
     #[test]
@@ -888,10 +902,7 @@ mod tests {
             expected_scale,
         };
         let err = verify_balance_proof(&inputs).expect_err("fractional delta should be rejected");
-        assert!(
-            err.to_string().contains("claimed delta must use scale 0"),
-            "unexpected error: {err}"
-        );
+        assert_smart_contract_error(&err, "claimed delta must use scale 0");
     }
 
     #[test]

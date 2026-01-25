@@ -65,15 +65,21 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
         .with_config_layer(|layer| {
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
-                .write(["sumeragi", "use_stake_snapshot_roster"], true)
+                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
                 .write(
-                    ["sumeragi", "epoch_length_blocks"],
+                    ["sumeragi", "npos", "epoch_length_blocks"],
                     i64::try_from(EPOCH_LEN).unwrap(),
                 )
-                .write(["sumeragi", "vrf_commit_deadline_offset"], 2_i64)
-                .write(["sumeragi", "vrf_reveal_deadline_offset"], 4_i64)
-                .write(["sumeragi", "collectors_k"], 1_i64)
-                .write(["sumeragi", "collectors_redundant_send_r"], 1_i64)
+                .write(
+                    ["sumeragi", "npos", "vrf", "commit_deadline_offset_blocks"],
+                    2_i64,
+                )
+                .write(
+                    ["sumeragi", "npos", "vrf", "reveal_deadline_offset_blocks"],
+                    4_i64,
+                )
+                .write(["sumeragi", "collectors", "k"], 1_i64)
+                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
                 .write(
                     ["sumeragi", "npos", "election", "min_self_bond"],
                     i64::try_from(MIN_SELF_BOND).unwrap(),
@@ -251,15 +257,21 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
         .with_config_layer(|layer| {
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
-                .write(["sumeragi", "use_stake_snapshot_roster"], true)
+                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
                 .write(
-                    ["sumeragi", "epoch_length_blocks"],
+                    ["sumeragi", "npos", "epoch_length_blocks"],
                     i64::try_from(EPOCH_LEN).unwrap(),
                 )
-                .write(["sumeragi", "vrf_commit_deadline_offset"], 2_i64)
-                .write(["sumeragi", "vrf_reveal_deadline_offset"], 4_i64)
-                .write(["sumeragi", "collectors_k"], 1_i64)
-                .write(["sumeragi", "collectors_redundant_send_r"], 1_i64)
+                .write(
+                    ["sumeragi", "npos", "vrf", "commit_deadline_offset_blocks"],
+                    2_i64,
+                )
+                .write(
+                    ["sumeragi", "npos", "vrf", "reveal_deadline_offset_blocks"],
+                    4_i64,
+                )
+                .write(["sumeragi", "collectors", "k"], 1_i64)
+                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
                 .write(
                     ["sumeragi", "npos", "election", "min_self_bond"],
                     i64::try_from(MIN_SELF_BOND).unwrap(),

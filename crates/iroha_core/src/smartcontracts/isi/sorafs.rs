@@ -1,5 +1,5 @@
 use core::convert::TryFrom;
-use std::{collections::BTreeSet, str::FromStr};
+use std::{collections::BTreeSet, str::FromStr, sync::OnceLock};
 
 use blake3::hash as blake3_hash;
 use iroha_crypto::{Algorithm, PublicKey, Signature};
@@ -78,22 +78,20 @@ fn mul_div_u128(value: u128, mul: u128, div: u128) -> u128 {
 const STORAGE_CLASS_METADATA_KEY: &str = "sorafs.storage_class";
 const PROVIDER_OWNER_METADATA_KEY: &str = "sorafs.owner_account_id";
 
-fn storage_class_from_declaration_metadata(
+fn storage_class_metadata_key() -> &'static Name {
+    static KEY: OnceLock<Name> = OnceLock::new();
+    KEY.get_or_init(|| {
+        STORAGE_CLASS_METADATA_KEY
+            .parse()
+            .expect("static storage class metadata key must parse")
+    })
+}
+
+fn parse_storage_class_label(
     provider_id: ProviderId,
-    metadata: &Metadata,
-    default: StorageClass,
+    value: &str,
 ) -> Result<StorageClass, InstructionExecutionError> {
-    let Some(json_value) = metadata.get(STORAGE_CLASS_METADATA_KEY) else {
-        return Ok(default);
-    };
-
     let provider_hex = hex::encode(provider_id.as_bytes());
-    let value: String = json_value.try_into_any().map_err(|err| {
-        invalid_parameter(format!(
-            "capacity declaration metadata `{STORAGE_CLASS_METADATA_KEY}` for provider {provider_hex} must be a string: {err}"
-        ))
-    })?;
-
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(invalid_parameter(format!(
@@ -114,6 +112,54 @@ fn storage_class_from_declaration_metadata(
     };
 
     Ok(class)
+}
+
+fn storage_class_from_declaration_metadata(
+    provider_id: ProviderId,
+    metadata: &Metadata,
+    default: StorageClass,
+) -> Result<StorageClass, InstructionExecutionError> {
+    let Some(json_value) = metadata.get(storage_class_metadata_key()) else {
+        return Ok(default);
+    };
+
+    let value: String = json_value.try_into_any().map_err(|err| {
+        invalid_parameter(format!(
+            "capacity declaration metadata `{STORAGE_CLASS_METADATA_KEY}` for provider {} must be a string: {err}",
+            hex::encode(provider_id.as_bytes())
+        ))
+    })?;
+    parse_storage_class_label(provider_id, &value)
+}
+
+fn storage_class_from_declaration_record(
+    record: &CapacityDeclarationRecord,
+    default: StorageClass,
+) -> Result<StorageClass, InstructionExecutionError> {
+    if record.metadata.get(storage_class_metadata_key()).is_some() {
+        return storage_class_from_declaration_metadata(
+            record.provider_id,
+            &record.metadata,
+            default,
+        );
+    }
+
+    let provider_id = record.provider_id;
+    let provider_hex = hex::encode(provider_id.as_bytes());
+    let declaration: CapacityDeclarationV1 =
+        decode_from_bytes(&record.declaration).map_err(|err| {
+            invalid_parameter(format!(
+                "invalid capacity declaration payload for provider {provider_hex}: {err}"
+            ))
+        })?;
+
+    for entry in &declaration.metadata {
+        if entry.key.trim() == STORAGE_CLASS_METADATA_KEY {
+            return parse_storage_class_label(provider_id, &entry.value);
+        }
+    }
+
+    Ok(default)
 }
 
 fn merge_declaration_metadata_into_record(
@@ -157,7 +203,26 @@ fn merge_declaration_metadata_into_record(
     Ok(())
 }
 
+fn owner_literal_matches_authority(authority: &AccountId, literal: &str) -> bool {
+    if literal == authority.to_string() {
+        return true;
+    }
+    if let Some(signatory) = authority.try_signatory() {
+        let explicit = format!("{signatory}@{}", authority.domain());
+        if literal == explicit {
+            return true;
+        }
+    }
+    if let Ok(hex_literal) = authority.to_canonical_hex() {
+        if literal == hex_literal {
+            return true;
+        }
+    }
+    false
+}
+
 fn enforce_provider_owner(
+    world: &impl crate::state::WorldReadOnly,
     authority: &AccountId,
     metadata: &Metadata,
     provider_hex: &str,
@@ -175,27 +240,32 @@ fn enforce_provider_owner(
         ))
     })?;
 
-    let owner = AccountId::from_str(owner_str.trim()).map_err(|err| {
-        invalid_parameter(format!(
-            "capacity declaration metadata `{PROVIDER_OWNER_METADATA_KEY}` for provider {provider_hex} must be a valid account id: {err}"
-        ))
-    })?;
-
-    if &owner != authority {
+    let owner_literal = owner_str.trim();
+    if let Some(owner) = crate::block::parse_account_literal_with_world(world, owner_literal) {
+        if &owner == authority {
+            return Ok(());
+        }
         return Err(invalid_parameter(format!(
             "capacity declaration metadata `{PROVIDER_OWNER_METADATA_KEY}` for provider {provider_hex} must match the submitting authority"
         )));
     }
 
-    Ok(())
+    if owner_literal_matches_authority(authority, owner_literal) {
+        return Ok(());
+    }
+
+    Err(invalid_parameter(format!(
+        "capacity declaration metadata `{PROVIDER_OWNER_METADATA_KEY}` for provider {provider_hex} must be a valid account id matching the submitting authority"
+    )))
 }
 
 fn ensure_provider_owner_matches_authority(
     authority: &AccountId,
     record: &CapacityDeclarationRecord,
+    world: &impl crate::state::WorldReadOnly,
 ) -> Result<(), InstructionExecutionError> {
     let provider_hex = hex::encode(record.provider_id.as_bytes());
-    enforce_provider_owner(authority, &record.metadata, &provider_hex)
+    enforce_provider_owner(world, authority, &record.metadata, &provider_hex)
 }
 
 fn ensure_provider_owner_registered(
@@ -1219,7 +1289,12 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDeclaration {
             &mut record.metadata,
             &declaration.metadata,
         )?;
-        enforce_provider_owner(authority, &record.metadata, &provider_hex)?;
+        enforce_provider_owner(
+            &state_transaction.world,
+            authority,
+            &record.metadata,
+            &provider_hex,
+        )?;
         if let Some(existing_owner) = state_transaction.world.provider_owners.get(&provider_id) {
             if existing_owner != authority {
                 return Err(invalid_parameter(format!(
@@ -1312,7 +1387,11 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                         .into(),
                 )
             })?;
-        ensure_provider_owner_matches_authority(authority, declaration_record)?;
+        ensure_provider_owner_matches_authority(
+            authority,
+            declaration_record,
+            &state_transaction.world,
+        )?;
         if let Some(owner) = state_transaction.world.provider_owners.get(&provider_id)
             && owner != authority
         {
@@ -1356,7 +1435,7 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
             .saturating_sub(record.window_start_epoch)
             .max(1);
 
-        if policy.require_nonce && record.nonce != 0 && ledger.last_nonce == record.nonce {
+        if record.nonce != 0 && ledger.last_nonce == record.nonce {
             if record.window_start_epoch == ledger.last_window_start_epoch
                 && record.window_end_epoch == ledger.last_window_end_epoch
             {
@@ -1382,9 +1461,8 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
         }
 
         let pricing_schedule = state_transaction.world.sorafs_pricing.get();
-        let storage_class = storage_class_from_declaration_metadata(
-            provider_id,
-            &declaration_record.metadata,
+        let storage_class = storage_class_from_declaration_record(
+            declaration_record,
             pricing_schedule.default_storage_class,
         )?;
         let mut storage_fee =
@@ -1686,7 +1764,15 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDispute {
             ));
         }
 
-        if let Some(replication_order_id) = record.replication_order_id {
+        if matches!(dispute.kind, CapacityDisputeKind::ReplicationShortfall)
+            && dispute.replication_order_id.is_none()
+        {
+            return Err(invalid_parameter(
+                "capacity dispute replication order identifier is required for replication shortfall",
+            ));
+        }
+
+        if let Some(replication_order_id) = dispute.replication_order_id {
             let order_id = ReplicationOrderId::new(replication_order_id);
             if state_transaction
                 .world
@@ -1701,6 +1787,7 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDispute {
         }
 
         record.kind = dispute.kind as u8;
+        record.replication_order_id = dispute.replication_order_id;
         record.submitted_epoch = dispute.submitted_epoch;
         record.description.clone_from(&dispute.description);
         record
@@ -2108,6 +2195,8 @@ mod sorafs_tests {
         let handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::new(), kura, handle);
         seed_sorafs_permissions(&mut state, &alice());
+        state.gov.sorafs_telemetry.require_submitter = true;
+        state.gov.sorafs_telemetry.submitters = vec![alice()];
         state
     }
 
@@ -2557,7 +2646,7 @@ mod sorafs_tests {
             provider_id: provider.as_bytes().to_owned(),
             complainant_id: [0x44; 32],
             replication_order_id: None,
-            kind: CapacityDisputeKind::ReplicationShortfall,
+            kind: CapacityDisputeKind::UptimeBreach,
             evidence: sorafs_manifest::capacity::CapacityDisputeEvidenceV1 {
                 evidence_digest: [0xAA; 32],
                 media_type: Some("application/zip".into()),
@@ -2565,7 +2654,7 @@ mod sorafs_tests {
                 size_bytes: Some(1_024),
             },
             submitted_epoch: 1_700_000_128,
-            description: "provider failed ingestion SLA".into(),
+            description: "provider uptime dipped below SLA".into(),
             requested_remedy: Some("slash stake".into()),
         };
         let payload = norito::to_bytes(&dispute).expect("encode dispute payload");
@@ -4195,6 +4284,35 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn capacity_declaration_accepts_ih58_owner_literal_without_registry() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+
+        let mut declaration = sample_capacity_declaration();
+        declaration.metadata = vec![CapacityMetadataEntry {
+            key: PROVIDER_OWNER_METADATA_KEY.to_owned(),
+            value: alice().to_string(),
+        }];
+        let provider = ProviderId::new(declaration.provider_id);
+        let record = CapacityDeclarationRecord::new(
+            provider,
+            norito::to_bytes(&declaration).expect("serialize declaration"),
+            declaration.committed_capacity_gib,
+            9,
+            10,
+            20,
+            Metadata::default(),
+        );
+
+        RegisterCapacityDeclaration { record }
+            .execute(&alice(), &mut stx)
+            .expect("register declaration with IH58 owner");
+
+        assert!(stx.world.capacity_declarations.get(&provider).is_some());
+    }
+
+    #[test]
     fn record_capacity_telemetry_updates_pricing_and_credit() {
         let state = make_state();
         let mut block = state.block(block_header());
@@ -4370,6 +4488,37 @@ mod sorafs_tests {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 message
             )) if message.contains("window_gap_exceeded")
+        ));
+    }
+
+    #[test]
+    fn record_capacity_telemetry_rejects_replay_when_nonce_optional() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+
+        let (provider, declaration) = sample_capacity_record();
+        RegisterCapacityDeclaration {
+            record: declaration,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("register capacity declaration");
+
+        stx.gov.sorafs_telemetry.require_nonce = false;
+        record_capacity_window(&mut stx, provider, 0, 10, 50, 50, 25, 9_500, 9_500, 0);
+
+        let replay = CapacityTelemetryRecord::new(
+            provider, 11, 18, 50, 50, 25, 1, 1, 9_500, 9_500, 0, 0, 0, 0, 0,
+        )
+        .with_nonce(10);
+        let err = RecordCapacityTelemetry { record: replay }
+            .execute(&alice(), &mut stx)
+            .expect_err("replayed nonce must be rejected even when optional");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message
+            )) if message.contains("replayed_nonce")
         ));
     }
 
@@ -5953,6 +6102,30 @@ mod sorafs_tests {
             }
             other => panic!("unexpected error variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn storage_class_from_declaration_record_reads_payload_metadata() {
+        let mut declaration = sample_capacity_declaration();
+        declaration.metadata.push(CapacityMetadataEntry {
+            key: STORAGE_CLASS_METADATA_KEY.to_string(),
+            value: "cold".to_string(),
+        });
+        let canonical_bytes = norito::to_bytes(&declaration).expect("serialize declaration");
+        let provider = ProviderId::new(declaration.provider_id);
+        let record = CapacityDeclarationRecord::new(
+            provider,
+            canonical_bytes,
+            declaration.committed_capacity_gib,
+            9,
+            10,
+            20,
+            Metadata::default(),
+        );
+
+        let class = super::storage_class_from_declaration_record(&record, StorageClass::Hot)
+            .expect("payload metadata lookup must succeed");
+        assert_eq!(class, StorageClass::Cold);
     }
 
     #[test]

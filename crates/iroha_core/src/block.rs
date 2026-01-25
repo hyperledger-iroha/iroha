@@ -845,8 +845,26 @@ fn parse_account_address_literal_with_world(
             } else {
                 None
             }
-        })?;
-    address.to_account_id(&resolved).ok()
+        });
+    if let Some(domain) = resolved {
+        return address.to_account_id(&domain).ok();
+    }
+
+    // Fallback: match encoded addresses against existing accounts when selector registry is missing.
+    let target = address.canonical_hex().ok()?;
+    for (account_id, _) in world.accounts().iter() {
+        let Ok(candidate) = AccountAddress::from_account_id(account_id) else {
+            continue;
+        };
+        let Ok(candidate_hex) = candidate.canonical_hex() else {
+            continue;
+        };
+        if candidate_hex == target {
+            return Some(account_id.clone());
+        }
+    }
+
+    None
 }
 
 fn strip_prefix_case_insensitive<'a>(input: &'a str, prefix: &str) -> Option<&'a str> {
@@ -974,6 +992,23 @@ mod prefetch_tests {
         let literal = format!("{ih58}@{}", alice.domain());
         assert_eq!(
             parse_account_literal_with_world(&world_view, &literal),
+            Some(alice)
+        );
+    }
+
+    #[test]
+    fn parse_account_literal_resolves_ih58_without_selector_registry() {
+        let alice: AccountId = (*ALICE_ID).clone();
+        let domain = Domain::new(alice.domain().clone()).build(&alice);
+        let account = Account::new(alice.clone()).build(&alice);
+        let mut world = World::with([domain], [account], []);
+        // Simulate missing selector index to ensure fallback resolution via existing accounts.
+        world.domain_selectors = Default::default();
+        let world_view = world.view();
+
+        let ih58 = alice.canonical_ih58().expect("ih58 encoding");
+        assert_eq!(
+            parse_account_literal_with_world(&world_view, &ih58),
             Some(alice)
         );
     }

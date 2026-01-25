@@ -5213,6 +5213,7 @@ pub struct SorafsTelemetryPolicy {
     /// Require telemetry submissions to originate from a configured allow-list.
     pub require_submitter: bool,
     /// Require a replay nonce on each telemetry window.
+    /// When disabled, windows without a nonce are accepted but provided nonces are still checked.
     pub require_nonce: bool,
     /// Maximum tolerated gap between consecutive telemetry windows.
     pub max_window_gap: Duration,

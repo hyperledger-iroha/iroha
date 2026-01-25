@@ -243,15 +243,23 @@ fn quiet_network_builder() -> NetworkBuilder {
     install_quiet_tracing();
     init_instruction_registry();
     let mut sumeragi = toml::Table::new();
-    sumeragi.insert("collectors_redundant_send_r".into(), TomlValue::Integer(3));
-    sumeragi.insert("rbc_pending_ttl_ms".into(), TomlValue::Integer(120_000));
-    sumeragi.insert("rbc_session_ttl_secs".into(), TomlValue::Integer(240));
+    let mut collectors = toml::Table::new();
+    collectors.insert("redundant_send_r".into(), TomlValue::Integer(3));
+    sumeragi.insert("collectors".into(), TomlValue::Table(collectors));
+
+    let mut rbc = toml::Table::new();
+    rbc.insert("pending_ttl_ms".into(), TomlValue::Integer(120_000));
+    rbc.insert("session_ttl_ms".into(), TomlValue::Integer(240_000));
+    sumeragi.insert("rbc".into(), TomlValue::Table(rbc));
+
     // Increase DA quorum/availability timeouts to tolerate slower CI and local hosts.
-    sumeragi.insert("da_quorum_timeout_multiplier".into(), TomlValue::Integer(6));
-    sumeragi.insert(
-        "da_availability_timeout_multiplier".into(),
+    let mut da = toml::Table::new();
+    da.insert("quorum_timeout_multiplier".into(), TomlValue::Integer(6));
+    da.insert(
+        "availability_timeout_multiplier".into(),
         TomlValue::Integer(3),
     );
+    sumeragi.insert("da".into(), TomlValue::Table(da));
     let mut nexus = toml::Table::new();
     nexus.insert("enabled".into(), TomlValue::Boolean(false));
     let mut layer = toml::Table::new();

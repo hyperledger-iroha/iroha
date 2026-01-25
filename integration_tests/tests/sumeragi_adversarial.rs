@@ -90,8 +90,8 @@ async fn run_chunk_drop_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da_enabled"], true)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], 16_i64 * 1024)
+                .write(["sumeragi", "da", "enabled"], true)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
                 .write(["sumeragi", "debug", "rbc", "drop_every_nth_chunk"], 2_i64);
         });
     let Some(network) =
@@ -151,8 +151,8 @@ async fn run_chunk_reorder_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da_enabled"], true)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], 16_i64 * 1024)
+                .write(["sumeragi", "da", "enabled"], true)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
                 .write(["sumeragi", "debug", "rbc", "shuffle_chunks"], true);
         });
     let Some(network) =
@@ -209,7 +209,7 @@ async fn run_witness_corruption_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da_enabled"], true)
+                .write(["sumeragi", "da", "enabled"], true)
                 .write(["sumeragi", "debug", "rbc", "corrupt_witness_ack"], true);
         });
     let Some(network) =
@@ -264,7 +264,7 @@ async fn run_duplicate_inits_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da_enabled"], true)
+                .write(["sumeragi", "da", "enabled"], true)
                 .write(["sumeragi", "debug", "rbc", "duplicate_inits"], true);
         });
     let Some(network) =
@@ -331,8 +331,8 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da_enabled"], true)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], 16_i64 * 1024)
+                .write(["sumeragi", "da", "enabled"], true)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
                 .write(["sumeragi", "debug", "rbc", "drop_every_nth_chunk"], 2_i64);
         });
     let Some(drop_network) = sandbox::start_network_async_or_skip(
@@ -366,7 +366,7 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da_enabled"], true);
+                .write(["sumeragi", "da", "enabled"], true);
         });
     let Some(recovery_network) = sandbox::start_network_async_or_skip(
         recovery_builder,
@@ -428,8 +428,8 @@ async fn run_validator_selective_drop_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da_enabled"], true)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], 16_i64 * 1024)
+                .write(["sumeragi", "da", "enabled"], true)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
                 .write(
                     ["sumeragi", "debug", "rbc", "drop_validator_mask"],
                     DROP_MASK,
@@ -502,8 +502,8 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da_enabled"], true)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], 16_i64 * 1024)
+                .write(["sumeragi", "da", "enabled"], true)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
                 .write(["sumeragi", "debug", "rbc", "equivocate_chunk_mask"], 1_i64)
                 .write(
                     ["sumeragi", "debug", "rbc", "equivocate_validator_mask"],
@@ -593,8 +593,8 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da_enabled"], true)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], 16_i64 * 1024)
+                .write(["sumeragi", "da", "enabled"], true)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
                 .write(
                     ["sumeragi", "debug", "rbc", "equivocate_chunk_mask"],
                     CHUNK_MASK,
@@ -690,8 +690,8 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da_enabled"], true)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], 16_i64 * 1024)
+                .write(["sumeragi", "da", "enabled"], true)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
                 .write(
                     ["sumeragi", "debug", "rbc", "conflicting_ready_mask"],
                     FORK_MASK,
@@ -773,7 +773,7 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da_enabled"], true)
+                .write(["sumeragi", "da", "enabled"], true)
                 .write(["sumeragi", "debug", "rbc", "duplicate_inits"], true);
         });
     let Some(network) =
@@ -860,8 +860,8 @@ async fn run_partial_erasure_scenario() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da_enabled"], true)
-                .write(["sumeragi", "rbc_chunk_max_bytes"], 16_i64 * 1024)
+                .write(["sumeragi", "da", "enabled"], true)
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
                 .write(
                     ["sumeragi", "debug", "rbc", "partial_chunk_mask"],
                     PARTIAL_MASK,

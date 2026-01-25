@@ -200,8 +200,8 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
                     ["nexus", "staking", "slash_sink_account_id"],
                     STAKE_ESCROW_ACCOUNT,
                 )
-                .write(["sumeragi", "collectors_k"], 1_i64)
-                .write(["sumeragi", "collectors_redundant_send_r"], 1_i64);
+                .write(["sumeragi", "collectors", "k"], 1_i64)
+                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64);
         })
         .with_genesis_block(|topology, topology_entries| {
             let instructions = stake_genesis_instructions(topology.as_ref(), &topology_entries);

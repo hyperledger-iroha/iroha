@@ -38,7 +38,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da_enabled"], true);
+                .write(["sumeragi", "da", "enabled"], true);
         })
         // Keep blocks small to make block progression deterministic in tests
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
