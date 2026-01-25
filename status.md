@@ -2,6 +2,9 @@
 
 Last update: 2026-01-25
 
+- SoraFS dispute helper now uses `UptimeBreach` (no replication order required); P2P peer loop annotates inbound message type and documents peer-message sender fields to satisfy Rust 2024 inference + missing-docs lints.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-capacity-dup3 CARGO_BUILD_JOBS=1 cargo test -p iroha_core smartcontracts::isi::sorafs::sorafs_tests::register_capacity_dispute_rejects_duplicate -- --nocapture` (test passed; command timed out after 20m while continuing to build/run filtered binaries; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
+
 - SoraFS telemetry cooldown penalty test: `record_capacity_telemetry_respects_cooldown_between_penalties` passes when run in an isolated build dir; earlier failure likely from concurrent cargo/build-dir locks rather than logic regressions.
 - Tests: `CARGO_HOME=/tmp/iroha-codex-cargo CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core record_capacity_telemetry_respects_cooldown_between_penalties -- --nocapture` (ok; command hit timeout after running filtered binaries, but the target test passed).
 
@@ -9,7 +12,9 @@ Last update: 2026-01-25
 - Tests: `cargo test -p iroha_core --lib smartcontracts::isi::sorafs::sorafs_tests::record_capacity_telemetry_requires_authorised_submitter -- --nocapture` (ok; warning about unused `consensus_mode` persists).
 
 - SoraFS telemetry: treat PDP/PoTR failure counters as authoritative even when challenge/window counts are zero; add coverage for PDP failures reported without challenge counts so proof-health penalties/alerts aren’t suppressed.
-- Tests: not run (local `cargo test` invocations were terminated with SIGTERM in this environment).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core smartcontracts::isi::sorafs::sorafs_tests::record_capacity_telemetry_forces_penalty_on_pdp_failure -- --nocapture` (ok).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core smartcontracts::isi::sorafs::sorafs_tests::record_capacity_telemetry_emits_proof_health_event -- --nocapture` (ok).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core smartcontracts::isi::sorafs::sorafs_tests::record_capacity_telemetry_penalises_pdp_failures_without_challenge_count -- --nocapture` (ok).
 
 - Staking ISI: apply the transaction before committing the block so CancelConsensusEvidencePenalty persists `penalty_cancelled`; fix Kura budget test compile by restoring `budget_limit` from config in `store_block_rejects_when_budget_exceeded`.
 - Tests: `cargo test -p iroha_core smartcontracts::isi::staking::tests::cancel_consensus_evidence_penalty_marks_record -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
@@ -69,7 +74,7 @@ Last update: 2026-01-25
 - Offline balance proof: explicitly validate claimed-delta/resulting-value scales before building proofs so fractional values are rejected deterministically, and assert smart-contract errors via the inner message instead of relying on the generic display string.
 - Tests: `cargo test -p iroha_core build_balance_proof_rejects_fractional_value -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
 - SoraFS capacity disputes: validate replication-order requirements using the decoded payload (replication shortfall must specify an order; unknown orders are rejected) and persist the payload’s replication-order id into the stored record.
-- Tests: `cargo test -p iroha_core smartcontracts::isi::sorafs::sorafs_tests::register_capacity_dispute_rejects_unknown_replication_order -- --nocapture` (terminated by SIGTERM while other `cargo test` processes were running).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-capacity-unknown CARGO_BUILD_JOBS=1 RUSTFLAGS='-C debuginfo=0' cargo test -p iroha_core smartcontracts::isi::sorafs::sorafs_tests::register_capacity_dispute_rejects_unknown_replication_order -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
 - NFT ISI tests: update NftId literals to `name$domain` and reset `domain_selectors` with `Default::default()` so missing-domain and selector-free paths align with the current Storage API; audited for other `Storage::clear()` uses in tests and found none.
 - Tests: `cargo test -p iroha_core smartcontracts::isi::nft::isi::tests::unregister_nft_rejects_missing_domain -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
 - Tests: `cargo test -p iroha_core build_balance_proof_rejects_fractional_value -- --nocapture` (failed to compile: borrow checker error in `crates/iroha_core/src/smartcontracts/isi/world.rs:11190` about mutable borrow of `stx` while `params` is borrowed; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
