@@ -54,11 +54,11 @@ fn cutover_builder(peers: usize, npos_params: SumeragiNposParameters) -> Network
         .with_config_layer(|layer| {
             layer
                 .write(["sumeragi", "consensus_mode"], "permissioned")
-                .write(["sumeragi", "collectors_k"], 1_i64)
-                .write(["sumeragi", "collectors_redundant_send_r"], 1_i64)
-                .write(["sumeragi", "da_enabled"], true)
+                .write(["sumeragi", "collectors", "k"], 1_i64)
+                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
+                .write(["sumeragi", "da", "enabled"], true)
                 .write(
-                    ["sumeragi", "epoch_length_blocks"],
+                    ["sumeragi", "npos", "epoch_length_blocks"],
                     i64::try_from(EPOCH_LENGTH_BLOCKS)
                         .expect("epoch length fits in i64 for test configuration"),
                 );

@@ -3204,6 +3204,11 @@ fn normalize_legacy_sumeragi_config(table: &mut Table) {
         false,
     );
     move_key(
+        "epoch_length_blocks",
+        &["npos", "epoch_length_blocks"],
+        false,
+    );
+    move_key(
         "use_stake_snapshot_roster",
         &["npos", "use_stake_snapshot_roster"],
         false,
@@ -8049,6 +8054,7 @@ exit 0
                 layer
                     .write(["sumeragi", "collectors_k"], 2_i64)
                     .write(["sumeragi", "da_enabled"], true)
+                    .write(["sumeragi", "epoch_length_blocks"], 12_i64)
                     .write(["sumeragi", "pacemaker_max_backoff_ms"], 12_000_i64)
                     .write(["sumeragi", "rbc_session_ttl_secs"], 5_i64);
             })
@@ -8082,6 +8088,11 @@ exit 0
         assert_eq!(
             get_nested_value(sumeragi_writer, &["da", "enabled"]),
             Some(&TomlValue::Boolean(true))
+        );
+        assert!(!sumeragi_writer.contains_key("epoch_length_blocks"));
+        assert_eq!(
+            get_nested_value(sumeragi_writer, &["npos", "epoch_length_blocks"]),
+            Some(&TomlValue::Integer(12))
         );
         assert!(!sumeragi_writer.contains_key("pacemaker_max_backoff_ms"));
         assert_eq!(

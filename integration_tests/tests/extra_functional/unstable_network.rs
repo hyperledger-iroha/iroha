@@ -847,9 +847,9 @@ impl UnstableNetwork {
             builder = builder
                 .with_config_layer(|layer| {
                     layer
-                        .write(["sumeragi", "collectors_k"], i64::from(COLLECTORS_K))
+                        .write(["sumeragi", "collectors", "k"], i64::from(COLLECTORS_K))
                         .write(
-                            ["sumeragi", "collectors_redundant_send_r"],
+                            ["sumeragi", "collectors", "redundant_send_r"],
                             i64::from(REDUNDANT_SEND_R),
                         );
                 })

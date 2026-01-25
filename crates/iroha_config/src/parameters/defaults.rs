@@ -2816,6 +2816,8 @@ pub mod governance {
         /// Require telemetry submissions to originate from an authorised submitter list.
         pub const REQUIRE_SUBMITTER: bool = true;
         /// Require telemetry windows to carry a nonce for replay protection.
+        /// Windows without a nonce are accepted only when this is false, but provided nonces
+        /// are still checked for replay regardless.
         pub const REQUIRE_NONCE: bool = true;
         /// Maximum tolerated gap between accepted telemetry windows (seconds).
         pub const MAX_WINDOW_GAP_SECS: u64 = 6 * 60 * 60;

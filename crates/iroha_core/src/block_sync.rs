@@ -4687,6 +4687,7 @@ pub mod message {
 
         #[test]
         fn filter_blocks_replaces_qc_using_cached_signers() {
+            let _guard = crate::sumeragi::status::commit_history_test_guard();
             crate::sumeragi::status::reset_block_sync_counters_for_tests();
             let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -4759,6 +4760,7 @@ pub mod message {
 
         #[test]
         fn filter_blocks_replaces_mismatched_qc_with_local_aggregate() {
+            let _guard = crate::sumeragi::status::commit_history_test_guard();
             crate::sumeragi::status::reset_precommit_signer_history_for_tests();
             crate::sumeragi::status::reset_block_sync_counters_for_tests();
             let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -4845,6 +4847,7 @@ pub mod message {
 
         #[test]
         fn filter_blocks_replaces_qc_with_wrong_signer_bitmap() {
+            let _guard = crate::sumeragi::status::commit_history_test_guard();
             let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -5046,6 +5049,7 @@ pub mod message {
 
         #[test]
         fn filter_blocks_retains_cached_qc_even_with_signer_mismatch() {
+            let _guard = crate::sumeragi::status::commit_history_test_guard();
             let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);

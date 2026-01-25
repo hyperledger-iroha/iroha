@@ -23,9 +23,9 @@ async fn npos_prf_collectors_track_endpoint() -> eyre::Result<()> {
         .with_config_layer(|layer| {
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
-                .write(["sumeragi", "da_enabled"], true)
-                .write(["sumeragi", "collectors_k"], 2_i64)
-                .write(["sumeragi", "collectors_redundant_send_r"], 1_i64);
+                .write(["sumeragi", "da", "enabled"], true)
+                .write(["sumeragi", "collectors", "k"], 2_i64)
+                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64);
         });
 
     let Some(network) = sandbox::start_network_async_or_skip(

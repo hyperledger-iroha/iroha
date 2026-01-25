@@ -12,7 +12,7 @@ This note summarises the authorization and abuse controls around SoraFS control-
 
 ## Telemetry submitters and provider overrides
 
-- `governance.sorafs_telemetry.require_submitter` and `require_nonce` default to `true`, forcing telemetry windows to come from authorised accounts with replay protection.
+- `governance.sorafs_telemetry.require_submitter` and `require_nonce` default to `true`, forcing telemetry windows to come from authorised accounts with replay protection. When `require_nonce=false`, windows without a nonce are accepted but any provided nonces are still checked for replay.
 - `submitters` defines the global allow-list; `per_provider_submitters` overrides it for specific providers when the submitting account differs from the default.
 - Capacity telemetry still enforces provider ownership, window hygiene, and nonce replay detection; spoofed or mismatched owners are rejected with labelled telemetry.
 

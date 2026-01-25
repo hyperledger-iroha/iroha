@@ -828,16 +828,23 @@ impl Execute for ClaimPublicLaneRewards {
             return Ok(());
         }
 
-        let sink_account: AccountId = state_transaction
-            .nexus
-            .fees
-            .fee_sink_account_id
-            .parse()
-            .map_err(|_| {
-                Error::InvariantViolation(
-                    "invalid nexus.fees.fee_sink_account_id; expected account identifier".into(),
-                )
-            })?;
+        let sink_account = crate::block::parse_account_literal_with_world(
+            &state_transaction.world,
+            &state_transaction.nexus.fees.fee_sink_account_id,
+        )
+        .or_else(|| {
+            state_transaction
+                .nexus
+                .fees
+                .fee_sink_account_id
+                .parse()
+                .ok()
+        })
+        .ok_or_else(|| {
+            Error::InvariantViolation(
+                "invalid nexus.fees.fee_sink_account_id; expected account identifier".into(),
+            )
+        })?;
         let fee_asset: AssetDefinitionId = state_transaction
             .nexus
             .fees
@@ -1151,16 +1158,23 @@ fn validate_reward_sink(
     total_reward: &Numeric,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
-    let sink_account: AccountId = state_transaction
-        .nexus
-        .fees
-        .fee_sink_account_id
-        .parse()
-        .map_err(|_| {
-            Error::InvariantViolation(
-                "invalid nexus.fees.fee_sink_account_id; expected account identifier".into(),
-            )
-        })?;
+    let sink_account = crate::block::parse_account_literal_with_world(
+        &state_transaction.world,
+        &state_transaction.nexus.fees.fee_sink_account_id,
+    )
+    .or_else(|| {
+        state_transaction
+            .nexus
+            .fees
+            .fee_sink_account_id
+            .parse()
+            .ok()
+    })
+    .ok_or_else(|| {
+        Error::InvariantViolation(
+            "invalid nexus.fees.fee_sink_account_id; expected account identifier".into(),
+        )
+    })?;
     let fee_asset: AssetDefinitionId =
         state_transaction
             .nexus
@@ -3182,7 +3196,7 @@ mod tests {
     }
 
     #[test]
-    fn stake_snapshot_drops_validator_missing_from_topology() {
+    fn stake_snapshot_widens_missing_validator_from_topology() {
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
@@ -3258,8 +3272,8 @@ mod tests {
         let roster =
             crate::state::StakeSnapshot::epoch_validator_peer_ids(&view, 0).unwrap_or_default();
         assert!(
-            !roster.contains(&validator_peer),
-            "validator should be dropped when commit topology no longer carries the peer"
+            roster.contains(&validator_peer),
+            "active validator should remain in the snapshot even if commit topology omits it"
         );
     }
 
@@ -4240,6 +4254,56 @@ mod tests {
     }
 
     #[test]
+    fn claim_rewards_accepts_ih58_fee_sink() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        iroha_data_model::account::clear_account_domain_selector_resolver();
+
+        let (_sink, validator, reward_asset, _asset_def_id) =
+            configure_reward_fixture(&mut stx, LaneId::new(12), 200);
+        stx.nexus.staking.reward_dust_threshold = 0;
+
+        let share = PublicLaneRewardShare {
+            account: validator.clone(),
+            role: PublicLaneRewardRole::Validator,
+            amount: Numeric::new(10, 0),
+        };
+        RecordPublicLaneRewards {
+            lane_id: LaneId::new(12),
+            epoch: 1,
+            reward_asset: reward_asset.clone(),
+            total_reward: Numeric::new(10, 0),
+            shares: vec![share],
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
+
+        ClaimPublicLaneRewards {
+            lane_id: LaneId::new(12),
+            account: validator.clone(),
+            upto_epoch: Some(1),
+        }
+        .execute(&validator, &mut stx)
+        .unwrap();
+
+        stx.apply();
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        let claimed = view
+            .world
+            .public_lane_reward_claims()
+            .get(&(LaneId::new(12), validator.clone(), reward_asset.clone()))
+            .copied()
+            .expect("claim marker");
+        assert_eq!(claimed, 1);
+    }
+
+    #[test]
     fn slash_rejects_above_max_ratio() {
         let mut state = setup_state();
         state.nexus.get_mut().staking.max_slash_bps = 1_000; // 10%
@@ -4422,7 +4486,7 @@ mod tests {
         CancelConsensusEvidencePenalty { evidence }
             .execute(&ALICE_ID, &mut stx)
             .expect("cancel evidence penalty");
-        drop(stx);
+        stx.apply();
         state_block.commit().unwrap();
 
         let view = state.world.consensus_evidence.view();

@@ -11167,11 +11167,27 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
+            let params = stx.world.parameters.get().clone();
+            let require_hsm = params.sumeragi.key_require_hsm;
+            let allowed_hsm_providers = params.sumeragi.key_allowed_hsm_providers.clone();
+            let activation_lead_blocks = params.sumeragi.key_activation_lead_blocks;
             let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let peer_id = crate::PeerId::new(bls.public_key().clone());
             let pop = iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("pop");
-            let isi =
+            let mut isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop);
+            if require_hsm {
+                let provider = allowed_hsm_providers
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "softkey".to_string());
+                let binding = iroha_data_model::consensus::HsmBinding {
+                    provider,
+                    key_label: peer_id.public_key().to_string(),
+                    slot: Some(1),
+                };
+                isi = isi.with_hsm(binding);
+            }
             isi.execute(&ALICE_ID, &mut stx)
                 .expect("register peer with policy enforcement");
 
@@ -11188,10 +11204,7 @@ pub mod isi {
                 .consensus_keys
                 .get(&ids[0])
                 .expect("consensus key record");
-            let params = stx.world.parameters.get();
-            let expected_activation = stx
-                .block_height()
-                .saturating_add(params.sumeragi.key_activation_lead_blocks);
+            let expected_activation = stx.block_height().saturating_add(activation_lead_blocks);
             assert_eq!(
                 record.activation_height, expected_activation,
                 "activation height must obey lead-time policy"
@@ -11201,10 +11214,17 @@ pub mod isi {
                 ConsensusKeyStatus::Pending,
                 "lead-time activation should mark the key pending"
             );
-            assert!(
-                record.hsm.is_some(),
-                "HSM binding must be populated when key_require_hsm is enabled"
-            );
+            if require_hsm {
+                assert!(
+                    record.hsm.is_some(),
+                    "HSM binding must be populated when key_require_hsm is enabled"
+                );
+            } else {
+                assert!(
+                    record.hsm.is_none(),
+                    "HSM binding must be empty when key_require_hsm is disabled"
+                );
+            }
         }
 
         #[test]

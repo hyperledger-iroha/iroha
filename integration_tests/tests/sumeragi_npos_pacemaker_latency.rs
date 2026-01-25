@@ -60,9 +60,9 @@ async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "consensus_mode"], "npos")
-                .write(["sumeragi", "collectors_k"], i64::from(COLLECTORS_K))
+                .write(["sumeragi", "collectors", "k"], i64::from(COLLECTORS_K))
                 .write(
-                    ["sumeragi", "collectors_redundant_send_r"],
+                    ["sumeragi", "collectors", "redundant_send_r"],
                     i64::from(REDUNDANT_SEND_R),
                 );
         })
