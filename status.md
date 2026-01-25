@@ -3,6 +3,49 @@
 Last update: 2026-01-25
 
 - NPoS localnet 1 Hz rerun (debug + block-queue priority fix, 4 peers): `/private/tmp/iroha-localnet-npos-1hz-20260125T094329Z` (ports 33080/34337); genesis `block_time_ms=1000`, `commit_time_ms=1500`, config defaults, `RUST_LOG=warn,iroha_core::sumeragi=debug`; 100x1 Hz `ledger transaction ping --msg 1hz-profile --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_20260125T094329Z.jsonl` (ping log `ping_1hz_20260125T094329Z.log`). `commit_qc.height` 1->9 (+8 over 120 samples), `view_change_install_total` +5 (`missing_qc_total` +2, `missing_payload_total` +0, `stake_quorum_timeout_total` +2), `missing_block_fetch.total` +61, `pending_rbc.bytes` max 34271 (sessions max 1), `stash_ready_init_missing_total` 14, `stash_deliver_init_missing_total` 7.
+- Staking: resolve `stake_escrow_account_id`/`slash_sink_account_id` via world-aware account literal parsing (accepts IH58-only literals once domain selectors are registered); added stake-context coverage to lock this in.
+- Tests: `cargo test -p iroha_core unregister_peer -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+
+- Data-model test stabilization: share default-domain guard across tests, add thread-local chain-discriminant guards for JSON/id tests, decode block-header roundtrip with bare Norito decode, fix deterministic fuzz chunk digests, make AssetId constructor test parse explicit-domain accounts, resolve oracle fixture selectors in tests and regenerate oracle fixtures, and update AccountId doctest to parse explicit-domain literals.
+- Tests: `cargo test -p iroha_data_model` (ok).
+- Tests: `cargo test -p iroha_data_model --doc` (ok).
+- Tests: `cargo test -p iroha_data_model --test oracle_reference_fixtures -- --ignored` (ok; regenerated `fixtures/oracle/*`).
+
+- World ISI lead-time tests now use non-genesis dummy blocks with BLS-normal leaders so lead-time policy checks exercise non-genesis paths; added a non-genesis dummy block helper in the ISI world test module.
+- Tests: `cargo test -p iroha_core register_peer_rejects_activation_before_lead_time -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
+- Tests: `cargo test --workspace` (failed: `crates/ivm/tests/core_host_policy.rs:35` `extend_from_slice` expected `&[u8]` but got `Vec<u8>`).
+
+- World ISI tests: explicitly enable Nexus in `next_mode_rejected_when_nexus_enabled` to match the default disabled config and keep staged cutover rejection covered.
+- Tests: `cargo test -p iroha_core --lib smartcontracts::isi::world::isi::tests::next_mode_rejected_when_nexus_enabled` (ok; warning about unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
+- Tests: `cargo test -p iroha_core smartcontracts::isi::world::isi::tests::next_mode_rejected_when_nexus_enabled` (failed: `crates/iroha_core/tests/ivm_corehost_domain.rs` test binary killed by SIGKILL after rebuild; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
+
+- Permission summary account parsing: accept IH58-with-domain literals in `parse_account_literal_with_world` so permission payloads resolve account IDs; added coverage for the IH58 `@domain` literal path.
+- Tests: `cargo test -p iroha_core permission_summary_resolves_accounts_from_payload` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
+- Tests: `cargo test -p iroha_core parse_account_literal_accepts_ih58_with_domain_suffix` (ok; same warnings).
+
+- AccountId parsing: guard the chain discriminant in the encoded-literals-with-domain test to avoid cross-test IH58 prefix races.
+- Tests: `cargo test -p iroha_data_model account_id_parsing_tests::encoded_literals_with_domain_parse_without_resolver -- --nocapture` (ok).
+
+- Curve registry alignment test now accepts the `bls` feature gate listed in the published registry.
+- Tests: `cargo test --workspace` (failed: `crates/ivm/tests/wsv_host_grant_revoke_tlv.rs:22` and `crates/ivm/tests/wsv_host_account_admin.rs:21` `extend_from_slice` expected `&[u8]` but got `Vec<u8>`; warning about unused `DomainId` import in `crates/ivm/tests/wsv_host_account_admin.rs:8`).
+
+- DAG conflict graph: apply the global state wildcard (`state:*`) to state-map entries even when no per-map wildcard exists, so `state:*` correctly conflicts with `state:Foo/<entry>`.
+- Tests: `cargo test -p iroha_core block::dag_tests::state_global_wildcard_conflicts_with_state_entries -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
+
+- Block sync: cached QC validation now skips block-signer mismatch when using local precommit signer records so ShareBlocks filtering retains cached QCs even if block signatures differ.
+- Tests: `cargo test -p iroha_core block_sync::message::filter_tests::filter_blocks_retains_cached_qc_even_with_signer_mismatch` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
+
+- AXT replay-ledger state tests now encode `AxtDescriptor`/`DataSpaceId` TLVs with Norito headers so `AXT_BEGIN` decoding succeeds after restart/prune flows.
+- Tests: `cargo test -p iroha_core axt_replay_ledger -- --nocapture` (state replay-ledger tests ok; `axt_replay_ledger_persists_through_kura_replay` failed in `crates/iroha_core/tests/ivm_corehost_axt.rs` with `UnknownDataspace(DataSpaceId(99))`).
+
+- AccountId/AssetId JSON now serialize with explicit `@domain` suffixes (e.g., `IH58@domain`, `asset##IH58@domain`) so decoding no longer depends on a domain-selector resolver; updated Norito JSON migration notes and id-json regression expectations.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-offline cargo test -p iroha_data_model --features json summary_round_trips_through_norito_json -- --nocapture` (ok).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-offline cargo test -p iroha_data_model --features json summary_defaults_optional_fields_when_missing_in_json -- --nocapture` (ok).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-offline cargo test -p iroha_data_model --features json account_id_json_uses_explicit_domain_suffix -- --nocapture` (ok).
+
+- Commit-with-signers full-roster quorum test updated to use a six-node topology (min_votes_for_commit = 4) while still excluding leader/proxy tail from QC signer set.
+- Tests: `cargo test -p iroha_core commit_with_signers_accepts_full_roster_quorum -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` in `crates/iroha_core/src/peers_gossiper.rs:274` and unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:45490`).
 - NPoS localnet 1 Hz rerun (debug + BlockCreated/FetchPendingBlock/RBC INIT via block queue, 4 peers): `/private/tmp/iroha-localnet-npos-1hz-20260125T082237Z` (ports 32080/36380); genesis `block_time_ms=1000`, `commit_time_ms=1500`, config defaults, `RUST_LOG=warn,iroha_core::sumeragi=debug`; 100x1 Hz `ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_20260125T082237Z.jsonl` (ping log `ping_1hz_20260125T082237Z.log`). `commit_qc.height` 0->10 (+10 over 120 samples), `view_change_install_total` +2 (`missing_qc_total` +1, `stake_quorum_timeout_total` +1), `missing_block_fetch.total` +21, `pending_rbc.bytes` max 0 (sessions max 0).
 - Sumeragi ingress: route BlockCreated/FetchPendingBlock/RBC INIT via the block queue and drain block traffic ahead of block-payload work to avoid missing-block stalls; update routing/priority unit coverage and queue docs.
 - Tests: `cargo test -p iroha_core incoming_block_message_ -- --nocapture` (ok).

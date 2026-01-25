@@ -26,7 +26,7 @@ use iroha_primitives::{BigInt, numeric::Numeric};
 use super::prelude::*;
 use crate::{
     smartcontracts::isi::asset::isi::assert_numeric_spec_with,
-    state::{ConsensusKeyGate, WorldTransaction, peer_consensus_key_gate},
+    state::{ConsensusKeyGate, WorldReadOnly, WorldTransaction, peer_consensus_key_gate},
     sumeragi::status as sumeragi_status,
     telemetry::StateTelemetry,
 };
@@ -100,7 +100,12 @@ impl Execute for RegisterPublicLaneValidator {
                 "initial stake below minimum configured amount".into(),
             ));
         }
-        let stake_ctx = stake_context(&state_transaction.nexus.staking, &self.stake_account, None)?;
+        let stake_ctx = stake_context(
+            &state_transaction.world,
+            &state_transaction.nexus.staking,
+            &self.stake_account,
+            None,
+        )?;
         assert_stake_amount_matches_spec(
             state_transaction,
             &stake_ctx.asset_definition,
@@ -374,7 +379,12 @@ impl Execute for BondPublicLaneStake {
         finalize_validator_lifecycle(state_transaction)?;
         ensure_positive_amount(&self.amount, "stake amount")?;
 
-        let stake_ctx = stake_context(&state_transaction.nexus.staking, &self.staker, None)?;
+        let stake_ctx = stake_context(
+            &state_transaction.world,
+            &state_transaction.nexus.staking,
+            &self.staker,
+            None,
+        )?;
         assert_stake_amount_matches_spec(
             state_transaction,
             &stake_ctx.asset_definition,
@@ -478,7 +488,12 @@ impl Execute for SchedulePublicLaneUnbond {
                 "release_at_ms must be in the future or equal to the current block".into(),
             ));
         }
-        let stake_ctx = stake_context(&state_transaction.nexus.staking, &self.staker, None)?;
+        let stake_ctx = stake_context(
+            &state_transaction.world,
+            &state_transaction.nexus.staking,
+            &self.staker,
+            None,
+        )?;
         assert_stake_amount_matches_spec(
             state_transaction,
             &stake_ctx.asset_definition,
@@ -568,7 +583,12 @@ impl Execute for FinalizePublicLaneUnbond {
         )?;
         finalize_validator_lifecycle(state_transaction)?;
         let block_timestamp_ms = state_transaction.block_unix_timestamp_ms();
-        let stake_ctx = stake_context(&state_transaction.nexus.staking, &self.staker, None)?;
+        let stake_ctx = stake_context(
+            &state_transaction.world,
+            &state_transaction.nexus.staking,
+            &self.staker,
+            None,
+        )?;
         let share_key = stake_key(self.lane_id, &self.validator, &self.staker);
         let mut share = state_transaction
             .world
@@ -1415,7 +1435,7 @@ pub(crate) fn apply_slash_to_validator(
         .get(&validator_key)
         .map(|record| record.stake_account.clone())
         .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
-    let stake_ctx = stake_context(staking_cfg, &stake_account, None)?;
+    let stake_ctx = stake_context(world, staking_cfg, &stake_account, None)?;
     let spec = world
         .asset_definitions
         .get(&stake_ctx.asset_definition)
@@ -1518,6 +1538,7 @@ struct StakeEscrowContext {
 }
 
 fn stake_context(
+    world: &impl WorldReadOnly,
     staking_cfg: &iroha_config::parameters::actual::NexusStaking,
     staker: &AccountId,
     slash_sink_override: Option<&AccountId>,
@@ -1527,19 +1548,19 @@ fn stake_context(
             "invalid nexus.staking.stake_asset_id; expected `name#domain`".into(),
         )
     })?;
-    let escrow_account: AccountId = staking_cfg.stake_escrow_account_id.parse().map_err(|_| {
-        Error::InvariantViolation(
-            "invalid nexus.staking.stake_escrow_account_id; expected account identifier".into(),
-        )
-    })?;
+    let escrow_account = parse_staking_account_literal(
+        world,
+        &staking_cfg.stake_escrow_account_id,
+        "stake_escrow_account_id",
+    )?;
     let slash_sink_account: AccountId = if let Some(account) = slash_sink_override {
         account.clone()
     } else {
-        staking_cfg.slash_sink_account_id.parse().map_err(|_| {
-            Error::InvariantViolation(
-                "invalid nexus.staking.slash_sink_account_id; expected account identifier".into(),
-            )
-        })?
+        parse_staking_account_literal(
+            world,
+            &staking_cfg.slash_sink_account_id,
+            "slash_sink_account_id",
+        )?
     };
 
     Ok(StakeEscrowContext {
@@ -1548,6 +1569,20 @@ fn stake_context(
         escrow_asset: AssetId::new(asset_definition.clone(), escrow_account),
         slash_sink_asset: AssetId::new(asset_definition, slash_sink_account),
     })
+}
+
+fn parse_staking_account_literal(
+    world: &impl WorldReadOnly,
+    literal: &str,
+    field: &'static str,
+) -> Result<AccountId, Error> {
+    crate::block::parse_account_literal_with_world(world, literal)
+        .or_else(|| literal.parse().ok())
+        .ok_or_else(|| {
+            Error::InvariantViolation(
+                format!("invalid nexus.staking.{field}; expected account identifier").into(),
+            )
+        })
 }
 
 fn assert_stake_amount_matches_spec(
@@ -1867,6 +1902,33 @@ mod tests {
             .extend(stx.world.peers.iter().cloned());
 
         (validator, delegator, escrow, asset_def_id)
+    }
+
+    #[test]
+    fn stake_context_accepts_ih58_account_literals() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, _delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
+        stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
+        stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
+        stx.nexus.staking.slash_sink_account_id = escrow.to_string();
+
+        let stake_ctx = stake_context(&stx.world, &stx.nexus.staking, &validator, None)
+            .expect("stake context should accept IH58 literals");
+
+        assert_eq!(
+            stake_ctx.escrow_asset.account(),
+            &escrow,
+            "escrow account should resolve from literal"
+        );
+        assert_eq!(
+            stake_ctx.slash_sink_asset.account(),
+            &escrow,
+            "slash sink account should resolve from literal"
+        );
     }
 
     #[test]

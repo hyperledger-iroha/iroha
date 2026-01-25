@@ -2374,8 +2374,8 @@ pub mod message {
         };
         let derived_qc =
             BlockSynchronizer::block_sync_qc_for(state_view, fallback_consensus_mode, block);
-        let candidate = match (incoming, derived_qc) {
-            (Some(incoming), Some(derived)) if incoming == derived => Some(incoming),
+        let (candidate, qc_from_cache) = match (incoming, derived_qc) {
+            (Some(incoming), Some(derived)) if incoming == derived => (Some(incoming), true),
             (Some(_incoming), Some(derived)) => {
                 status::inc_block_sync_qc_replaced();
                 warn!(
@@ -2384,7 +2384,7 @@ pub mod message {
                     hash = %context.block_hash,
                     "replacing block sync QC that does not match cached aggregate"
                 );
-                Some(derived)
+                (Some(derived), true)
             }
             (Some(incoming), None) => {
                 status::inc_block_sync_qc_derive_failed();
@@ -2398,9 +2398,12 @@ pub mod message {
                     incoming_qc_signers,
                     "keeping incoming block sync QC; no cached precommit signer record"
                 );
-                Some(incoming)
+                (Some(incoming), false)
             }
-            (None, derived) => derived,
+            (None, derived) => {
+                let from_cache = derived.is_some();
+                (derived, from_cache)
+            }
         };
 
         let qc = candidate?;
@@ -2461,11 +2464,17 @@ pub mod message {
                 pops.insert(peer.public_key().clone(), pop);
             }
         }
+        let empty_signers = BTreeSet::new();
+        let qc_block_signers = if qc_from_cache {
+            &empty_signers
+        } else {
+            block_signers
+        };
         if let Err(err) = crate::sumeragi::main_loop::validate_block_sync_qc(
             &qc,
             topology,
             state_view.world(),
-            block_signers,
+            qc_block_signers,
             context.block_view,
             &pops,
             state_view.chain_id(),

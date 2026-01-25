@@ -9110,12 +9110,10 @@ fn drain_mailbox<A: WorkerActor>(
                     iroha_logger::error!(?err, "Sumeragi block-message handler failed");
                 }
                 if let Some(start) = drain_start {
-                    let elapsed_ms =
-                        u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
                     match tier {
                         PriorityTier::Votes => {
-                            stats.vote_drain_ms =
-                                stats.vote_drain_ms.saturating_add(elapsed_ms);
+                            stats.vote_drain_ms = stats.vote_drain_ms.saturating_add(elapsed_ms);
                             if matches!(phase, DrainPhase::PreTick) {
                                 stats.pre_tick_votes_drain_ms =
                                     stats.pre_tick_votes_drain_ms.saturating_add(elapsed_ms);

@@ -651,9 +651,11 @@ fn intern_access(access: &[crate::pipeline::access::AccessSet]) -> (usize, Vec<A
                 if let Some(wildcard_key) = wildcard_keys.get(base) {
                     reads.push(*map.get(wildcard_key.as_str()).expect("key interned"));
                 }
-                return;
             }
             if wildcard_bases.contains("*") && key.starts_with(STATE_KEY_PREFIX) {
+                if state_wildcard_base(key) == Some("*") {
+                    return;
+                }
                 if let Some(wildcard_key) = wildcard_keys.get("*") {
                     reads.push(*map.get(wildcard_key.as_str()).expect("key interned"));
                 }
@@ -797,8 +799,16 @@ pub(crate) fn parse_account_literal_with_world(
     ) {
         let domain: DomainId = domain_part.parse().ok()?;
 
-        if AccountAddress::parse_any(address_part, None).is_ok() {
-            return None;
+        let expected_prefix = address::chain_discriminant();
+        match AccountAddress::parse_any(address_part, Some(expected_prefix)) {
+            Ok((address, _format)) => {
+                return address.to_account_id(&domain).ok();
+            }
+            Err(
+                address::AccountAddressError::UnsupportedAddressFormat
+                | address::AccountAddressError::ChecksumMismatch,
+            ) => {}
+            Err(_) => return None,
         }
 
         if let Ok(label) = iroha_data_model::name::Name::from_str(address_part) {
@@ -908,9 +918,11 @@ fn prefetch_account_stores(state_block: &StateBlock<'_>, account_id: &AccountId)
 #[cfg(test)]
 mod prefetch_tests {
     use iroha_data_model::{
-        account::{AccountDetails, AccountDomainSelector, AccountId, AccountValue},
+        Registrable,
+        account::{Account, AccountDetails, AccountDomainSelector, AccountId, AccountValue},
         asset::AssetDefinitionId,
         block::BlockHeader,
+        domain::Domain,
         isi::{InstructionBox, Log},
         name::Name,
         nexus::LaneConfig,
@@ -948,6 +960,22 @@ mod prefetch_tests {
             Some(alice.clone())
         );
         assert!(parse_account_from_access_key(&world_view, "asset:coin#wonderland").is_none());
+    }
+
+    #[test]
+    fn parse_account_literal_accepts_ih58_with_domain_suffix() {
+        let alice: AccountId = (*ALICE_ID).clone();
+        let domain = Domain::new(alice.domain().clone()).build(&alice);
+        let account = Account::new(alice.clone()).build(&alice);
+        let world = World::with([domain], [account], []);
+        let world_view = world.view();
+
+        let ih58 = alice.canonical_ih58().expect("ih58 encoding");
+        let literal = format!("{ih58}@{}", alice.domain());
+        assert_eq!(
+            parse_account_literal_with_world(&world_view, &literal),
+            Some(alice)
+        );
     }
 
     #[test]
@@ -7599,23 +7627,23 @@ pub(crate) mod valid {
 
         #[test]
         fn commit_with_signers_accepts_full_roster_quorum() {
-            // Five-node topology (min_votes_for_commit = 3). Provide a quorum that excludes the
-            // leader (0) and proxy tail (2) but still spans the full roster.
+            // Six-node topology (min_votes_for_commit = 4). Provide a quorum that excludes the
+            // leader (0) and proxy tail (3) but still spans the full roster.
             let key_pairs =
                 core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-                    .take(5)
+                    .take(6)
                     .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
-            assert_eq!(topology.min_votes_for_commit(), 3);
+            assert_eq!(topology.min_votes_for_commit(), 4);
 
             let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
             // Populate the block with commit-role signatures so `is_commit` passes even though the
             // QC signer set omits the leader and proxy tail.
-            block.sign(&key_pairs[2], &topology); // proxy tail
             block.sign(&key_pairs[1], &topology);
-            block.sign(&key_pairs[3], &topology);
+            block.sign(&key_pairs[2], &topology);
             block.sign(&key_pairs[4], &topology);
-            let signers: BTreeSet<_> = [1_u32, 3_u32, 4_u32].into_iter().collect();
+            block.sign(&key_pairs[5], &topology);
+            let signers: BTreeSet<_> = [1_u32, 2_u32, 4_u32, 5_u32].into_iter().collect();
 
             let result = block
                 .commit_with_signers(&topology, &signers, false)

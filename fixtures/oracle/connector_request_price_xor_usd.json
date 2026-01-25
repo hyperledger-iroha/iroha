@@ -1,14 +1,21 @@
 {
-  "body_hash": "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
-  "connector_id": "http-bin",
-  "connector_version": 2,
-  "endpoint": "/price",
-  "feed_config_version": [
-    1
-  ],
   "feed_id": [
     "price_xor_usd"
   ],
+  "feed_config_version": [
+    1
+  ],
+  "slot": 10,
+  "connector_id": "http-bin",
+  "connector_version": 2,
+  "method": {
+    "method": "Get",
+    "value": null
+  },
+  "endpoint": "/price",
+  "query": {
+    "pair": "XOR/USD"
+  },
   "headers": {
     "user-agent": {
       "kind": "Plain",
@@ -19,12 +26,5 @@
       "value": "hash:B27DCB7DCA58BE630E474EDDA67E2BACA7E55B7062C48FCDA50CF5AB226F0D59#2EE1"
     }
   },
-  "method": {
-    "method": "Get",
-    "value": null
-  },
-  "query": {
-    "pair": "XOR/USD"
-  },
-  "slot": 10
+  "body_hash": "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22"
 }

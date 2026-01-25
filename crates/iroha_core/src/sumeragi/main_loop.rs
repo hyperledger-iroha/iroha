@@ -8533,8 +8533,7 @@ impl Actor {
             self.try_replay_deferred_votes()
         };
         let deferred_block_sync_progress = {
-            let _view_ctx =
-                StateViewContextGuard::new("sumeragi.tick.replay_deferred_block_sync");
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.replay_deferred_block_sync");
             self.try_replay_deferred_block_sync_updates()
         };
         let (missing_block_progress, missing_block_cost) = {

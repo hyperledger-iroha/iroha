@@ -49,7 +49,9 @@ translator: manual
 | `#[serde(flatten)]` | `#[norito(flatten)]` を利用 |
 | カスタム deserialize ビジター | `norito::NoritoDeserialize` 手書き実装、または `json::MapVisitor` / `json::SeqVisitor` |
 
-> **ステータス（2025-11-07）:** 文字列ベースの ID 新型 (`AccountId`, `AssetId`, `DomainId`, `NftId`, `TriggerId` など) は `string_id!` マクロ経由で Norito の `FastJsonWrite` + `JsonDeserialize` を実装済み。これにより `norito::json::to_json` / `from_json` で正規 `IH58` 表記を扱えます。
+> **ステータス（2025-11-07）:** 文字列ベースの ID 新型 (`DomainId`, `AssetDefinitionId`, `NftId`, `TriggerId` など) は `string_id!` マクロ経由で Norito の `FastJsonWrite` + `JsonDeserialize` を実装済み。これにより `norito::json::to_json` / `from_json` で正規表記を扱えます。
+>
+> **Status (Jan 25, 2026):** `AccountId`/`AssetId` JSON now includes an explicit `@domain` suffix (e.g., `IH58@domain`, `asset##IH58@domain`) so decoding does not rely on a domain-selector resolver. Alias inputs such as `label@domain` remain parseable via resolvers where configured.
 
 > **ステータス（2025-11-07）:** `IpfsPath` も既存パーサを用いた Norito `FastJsonWrite` / `JsonDeserialize` を実装し、正／負のラウンドトリップテストを追加しました。互換目的で Serde 実装は一時的に残っています。
 
