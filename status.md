@@ -2,6 +2,9 @@
 
 Last update: 2026-01-26
 
+- Sumeragi DA eviction test: raise P2P frame caps, extend RBC timeouts, and stop submitting extra oversized log transactions once DA evictions appear to avoid long consensus stalls; log level lowered to WARN to avoid payload spam.
+- Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_da sumeragi_da_eviction_rehydrates_block_bodies -- --nocapture` (ok).
+
 - Sumeragi main-loop test harness: stop holding commit-history/RBC status test locks for the entire harness lifetime so parallel unit tests no longer serialize and `block_created_*` cases finish under the 60s watchdog.
 - Tests: `cargo test -p iroha_core sumeragi::main_loop::tests::block_created_ -- --nocapture --test-threads=4` (block_created suite passed in 59.84s; command later timed out while continuing to build/run filtered binaries; warnings about unused assignments in `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`, unused `PeersGossiperHandle::closed_for_tests`, and unused `consensus_mode` persist).
 - Sumeragi missing-block fetch: dedup FetchPendingBlock requests by requester+hash, stash requesters until the block arrives, flush responses on BlockCreated, and route responses through the background queue; add fetch-dedup metrics + coverage.
