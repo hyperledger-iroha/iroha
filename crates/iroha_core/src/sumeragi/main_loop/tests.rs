@@ -649,6 +649,25 @@ fn sample_bls_topology(count: usize) -> (Vec<KeyPair>, super::network_topology::
     (keypairs, topology)
 }
 
+fn keypair_for_peer<'a>(keypairs: &'a [KeyPair], peer: &PeerId) -> &'a KeyPair {
+    keypairs
+        .iter()
+        .find(|kp| kp.public_key() == peer.public_key())
+        .expect("matching keypair for peer")
+}
+
+fn keypair_at_index<'a>(
+    keypairs: &'a [KeyPair],
+    topology: &super::network_topology::Topology,
+    index: usize,
+) -> &'a KeyPair {
+    let peer = topology
+        .as_ref()
+        .get(index)
+        .expect("peer index in topology");
+    keypair_for_peer(keypairs, peer)
+}
+
 fn sample_da_record(proof_digest: Option<Hash>) -> DaCommitmentRecord {
     DaCommitmentRecord::new(
         LaneId::new(1),
@@ -35475,6 +35494,9 @@ async fn assemble_proposal_schedules_rbc_after_proposal_messages() {
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
+    let background_log: Arc<Mutex<Vec<super::BackgroundRequestLogEntry>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    actor.background_request_log = Some(Arc::clone(&background_log));
 
     let tx = sample_transaction();
     actor
@@ -35508,7 +35530,6 @@ async fn assemble_proposal_schedules_rbc_after_proposal_messages() {
         "local peer must be leader for proposal assembly"
     );
 
-    let _ = harness.background_rx.try_iter().count();
     let assembled = actor
         .assemble_and_broadcast_proposal(
             height,
@@ -35522,32 +35543,29 @@ async fn assemble_proposal_schedules_rbc_after_proposal_messages() {
         .expect("proposal assembly should succeed");
     assert!(assembled, "proposal assembly should succeed");
 
-    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let posts = background_log
+        .lock()
+        .expect("background request log mutex poisoned")
+        .clone();
     let mut proposal_indexes = Vec::new();
     let mut rbc_indexes = Vec::new();
     for (idx, post) in posts.iter().enumerate() {
-        let msg = match post {
-            BackgroundPost::Post { msg, .. } => msg,
-            _ => continue,
-        };
-        match msg {
-            BlockMessage::Proposal(_) | BlockMessage::BlockCreated(_) => proposal_indexes.push(idx),
-            BlockMessage::RbcInit(_) | BlockMessage::RbcChunk(_) | BlockMessage::RbcReady(_) => {
-                rbc_indexes.push(idx)
-            }
-            _ => {}
+        match post.msg_kind {
+            Some("Proposal") | Some("BlockCreated") => proposal_indexes.push(idx),
+            Some("RbcInit") | Some("RbcChunk") | Some("RbcReady") => rbc_indexes.push(idx),
+            _ => (),
         }
     }
     assert!(
         !proposal_indexes.is_empty(),
-        "proposal messages should be enqueued"
+        "proposal messages should be scheduled"
     );
-    assert!(!rbc_indexes.is_empty(), "RBC messages should be enqueued");
+    assert!(!rbc_indexes.is_empty(), "RBC messages should be scheduled");
     let last_proposal = *proposal_indexes.iter().max().expect("proposal index");
     let first_rbc = *rbc_indexes.iter().min().expect("RBC index");
     assert!(
         first_rbc > last_proposal,
-        "RBC messages should be enqueued after proposal messages"
+        "RBC messages should be scheduled after proposal messages"
     );
 
     harness.shutdown.send();
@@ -41908,12 +41926,26 @@ fn derive_block_sync_qc_from_committed_signers() {
     let keypairs: Vec<_> = (0..4)
         .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
         .collect();
+    let peers: Vec<PeerId> = keypairs
+        .iter()
+        .map(|kp| PeerId::new(kp.public_key().clone()))
+        .collect();
+    let topology = super::network_topology::Topology::new(peers);
     let parent =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
     let header = BlockHeader::new(nonzero!(3_u64), Some(parent), None, None, 0, 0);
-    let mut block = BlockBuilder::new(header).build_with_signature(0, keypairs[0].private_key());
-    for (idx, keypair) in keypairs.iter().enumerate().skip(1).take(2) {
-        let sig = SignatureOf::from_hash(keypair.private_key(), block.header().hash());
+    let signature_topology = super::topology_for_view(
+        &topology,
+        header.height().get(),
+        header.view_change_index(),
+        super::PERMISSIONED_TAG,
+        None,
+    );
+    let leader_kp = keypair_at_index(&keypairs, &signature_topology, 0);
+    let mut block = BlockBuilder::new(header).build_with_signature(0, leader_kp.private_key());
+    for idx in 1..3 {
+        let signer_kp = keypair_at_index(&keypairs, &signature_topology, idx);
+        let sig = SignatureOf::from_hash(signer_kp.private_key(), block.header().hash());
         block
             .add_signature(BlockSignature::new(
                 u64::try_from(idx).expect("signer index fits u64"),
@@ -41921,11 +41953,7 @@ fn derive_block_sync_qc_from_committed_signers() {
             ))
             .expect("signature added");
     }
-    let peers: Vec<PeerId> = keypairs
-        .iter()
-        .map(|kp| PeerId::new(kp.public_key().clone()))
-        .collect();
-    let topology = super::network_topology::Topology::new(peers);
+    let topology = signature_topology;
     let state = State::new_for_testing(
         World::new(),
         Kura::blank_kura_for_testing(),
@@ -42257,17 +42285,23 @@ fn validate_block_sync_qc_accepts_npos_rotated_signers_across_views() {
 
 #[test]
 fn validated_block_signers_accept_trimmed_commit_roles() {
-    let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let topology = super::network_topology::Topology::new(vec![
-        PeerId::new(kp_leader.public_key().clone()),
-        PeerId::new(kp_validator.public_key().clone()),
-        PeerId::new(kp_proxy.public_key().clone()),
-    ]);
+    let keypairs = vec![
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+    ];
+    let peers = keypairs
+        .iter()
+        .map(|kp| PeerId::new(kp.public_key().clone()))
+        .collect::<Vec<_>>();
+    let topology = super::network_topology::Topology::new(peers);
+    let signature_topology =
+        super::topology_for_view(&topology, 2, 0, super::PERMISSIONED_TAG, None);
+    let leader_kp = keypair_at_index(&keypairs, &signature_topology, 0);
+    let validator_kp = keypair_at_index(&keypairs, &signature_topology, 1);
 
-    let mut block = super::ValidBlock::new_dummy(kp_leader.private_key());
-    block.sign(&kp_validator, &topology);
+    let mut block = super::ValidBlock::new_dummy(leader_kp.private_key());
+    block.sign(validator_kp, &signature_topology);
     let block: SignedBlock = block.into();
     let state = State::new_for_testing(
         World::new(),
@@ -42291,18 +42325,26 @@ fn validated_block_signers_accept_trimmed_commit_roles() {
 
 #[test]
 fn validated_block_signers_return_commit_role_signers() {
-    let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let topology = super::network_topology::Topology::new(vec![
-        PeerId::new(kp_leader.public_key().clone()),
-        PeerId::new(kp_validator.public_key().clone()),
-        PeerId::new(kp_proxy.public_key().clone()),
-    ]);
+    let keypairs = vec![
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+    ];
+    let peers = keypairs
+        .iter()
+        .map(|kp| PeerId::new(kp.public_key().clone()))
+        .collect::<Vec<_>>();
+    let topology = super::network_topology::Topology::new(peers);
+    let signature_topology =
+        super::topology_for_view(&topology, 2, 0, super::PERMISSIONED_TAG, None);
+    let leader_kp = keypair_at_index(&keypairs, &signature_topology, 0);
+    let validator_kp = keypair_at_index(&keypairs, &signature_topology, 1);
+    let proxy_idx = signature_topology.proxy_tail_index();
+    let proxy_kp = keypair_at_index(&keypairs, &signature_topology, proxy_idx);
 
-    let mut block = super::ValidBlock::new_dummy(kp_leader.private_key());
-    block.sign(&kp_validator, &topology);
-    block.sign(&kp_proxy, &topology);
+    let mut block = super::ValidBlock::new_dummy(leader_kp.private_key());
+    block.sign(validator_kp, &signature_topology);
+    block.sign(proxy_kp, &signature_topology);
     let block: SignedBlock = block.into();
     let state = State::new_for_testing(
         World::new(),
@@ -42326,20 +42368,27 @@ fn validated_block_signers_return_commit_role_signers() {
 
 #[test]
 fn validated_block_signers_include_set_b() {
-    let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_proxy = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_set_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let topology = super::network_topology::Topology::new(vec![
-        PeerId::new(kp_leader.public_key().clone()),
-        PeerId::new(kp_validator.public_key().clone()),
-        PeerId::new(kp_proxy.public_key().clone()),
-        PeerId::new(kp_set_b.public_key().clone()),
-    ]);
+    let keypairs = vec![
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+    ];
+    let peers = keypairs
+        .iter()
+        .map(|kp| PeerId::new(kp.public_key().clone()))
+        .collect::<Vec<_>>();
+    let topology = super::network_topology::Topology::new(peers);
+    let signature_topology =
+        super::topology_for_view(&topology, 2, 0, super::PERMISSIONED_TAG, None);
+    let leader_kp = keypair_at_index(&keypairs, &signature_topology, 0);
+    let validator_kp = keypair_at_index(&keypairs, &signature_topology, 1);
+    let set_b_idx = signature_topology.proxy_tail_index().saturating_add(1);
+    let set_b_kp = keypair_at_index(&keypairs, &signature_topology, set_b_idx);
 
-    let mut block = super::ValidBlock::new_dummy(kp_leader.private_key());
-    block.sign(&kp_validator, &topology);
-    block.sign(&kp_set_b, &topology);
+    let mut block = super::ValidBlock::new_dummy(leader_kp.private_key());
+    block.sign(validator_kp, &signature_topology);
+    block.sign(set_b_kp, &signature_topology);
     let block: SignedBlock = block.into();
     let state = State::new_for_testing(
         World::new(),
@@ -42363,19 +42412,25 @@ fn validated_block_signers_include_set_b() {
 
 #[test]
 fn validated_block_signers_rotate_topology_for_view() {
-    let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let topology = super::network_topology::Topology::new(vec![
-        PeerId::new(kp_a.public_key().clone()),
-        PeerId::new(kp_b.public_key().clone()),
-    ]);
+    let keypairs = vec![
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+    ];
+    let peers = keypairs
+        .iter()
+        .map(|kp| PeerId::new(kp.public_key().clone()))
+        .collect::<Vec<_>>();
+    let topology = super::network_topology::Topology::new(peers);
+    let signature_topology =
+        super::topology_for_view(&topology, 2, 1, super::PERMISSIONED_TAG, None);
+    let leader_kp = keypair_at_index(&keypairs, &signature_topology, 0);
+    let other_kp = keypair_at_index(&keypairs, &signature_topology, 1);
 
-    let mut block = super::ValidBlock::new_dummy_and_modify_header(kp_b.private_key(), |header| {
-        header.set_view_change_index(1);
-    });
-    let mut rotated = topology.clone();
-    rotated.nth_rotation(1);
-    block.sign(&kp_a, &rotated);
+    let mut block =
+        super::ValidBlock::new_dummy_and_modify_header(leader_kp.private_key(), |header| {
+            header.set_view_change_index(1);
+        });
+    block.sign(other_kp, &signature_topology);
     let block: SignedBlock = block.into();
     let state = State::new_for_testing(
         World::new(),
@@ -42550,21 +42605,26 @@ fn topology_for_view_canonicalizes_npos_roster_order() {
 
 #[test]
 fn validated_block_signers_accepts_npos_prf_rotation() {
-    let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let topology = super::network_topology::Topology::new(vec![
-        PeerId::new(kp_a.public_key().clone()),
-        PeerId::new(kp_b.public_key().clone()),
-    ]);
+    let keypairs = vec![
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+    ];
+    let peers = keypairs
+        .iter()
+        .map(|kp| PeerId::new(kp.public_key().clone()))
+        .collect::<Vec<_>>();
+    let topology = super::network_topology::Topology::new(peers);
 
     let seed = [0x33_u8; 32];
     let mut height = 1u64;
     let mut view = 0u64;
-    let mut leader = topology.leader_index_prf(seed, height, view);
+    let mut canonical = topology.clone();
+    canonical.canonicalize_order();
+    let mut leader = canonical.leader_index_prf(seed, height, view);
     if leader == 0 {
         'search: for h in 1u64..=64 {
             for v in 0u64..=8 {
-                let candidate = topology.leader_index_prf(seed, h, v);
+                let candidate = canonical.leader_index_prf(seed, h, v);
                 if candidate != 0 {
                     height = h;
                     view = v;
@@ -42575,9 +42635,15 @@ fn validated_block_signers_accepts_npos_prf_rotation() {
         }
     }
     assert_ne!(leader, 0, "test requires non-zero PRF leader index");
-    assert_eq!(leader, 1, "expected leader index to resolve to peer B");
+    let signature_topology =
+        super::topology_for_view(&topology, height, view, super::NPOS_TAG, Some(seed));
+    let leader_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("leader present after rotation");
+    let leader_kp = keypair_for_peer(&keypairs, leader_peer);
 
-    let block = super::ValidBlock::new_dummy_and_modify_header(kp_b.private_key(), |header| {
+    let block = super::ValidBlock::new_dummy_and_modify_header(leader_kp.private_key(), |header| {
         header.set_height(NonZeroU64::new(height).expect("height"));
         header.set_view_change_index(view);
     });
@@ -42603,23 +42669,29 @@ fn validated_block_signers_accepts_npos_prf_rotation() {
 #[test]
 fn qc_validation_remaps_signers_across_block_and_qc_views() {
     let chain: ChainId = "qc-remap".parse().expect("chain id parses");
-    let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let kp_c = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let topology = super::network_topology::Topology::new(vec![
-        PeerId::new(kp_a.public_key().clone()),
-        PeerId::new(kp_b.public_key().clone()),
-        PeerId::new(kp_c.public_key().clone()),
-    ]);
+    let keypairs = vec![
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+    ];
+    let peers = keypairs
+        .iter()
+        .map(|kp| PeerId::new(kp.public_key().clone()))
+        .collect::<Vec<_>>();
+    let topology = super::network_topology::Topology::new(peers);
 
     // Block built in view 1 and signed against the rotated topology.
-    let mut block = super::ValidBlock::new_dummy_and_modify_header(kp_b.private_key(), |header| {
-        header.set_view_change_index(1);
-    });
-    let mut rotated = topology.clone();
-    rotated.nth_rotation(1);
-    block.sign(&kp_c, &rotated);
-    block.sign(&kp_a, &rotated);
+    let signature_topology =
+        super::topology_for_view(&topology, 2, 1, super::PERMISSIONED_TAG, None);
+    let leader_kp = keypair_at_index(&keypairs, &signature_topology, 0);
+    let signer_kp_1 = keypair_at_index(&keypairs, &signature_topology, 1);
+    let signer_kp_2 = keypair_at_index(&keypairs, &signature_topology, 2);
+    let mut block =
+        super::ValidBlock::new_dummy_and_modify_header(leader_kp.private_key(), |header| {
+            header.set_view_change_index(1);
+        });
+    block.sign(signer_kp_1, &signature_topology);
+    block.sign(signer_kp_2, &signature_topology);
     let block: SignedBlock = block.into();
     let state = State::new_for_testing(
         World::new(),
@@ -42638,7 +42710,6 @@ fn qc_validation_remaps_signers_across_block_and_qc_views() {
     // QC aggregated in a later view; bitmap is expressed in that rotated index space.
     let signers_bitmap = vec![0b0000_0111];
     let block_hash = block.hash();
-    let keypairs = vec![kp_a.clone(), kp_b.clone(), kp_c.clone()];
     let qc = qc_with_bitmap(
         &chain,
         block_hash,
@@ -47126,7 +47197,7 @@ fn phase_tracker_reports_view_age() {
 
 #[test]
 fn build_consensus_proposal_populates_defaults() {
-    let block = sample_block(5, 0, None);
+    let block = empty_block(5, 0, None);
     let payload_hash = Hash::new(b"payload-bytes");
     let subject_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; 32]));
     let qc_ref = QcHeaderRef {
@@ -49720,13 +49791,19 @@ async fn conflicting_vote_does_not_override_first() {
     let view = 0;
     let epoch = actor.current_epoch();
     let chain_id = actor.chain_id.clone();
-    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
 
     let block_hash_a =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB1; Hash::LENGTH]));
     let block_hash_b =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB2; Hash::LENGTH]));
 
+    let roster_a = actor.roster_for_vote_with_mode(block_hash_a, height, view, consensus_mode);
+    assert!(
+        !roster_a.is_empty(),
+        "vote roster should resolve for first vote"
+    );
+    let topology_a = super::network_topology::Topology::new(roster_a);
     let mut vote_a = crate::sumeragi::consensus::Vote {
         phase: crate::sumeragi::consensus::Phase::Commit,
         block_hash: block_hash_a,
@@ -49739,9 +49816,22 @@ async fn conflicting_vote_does_not_override_first() {
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote_a, &chain_id, &topology, &harness.key_pairs);
+    sign_vote_for_view_with_seed(
+        &mut vote_a,
+        &chain_id,
+        &topology_a,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
     actor.handle_vote(vote_a.clone());
 
+    let roster_b = actor.roster_for_vote_with_mode(block_hash_b, height, view, consensus_mode);
+    assert!(
+        !roster_b.is_empty(),
+        "vote roster should resolve for conflicting vote"
+    );
+    let topology_b = super::network_topology::Topology::new(roster_b);
     let mut vote_b = crate::sumeragi::consensus::Vote {
         phase: crate::sumeragi::consensus::Phase::Commit,
         block_hash: block_hash_b,
@@ -49754,7 +49844,14 @@ async fn conflicting_vote_does_not_override_first() {
         signer: 0,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote_b, &chain_id, &topology, &harness.key_pairs);
+    sign_vote_for_view_with_seed(
+        &mut vote_b,
+        &chain_id,
+        &topology_b,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
     actor.handle_vote(vote_b);
 
     let key = (
@@ -49788,8 +49885,9 @@ async fn commit_qc_uses_exec_roots_from_view_votes() {
 
     let canonical_topology =
         super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
-        super::topology_for_view(&canonical_topology, height, view, PERMISSIONED_TAG, None);
+        super::topology_for_view(&canonical_topology, height, view, mode_tag, prf_seed);
     let signer_peer = signature_topology
         .as_ref()
         .first()
@@ -49816,12 +49914,10 @@ async fn commit_qc_uses_exec_roots_from_view_votes() {
     );
     actor.locked_qc = None;
 
-    let (consensus_mode, _mode_tag, _prf_seed) = actor.consensus_context_for_height(height);
     let commit_roster = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
     let topology = super::network_topology::Topology::new(commit_roster);
 
-    let signature_topology =
-        super::topology_for_view(&topology, height, view, super::PERMISSIONED_TAG, None);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     let required = signature_topology.min_votes_for_commit().max(1);
     let parent_state_root = Hash::prehashed([0x11; 32]);
     let post_state_root = Hash::prehashed([0x22; 32]);
@@ -49844,7 +49940,14 @@ async fn commit_qc_uses_exec_roots_from_view_votes() {
             signer: ValidatorIndex::try_from(idx).expect("signer index fits"),
             bls_sig: Vec::new(),
         };
-        sign_vote_for_view(&mut vote, &chain_id, &topology, &harness.key_pairs);
+        sign_vote_for_view_with_seed(
+            &mut vote,
+            &chain_id,
+            &topology,
+            &harness.key_pairs,
+            mode_tag,
+            prf_seed,
+        );
         actor.handle_vote(vote);
     }
 

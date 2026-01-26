@@ -2575,8 +2575,8 @@ fn block_sync_quorum_available(
         return false;
     }
 
-    if missing_block_requested {
-        return block_height <= local_height.saturating_add(1);
+    if !missing_block_requested {
+        return false;
     }
 
     block_height <= local_height.saturating_add(1)
@@ -3996,6 +3996,24 @@ pub(super) struct Actor {
     block_sync_rebroadcast_log: PayloadRebroadcastThrottle,
     block_sync_fetch_log: PayloadRebroadcastThrottle,
     roster_validation_cache: RosterValidationCache,
+    #[cfg(test)]
+    background_request_log: Option<Arc<Mutex<Vec<BackgroundRequestLogEntry>>>>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BackgroundRequestLogEntry {
+    kind: BackgroundRequestLogKind,
+    msg_kind: Option<&'static str>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum BackgroundRequestLogKind {
+    Post,
+    Broadcast,
+    PostControlFlow,
+    BroadcastControlFlow,
 }
 
 #[derive(Debug, Clone)]
@@ -8060,6 +8078,8 @@ impl Actor {
             block_sync_rebroadcast_log: PayloadRebroadcastThrottle::default(),
             block_sync_fetch_log: PayloadRebroadcastThrottle::default(),
             roster_validation_cache,
+            #[cfg(test)]
+            background_request_log: None,
         };
         actor.refresh_p2p_topology();
         if let Some(roster) = roster_to_install_now {
@@ -9936,6 +9956,8 @@ impl Actor {
             }
             other => other,
         };
+        #[cfg(test)]
+        self.record_background_request(&request);
         if self.config.debug.disable_background_worker {
             self.dispatch_background_inline(request);
             return;
@@ -9985,6 +10007,34 @@ impl Actor {
         if let Err(request) = dispatched {
             self.dispatch_background_fallback(*request);
         }
+    }
+
+    #[cfg(test)]
+    fn record_background_request(&self, request: &BackgroundRequest) {
+        let Some(log) = self.background_request_log.as_ref() else {
+            return;
+        };
+        let entry = match request {
+            BackgroundRequest::Post { msg, .. } => BackgroundRequestLogEntry {
+                kind: BackgroundRequestLogKind::Post,
+                msg_kind: Some(Self::block_message_kind(msg)),
+            },
+            BackgroundRequest::Broadcast { msg } => BackgroundRequestLogEntry {
+                kind: BackgroundRequestLogKind::Broadcast,
+                msg_kind: Some(Self::block_message_kind(msg)),
+            },
+            BackgroundRequest::PostControlFlow { .. } => BackgroundRequestLogEntry {
+                kind: BackgroundRequestLogKind::PostControlFlow,
+                msg_kind: None,
+            },
+            BackgroundRequest::BroadcastControlFlow { .. } => BackgroundRequestLogEntry {
+                kind: BackgroundRequestLogKind::BroadcastControlFlow,
+                msg_kind: None,
+            },
+        };
+        log.lock()
+            .expect("background request log mutex poisoned")
+            .push(entry);
     }
 
     fn dispatch_background_inline(&mut self, request: BackgroundRequest) {

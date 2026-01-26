@@ -557,6 +557,7 @@ impl Actor {
 
         let da_enabled = self.runtime_da_enabled();
         let mut overflow_transactions = Vec::new();
+        let mut oversized_frame_len: Option<usize> = None;
         let mut tx_batch;
         let mut routing_batch;
         let mut tx_sizes;
@@ -573,6 +574,10 @@ impl Actor {
             tx_sizes = Vec::with_capacity(transactions.len());
             for (tx, routing) in transactions.into_iter().zip(routing_decisions.into_iter()) {
                 let encoded_len = tx.as_ref().encode().len();
+                if encoded_len > self.consensus_payload_frame_cap {
+                    oversized_frame_len =
+                        Some(oversized_frame_len.map_or(encoded_len, |prev| prev.max(encoded_len)));
+                }
                 if encoded_len > remaining_budget {
                     overflow_transactions.push(tx);
                     continue;
@@ -632,6 +637,12 @@ impl Actor {
                 })
                 .has_work();
             if !has_internal_work {
+                if let Some(frame_len) = oversized_frame_len {
+                    return Err(eyre!(
+                        "proposal frame size {frame_len} exceeds consensus payload cap {}",
+                        self.consensus_payload_frame_cap
+                    ));
+                }
                 info!(
                     height = proposal_height,
                     view,
