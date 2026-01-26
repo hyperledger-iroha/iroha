@@ -1048,6 +1048,17 @@ impl Actor {
                 );
                 return None;
             }
+            if qc.epoch != expected_epoch {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    hash = %block_hash,
+                    expected_epoch,
+                    qc_epoch = qc.epoch,
+                    "dropping block sync QC with mismatched epoch"
+                );
+                return None;
+            }
             if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
                 warn!(
                     height = block_height,
@@ -1302,7 +1313,12 @@ impl Actor {
         };
         let qc_validate_ms =
             u64::try_from(qc_validate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-        if incoming_qc_validated {
+        let conflicts_locked = incoming_qc.as_ref().is_some_and(|qc| {
+            self.locked_qc.as_ref().is_some_and(|lock| {
+                qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash
+            })
+        });
+        if incoming_qc_validated && !conflicts_locked {
             if let Some(qc) = incoming_qc.as_ref() {
                 self.qc_cache.insert(
                     (

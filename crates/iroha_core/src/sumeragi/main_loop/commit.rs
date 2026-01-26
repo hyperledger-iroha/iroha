@@ -3419,7 +3419,8 @@ impl Actor {
         Hash::new(&payload_bytes) == *payload_hash
     }
 
-    fn payload_available_for_da(
+    /// Return true when the pending block payload is available locally or via RBC.
+    pub(super) fn payload_available_for_da(
         sessions: &BTreeMap<super::rbc_store::SessionKey, RbcSession>,
         handle: &rbc_status::Handle,
         pending: &PendingBlock,
