@@ -2482,6 +2482,7 @@ pub mod message {
             stake_snapshot,
             mode_tag,
             prf_seed,
+            None,
         ) {
             warn!(
                 ?err,

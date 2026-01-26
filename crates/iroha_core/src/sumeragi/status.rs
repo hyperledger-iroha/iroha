@@ -2366,6 +2366,8 @@ pub enum ConsensusMessageReason {
     SignatureMismatchDeferred,
     /// Payload deferred while commit/validation work is in flight.
     CommitPipelineActive,
+    /// QC aggregate verification pending on background worker.
+    AggregateVerifyDeferred,
     /// Delivery channel is unavailable.
     EnqueueFailed,
     /// Sender is currently penalized.
@@ -2426,6 +2428,7 @@ impl ConsensusMessageReason {
             ConsensusMessageReason::PayloadUnapplied => "payload_unapplied",
             ConsensusMessageReason::SignatureMismatchDeferred => "signature_mismatch_deferred",
             ConsensusMessageReason::CommitPipelineActive => "commit_pipeline_active",
+            ConsensusMessageReason::AggregateVerifyDeferred => "aggregate_verify_deferred",
             ConsensusMessageReason::EnqueueFailed => "enqueue_failed",
             ConsensusMessageReason::PenalizedSender => "penalized_sender",
             ConsensusMessageReason::EpochMismatch => "epoch_mismatch",
@@ -7276,6 +7279,10 @@ mod tests {
         assert_eq!(
             super::ConsensusMessageReason::NotFound.as_str(),
             "not_found"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::AggregateVerifyDeferred.as_str(),
+            "aggregate_verify_deferred"
         );
     }
 

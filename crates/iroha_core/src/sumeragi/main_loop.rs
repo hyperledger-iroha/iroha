@@ -116,6 +116,7 @@ mod proposal_handlers;
 mod proposals;
 mod propose;
 mod qc;
+mod qc_verify;
 mod rbc;
 mod reschedule;
 
@@ -572,6 +573,27 @@ pub(super) struct QcValidationOutcome {
     present_signers: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct QcVerifyKey {
+    phase: crate::sumeragi::consensus::Phase,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    block_hash: HashOf<BlockHeader>,
+}
+
+impl QcVerifyKey {
+    fn from_qc(qc: &Qc) -> Self {
+        Self {
+            phase: qc.phase,
+            height: qc.height,
+            view: qc.view,
+            epoch: qc.epoch,
+            block_hash: qc.subject_block_hash.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct QcSignerTally {
     voting_signers: BTreeSet<ValidatorIndex>,
@@ -926,6 +948,7 @@ fn validate_qc_with_evidence(
     stake_snapshot: Option<&CommitStakeSnapshot>,
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
+    aggregate_ok: Option<bool>,
 ) -> (
     Result<QcValidationOutcome, QcValidationError>,
     Option<crate::sumeragi::consensus::Evidence>,
@@ -941,6 +964,7 @@ fn validate_qc_with_evidence(
         stake_snapshot,
         mode_tag,
         prf_seed,
+        aggregate_ok,
     ) {
         Ok(outcome) => (Ok(outcome), None),
         Err(err) => (Err(err), qc_validation_error_to_evidence(qc, &err)),
@@ -1200,7 +1224,80 @@ fn qc_validator_set_matches_topology(
     if HashOf::new(&qc.validator_set) != qc.validator_set_hash {
         return false;
     }
-    qc.validator_set.as_slice() == canonical_topology.as_ref()
+    let mut canonical = canonical_topology.clone();
+    canonical.canonicalize_order();
+    qc.validator_set.as_slice() == canonical.as_ref()
+}
+
+#[derive(Debug, Clone)]
+struct QcAggregateInputs {
+    preimage: Vec<u8>,
+    signature: Vec<u8>,
+    public_keys: Vec<PublicKey>,
+    pops: Vec<Vec<u8>>,
+}
+
+impl QcAggregateInputs {
+    fn verify(&self) -> bool {
+        let pop_refs: Vec<&[u8]> = self.pops.iter().map(Vec::as_slice).collect();
+        let pk_refs: Vec<&PublicKey> = self.public_keys.iter().collect();
+        iroha_crypto::bls_normal_verify_preaggregated_same_message(
+            &self.preimage,
+            &self.signature,
+            &pk_refs,
+            &pop_refs,
+        )
+        .is_ok()
+    }
+}
+
+fn qc_aggregate_inputs(
+    qc: &crate::sumeragi::consensus::Qc,
+    canonical_topology: &super::network_topology::Topology,
+    pops: &BTreeMap<PublicKey, Vec<u8>>,
+    chain_id: &ChainId,
+    mode_tag: &str,
+) -> Option<QcAggregateInputs> {
+    if qc.mode_tag != mode_tag {
+        return None;
+    }
+    if !qc_validator_set_matches_topology(qc, canonical_topology) {
+        return None;
+    }
+    if qc.aggregate.bls_aggregate_signature.is_empty() {
+        return None;
+    }
+    let roster_len = canonical_topology.as_ref().len();
+    if roster_len == 0 {
+        return None;
+    }
+    let parsed_signers = qc_signer_indices(qc, roster_len, roster_len).ok()?;
+    if parsed_signers.present.is_empty() {
+        return None;
+    }
+    let mut public_keys: Vec<PublicKey> = Vec::with_capacity(parsed_signers.present.len());
+    let mut signer_pops: Vec<Vec<u8>> = Vec::with_capacity(parsed_signers.present.len());
+    for signer in &parsed_signers.present {
+        let Ok(idx) = usize::try_from(*signer) else {
+            return None;
+        };
+        let Some(peer) = canonical_topology.as_ref().get(idx) else {
+            return None;
+        };
+        let pk = peer.public_key();
+        let Some(pop) = pops.get(pk) else {
+            return None;
+        };
+        public_keys.push(pk.clone());
+        signer_pops.push(pop.clone());
+    }
+    let preimage = qc_bls_preimage(qc, chain_id, mode_tag);
+    Some(QcAggregateInputs {
+        preimage,
+        signature: qc.aggregate.bls_aggregate_signature.clone(),
+        public_keys,
+        pops: signer_pops,
+    })
 }
 
 fn qc_aggregate_consistent(
@@ -1210,51 +1307,10 @@ fn qc_aggregate_consistent(
     chain_id: &ChainId,
     mode_tag: &str,
 ) -> bool {
-    if qc.mode_tag != mode_tag {
+    let Some(inputs) = qc_aggregate_inputs(qc, canonical_topology, pops, chain_id, mode_tag) else {
         return false;
-    }
-    if !qc_validator_set_matches_topology(qc, canonical_topology) {
-        return false;
-    }
-    if qc.aggregate.bls_aggregate_signature.is_empty() {
-        return false;
-    }
-    let roster_len = canonical_topology.as_ref().len();
-    if roster_len == 0 {
-        return false;
-    }
-    let parsed_signers = match qc_signer_indices(qc, roster_len, roster_len) {
-        Ok(parsed) => parsed,
-        Err(_) => return false,
     };
-    if parsed_signers.present.is_empty() {
-        return false;
-    }
-    let mut public_keys: Vec<&PublicKey> = Vec::with_capacity(parsed_signers.present.len());
-    let mut signer_pops: Vec<Vec<u8>> = Vec::with_capacity(parsed_signers.present.len());
-    for signer in &parsed_signers.present {
-        let Ok(idx) = usize::try_from(*signer) else {
-            return false;
-        };
-        let Some(peer) = canonical_topology.as_ref().get(idx) else {
-            return false;
-        };
-        let pk = peer.public_key();
-        let Some(pop) = pops.get(pk) else {
-            return false;
-        };
-        public_keys.push(pk);
-        signer_pops.push(pop.clone());
-    }
-    let preimage = qc_bls_preimage(qc, chain_id, mode_tag);
-    let pop_refs: Vec<&[u8]> = signer_pops.iter().map(Vec::as_slice).collect();
-    iroha_crypto::bls_normal_verify_preaggregated_same_message(
-        &preimage,
-        &qc.aggregate.bls_aggregate_signature,
-        &public_keys,
-        &pop_refs,
-    )
-    .is_ok()
+    inputs.verify()
 }
 
 fn kickstart_pacemaker_after_commit<F>(
@@ -1568,6 +1624,7 @@ pub(crate) fn validate_block_sync_qc(
     stake_snapshot: Option<&CommitStakeSnapshot>,
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
+    aggregate_ok: Option<bool>,
 ) -> Result<(BTreeSet<crate::sumeragi::consensus::ValidatorIndex>, usize), QcValidationError> {
     let signature_topology = topology_for_view(topology, qc.height, qc.view, mode_tag, prf_seed);
     let roster_len = topology.as_ref().len();
@@ -1627,7 +1684,11 @@ pub(crate) fn validate_block_sync_qc(
             }
         }
     }
-    if !qc_aggregate_consistent(qc, topology, pops, chain_id, mode_tag) {
+    let aggregate_ok = match aggregate_ok {
+        Some(value) => value,
+        None => qc_aggregate_consistent(qc, topology, pops, chain_id, mode_tag),
+    };
+    if !aggregate_ok {
         return Err(QcValidationError::AggregateMismatch);
     }
     // Return the raw bitmap indices so cached signers reproduce the QC bitmap correctly.
@@ -1788,6 +1849,7 @@ fn tally_qc_against_votes(
         stake_snapshot,
         mode_tag,
         prf_seed,
+        None,
     )
     .map(
         |QcValidationOutcome {
@@ -1827,6 +1889,7 @@ fn tally_qc_against_block_signers(
         stake_snapshot,
         mode_tag,
         prf_seed,
+        None,
     )?;
     // Keep bitmap indices as-is so cached signers reproduce the QC bitmap correctly.
     let roster_len = topology.as_ref().len();
@@ -1883,6 +1946,7 @@ fn validate_qc_against_votes(
     stake_snapshot: Option<&CommitStakeSnapshot>,
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
+    aggregate_ok: Option<bool>,
 ) -> Result<QcValidationOutcome, QcValidationError> {
     let signature_topology = topology_for_view(topology, qc.height, qc.view, mode_tag, prf_seed);
     let roster_len = topology.as_ref().len();
@@ -1924,7 +1988,11 @@ fn validate_qc_against_votes(
         }
     }
 
-    if !qc_aggregate_consistent(qc, topology, pops, chain_id, mode_tag) {
+    let aggregate_ok = match aggregate_ok {
+        Some(value) => value,
+        None => qc_aggregate_consistent(qc, topology, pops, chain_id, mode_tag),
+    };
+    if !aggregate_ok {
         return Err(QcValidationError::AggregateMismatch);
     }
     let mut missing = 0usize;
@@ -4055,6 +4123,7 @@ struct DeferredBlockSyncUpdate {
 
 struct ActorSubsystems {
     validation: ValidationState,
+    qc_verify: QcVerifyState,
     commit: CommitState,
     propose: ProposeState,
     da_rbc: DaRbcState,
@@ -4525,6 +4594,37 @@ impl ValidationState {
     }
 }
 
+struct QcVerifyInFlight {
+    id: u64,
+    qc: crate::sumeragi::consensus::Qc,
+}
+
+struct QcVerifyState {
+    work_txs: Vec<mpsc::SyncSender<qc_verify::QcVerifyWork>>,
+    result_rx: Option<mpsc::Receiver<qc_verify::QcVerifyResult>>,
+    inflight: BTreeMap<QcVerifyKey, QcVerifyInFlight>,
+    next_id: u64,
+    next_worker: usize,
+}
+
+impl QcVerifyState {
+    fn new() -> Self {
+        Self {
+            work_txs: Vec::new(),
+            result_rx: None,
+            inflight: BTreeMap::new(),
+            next_id: 0,
+            next_worker: 0,
+        }
+    }
+
+    fn next_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        id
+    }
+}
+
 struct ProposeState {
     backpressure_gate: BackpressureGate,
     pacemaker: Pacemaker,
@@ -4588,6 +4688,18 @@ impl Actor {
         self.subsystems.validation.work_txs = validation_handle.work_txs;
         self.subsystems.validation.result_rx = Some(validation_handle.result_rx);
         validation_handle.join_handles
+    }
+
+    pub(super) fn attach_qc_verify_worker(&mut self) -> Vec<std::thread::JoinHandle<()>> {
+        let handle = qc_verify::spawn_qc_verify_workers(
+            self.wake_tx.clone(),
+            self.config.worker.validation_worker_threads,
+            self.config.worker.validation_work_queue_cap,
+            self.config.worker.validation_result_queue_cap,
+        );
+        self.subsystems.qc_verify.work_txs = handle.work_txs;
+        self.subsystems.qc_verify.result_rx = Some(handle.result_rx);
+        handle.join_handles
     }
 }
 
@@ -4851,6 +4963,15 @@ fn signature_topology_for_roster(
     let mut topology = super::network_topology::Topology::new(roster.to_vec());
     match mode_tag {
         PERMISSIONED_TAG => {
+            topology.canonicalize_order();
+            if let Some(seed) = prf_seed {
+                topology.shuffle_prf(seed, height);
+            } else {
+                warn!(
+                    height,
+                    view, "missing PRF seed for permissioned roster signature alignment"
+                );
+            }
             topology.nth_rotation(view);
         }
         NPOS_TAG => {
@@ -4879,11 +5000,12 @@ fn canonicalize_block_signatures_for_roster(
     if roster.is_empty() {
         return Vec::new();
     }
+    let canonical_roster = canonicalize_roster(roster.to_vec());
     let height = block.header().height().get();
     let view = block.header().view_change_index();
     let signature_topology =
-        signature_topology_for_roster(roster, height, view, mode_tag, prf_seed);
-    let canonical_topology = super::network_topology::Topology::new(roster.to_vec());
+        signature_topology_for_roster(&canonical_roster, height, view, mode_tag, prf_seed);
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let mut mapped = BTreeSet::new();
     let mut invalid = 0usize;
     for sig in block.signatures() {
@@ -5891,19 +6013,29 @@ fn select_block_sync_roster(
 
     if allow_uncertified {
         let view = state.view();
-        let roster = derive_active_topology_for_mode(&view, trusted, me, consensus_mode);
+        let mut roster = derive_active_topology_for_mode(&view, trusted, me, consensus_mode);
         let source = if view.commit_topology().is_empty() {
             BlockSyncRosterSource::TrustedPeersFallback
         } else {
             BlockSyncRosterSource::CommitTopologySnapshot
         };
-        let stake_snapshot = match consensus_mode {
+        let mut stake_snapshot = match consensus_mode {
             ConsensusMode::Npos => roster_cache.stake_snapshot_for_roster(&roster),
             ConsensusMode::Permissioned => None,
         };
         drop(view);
 
         if !roster.is_empty() {
+            if !trusted.pops.is_empty() {
+                roster.retain(|peer| trusted.pops.contains_key(peer.public_key()));
+                stake_snapshot = match consensus_mode {
+                    ConsensusMode::Npos => roster_cache.stake_snapshot_for_roster(&roster),
+                    ConsensusMode::Permissioned => None,
+                };
+            }
+            if roster.is_empty() {
+                return None;
+            }
             return Some(BlockSyncRosterSelection {
                 roster,
                 source,
@@ -6559,6 +6691,7 @@ impl Actor {
                 stake_snapshot.as_ref(),
                 mode_tag,
                 prf_seed,
+                None,
             );
             let mut fallback_tally = None;
             let mut sync_err = None;
@@ -7824,6 +7957,7 @@ impl Actor {
         };
         let subsystems = ActorSubsystems {
             validation: ValidationState::new(),
+            qc_verify: QcVerifyState::new(),
             commit: CommitState::new(),
             propose: propose_state,
             da_rbc: DaRbcState {

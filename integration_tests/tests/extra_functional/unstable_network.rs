@@ -16,8 +16,7 @@ use iroha_config_base::toml::WriteExt;
 use iroha_core::sumeragi::network_topology::{Topology, commit_quorum_from_len};
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    ChainId,
-    Level,
+    ChainId, Level,
     asset::AssetDefinition,
     isi::Register,
     parameter::{BlockParameter, SumeragiParameter},
@@ -860,12 +859,9 @@ impl UnstableNetwork {
             if rotated.len() > 1 && COLLECTORS_K > 0 {
                 let seed = permissioned_prf_seed(chain_id);
                 let topology = Topology::new(rotated.clone());
-                for idx in topology.collector_indices_k_prf(
-                    usize::from(COLLECTORS_K),
-                    seed,
-                    height,
-                    0,
-                ) {
+                for idx in
+                    topology.collector_indices_k_prf(usize::from(COLLECTORS_K), seed, height, 0)
+                {
                     if let Some(peer) = topology.as_ref().get(idx) {
                         collector_ids.insert(peer.clone());
                     }
@@ -884,10 +880,7 @@ impl UnstableNetwork {
                 }
             }
             if selected.len() < n_faulty_peers {
-                let head = rotated
-                    .iter()
-                    .skip(1)
-                    .take(commit_quorum.saturating_sub(1));
+                let head = rotated.iter().skip(1).take(commit_quorum.saturating_sub(1));
                 for peer in head {
                     if collector_ids.contains(peer) {
                         continue;
@@ -994,16 +987,15 @@ impl UnstableNetwork {
             .first()
             .cloned()
             .expect("topology always has a leader");
-        let faulty_ids: HashSet<_> =
-            Self::select_faulty_peer_ids(
-                &peer_ids,
-                self.n_faulty_peers,
-                round_index,
-                &chain_id,
-                target_height,
-            )
-                .into_iter()
-                .collect();
+        let faulty_ids: HashSet<_> = Self::select_faulty_peer_ids(
+            &peer_ids,
+            self.n_faulty_peers,
+            round_index,
+            &chain_id,
+            target_height,
+        )
+        .into_iter()
+        .collect();
         let faulty: Vec<_> = peers
             .iter()
             .filter(|peer| faulty_ids.contains(&peer.id()))
@@ -1011,11 +1003,8 @@ impl UnstableNetwork {
             .collect();
 
         let sync_timeout = scaled_timeout(network.sync_timeout(), peers.len());
-        let relay_pause = non_faulty_sync_timeout(
-            sync_timeout,
-            network.pipeline_time(),
-            self.n_faulty_peers,
-        );
+        let relay_pause =
+            non_faulty_sync_timeout(sync_timeout, network.pipeline_time(), self.n_faulty_peers);
         let submit_while_partitioned = self.n_faulty_peers <= 1;
         let stagger_faults = self.n_faulty_peers > 1;
         if stagger_faults {
@@ -1040,75 +1029,75 @@ impl UnstableNetwork {
             let leader_id = leader_id.clone();
             let faulty_ids = faulty_ids.clone();
             async move {
-            let mint_asset = Mint::asset_numeric(
-                Numeric::one(),
-                AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone()),
-            );
-            let some_peer = peers
-                .iter()
-                .find(|peer| peer.id() == leader_id)
-                .filter(|peer| !faulty_ids.contains(&peer.id()))
-                .cloned()
-                .unwrap_or_else(|| {
-                    let mut rng = ChaCha8Rng::seed_from_u64(
-                        0x5553_5052 + u64::try_from(round_index).unwrap_or(0),
-                    );
-                    peers
-                        .iter()
-                        .filter(|peer| !faulty_ids.contains(&peer.id()))
-                        .choose(&mut rng)
-                        .expect("there should be some working peers")
-                        .clone()
-                });
-            iroha_logger::info!(phase, via_peer = some_peer.mnemonic(), "Submit transaction");
-            let mut leader_client = some_peer.client();
-            if leader_client.transaction_status_timeout < sync_timeout {
-                leader_client.transaction_status_timeout = sync_timeout;
-            }
-            if let Some(ttl) = leader_client.transaction_ttl {
-                let min_ttl = sync_timeout + Duration::from_secs(120);
-                if ttl < min_ttl {
-                    leader_client.transaction_ttl = Some(min_ttl);
+                let mint_asset = Mint::asset_numeric(
+                    Numeric::one(),
+                    AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone()),
+                );
+                let some_peer = peers
+                    .iter()
+                    .find(|peer| peer.id() == leader_id)
+                    .filter(|peer| !faulty_ids.contains(&peer.id()))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        let mut rng = ChaCha8Rng::seed_from_u64(
+                            0x5553_5052 + u64::try_from(round_index).unwrap_or(0),
+                        );
+                        peers
+                            .iter()
+                            .filter(|peer| !faulty_ids.contains(&peer.id()))
+                            .choose(&mut rng)
+                            .expect("there should be some working peers")
+                            .clone()
+                    });
+                iroha_logger::info!(phase, via_peer = some_peer.mnemonic(), "Submit transaction");
+                let mut leader_client = some_peer.client();
+                if leader_client.transaction_status_timeout < sync_timeout {
+                    leader_client.transaction_status_timeout = sync_timeout;
                 }
-            }
-            let tx = Arc::new(leader_client.build_transaction_from_items(
-                vec![mint_asset],
-                Metadata::default(),
-            ));
-            let mut submitters = JoinSet::new();
-            for peer in peers.iter().filter(|peer| !faulty_ids.contains(&peer.id())) {
-                let mut client = peer.client();
-                if let Some(ttl) = client.transaction_ttl {
+                if let Some(ttl) = leader_client.transaction_ttl {
                     let min_ttl = sync_timeout + Duration::from_secs(120);
                     if ttl < min_ttl {
-                        client.transaction_ttl = Some(min_ttl);
+                        leader_client.transaction_ttl = Some(min_ttl);
                     }
                 }
-                let tx = Arc::clone(&tx);
-                submitters.spawn_blocking(move || client.submit_transaction(&tx));
-            }
-            let mut last_err: Option<eyre::Report> = None;
-            let mut submitted = false;
-            while let Some(res) = submitters.join_next().await {
-                match res {
-                    Ok(Ok(_hash)) => {
-                        submitted = true;
-                        break;
+                let tx = Arc::new(
+                    leader_client
+                        .build_transaction_from_items(vec![mint_asset], Metadata::default()),
+                );
+                let mut submitters = JoinSet::new();
+                for peer in peers.iter().filter(|peer| !faulty_ids.contains(&peer.id())) {
+                    let mut client = peer.client();
+                    if let Some(ttl) = client.transaction_ttl {
+                        let min_ttl = sync_timeout + Duration::from_secs(120);
+                        if ttl < min_ttl {
+                            client.transaction_ttl = Some(min_ttl);
+                        }
                     }
-                    Ok(Err(err)) => {
-                        last_err = Some(err);
-                    }
-                    Err(err) => {
-                        last_err = Some(eyre::Report::new(err));
+                    let tx = Arc::clone(&tx);
+                    submitters.spawn_blocking(move || client.submit_transaction(&tx));
+                }
+                let mut last_err: Option<eyre::Report> = None;
+                let mut submitted = false;
+                while let Some(res) = submitters.join_next().await {
+                    match res {
+                        Ok(Ok(_hash)) => {
+                            submitted = true;
+                            break;
+                        }
+                        Ok(Err(err)) => {
+                            last_err = Some(err);
+                        }
+                        Err(err) => {
+                            last_err = Some(eyre::Report::new(err));
+                        }
                     }
                 }
-            }
-            submitters.abort_all();
-            if !submitted {
-                return Err(last_err.unwrap_or_else(|| {
-                    eyre!("transaction submission failed on all non-faulty peers")
-                }));
-            }
+                submitters.abort_all();
+                if !submitted {
+                    return Err(last_err.unwrap_or_else(|| {
+                        eyre!("transaction submission failed on all non-faulty peers")
+                    }));
+                }
                 Ok::<_, eyre::Report>(())
             }
         };
@@ -1164,7 +1153,8 @@ impl UnstableNetwork {
     ) -> Result<()> {
         let client = network.client();
         let expected = Numeric::new(rounds as u128, 0);
-        let deadline = Instant::now() + scaled_timeout(network.sync_timeout(), network.peers().len());
+        let deadline =
+            Instant::now() + scaled_timeout(network.sync_timeout(), network.peers().len());
         loop {
             let asset = spawn_blocking({
                 let client = client.clone();
@@ -1213,13 +1203,8 @@ mod tests {
         let rotated = topology_for_permissioned_round(&peer_ids, &chain_id, height, 0);
         let commit_quorum = commit_quorum_from_len(rotated.len());
         let expected_tail: BTreeSet<_> = rotated[commit_quorum..].iter().cloned().collect();
-        let selected_single = UnstableNetwork::select_faulty_peer_ids(
-            &peer_ids,
-            1,
-            0,
-            &chain_id,
-            height,
-        );
+        let selected_single =
+            UnstableNetwork::select_faulty_peer_ids(&peer_ids, 1, 0, &chain_id, height);
         assert_eq!(selected_single.len(), 1);
         assert!(expected_tail.contains(&selected_single[0]));
 
@@ -1230,15 +1215,10 @@ mod tests {
             .into_iter()
             .filter_map(|idx| topology.as_ref().get(idx).cloned())
             .collect();
-        let selected_multi: BTreeSet<_> = UnstableNetwork::select_faulty_peer_ids(
-            &peer_ids,
-            3,
-            0,
-            &chain_id,
-            height,
-        )
-        .into_iter()
-        .collect();
+        let selected_multi: BTreeSet<_> =
+            UnstableNetwork::select_faulty_peer_ids(&peer_ids, 3, 0, &chain_id, height)
+                .into_iter()
+                .collect();
         assert_eq!(selected_multi.len(), 3);
         assert!(collector_ids.is_disjoint(&selected_multi));
     }
