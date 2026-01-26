@@ -540,18 +540,68 @@ impl Actor {
             );
             return Ok(());
         }
+        let snapshot_selection = if block_known && has_roster_hint {
+            self.state
+                .commit_roster_snapshot_for_block(block_height, block_hash)
+                .and_then(|snapshot| {
+                    let qc_match = incoming_qc
+                        .as_ref()
+                        .is_none_or(|qc| HashOf::new(qc) == HashOf::new(&snapshot.commit_qc));
+                    let checkpoint_match = validator_checkpoint.as_ref().is_none_or(|checkpoint| {
+                        HashOf::new(checkpoint) == HashOf::new(&snapshot.validator_checkpoint)
+                    });
+                    let stake_match = stake_snapshot.as_ref().is_none_or(|stake| {
+                        snapshot
+                            .stake_snapshot
+                            .as_ref()
+                            .is_some_and(|snapshot| HashOf::new(snapshot) == HashOf::new(stake))
+                    });
+                    if !(qc_match && checkpoint_match && stake_match) {
+                        return None;
+                    }
+                    let roster = snapshot.commit_qc.validator_set.clone();
+                    let stake_snapshot = snapshot
+                        .stake_snapshot
+                        .as_ref()
+                        .filter(|snapshot| snapshot.matches_roster(&roster))
+                        .cloned();
+                    let selection = BlockSyncRosterSelection {
+                        roster,
+                        source: BlockSyncRosterSource::CommitRosterJournal,
+                        commit_qc: Some(snapshot.commit_qc.clone()),
+                        checkpoint: Some(snapshot.validator_checkpoint.clone()),
+                        stake_snapshot,
+                    };
+                    if let Some(key) = BlockSyncRosterCacheKey::from_hints(
+                        block_hash,
+                        block_height,
+                        block_view,
+                        consensus_mode,
+                        selection.commit_qc.as_ref(),
+                        selection.checkpoint.as_ref(),
+                        selection.stake_snapshot.as_ref(),
+                    ) {
+                        self.block_sync_roster_cache.insert(key, selection.clone());
+                    }
+                    Some(selection)
+                })
+        } else {
+            None
+        };
         let roster_start = Instant::now();
         let persisted_roster_start = Instant::now();
-        let persisted_roster = persisted_roster_for_block(
-            self.state.as_ref(),
-            &self.kura,
-            consensus_mode,
-            block_height,
-            block_hash,
-            Some(block_view),
-            &self.roster_validation_cache,
-            Some(&mut self.block_sync_roster_cache),
-        );
+        let persisted_roster = snapshot_selection.or_else(|| {
+            persisted_roster_for_block(
+                self.state.as_ref(),
+                &self.kura,
+                consensus_mode,
+                block_height,
+                block_hash,
+                Some(block_view),
+                &self.roster_validation_cache,
+                Some(&mut self.block_sync_roster_cache),
+            )
+        });
         let roster_persisted_ms =
             u64::try_from(persisted_roster_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let cert_hint = incoming_qc.as_ref();

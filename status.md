@@ -2,6 +2,9 @@
 
 Last update: 2026-01-26
 
+- Sumeragi block sync: reuse persisted commit-roster snapshots for known blocks when incoming hints match so roster validation is skipped and BlockCreated/INIT delivery isn't stalled by repeated roster checks; add `block_sync_update_known_block_reuses_commit_roster_snapshot` coverage.
+- Tests: not run (not requested).
+
 - Sumeragi proposal: surface a frame-cap rejection when a single DA transaction exceeds the consensus payload cap even if it was filtered by payload budget.
 - Tests: `cargo test -p iroha_core sumeragi::main_loop::tests::da_proposal_rejects_single_tx_exceeding_consensus_payload_frame_cap -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:46381`/`:49943` persist).
 
