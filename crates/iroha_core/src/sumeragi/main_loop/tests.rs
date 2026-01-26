@@ -1427,8 +1427,6 @@ struct TestActorHarness {
     shutdown: iroha_futures::supervisor::ShutdownSignal,
     _network_child: iroha_futures::supervisor::Child,
     _gossiper_child: iroha_futures::supervisor::Child,
-    _commit_history_guard: super::status::TestLockGuard,
-    _rbc_status_guard: super::status::TestLockGuard,
     key_pairs: Vec<KeyPair>,
 }
 
@@ -1544,8 +1542,6 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         "DA must remain enabled in sumeragi tests; disabling it can deadlock consensus startup"
     );
 
-    let commit_history_guard = super::status::commit_history_test_guard();
-    let rbc_status_guard = super::status::rbc_status_test_guard();
     super::status::reset_commit_certs_for_tests();
     super::status::reset_validator_checkpoints_for_tests();
     super::status::reset_precommit_signer_history_for_tests();
@@ -1806,8 +1802,6 @@ async fn test_actor_harness_with_config_and_height_and_kura(
         shutdown,
         _network_child: network_child,
         _gossiper_child: gossiper_child,
-        _commit_history_guard: commit_history_guard,
-        _rbc_status_guard: rbc_status_guard,
         key_pairs,
     }
 }

@@ -40,7 +40,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [ ] Run Izanami at tps=1 (300s, 4 peers) with main_loop debug and record BlockSyncUpdate sub-step timings plus queue latency in `status.md`.
 
 0. **TEST-HARNESS-DETERMINISM — Validate Sumeragi unit tests under parallel execution** (QA/Consensus, Line: Shared, Owner: Core WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
- - [ ] Run `cargo test -p iroha_core sumeragi::main_loop::tests::block_created_ -- --nocapture` with default test threads and confirm no hangs.
+ - [x] Run `cargo test -p iroha_core sumeragi::main_loop::tests::block_created_ -- --nocapture --test-threads=4` and confirm no hangs (suite passed in 59.84s; filtered-binary builds continued after the target tests).
  - [ ] Decide whether any unit tests should opt in to real P2P via `IROHA_TEST_REAL_NETWORK` and document the criteria.
 
 0. **KOTODAMA-LANG-PARITY — Close remaining Kotodama gaps** (IVM/Kotodama, Line: Shared, Owner: IVM WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
