@@ -786,28 +786,23 @@ impl Actor {
                                 return Ok(());
                             }
                         }
-                        let block_signers = {
-                            let state_view = self.state.view();
-                            validated_block_signers(
-                                &block,
-                                &topology,
-                                &state_view,
-                                mode_tag,
-                                prf_seed,
-                            )
-                        };
-                        let block_signers = match block_signers {
-                            Ok(signers) => signers,
-                            Err(err) => {
-                                warn!(
-                                    ?err,
-                                    height = block_height,
-                                    view = block_view,
-                                    block = %block_hash,
-                                    "block sync QC received for known block with invalid signatures; proceeding without signer subset check"
-                                );
-                                BTreeSet::new()
-                            }
+                        let cached_qc_match = cached_qc_for(
+                            &self.qc_cache,
+                            qc.phase,
+                            qc.subject_block_hash,
+                            qc.height,
+                            qc.view,
+                            qc.epoch,
+                        )
+                        .filter(|cached| HashOf::new(cached) == HashOf::new(&qc));
+                        let commit_qc_match = selection
+                            .commit_qc
+                            .as_ref()
+                            .is_some_and(|cert| HashOf::new(cert) == HashOf::new(&qc));
+                        let cached_tally = if cached_qc_match.is_some() || commit_qc_match {
+                            self.qc_signer_tally.get(&Self::qc_tally_key(&qc)).cloned()
+                        } else {
+                            None
                         };
                         let qc_signers = qc_signer_count(&qc);
                         let qc_ref = Self::qc_to_header_ref(&qc);
@@ -817,11 +812,32 @@ impl Actor {
                             |hash, height| self.parent_hash_for(hash, height),
                             |hash| self.block_known_for_lock(hash),
                         );
-                        let tally = if let Some(tally) =
-                            self.qc_signer_tally.get(&Self::qc_tally_key(&qc)).cloned()
-                        {
+                        let tally = if let Some(tally) = cached_tally {
                             Ok(tally)
                         } else {
+                            let block_signers = {
+                                let state_view = self.state.view();
+                                validated_block_signers(
+                                    &block,
+                                    &topology,
+                                    &state_view,
+                                    mode_tag,
+                                    prf_seed,
+                                )
+                            };
+                            let block_signers = match block_signers {
+                                Ok(signers) => signers,
+                                Err(err) => {
+                                    warn!(
+                                        ?err,
+                                        height = block_height,
+                                        view = block_view,
+                                        block = %block_hash,
+                                        "block sync QC received for known block with invalid signatures; proceeding without signer subset check"
+                                    );
+                                    BTreeSet::new()
+                                }
+                            };
                             let state_view = self.state.view();
                             let world = state_view.world();
                             tally_qc_against_block_signers(
