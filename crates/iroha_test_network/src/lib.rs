@@ -115,7 +115,8 @@ const NETWORK_PERMIT_DIR_ENV: &str = "IROHA_TEST_NETWORK_PERMIT_DIR";
 const NETWORK_PERMIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const NETWORK_PERMIT_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const NETWORK_PERMIT_STALE_TTL: Duration = Duration::from_secs(60 * 60 * 12);
-const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 16;
+// Keep test-network parallelism conservative; DA/RBC-heavy suites are resource intensive.
+const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 64;
 const TEST_CONCURRENCY_OVERSUBSCRIPTION: usize = 2;
 const TEST_CONCURRENCY_MIN_THREADS: usize = 4;
 const PERMISSIONED_BLS_DOMAIN: &str = "bls-iroha2:permissioned-sumeragi:v1";

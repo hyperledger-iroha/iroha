@@ -398,11 +398,10 @@ fn non_faulty_sync_timeout(
     if faulty_peers <= 1 {
         return sync_timeout;
     }
-    // Keep relay partitions shorter than RBC session TTLs and idle P2P timeouts,
-    // otherwise non-faulty peers can churn through view changes without progress.
+    // Keep multi-fault relay partitions short to avoid cascading view-change churn.
     let cap = pipeline_time
-        .saturating_mul(6)
-        .saturating_add(Duration::from_secs(5));
+        .saturating_mul(2)
+        .saturating_add(Duration::from_secs(2));
     sync_timeout.min(cap)
 }
 
@@ -1010,10 +1009,6 @@ impl UnstableNetwork {
             .filter(|peer| faulty_ids.contains(&peer.id()))
             .cloned()
             .collect();
-        for peer in &faulty {
-            relay.suspend(&peer.id()).activate();
-            iroha_logger::info!(peer = peer.mnemonic(), "Suspended");
-        }
 
         let sync_timeout = scaled_timeout(network.sync_timeout(), peers.len());
         let relay_pause = non_faulty_sync_timeout(
@@ -1022,6 +1017,25 @@ impl UnstableNetwork {
             self.n_faulty_peers,
         );
         let submit_while_partitioned = self.n_faulty_peers <= 1;
+        let stagger_faults = self.n_faulty_peers > 1;
+        if stagger_faults {
+            let per_peer_pause = relay_pause
+                .checked_div(u32::try_from(self.n_faulty_peers).unwrap_or(1))
+                .unwrap_or(Duration::from_secs(1))
+                .max(Duration::from_millis(200));
+            for peer in &faulty {
+                relay.suspend(&peer.id()).activate();
+                iroha_logger::info!(peer = peer.mnemonic(), "Suspended");
+                sleep(per_peer_pause).await;
+                relay.suspend(&peer.id()).deactivate();
+                iroha_logger::info!(peer = peer.mnemonic(), "Unsuspended");
+            }
+        } else {
+            for peer in &faulty {
+                relay.suspend(&peer.id()).activate();
+                iroha_logger::info!(peer = peer.mnemonic(), "Suspended");
+            }
+        }
         let submit_tx = |phase: &'static str| {
             let leader_id = leader_id.clone();
             let faulty_ids = faulty_ids.clone();
@@ -1102,27 +1116,30 @@ impl UnstableNetwork {
             submit_tx("partitioned").await?;
         }
 
-        if submit_while_partitioned {
-            let non_faulty_sync = timeout(
-                relay_pause,
-                once_blocks_sync(
-                    network.peers().iter().filter(|x| !faulty.contains(x)),
-                    BlockHeight::predicate_non_empty(target_height),
-                ),
-            )
-            .await;
-            non_faulty_sync
-                .map_err(eyre::Report::new)
-                .wrap_err("Non-suspended peers must sync within timeout")??;
-        } else {
-            sleep(relay_pause).await;
-        }
+        if !stagger_faults {
+            if submit_while_partitioned {
+                let non_faulty_sync = timeout(
+                    relay_pause,
+                    once_blocks_sync(
+                        network.peers().iter().filter(|x| !faulty.contains(x)),
+                        BlockHeight::predicate_non_empty(target_height),
+                    ),
+                )
+                .await;
+                non_faulty_sync
+                    .map_err(eyre::Report::new)
+                    .wrap_err("Non-suspended peers must sync within timeout")??;
+            } else {
+                sleep(relay_pause).await;
+            }
 
-        for peer in &faulty {
-            relay.suspend(&peer.id()).deactivate();
-            iroha_logger::info!(peer = peer.mnemonic(), "Unsuspended");
+            for peer in &faulty {
+                relay.suspend(&peer.id()).deactivate();
+                iroha_logger::info!(peer = peer.mnemonic(), "Unsuspended");
+            }
         }
         if !submit_while_partitioned {
+            sleep(network.pipeline_time().saturating_mul(2)).await;
             submit_tx("recovered").await?;
         }
 
@@ -1240,7 +1257,7 @@ mod tests {
         let pipeline_time = Duration::from_secs(9);
         let capped = non_faulty_sync_timeout(sync_timeout, pipeline_time, 2);
         assert!(capped < sync_timeout);
-        assert!(capped <= pipeline_time * 6 + Duration::from_secs(5));
+        assert!(capped <= pipeline_time * 2 + Duration::from_secs(2));
         let uncapped = non_faulty_sync_timeout(sync_timeout, pipeline_time, 1);
         assert_eq!(uncapped, sync_timeout);
     }
