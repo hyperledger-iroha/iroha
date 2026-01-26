@@ -234,7 +234,15 @@ impl Actor {
                     );
                     continue;
                 }
-                if matches!(pending.last_gate, Some(GateReason::MissingLocalData))
+                let payload_available = da_enabled
+                    && Self::payload_available_for_da(
+                        &self.subsystems.da_rbc.rbc.sessions,
+                        &self.subsystems.da_rbc.rbc.status_handle,
+                        pending,
+                    );
+                let missing_local_data = da_enabled && !payload_available;
+                if (missing_local_data
+                    || matches!(pending.last_gate, Some(GateReason::MissingLocalData)))
                     && pending_age < availability_timeout
                 {
                     missing_data_backoff_skipped = missing_data_backoff_skipped.saturating_add(1);
