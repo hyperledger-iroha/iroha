@@ -7407,7 +7407,8 @@ mod tests {
             let mut store = kura.block_store.lock();
             (
                 store.da_block_path(2),
-                kura.get_block_hash(nonzero!(2_usize)).expect("hash available"),
+                kura.get_block_hash(nonzero!(2_usize))
+                    .expect("hash available"),
             )
         };
 

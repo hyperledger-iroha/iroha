@@ -1132,7 +1132,7 @@ impl Actor {
             required,
             "aggregated QC from votes"
         );
-        if let Err(err) = self.handle_qc(qc.clone()) {
+        if let Err(err) = self.handle_qc_with_aggregate(qc.clone(), Some(true)) {
             warn!(
                 ?err,
                 height,
@@ -1923,8 +1923,16 @@ impl Actor {
         );
     }
 
-    #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
     pub(super) fn handle_qc(&mut self, qc: crate::sumeragi::consensus::Qc) -> Result<()> {
+        self.handle_qc_with_aggregate(qc, None)
+    }
+
+    #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
+    pub(super) fn handle_qc_with_aggregate(
+        &mut self,
+        qc: crate::sumeragi::consensus::Qc,
+        aggregate_ok: Option<bool>,
+    ) -> Result<()> {
         // Prepare certificates are view-scoped; commit/new-view certificates can safely arrive
         // after a local view change and still unlock progress, so don't drop them as stale.
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Prepare)
@@ -2030,6 +2038,105 @@ impl Actor {
             return Ok(());
         }
         let topology = super::network_topology::Topology::new(commit_topology.clone());
+        if aggregate_ok.is_none() && !self.subsystems.qc_verify.work_txs.is_empty() {
+            if let Some(inputs) = super::qc_aggregate_inputs(
+                &qc,
+                &topology,
+                &self.roster_validation_cache.pops,
+                &self.common_config.chain,
+                mode_tag,
+            ) {
+                let key = super::QcVerifyKey::from_qc(&qc);
+                if self.subsystems.qc_verify.inflight.contains_key(&key) {
+                    debug!(
+                        height = qc.height,
+                        view = qc.view,
+                        phase = ?qc.phase,
+                        block = %qc.subject_block_hash,
+                        "dropping duplicate QC while aggregate verification is in flight"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::Qc,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::Duplicate,
+                    );
+                    return Ok(());
+                }
+                let id = self.subsystems.qc_verify.next_id();
+                let mut work = super::qc_verify::QcVerifyWork {
+                    id,
+                    key: key.clone(),
+                    inputs,
+                };
+                let mut dispatched = false;
+                let mut disconnected = Vec::new();
+                let total = self.subsystems.qc_verify.work_txs.len();
+                for _ in 0..total {
+                    let idx = self.subsystems.qc_verify.next_worker % total;
+                    self.subsystems.qc_verify.next_worker =
+                        self.subsystems.qc_verify.next_worker.saturating_add(1);
+                    let work_tx = &self.subsystems.qc_verify.work_txs[idx];
+                    match work_tx.try_send(work) {
+                        Ok(()) => {
+                            dispatched = true;
+                            break;
+                        }
+                        Err(mpsc::TrySendError::Full(returned)) => {
+                            work = returned;
+                        }
+                        Err(mpsc::TrySendError::Disconnected(returned)) => {
+                            work = returned;
+                            disconnected.push(idx);
+                        }
+                    }
+                }
+                if !disconnected.is_empty() {
+                    disconnected.sort_unstable();
+                    disconnected.dedup();
+                    for idx in disconnected.into_iter().rev() {
+                        if idx < self.subsystems.qc_verify.work_txs.len() {
+                            self.subsystems.qc_verify.work_txs.swap_remove(idx);
+                        }
+                    }
+                    if self.subsystems.qc_verify.next_worker
+                        >= self.subsystems.qc_verify.work_txs.len()
+                    {
+                        self.subsystems.qc_verify.next_worker = 0;
+                    }
+                }
+                if dispatched {
+                    self.subsystems
+                        .qc_verify
+                        .inflight
+                        .insert(key, super::QcVerifyInFlight { id, qc: qc.clone() });
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::Qc,
+                        super::status::ConsensusMessageOutcome::Deferred,
+                        super::status::ConsensusMessageReason::AggregateVerifyDeferred,
+                    );
+                    return Ok(());
+                }
+                if self.subsystems.qc_verify.work_txs.is_empty() {
+                    warn!(
+                        height = qc.height,
+                        view = qc.view,
+                        phase = ?qc.phase,
+                        block = %qc.subject_block_hash,
+                        "QC verify workers unavailable; running aggregate verification inline"
+                    );
+                    self.subsystems.qc_verify.result_rx = None;
+                    self.subsystems.qc_verify.inflight.clear();
+                } else {
+                    warn!(
+                        height = qc.height,
+                        view = qc.view,
+                        phase = ?qc.phase,
+                        block = %qc.subject_block_hash,
+                        "QC verify worker queue full; running aggregate verification inline"
+                    );
+                }
+            }
+        }
         let (stake_snapshot, validation, evidence) = {
             let state_view = self.state.view();
             let world = state_view.world();
@@ -2048,6 +2155,7 @@ impl Actor {
                 stake_snapshot.as_ref(),
                 mode_tag,
                 prf_seed,
+                aggregate_ok,
             );
             (stake_snapshot, validation, evidence)
         };
@@ -2059,6 +2167,7 @@ impl Actor {
                     &topology,
                     consensus_mode,
                     stake_snapshot.as_ref(),
+                    aggregate_ok,
                     &err,
                 ) {
                     outcome
@@ -2413,6 +2522,7 @@ impl Actor {
         topology: &super::network_topology::Topology,
         consensus_mode: ConsensusMode,
         stake_snapshot: Option<&CommitStakeSnapshot>,
+        aggregate_ok: Option<bool>,
         err: &QcValidationError,
     ) -> Option<QcValidationOutcome> {
         let QcValidationError::MissingVotes { .. } = err else {
@@ -2428,13 +2538,16 @@ impl Actor {
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(qc.height);
         let _signature_topology =
             super::topology_for_view(topology, qc.height, qc.view, mode_tag, prf_seed);
-        let aggregate_ok = qc_aggregate_consistent(
-            qc,
-            topology,
-            &self.roster_validation_cache.pops,
-            &self.common_config.chain,
-            mode_tag,
-        );
+        let aggregate_ok = match aggregate_ok {
+            Some(value) => value,
+            None => qc_aggregate_consistent(
+                qc,
+                topology,
+                &self.roster_validation_cache.pops,
+                &self.common_config.chain,
+                mode_tag,
+            ),
+        };
         if !aggregate_ok {
             return None;
         }

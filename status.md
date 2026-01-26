@@ -2,6 +2,11 @@
 
 Last update: 2026-01-26
 
+- Sumeragi worker: preempt blocks when backlog is urgent, cap block-payload/RBC-chunk drain counts while block queue is non-empty, and add selection/adaptive-cap coverage to reduce BlockCreated/RBC INIT queue latency.
+- Tests: `cargo test -p iroha_core select_next_tier_preempts_votes_for_urgent_blocks -- --nocapture` (ok; warnings about unused variables in unrelated tests persist).
+- Tests: `cargo test -p iroha_core adaptive_drain_caps_clamp_for_block_backlog -- --nocapture` (ok; same warnings).
+
+- NPoS localnet 1 Hz soak (debug, 4 peers) after missing-block fetch stash/dedup: `/private/tmp/iroha-localnet-npos-1hz-20260126T110734Z` (ports 45080/46337); 1200x1 Hz `iroha ledger transaction ping --msg 1hz-profile --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_20260126T111016Z.jsonl` (ping log `ping_1hz_20260126T111016Z.log`). Height=5 v0: leader peer1 recv 11:11:08.566; peer0 recv 11:11:09.004 (+0.439s), peer2 missing req 11:11:10.131 → recv 11:11:10.928 (+0.796s), peer3 missing req 11:11:09.773 → recv 11:11:09.808 (+0.035s); no view>0 BlockCreated before v0 at height 5. Max missing‑req→v0 latency across run: peer1 6.574s (h3), peer2 4.989s (h6), peer0 3.698s (h3), peer3 1.655s (h7).
 - Sumeragi missing-block fetch: dedup FetchPendingBlock requests by requester+hash, stash requesters until the block arrives, flush responses on BlockCreated, and route responses through the background queue; add fetch-dedup metrics + coverage.
 - Tests: `cargo test -p iroha_core fetch_pending_block_serves_aborted_pending -- --nocapture --test-threads=1` (ok).
 - Tests: `cargo test -p iroha_core fetch_pending_block_falls_back_to_block_created_when_oversized -- --nocapture --test-threads=1` (ok).

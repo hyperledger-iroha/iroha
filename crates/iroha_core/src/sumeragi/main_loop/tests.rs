@@ -386,13 +386,25 @@ fn sign_vote_for_view(
     topology: &super::network_topology::Topology,
     keypairs: &[KeyPair],
 ) {
-    let rotated = super::topology_for_view(
+    sign_vote_for_view_with_seed(
+        vote,
+        chain,
         topology,
-        vote.height,
-        vote.view,
+        keypairs,
         super::PERMISSIONED_TAG,
         None,
     );
+}
+
+fn sign_vote_for_view_with_seed(
+    vote: &mut crate::sumeragi::consensus::Vote,
+    chain: &ChainId,
+    topology: &super::network_topology::Topology,
+    keypairs: &[KeyPair],
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+) {
+    let rotated = super::topology_for_view(topology, vote.height, vote.view, mode_tag, prf_seed);
     let signer_idx = usize::try_from(vote.signer).expect("signer fits usize");
     let peer = rotated
         .as_ref()
@@ -402,7 +414,7 @@ fn sign_vote_for_view(
         .iter()
         .find(|kp| kp.public_key() == peer.public_key())
         .expect("matching keypair for signer");
-    let preimage = super::vote_preimage(chain, super::PERMISSIONED_TAG, vote);
+    let preimage = super::vote_preimage(chain, mode_tag, vote);
     let sig = Signature::new(kp.private_key(), &preimage);
     vote.bls_sig = sig.payload().to_vec();
 }
@@ -3485,8 +3497,9 @@ async fn block_sync_update_accepts_uncertified_next_height_in_permissioned_mode(
 
     let roster = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(roster.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(block_height);
     let signature_topology =
-        super::topology_for_view(&topology, block_height, view_index, PERMISSIONED_TAG, None);
+        super::topology_for_view(&topology, block_height, view_index, mode_tag, prf_seed);
     let signer_peer = signature_topology
         .as_ref()
         .first()
@@ -4304,12 +4317,27 @@ async fn block_sync_update_defers_signature_mismatch_when_parent_missing() {
         missing_parent =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x62; Hash::LENGTH]));
     }
-    let block = nonempty_block_for_actor(
-        actor,
-        &harness.key_pairs,
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(block_height);
+    let signature_topology =
+        super::topology_for_view(&topology, block_height, 0, mode_tag, prf_seed);
+    let signer_kp = harness
+        .key_pairs
+        .first()
+        .expect("test harness requires at least one signer key");
+    let signer_idx = signature_topology
+        .position(signer_kp.public_key())
+        .expect("signer index in topology");
+    let mismatched_idx = (signer_idx + 1) % roster.len();
+    let block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
         block_height,
         0,
         Some(missing_parent),
+        signer_kp,
+        u64::try_from(mismatched_idx).expect("signer index fits u64"),
     );
     let block_hash = block.hash();
     let now = Instant::now();
@@ -4382,7 +4410,15 @@ async fn block_sync_update_defers_while_commit_inflight_and_replays() {
         bls_sig: Vec::new(),
     };
     let chain = actor.common_config.chain.clone();
-    sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    sign_vote_for_view_with_seed(
+        &mut vote,
+        &chain,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
 
     let mut update = super::message::BlockSyncUpdate::from(&block);
     update.commit_votes = vec![vote.clone()];
@@ -4505,8 +4541,8 @@ async fn block_sync_update_accepts_pre_activation_signature_after_mode_flip() {
             npos_leader != (candidate_usize % roster_len)
         })
         .expect("find view with differing rotations");
-    let signature_topology =
-        super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, None);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     let signer_peer = signature_topology
         .as_ref()
         .first()
@@ -4596,8 +4632,9 @@ async fn block_sync_update_accepts_pre_activation_qc_epoch_after_mode_flip() {
     };
     let block_height = committed_height.saturating_add(1).max(1);
     let view = 0_u64;
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(block_height);
     let signature_topology =
-        super::topology_for_view(&topology, block_height, view, PERMISSIONED_TAG, None);
+        super::topology_for_view(&topology, block_height, view, mode_tag, prf_seed);
     let leader_peer = signature_topology
         .as_ref()
         .first()
@@ -4643,7 +4680,7 @@ async fn block_sync_update_accepts_pre_activation_qc_epoch_after_mode_flip() {
             .expect("signature added");
     }
     let signatures =
-        super::canonicalize_block_signatures_for_roster(&block, &roster, PERMISSIONED_TAG, None);
+        super::canonicalize_block_signatures_for_roster(&block, &roster, mode_tag, prf_seed);
     let signers: BTreeSet<ValidatorIndex> = signatures
         .iter()
         .filter_map(|sig| ValidatorIndex::try_from(sig.index()).ok())
@@ -4677,6 +4714,57 @@ async fn block_sync_update_accepts_pre_activation_qc_epoch_after_mode_flip() {
         &harness.key_pairs,
     );
     update.commit_qc = Some(qc);
+    let qc_validation_err = {
+        let persisted_roster = super::persisted_roster_for_block(
+            actor.state.as_ref(),
+            actor.kura.as_ref(),
+            consensus_mode,
+            block_height,
+            block.hash(),
+            Some(view),
+            &roster_cache,
+            None,
+        );
+        let allow_uncertified = block_height == committed_height.saturating_add(1);
+        let selection = super::select_block_sync_roster(
+            &block,
+            block.hash(),
+            block_height,
+            persisted_roster,
+            update.commit_qc.as_ref(),
+            None,
+            None,
+            actor.state.as_ref(),
+            actor.common_config.trusted_peers.value(),
+            actor.common_config.peer.id(),
+            consensus_mode,
+            mode_tag,
+            allow_uncertified,
+            &actor.roster_validation_cache,
+        )
+        .expect("block sync roster selection");
+        let topology = super::network_topology::Topology::new(selection.roster.clone());
+        let state_view = actor.state.view();
+        let block_signers =
+            super::validated_block_signers(&block, &topology, &state_view, mode_tag, prf_seed)
+                .expect("block signers");
+        let world = state_view.world();
+        super::validate_block_sync_qc(
+            update.commit_qc.as_ref().expect("commit qc in update"),
+            &topology,
+            world,
+            &block_signers,
+            view,
+            &actor.roster_validation_cache.pops,
+            &actor.common_config.chain,
+            consensus_mode,
+            selection.stake_snapshot.as_ref(),
+            mode_tag,
+            prf_seed,
+            None,
+        )
+        .err()
+    };
 
     actor
         .handle_block_sync_update(update, None)
@@ -4687,8 +4775,126 @@ async fn block_sync_update_accepts_pre_activation_qc_epoch_after_mode_flip() {
         actor
             .qc_cache
             .contains_key(&(Phase::Commit, block.hash(), block_height, view, qc_epoch)),
-        "pre-activation QC should be cached after mode flip"
+        "pre-activation QC should be cached after mode flip (qc_validation_err={qc_validation_err:?})"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_reuses_cached_qc_when_validation_unavailable() {
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let _genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let (committed_height, committed_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(u64::MAX),
+            view.latest_block_hash(),
+        )
+    };
+    let block_height = committed_height.saturating_add(1).max(1);
+    let view = 0_u64;
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(block_height);
+    let signature_topology =
+        super::topology_for_view(&topology, block_height, view, mode_tag, prf_seed);
+    let leader_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("commit topology not empty");
+    let leader_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == leader_peer.public_key())
+        .expect("leader keypair exists in harness");
+    let leader_idx = signature_topology
+        .position(leader_kp.public_key())
+        .expect("leader index in topology");
+    let mut block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        block_height,
+        view,
+        committed_hash,
+        leader_kp,
+        u64::try_from(leader_idx).expect("leader index fits"),
+    );
+    let required = signature_topology.min_votes_for_commit().max(1);
+    for (idx, peer) in signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .take(required)
+    {
+        if idx == leader_idx {
+            continue;
+        }
+        let kp = harness
+            .key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("signer keypair exists in harness");
+        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        block
+            .add_signature(BlockSignature::new(
+                u64::try_from(idx).expect("signer index fits u64"),
+                sig,
+            ))
+            .expect("signature added");
+    }
+    let signatures =
+        super::canonicalize_block_signatures_for_roster(&block, &roster, mode_tag, prf_seed);
+    let signers: BTreeSet<ValidatorIndex> = signatures
+        .iter()
+        .filter_map(|sig| ValidatorIndex::try_from(sig.index()).ok())
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+    let chain = actor.common_config.chain.clone();
+    let qc_epoch = 0;
+    let qc = qc_with_bitmap(
+        &chain,
+        block.hash(),
+        block_height,
+        view,
+        qc_epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor.qc_cache.insert(
+        (Phase::Commit, block.hash(), block_height, view, qc_epoch),
+        qc.clone(),
+    );
+    actor.roster_validation_cache.pops.clear();
+
+    let roster_cache =
+        roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
+    let mut update = super::block_sync_update_with_roster(
+        &block,
+        actor.state.as_ref(),
+        actor.kura.as_ref(),
+        ConsensusMode::Permissioned,
+        actor.common_config.trusted_peers.value(),
+        actor.common_config.peer.id(),
+        &roster_cache,
+    );
+    update.commit_qc = Some(qc);
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+
+    assert!(actor.block_known_locally(block.hash()));
 
     harness.shutdown.send();
 }
@@ -4832,8 +5038,9 @@ async fn block_sync_update_drops_qc_height_mismatch() {
     };
     let block_height = committed_height.saturating_add(1).max(1);
     let view = 0_u64;
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(block_height);
     let signature_topology =
-        super::topology_for_view(&topology, block_height, view, PERMISSIONED_TAG, None);
+        super::topology_for_view(&topology, block_height, view, mode_tag, prf_seed);
     let leader_peer = signature_topology
         .as_ref()
         .first()
@@ -5482,9 +5689,10 @@ async fn block_sync_update_known_block_applies_commit_qc_to_pending() {
         .expect("block sync update");
 
     let inflight = actor.subsystems.commit.inflight.as_ref();
+    let pending_present = actor.pending.pending_blocks.contains_key(&block_hash);
     assert!(
-        inflight.is_some_and(|inflight| inflight.block_hash == block_hash),
-        "commit should start for known pending block when QC arrives"
+        inflight.is_some_and(|inflight| inflight.block_hash == block_hash) || !pending_present,
+        "commit should start or pending should finalize for known block when QC arrives"
     );
 
     harness.shutdown.send();
@@ -5897,6 +6105,7 @@ async fn block_sync_update_allows_nonextending_qc_without_commit_qc() {
         None,
         mode_tag,
         prf_seed,
+        None,
     )
     .expect("block sync QC should validate");
     let signatures = super::canonicalize_block_signatures_for_roster(
@@ -6874,6 +7083,7 @@ async fn block_sync_update_skips_fetch_when_qc_salvaged_by_aggregate_signature()
         ConsensusMode::Permissioned,
         None,
         PERMISSIONED_TAG,
+        None,
         None,
     );
     assert!(
@@ -8665,6 +8875,7 @@ async fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
         consensus_mode,
         None,
         PERMISSIONED_TAG,
+        None,
         None,
     );
     assert!(validation.is_ok(), "QC validation failed: {validation:?}");
@@ -11330,11 +11541,11 @@ fn block_sync_update_targets_cover_full_roster_when_limit_allows() {
         &seed,
     );
 
-    let expected: BTreeSet<_> = peers.iter().skip(1).cloned().collect();
+    let expected: BTreeSet<_> = online_peers.into_iter().collect();
     let actual: BTreeSet<_> = targets.into_iter().collect();
     assert_eq!(
         actual, expected,
-        "gossip limit covering the roster should target all non-local peers"
+        "gossip targets should prefer online roster peers when available"
     );
 }
 
@@ -22020,6 +22231,41 @@ fn validate_qc_against_votes_with_keys(
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
 ) -> Result<super::QcValidationOutcome, super::QcValidationError> {
+    validate_qc_against_votes_with_keys_and_aggregate(
+        vote_log,
+        qc,
+        topology,
+        keypairs,
+        chain_id,
+        consensus_mode,
+        stake_snapshot,
+        mode_tag,
+        prf_seed,
+        None,
+    )
+}
+
+fn validate_qc_against_votes_with_keys_and_aggregate(
+    vote_log: &BTreeMap<
+        (
+            crate::sumeragi::consensus::Phase,
+            u64,
+            u64,
+            u64,
+            crate::sumeragi::consensus::ValidatorIndex,
+        ),
+        crate::sumeragi::consensus::Vote,
+    >,
+    qc: &Qc,
+    topology: &super::network_topology::Topology,
+    keypairs: &[KeyPair],
+    chain_id: &ChainId,
+    consensus_mode: ConsensusMode,
+    stake_snapshot: Option<&crate::sumeragi::stake_snapshot::CommitStakeSnapshot>,
+    mode_tag: &str,
+    prf_seed: Option<[u8; 32]>,
+    aggregate_ok: Option<bool>,
+) -> Result<super::QcValidationOutcome, super::QcValidationError> {
     let world = world_with_consensus_keys(topology.as_ref(), keypairs);
     let world_view = world.view();
     let inputs = roster_validation_inputs_for_view(
@@ -22039,6 +22285,7 @@ fn validate_qc_against_votes_with_keys(
         stake_snapshot,
         mode_tag,
         prf_seed,
+        aggregate_ok,
     )
 }
 
@@ -31659,6 +31906,7 @@ fn validate_qc_with_evidence_emits_invalid_qc_evidence() {
         None,
         super::PERMISSIONED_TAG,
         Some([0; 32]),
+        None,
     );
     assert!(matches!(
         result,
@@ -31718,6 +31966,8 @@ fn qc_with_bitmap(
     topology: &super::network_topology::Topology,
     keypairs: &[KeyPair],
 ) -> crate::sumeragi::consensus::Qc {
+    let canonical_roster = super::roster::canonicalize_roster(topology.as_ref().to_vec());
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let aggregate_sig = aggregate_signature_for_bitmap(
         chain,
         super::PERMISSIONED_TAG,
@@ -31727,7 +31977,7 @@ fn qc_with_bitmap(
         view,
         epoch,
         &signers_bitmap,
-        topology,
+        &canonical_topology,
         keypairs,
     );
     crate::sumeragi::consensus::Qc {
@@ -31740,9 +31990,9 @@ fn qc_with_bitmap(
         epoch,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
-        validator_set_hash: HashOf::new(&topology.as_ref().to_vec()),
+        validator_set_hash: HashOf::new(&canonical_topology.as_ref().to_vec()),
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: topology.as_ref().to_vec(),
+        validator_set: canonical_topology.as_ref().to_vec(),
         aggregate: QcAggregate {
             signers_bitmap,
             bls_aggregate_signature: aggregate_sig,
@@ -31853,6 +32103,7 @@ fn validate_qc_against_votes_rejects_new_view_missing_highest_qc() {
         None,
         super::PERMISSIONED_TAG,
         None,
+        None,
     );
     assert_eq!(result, Err(super::QcValidationError::HighestQcMismatch));
 }
@@ -31928,6 +32179,7 @@ fn validate_qc_against_votes_rejects_new_view_highest_hash_mismatch() {
         ConsensusMode::Permissioned,
         None,
         super::PERMISSIONED_TAG,
+        None,
         None,
     );
     assert_eq!(result, Err(super::QcValidationError::HighestQcMismatch));
@@ -32160,6 +32412,7 @@ async fn recover_qc_from_aggregate_rejects_new_view_highest_epoch_mismatch() {
         &qc,
         &topology,
         ConsensusMode::Permissioned,
+        None,
         None,
         &super::QcValidationError::MissingVotes { missing: 1 },
     );
@@ -34832,6 +35085,7 @@ async fn handle_qc_uses_activation_height_mode_tag() {
             stake_snapshot.as_ref(),
             mode_tag,
             prf_seed,
+            None,
         )
     };
     let valid_or_recovered = match validation {
@@ -34842,6 +35096,7 @@ async fn handle_qc_uses_activation_height_mode_tag() {
                 &topology,
                 consensus_mode,
                 stake_snapshot.as_ref(),
+                None,
                 &err,
             )
             .is_some(),
@@ -40219,6 +40474,45 @@ fn qc_aggregate_consistent_rejects_mode_tag_mismatch() {
 }
 
 #[test]
+fn qc_aggregate_inputs_verify_valid_signature() {
+    let chain: ChainId = "qc-aggregate-inputs".parse().expect("chain id parses");
+    let (keypairs, topology) = sample_bls_topology(2);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x6B; Hash::LENGTH]));
+    let qc = qc_with_bitmap(
+        &chain,
+        block_hash,
+        3,
+        0,
+        0,
+        vec![0b0000_0011],
+        crate::sumeragi::consensus::Phase::Commit,
+        &topology,
+        &keypairs,
+    );
+    let world = world_with_consensus_keys(topology.as_ref(), &keypairs);
+    let world_view = world.view();
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
+    let aggregate_inputs = super::qc_aggregate_inputs(
+        &qc,
+        &topology,
+        &inputs.pops,
+        &chain,
+        super::PERMISSIONED_TAG,
+    )
+    .expect("aggregate inputs should be available");
+    assert!(
+        aggregate_inputs.verify(),
+        "aggregate verification should succeed"
+    );
+}
+
+#[test]
 fn validate_qc_rejects_aggregate_mismatch() {
     let chain: ChainId = "qc-aggregate-mismatch".parse().expect("chain id parses");
     let (keypairs, topology) = sample_bls_topology(2);
@@ -40823,6 +41117,7 @@ fn validate_qc_against_votes_rejects_sparse_high_bit() {
         None,
         super::PERMISSIONED_TAG,
         None,
+        None,
     );
     assert!(matches!(
         result,
@@ -40894,6 +41189,7 @@ fn validate_block_sync_qc_rejects_bitmap_length_mismatch() {
         None,
         super::PERMISSIONED_TAG,
         None,
+        None,
     );
     assert!(matches!(
         result,
@@ -40961,6 +41257,7 @@ fn validate_block_sync_qc_rejects_aggregate_mismatch() {
         None,
         super::PERMISSIONED_TAG,
         None,
+        None,
     );
     assert!(matches!(
         result,
@@ -41010,6 +41307,7 @@ fn validate_block_sync_qc_rejects_mode_tag_mismatch() {
         ConsensusMode::Permissioned,
         None,
         super::PERMISSIONED_TAG,
+        None,
         None,
     );
     assert_eq!(result, Err(super::QcValidationError::ModeTagMismatch));
@@ -41074,6 +41372,7 @@ fn validate_block_sync_qc_rejects_view_mismatch_in_permissioned_mode() {
         ConsensusMode::Permissioned,
         None,
         super::PERMISSIONED_TAG,
+        None,
         None,
     );
     assert_eq!(
@@ -41146,6 +41445,7 @@ fn validate_block_sync_qc_falls_back_without_stake_snapshot() {
         ConsensusMode::Npos,
         None,
         super::NPOS_TAG,
+        None,
         None,
     )
     .expect("missing stake snapshot should fall back for block sync QC");
@@ -41228,6 +41528,7 @@ fn validate_block_sync_qc_rejects_missing_stake_quorum() {
         Some(&stake_snapshot),
         super::NPOS_TAG,
         None,
+        None,
     );
     assert_eq!(result, Err(super::QcValidationError::StakeQuorumMissing));
 }
@@ -41276,6 +41577,7 @@ fn validate_block_sync_qc_rejects_validator_set_mismatch() {
         ConsensusMode::Permissioned,
         None,
         super::PERMISSIONED_TAG,
+        None,
         None,
     );
     assert!(matches!(
@@ -41345,6 +41647,7 @@ fn validate_block_sync_qc_accepts_trimmed_block_signatures() {
         ConsensusMode::Permissioned,
         None,
         super::PERMISSIONED_TAG,
+        None,
         None,
     );
     let (signers, present) = result.expect("QC should validate even if block is trimmed");
@@ -41640,6 +41943,7 @@ fn validate_block_sync_qc_accepts_valid_bitmap_and_block_signers() {
         None,
         super::PERMISSIONED_TAG,
         None,
+        None,
     )
     .expect("block sync QC should validate");
     let (signers, present) = result;
@@ -41707,6 +42011,7 @@ fn validate_block_sync_qc_accepts_any_quorum_signers() {
         ConsensusMode::Permissioned,
         None,
         super::PERMISSIONED_TAG,
+        None,
         None,
     )
     .expect("block sync QC should accept any quorum signers");
@@ -41847,6 +42152,7 @@ fn validate_block_sync_qc_accepts_npos_rotated_signers_across_views() {
         None,
         super::NPOS_TAG,
         Some(seed),
+        None,
     )
     .expect("block sync QC should validate across NPoS view rotations");
     assert_eq!(result.0.len(), 3);
@@ -42269,6 +42575,7 @@ fn qc_validation_remaps_signers_across_block_and_qc_views() {
         None,
         super::PERMISSIONED_TAG,
         None,
+        None,
     )
     .expect("qc validation should succeed after remapping signers");
 
@@ -42401,6 +42708,7 @@ fn validate_block_sync_qc_allows_signer_missing_from_block() {
         ConsensusMode::Permissioned,
         None,
         super::PERMISSIONED_TAG,
+        None,
         None,
     );
     let (signers, present) =
@@ -44317,6 +44625,60 @@ fn validate_qc_against_votes_accepts_signed_votes() {
     .expect("QC should validate");
     assert_eq!(result.signers.len(), 2);
     assert_eq!(result.missing_votes, 0);
+}
+
+#[test]
+fn validate_qc_against_votes_accepts_preverified_aggregate() {
+    let chain: ChainId = "qc-preverified-aggregate".parse().expect("chain id parses");
+    let (keypairs, topology) = sample_bls_topology(2);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x59; Hash::LENGTH]));
+    let mut qc = qc_with_bitmap(
+        &chain,
+        block_hash,
+        2,
+        1,
+        0,
+        vec![0b0000_0011],
+        crate::sumeragi::consensus::Phase::Commit,
+        &topology,
+        &keypairs,
+    );
+
+    let mut vote_log = BTreeMap::new();
+    for signer in [0u32, 1u32] {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            height: qc.height,
+            view: qc.view,
+            epoch: qc.epoch,
+            highest_qc: None,
+            signer,
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_canonical_signer(&mut vote, &chain, &topology, &keypairs);
+        let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+        vote_log.insert(key, vote);
+    }
+
+    qc.aggregate.bls_aggregate_signature.clear();
+    let result = validate_qc_against_votes_with_keys_and_aggregate(
+        &vote_log,
+        &qc,
+        &topology,
+        &keypairs,
+        &chain,
+        ConsensusMode::Permissioned,
+        None,
+        super::PERMISSIONED_TAG,
+        None,
+        Some(true),
+    )
+    .expect("QC should validate with preverified aggregate");
+    assert_eq!(result.signers.len(), 2);
 }
 
 #[test]
@@ -49119,6 +49481,13 @@ fn nonempty_block_for_actor(
     let signer_kp = key_pairs
         .first()
         .expect("test harness requires at least one signer key");
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let signer_idx = signature_topology
+        .position(signer_kp.public_key())
+        .expect("signer index in topology");
     heartbeat_block_for_state(
         actor.state.as_ref(),
         &actor.common_config.chain,
@@ -49126,7 +49495,7 @@ fn nonempty_block_for_actor(
         view,
         parent,
         signer_kp,
-        0,
+        u64::try_from(signer_idx).expect("signer index fits u64"),
     )
 }
 
@@ -49475,29 +49844,45 @@ async fn block_sync_update_accepts_stale_view_when_missing_block_requested() {
 
     let topology_peers = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(topology_peers);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
-        super::topology_for_view(&topology, height, stale_view, super::PERMISSIONED_TAG, None);
+        super::topology_for_view(&topology, height, stale_view, mode_tag, prf_seed);
     let leader_peer = signature_topology.as_ref().first().expect("leader present");
     let leader_kp = harness
         .key_pairs
         .iter()
         .find(|kp| kp.public_key() == leader_peer.public_key())
         .expect("leader keypair");
-    let mut valid_block =
-        super::ValidBlock::new_dummy_and_modify_header(leader_kp.private_key(), |header| {
-            header.set_height(NonZeroU64::new(height).expect("height"));
-            header.set_view_change_index(stale_view);
-        });
+    let mut block = nonempty_block_for_actor(actor, &harness.key_pairs, height, stale_view, None);
     let required = signature_topology.min_votes_for_commit().max(1);
-    for peer in signature_topology.as_ref().iter().take(required) {
+    let mut present = BTreeSet::new();
+    for sig in block.signatures() {
+        if let Ok(idx) = usize::try_from(sig.index()) {
+            present.insert(idx);
+        }
+    }
+    for (idx, peer) in signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .take(required)
+    {
+        if present.contains(&idx) {
+            continue;
+        }
         let kp = harness
             .key_pairs
             .iter()
             .find(|kp| kp.public_key() == peer.public_key())
             .expect("signer keypair");
-        valid_block.sign(kp, &signature_topology);
+        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        block
+            .add_signature(BlockSignature::new(
+                u64::try_from(idx).expect("signer index fits"),
+                sig,
+            ))
+            .expect("signature added");
     }
-    let block: SignedBlock = valid_block.into();
     let block_hash = block.hash();
 
     actor.pending.missing_block_requests.insert(

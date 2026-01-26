@@ -219,29 +219,19 @@ pub(super) fn derive_active_topology_from_views(
         baseline
     } else {
         let missing = missing_pops_for_roster(&baseline, &trusted.pops);
-        if missing > 0 && !baseline_from_trusted {
+        if missing > 0 {
             iroha_logger::warn!(
                 missing,
                 pops = trusted.pops.len(),
                 baseline = baseline.len(),
-                "PoP map incomplete for active topology; skipping PoP filtering"
+                "PoP map incomplete for active topology; dropping peers without PoP"
             );
-            baseline
+        }
+        let filtered = filter_roster_with_pops(baseline.clone(), &trusted.pops);
+        if baseline_from_trusted {
+            filtered
         } else {
-            if missing > 0 {
-                iroha_logger::warn!(
-                    missing,
-                    pops = trusted.pops.len(),
-                    baseline = baseline.len(),
-                    "PoP map incomplete for trusted roster; dropping peers without PoP"
-                );
-            }
-            let filtered = filter_roster_with_pops(baseline.clone(), &trusted.pops);
-            if baseline_from_trusted {
-                filtered
-            } else {
-                guard_pop_quorum(filtered, &baseline, trusted.pops.len())
-            }
+            guard_pop_quorum(filtered, &baseline, trusted.pops.len())
         }
     };
 
