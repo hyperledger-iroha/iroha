@@ -2,6 +2,36 @@
 
 Last update: 2026-01-26
 
+- Sumeragi proposal: surface a frame-cap rejection when a single DA transaction exceeds the consensus payload cap even if it was filtered by payload budget.
+- Tests: `cargo test -p iroha_core sumeragi::main_loop::tests::da_proposal_rejects_single_tx_exceeding_consensus_payload_frame_cap -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:46381`/`:49943` persist).
+
+- Sumeragi block-signature tests: align test signing with view-aligned/canonical topology indices so block-signers validation and derived block-sync QC tests use the same ordering as production.
+- Tests: `cargo test -p iroha_core sumeragi::main_loop::tests::derive_block_sync_qc_from_committed_signers -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:46381`/`:49943` persist). `cargo test -p iroha_core sumeragi::main_loop::tests::validated_block_signers_accept_trimmed_commit_roles -- --nocapture` (ok; same warnings). `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+
+- Sumeragi vote intake: align conflicting-vote test signing with the roster/topology used by verification so the first vote is recorded before rejecting conflicts.
+- Tests: `cargo test -p iroha_core sumeragi::main_loop::tests::conflicting_vote_does_not_override_first -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:46316`/`:49878` persist).
+
+- Sumeragi reschedule: expose DA payload availability helper to sibling modules so quorum reschedule checks compile cleanly.
+- Tests: not run (covered by the targeted test above).
+
+- Sumeragi commit pipeline: defer quorum reschedule while DA payload availability is missing by checking payload hashes during reschedule sweeps, so MissingLocalData is honored even before commit processing updates the gate.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target cargo test -p iroha_core commit_pipeline_defers_reschedule_until_availability_timeout -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:46316`/`:49845` persist).
+
+- Sumeragi tests: align permissioned vote signing with PRF-seeded view topology when assembling view-aligned commit votes (fixes QC formation in main-loop tests).
+- Tests: `cargo test -p iroha_core sumeragi::main_loop::tests::commit_qc_uses_exec_roots_from_view_votes -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:46316`/`:49878` persist).
+
+- Sumeragi block sync: require explicit missing-block requests before accepting sparse-signature updates for the next height.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target-block-sync cargo test -p iroha_core block_sync_quorum_allows_missing_block_request_with_sparse_signatures -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:46315`/`:49851` persist).
+
+- Sumeragi block sync: drop block-sync candidate QCs with mismatched epochs before validation/caching; proposal-defaults unit test now uses an empty block to exercise zero-root defaults.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target-test cargo test -p iroha_core block_sync_update_drops_qc_epoch_mismatch -- --nocapture` (not rerun; prior compile errors in `crates/iroha_core/src/sumeragi/main_loop/tests.rs` resolved by the view-aligned vote signing fix above).
+
+- Sumeragi proposal/RBC scheduling test: log schedule_background call order for bypassed consensus messages and use it to assert RBC scheduling follows proposals in `assemble_proposal_schedules_rbc_after_proposal_messages`.
+- Tests: not run (not requested).
+
+- Sumeragi block sync: skip caching precommit QCs that conflict with a locked QC at the same height during block sync updates.
+- Tests: `cargo test -p iroha_core block_sync_update_rejects_conflicting_precommit_qc_against_lock -- --nocapture` (previously failed on private `payload_available_for_da` access; not re-run after the reschedule DA availability update).
+
 - Sumeragi worker: preempt blocks when backlog is urgent, cap block-payload/RBC-chunk drain counts while block queue is non-empty, and add selection/adaptive-cap coverage to reduce BlockCreated/RBC INIT queue latency.
 - Tests: `cargo test -p iroha_core select_next_tier_preempts_votes_for_urgent_blocks -- --nocapture` (ok; warnings about unused variables in unrelated tests persist).
 - Tests: `cargo test -p iroha_core adaptive_drain_caps_clamp_for_block_backlog -- --nocapture` (ok; same warnings).

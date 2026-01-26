@@ -1066,10 +1066,10 @@ impl UnstableNetwork {
                         leader_client.transaction_ttl = Some(min_ttl);
                     }
                 }
-                let tx = Arc::new(leader_client.build_transaction_from_items(
-                    vec![mint_asset],
-                    Metadata::default(),
-                ));
+                let tx = Arc::new(
+                    leader_client
+                        .build_transaction_from_items(vec![mint_asset], Metadata::default()),
+                );
                 let deadline = Instant::now() + sync_timeout;
                 let mut attempts = 0usize;
                 loop {
