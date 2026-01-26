@@ -2,6 +2,12 @@
 
 Last update: 2026-01-26
 
+- Unstable network 9-peer/3-fault test: retry transaction submission with backoff, extend post-partition recovery delay before mint submit, and add backoff unit coverage to reduce flakiness under slow Torii/relay recovery.
+- Tests: `cargo test -p integration_tests unstable_network_9_peers_3_faults -- --nocapture` (ok; Torii HTTP not reachable yet warnings during startup).
+
+- Extra-functional connected-peers test: wait for the newly registered peer to sync block 2 before submitting the log transaction so roster sync completes and block 3 can commit cleanly.
+- Tests: `cargo test -p integration_tests --test mod extra_functional::connected_peers::register_new_peer -- --nocapture` (ok).
+
 - Sumeragi DA eviction test: raise P2P frame caps, extend RBC timeouts, and stop submitting extra oversized log transactions once DA evictions appear to avoid long consensus stalls; log level lowered to WARN to avoid payload spam.
 - Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_da sumeragi_da_eviction_rehydrates_block_bodies -- --nocapture` (ok).
 
