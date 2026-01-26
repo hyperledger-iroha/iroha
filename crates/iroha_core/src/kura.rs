@@ -462,6 +462,58 @@ enum BlockNotify {
 }
 
 impl Kura {
+    /// Return `true` when the block payload is available locally (in memory, on disk, or in the
+    /// DA payload store).
+    pub(crate) fn block_payload_available_by_hash(&self, hash: HashOf<BlockHeader>) -> bool {
+        let Some(height) = self.get_block_height_by_hash(hash) else {
+            return false;
+        };
+        self.block_payload_available_by_height(height)
+    }
+
+    fn block_payload_available_by_height(&self, block_height: NonZeroUsize) -> bool {
+        let (block_index, has_cached) = {
+            let data = self.block_data.lock();
+            let idx = block_height.get().saturating_sub(1);
+            if data.len() <= idx {
+                return false;
+            }
+            (idx, data[idx].1.is_some())
+        };
+        if has_cached {
+            return true;
+        }
+
+        let (index, da_path) = {
+            let mut store = self.block_store.lock();
+            let index = match store.read_block_index(block_index as u64) {
+                Ok(index) => index,
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        block_index,
+                        "failed to read block index while checking payload availability"
+                    );
+                    return false;
+                }
+            };
+            let da_path = store.da_block_path(block_height.get() as u64);
+            (index, da_path)
+        };
+
+        if index.length == 0 {
+            return false;
+        }
+        if !index.is_evicted() {
+            return true;
+        }
+
+        let Ok(metadata) = std::fs::metadata(&da_path) else {
+            return false;
+        };
+        metadata.len() == index.length
+    }
+
     /// Initialize Kura.
     ///
     /// This does _not_ start the thread which receives and stores new blocks, see [`Self::start`].
@@ -7319,6 +7371,60 @@ mod tests {
         let expected_hash = kura.get_block_hash(height).expect("hash available");
         let block = kura.get_block(height).expect("rehydrated block");
         assert_eq!(block.hash(), expected_hash);
+    }
+
+    #[test]
+    fn block_payload_available_by_hash_tracks_evicted_da_payload() {
+        let temp_dir = TempDir::new().unwrap();
+        populate_store(&temp_dir, 4);
+
+        let (kura, _) = Kura::new(
+            &KuraConfig {
+                init_mode: InitMode::Strict,
+                store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: FsyncMode::Batched,
+                fsync_interval: FSYNC_INTERVAL,
+                block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("kura init");
+
+        let evict_len = {
+            let mut store = kura.block_store.lock();
+            store.read_block_index(1).expect("block index").length
+        };
+        kura.evict_block_bodies(evict_len)
+            .expect("evict block bodies");
+
+        let (da_path, block_hash) = {
+            let mut store = kura.block_store.lock();
+            (
+                store.da_block_path(2),
+                kura.get_block_hash(nonzero!(2_usize)).expect("hash available"),
+            )
+        };
+
+        assert!(
+            da_path.exists(),
+            "expected DA payload to exist after eviction"
+        );
+        assert!(
+            kura.block_payload_available_by_hash(block_hash),
+            "payload should be available when DA payload exists"
+        );
+
+        std::fs::remove_file(&da_path).expect("remove DA payload");
+        assert!(
+            !kura.block_payload_available_by_hash(block_hash),
+            "payload should be unavailable after DA payload removal"
+        );
     }
 
     #[test]
