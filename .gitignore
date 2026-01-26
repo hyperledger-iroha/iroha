@@ -80,6 +80,7 @@ java/iroha_android/build/*
 java/iroha_android/android/build/*
 java/iroha_android/core/build/*
 java/iroha_android/jvm/build/*
+java/iroha_android/samples-android/build/*
 java/norito_java/build/*
 IrohaSwift/.clang-module-cache*
 IrohaSwift/.swift-cache*

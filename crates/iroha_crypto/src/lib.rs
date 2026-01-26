@@ -54,6 +54,8 @@ pub mod sm;
 
 use core::{fmt, str::FromStr};
 use std::sync::Arc;
+#[cfg(feature = "bls")]
+use std::sync::{Mutex, OnceLock};
 use std::{
     borrow::ToOwned as _,
     boxed::Box,
@@ -746,6 +748,18 @@ fn bls_collect_pks_with_pop<'a>(
 ) -> Result<Vec<&'a [u8]>, Error> {
     use std::collections::BTreeSet;
 
+    fn pop_cache_key(pk_bytes: &[u8], pop: &[u8]) -> Hash {
+        let mut buf = Vec::with_capacity(pk_bytes.len() + pop.len());
+        buf.extend_from_slice(pk_bytes);
+        buf.extend_from_slice(pop);
+        Hash::new(&buf)
+    }
+
+    fn pop_cache() -> &'static Mutex<std::collections::BTreeSet<Hash>> {
+        static CACHE: OnceLock<Mutex<std::collections::BTreeSet<Hash>>> = OnceLock::new();
+        CACHE.get_or_init(|| Mutex::new(std::collections::BTreeSet::new()))
+    }
+
     if public_keys.len() != pops.len() || public_keys.is_empty() {
         return Err(Error::BadSignature);
     }
@@ -755,8 +769,18 @@ fn bls_collect_pks_with_pop<'a>(
         if pk.algorithm() != algorithm {
             return Err(Error::BadSignature);
         }
-        pop_verify(pk, pop)?;
         let (_, bytes) = pk.to_bytes();
+        let cache_key = pop_cache_key(bytes, pop);
+        let cached = pop_cache()
+            .lock()
+            .ok()
+            .map_or(false, |cache| cache.contains(&cache_key));
+        if !cached {
+            pop_verify(pk, pop)?;
+            if let Ok(mut cache) = pop_cache().lock() {
+                cache.insert(cache_key);
+            }
+        }
         if !seen.insert(bytes) {
             return Err(Error::BadSignature);
         }

@@ -807,6 +807,9 @@ impl Actor {
                 clear_missing_block_request(&mut self.pending.missing_block_requests, block_hash)
             })
             .flatten();
+        if allowed {
+            self.pending.pending_fetch_requests.remove(block_hash);
+        }
         if !allowed {
             debug!(
                 ?block_hash,
