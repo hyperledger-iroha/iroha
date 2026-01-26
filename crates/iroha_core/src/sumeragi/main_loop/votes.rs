@@ -1610,6 +1610,7 @@ impl Actor {
                 block_hash,
                 roster_view,
                 &self.roster_validation_cache,
+                None,
             )
             .or_else(|| {
                 super::block_sync_history_roster_for_block(

@@ -260,6 +260,7 @@ const PROPOSALS_SEEN_HEIGHT_WINDOW: u64 = PROPOSAL_CACHE_LIMIT as u64;
 const PROPOSALS_SEEN_VIEW_WINDOW: u64 = PROPOSAL_CACHE_LIMIT as u64;
 const VOTE_CACHE_HEIGHT_WINDOW: u64 = PROPOSAL_CACHE_LIMIT as u64;
 const VOTE_CACHE_VIEW_WINDOW: u64 = PROPOSAL_CACHE_LIMIT as u64;
+const BLOCK_SYNC_ROSTER_CACHE_LIMIT: usize = 64;
 fn missing_quorum_stale(
     pending_age: Duration,
     commit_timeout: Duration,
@@ -2725,6 +2726,7 @@ impl Actor {
             parent_hash,
             None,
             &self.roster_validation_cache,
+            None,
         )
         .or_else(|| {
             block_sync_history_roster_for_block(
@@ -3902,6 +3904,7 @@ pub(super) struct Actor {
     deferred_qcs: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     deferred_block_sync_updates: BTreeMap<DeferredBlockSyncKey, DeferredBlockSyncUpdate>,
     vote_roster_cache: BTreeMap<HashOf<BlockHeader>, VoteRosterCacheEntry>,
+    block_sync_roster_cache: BlockSyncRosterSelectionCache,
     qc_cache: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     qc_signer_tally: BTreeMap<QcVoteKey, QcSignerTally>,
     epoch_manager: Option<EpochManager>,
@@ -3932,6 +3935,114 @@ struct VoteRosterCacheEntry {
     roster: Vec<PeerId>,
     height: u64,
     view: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum BlockSyncRosterCacheMode {
+    Permissioned,
+    Npos,
+}
+
+impl From<ConsensusMode> for BlockSyncRosterCacheMode {
+    fn from(mode: ConsensusMode) -> Self {
+        match mode {
+            ConsensusMode::Permissioned => Self::Permissioned,
+            ConsensusMode::Npos => Self::Npos,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct BlockSyncRosterCacheKey {
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    consensus_mode: BlockSyncRosterCacheMode,
+    cert_hash: Option<Hash>,
+    checkpoint_hash: Option<Hash>,
+    stake_snapshot_hash: Option<Hash>,
+}
+
+impl BlockSyncRosterCacheKey {
+    fn from_hints(
+        block_hash: HashOf<BlockHeader>,
+        block_height: u64,
+        block_view: u64,
+        consensus_mode: ConsensusMode,
+        commit_qc: Option<&Qc>,
+        checkpoint: Option<&ValidatorSetCheckpoint>,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
+    ) -> Option<Self> {
+        if commit_qc.is_none() && checkpoint.is_none() {
+            return None;
+        }
+        if matches!(consensus_mode, ConsensusMode::Npos) && stake_snapshot.is_none() {
+            return None;
+        }
+        let cert_hash = commit_qc.map(|cert| Hash::from(HashOf::new(cert)));
+        let checkpoint_hash = checkpoint.map(|chk| Hash::from(HashOf::new(chk)));
+        let stake_snapshot_hash = stake_snapshot.map(|snapshot| Hash::from(HashOf::new(snapshot)));
+        Some(Self {
+            block_hash,
+            height: block_height,
+            view: block_view,
+            consensus_mode: BlockSyncRosterCacheMode::from(consensus_mode),
+            cert_hash,
+            checkpoint_hash,
+            stake_snapshot_hash,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct BlockSyncRosterSelectionCache {
+    entries: BTreeMap<BlockSyncRosterCacheKey, BlockSyncRosterSelection>,
+    order: VecDeque<BlockSyncRosterCacheKey>,
+    capacity: usize,
+}
+
+impl BlockSyncRosterSelectionCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            order: VecDeque::new(),
+            capacity,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+    }
+
+    fn get(&mut self, key: &BlockSyncRosterCacheKey) -> Option<BlockSyncRosterSelection> {
+        let selection = self.entries.get(key).cloned()?;
+        self.touch(key.clone());
+        Some(selection)
+    }
+
+    fn insert(&mut self, key: BlockSyncRosterCacheKey, selection: BlockSyncRosterSelection) {
+        if self.capacity == 0 {
+            return;
+        }
+        self.entries.insert(key.clone(), selection);
+        self.touch(key);
+        self.evict();
+    }
+
+    fn touch(&mut self, key: BlockSyncRosterCacheKey) {
+        self.order.retain(|entry| entry != &key);
+        self.order.push_back(key);
+    }
+
+    fn evict(&mut self) {
+        while self.entries.len() > self.capacity {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
 }
 
 type DeferredBlockSyncKey = (u64, u64, HashOf<BlockHeader>);
@@ -4343,6 +4454,7 @@ impl MergeCommitteeState {
 struct PendingBlockState {
     pending_blocks: BTreeMap<HashOf<BlockHeader>, PendingBlock>,
     missing_block_requests: BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
+    pending_fetch_requests: BTreeMap<HashOf<BlockHeader>, BTreeSet<PeerId>>,
     pending_processing: Cell<Option<HashOf<BlockHeader>>>,
     pending_processing_parent: Cell<Option<HashOf<BlockHeader>>>,
     last_commit_pipeline_run: Instant,
@@ -4824,11 +4936,20 @@ fn selection_from_roster_artifacts(
         && block_view.is_none_or(|view| view == 0);
     let mut cert_inputs: Option<RosterValidationInputs> = None;
     let mut checkpoint_inputs: Option<RosterValidationInputs> = None;
+    let mut cert_inputs_ms = 0;
+    let mut cert_validate_ms = 0;
+    let mut checkpoint_inputs_ms = 0;
+    let mut checkpoint_validate_ms = 0;
     let validated_cert = commit_qc.and_then(|cert| {
         let inputs = cert_inputs.get_or_insert_with(|| {
-            roster_cache.inputs_for_roster(&cert.validator_set, consensus_mode, stake_snapshot)
+            let inputs_start = Instant::now();
+            let inputs =
+                roster_cache.inputs_for_roster(&cert.validator_set, consensus_mode, stake_snapshot);
+            cert_inputs_ms = u64::try_from(inputs_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+            inputs
         });
-        match validate_commit_qc_roster(
+        let validate_start = Instant::now();
+        let result = validate_commit_qc_roster(
             cert,
             block_hash,
             block_height,
@@ -4839,7 +4960,9 @@ fn selection_from_roster_artifacts(
             mode_tag,
             allow_genesis_stub,
             inputs,
-        ) {
+        );
+        cert_validate_ms = u64::try_from(validate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match result {
             Ok(roster) => Some((roster, cert)),
             Err(err) => {
                 warn!(
@@ -4856,6 +4979,7 @@ fn selection_from_roster_artifacts(
         (ConsensusMode::Npos, None) => expected_epoch,
         _ => 0,
     };
+    let checkpoint_roots_start = Instant::now();
     let checkpoint_roots = validated_cert
         .as_ref()
         .map(|(_, cert)| (cert.parent_state_root, cert.post_state_root))
@@ -4871,19 +4995,38 @@ fn selection_from_roster_artifacts(
                 }
             })
         });
+    let checkpoint_roots_ms =
+        u64::try_from(checkpoint_roots_start.elapsed().as_millis()).unwrap_or(u64::MAX);
     let validated_checkpoint = checkpoint.and_then(|chk| {
         let reuse_cert_inputs =
             commit_qc.is_some_and(|cert| cert.validator_set == chk.validator_set);
         let inputs = if reuse_cert_inputs {
             cert_inputs.get_or_insert_with(|| {
-                roster_cache.inputs_for_roster(&chk.validator_set, consensus_mode, stake_snapshot)
+                let inputs_start = Instant::now();
+                let inputs = roster_cache.inputs_for_roster(
+                    &chk.validator_set,
+                    consensus_mode,
+                    stake_snapshot,
+                );
+                cert_inputs_ms =
+                    u64::try_from(inputs_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                inputs
             })
         } else {
             checkpoint_inputs.get_or_insert_with(|| {
-                roster_cache.inputs_for_roster(&chk.validator_set, consensus_mode, stake_snapshot)
+                let inputs_start = Instant::now();
+                let inputs = roster_cache.inputs_for_roster(
+                    &chk.validator_set,
+                    consensus_mode,
+                    stake_snapshot,
+                );
+                checkpoint_inputs_ms =
+                    u64::try_from(inputs_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                inputs
             })
         };
-        match validate_checkpoint_roster(
+        let validate_start = Instant::now();
+        let result = validate_checkpoint_roster(
             chk,
             block_hash,
             block_height,
@@ -4895,7 +5038,10 @@ fn selection_from_roster_artifacts(
             checkpoint_roots,
             allow_genesis_stub,
             inputs,
-        ) {
+        );
+        checkpoint_validate_ms =
+            u64::try_from(validate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match result {
             Ok(roster) => Some((roster, chk)),
             Err(err) => {
                 warn!(
@@ -4907,6 +5053,18 @@ fn selection_from_roster_artifacts(
             }
         }
     });
+    debug!(
+        block = %block_hash,
+        height = block_height,
+        view = ?block_view,
+        source = source.as_str(),
+        cert_inputs_ms,
+        cert_validate_ms,
+        checkpoint_roots_ms,
+        checkpoint_inputs_ms,
+        checkpoint_validate_ms,
+        "block sync roster validation substeps"
+    );
     match (validated_cert, validated_checkpoint) {
         (Some((roster, cert)), Some((checkpoint_roster, chk))) => {
             if roster != checkpoint_roster {
@@ -5087,12 +5245,29 @@ fn persisted_roster_for_block(
     block_hash: HashOf<BlockHeader>,
     block_view: Option<u64>,
     roster_cache: &RosterValidationCache,
+    selection_cache: Option<&mut BlockSyncRosterSelectionCache>,
 ) -> Option<BlockSyncRosterSelection> {
     let mode_tag = match consensus_mode {
         ConsensusMode::Permissioned => PERMISSIONED_TAG,
         ConsensusMode::Npos => NPOS_TAG,
     };
+    let mut selection_cache = selection_cache;
     if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
+        let key_view = block_view.unwrap_or(snapshot.commit_qc.view);
+        let cache_key = BlockSyncRosterCacheKey::from_hints(
+            block_hash,
+            block_height,
+            key_view,
+            consensus_mode,
+            Some(&snapshot.commit_qc),
+            Some(&snapshot.validator_checkpoint),
+            snapshot.stake_snapshot.as_ref(),
+        );
+        if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key.as_ref()) {
+            if let Some(selection) = cache.get(key) {
+                return Some(selection);
+            }
+        }
         if let Some(selection) = selection_from_roster_artifacts(
             Some(&snapshot.commit_qc),
             Some(&snapshot.validator_checkpoint),
@@ -5106,6 +5281,11 @@ fn persisted_roster_for_block(
             mode_tag,
             roster_cache,
         ) {
+            if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key) {
+                if selection.commit_qc.is_some() || selection.checkpoint.is_some() {
+                    cache.insert(key, selection.clone());
+                }
+            }
             if let Some(cert) = selection.commit_qc.as_ref() {
                 status::record_commit_qc(cert.clone());
             }
@@ -5134,6 +5314,24 @@ fn persisted_roster_for_block(
             None
         }
     }) {
+        let key_view = block_view
+            .or_else(|| meta.commit_qc.as_ref().map(|qc| qc.view))
+            .or_else(|| meta.validator_checkpoint.as_ref().map(|chk| chk.view))
+            .unwrap_or(0);
+        let cache_key = BlockSyncRosterCacheKey::from_hints(
+            block_hash,
+            block_height,
+            key_view,
+            consensus_mode,
+            meta.commit_qc.as_ref(),
+            meta.validator_checkpoint.as_ref(),
+            meta.stake_snapshot.as_ref(),
+        );
+        if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key.as_ref()) {
+            if let Some(selection) = cache.get(key) {
+                return Some(selection);
+            }
+        }
         if let Some(selection) = selection_from_roster_artifacts(
             meta.commit_qc.as_ref(),
             meta.validator_checkpoint.as_ref(),
@@ -5147,6 +5345,11 @@ fn persisted_roster_for_block(
             mode_tag,
             roster_cache,
         ) {
+            if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key) {
+                if selection.commit_qc.is_some() || selection.checkpoint.is_some() {
+                    cache.insert(key, selection.clone());
+                }
+            }
             if let Some(cert) = selection.commit_qc.as_ref() {
                 status::record_commit_qc(cert.clone());
             }
@@ -5195,6 +5398,7 @@ fn block_sync_update_with_roster(
         block_hash,
         Some(block_view),
         roster_cache,
+        None,
     )
     .or_else(|| {
         block_sync_history_roster_for_block(
@@ -7689,6 +7893,9 @@ impl Actor {
             deferred_qcs: BTreeMap::new(),
             deferred_block_sync_updates: BTreeMap::new(),
             vote_roster_cache: BTreeMap::new(),
+            block_sync_roster_cache: BlockSyncRosterSelectionCache::new(
+                BLOCK_SYNC_ROSTER_CACHE_LIMIT,
+            ),
             qc_cache: BTreeMap::new(),
             qc_signer_tally: BTreeMap::new(),
             epoch_manager,
@@ -7696,6 +7903,7 @@ impl Actor {
             pending: PendingBlockState {
                 pending_blocks: BTreeMap::new(),
                 missing_block_requests: BTreeMap::new(),
+                pending_fetch_requests: BTreeMap::new(),
                 pending_processing: Cell::new(None),
                 pending_processing_parent: Cell::new(None),
                 last_commit_pipeline_run: initial_commit_pipeline_run,
@@ -8947,8 +9155,7 @@ impl Actor {
             );
         }
         let message_timing = MessageTimingGuard::for_message(&msg);
-        if let (Some((queue, latency_ms)), Some(timing)) =
-            (queue_latency, message_timing.as_ref())
+        if let (Some((queue, latency_ms)), Some(timing)) = (queue_latency, message_timing.as_ref())
         {
             debug!(
                 kind = timing.kind,

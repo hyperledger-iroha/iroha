@@ -454,7 +454,10 @@ mod tests {
         role::RoleIdWithOwner,
         sumeragi::{
             consensus::{RbcChunk, RbcDeliver, RbcInit, RbcReady},
-            message::{BlockCreated, BlockMessage, BlockSyncUpdate, ConsensusParamsAdvert, FetchPendingBlock},
+            message::{
+                BlockCreated, BlockMessage, BlockSyncUpdate, ConsensusParamsAdvert,
+                FetchPendingBlock,
+            },
         },
     };
 
@@ -534,9 +537,10 @@ mod tests {
         );
         let block_hash = header.hash();
         let block = BlockBuilder::new(header.clone()).build(BTreeSet::new());
-        let created = NetworkMessage::SumeragiBlock(Box::new(BlockMessage::BlockCreated(
-            BlockCreated { block: block.clone() },
-        )));
+        let created =
+            NetworkMessage::SumeragiBlock(Box::new(BlockMessage::BlockCreated(BlockCreated {
+                block: block.clone(),
+            })));
         assert_eq!(created.topic(), NetworkTopic::Consensus);
 
         let fetch = FetchPendingBlock {
@@ -586,8 +590,7 @@ mod tests {
         assert_eq!(payload.topic(), NetworkTopic::ConsensusChunk);
 
         let sync = BlockSyncUpdate::from(&block);
-        let sync_msg =
-            NetworkMessage::SumeragiBlock(Box::new(BlockMessage::BlockSyncUpdate(sync)));
+        let sync_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessage::BlockSyncUpdate(sync)));
         assert_eq!(sync_msg.topic(), NetworkTopic::ConsensusPayload);
 
         let ready = RbcReady {

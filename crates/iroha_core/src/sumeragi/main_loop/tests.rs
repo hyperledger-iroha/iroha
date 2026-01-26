@@ -3354,6 +3354,107 @@ async fn block_sync_update_drops_conflicting_committed_block_without_roster_coun
     harness.shutdown.send();
 }
 
+#[test]
+fn block_sync_roster_cache_hits_and_evicts() {
+    let roster = vec![
+        PeerId::new(KeyPair::random().public_key().clone()),
+        PeerId::new(KeyPair::random().public_key().clone()),
+    ];
+    let make_qc = |block_hash, height, view| Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: Hash::prehashed([0x11; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0x22; Hash::LENGTH]),
+        height,
+        view,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&roster),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: roster.clone(),
+        aggregate: QcAggregate {
+            signers_bitmap: vec![0b0000_0011],
+            bls_aggregate_signature: vec![0xAA],
+        },
+    };
+    let hash1 =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x31; Hash::LENGTH]));
+    let hash2 =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x32; Hash::LENGTH]));
+    let hash3 =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x33; Hash::LENGTH]));
+    let qc1 = make_qc(hash1, 1, 0);
+    let qc2 = make_qc(hash2, 2, 0);
+    let qc3 = make_qc(hash3, 3, 0);
+
+    let key1 = super::BlockSyncRosterCacheKey::from_hints(
+        hash1,
+        1,
+        0,
+        ConsensusMode::Permissioned,
+        Some(&qc1),
+        None,
+        None,
+    )
+    .expect("key from qc1");
+    let key2 = super::BlockSyncRosterCacheKey::from_hints(
+        hash2,
+        2,
+        0,
+        ConsensusMode::Permissioned,
+        Some(&qc2),
+        None,
+        None,
+    )
+    .expect("key from qc2");
+    let key3 = super::BlockSyncRosterCacheKey::from_hints(
+        hash3,
+        3,
+        0,
+        ConsensusMode::Permissioned,
+        Some(&qc3),
+        None,
+        None,
+    )
+    .expect("key from qc3");
+
+    let selection1 = super::BlockSyncRosterSelection {
+        roster: roster.clone(),
+        source: super::BlockSyncRosterSource::QcHint,
+        commit_qc: Some(qc1),
+        checkpoint: None,
+        stake_snapshot: None,
+    };
+    let selection2 = super::BlockSyncRosterSelection {
+        roster: roster.clone(),
+        source: super::BlockSyncRosterSource::QcHint,
+        commit_qc: Some(qc2),
+        checkpoint: None,
+        stake_snapshot: None,
+    };
+    let selection3 = super::BlockSyncRosterSelection {
+        roster,
+        source: super::BlockSyncRosterSource::QcHint,
+        commit_qc: Some(qc3),
+        checkpoint: None,
+        stake_snapshot: None,
+    };
+
+    let mut cache = super::BlockSyncRosterSelectionCache::new(2);
+    cache.insert(key1.clone(), selection1.clone());
+    cache.insert(key2.clone(), selection2.clone());
+    assert_eq!(cache.get(&key1), Some(selection1.clone()));
+    cache.insert(key3.clone(), selection3.clone());
+
+    assert!(
+        cache.get(&key2).is_none(),
+        "least-recently used entry evicted"
+    );
+    assert_eq!(cache.get(&key1), Some(selection1));
+    assert_eq!(cache.get(&key3), Some(selection3));
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_accepts_uncertified_next_height_in_permissioned_mode() {
     use crate::sumeragi::status;
@@ -5898,9 +5999,8 @@ async fn fetch_pending_block_attaches_cached_qc() {
         .handle_fetch_pending_block(request)
         .expect("fetch pending block");
 
-    // BlockCreated bypasses the background queue; verify no BlockSyncUpdate leaked in.
+    // FetchPendingBlock responses are enqueued on the background queue.
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    eprintln!("background posts: {posts:#?}");
     let mut found = false;
     for post in posts {
         if let BackgroundPost::Post {
@@ -6356,11 +6456,82 @@ async fn fetch_pending_block_records_not_found_when_missing() {
         .iter()
         .find(|entry| {
             entry.kind == super::status::ConsensusMessageKind::FetchPendingBlock
-                && entry.outcome == super::status::ConsensusMessageOutcome::Dropped
+                && entry.outcome == super::status::ConsensusMessageOutcome::Deferred
                 && entry.reason == super::status::ConsensusMessageReason::NotFound
         })
         .expect("fetch pending block not found entry");
     assert_eq!(entry.total, 1);
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_pending_block_stashes_and_serves_when_block_arrives() {
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let height = committed_height.saturating_add(1).max(1);
+    let view = 0u64;
+    let parent_hash = actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent_hash);
+    let block_hash = block.hash();
+
+    let request = super::message::FetchPendingBlock {
+        requester: actor.common_config.peer.id.clone(),
+        block_hash,
+        height,
+        view,
+    };
+    let _ = harness.background_rx.try_iter().count();
+    actor
+        .handle_fetch_pending_block(request)
+        .expect("fetch pending block");
+
+    assert!(
+        actor
+            .pending
+            .pending_fetch_requests
+            .contains_key(&block_hash),
+        "expected fetch request to be stashed"
+    );
+    assert!(
+        harness.background_rx.try_iter().next().is_none(),
+        "no payload response should be sent before the block arrives"
+    );
+
+    let created = super::message::BlockCreated {
+        block: block.clone(),
+    };
+    actor
+        .handle_block_created(created, None)
+        .expect("block created");
+
+    assert!(
+        !actor
+            .pending
+            .pending_fetch_requests
+            .contains_key(&block_hash),
+        "expected stashed fetch requests to flush once payload is available"
+    );
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    assert!(
+        posts.iter().any(|post| match post {
+            BackgroundPost::Post {
+                msg: BlockMessage::BlockCreated(created),
+                ..
+            } => created.block.hash() == block_hash,
+            BackgroundPost::Post {
+                msg: BlockMessage::BlockSyncUpdate(update),
+                ..
+            } => update.block.hash() == block_hash,
+            _ => false,
+        }),
+        "expected missing-block fetch response after payload is available"
+    );
 
     super::status::reset_message_handling_for_tests();
     harness.shutdown.send();
@@ -8419,6 +8590,7 @@ async fn commit_pipeline_rebuilds_qcs_with_empty_active_roster() {
         block_hash,
         Some(view),
         &roster_cache,
+        None,
     );
     assert!(
         persisted.is_some(),
@@ -23623,6 +23795,7 @@ fn block_sync_roster_recovers_from_roster_sidecar_after_cache_reset() {
         block_hash,
         Some(block.header().view_change_index()),
         &roster_cache,
+        None,
     )
     .expect("sidecar");
     let selection = select_block_sync_roster(
