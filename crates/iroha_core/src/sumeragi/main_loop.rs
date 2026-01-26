@@ -262,6 +262,7 @@ const PROPOSALS_SEEN_VIEW_WINDOW: u64 = PROPOSAL_CACHE_LIMIT as u64;
 const VOTE_CACHE_HEIGHT_WINDOW: u64 = PROPOSAL_CACHE_LIMIT as u64;
 const VOTE_CACHE_VIEW_WINDOW: u64 = PROPOSAL_CACHE_LIMIT as u64;
 const BLOCK_SYNC_ROSTER_CACHE_LIMIT: usize = 64;
+const BLOCK_SIGNER_CACHE_LIMIT: usize = 128;
 fn missing_quorum_stale(
     pending_age: Duration,
     commit_timeout: Duration,
@@ -3973,6 +3974,7 @@ pub(super) struct Actor {
     deferred_block_sync_updates: BTreeMap<DeferredBlockSyncKey, DeferredBlockSyncUpdate>,
     vote_roster_cache: BTreeMap<HashOf<BlockHeader>, VoteRosterCacheEntry>,
     block_sync_roster_cache: BlockSyncRosterSelectionCache,
+    block_signer_cache: BlockSignerCache,
     qc_cache: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     qc_signer_tally: BTreeMap<QcVoteKey, QcSignerTally>,
     epoch_manager: Option<EpochManager>,
@@ -4077,6 +4079,96 @@ impl BlockSyncRosterCacheKey {
             checkpoint_hash,
             stake_snapshot_hash,
         })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct BlockSignerCacheKey {
+    block_hash: HashOf<BlockHeader>,
+    roster_hash: HashOf<Vec<PeerId>>,
+    consensus_mode: BlockSyncRosterCacheMode,
+    prf_seed: Option<[u8; 32]>,
+}
+
+impl BlockSignerCacheKey {
+    fn new(
+        block_hash: HashOf<BlockHeader>,
+        roster: &[PeerId],
+        consensus_mode: ConsensusMode,
+        prf_seed: Option<[u8; 32]>,
+    ) -> Option<Self> {
+        if roster.is_empty() {
+            return None;
+        }
+        Some(Self {
+            block_hash,
+            roster_hash: HashOf::new(&roster.to_vec()),
+            consensus_mode: BlockSyncRosterCacheMode::from(consensus_mode),
+            prf_seed,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct BlockSignerCache {
+    entries: BTreeMap<BlockSignerCacheKey, BTreeSet<crate::sumeragi::consensus::ValidatorIndex>>,
+    order: VecDeque<BlockSignerCacheKey>,
+    capacity: usize,
+}
+
+impl BlockSignerCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            order: VecDeque::new(),
+            capacity,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+    }
+
+    fn get(
+        &mut self,
+        key: &BlockSignerCacheKey,
+    ) -> Option<BTreeSet<crate::sumeragi::consensus::ValidatorIndex>> {
+        let signers = self.entries.get(key).cloned()?;
+        self.touch(key.clone());
+        Some(signers)
+    }
+
+    fn insert(
+        &mut self,
+        key: BlockSignerCacheKey,
+        signers: BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+    ) {
+        if self.capacity == 0 {
+            return;
+        }
+        self.entries.insert(key.clone(), signers);
+        self.touch(key);
+        self.evict();
+    }
+
+    fn remove_block(&mut self, block_hash: &HashOf<BlockHeader>) {
+        self.entries.retain(|key, _| &key.block_hash != block_hash);
+        self.order.retain(|key| &key.block_hash != block_hash);
+    }
+
+    fn touch(&mut self, key: BlockSignerCacheKey) {
+        self.order.retain(|entry| entry != &key);
+        self.order.push_back(key);
+    }
+
+    fn evict(&mut self) {
+        while self.entries.len() > self.capacity {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
     }
 }
 
@@ -8048,6 +8140,7 @@ impl Actor {
             block_sync_roster_cache: BlockSyncRosterSelectionCache::new(
                 BLOCK_SYNC_ROSTER_CACHE_LIMIT,
             ),
+            block_signer_cache: BlockSignerCache::new(BLOCK_SIGNER_CACHE_LIMIT),
             qc_cache: BTreeMap::new(),
             qc_signer_tally: BTreeMap::new(),
             epoch_manager,

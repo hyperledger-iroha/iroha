@@ -290,6 +290,7 @@ impl Actor {
                     || (keep_commit_qc
                         && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
             });
+            self.block_signer_cache.remove_block(&hash);
             self.pending.pending_blocks.remove(&hash);
             aborted_removed = aborted_removed.saturating_add(1);
         }
@@ -301,6 +302,7 @@ impl Actor {
                 .retain(|(_, qc_hash, _, _, _), _| qc_hash != &hash);
             self.qc_signer_tally
                 .retain(|(_, qc_hash, _, _, _), _| qc_hash != &hash);
+            self.block_signer_cache.remove_block(&hash);
             stale_removed = stale_removed.saturating_add(1);
         }
 
@@ -375,6 +377,7 @@ impl Actor {
                     .retain(|(_, qc_hash, _, _, _), _| qc_hash != &key.0);
                 self.qc_signer_tally
                     .retain(|(_, qc_hash, _, _, _), _| qc_hash != &key.0);
+                self.block_signer_cache.remove_block(&key.0);
                 if let Some(highest) = self.highest_qc {
                     if highest.subject_block_hash == key.0
                         && highest.height == key.1

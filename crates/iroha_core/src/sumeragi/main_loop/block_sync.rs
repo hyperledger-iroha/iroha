@@ -865,27 +865,45 @@ impl Actor {
                         let tally = if let Some(tally) = cached_tally {
                             Ok(tally)
                         } else {
-                            let block_signers = {
-                                let state_view = self.state.view();
-                                validated_block_signers(
-                                    &block,
-                                    &topology,
-                                    &state_view,
-                                    mode_tag,
-                                    prf_seed,
-                                )
-                            };
-                            let block_signers = match block_signers {
-                                Ok(signers) => signers,
-                                Err(err) => {
-                                    warn!(
-                                        ?err,
-                                        height = block_height,
-                                        view = block_view,
-                                        block = %block_hash,
-                                        "block sync QC received for known block with invalid signatures; proceeding without signer subset check"
-                                    );
-                                    BTreeSet::new()
+                            let signer_cache_key = BlockSignerCacheKey::new(
+                                block_hash,
+                                selection.roster.as_slice(),
+                                consensus_mode,
+                                prf_seed,
+                            );
+                            let cached_block_signers = signer_cache_key
+                                .as_ref()
+                                .and_then(|key| self.block_signer_cache.get(key));
+                            let block_signers = if let Some(signers) = cached_block_signers {
+                                signers
+                            } else {
+                                let block_signers = {
+                                    let state_view = self.state.view();
+                                    validated_block_signers(
+                                        &block,
+                                        &topology,
+                                        &state_view,
+                                        mode_tag,
+                                        prf_seed,
+                                    )
+                                };
+                                match block_signers {
+                                    Ok(signers) => {
+                                        if let Some(key) = signer_cache_key {
+                                            self.block_signer_cache.insert(key, signers.clone());
+                                        }
+                                        signers
+                                    }
+                                    Err(err) => {
+                                        warn!(
+                                            ?err,
+                                            height = block_height,
+                                            view = block_view,
+                                            block = %block_hash,
+                                            "block sync QC received for known block with invalid signatures; proceeding without signer subset check"
+                                        );
+                                        BTreeSet::new()
+                                    }
                                 }
                             };
                             let state_view = self.state.view();

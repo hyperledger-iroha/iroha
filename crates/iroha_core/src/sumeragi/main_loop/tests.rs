@@ -5704,11 +5704,15 @@ async fn block_sync_update_known_block_reuses_commit_roster_snapshot() {
     );
     actor.roster_validation_cache.pops.clear();
 
-    let before = super::status::snapshot().block_sync_roster.drop_missing_total;
+    let before = super::status::snapshot()
+        .block_sync_roster
+        .drop_missing_total;
     actor
         .handle_block_sync_update(update, None)
         .expect("block sync update");
-    let after = super::status::snapshot().block_sync_roster.drop_missing_total;
+    let after = super::status::snapshot()
+        .block_sync_roster
+        .drop_missing_total;
     assert_eq!(
         after, before,
         "known blocks should reuse commit roster snapshots"
@@ -5814,6 +5818,183 @@ async fn block_sync_update_known_block_revalidates_qc_on_hash_mismatch() {
         HashOf::new(cached),
         HashOf::new(&qc),
         "mismatched QC must not replace cached entry"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_known_block_reuses_cached_block_signers() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let (committed_height, committed_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(u64::MAX),
+            view.latest_block_hash(),
+        )
+    };
+    let block_height = committed_height.saturating_add(1).max(1);
+    let view = 0_u64;
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "test requires commit roster");
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    assert!(required > 1, "test requires commit quorum > 1");
+    let canonical_roster = super::roster::canonicalize_roster(roster.clone());
+    assert!(
+        canonical_roster.len() > required,
+        "test requires extra validator beyond quorum"
+    );
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(block_height);
+    let signature_topology =
+        super::topology_for_view(&topology, block_height, view, mode_tag, prf_seed);
+
+    let block_peers: Vec<_> = canonical_roster.iter().take(required).cloned().collect();
+    let missing_peer = canonical_roster[required].clone();
+    let mut qc_peers: Vec<_> = block_peers[..required - 1].to_vec();
+    qc_peers.push(missing_peer.clone());
+
+    let signer_peer = block_peers.first().expect("block signer peer available");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair exists in harness");
+    let signer_idx = signature_topology
+        .position(signer_peer.public_key())
+        .expect("signer index in topology");
+    let mut block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        block_height,
+        view,
+        committed_hash,
+        signer_kp,
+        u64::try_from(signer_idx).expect("signer index fits u64"),
+    );
+    for peer in block_peers.iter().skip(1) {
+        let kp = harness
+            .key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("signer keypair exists in harness");
+        let idx = signature_topology
+            .position(peer.public_key())
+            .expect("signer index in topology");
+        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        block
+            .add_signature(BlockSignature::new(
+                u64::try_from(idx).expect("signer index fits u64"),
+                sig,
+            ))
+            .expect("signature added");
+    }
+
+    let block_signers = {
+        let state_view = actor.state.view();
+        super::validated_block_signers(&block, &topology, &state_view, mode_tag, prf_seed)
+            .expect("block signers validated")
+    };
+    let missing_idx = signature_topology
+        .position(missing_peer.public_key())
+        .expect("missing signer index");
+    let missing_idx = ValidatorIndex::try_from(u32::try_from(missing_idx).expect("idx fits"))
+        .expect("validator index fits");
+    assert!(
+        !block_signers.contains(&missing_idx),
+        "block signers should exclude the missing QC signer"
+    );
+
+    actor.kura.store_block(block.clone()).expect("store block");
+    let block_hash = block.hash();
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster.clone());
+    let mut qc_signers = BTreeSet::new();
+    for peer in &qc_peers {
+        let idx = canonical_topology
+            .position(peer.public_key())
+            .expect("qc signer index");
+        qc_signers.insert(
+            ValidatorIndex::try_from(u32::try_from(idx).expect("idx fits"))
+                .expect("validator index fits"),
+        );
+    }
+    let signers_bitmap = super::build_signers_bitmap(&qc_signers, canonical_roster.len());
+    let epoch = actor.epoch_for_height(block_height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        block_height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    let roster_cache =
+        roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
+    let mut update = super::block_sync_update_with_roster(
+        &block,
+        actor.state.as_ref(),
+        actor.kura.as_ref(),
+        ConsensusMode::Permissioned,
+        actor.common_config.trusted_peers.value(),
+        actor.common_config.peer.id(),
+        &roster_cache,
+    );
+    update.commit_qc = Some(qc.clone());
+    update.validator_checkpoint = None;
+    update.stake_snapshot = None;
+    update.commit_votes.clear();
+
+    let qc_key = (Phase::Commit, block_hash, block_height, view, epoch);
+    assert!(actor.qc_cache.get(&qc_key).is_none());
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+    assert!(
+        actor.qc_cache.get(&qc_key).is_none(),
+        "QC should be rejected without cached block signers"
+    );
+
+    let mut cached_signers = BTreeSet::new();
+    for peer in &qc_peers {
+        let idx = signature_topology
+            .position(peer.public_key())
+            .expect("cached signer index");
+        cached_signers.insert(
+            ValidatorIndex::try_from(u32::try_from(idx).expect("idx fits"))
+                .expect("validator index fits"),
+        );
+    }
+    let cache_key =
+        BlockSignerCacheKey::new(block_hash, roster.as_slice(), consensus_mode, prf_seed)
+            .expect("cache key");
+    actor.block_signer_cache.insert(cache_key, cached_signers);
+
+    let mut update = super::block_sync_update_with_roster(
+        &block,
+        actor.state.as_ref(),
+        actor.kura.as_ref(),
+        ConsensusMode::Permissioned,
+        actor.common_config.trusted_peers.value(),
+        actor.common_config.peer.id(),
+        &roster_cache,
+    );
+    update.commit_qc = Some(qc);
+    update.validator_checkpoint = None;
+    update.stake_snapshot = None;
+    update.commit_votes.clear();
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+    assert!(
+        actor.qc_cache.get(&qc_key).is_some(),
+        "QC should be accepted once cached block signers are used"
     );
 
     harness.shutdown.send();
