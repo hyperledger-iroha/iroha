@@ -227,9 +227,7 @@ fn spawn_rbc_persist_worker(
     })
 }
 
-fn spawn_rbc_seed_worker(
-    wake_tx: Option<mpsc::SyncSender<()>>,
-) -> io::Result<RbcSeedWorkerHandle> {
+fn spawn_rbc_seed_worker(wake_tx: Option<mpsc::SyncSender<()>>) -> io::Result<RbcSeedWorkerHandle> {
     let (work_tx, work_rx) = mpsc::sync_channel::<RbcSeedWork>(RBC_SEED_WORK_QUEUE_CAP);
     let (result_tx, result_rx) = mpsc::sync_channel::<RbcSeedResult>(RBC_SEED_RESULT_QUEUE_CAP);
     let join_handle = std::thread::Builder::new()
@@ -1660,7 +1658,10 @@ impl Actor {
                     debug!(?key, "RBC seed queue full; falling back to sync seeding");
                 }
                 Err(mpsc::TrySendError::Disconnected(_work)) => {
-                    warn!(?key, "RBC seed worker disconnected; falling back to sync seeding");
+                    warn!(
+                        ?key,
+                        "RBC seed worker disconnected; falling back to sync seeding"
+                    );
                     self.subsystems.da_rbc.rbc.seed_tx = None;
                     self.subsystems.da_rbc.rbc.seed_rx = None;
                     self.subsystems.da_rbc.rbc.seed_inflight.clear();
@@ -5238,7 +5239,11 @@ impl Actor {
                     if invalid {
                         self.clear_pending_rbc(&key);
                     } else if let Err(err) = self.flush_pending_rbc(key) {
-                        warn!(?err, ?key, "failed to flush pending RBC after seed completion");
+                        warn!(
+                            ?err,
+                            ?key,
+                            "failed to flush pending RBC after seed completion"
+                        );
                     }
 
                     if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {

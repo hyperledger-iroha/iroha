@@ -2909,7 +2909,7 @@ mod tests {
             height: 0,
             view: 0,
         };
-        handle.incoming_block_message(BlockMessage::FetchPendingBlock(request));
+        handle.incoming_block_message(BlockMessage::FetchPendingBlock(request.clone()));
 
         let received = block_rx
             .try_recv()
@@ -2920,6 +2920,11 @@ mod tests {
                 message: BlockMessage::FetchPendingBlock(_),
                 ..
             }
+        ));
+        handle.incoming_block_message(BlockMessage::FetchPendingBlock(request));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
         ));
         assert!(matches!(
             block_payload_rx.try_recv(),
@@ -3382,6 +3387,84 @@ mod tests {
         ));
         assert!(matches!(
             block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn incoming_block_message_drops_duplicate_rbc_init() {
+        const CAP: usize = 4;
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let height = 2;
+        let view = 0;
+        let block_header = BlockHeader::new(
+            NonZeroU64::new(height).expect("block height must be non-zero"),
+            None,
+            None,
+            None,
+            0,
+            view,
+        );
+        let leader_key = KeyPair::random();
+        let (_, leader_private) = leader_key.into_parts();
+        let leader_signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(&leader_private, block_header.hash()),
+        );
+        let init = BlockMessage::RbcInit(crate::sumeragi::consensus::RbcInit {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([3u8; 32])),
+            height,
+            view,
+            epoch: 0,
+            roster: vec![PeerId::new(KeyPair::random().public_key().clone())],
+            roster_hash: Hash::prehashed([0x14; 32]),
+            total_chunks: 1,
+            chunk_digests: vec![[5u8; 32]],
+            payload_hash: Hash::prehashed([4u8; 32]),
+            chunk_root: Hash::prehashed([5u8; 32]),
+            block_header,
+            leader_signature,
+        });
+
+        assert!(handle.try_incoming_block_message(init.clone()));
+        assert!(!handle.try_incoming_block_message(init));
+
+        let received = block_rx.try_recv().expect("RbcInit should be enqueued");
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::RbcInit(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            block_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
     }
@@ -4951,9 +5034,11 @@ mod tests {
             .position(|entry| *entry == "block")
             .expect("block should be drained");
         assert_eq!(block_index, VOTE_BURST_CAP_WITH_BLOCKS);
-        assert!(actor.events[..block_index]
-            .iter()
-            .all(|entry| *entry == "vote"));
+        assert!(
+            actor.events[..block_index]
+                .iter()
+                .all(|entry| *entry == "vote")
+        );
         assert_eq!(actor.events.len(), vote_total + 1);
         assert_eq!(stats.votes_handled, vote_total);
         assert_eq!(stats.blocks_handled, 1);
@@ -7170,6 +7255,11 @@ enum BlockPayloadDedupKey {
         view: u64,
         payload_hash: CryptoHash,
     },
+    RbcInit {
+        height: u64,
+        view: u64,
+        init_hash: CryptoHash,
+    },
     RbcReady {
         height: u64,
         view: u64,
@@ -7190,6 +7280,12 @@ enum BlockPayloadDedupKey {
         block_hash: HashOf<BlockHeader>,
         evidence_hash: CryptoHash,
     },
+    FetchPendingBlock {
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+        requester_hash: CryptoHash,
+    },
     RbcChunk {
         height: u64,
         view: u64,
@@ -7204,7 +7300,7 @@ const VOTE_DEDUP_CACHE_CAP: usize = 8192;
 const VOTE_DEDUP_CACHE_TTL: Duration = Duration::from_secs(60);
 const BLOCK_PAYLOAD_DEDUP_CACHE_CAP: usize = 8192;
 const BLOCK_PAYLOAD_DEDUP_CACHE_TTL: Duration = Duration::from_secs(120);
-const BLOCK_PAYLOAD_DEDUP_KIND_COUNT: usize = 6;
+const BLOCK_PAYLOAD_DEDUP_KIND_COUNT: usize = 8;
 const BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND: usize =
     if BLOCK_PAYLOAD_DEDUP_CACHE_CAP / BLOCK_PAYLOAD_DEDUP_KIND_COUNT == 0 {
         1
@@ -7387,9 +7483,11 @@ where
 struct BlockPayloadDedupCache {
     block_created: DedupCache<BlockPayloadDedupKey>,
     proposal: DedupCache<BlockPayloadDedupKey>,
+    rbc_init: DedupCache<BlockPayloadDedupKey>,
     rbc_ready: DedupCache<BlockPayloadDedupKey>,
     rbc_deliver: DedupCache<BlockPayloadDedupKey>,
     block_sync_update: DedupCache<BlockPayloadDedupKey>,
+    fetch_pending_block: DedupCache<BlockPayloadDedupKey>,
     rbc_chunk: DedupCache<BlockPayloadDedupKey>,
 }
 
@@ -7398,9 +7496,11 @@ impl BlockPayloadDedupCache {
         Self {
             block_created: DedupCache::new(cap_per_kind, ttl),
             proposal: DedupCache::new(cap_per_kind, ttl),
+            rbc_init: DedupCache::new(cap_per_kind, ttl),
             rbc_ready: DedupCache::new(cap_per_kind, ttl),
             rbc_deliver: DedupCache::new(cap_per_kind, ttl),
             block_sync_update: DedupCache::new(cap_per_kind, ttl),
+            fetch_pending_block: DedupCache::new(cap_per_kind, ttl),
             rbc_chunk: DedupCache::new(cap_per_kind, ttl),
         }
     }
@@ -7409,9 +7509,13 @@ impl BlockPayloadDedupCache {
         match key {
             BlockPayloadDedupKey::BlockCreated { .. } => self.block_created.insert(key, now),
             BlockPayloadDedupKey::Proposal { .. } => self.proposal.insert(key, now),
+            BlockPayloadDedupKey::RbcInit { .. } => self.rbc_init.insert(key, now),
             BlockPayloadDedupKey::RbcReady { .. } => self.rbc_ready.insert(key, now),
             BlockPayloadDedupKey::RbcDeliver { .. } => self.rbc_deliver.insert(key, now),
             BlockPayloadDedupKey::BlockSyncUpdate { .. } => self.block_sync_update.insert(key, now),
+            BlockPayloadDedupKey::FetchPendingBlock { .. } => {
+                self.fetch_pending_block.insert(key, now)
+            }
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.insert(key, now),
         }
     }
@@ -7420,9 +7524,11 @@ impl BlockPayloadDedupCache {
         match *key {
             BlockPayloadDedupKey::BlockCreated { .. } => self.block_created.remove(key),
             BlockPayloadDedupKey::Proposal { .. } => self.proposal.remove(key),
+            BlockPayloadDedupKey::RbcInit { .. } => self.rbc_init.remove(key),
             BlockPayloadDedupKey::RbcReady { .. } => self.rbc_ready.remove(key),
             BlockPayloadDedupKey::RbcDeliver { .. } => self.rbc_deliver.remove(key),
             BlockPayloadDedupKey::BlockSyncUpdate { .. } => self.block_sync_update.remove(key),
+            BlockPayloadDedupKey::FetchPendingBlock { .. } => self.fetch_pending_block.remove(key),
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.remove(key),
         }
     }
@@ -7432,9 +7538,13 @@ impl BlockPayloadDedupCache {
         match key {
             BlockPayloadDedupKey::BlockCreated { .. } => self.block_created.contains(key),
             BlockPayloadDedupKey::Proposal { .. } => self.proposal.contains(key),
+            BlockPayloadDedupKey::RbcInit { .. } => self.rbc_init.contains(key),
             BlockPayloadDedupKey::RbcReady { .. } => self.rbc_ready.contains(key),
             BlockPayloadDedupKey::RbcDeliver { .. } => self.rbc_deliver.contains(key),
             BlockPayloadDedupKey::BlockSyncUpdate { .. } => self.block_sync_update.contains(key),
+            BlockPayloadDedupKey::FetchPendingBlock { .. } => {
+                self.fetch_pending_block.contains(key)
+            }
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.contains(key),
         }
     }
@@ -7443,9 +7553,11 @@ impl BlockPayloadDedupCache {
     fn clear(&mut self) {
         self.block_created.clear();
         self.proposal.clear();
+        self.rbc_init.clear();
         self.rbc_ready.clear();
         self.rbc_deliver.clear();
         self.block_sync_update.clear();
+        self.fetch_pending_block.clear();
         self.rbc_chunk.clear();
     }
 
@@ -7453,9 +7565,11 @@ impl BlockPayloadDedupCache {
     fn len(&self) -> usize {
         self.block_created.len()
             + self.proposal.len()
+            + self.rbc_init.len()
             + self.rbc_ready.len()
             + self.rbc_deliver.len()
             + self.block_sync_update.len()
+            + self.fetch_pending_block.len()
             + self.rbc_chunk.len()
     }
 
@@ -7464,9 +7578,11 @@ impl BlockPayloadDedupCache {
         match key {
             BlockPayloadDedupKey::BlockCreated { .. } => self.block_created.len(),
             BlockPayloadDedupKey::Proposal { .. } => self.proposal.len(),
+            BlockPayloadDedupKey::RbcInit { .. } => self.rbc_init.len(),
             BlockPayloadDedupKey::RbcReady { .. } => self.rbc_ready.len(),
             BlockPayloadDedupKey::RbcDeliver { .. } => self.rbc_deliver.len(),
             BlockPayloadDedupKey::BlockSyncUpdate { .. } => self.block_sync_update.len(),
+            BlockPayloadDedupKey::FetchPendingBlock { .. } => self.fetch_pending_block.len(),
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.len(),
         }
     }
@@ -7595,10 +7711,14 @@ impl SumeragiHandle {
         let kind = match key {
             BlockPayloadDedupKey::BlockCreated { .. } => status::DedupEvictionKind::BlockCreated,
             BlockPayloadDedupKey::Proposal { .. } => status::DedupEvictionKind::Proposal,
+            BlockPayloadDedupKey::RbcInit { .. } => status::DedupEvictionKind::RbcInit,
             BlockPayloadDedupKey::RbcReady { .. } => status::DedupEvictionKind::RbcReady,
             BlockPayloadDedupKey::RbcDeliver { .. } => status::DedupEvictionKind::RbcDeliver,
             BlockPayloadDedupKey::BlockSyncUpdate { .. } => {
                 status::DedupEvictionKind::BlockSyncUpdate
+            }
+            BlockPayloadDedupKey::FetchPendingBlock { .. } => {
+                status::DedupEvictionKind::FetchPendingBlock
             }
             BlockPayloadDedupKey::RbcChunk { .. } => status::DedupEvictionKind::RbcChunk,
         };
@@ -7637,7 +7757,7 @@ impl SumeragiHandle {
     ///
     /// Note: this is a best-effort enqueue that drops messages when queues are saturated
     /// to avoid stalling upstream relays. Block-sync updates and critical payload messages
-    /// (block creation and proposals), plus RBC READY/DELIVER and QC votes/certificates,
+    /// (block creation, proposals, and RBC INIT), plus RBC READY/DELIVER and QC votes/certificates,
     /// always use blocking semantics because dropping them can stall consensus recovery.
     pub fn try_incoming_block_message(&self, msg: BlockMessage) -> bool {
         let blocking = matches!(
@@ -8036,24 +8156,46 @@ impl SumeragiHandle {
                     mode,
                 )
             }
-            BlockMessage::RbcInit(init) => enqueue_with_mode(
-                &self.block,
-                {
+            BlockMessage::RbcInit(init) => {
+                let init_hash = CryptoHash::new(init.encode());
+                let dedup_key = BlockPayloadDedupKey::RbcInit {
+                    height: init.height,
+                    view: init.view,
+                    init_hash,
+                };
+                let duplicate = !self.dedup_block_payload(dedup_key);
+                if duplicate {
                     iroha_logger::debug!(
                         height = init.height,
                         view = init.view,
                         block = %init.block_hash,
-                        total_chunks = init.total_chunks,
-                        mode = ?mode,
-                        queue = ?status::WorkerQueueKind::Blocks,
-                        "enqueueing RBC INIT"
+                        "dropping duplicate RBC INIT from network"
                     );
-                    InboundBlockMessage::new(BlockMessage::RbcInit(init), sender)
-                },
-                "RbcInit",
-                status::WorkerQueueKind::Blocks,
-                mode,
-            ),
+                    return false;
+                }
+                let accepted = enqueue_with_mode(
+                    &self.block,
+                    {
+                        iroha_logger::debug!(
+                            height = init.height,
+                            view = init.view,
+                            block = %init.block_hash,
+                            total_chunks = init.total_chunks,
+                            mode = ?mode,
+                            queue = ?status::WorkerQueueKind::Blocks,
+                            "enqueueing RBC INIT"
+                        );
+                        InboundBlockMessage::new(BlockMessage::RbcInit(init), sender)
+                    },
+                    "RbcInit",
+                    status::WorkerQueueKind::Blocks,
+                    mode,
+                );
+                if !accepted {
+                    self.release_block_payload_dedup(&dedup_key);
+                }
+                accepted
+            }
             BlockMessage::RbcChunk(chunk) => {
                 let height = chunk.height;
                 let view = chunk.view;
@@ -8096,13 +8238,37 @@ impl SumeragiHandle {
                 }
                 accepted
             }
-            BlockMessage::FetchPendingBlock(request) => enqueue_with_mode(
-                &self.block,
-                InboundBlockMessage::new(BlockMessage::FetchPendingBlock(request), sender),
-                "FetchPendingBlock",
-                status::WorkerQueueKind::Blocks,
-                mode,
-            ),
+            BlockMessage::FetchPendingBlock(request) => {
+                let requester_hash = CryptoHash::new(request.requester.encode());
+                let dedup_key = BlockPayloadDedupKey::FetchPendingBlock {
+                    height: request.height,
+                    view: request.view,
+                    block_hash: request.block_hash,
+                    requester_hash,
+                };
+                let duplicate = !self.dedup_block_payload(dedup_key);
+                if duplicate {
+                    iroha_logger::debug!(
+                        height = request.height,
+                        view = request.view,
+                        block = %request.block_hash,
+                        requester = %request.requester,
+                        "dropping duplicate FetchPendingBlock from network"
+                    );
+                    return false;
+                }
+                let accepted = enqueue_with_mode(
+                    &self.block,
+                    InboundBlockMessage::new(BlockMessage::FetchPendingBlock(request), sender),
+                    "FetchPendingBlock",
+                    status::WorkerQueueKind::Blocks,
+                    mode,
+                );
+                if !accepted {
+                    self.release_block_payload_dedup(&dedup_key);
+                }
+                accepted
+            }
             other => enqueue_with_mode(
                 &self.block,
                 InboundBlockMessage::new(other, sender),

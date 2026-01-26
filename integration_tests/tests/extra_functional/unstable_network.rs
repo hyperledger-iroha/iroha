@@ -930,11 +930,8 @@ impl UnstableNetwork {
         }
 
         let sync_timeout = scaled_timeout(network.sync_timeout(), peers.len());
-        let relay_pause = non_faulty_sync_timeout(
-            sync_timeout,
-            network.pipeline_time(),
-            self.n_faulty_peers,
-        );
+        let relay_pause =
+            non_faulty_sync_timeout(sync_timeout, network.pipeline_time(), self.n_faulty_peers);
         let mint_asset = Mint::asset_numeric(
             Numeric::one(),
             AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone()),
