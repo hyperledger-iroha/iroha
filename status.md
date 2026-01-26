@@ -7,6 +7,18 @@ Last update: 2026-01-26
 - Tests: `cargo test -p iroha_core adaptive_drain_caps_clamp_for_block_backlog -- --nocapture` (ok; same warnings).
 
 - NPoS localnet 1 Hz soak (debug, 4 peers) after missing-block fetch stash/dedup: `/private/tmp/iroha-localnet-npos-1hz-20260126T110734Z` (ports 45080/46337); 1200x1 Hz `iroha ledger transaction ping --msg 1hz-profile --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_20260126T111016Z.jsonl` (ping log `ping_1hz_20260126T111016Z.log`). Height=5 v0: leader peer1 recv 11:11:08.566; peer0 recv 11:11:09.004 (+0.439s), peer2 missing req 11:11:10.131 → recv 11:11:10.928 (+0.796s), peer3 missing req 11:11:09.773 → recv 11:11:09.808 (+0.035s); no view>0 BlockCreated before v0 at height 5. Max missing‑req→v0 latency across run: peer1 6.574s (h3), peer2 4.989s (h6), peer0 3.698s (h3), peer3 1.655s (h7).
+
+- Unstable network 9-peer/3-fault test: retry transaction submission with backoff, extend post-partition recovery delay before mint submit, and add backoff unit coverage to reduce flakiness under slow Torii/relay recovery.
+- Tests: `cargo test -p integration_tests unstable_network_9_peers_3_faults -- --nocapture` (ok; Torii HTTP not reachable yet warnings during startup).
+
+- Extra-functional connected-peers test: wait for the newly registered peer to sync block 2 before submitting the log transaction so roster sync completes and block 3 can commit cleanly.
+- Tests: `cargo test -p integration_tests --test mod extra_functional::connected_peers::register_new_peer -- --nocapture` (ok).
+
+- Sumeragi DA eviction test: raise P2P frame caps, extend RBC timeouts, and stop submitting extra oversized log transactions once DA evictions appear to avoid long consensus stalls; log level lowered to WARN to avoid payload spam.
+- Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_da sumeragi_da_eviction_rehydrates_block_bodies -- --nocapture` (ok).
+
+- Sumeragi main-loop test harness: stop holding commit-history/RBC status test locks for the entire harness lifetime so parallel unit tests no longer serialize and `block_created_*` cases finish under the 60s watchdog.
+- Tests: `cargo test -p iroha_core sumeragi::main_loop::tests::block_created_ -- --nocapture --test-threads=4` (block_created suite passed in 59.84s; command later timed out while continuing to build/run filtered binaries; warnings about unused assignments in `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`, unused `PeersGossiperHandle::closed_for_tests`, and unused `consensus_mode` persist).
 - Sumeragi missing-block fetch: dedup FetchPendingBlock requests by requester+hash, stash requesters until the block arrives, flush responses on BlockCreated, and route responses through the background queue; add fetch-dedup metrics + coverage.
 - Tests: `cargo test -p iroha_core fetch_pending_block_serves_aborted_pending -- --nocapture --test-threads=1` (ok).
 - Tests: `cargo test -p iroha_core fetch_pending_block_falls_back_to_block_created_when_oversized -- --nocapture --test-threads=1` (ok).
