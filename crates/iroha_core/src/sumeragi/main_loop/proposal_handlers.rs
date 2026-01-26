@@ -858,6 +858,7 @@ impl Actor {
                 super::status::ConsensusMessageReason::StaleHeight,
             );
             self.pending.pending_blocks.remove(&block_hash);
+            self.pending.pending_fetch_requests.remove(&block_hash);
             self.subsystems
                 .propose
                 .proposal_cache
@@ -968,6 +969,7 @@ impl Actor {
                     super::status::ConsensusMessageReason::InvalidPayload,
                 );
                 self.pending.pending_blocks.remove(&block_hash);
+                self.pending.pending_fetch_requests.remove(&block_hash);
                 let proposal = self
                     .subsystems
                     .propose
@@ -1113,7 +1115,9 @@ impl Actor {
                         .rbc
                         .sessions
                         .get(&session_key)
-                        .is_some_and(|session| super::rbc_session_needs_payload(session, payload_hash))
+                        .is_some_and(|session| {
+                            super::rbc_session_needs_payload(session, payload_hash)
+                        })
                 {
                     if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
                         let payload_bytes = super::proposals::block_payload_bytes(&block);
@@ -1459,17 +1463,17 @@ impl Actor {
                         Some(true) => {}
                         None => {
                             debug!(
-                                locked_qc_height = lock.height,
-                                locked_qc_view = lock.view,
-                                locked_qc_hash = %locked_hash,
-                                height,
-                                view,
-                                block = %block_hash,
-                                "accepting BlockCreated without hint: locked ancestry unknown"
-                    );
-                }
-            }
-        } else {
+                                        locked_qc_height = lock.height,
+                                        locked_qc_view = lock.view,
+                                        locked_qc_hash = %locked_hash,
+                                        height,
+                                        view,
+                                        block = %block_hash,
+                                        "accepting BlockCreated without hint: locked ancestry unknown"
+                            );
+                        }
+                    }
+                } else {
                     debug!(
                         locked_qc_height = lock.height,
                         locked_qc_view = lock.view,
@@ -1596,10 +1600,7 @@ impl Actor {
                                 }
                             }
                             Err(mpsc::TrySendError::Full(_work)) => {
-                                debug!(
-                                    ?session_key,
-                                    "RBC seed queue full; seeding synchronously"
-                                );
+                                debug!(?session_key, "RBC seed queue full; seeding synchronously");
                             }
                             Err(mpsc::TrySendError::Disconnected(_work)) => {
                                 warn!(
@@ -1857,6 +1858,14 @@ impl Actor {
             .proposal_cache
             .pop_proposal(height, view);
         self.clear_missing_block_request(&block_hash, MissingBlockClearReason::PayloadAvailable);
+        if let Some(block) = self
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .map(|pending| pending.block.clone())
+        {
+            self.flush_pending_fetch_requests(&block);
+        }
 
         // If votes or cached QCs already exist for this block, re-evaluate now that the payload is
         // present so late-arriving block payloads can still finalize with previously collected votes.
@@ -1894,8 +1903,7 @@ impl Actor {
                 let _ = self.handle_qc(qc);
             }
         }
-        let qc_replay_ms =
-            u64::try_from(qc_replay_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let qc_replay_ms = u64::try_from(qc_replay_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.request_commit_pipeline();
         debug!(
             height,
@@ -1958,6 +1966,7 @@ impl Actor {
         view: u64,
     ) {
         self.pending.pending_blocks.remove(&block_hash);
+        self.pending.pending_fetch_requests.remove(&block_hash);
         self.purge_rbc_state(session_key, block_hash, height, view);
     }
 }

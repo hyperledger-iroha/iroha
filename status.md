@@ -4,7 +4,20 @@ Last update: 2026-01-26
 
 - Sumeragi main-loop test harness: stop holding commit-history/RBC status test locks for the entire harness lifetime so parallel unit tests no longer serialize and `block_created_*` cases finish under the 60s watchdog.
 - Tests: `cargo test -p iroha_core sumeragi::main_loop::tests::block_created_ -- --nocapture --test-threads=4` (block_created suite passed in 59.84s; command later timed out while continuing to build/run filtered binaries; warnings about unused assignments in `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`, unused `PeersGossiperHandle::closed_for_tests`, and unused `consensus_mode` persist).
+- Sumeragi missing-block fetch: dedup FetchPendingBlock requests by requester+hash, stash requesters until the block arrives, flush responses on BlockCreated, and route responses through the background queue; add fetch-dedup metrics + coverage.
+- Tests: `cargo test -p iroha_core fetch_pending_block_serves_aborted_pending -- --nocapture --test-threads=1` (ok).
+- Tests: `cargo test -p iroha_core fetch_pending_block_falls_back_to_block_created_when_oversized -- --nocapture --test-threads=1` (ok).
 
+- Crypto: cache BLS PoP verification results inside `bls_collect_pks_with_pop` so repeated aggregate/QC verifications skip redundant PoP checks.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Tests: `cargo test -p iroha_crypto --features bls bls_normal_preaggregated_same_message_roundtrip -- --nocapture`.
+
+- Peers gossiper: gate `PeersGossiperHandle::closed_for_tests` to `cfg(test)` to silence the unused warning in non-test builds.
+- Tests: not run (warning fix only).
+
+- Sumeragi ingress: dedup inbound RBC INIT by hashing the full INIT payload before enqueueing to avoid duplicate queue floods; track RBC INIT dedup evictions and add `incoming_block_message_drops_duplicate_rbc_init` coverage.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Tests: `cargo test -p iroha_core incoming_block_message_drops_duplicate_rbc_init -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
 - Kura payload availability: treat evicted blocks as missing when DA payload files are gone so Sumeragi keeps missing-block/RBC recovery paths alive; add `block_payload_available_by_hash_tracks_evicted_da_payload`.
 - Tests: not run (not requested).
 
@@ -31,6 +44,15 @@ Last update: 2026-01-26
 
 - Sumeragi block sync: add BlockSyncUpdate sub-step timers (Kura checks, roster selection, QC fallback) and cap vote bursts when blocks are queued to reduce block-queue latency; add `run_worker_iteration_limits_vote_burst_when_blocks_pending` coverage.
 - Tests: not run (not requested).
+
+- Sumeragi block sync: add roster-validation and QC-apply micro timers (cert/checkpoint validate, tally/process/commit) and cache validated roster selections for persisted roster artifacts; add `block_sync_roster_cache_hits_and_evicts` coverage.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+
+- Izanami run (tps=1, 300s, 4 peers) after block-sync substep timers + block-queue vote burst cap: stopped before target blocks; committed height 20 (lane_000_core blocks.index size 320) across peers. Worker slow lines: 502; mean elapsed 2315ms with pre/tick/post means 761/766/630ms. Pre-tick per-tier means: votes 198ms, payloads 407ms, blocks 139ms; post-tick per-tier means: votes 345ms, payloads 102ms, blocks 176ms. Message timings: BlockCreated mean 267ms (p95 556ms), BlockSyncUpdate mean 1284ms (p95 2738ms). Queue latency (enqueue→drain): BlockCreated mean 5191ms (p95 12754ms), BlockSyncUpdate mean 3089ms (p95 8615ms). Queue depths: block_rx mean 5.4 (max 26), vote_rx mean 1.2 (max 10). BlockCreated substeps mean/p95: hint_validation 3/9ms, payload_bytes 4/9ms, payload_hash 1/2ms, rbc_seed 128/320ms, qc_replay 20/96ms. BlockSyncUpdate substeps mean/p95: roster_validate 392/501ms, signature_verify 50/134ms, commit_votes_pre 58/154ms, qc_validate 183/251ms, qc_apply 261/695ms (kura_committed/known, qc_candidate/fallback, commit_votes_post, block_apply ≈0). Commit stage timings mean/p95: qc_verify 597/2563ms, kura_persist 159/248ms. Duplicate metric registration warnings observed. Network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_Mu7adD`.
+- Tests: not run (Izanami run only).
+
+- Izanami run (tps=1, 300s, 4 peers) after roster-selection cache + micro timers: stopped before target blocks; committed height 22 (lane_000_core blocks.index size 352) across peers. Worker slow lines: 553; mean elapsed 2266ms with pre/tick/post means 725/711/673ms. Pre-tick per-tier means: votes 222ms, payloads 319ms, blocks 164ms; post-tick per-tier means: votes 397ms, payloads 120ms, blocks 152ms. Message timings: BlockCreated mean 415ms (p95 719ms), BlockSyncUpdate mean 1181ms (p95 2870ms). Queue latency: BlockCreated mean 5929ms (p95 14789ms), BlockSyncUpdate mean 2592ms (p95 7221ms). Queue depths: block_rx mean 3.98 (max 21), vote_rx mean 1.45 (max 10). Roster validation substeps mean/p95: cert_validate 215/381ms, checkpoint_validate 214/367ms (inputs/roots ≈0). BlockSyncUpdate substeps mean/p95: roster_validate 358/428ms, signature_verify 48/82ms, commit_votes_pre 54/78ms, qc_validate 196/335ms, qc_apply 226/325ms (qc_apply_tally 223/320ms, qc_apply_commit 3/5ms; others ≈0). BlockCreated substeps mean/p95: hint_validation 3/12ms, payload_bytes 4/9ms, payload_hash 1/2ms, rbc_seed 235/535ms, qc_replay 7/48ms. Duplicate metric registration warnings observed. Network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_dgKvnC`.
+- Tests: not run (Izanami run only).
 
 - Izanami run (tps=1, 300s, 4 peers) after RBC seed offload: stopped before target blocks; committed height 13 (lane_000_core blocks.index), logs in `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_IggGS1`. Worker slow lines: 558; mean elapsed 2119ms with pre/tick/post means 648/896/487ms (~96%). Pre-tick per-tier means: votes 224ms, payloads 267ms, blocks 144ms; post-tick per-tier means: votes 248ms, payloads 86ms, blocks 145ms. Message timings: BlockCreated mean 347ms (p95 806ms), BlockSyncUpdate mean 1680ms (p95 3945ms). Queue latency: Blocks mean 7558ms (p95 24014ms), BlockPayload mean 3502ms (p95 11184ms). Queue depths: block_rx mean 4.3 (max 38), vote_rx mean 1.3 (max 13). Duplicate metric registration warnings observed.
 - Tests: not run (Izanami run only).

@@ -4888,6 +4888,7 @@ impl Actor {
             Some(&self.common_config.trusted_peers.value().pops),
         );
         drop(world);
+        self.block_sync_roster_cache.clear();
     }
 
     pub(super) fn refresh_commit_topology_state(
@@ -4924,6 +4925,7 @@ impl Actor {
         preserve_proposals_seen: bool,
     ) {
         self.pending.pending_blocks.clear();
+        self.pending.pending_fetch_requests.clear();
         self.pending.missing_block_requests.clear();
         self.pending.pending_processing.set(None);
         self.pending.pending_processing_parent.set(None);

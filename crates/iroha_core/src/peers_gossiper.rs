@@ -270,7 +270,7 @@ impl PeersGossiperHandle {
 
     /// Build a handle that drops all gossip messages, for unit tests that do not need a live
     /// gossiper task.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn closed_for_tests() -> Self {
         let (message_sender, message_receiver) = mpsc::channel(1);
         drop(message_receiver);

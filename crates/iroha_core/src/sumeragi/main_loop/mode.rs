@@ -170,6 +170,7 @@ impl Actor {
         self.subsystems.propose.collectors_contacted.clear();
         self.subsystems.propose.collector_role_index = None;
         self.pending.pending_blocks.clear();
+        self.pending.pending_fetch_requests.clear();
         self.subsystems.da_rbc.rbc.pending.clear();
         self.subsystems.da_rbc.rbc.sessions.clear();
         self.subsystems.da_rbc.rbc.deliver_deferral.clear();
