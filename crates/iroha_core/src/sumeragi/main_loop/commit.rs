@@ -1561,6 +1561,7 @@ impl Actor {
                     .retain(|(_, hash, _, _, _), _| hash != &stale_hash);
                 self.qc_signer_tally
                     .retain(|(_, hash, _, _, _), _| hash != &stale_hash);
+                self.block_signer_cache.remove_block(&stale_hash);
             }
             self.qc_cache.retain(|(_, hash, height, _, _), _| {
                 *hash == block_hash || *height > pending_height
@@ -1577,6 +1578,7 @@ impl Actor {
                     .retain(|(_, hash, _, _, _), _| hash != &parent);
                 self.qc_signer_tally
                     .retain(|(_, hash, _, _, _), _| hash != &parent);
+                self.block_signer_cache.remove_block(&parent);
             }
             let retention_floor = pending_height.saturating_sub(1);
             self.vote_log
@@ -4890,6 +4892,7 @@ impl Actor {
         );
         drop(world);
         self.block_sync_roster_cache.clear();
+        self.block_signer_cache.clear();
     }
 
     pub(super) fn refresh_commit_topology_state(
@@ -4936,6 +4939,7 @@ impl Actor {
         self.vote_roster_cache.clear();
         self.qc_cache.clear();
         self.qc_signer_tally.clear();
+        self.block_signer_cache.clear();
         self.voting_block = None;
         if !preserve_proposals_seen {
             self.subsystems.propose.proposals_seen.clear();

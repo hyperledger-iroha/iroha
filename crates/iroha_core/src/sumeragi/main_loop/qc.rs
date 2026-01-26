@@ -1904,6 +1904,7 @@ impl Actor {
         }
         for (hash, _) in &drop_blocks {
             self.vote_roster_cache.remove(hash);
+            self.block_signer_cache.remove_block(hash);
         }
         self.qc_signer_tally
             .retain(|(phase, hash, height, _, _), _| {

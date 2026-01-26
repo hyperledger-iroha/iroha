@@ -2,6 +2,9 @@
 
 Last update: 2026-01-26
 
+- Sumeragi block sync: cache validated block-signer sets per block hash/roster/mode/PRF for known-block QC validation so repeated BlockSyncUpdate handling can skip `validate_signatures_subset`; added `block_sync_update_known_block_reuses_cached_block_signers` coverage.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config). `cargo test -p iroha_core block_sync_update_known_block_reuses_cached_block_signers -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:46757`/`:50318` persist).
+
 - Sumeragi block sync: reuse cached QC tallies for known blocks only when the incoming QC hash matches the cached QC or roster certificate, avoiding redundant aggregate/signature validation while preventing hash-mismatch bypass; added `block_sync_update_known_block_revalidates_qc_on_hash_mismatch` coverage.
 - Tests: `cargo test -p iroha_core block_sync_update_known_block_revalidates_qc_on_hash_mismatch -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:46418`/`:49947` persist). `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 
