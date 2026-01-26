@@ -5631,6 +5631,93 @@ async fn block_sync_update_known_block_records_commit_qc() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_known_block_reuses_commit_roster_snapshot() {
+    super::status::reset_block_sync_counters_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = 1_u64;
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "test requires commit roster");
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    let mut signers = BTreeSet::new();
+    for idx in 0..topology.as_ref().len() {
+        if signers.len() >= required {
+            break;
+        }
+        signers.insert(
+            ValidatorIndex::try_from(u32::try_from(idx).expect("signer idx fits"))
+                .expect("signer idx fits"),
+        );
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        view,
+        block_hash,
+        qc.parent_state_root,
+        qc.post_state_root,
+        roster,
+        signers_bitmap,
+        qc.aggregate.bls_aggregate_signature.clone(),
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut journal = state.commit_roster_journal.write();
+        journal.upsert(qc.clone(), checkpoint.clone(), None);
+    }
+
+    let block = actor
+        .kura
+        .get_block(NonZeroUsize::new(1).expect("height"))
+        .expect("block exists");
+    let mut update = super::message::BlockSyncUpdate::from(block.as_ref());
+    update.commit_qc = Some(qc.clone());
+    update.validator_checkpoint = Some(checkpoint);
+    update.stake_snapshot = None;
+    update.commit_votes.clear();
+
+    let tally_signers = signers_from_bitmap(&qc.aggregate.signers_bitmap, topology.as_ref().len());
+    actor.qc_signer_tally.insert(
+        Actor::qc_tally_key(&qc),
+        super::QcSignerTally {
+            voting_signers: tally_signers.clone(),
+            present_signers: tally_signers.len(),
+        },
+    );
+    actor.roster_validation_cache.pops.clear();
+
+    let before = super::status::snapshot().block_sync_roster.drop_missing_total;
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+    let after = super::status::snapshot().block_sync_roster.drop_missing_total;
+    assert_eq!(
+        after, before,
+        "known blocks should reuse commit roster snapshots"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_known_block_revalidates_qc_on_hash_mismatch() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
