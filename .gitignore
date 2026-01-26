@@ -224,3 +224,6 @@ dashboards/data/*.json
 
 # Fixture regeneration metadata
 artifacts/*.json
+
+# Local executable (repo root)
+/priv

@@ -2,6 +2,11 @@
 
 Last update: 2026-01-26
 
+- Sumeragi block sync: reuse cached QC tallies for known blocks only when the incoming QC hash matches the cached QC or roster certificate, avoiding redundant aggregate/signature validation while preventing hash-mismatch bypass; added `block_sync_update_known_block_revalidates_qc_on_hash_mismatch` coverage.
+- Tests: `cargo test -p iroha_core block_sync_update_known_block_revalidates_qc_on_hash_mismatch -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:46418`/`:49947` persist). `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+
+- Izanami run (tps=1, 300s, 4 peers) with QC fast-path gating: failed with `no block height progress for 180s` (min height 3); plan submissions hit connection refused/timeouts against `http://127.0.0.1:33251`; one peer exited with status 3; duplicate metric registration warnings observed. Network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_bLPG1H`.
+
 - Sumeragi block sync: reuse persisted commit-roster snapshots for known blocks when incoming hints match so roster validation is skipped and BlockCreated/INIT delivery isn't stalled by repeated roster checks; add `block_sync_update_known_block_reuses_commit_roster_snapshot` coverage.
 - Tests: not run (not requested).
 
