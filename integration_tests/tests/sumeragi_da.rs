@@ -3029,6 +3029,7 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
         u64::try_from(torii_max_content_len_for_payload(payload_bytes)).unwrap_or(u64::MAX);
     let tx_limit_nz =
         NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
+    let rbc_chunk_max_bytes = i64::try_from(payload_bytes).unwrap_or(i64::MAX);
     let stake_amount = SumeragiNposParameters::default().min_self_bond();
 
     let builder = NetworkBuilder::new()
@@ -3048,13 +3049,44 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["logger", "level"], "INFO")
+                .write(["logger", "level"], "WARN")
+                .write(["network", "max_frame_bytes"], CONSENSUS_FRAME_BUDGET_BYTES)
+                .write(
+                    ["network", "max_frame_bytes_consensus"],
+                    CONSENSUS_FRAME_BUDGET_BYTES,
+                )
+                .write(
+                    ["network", "max_frame_bytes_control"],
+                    CONSENSUS_FRAME_BUDGET_BYTES,
+                )
+                .write(
+                    ["network", "max_frame_bytes_block_sync"],
+                    CONSENSUS_FRAME_BUDGET_BYTES,
+                )
+                .write(
+                    ["network", "max_frame_bytes_other"],
+                    CONSENSUS_FRAME_BUDGET_BYTES,
+                )
+                .write(
+                    ["network", "max_frame_bytes_tx_gossip"],
+                    P2P_TX_FRAME_BUDGET_BYTES,
+                )
+                .write(["network", "p2p_queue_cap_high"], P2P_QUEUE_CAP_HIGH)
+                .write(["network", "p2p_queue_cap_low"], P2P_QUEUE_CAP_LOW)
+                .write(["network", "p2p_post_queue_cap"], P2P_POST_QUEUE_CAP)
                 .write(
                     ["torii", "max_content_len"],
                     torii_max_content_len_for_payload(payload_bytes),
                 )
                 .write(["sumeragi", "da", "enabled"], true)
                 .write(["sumeragi", "consensus_mode"], "npos")
+                .write(["sumeragi", "rbc", "chunk_max_bytes"], rbc_chunk_max_bytes)
+                .write(["sumeragi", "rbc", "session_ttl_ms"], 600_000i64)
+                .write(["sumeragi", "rbc", "disk_store_ttl_ms"], 600_000i64)
+                .write(
+                    ["sumeragi", "debug", "rbc", "force_deliver_quorum_one"],
+                    true,
+                )
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "storage", "max_disk_usage_bytes"], 1_000_000i64)
                 .write(
@@ -3112,9 +3144,11 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
             .torii_url
             .join("status")
             .wrap_err("compose status URL")?;
+        let kura_root = primary_peer.kura_store_dir();
 
         let status_before = fetch_status(&client).await?;
         let mut expected_height = status_before.blocks;
+        let mut da_files = Vec::new();
         for idx in 0..10u64 {
             expected_height = expected_height.saturating_add(1);
             let payload = generate_incompressible_payload(
@@ -3134,10 +3168,15 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
                 Instant::now(),
             )
             .await?;
+            da_files = collect_da_block_files(&kura_root)?;
+            if !da_files.is_empty() {
+                break;
+            }
         }
 
-        let da_files =
-            wait_for_da_block_files(primary_peer.kura_store_dir(), Duration::from_secs(30)).await?;
+        if da_files.is_empty() {
+            da_files = wait_for_da_block_files(kura_root, Duration::from_secs(30)).await?;
+        }
         ensure!(
             !da_files.is_empty(),
             "expected DA-evicted block files under Kura storage"
