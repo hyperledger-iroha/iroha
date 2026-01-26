@@ -76,6 +76,17 @@ async fn register_new_peer() -> Result<()> {
     )
     .await?;
 
+    if sandbox::handle_result(
+        timeout(network.sync_timeout(), peer.once_block(2))
+            .await
+            .map_err(eyre::Report::new),
+        stringify!(register_new_peer),
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+
     submit_instruction_or_warn(
         network.client(),
         Log::new(Level::INFO, "register_new_peer_sync".to_string()),

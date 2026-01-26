@@ -405,6 +405,12 @@ fn non_faulty_sync_timeout(
     sync_timeout.min(cap)
 }
 
+fn submit_retry_backoff(attempt: usize) -> Duration {
+    let step = Duration::from_millis(200);
+    let scaled = step.saturating_mul(u32::try_from(attempt).unwrap_or(u32::MAX));
+    scaled.min(Duration::from_secs(2))
+}
+
 fn permissioned_prf_seed(chain_id: &ChainId) -> [u8; 32] {
     let hash = Hash::new(chain_id.as_str().as_bytes());
     <[u8; 32]>::from(hash)
@@ -1040,76 +1046,88 @@ impl UnstableNetwork {
             let leader_id = leader_id.clone();
             let faulty_ids = faulty_ids.clone();
             async move {
-            let mint_asset = Mint::asset_numeric(
-                Numeric::one(),
-                AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone()),
-            );
-            let some_peer = peers
-                .iter()
-                .find(|peer| peer.id() == leader_id)
-                .filter(|peer| !faulty_ids.contains(&peer.id()))
-                .cloned()
-                .unwrap_or_else(|| {
-                    let mut rng = ChaCha8Rng::seed_from_u64(
-                        0x5553_5052 + u64::try_from(round_index).unwrap_or(0),
-                    );
-                    peers
-                        .iter()
-                        .filter(|peer| !faulty_ids.contains(&peer.id()))
-                        .choose(&mut rng)
-                        .expect("there should be some working peers")
-                        .clone()
-                });
-            iroha_logger::info!(phase, via_peer = some_peer.mnemonic(), "Submit transaction");
-            let mut leader_client = some_peer.client();
-            if leader_client.transaction_status_timeout < sync_timeout {
-                leader_client.transaction_status_timeout = sync_timeout;
-            }
-            if let Some(ttl) = leader_client.transaction_ttl {
-                let min_ttl = sync_timeout + Duration::from_secs(120);
-                if ttl < min_ttl {
-                    leader_client.transaction_ttl = Some(min_ttl);
+                let mint_asset = Mint::asset_numeric(
+                    Numeric::one(),
+                    AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone()),
+                );
+                let some_peer = peers
+                    .iter()
+                    .find(|peer| peer.id() == leader_id)
+                    .filter(|peer| !faulty_ids.contains(&peer.id()))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        let mut rng = ChaCha8Rng::seed_from_u64(
+                            0x5553_5052 + u64::try_from(round_index).unwrap_or(0),
+                        );
+                        peers
+                            .iter()
+                            .filter(|peer| !faulty_ids.contains(&peer.id()))
+                            .choose(&mut rng)
+                            .expect("there should be some working peers")
+                            .clone()
+                    });
+                iroha_logger::info!(phase, via_peer = some_peer.mnemonic(), "Submit transaction");
+                let mut leader_client = some_peer.client();
+                if leader_client.transaction_status_timeout < sync_timeout {
+                    leader_client.transaction_status_timeout = sync_timeout;
                 }
-            }
-            let tx = Arc::new(leader_client.build_transaction_from_items(
-                vec![mint_asset],
-                Metadata::default(),
-            ));
-            let mut submitters = JoinSet::new();
-            for peer in peers.iter().filter(|peer| !faulty_ids.contains(&peer.id())) {
-                let mut client = peer.client();
-                if let Some(ttl) = client.transaction_ttl {
-                    let min_ttl = sync_timeout + Duration::from_secs(120);
+                let min_ttl = sync_timeout.saturating_add(Duration::from_secs(300));
+                if let Some(ttl) = leader_client.transaction_ttl {
                     if ttl < min_ttl {
-                        client.transaction_ttl = Some(min_ttl);
+                        leader_client.transaction_ttl = Some(min_ttl);
                     }
                 }
-                let tx = Arc::clone(&tx);
-                submitters.spawn_blocking(move || client.submit_transaction(&tx));
-            }
-            let mut last_err: Option<eyre::Report> = None;
-            let mut submitted = false;
-            while let Some(res) = submitters.join_next().await {
-                match res {
-                    Ok(Ok(_hash)) => {
-                        submitted = true;
-                        break;
+                let tx = Arc::new(leader_client.build_transaction_from_items(
+                    vec![mint_asset],
+                    Metadata::default(),
+                ));
+                let deadline = Instant::now() + sync_timeout;
+                let mut attempts = 0usize;
+                loop {
+                    attempts = attempts.saturating_add(1);
+                    let mut submitters = JoinSet::new();
+                    for peer in peers.iter().filter(|peer| !faulty_ids.contains(&peer.id())) {
+                        let mut client = peer.client();
+                        if let Some(ttl) = client.transaction_ttl {
+                            if ttl < min_ttl {
+                                client.transaction_ttl = Some(min_ttl);
+                            }
+                        }
+                        let tx = Arc::clone(&tx);
+                        submitters.spawn_blocking(move || client.submit_transaction(&tx));
                     }
-                    Ok(Err(err)) => {
-                        last_err = Some(err);
+                    let mut submitted = false;
+                    let mut attempt_err: Option<eyre::Report> = None;
+                    while let Some(res) = submitters.join_next().await {
+                        match res {
+                            Ok(Ok(_hash)) => {
+                                submitted = true;
+                                break;
+                            }
+                            Ok(Err(err)) => {
+                                attempt_err = Some(err);
+                            }
+                            Err(err) => {
+                                attempt_err = Some(eyre::Report::new(err));
+                            }
+                        }
                     }
-                    Err(err) => {
-                        last_err = Some(eyre::Report::new(err));
+                    submitters.abort_all();
+                    if submitted {
+                        return Ok(());
                     }
+                    let err = attempt_err.unwrap_or_else(|| {
+                        eyre!("transaction submission failed on all non-faulty peers")
+                    });
+                    if Instant::now() >= deadline {
+                        return Err(err);
+                    }
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return Err(err);
+                    }
+                    sleep(submit_retry_backoff(attempts).min(remaining)).await;
                 }
-            }
-            submitters.abort_all();
-            if !submitted {
-                return Err(last_err.unwrap_or_else(|| {
-                    eyre!("transaction submission failed on all non-faulty peers")
-                }));
-            }
-                Ok::<_, eyre::Report>(())
             }
         };
         if submit_while_partitioned {
@@ -1139,7 +1157,11 @@ impl UnstableNetwork {
             }
         }
         if !submit_while_partitioned {
-            sleep(network.pipeline_time().saturating_mul(2)).await;
+            // Let connections settle after staggered partitions before submitting.
+            let recovery_delay = relay_pause
+                .saturating_add(network.pipeline_time())
+                .max(network.pipeline_time().saturating_mul(2));
+            sleep(recovery_delay).await;
             submit_tx("recovered").await?;
         }
 
@@ -1260,6 +1282,13 @@ mod tests {
         assert!(capped <= pipeline_time * 2 + Duration::from_secs(2));
         let uncapped = non_faulty_sync_timeout(sync_timeout, pipeline_time, 1);
         assert_eq!(uncapped, sync_timeout);
+    }
+
+    #[test]
+    fn submit_retry_backoff_caps_delay() {
+        assert_eq!(submit_retry_backoff(1), Duration::from_millis(200));
+        assert_eq!(submit_retry_backoff(5), Duration::from_millis(1000));
+        assert_eq!(submit_retry_backoff(20), Duration::from_secs(2));
     }
 }
 
