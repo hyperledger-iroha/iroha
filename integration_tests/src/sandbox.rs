@@ -191,7 +191,7 @@ impl Drop for NetworkPermit {
 const SERIAL_GUARD_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const SERIAL_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MIN_NETWORK_PEERS: usize = 4; // DA-enabled consensus can stall with fewer peers.
-const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 16; // Match iroha_test_network default.
+const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 64; // Match iroha_test_network default.
 const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
 const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
 
