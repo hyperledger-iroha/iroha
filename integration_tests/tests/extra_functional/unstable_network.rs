@@ -5,6 +5,7 @@ use std::{
     borrow::Cow,
     collections::HashSet,
     panic::{self, AssertUnwindSafe},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -12,8 +13,10 @@ use eyre::{Context, Result, eyre};
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use integration_tests::sandbox;
 use iroha_config_base::toml::WriteExt;
-use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
+use iroha_core::sumeragi::network_topology::{Topology, commit_quorum_from_len};
+use iroha_crypto::Hash;
 use iroha_data_model::{
+    ChainId,
     Level,
     asset::AssetDefinition,
     isi::Register,
@@ -31,7 +34,7 @@ use rand_chacha::ChaCha8Rng;
 use relay::P2pRelay;
 use tokio::{
     self,
-    task::spawn_blocking,
+    task::{JoinSet, spawn_blocking},
     time::{sleep, timeout},
 };
 use toml::Table;
@@ -379,6 +382,9 @@ enum GenesisPeer {
     Nth(usize),
 }
 
+const COLLECTORS_K: u16 = 3;
+const REDUNDANT_SEND_R: u8 = 2;
+
 fn scaled_timeout(base: Duration, peer_count: usize) -> Duration {
     let scale = ((peer_count + 3) / 4).max(1) as u32;
     base.saturating_mul(scale)
@@ -392,12 +398,31 @@ fn non_faulty_sync_timeout(
     if faulty_peers <= 1 {
         return sync_timeout;
     }
-    // Keep relay partitions shorter than RBC session TTLs and idle P2P timeouts,
-    // otherwise non-faulty peers can churn through view changes without progress.
+    // Keep multi-fault relay partitions short to avoid cascading view-change churn.
     let cap = pipeline_time
-        .saturating_mul(6)
-        .saturating_add(Duration::from_secs(5));
+        .saturating_mul(2)
+        .saturating_add(Duration::from_secs(2));
     sync_timeout.min(cap)
+}
+
+fn permissioned_prf_seed(chain_id: &ChainId) -> [u8; 32] {
+    let hash = Hash::new(chain_id.as_str().as_bytes());
+    <[u8; 32]>::from(hash)
+}
+
+fn topology_for_permissioned_round(
+    peer_ids: &[PeerId],
+    chain_id: &ChainId,
+    height: u64,
+    view: u64,
+) -> Vec<PeerId> {
+    let mut ordered = peer_ids.to_vec();
+    ordered.sort();
+    ordered.dedup();
+    let mut topology = Topology::new(ordered);
+    topology.shuffle_prf(permissioned_prf_seed(chain_id), height);
+    topology.nth_rotation(view);
+    topology.into_iter().collect()
 }
 
 async fn start_network_under_relay(
@@ -820,15 +845,64 @@ impl UnstableNetwork {
         peer_ids: &[PeerId],
         n_faulty_peers: usize,
         round_index: usize,
+        chain_id: &ChainId,
+        height: u64,
     ) -> Vec<PeerId> {
         if n_faulty_peers == 0 {
             return Vec::new();
         }
-        let mut ordered_ids = peer_ids.to_vec();
-        ordered_ids.sort();
-        ordered_ids.dedup();
-        let commit_quorum = commit_quorum_from_len(ordered_ids.len());
-        let candidates = ordered_ids.get(commit_quorum..).unwrap_or(&[]);
+        let rotated = topology_for_permissioned_round(peer_ids, chain_id, height, 0);
+        let commit_quorum = commit_quorum_from_len(rotated.len());
+        let candidates: Vec<PeerId> = if n_faulty_peers <= 1 {
+            rotated.get(commit_quorum..).unwrap_or(&[]).to_vec()
+        } else {
+            let mut collector_ids = HashSet::new();
+            if rotated.len() > 1 && COLLECTORS_K > 0 {
+                let seed = permissioned_prf_seed(chain_id);
+                let topology = Topology::new(rotated.clone());
+                for idx in topology.collector_indices_k_prf(
+                    usize::from(COLLECTORS_K),
+                    seed,
+                    height,
+                    0,
+                ) {
+                    if let Some(peer) = topology.as_ref().get(idx) {
+                        collector_ids.insert(peer.clone());
+                    }
+                }
+            }
+            let mut selected = Vec::new();
+            let mut seen = HashSet::new();
+            if let Some(tail) = rotated.get(commit_quorum..) {
+                for peer in tail {
+                    if collector_ids.contains(peer) {
+                        continue;
+                    }
+                    if seen.insert(peer.clone()) {
+                        selected.push(peer.clone());
+                    }
+                }
+            }
+            if selected.len() < n_faulty_peers {
+                let head = rotated
+                    .iter()
+                    .skip(1)
+                    .take(commit_quorum.saturating_sub(1));
+                for peer in head {
+                    if collector_ids.contains(peer) {
+                        continue;
+                    }
+                    if seen.insert(peer.clone()) {
+                        selected.push(peer.clone());
+                    }
+                }
+            }
+            if selected.len() < n_faulty_peers {
+                rotated.get(commit_quorum..).unwrap_or(&[]).to_vec()
+            } else {
+                selected
+            }
+        };
         let mut rng =
             ChaCha8Rng::seed_from_u64(0x5553_5442 + u64::try_from(round_index).unwrap_or(0));
         candidates
@@ -857,9 +931,6 @@ impl UnstableNetwork {
             )));
 
         if self.n_peers > 4 {
-            const COLLECTORS_K: u16 = 3;
-            const REDUNDANT_SEND_R: u8 = 2;
-
             builder = builder
                 .with_config_layer(|layer| {
                     layer
@@ -914,9 +985,23 @@ impl UnstableNetwork {
             "Begin round"
         );
 
+        let target_height = ctx.init_blocks + (round_index as u64) + 1;
+        let chain_id = network.chain_id();
         let peer_ids: Vec<_> = peers.iter().map(NetworkPeer::id).collect();
+        let rotated_topology =
+            topology_for_permissioned_round(&peer_ids, &chain_id, target_height, 0);
+        let leader_id = rotated_topology
+            .first()
+            .cloned()
+            .expect("topology always has a leader");
         let faulty_ids: HashSet<_> =
-            Self::select_faulty_peer_ids(&peer_ids, self.n_faulty_peers, round_index)
+            Self::select_faulty_peer_ids(
+                &peer_ids,
+                self.n_faulty_peers,
+                round_index,
+                &chain_id,
+                target_height,
+            )
                 .into_iter()
                 .collect();
         let faulty: Vec<_> = peers
@@ -924,79 +1009,138 @@ impl UnstableNetwork {
             .filter(|peer| faulty_ids.contains(&peer.id()))
             .cloned()
             .collect();
-        for peer in &faulty {
-            relay.suspend(&peer.id()).activate();
-            iroha_logger::info!(peer = peer.mnemonic(), "Suspended");
-        }
 
         let sync_timeout = scaled_timeout(network.sync_timeout(), peers.len());
-        let relay_pause =
-            non_faulty_sync_timeout(sync_timeout, network.pipeline_time(), self.n_faulty_peers);
-        let mint_asset = Mint::asset_numeric(
-            Numeric::one(),
-            AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone()),
+        let relay_pause = non_faulty_sync_timeout(
+            sync_timeout,
+            network.pipeline_time(),
+            self.n_faulty_peers,
         );
-        let some_peer = {
-            let mut rng =
-                ChaCha8Rng::seed_from_u64(0x5553_5052 + u64::try_from(round_index).unwrap_or(0));
-            peers
-                .iter()
-                .filter(|peer| !faulty_ids.contains(&peer.id()))
-                .choose(&mut rng)
-                .expect("there should be some working peers")
-                .clone()
-        };
-        iroha_logger::info!(via_peer = some_peer.mnemonic(), "Submit transaction");
-        let mut client = some_peer.client();
-        if client.transaction_status_timeout < sync_timeout {
-            client.transaction_status_timeout = sync_timeout;
-        }
-        if let Some(ttl) = client.transaction_ttl {
-            let min_ttl = sync_timeout + Duration::from_secs(120);
-            if ttl < min_ttl {
-                client.transaction_ttl = Some(min_ttl);
+        let submit_while_partitioned = self.n_faulty_peers <= 1;
+        let stagger_faults = self.n_faulty_peers > 1;
+        if stagger_faults {
+            let per_peer_pause = relay_pause
+                .checked_div(u32::try_from(self.n_faulty_peers).unwrap_or(1))
+                .unwrap_or(Duration::from_secs(1))
+                .max(Duration::from_millis(200));
+            for peer in &faulty {
+                relay.suspend(&peer.id()).activate();
+                iroha_logger::info!(peer = peer.mnemonic(), "Suspended");
+                sleep(per_peer_pause).await;
+                relay.suspend(&peer.id()).deactivate();
+                iroha_logger::info!(peer = peer.mnemonic(), "Unsuspended");
             }
-        }
-        let submit_handle = spawn_blocking(move || client.submit_blocking(mint_asset));
-
-        let target_height = ctx.init_blocks + (round_index as u64) + 1;
-        let non_faulty_sync = timeout(
-            relay_pause,
-            once_blocks_sync(
-                network.peers().iter().filter(|x| !faulty.contains(x)),
-                BlockHeight::predicate_non_empty(target_height),
-            ),
-        )
-        .await;
-        if self.n_faulty_peers <= 1 {
-            non_faulty_sync
-                .map_err(eyre::Report::new)
-                .wrap_err("Non-suspended peers must sync within timeout")??;
         } else {
-            // TODO: Restore strict non-faulty sync assertions once multi-fault collectors can
-            // reliably sustain progress under relay partitions.
-            match non_faulty_sync {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => {
-                    iroha_logger::warn!(
-                        ?err,
-                        faulty_peers = self.n_faulty_peers,
-                        "Non-suspended peer sync failed before relay resume; continuing"
-                    );
-                }
-                Err(err) => {
-                    iroha_logger::warn!(
-                        ?err,
-                        faulty_peers = self.n_faulty_peers,
-                        "Non-suspended peers did not sync before relay resume; continuing"
-                    );
-                }
+            for peer in &faulty {
+                relay.suspend(&peer.id()).activate();
+                iroha_logger::info!(peer = peer.mnemonic(), "Suspended");
             }
         }
+        let submit_tx = |phase: &'static str| {
+            let leader_id = leader_id.clone();
+            let faulty_ids = faulty_ids.clone();
+            async move {
+            let mint_asset = Mint::asset_numeric(
+                Numeric::one(),
+                AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone()),
+            );
+            let some_peer = peers
+                .iter()
+                .find(|peer| peer.id() == leader_id)
+                .filter(|peer| !faulty_ids.contains(&peer.id()))
+                .cloned()
+                .unwrap_or_else(|| {
+                    let mut rng = ChaCha8Rng::seed_from_u64(
+                        0x5553_5052 + u64::try_from(round_index).unwrap_or(0),
+                    );
+                    peers
+                        .iter()
+                        .filter(|peer| !faulty_ids.contains(&peer.id()))
+                        .choose(&mut rng)
+                        .expect("there should be some working peers")
+                        .clone()
+                });
+            iroha_logger::info!(phase, via_peer = some_peer.mnemonic(), "Submit transaction");
+            let mut leader_client = some_peer.client();
+            if leader_client.transaction_status_timeout < sync_timeout {
+                leader_client.transaction_status_timeout = sync_timeout;
+            }
+            if let Some(ttl) = leader_client.transaction_ttl {
+                let min_ttl = sync_timeout + Duration::from_secs(120);
+                if ttl < min_ttl {
+                    leader_client.transaction_ttl = Some(min_ttl);
+                }
+            }
+            let tx = Arc::new(leader_client.build_transaction_from_items(
+                vec![mint_asset],
+                Metadata::default(),
+            ));
+            let mut submitters = JoinSet::new();
+            for peer in peers.iter().filter(|peer| !faulty_ids.contains(&peer.id())) {
+                let mut client = peer.client();
+                if let Some(ttl) = client.transaction_ttl {
+                    let min_ttl = sync_timeout + Duration::from_secs(120);
+                    if ttl < min_ttl {
+                        client.transaction_ttl = Some(min_ttl);
+                    }
+                }
+                let tx = Arc::clone(&tx);
+                submitters.spawn_blocking(move || client.submit_transaction(&tx));
+            }
+            let mut last_err: Option<eyre::Report> = None;
+            let mut submitted = false;
+            while let Some(res) = submitters.join_next().await {
+                match res {
+                    Ok(Ok(_hash)) => {
+                        submitted = true;
+                        break;
+                    }
+                    Ok(Err(err)) => {
+                        last_err = Some(err);
+                    }
+                    Err(err) => {
+                        last_err = Some(eyre::Report::new(err));
+                    }
+                }
+            }
+            submitters.abort_all();
+            if !submitted {
+                return Err(last_err.unwrap_or_else(|| {
+                    eyre!("transaction submission failed on all non-faulty peers")
+                }));
+            }
+                Ok::<_, eyre::Report>(())
+            }
+        };
+        if submit_while_partitioned {
+            submit_tx("partitioned").await?;
+        }
 
-        for peer in &faulty {
-            relay.suspend(&peer.id()).deactivate();
-            iroha_logger::info!(peer = peer.mnemonic(), "Unsuspended");
+        if !stagger_faults {
+            if submit_while_partitioned {
+                let non_faulty_sync = timeout(
+                    relay_pause,
+                    once_blocks_sync(
+                        network.peers().iter().filter(|x| !faulty.contains(x)),
+                        BlockHeight::predicate_non_empty(target_height),
+                    ),
+                )
+                .await;
+                non_faulty_sync
+                    .map_err(eyre::Report::new)
+                    .wrap_err("Non-suspended peers must sync within timeout")??;
+            } else {
+                sleep(relay_pause).await;
+            }
+
+            for peer in &faulty {
+                relay.suspend(&peer.id()).deactivate();
+                iroha_logger::info!(peer = peer.mnemonic(), "Unsuspended");
+            }
+        }
+        if !submit_while_partitioned {
+            sleep(network.pipeline_time().saturating_mul(2)).await;
+            submit_tx("recovered").await?;
         }
 
         timeout(
@@ -1010,8 +1154,6 @@ impl UnstableNetwork {
         .map_err(eyre::Report::new)
         .wrap_err("faulty peers did not catch up")??;
 
-        submit_handle.await??;
-
         Ok(())
     }
 
@@ -1022,7 +1164,7 @@ impl UnstableNetwork {
     ) -> Result<()> {
         let client = network.client();
         let expected = Numeric::new(rounds as u128, 0);
-        let deadline = Instant::now() + network.sync_timeout();
+        let deadline = Instant::now() + scaled_timeout(network.sync_timeout(), network.peers().len());
         loop {
             let asset = spawn_blocking({
                 let client = client.clone();
@@ -1062,21 +1204,43 @@ mod tests {
     use iroha_crypto::KeyPair;
 
     #[test]
-    fn faulty_peer_selection_uses_tail_after_commit_quorum() {
+    fn faulty_peer_selection_respects_collectors() {
         let peer_ids: Vec<_> = (0..9)
             .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
             .collect();
-        let mut ordered = peer_ids.clone();
-        ordered.sort();
-        let commit_quorum = commit_quorum_from_len(ordered.len());
-        let expected_tail: BTreeSet<_> = ordered[commit_quorum..].iter().cloned().collect();
+        let chain_id: ChainId = "unstable-network-selection".parse().expect("chain id");
+        let height = 7_u64;
+        let rotated = topology_for_permissioned_round(&peer_ids, &chain_id, height, 0);
+        let commit_quorum = commit_quorum_from_len(rotated.len());
+        let expected_tail: BTreeSet<_> = rotated[commit_quorum..].iter().cloned().collect();
+        let selected_single = UnstableNetwork::select_faulty_peer_ids(
+            &peer_ids,
+            1,
+            0,
+            &chain_id,
+            height,
+        );
+        assert_eq!(selected_single.len(), 1);
+        assert!(expected_tail.contains(&selected_single[0]));
 
-        let selected: BTreeSet<_> =
-            UnstableNetwork::select_faulty_peer_ids(&peer_ids, expected_tail.len(), 0)
-                .into_iter()
-                .collect();
-
-        assert_eq!(selected, expected_tail);
+        let topology = Topology::new(rotated.clone());
+        let seed = permissioned_prf_seed(&chain_id);
+        let collector_ids: BTreeSet<_> = topology
+            .collector_indices_k_prf(usize::from(COLLECTORS_K), seed, height, 0)
+            .into_iter()
+            .filter_map(|idx| topology.as_ref().get(idx).cloned())
+            .collect();
+        let selected_multi: BTreeSet<_> = UnstableNetwork::select_faulty_peer_ids(
+            &peer_ids,
+            3,
+            0,
+            &chain_id,
+            height,
+        )
+        .into_iter()
+        .collect();
+        assert_eq!(selected_multi.len(), 3);
+        assert!(collector_ids.is_disjoint(&selected_multi));
     }
 
     #[test]
@@ -1093,7 +1257,7 @@ mod tests {
         let pipeline_time = Duration::from_secs(9);
         let capped = non_faulty_sync_timeout(sync_timeout, pipeline_time, 2);
         assert!(capped < sync_timeout);
-        assert!(capped <= pipeline_time * 6 + Duration::from_secs(5));
+        assert!(capped <= pipeline_time * 2 + Duration::from_secs(2));
         let uncapped = non_faulty_sync_timeout(sync_timeout, pipeline_time, 1);
         assert_eq!(uncapped, sync_timeout);
     }

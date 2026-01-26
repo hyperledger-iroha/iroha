@@ -16,6 +16,20 @@ Last update: 2026-01-26
 - Sumeragi ingress: dedup inbound RBC INIT by hashing the full INIT payload before enqueueing to avoid duplicate queue floods; track RBC INIT dedup evictions and add `incoming_block_message_drops_duplicate_rbc_init` coverage.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Tests: `cargo test -p iroha_core incoming_block_message_drops_duplicate_rbc_init -- --nocapture` (ok; warnings about unused `PeersGossiperHandle::closed_for_tests` and unused `consensus_mode` persist).
+- Kura payload availability: treat evicted blocks as missing when DA payload files are gone so Sumeragi keeps missing-block/RBC recovery paths alive; add `block_payload_available_by_hash_tracks_evicted_da_payload`.
+- Tests: not run (not requested).
+
+- Sumeragi commit worker: retry result delivery with wake nudges when the result queue is full to avoid backpressure stalls; added `commit_worker_wakes_when_result_queue_full` coverage.
+- Tests: `cargo test -p iroha_core commit_worker_wakes -- --nocapture` (ok; warnings about unused assignments in `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and unused `PeersGossiperHandle::closed_for_tests`/`consensus_mode` persist).
+
+- Test-network harness: increase the default peers-per-network divisor to 64 in `iroha_test_network` + integration-test sandbox so cross-process network concurrency is more conservative for DA/RBC-heavy suites (reduces resource contention and timeout flakiness in extra_functional/sumeragi_da/triggers runs).
+- Tests: `cargo test -p iroha_test_network network_parallelism_env_override_applies -- --nocapture` (ok). `cargo test -p integration_tests serial_guard_applies_default_parallelism -- --nocapture` (ok; filtered binaries compiled).
+
+- Unstable network tests: avoid suspending PRF-selected collectors for multi-fault rounds, stagger multi-fault suspensions with shorter pauses, submit mints only after recovery + stabilization delay, and scale supply-check timeouts; updated selection/unit coverage.
+- Tests: `cargo test -p integration_tests --test mod unstable_network_9_peers_2_faults -- --nocapture` (ok; duplicate metric registration warnings, occasional relay connection-refused during peer startup). `cargo test -p integration_tests --test mod unstable_network_9_peers_3_faults -- --nocapture` (ok; duplicate metric registration warnings).
+
+- Sumeragi RBC: when the derived commit roster is unavailable, treat the INIT roster as authoritative if it matches the active topology to unblock READY emission under NPoS; added `handle_rbc_init_uses_active_roster_when_derived_missing` coverage.
+- Tests: `cargo test -p iroha_core handle_rbc_init_uses_active_roster_when_derived_missing -- --nocapture` (warnings about unused assignments in `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and unused `PeersGossiperHandle::closed_for_tests`/`consensus_mode` persist).
 
 - Consensus ingress: classify RBC chunks as critical (with RBC-session tracking) so chunk delivery is not throttled by bulk caps; updated ingress limiter tests.
 - Tests: not run (not requested).

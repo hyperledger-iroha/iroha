@@ -6981,7 +6981,7 @@ impl Actor {
                 .pending_processing
                 .get()
                 .is_some_and(|pending| pending == hash)
-            || self.kura.get_block_height_by_hash(hash).is_some()
+            || self.kura.block_payload_available_by_hash(hash)
     }
 
     fn block_payload_available_for_progress(&self, hash: HashOf<BlockHeader>) -> bool {
@@ -7004,7 +7004,7 @@ impl Actor {
         {
             return true;
         }
-        self.kura.get_block_height_by_hash(hash).is_some()
+        self.kura.block_payload_available_by_hash(hash)
     }
 
     fn block_known_locally(&self, hash: HashOf<BlockHeader>) -> bool {

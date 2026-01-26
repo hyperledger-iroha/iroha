@@ -73,6 +73,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Mitigate memory exposure for commitment witness material (zeroization in the Norito bridge).
 
 3. **INTEGRATION-TEST-REVALIDATION — Re-run integration tests after Sumeragi drain-order fix** (QA/Consensus, Line: Shared, Owner: QA WG, Priority: High, Status: 🈺 In Progress, target TBD)
+- [ ] Re-run the previously failing suites (connected_peers, unstable_network, sumeragi_da, time_trigger, npos_pacemaker) with the now more conservative default test-network parallelism (peers-per-network divisor 64) to confirm the resource-contention fix holds.
 - [ ] Re-run remaining `tmp_failures.txt` cases (proof events/queries, extra_functional suites, sumeragi_da) after seeding the genesis commit roster on commit to confirm consensus recovery.
 - [ ] Re-run the `sumeragi_da_*` failures after aligning proposal block signatures with the local validator index (RBC INIT leader signature should now match non-zero leaders).
  - [x] Re-run `cargo test -p integration_tests sumeragi_rbc_da_large_payload_four_peers -- --nocapture` to confirm DA large-payload RBC flow completes after READY/DELIVER queue routing.
