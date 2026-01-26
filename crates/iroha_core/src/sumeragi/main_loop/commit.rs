@@ -109,15 +109,24 @@ pub(super) fn spawn_commit_worker(
                     &genesis_account,
                     work,
                 );
-                if result_tx
-                    .send(CommitResult {
-                        id,
-                        outcome,
-                        timings,
-                    })
-                    .is_err()
-                {
-                    break;
+                let mut result = CommitResult {
+                    id,
+                    outcome,
+                    timings,
+                };
+                loop {
+                    match result_tx.try_send(result) {
+                        Ok(()) => break,
+                        Err(mpsc::TrySendError::Full(pending)) => {
+                            // Nudge the main loop to drain results before retrying.
+                            if let Some(wake) = wake_tx.as_ref() {
+                                let _ = wake.try_send(());
+                            }
+                            result = pending;
+                            std::thread::yield_now();
+                        }
+                        Err(mpsc::TrySendError::Disconnected(_)) => return,
+                    }
                 }
                 if let Some(wake) = wake_tx.as_ref() {
                     let _ = wake.try_send(());
@@ -5510,6 +5519,101 @@ mod tests {
         wake_rx
             .recv_timeout(COMMIT_WORKER_TIMEOUT)
             .expect("wake signal");
+
+        drop(handle.work_tx);
+        if let Err(err) = handle.join_handle.join() {
+            panic!("commit worker panicked: {err:?}");
+        }
+    }
+
+    #[test]
+    fn commit_worker_wakes_when_result_queue_full() {
+        let genesis_key = KeyPair::random();
+        let genesis_account_id =
+            AccountId::new(GENESIS_DOMAIN_ID.clone(), genesis_key.public_key().clone());
+        let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
+        let world = World::with([genesis_domain], [genesis_account], []);
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            world,
+            Arc::clone(&kura),
+            query_handle,
+        ));
+        let chain_id = state.view().chain_id().clone();
+        let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+
+        let handle = spawn_commit_worker(
+            Arc::clone(&state),
+            Arc::clone(&kura),
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            Some(wake_tx),
+            1,
+            1,
+        );
+
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(0));
+        let tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            &time_source,
+        )
+        .with_instructions([Log::new(
+            Level::DEBUG,
+            "commit worker queue-full wake test".to_string(),
+        )])
+        .sign(genesis_key.private_key());
+        let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
+        let peer_key = KeyPair::random();
+        let peer_id = PeerId::new(peer_key.public_key().clone());
+        let topology = vec![peer_id];
+        let (events_sender, _events_rx) = tokio::sync::broadcast::channel(16);
+
+        let work = CommitWork {
+            id: 100,
+            block: block.clone(),
+            commit_topology: topology.clone(),
+            signature_topology: topology.clone(),
+            qc_signers: None,
+            commit_qc: None,
+            allow_quorum_bypass: false,
+            persist_required: false,
+            events_sender: events_sender.clone(),
+        };
+
+        handle.work_tx.send(work).expect("send commit work 1");
+        wake_rx
+            .recv_timeout(COMMIT_WORKER_TIMEOUT)
+            .expect("wake for first result");
+
+        // Keep the result queue full, then enqueue another commit.
+        let work = CommitWork {
+            id: 101,
+            block,
+            commit_topology: topology.clone(),
+            signature_topology: topology,
+            qc_signers: None,
+            commit_qc: None,
+            allow_quorum_bypass: false,
+            persist_required: false,
+            events_sender,
+        };
+        handle.work_tx.send(work).expect("send commit work 2");
+        wake_rx
+            .recv_timeout(COMMIT_WORKER_TIMEOUT)
+            .expect("wake while result queue full");
+
+        let _result = handle
+            .result_rx
+            .recv_timeout(COMMIT_WORKER_TIMEOUT)
+            .expect("commit result 1");
+        let _result = handle
+            .result_rx
+            .recv_timeout(COMMIT_WORKER_TIMEOUT)
+            .expect("commit result 2");
+        let _ = wake_rx.try_recv();
 
         drop(handle.work_tx);
         if let Err(err) = handle.join_handle.join() {

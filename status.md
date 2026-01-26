@@ -2,6 +2,12 @@
 
 Last update: 2026-01-26
 
+- Kura payload availability: treat evicted blocks as missing when DA payload files are gone so Sumeragi keeps missing-block/RBC recovery paths alive; add `block_payload_available_by_hash_tracks_evicted_da_payload`.
+- Tests: not run (not requested).
+
+- Sumeragi commit worker: retry result delivery with wake nudges when the result queue is full to avoid backpressure stalls; added `commit_worker_wakes_when_result_queue_full` coverage.
+- Tests: `cargo test -p iroha_core commit_worker_wakes -- --nocapture` (ok; warnings about unused assignments in `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and unused `PeersGossiperHandle::closed_for_tests`/`consensus_mode` persist).
+
 - Test-network harness: increase the default peers-per-network divisor to 64 in `iroha_test_network` + integration-test sandbox so cross-process network concurrency is more conservative for DA/RBC-heavy suites (reduces resource contention and timeout flakiness in extra_functional/sumeragi_da/triggers runs).
 - Tests: `cargo test -p iroha_test_network network_parallelism_env_override_applies -- --nocapture` (ok). `cargo test -p integration_tests serial_guard_applies_default_parallelism -- --nocapture` (ok; filtered binaries compiled).
 
