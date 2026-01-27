@@ -556,10 +556,14 @@ impl PeersGossiper {
             .difference(&new_topology)
             .cloned()
             .collect();
+        let added: Vec<_> = new_topology
+            .difference(&self.current_topology)
+            .cloned()
+            .collect();
         let unchanged = new_topology == self.current_topology;
 
+        let mut trust_changed = false;
         if !removed.is_empty() {
-            let mut trust_changed = false;
             for peer in removed {
                 if self.static_trusted_peers.contains(&peer) {
                     continue;
@@ -568,9 +572,17 @@ impl PeersGossiper {
                 self.trust_candidates.remove(&peer);
                 self.trust.entries.remove(&peer);
             }
-            if trust_changed {
-                self.update_trusted_peers_on_network();
+        }
+        if !added.is_empty() {
+            let now = std::time::Instant::now();
+            self.trust.seed(added.iter().cloned(), now);
+            for peer in &added {
+                trust_changed |= self.trusted_peers.insert(peer.clone());
+                self.trust_candidates.insert(peer.clone());
             }
+        }
+        if trust_changed {
+            self.update_trusted_peers_on_network();
         }
 
         self.current_topology.clone_from(&new_topology);
@@ -1270,6 +1282,80 @@ mod tests {
         );
 
         shutdown.send();
+    }
+
+    #[test]
+    fn topology_update_adds_new_trusted_peers() {
+        let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_id = PeerId::from(key_pair.public_key().clone());
+        let local_peer = Peer::new(
+            "127.0.0.1:9100".parse().expect("addr"),
+            peer_id.clone(),
+        );
+
+        let observer_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let observer_peer = Peer::new(
+            "127.0.0.1:9101".parse().expect("addr"),
+            observer_kp.public_key().clone(),
+        );
+
+        let trusted_set: BTreeSet<_> =
+            [peer_id.clone(), observer_peer.id().clone()].into_iter().collect();
+        let trust_candidates = trusted_set.clone();
+        let current_topology = trusted_set.clone();
+        let initial_peers =
+            BTreeMap::from([(observer_peer.id().clone(), observer_peer.address().clone())]);
+
+        let mut gossiper = PeersGossiper {
+            peer_id,
+            initial_peers,
+            consensus_mode: ConsensusMode::Permissioned,
+            trusted_peers: trusted_set.clone(),
+            static_trusted_peers: trusted_set,
+            trust_candidates,
+            gossip_peers: BTreeMap::new(),
+            current_topology,
+            key_pair,
+            gossip_period: std::time::Duration::from_secs(1),
+            gossip_max_period: std::time::Duration::from_secs(1),
+            gossip_backoff: std::time::Duration::from_secs(1),
+            gossip_next_deadline: std::time::Instant::now(),
+            gossip_pending: true,
+            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_at: None,
+            trust: TrustBook::new(
+                std::time::Duration::from_secs(1),
+                TrustPenalties {
+                    bad_gossip: 1,
+                    unknown_peer: 1,
+                },
+                -1,
+            ),
+            network: IrohaNetwork::closed_for_tests(),
+        };
+
+        let added_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let added_peer = Peer::new(
+            "127.0.0.1:9102".parse().expect("addr"),
+            added_kp.public_key().clone(),
+        );
+        let added_id = added_peer.id().clone();
+
+        let update = UpdateTopology(HashSet::from_iter(vec![added_id.clone()]));
+        gossiper.set_current_topology(update);
+
+        assert!(
+            gossiper.trusted_peers.contains(&added_id),
+            "new topology member should be trusted"
+        );
+        assert!(
+            gossiper.trust_candidates.contains(&added_id),
+            "new topology member should be tracked as a trust candidate"
+        );
+        assert!(
+            gossiper.trust.entries.contains_key(&added_id),
+            "new topology member should be seeded in trust book"
+        );
     }
 
     #[test]

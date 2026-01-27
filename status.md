@@ -1,9 +1,15 @@
 # Status
 
-Last update: 2026-01-26
+Last update: 2026-01-27
+
+- Peers gossiper tests: fix `topology_update_adds_new_trusted_peers` initial peer map typing to match `BTreeMap<PeerId, SocketAddr>` expectations.
+- Tests: not run (compile fix only).
 
 - Sumeragi vote intake: align permissioned test vote signing with PRF-seeded view topology and allow precommit vote validation to fall back to the active roster when the persisted roster is missing but DA/pending/missing-block context keeps stale votes valid.
 - Tests: `cargo test -p iroha_core handle_precommit_vote_ -- --nocapture` (ok). `cargo test -p iroha_core stale_view_accepts_precommit_vote_when_missing_block_requested -- --nocapture` (ok; command timed out after filtered binaries continued running).
+
+- Sumeragi/telemetry: update leader_index on proposal handling, seed trust for newly added topology peers, and remove duplicate queue/pending/commit metric registrations; added unit coverage for leader index, topology add, and duplicate-metric guard.
+- Tests: not run (not requested).
 
 - Sumeragi block sync: reuse cached QC tallies for known blocks only when the incoming QC hash matches the cached QC or roster certificate, avoiding redundant aggregate/signature validation while preventing hash-mismatch bypass; added `block_sync_update_known_block_revalidates_qc_on_hash_mismatch` coverage.
 - Tests: `cargo test -p iroha_core block_sync_update_known_block_revalidates_qc_on_hash_mismatch -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:46418`/`:49947` persist). `cargo fmt --all` (warns about nightly-only rustfmt options in config).

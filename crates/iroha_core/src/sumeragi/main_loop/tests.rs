@@ -39638,6 +39638,51 @@ async fn proposal_updates_highest_qc_and_marks_view_seen() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn proposal_updates_leader_index_status() {
+    let prior_leader_index = super::status::snapshot().leader_index;
+    super::status::set_leader_index(u64::MAX);
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_block = sample_block(1, 0, None);
+    actor
+        .kura
+        .store_block(parent_block.clone())
+        .expect("store parent block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(parent_block.hash());
+
+    actor.locked_qc = None;
+    let height = 2;
+    let view = 0;
+    let mut proposal = sample_proposal(parent_block.hash(), height, view);
+
+    let roster = actor.effective_commit_topology();
+    assert!(
+        !roster.is_empty(),
+        "expected non-empty commit topology for leader selection"
+    );
+    let mut topology = super::network_topology::Topology::new(roster);
+    let expected_leader =
+        actor.leader_index_for(&mut topology, height, view).expect("leader index");
+    let expected_u32 = u32::try_from(expected_leader).expect("leader index fits u32");
+    proposal.header.proposer = expected_u32;
+
+    actor.handle_proposal(proposal).expect("handle proposal");
+
+    let expected_u64 = u64::try_from(expected_leader).unwrap_or(u64::MAX);
+    assert_eq!(
+        super::status::snapshot().leader_index,
+        expected_u64,
+        "leader index should match proposal leader after handling"
+    );
+
+    super::status::set_leader_index(prior_leader_index);
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn prune_descendants_keeps_view_seen_after_divergent_proposal_drop() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
