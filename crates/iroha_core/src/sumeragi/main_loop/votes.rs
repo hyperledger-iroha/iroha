@@ -1,6 +1,10 @@
 //! Vote handling for consensus messages.
 
-use std::{collections::btree_map::Entry, sync::mpsc, time::Instant};
+use std::{
+    collections::btree_map::Entry,
+    sync::{Arc, mpsc},
+    time::Instant,
+};
 
 use iroha_logger::prelude::*;
 
@@ -48,8 +52,34 @@ pub(super) fn record_vote_drop_without_roster(
 }
 
 const VOTE_VERIFY_DEFERRED_DISPATCH_MAX: usize = 32;
+const VOTE_VERIFY_POP_CACHE_MAX: usize = 64;
 
 impl Actor {
+    fn cached_vote_verify_pops(
+        &mut self,
+        roster: &Vec<PeerId>,
+    ) -> Arc<BTreeMap<PublicKey, Vec<u8>>> {
+        let roster_hash = iroha_crypto::HashOf::new(roster);
+        if let Some(cached) = self.subsystems.vote_verify.pop_cache.get(&roster_hash) {
+            return Arc::clone(cached);
+        }
+        let mut pops = BTreeMap::new();
+        for peer in roster {
+            if let Some(pop) = self.roster_validation_cache.pops.get(peer.public_key()) {
+                pops.insert(peer.public_key().clone(), pop.clone());
+            }
+        }
+        let pops = Arc::new(pops);
+        if self.subsystems.vote_verify.pop_cache.len() >= VOTE_VERIFY_POP_CACHE_MAX {
+            self.subsystems.vote_verify.pop_cache.clear();
+        }
+        self.subsystems
+            .vote_verify
+            .pop_cache
+            .insert(roster_hash, Arc::clone(&pops));
+        pops
+    }
+
     fn build_vote_verify_work(
         &self,
         id: u64,
@@ -57,18 +87,12 @@ impl Actor {
         vote: &crate::sumeragi::consensus::Vote,
         context: &VoteProcessingContext,
     ) -> super::vote_verify::VoteVerifyWork {
-        let mut pops = BTreeMap::new();
-        for peer in context.signature_topology.as_ref() {
-            if let Some(pop) = self.roster_validation_cache.pops.get(peer.public_key()) {
-                pops.insert(peer.public_key().clone(), pop.clone());
-            }
-        }
         super::vote_verify::VoteVerifyWork {
             id,
             key,
             vote: vote.clone(),
             signature_topology: context.signature_topology.clone(),
-            pops,
+            pops: Arc::clone(&context.pops),
             chain_id: self.common_config.chain.clone(),
             mode_tag: context.mode_tag,
         }
@@ -299,7 +323,8 @@ impl Actor {
             self.defer_vote_for_roster(vote, "commit topology missing");
             return;
         }
-        let topology = super::network_topology::Topology::new(topology_peers.clone());
+        let pops = self.cached_vote_verify_pops(&topology_peers);
+        let topology = super::network_topology::Topology::new(topology_peers);
         let signature_topology =
             topology_for_view(&topology, vote.height, vote.view, mode_tag, prf_seed);
         let context = VoteProcessingContext {
@@ -309,6 +334,7 @@ impl Actor {
             mode_tag,
             prf_seed,
             stale_view,
+            pops,
         };
         if self.try_dispatch_vote_verification(&vote, &context) {
             return;

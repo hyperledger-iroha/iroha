@@ -558,9 +558,9 @@ macro_rules! build_world_transaction {
 /// Lightweight multi-scope container for tracking committed block hashes.
 ///
 /// Unlike the full MVCC cells used throughout the world state, block hashes only ever grow
-/// monotonically and can be rolled back deterministically by truncating the tail. This container
-/// therefore implements scoped mutation/rollback by recording the length at scope entry and
-/// truncating on drop if the scope was not explicitly committed/applied.
+/// monotonically and can be rolled back deterministically by truncating the tail. To avoid
+/// blocking read-only state views during block execution, block-scoped access buffers appended
+/// hashes and only applies them under a short write lock at commit time.
 #[derive(Default)]
 pub struct BlockHashes {
     inner: parking_lot::RwLock<Vec<HashOf<BlockHeader>>>,
@@ -576,15 +576,12 @@ impl BlockHashes {
 
     /// Obtain a block-scoped mutable view of the hashes.
     pub fn block(&self) -> BlockHashesBlock<'_> {
-        let guard = self.inner.write();
-        BlockHashesBlock::new(guard)
+        BlockHashesBlock::new(self, false)
     }
 
     /// Obtain a block-scoped mutable view after reverting the latest committed block, if any.
     pub fn block_and_revert(&self) -> BlockHashesBlock<'_> {
-        let mut guard = self.inner.write();
-        let _ = guard.pop();
-        BlockHashesBlock::from_guard(guard)
+        BlockHashesBlock::new(self, true)
     }
 
     /// Obtain a read-only snapshot of the committed hashes.
@@ -595,49 +592,68 @@ impl BlockHashes {
     }
 }
 
-/// Mutable block-scoped access to the block hash log.
+/// Block-scoped access to the block hash log with staged updates.
 pub struct BlockHashesBlock<'a> {
-    guard: parking_lot::RwLockWriteGuard<'a, Vec<HashOf<BlockHeader>>>,
-    baseline_len: usize,
-    committed: bool,
+    inner: &'a BlockHashes,
+    guard: Option<parking_lot::RwLockReadGuard<'a, Vec<HashOf<BlockHeader>>>>,
+    visible_len: usize,
+    pending: Vec<HashOf<BlockHeader>>,
 }
 
 impl<'a> BlockHashesBlock<'a> {
-    fn new(guard: parking_lot::RwLockWriteGuard<'a, Vec<HashOf<BlockHeader>>>) -> Self {
-        let baseline_len = guard.len();
+    fn new(inner: &'a BlockHashes, revert_latest: bool) -> Self {
+        let guard = inner.inner.read();
+        let visible_len = if revert_latest {
+            guard.len().saturating_sub(1)
+        } else {
+            guard.len()
+        };
         Self {
-            guard,
-            baseline_len,
-            committed: false,
+            inner,
+            guard: Some(guard),
+            visible_len,
+            pending: Vec::new(),
         }
     }
 
-    fn from_guard(guard: parking_lot::RwLockWriteGuard<'a, Vec<HashOf<BlockHeader>>>) -> Self {
-        Self {
-            baseline_len: guard.len(),
-            guard,
-            committed: false,
-        }
+    fn as_slice(&self) -> &[HashOf<BlockHeader>] {
+        let guard = self
+            .guard
+            .as_ref()
+            .expect("block hashes view guard missing");
+        &guard[..self.visible_len]
     }
 
     /// Begin a transaction-scoped view nested under this block.
-    pub(crate) fn transaction(&mut self) -> BlockHashesTransaction<'_, 'a> {
-        let baseline_len = self.guard.len();
+    pub(crate) fn transaction(&mut self) -> BlockHashesTransaction<'_> {
+        let visible_len = self.visible_len;
+        let guard = self
+            .guard
+            .as_ref()
+            .expect("block hashes view guard missing");
+        let base = &guard[..visible_len];
+        let baseline_len = self.pending.len();
         BlockHashesTransaction {
-            guard: &mut self.guard,
+            base,
+            pending: &mut self.pending,
             baseline_len,
             applied: false,
         }
     }
 
-    /// Push a new hash into the log.
+    /// Stage a new hash to be appended on commit.
     pub(crate) fn push(&mut self, hash: HashOf<BlockHeader>) {
-        self.guard.push(hash);
+        self.pending.push(hash);
     }
 
     /// Commit all mutations performed in this block scope.
     pub(crate) fn commit(mut self) {
-        self.committed = true;
+        let pending = std::mem::take(&mut self.pending);
+        let visible_len = self.visible_len;
+        self.guard.take();
+        let mut guard = self.inner.inner.write();
+        guard.truncate(visible_len);
+        guard.extend(pending);
     }
 
     /// Commit mutations in tests without exposing the block hash log publicly.
@@ -646,65 +662,44 @@ impl<'a> BlockHashesBlock<'a> {
     }
 }
 
-impl Drop for BlockHashesBlock<'_> {
-    fn drop(&mut self) {
-        if !self.committed {
-            self.guard.truncate(self.baseline_len);
-        }
-    }
-}
-
 impl std::ops::Deref for BlockHashesBlock<'_> {
-    type Target = Vec<HashOf<BlockHeader>>;
+    type Target = [HashOf<BlockHeader>];
 
     #[allow(clippy::explicit_auto_deref)]
     fn deref(&self) -> &Self::Target {
-        &*self.guard
-    }
-}
-
-impl std::ops::DerefMut for BlockHashesBlock<'_> {
-    #[allow(clippy::explicit_auto_deref)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.guard
+        self.as_slice()
     }
 }
 
 /// Transaction-scoped mutable view of the block hash log.
-pub struct BlockHashesTransaction<'block, 'a> {
-    guard: &'block mut parking_lot::RwLockWriteGuard<'a, Vec<HashOf<BlockHeader>>>,
+pub struct BlockHashesTransaction<'block> {
+    base: &'block [HashOf<BlockHeader>],
+    pending: &'block mut Vec<HashOf<BlockHeader>>,
     baseline_len: usize,
     applied: bool,
 }
 
-impl BlockHashesTransaction<'_, '_> {
+impl BlockHashesTransaction<'_> {
     /// Apply the accumulated mutations so they persist at the parent block scope.
     pub(crate) fn apply(mut self) {
         self.applied = true;
     }
 }
 
-impl Drop for BlockHashesTransaction<'_, '_> {
+impl Drop for BlockHashesTransaction<'_> {
     fn drop(&mut self) {
         if !self.applied {
-            self.guard.truncate(self.baseline_len);
+            self.pending.truncate(self.baseline_len);
         }
     }
 }
 
-impl std::ops::Deref for BlockHashesTransaction<'_, '_> {
-    type Target = Vec<HashOf<BlockHeader>>;
+impl std::ops::Deref for BlockHashesTransaction<'_> {
+    type Target = [HashOf<BlockHeader>];
 
     #[allow(clippy::explicit_auto_deref)]
     fn deref(&self) -> &Self::Target {
-        &*self.guard
-    }
-}
-
-impl std::ops::DerefMut for BlockHashesTransaction<'_, '_> {
-    #[allow(clippy::explicit_auto_deref)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.guard
+        self.base
     }
 }
 
@@ -4521,7 +4516,7 @@ pub struct StateTransaction<'block, 'state> {
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
     pub world: WorldTransaction<'block, 'state>,
     /// Blockchain.
-    pub block_hashes: BlockHashesTransaction<'block, 'state>,
+    pub block_hashes: BlockHashesTransaction<'block>,
     /// Merge-ledger cache retaining recent entries for this transaction scope.
     pub merge_ledger: &'state MergeLedgerStore,
     /// Topology used to commit latest block
@@ -4682,7 +4677,7 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
 
     /// Exposes the cached block hashes for this transaction scope.
     #[inline]
-    pub fn block_hashes(&self) -> &BlockHashesTransaction<'block, 'state> {
+    pub fn block_hashes(&self) -> &BlockHashesTransaction<'block> {
         &self.block_hashes
     }
 
@@ -31043,6 +31038,61 @@ mod tests {
                 .into_iter()
                 .eq(block_hashes.into_iter().skip(7))
         );
+    }
+
+    #[test]
+    fn block_hashes_commit_applies_pending_only_on_commit() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let initial_len = state.block_hashes.view().len();
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let hash = header.hash();
+
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push(hash);
+            assert_eq!(
+                state.block_hashes.view().len(),
+                initial_len,
+                "pending block hash should not be visible before commit"
+            );
+            block_hashes.commit_for_tests();
+        }
+
+        let view = state.block_hashes.view();
+        assert_eq!(view.len(), initial_len + 1);
+        assert_eq!(view.iter().last().copied(), Some(hash));
+    }
+
+    #[test]
+    fn block_hashes_block_and_revert_replaces_tail_on_commit() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let first_header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let first_hash = first_header.hash();
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push(first_hash);
+            block_hashes.commit_for_tests();
+        }
+
+        let replacement_header =
+            BlockHeader::new(NonZeroU64::new(2).unwrap(), Some(first_hash), None, None, 0, 0);
+        let replacement_hash = replacement_header.hash();
+        {
+            let mut block_hashes = state.block_hashes.block_and_revert();
+            assert_eq!(block_hashes.len(), 0, "revert view should drop tail");
+            block_hashes.push(replacement_hash);
+            block_hashes.commit_for_tests();
+        }
+
+        let view = state.block_hashes.view();
+        assert_eq!(view.len(), 1);
+        assert_eq!(view.iter().last().copied(), Some(replacement_hash));
     }
 
     #[test]
