@@ -13,7 +13,7 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     v.extend_from_slice(&type_id.to_be_bytes());
     v.push(1);
     v.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    v.extend_from_slice(payload);
+    v.extend_from_slice(payload.as_ref());
     let h: [u8; 32] = iroha_crypto::Hash::new(payload).into();
     v.extend_from_slice(&h);
     v

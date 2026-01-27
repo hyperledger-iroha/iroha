@@ -4,6 +4,7 @@ Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Appl
 
 Features:
 - Torii HTTP client (balances, transactions, subscriptions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
+- Offline allowance registration helper (`ToriiClient.registerOfflineAllowance`) for `/v1/offline/allowances`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Native NoritoBridge integration (required by default; set `IROHASWIFT_USE_BRIDGE=optional` for the Swift-only fallback) powering transfer/mint/burn builders and JSON inspection helpers

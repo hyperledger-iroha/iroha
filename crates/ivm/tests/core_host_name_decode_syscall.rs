@@ -7,7 +7,7 @@ fn tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v.extend_from_slice(&(pty as u16).to_be_bytes());
     v.push(1);
     v.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    v.extend_from_slice(payload);
+    v.extend_from_slice(payload.as_ref());
     let h: [u8; 32] = iroha_crypto::Hash::new(payload).into();
     v.extend_from_slice(&h);
     v
@@ -18,7 +18,7 @@ fn name_decode_rejects_invalid_utf8() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     // Build NoritoBytes TLV with an invalid UTF-8 byte inside a Norito string payload.
-    let mut bad = norito::to_bytes("ok").expect("encode string");
+    let mut bad = norito::to_bytes(&"ok").expect("encode string");
     if let Some(last) = bad.last_mut() {
         *last = 0xFF;
     }
@@ -53,7 +53,7 @@ fn name_decode_rejects_invalid_name_utf8_valid() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     // Valid UTF-8 but invalid Name (contains space)
-    let bad = norito::to_bytes("bad name").expect("encode string");
+    let bad = norito::to_bytes(&"bad name").expect("encode string");
     let p_nb = vm
         .alloc_input_tlv(&tlv(PointerType::NoritoBytes, &bad))
         .unwrap();
@@ -84,7 +84,7 @@ fn name_decode_rejects_reserved_chars() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
     // Valid UTF-8 but invalid Name (reserved delimiter)
-    let bad = norito::to_bytes("alice@wonderland").expect("encode string");
+    let bad = norito::to_bytes(&"alice@wonderland").expect("encode string");
     let p_nb = vm
         .alloc_input_tlv(&tlv(PointerType::NoritoBytes, &bad))
         .unwrap();

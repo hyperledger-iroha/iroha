@@ -335,8 +335,8 @@ Consensus settings (`Sumeragi`) are summarised in `docs/source/sumeragi.md`. Exa
 [sumeragi]
 role = "validator"
 allow_view0_slack = false
-collectors_k = 2
-collectors_redundant_send_r = 2
+collectors_k = 3
+collectors_redundant_send_r = 3
 msg_channel_cap_votes = 8192
 msg_channel_cap_block_payload = 128
 msg_channel_cap_rbc_chunks = 1024

@@ -1,0 +1,245 @@
+diff --git a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/client/OfflineToriiClient.java b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/client/OfflineToriiClient.java
+index b8b10a2c7..4a7e58801 100644
+--- a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/client/OfflineToriiClient.java
++++ b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/client/OfflineToriiClient.java
+@@ -1,4 +1,19 @@
+ package org.hyperledger.iroha.android.client;
++
++import org.hyperledger.iroha.android.client.transport.TransportRequest;
++import org.hyperledger.iroha.android.offline.OfflineAllowanceList;
++import org.hyperledger.iroha.android.offline.OfflineCertificateIssueResponse;
++import org.hyperledger.iroha.android.offline.OfflineJsonParser;
++import org.hyperledger.iroha.android.offline.OfflineListParams;
++import org.hyperledger.iroha.android.offline.OfflineProofRequestParams;
++import org.hyperledger.iroha.android.offline.OfflineProofRequestResult;
++import org.hyperledger.iroha.android.offline.OfflineQueryEnvelope;
++import org.hyperledger.iroha.android.offline.OfflineRevocationList;
++import org.hyperledger.iroha.android.offline.OfflineSummaryList;
++import org.hyperledger.iroha.android.offline.OfflineToriiException;
++import org.hyperledger.iroha.android.offline.OfflineTransferList;
++import org.hyperledger.iroha.android.offline.OfflineWalletCertificate;
++import org.hyperledger.iroha.android.offline.OfflineWalletCertificateDraft;
+ import org.hyperledger.iroha.android.util.Java8Compat;
+ 
+ import java.io.UnsupportedEncodingException;
+@@ -13,22 +28,6 @@ import java.util.Map;
+ import java.util.Objects;
+ import java.util.concurrent.CompletableFuture;
+ import java.util.concurrent.CompletionException;
+-import org.hyperledger.iroha.android.client.transport.TransportRequest;
+-import org.hyperledger.iroha.android.client.transport.TransportResponse;
+-import org.hyperledger.iroha.android.client.PlatformHttpTransportExecutor;
+-import org.hyperledger.iroha.android.offline.OfflineAllowanceList;
+-import org.hyperledger.iroha.android.offline.OfflineCertificateIssueResponse;
+-import org.hyperledger.iroha.android.offline.OfflineJsonParser;
+-import org.hyperledger.iroha.android.offline.OfflineListParams;
+-import org.hyperledger.iroha.android.offline.OfflineQueryEnvelope;
+-import org.hyperledger.iroha.android.offline.OfflineProofRequestKind;
+-import org.hyperledger.iroha.android.offline.OfflineProofRequestParams;
+-import org.hyperledger.iroha.android.offline.OfflineProofRequestResult;
+-import org.hyperledger.iroha.android.offline.OfflineRevocationList;
+-import org.hyperledger.iroha.android.offline.OfflineSummaryList;
+-import org.hyperledger.iroha.android.offline.OfflineToriiException;
+-import org.hyperledger.iroha.android.offline.OfflineTransferList;
+-import org.hyperledger.iroha.android.offline.OfflineWalletCertificateDraft;
+ 
+ /**
+  * Lightweight HTTP client for Torii offline inspection endpoints (`/v1/offline/*`).
+@@ -141,6 +140,24 @@ public final class OfflineToriiClient {
+     return executeHttpRequest(request, OfflineJsonParser::parseCertificateIssueResponse);
+   }
+ 
++  /** Register a signed certificate on-ledger as an offline allowance. */
++  public CompletableFuture<Void> registerAllowance(
++      final OfflineWalletCertificate certificate,
++      final String authority,
++      final String privateKeyHex) {
++    Objects.requireNonNull(certificate, "certificate");
++    Objects.requireNonNull(authority, "authority");
++    Objects.requireNonNull(privateKeyHex, "privateKeyHex");
++    final java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
++    body.put("authority", authority);
++    body.put("private_key", privateKeyHex);
++    body.put("certificate", certificate.toJsonMap());
++    final byte[] bodyBytes = JsonEncoder.encode(body).getBytes(StandardCharsets.UTF_8);
++    final TransportRequest request = buildPostRequest(ALLOWANCES_PATH, bodyBytes);
++    notifyRequest(request);
++    return executeHttpRequest(request, payload -> (Void) null);
++  }
++
+   /** Issue a signed renewal certificate for an existing allowance. */
+   public CompletableFuture<OfflineCertificateIssueResponse> issueCertificateRenewal(
+       final String certificateIdHex, final OfflineWalletCertificateDraft draft) {
+@@ -320,9 +337,10 @@ public final class OfflineToriiClient {
+               final ClientResponse clientResponse =
+                   new ClientResponse(response.statusCode(), response.body());
+               if (response.statusCode() < 200 || response.statusCode() >= 300) {
++                final String bodyStr = new String(response.body(), java.nio.charset.StandardCharsets.UTF_8);
+                 final OfflineToriiException error =
+                     new OfflineToriiException(
+-                        "Offline request failed with status " + response.statusCode());
++                        "Offline request failed with status " + response.statusCode() + ": " + bodyStr);
+                 notifyFailure(request, error);
+                 future.completeExceptionally(error);
+                 return;
+diff --git a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/client/queue/FilePendingTransactionQueue.java b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/client/queue/FilePendingTransactionQueue.java
+index f3e71c1f2..bff445b30 100644
+--- a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/client/queue/FilePendingTransactionQueue.java
++++ b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/client/queue/FilePendingTransactionQueue.java
+@@ -68,9 +68,9 @@ public final class FilePendingTransactionQueue implements PendingTransactionQueu
+       throw new IOException("Failed to encode offline signing envelope", ex);
+     }
+     synchronized (lock) {
+-      Files.writeString(
++      Files.write(
+           queueFile,
+-          line + System.lineSeparator(),
++          (line + System.lineSeparator()).getBytes(StandardCharsets.UTF_8),
+           StandardOpenOption.CREATE,
+           StandardOpenOption.APPEND);
+     }
+@@ -85,12 +85,12 @@ public final class FilePendingTransactionQueue implements PendingTransactionQueu
+       final List<String> lines = Files.readAllLines(queueFile, StandardCharsets.UTF_8);
+       final List<SignedTransaction> transactions = new ArrayList<>(lines.size());
+       for (final String line : lines) {
+-        if (line.isBlank()) {
++        if (line.trim().isEmpty()) {
+           continue;
+         }
+         transactions.add(decodeEntry(line));
+       }
+-      Files.writeString(queueFile, "", StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
++      Files.write(queueFile, new byte[0], StandardOpenOption.TRUNCATE_EXISTING);
+       return transactions;
+     }
+   }
+@@ -103,7 +103,7 @@ public final class FilePendingTransactionQueue implements PendingTransactionQueu
+       }
+       int count = 0;
+       for (final String line : Files.readAllLines(queueFile, StandardCharsets.UTF_8)) {
+-        if (!line.isBlank()) {
++        if (!line.trim().isEmpty()) {
+           count++;
+         }
+       }
+@@ -115,8 +115,8 @@ public final class FilePendingTransactionQueue implements PendingTransactionQueu
+   public void clear() throws IOException {
+     synchronized (lock) {
+       if (Files.exists(queueFile)) {
+-        Files.writeString(
+-            queueFile, "", StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
++        Files.write(
++            queueFile, new byte[0], StandardOpenOption.TRUNCATE_EXISTING);
+       }
+     }
+   }
+diff --git a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineAuditLogger.java b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineAuditLogger.java
+index 2941db113..4fa8b4deb 100644
+--- a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineAuditLogger.java
++++ b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineAuditLogger.java
+@@ -79,7 +79,7 @@ public final class OfflineAuditLogger {
+   }
+ 
+   private void loadExisting() throws IOException {
+-    final String json = Files.readString(logFile, StandardCharsets.UTF_8).trim();
++    final String json = new String(Files.readAllBytes(logFile), StandardCharsets.UTF_8).trim();
+     if (json.isEmpty()) {
+       entries = new ArrayList<>();
+       return;
+@@ -102,10 +102,9 @@ public final class OfflineAuditLogger {
+ 
+   private void persist() throws IOException {
+     final String json = encodeEntries(entries);
+-    Files.writeString(
++    Files.write(
+         logFile,
+-        json,
+-        StandardCharsets.UTF_8,
++        json.getBytes(StandardCharsets.UTF_8),
+         StandardOpenOption.CREATE,
+         StandardOpenOption.TRUNCATE_EXISTING);
+   }
+diff --git a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineCounterJournal.java b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineCounterJournal.java
+index ec6503431..093d02787 100644
+--- a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineCounterJournal.java
++++ b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineCounterJournal.java
+@@ -245,7 +245,7 @@ public final class OfflineCounterJournal {
+   }
+ 
+   private void loadExisting() throws IOException {
+-    final String json = Files.readString(journalFile, StandardCharsets.UTF_8).trim();
++    final String json = new String(Files.readAllBytes(journalFile), StandardCharsets.UTF_8).trim();
+     if (json.isEmpty()) {
+       return;
+     }
+@@ -267,10 +267,9 @@ public final class OfflineCounterJournal {
+ 
+   private void persistLocked() throws IOException {
+     final Map<String, Object> serialized = serializeEntriesLocked();
+-    Files.writeString(
++    Files.write(
+         journalFile,
+-        JsonEncoder.encode(serialized),
+-        StandardCharsets.UTF_8,
++        JsonEncoder.encode(serialized).getBytes(StandardCharsets.UTF_8),
+         StandardOpenOption.CREATE,
+         StandardOpenOption.TRUNCATE_EXISTING);
+   }
+diff --git a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineVerdictJournal.java b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineVerdictJournal.java
+index 2998ca233..f834371e2 100644
+--- a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineVerdictJournal.java
++++ b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineVerdictJournal.java
+@@ -162,7 +162,7 @@ public final class OfflineVerdictJournal {
+   }
+ 
+   private void loadExisting() throws IOException {
+-    final String json = Files.readString(journalFile, StandardCharsets.UTF_8).trim();
++    final String json = new String(Files.readAllBytes(journalFile), StandardCharsets.UTF_8).trim();
+     if (json.isEmpty()) {
+       return;
+     }
+@@ -184,10 +184,9 @@ public final class OfflineVerdictJournal {
+ 
+   private void persistLocked() throws IOException {
+     final Map<String, Object> serialized = serializeEntriesLocked();
+-    Files.writeString(
++    Files.write(
+         journalFile,
+-        JsonEncoder.encode(serialized),
+-        StandardCharsets.UTF_8,
++        JsonEncoder.encode(serialized).getBytes(StandardCharsets.UTF_8),
+         StandardOpenOption.CREATE,
+         StandardOpenOption.TRUNCATE_EXISTING);
+   }
+diff --git a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineWalletCertificate.java b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineWalletCertificate.java
+index 9a93f7bb2..a37c57355 100644
+--- a/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineWalletCertificate.java
++++ b/core/iroha/iroha3/src/main/java/org/hyperledger/iroha/android/offline/OfflineWalletCertificate.java
+@@ -94,4 +94,27 @@ public final class OfflineWalletCertificate {
+   public Long refreshAtMs() {
+     return refreshAtMs;
+   }
++
++  public java.util.Map<String, Object> toJsonMap() {
++    final java.util.Map<String, Object> map = new java.util.LinkedHashMap<>();
++    map.put("controller", controller);
++    map.put("allowance", allowance.toJsonMap());
++    map.put("spend_public_key", spendPublicKey);
++    map.put("attestation_report", OfflineAllowanceCommitment.encodeBytes(attestationReport));
++    map.put("issued_at_ms", issuedAtMs);
++    map.put("expires_at_ms", expiresAtMs);
++    map.put("policy", policy.toJsonMap());
++    map.put("operator_signature", operatorSignatureHex);
++    map.put("metadata", metadata);
++    map.put(
++        "verdict_id",
++        verdictIdHex == null ? null : OfflineHashLiteral.normalize(verdictIdHex, "verdict_id"));
++    map.put(
++        "attestation_nonce",
++        attestationNonceHex == null
++            ? null
++            : OfflineHashLiteral.normalize(attestationNonceHex, "attestation_nonce"));
++    map.put("refresh_at_ms", refreshAtMs);
++    return map;
++  }
+ }

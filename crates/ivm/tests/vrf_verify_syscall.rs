@@ -22,7 +22,7 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&type_id.to_be_bytes());
     out.push(1);
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(payload);
+    out.extend_from_slice(payload.as_ref());
     let h: [u8; 32] = Hash::new(payload).into();
     out.extend_from_slice(&h);
     out

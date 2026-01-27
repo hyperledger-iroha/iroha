@@ -11,6 +11,7 @@ use std::{
 
 use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
+use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
     isi::staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
@@ -212,7 +213,7 @@ struct LocalnetPerfProfileSpec {
     block_time_ms: u64,
     commit_time_ms: u64,
     collectors_k: u16,
-    redundant_send_r: u8,
+    redundant_send_r: Option<u8>,
     block_max_transactions: u64,
     stake_amount: u64,
 }
@@ -228,7 +229,7 @@ impl LocalnetPerfProfile {
             block_time_ms: 1_000,
             commit_time_ms: 1_000,
             collectors_k: 3,
-            redundant_send_r: 2,
+            redundant_send_r: None,
             block_max_transactions: LOCALNET_BLOCK_MAX_TRANSACTIONS,
             stake_amount: LOCALNET_STAKE_AMOUNT,
         }
@@ -344,8 +345,6 @@ const LOCALNET_NPOS_TIMEOUT_PRECOMMIT_MS: u64 = 500;
 const LOCALNET_NPOS_TIMEOUT_COMMIT_MS: u64 = 650;
 const LOCALNET_NPOS_TIMEOUT_DA_MS: u64 = 600;
 const LOCALNET_NPOS_TIMEOUT_AGG_MS: u64 = 100;
-/// Default redundant send fanout (r) for localnet DA/RBC sessions.
-const LOCALNET_REDUNDANT_SEND_R: u8 = 2;
 /// Default DA commit-quorum timeout multiplier for localnet configs.
 const LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 1;
 /// Default DA availability timeout multiplier for localnet configs.
@@ -741,8 +740,9 @@ fn generate_localnet_with_line<T: Write>(
         resolve_localnet_pipeline_times(block_time_override, commit_time_override);
     let redundant_send_r = resolve_localnet_redundant_send_r(
         opts.redundant_send_r
-            .or_else(|| perf_spec.map(|spec| spec.redundant_send_r)),
+            .or_else(|| perf_spec.and_then(|spec| spec.redundant_send_r)),
         da_rbc_enabled,
+        opts.peers,
     );
     let collectors_k = perf_spec.map(|spec| spec.collectors_k);
     let block_max_transactions = perf_spec.map_or(LOCALNET_BLOCK_MAX_TRANSACTIONS, |spec| {
@@ -934,9 +934,11 @@ fn localnet_commit_inflight_timeout_ms(
 fn resolve_localnet_redundant_send_r(
     redundant_send_r: Option<u8>,
     da_rbc_enabled: bool,
+    peer_count: NonZeroU16,
 ) -> Option<u8> {
     if redundant_send_r.is_none() && da_rbc_enabled {
-        return Some(LOCALNET_REDUNDANT_SEND_R);
+        let peers = usize::from(peer_count.get());
+        return Some(redundant_send_r_from_len(peers));
     }
     redundant_send_r
 }
@@ -2043,6 +2045,10 @@ mod tests {
 
     use super::*;
 
+    fn default_redundant_send_r(peers: NonZeroU16) -> u8 {
+        redundant_send_r_from_len(usize::from(peers.get()))
+    }
+
     fn localnet_genesis_for_opts(opts: &LocalnetOptions) -> RawGenesisTransaction {
         let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
         let peers = build_peers(
@@ -2056,8 +2062,9 @@ mod tests {
         let perf_spec = opts.perf_profile.map(LocalnetPerfProfile::spec);
         let redundant_send_r = resolve_localnet_redundant_send_r(
             opts.redundant_send_r
-                .or_else(|| perf_spec.map(|spec| spec.redundant_send_r)),
+                .or_else(|| perf_spec.and_then(|spec| spec.redundant_send_r)),
             da_rbc_enabled,
+            opts.peers,
         );
         let block_time_override = opts
             .block_time_ms
@@ -2694,8 +2701,12 @@ mod tests {
 
         let source = TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
         let parsed = actual::Root::from_toml_source(source).expect("config should parse");
+        let expected_redundant_send_r = default_redundant_send_r(opts.peers);
         assert_eq!(parsed.sumeragi.collectors.k, 3);
-        assert_eq!(parsed.sumeragi.collectors.redundant_send_r, 2);
+        assert_eq!(
+            parsed.sumeragi.collectors.redundant_send_r,
+            expected_redundant_send_r
+        );
         let expected_filter: Directives = LOCALNET_PERF_LOGGER_FILTER
             .parse()
             .expect("perf logger filter should parse");
@@ -2707,7 +2718,10 @@ mod tests {
         assert_eq!(params.sumeragi().block_time_ms(), 1_000);
         assert_eq!(params.sumeragi().commit_time_ms(), 1_000);
         assert_eq!(params.sumeragi().collectors_k(), 3);
-        assert_eq!(params.sumeragi().collectors_redundant_send_r(), 2);
+        assert_eq!(
+            params.sumeragi().collectors_redundant_send_r(),
+            expected_redundant_send_r
+        );
         assert_eq!(
             params.block.max_transactions.get(),
             LOCALNET_BLOCK_MAX_TRANSACTIONS
@@ -2742,6 +2756,7 @@ mod tests {
 
         let source = TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
         let parsed = actual::Root::from_toml_source(source).expect("config should parse");
+        let expected_redundant_send_r = default_redundant_send_r(opts.peers);
         let expected_filter: Directives = LOCALNET_PERF_LOGGER_FILTER
             .parse()
             .expect("perf logger filter should parse");
@@ -2751,7 +2766,10 @@ mod tests {
         let manifest = genesis_json_from_path(&genesis_path);
         let params = genesis_parameters(&manifest);
         assert_eq!(params.sumeragi().collectors_k(), 3);
-        assert_eq!(params.sumeragi().collectors_redundant_send_r(), 2);
+        assert_eq!(
+            params.sumeragi().collectors_redundant_send_r(),
+            expected_redundant_send_r
+        );
         assert_eq!(params.sumeragi().block_time_ms(), 1_000);
 
         let npos = params
@@ -2760,7 +2778,7 @@ mod tests {
             .and_then(SumeragiNposParameters::from_custom_parameter)
             .expect("npos parameters must be present");
         assert_eq!(npos.k_aggregators(), 3);
-        assert_eq!(npos.redundant_send_r(), 2);
+        assert_eq!(npos.redundant_send_r(), expected_redundant_send_r);
         assert_eq!(npos.block_time_ms(), 1_000);
         assert_eq!(npos.timeout_commit_ms(), 650);
     }
@@ -2917,7 +2935,7 @@ mod tests {
         );
         assert_eq!(
             params.sumeragi().collectors_redundant_send_r(),
-            LOCALNET_REDUNDANT_SEND_R,
+            default_redundant_send_r(opts.peers),
             "localnet should preserve redundant send override"
         );
     }
@@ -3616,7 +3634,7 @@ mod tests {
                 .and_then(toml::Value::as_integer)
                 .and_then(|value| u8::try_from(value).ok());
             let expected_redundant = if expected {
-                Some(LOCALNET_REDUNDANT_SEND_R)
+                Some(default_redundant_send_r(opts.peers))
             } else {
                 None
             };

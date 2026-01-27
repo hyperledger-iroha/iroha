@@ -4912,7 +4912,8 @@ pub(crate) mod valid {
                 IvmStrategy::Conservative
             };
             // Load worker bound from config once to reuse across stages
-            let workers = state_block.pipeline.workers;
+            let workers = state_block.pipeline_worker_threads();
+            let pool = state_block.pipeline_thread_pool();
             let map_stateless_fail = |fail: AcceptTransactionFail| -> TransactionRejectionReason {
                 match fail {
                     AcceptTransactionFail::TransactionLimit(err) => {
@@ -4984,10 +4985,493 @@ pub(crate) mod valid {
             let lane_catalog = &state_block.nexus.lane_catalog;
             let routing_policy = &state_block.nexus.routing_policy;
             let fraud_cfg = &state_block.fraud_monitoring;
+            let cache_cap = state_block.pipeline.stateless_cache_cap;
+            let cache_enabled = cache_cap > 0 && !is_genesis_block;
+            let now_ms = block_creation_time.as_millis();
+            let max_clock_drift_ms = max_clock_drift.as_millis();
+            let mut cached_ok = vec![false; txs.len()];
+            let cache_context = if cache_enabled {
+                Some(crate::state::StatelessValidationContext::new(
+                    chain_id.clone(),
+                    u64::try_from(max_clock_drift_ms).unwrap_or(u64::MAX),
+                    tx_params,
+                    crypto_cfg.allowed_signing.clone(),
+                ))
+            } else {
+                None
+            };
+            if let Some(cache_context) = cache_context.as_ref() {
+                let mut cache = state_block.stateless_validation_cache().lock();
+                cache.set_cap(cache_cap);
+                cache.ensure_context(cache_context.clone());
+                for (idx, tx) in txs.iter().enumerate() {
+                    if cache.get_ok(&tx.hash(), now_ms) {
+                        cached_ok[idx] = true;
+                    }
+                }
+            }
+            let mut signature_overrides: Vec<
+                Option<Result<(), crate::tx::SignatureVerificationFail>>,
+            > = vec![None; txs.len()];
+            let signature_result_for_tx = |tx: &SignedTransaction| {
+                crate::tx::AcceptedTransaction::signature_verification_result(tx)
+            };
+            let malformed_signature = |tx: &SignedTransaction, detail: &str| {
+                Err(crate::tx::SignatureVerificationFail::new(
+                    tx.signature().clone(),
+                    crate::tx::SignatureRejectionCode::MalformedSignature,
+                    detail.to_string(),
+                ))
+            };
+
+            // Ed25519 deterministic micro-batching for stateless pre-pass.
+            {
+                #[derive(Clone)]
+                struct EdItem {
+                    idx: usize,
+                    pk: [u8; 32],
+                    msg: [u8; 32],
+                    sig: [u8; 64],
+                }
+                let mut items: Vec<EdItem> = Vec::new();
+                for (idx, tx) in txs.iter().enumerate() {
+                    if cached_ok[idx] {
+                        continue;
+                    }
+                    let AccountController::Single(signatory) = tx.authority().controller() else {
+                        continue;
+                    };
+                    if signatory.algorithm() != iroha_crypto::Algorithm::Ed25519 {
+                        continue;
+                    }
+                    let (_algo, pk_bytes) = signatory.to_bytes();
+                    if pk_bytes.len() != 32 {
+                        signature_overrides[idx] =
+                            Some(malformed_signature(tx, "bad signature or key length"));
+                        continue;
+                    }
+                    let sig_bytes = tx.signature().payload().payload();
+                    if sig_bytes.len() != 64 {
+                        signature_overrides[idx] =
+                            Some(malformed_signature(tx, "bad signature or key length"));
+                        continue;
+                    }
+                    let h = iroha_crypto::HashOf::new(tx.payload());
+                    let mut msg = [0u8; 32];
+                    msg.copy_from_slice(h.as_ref());
+                    let mut pk = [0u8; 32];
+                    pk.copy_from_slice(pk_bytes);
+                    let mut sig = [0u8; 64];
+                    sig.copy_from_slice(sig_bytes);
+                    items.push(EdItem { idx, pk, msg, sig });
+                }
+                let cap = if state_block.pipeline.signature_batch_max_ed25519 > 0 {
+                    state_block.pipeline.signature_batch_max_ed25519
+                } else {
+                    state_block.pipeline.signature_batch_max
+                };
+                if cap > 0 && !items.is_empty() {
+                    let derive_seed = |slice: &[&EdItem]| -> [u8; 32] {
+                        let mut tuples: Vec<Vec<u8>> = slice
+                            .iter()
+                            .map(|it| {
+                                let mut v = Vec::with_capacity(32 + 32 + 64);
+                                v.extend_from_slice(&it.pk);
+                                v.extend_from_slice(&it.msg);
+                                v.extend_from_slice(&it.sig);
+                                v
+                            })
+                            .collect();
+                        tuples.sort_unstable();
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(b"iroha:ecc_batch:v1:ed25519");
+                        for t in tuples.iter() {
+                            hasher.update(t);
+                        }
+                        let out = hasher.finalize();
+                        let mut seed = [0u8; 32];
+                        seed.copy_from_slice(&out);
+                        seed
+                    };
+                    let verify_batch_slice = |slice: &[&EdItem]| -> bool {
+                        let seed = derive_seed(slice);
+                        let msgs: Vec<&[u8]> = slice.iter().map(|it| it.msg.as_slice()).collect();
+                        let sigs: Vec<&[u8]> = slice.iter().map(|it| it.sig.as_slice()).collect();
+                        let pks: Vec<&[u8]> = slice.iter().map(|it| it.pk.as_slice()).collect();
+                        iroha_crypto::ed25519_verify_batch_deterministic(&msgs, &sigs, &pks, seed)
+                            .is_ok()
+                    };
+                    let mut start = 0;
+                    while start < items.len() {
+                        let end = usize::min(start + cap, items.len());
+                        let batch = &items[start..end];
+                        let refs: Vec<&EdItem> = batch.iter().collect();
+                        if verify_batch_slice(&refs) {
+                            for it in batch {
+                                signature_overrides[it.idx] = Some(Ok(()));
+                            }
+                        } else {
+                            for it in batch {
+                                signature_overrides[it.idx] =
+                                    Some(signature_result_for_tx(txs[it.idx]));
+                            }
+                        }
+                        start = end;
+                    }
+                }
+            }
+
+            // Secp256k1 deterministic micro-batching for stateless pre-pass.
+            {
+                #[derive(Clone)]
+                struct SecpItem {
+                    idx: usize,
+                    pk: Vec<u8>,
+                    msg: [u8; 32],
+                    sig: [u8; 64],
+                }
+                let mut items: Vec<SecpItem> = Vec::new();
+                for (idx, tx) in txs.iter().enumerate() {
+                    if cached_ok[idx] {
+                        continue;
+                    }
+                    let AccountController::Single(signatory) = tx.authority().controller() else {
+                        continue;
+                    };
+                    if signatory.algorithm() != iroha_crypto::Algorithm::Secp256k1 {
+                        continue;
+                    }
+                    let (_algo, pk_bytes) = signatory.to_bytes();
+                    let sig_bytes = tx.signature().payload().payload();
+                    if sig_bytes.len() != 64 {
+                        signature_overrides[idx] =
+                            Some(malformed_signature(tx, "bad secp256k1 signature length"));
+                        continue;
+                    }
+                    let h = iroha_crypto::HashOf::new(tx.payload());
+                    let mut msg = [0u8; 32];
+                    msg.copy_from_slice(h.as_ref());
+                    let mut sig = [0u8; 64];
+                    sig.copy_from_slice(sig_bytes);
+                    items.push(SecpItem {
+                        idx,
+                        pk: pk_bytes.to_vec(),
+                        msg,
+                        sig,
+                    });
+                }
+                let cap = state_block.pipeline.signature_batch_max_secp256k1;
+                if cap > 0 && !items.is_empty() {
+                    let derive_seed = |slice: &[&SecpItem]| -> [u8; 32] {
+                        let mut tuples: Vec<Vec<u8>> = slice
+                            .iter()
+                            .map(|it| {
+                                let mut v = Vec::with_capacity(it.pk.len() + 32 + 64);
+                                v.extend_from_slice(&it.pk);
+                                v.extend_from_slice(&it.msg);
+                                v.extend_from_slice(&it.sig);
+                                v
+                            })
+                            .collect();
+                        tuples.sort_unstable();
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(b"iroha:ecc_batch:v1:secp256k1");
+                        for t in tuples.iter() {
+                            hasher.update(t);
+                        }
+                        let out = hasher.finalize();
+                        let mut seed = [0u8; 32];
+                        seed.copy_from_slice(&out);
+                        seed
+                    };
+                    let verify_batch_slice = |slice: &[&SecpItem]| -> bool {
+                        let seed = derive_seed(slice);
+                        let msgs: Vec<&[u8]> = slice.iter().map(|it| it.msg.as_slice()).collect();
+                        let sigs: Vec<&[u8]> = slice.iter().map(|it| it.sig.as_slice()).collect();
+                        let pks: Vec<&[u8]> = slice.iter().map(|it| it.pk.as_slice()).collect();
+                        iroha_crypto::secp256k1_verify_batch_deterministic(&msgs, &sigs, &pks, seed)
+                            .is_ok()
+                    };
+                    let mut start = 0;
+                    while start < items.len() {
+                        let end = usize::min(start + cap, items.len());
+                        let batch = &items[start..end];
+                        let refs: Vec<&SecpItem> = batch.iter().collect();
+                        if verify_batch_slice(&refs) {
+                            for it in batch {
+                                signature_overrides[it.idx] = Some(Ok(()));
+                            }
+                        } else {
+                            for it in batch {
+                                signature_overrides[it.idx] =
+                                    Some(signature_result_for_tx(txs[it.idx]));
+                            }
+                        }
+                        start = end;
+                    }
+                }
+            }
+
+            // PQC deterministic micro-batching for stateless pre-pass.
+            {
+                #[derive(Clone)]
+                struct PqcItem {
+                    idx: usize,
+                    pk: Vec<u8>,
+                    msg: [u8; 32],
+                    sig: Vec<u8>,
+                }
+                let mut items: Vec<PqcItem> = Vec::new();
+                for (idx, tx) in txs.iter().enumerate() {
+                    if cached_ok[idx] {
+                        continue;
+                    }
+                    let AccountController::Single(signatory) = tx.authority().controller() else {
+                        continue;
+                    };
+                    if signatory.algorithm() != iroha_crypto::Algorithm::MlDsa {
+                        continue;
+                    }
+                    let (_algo, pk_bytes) = signatory.to_bytes();
+                    let h = iroha_crypto::HashOf::new(tx.payload());
+                    let mut msg = [0u8; 32];
+                    msg.copy_from_slice(h.as_ref());
+                    let sig_bytes = tx.signature().payload().payload().to_vec();
+                    items.push(PqcItem {
+                        idx,
+                        pk: pk_bytes.to_vec(),
+                        msg,
+                        sig: sig_bytes,
+                    });
+                }
+                let cap = state_block.pipeline.signature_batch_max_pqc;
+                if cap > 0 && !items.is_empty() {
+                    let derive_seed = |slice: &[&PqcItem]| -> [u8; 32] {
+                        let mut tuples: Vec<Vec<u8>> = slice
+                            .iter()
+                            .map(|it| {
+                                let mut v = Vec::with_capacity(it.pk.len() + 32 + it.sig.len());
+                                v.extend_from_slice(&it.pk);
+                                v.extend_from_slice(&it.msg);
+                                v.extend_from_slice(&it.sig);
+                                v
+                            })
+                            .collect();
+                        tuples.sort_unstable();
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(b"iroha:pqc_batch:v1:dilithium3");
+                        for t in tuples.iter() {
+                            hasher.update(t);
+                        }
+                        let out = hasher.finalize();
+                        let mut seed = [0u8; 32];
+                        seed.copy_from_slice(&out);
+                        seed
+                    };
+                    let verify_batch_slice = |slice: &[&PqcItem]| -> bool {
+                        let seed = derive_seed(slice);
+                        let msgs: Vec<&[u8]> = slice.iter().map(|it| it.msg.as_slice()).collect();
+                        let sigs: Vec<&[u8]> = slice.iter().map(|it| it.sig.as_slice()).collect();
+                        let pks: Vec<&[u8]> = slice.iter().map(|it| it.pk.as_slice()).collect();
+                        iroha_crypto::pqc_verify_batch_deterministic(&msgs, &sigs, &pks, seed)
+                            .is_ok()
+                    };
+                    let mut start = 0;
+                    while start < items.len() {
+                        let end = usize::min(start + cap, items.len());
+                        let batch = &items[start..end];
+                        let refs: Vec<&PqcItem> = batch.iter().collect();
+                        if verify_batch_slice(&refs) {
+                            for it in batch {
+                                signature_overrides[it.idx] = Some(Ok(()));
+                            }
+                        } else {
+                            for it in batch {
+                                signature_overrides[it.idx] =
+                                    Some(signature_result_for_tx(txs[it.idx]));
+                            }
+                        }
+                        start = end;
+                    }
+                }
+            }
+
+            // BLS deterministic batching for stateless pre-pass.
+            #[cfg(feature = "bls")]
+            {
+                #[derive(Clone)]
+                struct BlsItem {
+                    idx: usize,
+                    pk: iroha_crypto::PublicKey,
+                    pk_bytes: Vec<u8>,
+                    pop: Option<Vec<u8>>,
+                    msg: [u8; 32],
+                    sig: Vec<u8>,
+                }
+                static BLS_POP_KEY: LazyLock<iroha_data_model::name::Name> =
+                    LazyLock::new(|| "bls_pop".parse().expect("valid metadata key"));
+                static BLS_POP_SMALL_KEY: LazyLock<iroha_data_model::name::Name> =
+                    LazyLock::new(|| "bls_pop_small".parse().expect("valid metadata key"));
+                let mut all_normal_have_pop = true;
+                let mut all_small_have_pop = true;
+                let mut items_normal: Vec<BlsItem> = Vec::new();
+                let mut items_small: Vec<BlsItem> = Vec::new();
+                for (idx, tx) in txs.iter().enumerate() {
+                    if cached_ok[idx] {
+                        continue;
+                    }
+                    let AccountController::Single(signatory) = tx.authority().controller() else {
+                        continue;
+                    };
+                    let algo = signatory.algorithm();
+                    let small = match algo {
+                        iroha_crypto::Algorithm::BlsNormal => false,
+                        iroha_crypto::Algorithm::BlsSmall => true,
+                        _ => continue,
+                    };
+                    let h = iroha_crypto::HashOf::new(tx.payload());
+                    let mut msg = [0u8; 32];
+                    msg.copy_from_slice(h.as_ref());
+                    let sig_bytes = tx.signature().payload().payload().to_vec();
+                    let mut pop = None;
+                    if small {
+                        if let Some(pop_hex) =
+                            bls_small_pop_from_metadata(tx.metadata(), &BLS_POP_SMALL_KEY)
+                        {
+                            if iroha_crypto::bls_small_pop_verify(signatory, &pop_hex).is_err() {
+                                all_small_have_pop = false;
+                            } else {
+                                pop = Some(pop_hex);
+                            }
+                        } else {
+                            all_small_have_pop = false;
+                        }
+                    } else if let Some(pop_hex) = bls_pop_from_metadata(tx.metadata(), &BLS_POP_KEY)
+                    {
+                        if iroha_crypto::bls_normal_pop_verify(signatory, &pop_hex).is_err() {
+                            all_normal_have_pop = false;
+                        } else {
+                            pop = Some(pop_hex);
+                        }
+                    } else {
+                        all_normal_have_pop = false;
+                    }
+                    let item = BlsItem {
+                        idx,
+                        pk: signatory.clone(),
+                        pk_bytes: signatory.to_bytes().1.to_vec(),
+                        pop,
+                        msg,
+                        sig: sig_bytes,
+                    };
+                    if small {
+                        items_small.push(item);
+                    } else {
+                        items_normal.push(item);
+                    }
+                }
+                let cap = state_block.pipeline.signature_batch_max_bls;
+                let mut verify_set = |items: &[BlsItem], small: bool| {
+                    if items.is_empty() {
+                        return;
+                    }
+                    let mut groups: std::collections::BTreeMap<[u8; 32], Vec<&BlsItem>> =
+                        std::collections::BTreeMap::new();
+                    for item in items {
+                        groups.entry(item.msg).or_default().push(item);
+                    }
+                    let mut singletons: Vec<&BlsItem> = Vec::new();
+                    for group in groups.values() {
+                        if group.len() == 1 {
+                            singletons.push(group[0]);
+                            continue;
+                        }
+                        let ok = {
+                            let msg = group[0].msg.as_slice();
+                            let sigs: Vec<&[u8]> =
+                                group.iter().map(|it| it.sig.as_slice()).collect();
+                            let pks: Vec<&iroha_crypto::PublicKey> =
+                                group.iter().map(|it| &it.pk).collect();
+                            let mut pops = Vec::with_capacity(group.len());
+                            for it in group {
+                                let Some(pop) = it.pop.as_ref() else {
+                                    return;
+                                };
+                                pops.push(pop.as_slice());
+                            }
+                            if small {
+                                iroha_crypto::bls_small_verify_aggregate_same_message(
+                                    msg, &sigs, &pks, &pops,
+                                )
+                                .is_ok()
+                            } else {
+                                iroha_crypto::bls_normal_verify_aggregate_same_message(
+                                    msg, &sigs, &pks, &pops,
+                                )
+                                .is_ok()
+                            }
+                        };
+                        if ok {
+                            for it in group {
+                                signature_overrides[it.idx] = Some(Ok(()));
+                            }
+                        } else {
+                            for it in group {
+                                signature_overrides[it.idx] =
+                                    Some(signature_result_for_tx(txs[it.idx]));
+                            }
+                        }
+                    }
+                    if !singletons.is_empty() {
+                        let msgs: Vec<&[u8]> =
+                            singletons.iter().map(|it| it.msg.as_slice()).collect();
+                        let sigs: Vec<&[u8]> =
+                            singletons.iter().map(|it| it.sig.as_slice()).collect();
+                        let pks: Vec<&[u8]> =
+                            singletons.iter().map(|it| it.pk_bytes.as_slice()).collect();
+                        let ok = if small {
+                            iroha_crypto::bls_small_verify_aggregate_multi_message(
+                                &msgs, &sigs, &pks,
+                            )
+                            .is_ok()
+                        } else {
+                            iroha_crypto::bls_normal_verify_aggregate_multi_message(
+                                &msgs, &sigs, &pks,
+                            )
+                            .is_ok()
+                        };
+                        if ok {
+                            for it in singletons {
+                                signature_overrides[it.idx] = Some(Ok(()));
+                            }
+                        } else {
+                            for it in singletons {
+                                signature_overrides[it.idx] =
+                                    Some(signature_result_for_tx(txs[it.idx]));
+                            }
+                        }
+                    }
+                };
+                if cap > 0 {
+                    if all_normal_have_pop {
+                        for chunk in items_normal.chunks(cap) {
+                            verify_set(chunk, false);
+                        }
+                    }
+                    if all_small_have_pop {
+                        for chunk in items_small.chunks(cap) {
+                            verify_set(chunk, true);
+                        }
+                    }
+                }
+            }
             #[cfg(feature = "telemetry")]
             let t_stateless_start = Instant::now();
             let mut stateless_rejections: Vec<Option<TransactionRejectionReason>> = {
-                let validate_tx = |(_idx, tx): (usize, &&SignedTransaction)| {
+                let validate_tx = |(idx, tx): (usize, &&SignedTransaction)| {
+                    if cached_ok[idx] {
+                        return None;
+                    }
                     if tx.creation_time() >= block_creation_time {
                         return Some(TransactionRejectionReason::Validation(
                             iroha_data_model::ValidationFail::NotPermitted(format!(
@@ -5024,23 +5508,28 @@ pub(crate) mod valid {
                             return Some(reason);
                         }
                     }
+                    let signature_override = signature_overrides
+                        .get(idx)
+                        .and_then(|override_result| override_result.as_ref().cloned());
                     let stateless = if is_heartbeat {
-                        AcceptedTransaction::validate_heartbeat_with_now(
+                        AcceptedTransaction::validate_heartbeat_with_now_with_signature_result(
                             tx,
                             &chain_id,
                             max_clock_drift,
                             tx_params,
                             crypto_cfg.as_ref(),
                             block_creation_time,
+                            signature_override,
                         )
                     } else {
-                        AcceptedTransaction::validate_with_now(
+                        AcceptedTransaction::validate_with_now_with_signature_result(
                             tx,
                             &chain_id,
                             max_clock_drift,
                             tx_params,
                             crypto_cfg.as_ref(),
                             block_creation_time,
+                            signature_override,
                         )
                     };
                     match stateless {
@@ -5048,13 +5537,12 @@ pub(crate) mod valid {
                         Err(fail) => Some(map_stateless_fail(fail)),
                     }
                 };
-                if workers > 0 {
-                    let pool = rayon::ThreadPoolBuilder::new()
-                        .num_threads(workers)
-                        .thread_name(|i| format!("stateless-{i}"))
-                        .build()
-                        .expect("valid worker count for stateless pool");
-                    pool.install(|| txs.par_iter().enumerate().map(validate_tx).collect())
+                if workers > 1 {
+                    if let Some(pool) = pool.as_ref() {
+                        pool.install(|| txs.par_iter().enumerate().map(validate_tx).collect())
+                    } else {
+                        txs.par_iter().enumerate().map(validate_tx).collect()
+                    }
                 } else {
                     txs.iter().enumerate().map(validate_tx).collect()
                 }
@@ -5068,16 +5556,47 @@ pub(crate) mod valid {
                     t_stateless_start.elapsed().as_secs_f64() * 1_000.0,
                 );
             }
+            if let Some(cache_context) = cache_context {
+                let mut cache = state_block.stateless_validation_cache().lock();
+                cache.set_cap(cache_cap);
+                cache.ensure_context(cache_context);
+                for (idx, tx) in txs.iter().enumerate() {
+                    if cached_ok[idx] || stateless_rejections[idx].is_some() {
+                        continue;
+                    }
+                    let expires_at_ms = tx
+                        .time_to_live()
+                        .and_then(|ttl| tx.creation_time().checked_add(ttl))
+                        .map(|expires_at| expires_at.as_millis());
+                    let not_before_ms = tx
+                        .creation_time()
+                        .as_millis()
+                        .saturating_sub(max_clock_drift_ms);
+                    cache.insert_ok(tx.hash(), expires_at_ms, not_before_ms);
+                }
+            }
             #[cfg(feature = "telemetry")]
             let t_access_start = Instant::now();
             let derived: Vec<_> = if dynamic_prepass {
-                if workers > 0 {
-                    let pool = rayon::ThreadPoolBuilder::new()
-                        .num_threads(workers)
-                        .thread_name(|i| format!("prepass-{i}"))
-                        .build()
-                        .expect("valid worker count for prepass pool");
-                    pool.install(|| {
+                if workers > 1 {
+                    if let Some(pool) = pool.as_ref() {
+                        pool.install(|| {
+                            txs.par_iter()
+                                .enumerate()
+                                .map(|(idx, tx)| {
+                                    if stateless_rejections[idx].is_some() {
+                                        (crate::pipeline::access::AccessSet::new(), None)
+                                    } else {
+                                        derive_for_transaction_with_source(
+                                            tx,
+                                            Some(&*state_block),
+                                            strategy,
+                                        )
+                                    }
+                                })
+                                .collect()
+                        })
+                    } else {
                         txs.par_iter()
                             .enumerate()
                             .map(|(idx, tx)| {
@@ -5092,9 +5611,9 @@ pub(crate) mod valid {
                                 }
                             })
                             .collect()
-                    })
+                    }
                 } else {
-                    txs.par_iter()
+                    txs.iter()
                         .enumerate()
                         .map(|(idx, tx)| {
                             if stateless_rejections[idx].is_some() {
@@ -5241,7 +5760,6 @@ pub(crate) mod valid {
 
             // Parallel overlay construction from configuration
             let build_parallel = state_block.pipeline.parallel_overlay;
-            let workers = state_block.pipeline.workers;
             // Quarantine lane: overlays for quarantined transactions will be built
             // sequentially with per-tx caps below. Normal lane follows configured parallelism.
             #[cfg(feature = "telemetry")]
@@ -5250,13 +5768,8 @@ pub(crate) mod valid {
                 Result<Arc<TxOverlay>, crate::pipeline::overlay::OverlayBuildError>,
             > = vec![Err(crate::pipeline::overlay::OverlayBuildError::IvmHeaderParse); txs.len()];
             // Normal lane overlays
-            if build_parallel {
-                if workers > 0 {
-                    let pool = rayon::ThreadPoolBuilder::new()
-                        .num_threads(workers)
-                        .thread_name(|i| format!("overlay-worker-{i}"))
-                        .build()
-                        .expect("valid worker count for overlay pool");
+            if build_parallel && workers > 1 {
+                if let Some(pool) = pool.as_ref() {
                     pool.install(|| {
                         overlays.par_iter_mut().enumerate().for_each(|(i, slot)| {
                             if !is_quarantine[i] && stateless_rejections[i].is_none() {
@@ -6132,37 +6645,109 @@ pub(crate) mod valid {
                                 iroha_data_model::transaction::error::TransactionRejectionReason,
                             ),
                         >,
-                    > = if workers > 0 {
-                        let pool = rayon::ThreadPoolBuilder::new()
-                            .num_threads(workers)
-                            .thread_name(|i| format!("overlay-prep-{i}"))
-                            .build()
-                            .expect("valid worker count for prep pool");
-                        pool.install(|| layer_norm.par_iter().map(|&idx| {
-                            let tx = txs[idx];
-                            let overlay = match overlays[idx].as_ref() {
-                                Ok(o) => Arc::clone(o),
-                                Err(err) => {
-                                    let rej = map_overlay_error(err);
-                                    return Err((idx, rej));
-                                }
-                            };
-                            let max_instrs = state_block.pipeline.overlay_max_instructions;
-                            if max_instrs > 0 && overlay.instruction_count() > max_instrs {
-                                return Err((idx, iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                    iroha_data_model::ValidationFail::NotPermitted(format!("overlay exceeds max instructions: {} > {max_instrs}", overlay.instruction_count())),
-                                )));
-                            }
-                            let max_bytes = state_block.pipeline.overlay_max_bytes;
-                            if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
-                                return Err((idx, iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                                    iroha_data_model::ValidationFail::NotPermitted(format!("overlay exceeds max bytes: {} > {max_bytes}", overlay.byte_size())),
-                                )));
-                            }
-                            Ok(PreparedEntry{ idx, authority: tx.authority().clone(), chunk_size: state_block.pipeline.overlay_chunk_instructions.max(1), _log_only: false })
-                        }).collect())
+                    > = if workers > 1 {
+                        if let Some(pool) = pool.as_ref() {
+                            pool.install(|| {
+                                layer_norm
+                                    .par_iter()
+                                    .map(|&idx| {
+                                        let tx = txs[idx];
+                                        let overlay = match overlays[idx].as_ref() {
+                                            Ok(o) => Arc::clone(o),
+                                            Err(err) => {
+                                                let rej = map_overlay_error(err);
+                                                return Err((idx, rej));
+                                            }
+                                        };
+                                        let max_instrs =
+                                            state_block.pipeline.overlay_max_instructions;
+                                        if max_instrs > 0
+                                            && overlay.instruction_count() > max_instrs
+                                        {
+                                            return Err((
+                                                idx,
+                                                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                                    iroha_data_model::ValidationFail::NotPermitted(format!(
+                                                        "overlay exceeds max instructions: {} > {max_instrs}",
+                                                        overlay.instruction_count()
+                                                    )),
+                                                ),
+                                            ));
+                                        }
+                                        let max_bytes = state_block.pipeline.overlay_max_bytes;
+                                        if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
+                                            return Err((
+                                                idx,
+                                                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                                    iroha_data_model::ValidationFail::NotPermitted(format!(
+                                                        "overlay exceeds max bytes: {} > {max_bytes}",
+                                                        overlay.byte_size()
+                                                    )),
+                                                ),
+                                            ));
+                                        }
+                                        Ok(PreparedEntry {
+                                            idx,
+                                            authority: tx.authority().clone(),
+                                            chunk_size: state_block
+                                                .pipeline
+                                                .overlay_chunk_instructions
+                                                .max(1),
+                                            _log_only: false,
+                                        })
+                                    })
+                                    .collect()
+                            })
+                        } else {
+                            layer_norm
+                                .par_iter()
+                                .map(|&idx| {
+                                    let tx = txs[idx];
+                                    let overlay = match overlays[idx].as_ref() {
+                                        Ok(o) => Arc::clone(o),
+                                        Err(err) => {
+                                            let rej = map_overlay_error(err);
+                                            return Err((idx, rej));
+                                        }
+                                    };
+                                    let max_instrs = state_block.pipeline.overlay_max_instructions;
+                                    if max_instrs > 0 && overlay.instruction_count() > max_instrs {
+                                        return Err((
+                                            idx,
+                                            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                                iroha_data_model::ValidationFail::NotPermitted(format!(
+                                                    "overlay exceeds max instructions: {} > {max_instrs}",
+                                                    overlay.instruction_count()
+                                                )),
+                                            ),
+                                        ));
+                                    }
+                                    let max_bytes = state_block.pipeline.overlay_max_bytes;
+                                    if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
+                                        return Err((
+                                            idx,
+                                            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                                                iroha_data_model::ValidationFail::NotPermitted(format!(
+                                                    "overlay exceeds max bytes: {} > {max_bytes}",
+                                                    overlay.byte_size()
+                                                )),
+                                            ),
+                                        ));
+                                    }
+                                    Ok(PreparedEntry {
+                                        idx,
+                                        authority: tx.authority().clone(),
+                                        chunk_size: state_block
+                                            .pipeline
+                                            .overlay_chunk_instructions
+                                            .max(1),
+                                        _log_only: false,
+                                    })
+                                })
+                                .collect()
+                        }
                     } else {
-                        layer_norm.par_iter().map(|&idx| {
+                        layer_norm.iter().map(|&idx| {
                             let tx = txs[idx];
                             let overlay = match overlays[idx].as_ref() {
                                 Ok(o) => Arc::clone(o),
@@ -6183,7 +6768,12 @@ pub(crate) mod valid {
                                     iroha_data_model::ValidationFail::NotPermitted(format!("overlay exceeds max bytes: {} > {max_bytes}", overlay.byte_size())),
                                 )));
                             }
-                            Ok(PreparedEntry{ idx, authority: tx.authority().clone(), chunk_size: state_block.pipeline.overlay_chunk_instructions.max(1), _log_only: false })
+                            Ok(PreparedEntry {
+                                idx,
+                                authority: tx.authority().clone(),
+                                chunk_size: state_block.pipeline.overlay_chunk_instructions.max(1),
+                                _log_only: false,
+                            })
                         }).collect()
                     };
                     #[cfg(feature = "telemetry")]
@@ -6248,105 +6838,53 @@ pub(crate) mod valid {
                     for account_id in accounts_to_prefetch {
                         let _ = prefetch_account_stores(state_block, &account_id);
                     }
+                    let eval_detached = |p: &PreparedEntry| {
+                        if let Some(Ok(ovl)) = overlays.get(p.idx) {
+                            let mut delta = DetachedStateTransactionDelta::default();
+                            let mut unsupported = false;
+                            let mut reject: Option<TransactionRejectionReason> = None;
+                            for instr in ovl.instructions() {
+                                match crate::executor::execute_instruction_detached(
+                                    &p.authority,
+                                    instr,
+                                    &mut delta,
+                                ) {
+                                    Ok(()) => {}
+                                    Err(iroha_data_model::ValidationFail::InternalError(_)) => {
+                                        unsupported = true;
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        reject = Some(TransactionRejectionReason::Validation(e));
+                                        break;
+                                    }
+                                }
+                            }
+                            reject.map_or_else(
+                                || {
+                                    if unsupported {
+                                        (p.idx, None)
+                                    } else {
+                                        (p.idx, Some(Ok(delta)))
+                                    }
+                                },
+                                |r| (p.idx, Some(Err(r))),
+                            )
+                        } else {
+                            (p.idx, None)
+                        }
+                    };
                     let deltas_vec: Vec<(
                         usize,
                         Option<Result<DetachedStateTransactionDelta, TransactionRejectionReason>>,
-                    )> = if workers > 0 {
-                        let pool = rayon::ThreadPoolBuilder::new()
-                            .num_threads(workers)
-                            .thread_name(|i| format!("overlay-exec-{i}"))
-                            .build()
-                            .expect("valid worker count for exec pool");
-                        pool.install(|| {
-                            prepared
-                                .par_iter()
-                                .map(|p| {
-                                    if let Some(Ok(ovl)) = overlays.get(p.idx) {
-                                        let mut delta = DetachedStateTransactionDelta::default();
-                                        let mut unsupported = false;
-                                        let mut reject: Option<TransactionRejectionReason> = None;
-                                        for instr in ovl.instructions() {
-                                            match crate::executor::execute_instruction_detached(
-                                                &p.authority,
-                                                instr,
-                                                &mut delta,
-                                            ) {
-                                                Ok(()) => {}
-                                                Err(
-                                                    iroha_data_model::ValidationFail::InternalError(
-                                                        _,
-                                                    ),
-                                                ) => {
-                                                    unsupported = true;
-                                                    break;
-                                                }
-                                                Err(e) => {
-                                                    reject = Some(
-                                                        TransactionRejectionReason::Validation(e),
-                                                    );
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        reject.map_or_else(
-                                            || {
-                                                if unsupported {
-                                                    (p.idx, None)
-                                                } else {
-                                                    (p.idx, Some(Ok(delta)))
-                                                }
-                                            },
-                                            |r| (p.idx, Some(Err(r))),
-                                        )
-                                    } else {
-                                        (p.idx, None)
-                                    }
-                                })
-                                .collect()
-                        })
+                    )> = if workers > 1 {
+                        if let Some(pool) = pool.as_ref() {
+                            pool.install(|| prepared.par_iter().map(eval_detached).collect())
+                        } else {
+                            prepared.par_iter().map(eval_detached).collect()
+                        }
                     } else {
-                        prepared
-                            .par_iter()
-                            .map(|p| {
-                                if let Some(Ok(ovl)) = overlays.get(p.idx) {
-                                    let mut delta = DetachedStateTransactionDelta::default();
-                                    let mut unsupported = false;
-                                    let mut reject: Option<TransactionRejectionReason> = None;
-                                    for instr in ovl.instructions() {
-                                        match crate::executor::execute_instruction_detached(
-                                            &p.authority,
-                                            instr,
-                                            &mut delta,
-                                        ) {
-                                            Ok(()) => {}
-                                            Err(
-                                                iroha_data_model::ValidationFail::InternalError(_),
-                                            ) => {
-                                                unsupported = true;
-                                                break;
-                                            }
-                                            Err(e) => {
-                                                reject =
-                                                    Some(TransactionRejectionReason::Validation(e));
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    reject.map_or_else(
-                                        || {
-                                            if unsupported {
-                                                (p.idx, None)
-                                            } else {
-                                                (p.idx, Some(Ok(delta)))
-                                            }
-                                        },
-                                        |r| (p.idx, Some(Err(r))),
-                                    )
-                                } else {
-                                    (p.idx, None)
-                                }
-                            })
-                            .collect()
+                        prepared.iter().map(eval_detached).collect()
                     };
                     // Optimize lookups during merge: Vec<Option<..>> indexed by tx index
                     let mut deltas: Vec<

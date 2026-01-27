@@ -182,6 +182,15 @@ impl From<&SignedBlock> for BlockSyncUpdate {
 // NOTE: Previously manual decoding validated signature uniqueness; Decode is now derived for simplicity.
 
 /// Request a peer to resend a pending block payload.
+#[derive(Debug, Clone, Copy, Decode, Encode, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum FetchPendingBlockPriority {
+    /// Background fetch (default).
+    Background,
+    /// Consensus-critical fetch (highest QC).
+    Consensus,
+}
+
+/// Request a peer to resend a pending block payload.
 #[derive(Debug, Clone, Decode, Encode)]
 pub struct FetchPendingBlock {
     /// Peer requesting the payload.
@@ -192,6 +201,10 @@ pub struct FetchPendingBlock {
     pub height: u64,
     /// View hint for the missing block.
     pub view: u64,
+    /// Optional priority hint for responders.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub priority: Option<FetchPendingBlockPriority>,
 }
 
 #[cfg(test)]
@@ -321,6 +334,7 @@ mod tests {
             block_hash,
             height: 1,
             view: 0,
+            priority: None,
         });
         assert_eq!(fetch.priority(), iroha_p2p::Priority::High);
     }

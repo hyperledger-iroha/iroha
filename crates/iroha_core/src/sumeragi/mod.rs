@@ -3025,6 +3025,7 @@ mod tests {
             block_hash,
             height: 0,
             view: 0,
+            priority: None,
         };
         handle.incoming_block_message(BlockMessage::FetchPendingBlock(request.clone()));
 
@@ -3719,6 +3720,7 @@ mod tests {
             block_hash,
             height: 0,
             view: 0,
+            priority: None,
         };
         block_tx_fill
             .send(inbound(BlockMessage::FetchPendingBlock(request)))
@@ -7508,6 +7510,7 @@ enum BlockPayloadDedupKey {
         view: u64,
         block_hash: HashOf<BlockHeader>,
         requester_hash: CryptoHash,
+        priority: message::FetchPendingBlockPriority,
     },
     RbcChunk {
         height: u64,
@@ -8463,11 +8466,15 @@ impl SumeragiHandle {
             }
             BlockMessage::FetchPendingBlock(request) => {
                 let requester_hash = CryptoHash::new(request.requester.encode());
+                let request_priority = request
+                    .priority
+                    .unwrap_or(message::FetchPendingBlockPriority::Background);
                 let dedup_key = BlockPayloadDedupKey::FetchPendingBlock {
                     height: request.height,
                     view: request.view,
                     block_hash: request.block_hash,
                     requester_hash,
+                    priority: request_priority,
                 };
                 let duplicate = !self.dedup_block_payload(dedup_key);
                 if duplicate {

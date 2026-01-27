@@ -219,6 +219,16 @@ final class OfflineToriiEncodingTests: XCTestCase {
             return XCTFail("expected transfer payload")
         }
         XCTAssertEqual(object["bundle_id"]?.normalizedString, hashLiteral(transfer.bundleId))
+
+        let registerRequest = try ToriiOfflineAllowanceRegisterRequest(
+            authority: "alice@wonderland",
+            privateKey: "ed0120deadbeef",
+            certificate: certificate
+        )
+        guard case let .object(certificateObject) = registerRequest.certificate else {
+            return XCTFail("expected allowance certificate payload")
+        }
+        XCTAssertNotNil(certificateObject["operator_signature"]?.normalizedString)
     }
 
     // MARK: - Helpers

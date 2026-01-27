@@ -16,6 +16,7 @@ import org.hyperledger.iroha.android.offline.OfflineProofRequestParams;
 import org.hyperledger.iroha.android.offline.OfflineProofRequestResult;
 import org.hyperledger.iroha.android.offline.OfflineQueryEnvelope;
 import org.hyperledger.iroha.android.offline.OfflineToriiException;
+import org.hyperledger.iroha.android.offline.OfflineWalletCertificate;
 import org.hyperledger.iroha.android.offline.OfflineWalletCertificateDraft;
 import org.hyperledger.iroha.android.offline.OfflineWalletPolicy;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
@@ -35,6 +36,7 @@ public final class OfflineToriiClientTests {
     proofRequestBuilderValidation();
     issueCertificatePostsDraft();
     issueCertificateRenewalUsesPath();
+    registerAllowancePostsCertificate();
     System.out.println("[IrohaAndroid] OfflineToriiClientTests passed.");
   }
 
@@ -122,6 +124,8 @@ public final class OfflineToriiClientTests {
       client.listTransfers(null).join();
     } catch (final CompletionException ex) {
       assert ex.getCause() instanceof OfflineToriiException : "expected OfflineToriiException";
+      assert ex.getCause().getMessage().contains("500") : "status missing from message";
+      assert ex.getCause().getMessage().contains("boom") : "body missing from message";
       return;
     }
     throw new AssertionError("Expected CompletionException for non-2xx responses");
@@ -344,6 +348,53 @@ public final class OfflineToriiClientTests {
         : "renewal path missing";
     assert executor.lastRequest.uri().getPath().endsWith("/renew/issue")
         : "renewal path mismatch";
+  }
+
+  private static void registerAllowancePostsCertificate() {
+    final StubExecutor executor = new StubExecutor(200, "{}");
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    final OfflineAllowanceCommitment allowance =
+        new OfflineAllowanceCommitment("usd#wonderland", "10", new byte[] {1, 2});
+    final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
+    final String verdictId =
+        "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+    final String attestationNonce =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    final OfflineWalletCertificate certificate =
+        new OfflineWalletCertificate(
+            "alice@wonderland",
+            allowance,
+            "ed0120deadbeef",
+            new byte[] {3, 4},
+            100L,
+            200L,
+            policy,
+            "AA",
+            Map.of("note", "value"),
+            verdictId,
+            attestationNonce,
+            null);
+    client.registerAllowance(certificate, "treasury@wonderland", "deadbeef").join();
+    assert executor.lastRequest.uri().getPath().endsWith("/v1/offline/allowances")
+        : "allowance register path mismatch";
+    assert executor.lastBody.contains("\"authority\":\"treasury@wonderland\"")
+        : "authority missing from body";
+    assert executor.lastBody.contains("\"private_key\":\"deadbeef\"")
+        : "private key missing from body";
+    assert executor.lastBody.contains("\"operator_signature\"")
+        : "operator signature missing from body";
+    assert executor.lastBody.contains("\"verdict_id\":\"hash:")
+        : "verdict id missing from body";
+    assert executor.lastBody.contains(verdictId.toUpperCase())
+        : "verdict id not normalized in body";
+    assert executor.lastBody.contains("\"attestation_nonce\":\"hash:")
+        : "attestation nonce missing from body";
+    assert executor.lastBody.contains(attestationNonce.toUpperCase())
+        : "attestation nonce not normalized in body";
   }
 
   private static final class StubExecutor implements HttpTransportExecutor {

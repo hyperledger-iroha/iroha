@@ -978,6 +978,8 @@ mod tests {
                         iroha_config::parameters::defaults::sumeragi::VALIDATION_WORK_QUEUE_CAP,
                     validation_result_queue_cap:
                         iroha_config::parameters::defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP,
+                    validation_pending_cap:
+                        iroha_config::parameters::defaults::sumeragi::VALIDATION_PENDING_CAP,
                 },
                 pacemaker: iroha_config::parameters::actual::SumeragiPacemaker {
                     backoff_multiplier:
@@ -1236,6 +1238,7 @@ mod tests {
                     iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
                 parallel_overlay: false,
                 workers: iroha_config::parameters::defaults::pipeline::WORKERS,
+                stateless_cache_cap: iroha_config::parameters::defaults::pipeline::STATELESS_CACHE_CAP,
                 parallel_apply: true,
                 ready_queue_heap: iroha_config::parameters::defaults::pipeline::READY_QUEUE_HEAP,
                 gpu_key_bucket: iroha_config::parameters::defaults::pipeline::GPU_KEY_BUCKET,

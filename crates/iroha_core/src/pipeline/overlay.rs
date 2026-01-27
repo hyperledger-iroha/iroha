@@ -115,6 +115,7 @@ fn default_pipeline_config() -> iroha_config::parameters::actual::Pipeline {
         access_set_cache_enabled: defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
         parallel_overlay: defaults::pipeline::PARALLEL_OVERLAY,
         workers: defaults::pipeline::WORKERS,
+        stateless_cache_cap: defaults::pipeline::STATELESS_CACHE_CAP,
         parallel_apply: defaults::pipeline::PARALLEL_APPLY,
         ready_queue_heap: defaults::pipeline::READY_QUEUE_HEAP,
         gpu_key_bucket: defaults::pipeline::GPU_KEY_BUCKET,

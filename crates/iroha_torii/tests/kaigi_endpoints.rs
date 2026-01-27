@@ -82,9 +82,7 @@ fn build_app() -> (axum::Router, AccountId, AccountId) {
         [owner, relay],
         Vec::<iroha_data_model::asset::AssetDefinition>::new(),
     );
-    world.peers.mutate_vec(|peers| {
-        let _ = peers.push(local_peer_id.clone());
-    });
+    fixtures::seed_peer(&mut world, local_peer_id.clone());
 
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
 

@@ -1,9 +1,10 @@
 //! Block sync and missing-block request handlers.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_logger::prelude::*;
 
+use super::message::FetchPendingBlockPriority;
 use super::*;
 
 impl Actor {
@@ -31,7 +32,28 @@ impl Actor {
         }
     }
 
-    fn send_fetch_pending_block_response(&mut self, peer: PeerId, mut msg: BlockMessage) {
+    fn dispatch_fetch_pending_block_response(
+        &mut self,
+        peer: PeerId,
+        mut msg: BlockMessage,
+        priority: FetchPendingBlockPriority,
+    ) {
+        if matches!(priority, FetchPendingBlockPriority::Consensus) {
+            if !self.prepare_background_block_message(&mut msg) {
+                return;
+            }
+            self.dispatch_background_fallback(BackgroundRequest::Post { peer, msg });
+            return;
+        }
+        self.enqueue_fetch_pending_block_response(peer, msg);
+    }
+
+    fn send_fetch_pending_block_response(
+        &mut self,
+        peer: PeerId,
+        mut msg: BlockMessage,
+        priority: FetchPendingBlockPriority,
+    ) {
         if let BlockMessage::BlockSyncUpdate(update) = &mut msg {
             let block_hash = update.block.hash();
             let height = update.block.header().height().get();
@@ -73,14 +95,19 @@ impl Actor {
                     fallback_len,
                     "block sync response exceeds frame cap; sending BlockCreated instead"
                 );
-                self.enqueue_fetch_pending_block_response(peer, fallback);
+                self.dispatch_fetch_pending_block_response(peer, fallback, priority);
                 return;
             }
         }
-        self.enqueue_fetch_pending_block_response(peer, msg);
+        self.dispatch_fetch_pending_block_response(peer, msg, priority);
     }
 
-    fn send_fetch_pending_block_rbc_init(&mut self, peer: PeerId, block: &SignedBlock) {
+    fn send_fetch_pending_block_rbc_init(
+        &mut self,
+        peer: PeerId,
+        block: &SignedBlock,
+        priority: FetchPendingBlockPriority,
+    ) {
         if !self.runtime_da_enabled() {
             return;
         }
@@ -96,11 +123,16 @@ impl Actor {
         };
         // Send RBC INIT alongside missing-block responses so peers can process READY/DELIVER.
         let peer_clone = peer.clone();
-        self.send_fetch_pending_block_response(peer, BlockMessage::RbcInit(init));
-        self.send_fetch_pending_block_rbc_chunks(peer_clone, block);
+        self.send_fetch_pending_block_response(peer, BlockMessage::RbcInit(init), priority);
+        self.send_fetch_pending_block_rbc_chunks(peer_clone, block, priority);
     }
 
-    fn send_fetch_pending_block_rbc_chunks(&mut self, peer: PeerId, block: &SignedBlock) {
+    fn send_fetch_pending_block_rbc_chunks(
+        &mut self,
+        peer: PeerId,
+        block: &SignedBlock,
+        priority: FetchPendingBlockPriority,
+    ) {
         if !self.runtime_da_enabled() {
             return;
         }
@@ -135,7 +167,11 @@ impl Actor {
                 idx,
                 bytes,
             };
-            self.send_fetch_pending_block_response(peer.clone(), BlockMessage::RbcChunk(chunk));
+            self.send_fetch_pending_block_response(
+                peer.clone(),
+                BlockMessage::RbcChunk(chunk),
+                priority,
+            );
         }
     }
 
@@ -182,29 +218,66 @@ impl Actor {
     fn take_pending_fetch_requesters(
         &mut self,
         block_hash: &HashOf<BlockHeader>,
-    ) -> BTreeSet<PeerId> {
+    ) -> BTreeMap<PeerId, FetchPendingBlockPriority> {
         self.pending
             .pending_fetch_requests
             .remove(block_hash)
             .unwrap_or_default()
     }
 
-    fn stash_pending_fetch_request(&mut self, block_hash: HashOf<BlockHeader>, peer: PeerId) {
-        self.pending
+    fn stash_pending_fetch_request(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        peer: PeerId,
+        priority: FetchPendingBlockPriority,
+    ) {
+        let entry = self
+            .pending
             .pending_fetch_requests
             .entry(block_hash)
-            .or_default()
-            .insert(peer);
+            .or_default();
+        entry
+            .entry(peer)
+            .and_modify(|stored| *stored = (*stored).max(priority))
+            .or_insert(priority);
     }
 
-    fn send_fetch_pending_block_responses(&mut self, peers: BTreeSet<PeerId>, block: &SignedBlock) {
+    fn send_fetch_pending_block_responses(
+        &mut self,
+        peers: BTreeMap<PeerId, FetchPendingBlockPriority>,
+        block: &SignedBlock,
+    ) {
         if peers.is_empty() {
             return;
         }
         let msg = self.build_fetch_pending_block_payload(block);
-        for peer in peers {
-            self.send_fetch_pending_block_response(peer.clone(), msg.clone());
-            self.send_fetch_pending_block_rbc_init(peer, block);
+        if matches!(msg, BlockMessage::BlockSyncUpdate(_)) {
+            let created = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
+            let created_len =
+                super::consensus_block_wire_len(self.common_config.peer.id(), &created);
+            if created_len <= self.consensus_payload_frame_cap {
+                for (peer, priority) in peers.iter() {
+                    self.send_fetch_pending_block_response(
+                        peer.clone(),
+                        created.clone(),
+                        *priority,
+                    );
+                }
+            } else {
+                let header = block.header();
+                warn!(
+                    height = header.height().get(),
+                    view = header.view_change_index(),
+                    block = %block.hash(),
+                    cap = self.consensus_payload_frame_cap,
+                    created_len,
+                    "skipping BlockCreated fetch response; payload exceeds frame cap"
+                );
+            }
+        }
+        for (peer, priority) in peers {
+            self.send_fetch_pending_block_response(peer.clone(), msg.clone(), priority);
+            self.send_fetch_pending_block_rbc_init(peer, block, priority);
         }
     }
 
@@ -554,13 +627,28 @@ impl Actor {
             if let Some(qc) = incoming_qc.as_ref()
                 && HashOf::new(qc) != HashOf::new(&snapshot.commit_qc)
             {
-                info!(
-                    height = block_height,
-                    view = block_view,
-                    block = %block_hash,
-                    "dropping block sync QC: does not match local commit roster snapshot"
-                );
-                incoming_qc = None;
+                let same_validator_set = qc.validator_set_hash_version
+                    == snapshot.commit_qc.validator_set_hash_version
+                    && qc.validator_set_hash == snapshot.commit_qc.validator_set_hash
+                    && qc.validator_set == snapshot.commit_qc.validator_set;
+                if same_validator_set {
+                    info!(
+                        height = block_height,
+                        view = block_view,
+                        block = %block_hash,
+                        incoming_signers = qc_signer_count(qc),
+                        local_signers = qc_signer_count(&snapshot.commit_qc),
+                        "incoming block sync QC differs from local snapshot; revalidating"
+                    );
+                } else {
+                    info!(
+                        height = block_height,
+                        view = block_view,
+                        block = %block_hash,
+                        "dropping block sync QC: does not match local commit roster snapshot"
+                    );
+                    incoming_qc = None;
+                }
             }
             if let Some(checkpoint) = validator_checkpoint.as_ref()
                 && HashOf::new(checkpoint) != HashOf::new(&snapshot.validator_checkpoint)
@@ -1001,6 +1089,30 @@ impl Actor {
                                 "dropping block sync QC that conflicts with locked chain"
                             );
                         } else {
+                            let checkpoint = ValidatorSetCheckpoint::new(
+                                qc.height,
+                                qc.view,
+                                qc.subject_block_hash,
+                                qc.parent_state_root,
+                                qc.post_state_root,
+                                qc.validator_set.clone(),
+                                qc.aggregate.signers_bitmap.clone(),
+                                qc.aggregate.bls_aggregate_signature.clone(),
+                                qc.validator_set_hash_version,
+                                None,
+                            );
+                            if self.state.record_commit_roster(
+                                &qc,
+                                &checkpoint,
+                                stake_snapshot.clone(),
+                            ) {
+                                debug!(
+                                    incoming_hash = %block_hash,
+                                    height = block_height,
+                                    view = block_view,
+                                    "recorded commit roster from block sync QC"
+                                );
+                            }
                             super::status::record_commit_qc(qc.clone());
                             self.qc_cache.insert(
                                 (
@@ -1555,6 +1667,7 @@ impl Actor {
                         block_hash,
                         height: block_height,
                         view: block_view,
+                        priority: None,
                     };
                     let msg = BlockMessage::FetchPendingBlock(request);
                     for peer in targets {
@@ -2097,6 +2210,9 @@ impl Actor {
         let request_height = request.height;
         let request_view = request.view;
         let peer = request.requester;
+        let request_priority = request
+            .priority
+            .unwrap_or(FetchPendingBlockPriority::Background);
         let mut responded_any = false;
         let mut invalid_payload = false;
 
@@ -2125,7 +2241,10 @@ impl Actor {
         };
         if let Some(block) = inflight_response {
             let mut requesters = self.take_pending_fetch_requesters(&block_hash);
-            requesters.insert(peer.clone());
+            requesters
+                .entry(peer.clone())
+                .and_modify(|stored| *stored = (*stored).max(request_priority))
+                .or_insert(request_priority);
             self.send_fetch_pending_block_responses(requesters, &block);
             return Ok(());
         }
@@ -2146,7 +2265,10 @@ impl Actor {
         };
         if let Some(block) = pending_response {
             let mut requesters = self.take_pending_fetch_requesters(&block_hash);
-            requesters.insert(peer.clone());
+            requesters
+                .entry(peer.clone())
+                .and_modify(|stored| *stored = (*stored).max(request_priority))
+                .or_insert(request_priority);
             self.send_fetch_pending_block_responses(requesters, &block);
             return Ok(());
         }
@@ -2155,7 +2277,10 @@ impl Actor {
             if let Some(block) = self.kura.get_block(height) {
                 let block = block.as_ref();
                 let mut requesters = self.take_pending_fetch_requesters(&block_hash);
-                requesters.insert(peer.clone());
+                requesters
+                    .entry(peer.clone())
+                    .and_modify(|stored| *stored = (*stored).max(request_priority))
+                    .or_insert(request_priority);
                 self.send_fetch_pending_block_responses(requesters, block);
                 return Ok(());
             }
@@ -2189,11 +2314,16 @@ impl Actor {
                     chunk_count = chunks.len(),
                     "serving RBC INIT/chunks for missing-block fetch"
                 );
-                self.send_fetch_pending_block_response(peer.clone(), BlockMessage::RbcInit(init));
+                self.send_fetch_pending_block_response(
+                    peer.clone(),
+                    BlockMessage::RbcInit(init),
+                    request_priority,
+                );
                 for chunk in chunks {
                     self.send_fetch_pending_block_response(
                         peer.clone(),
                         BlockMessage::RbcChunk(chunk),
+                        request_priority,
                     );
                 }
                 responded_any = true;
@@ -2201,7 +2331,7 @@ impl Actor {
         }
 
         if !invalid_payload {
-            self.stash_pending_fetch_request(block_hash, peer);
+            self.stash_pending_fetch_request(block_hash, peer, request_priority);
         }
 
         if !responded_any {

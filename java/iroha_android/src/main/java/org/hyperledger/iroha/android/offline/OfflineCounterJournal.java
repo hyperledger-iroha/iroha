@@ -50,7 +50,7 @@ public final class OfflineCounterJournal {
   }
 
   public Optional<OfflineCounterCheckpoint> find(final String certificateIdHex) {
-    if (certificateIdHex == null || certificateIdHex.isBlank()) {
+    if (certificateIdHex == null || certificateIdHex.trim().isEmpty()) {
       return Optional.empty();
     }
     synchronized (lock) {
@@ -158,7 +158,7 @@ public final class OfflineCounterJournal {
     Objects.requireNonNull(proof, "proof");
     final String schema = proof.manifestSchema();
     final String deviceId = proof.deviceId();
-    if (schema == null || schema.isBlank() || deviceId == null || deviceId.isBlank()) {
+    if (schema == null || schema.trim().isEmpty() || deviceId == null || deviceId.trim().isEmpty()) {
       throw new OfflineCounterException(
           OfflineCounterException.Reason.INVALID_SCOPE,
           "provisioned manifest schema/device_id missing");
@@ -178,19 +178,19 @@ public final class OfflineCounterJournal {
       final String certificateIdHex,
       final String controllerId,
       final String controllerDisplay,
-      final OfflineCounterPlatform platform,
-      final String scope,
-      final long counter,
-      final Instant recordedAt) throws IOException {
+    final OfflineCounterPlatform platform,
+    final String scope,
+    final long counter,
+    final Instant recordedAt) throws IOException {
     Objects.requireNonNull(platform, "platform");
     final String normalizedCert = normalizeHex(certificateIdHex);
     final String trimmedScope = scope == null ? "" : scope.trim();
-    if (normalizedCert.isBlank()) {
+    if (normalizedCert.trim().isEmpty()) {
       throw new OfflineCounterException(
           OfflineCounterException.Reason.INVALID_SCOPE,
           "certificate_id_hex must not be empty");
     }
-    if (trimmedScope.isBlank()) {
+    if (trimmedScope.isEmpty()) {
       throw new OfflineCounterException(
           OfflineCounterException.Reason.INVALID_SCOPE,
           "counter scope must not be empty");
@@ -221,11 +221,15 @@ public final class OfflineCounterJournal {
       target.put(trimmedScope, counter);
       final String summaryHash = computeSummaryHashHex(apple, android);
       final String resolvedControllerId =
-          existing != null && existing.controllerId() != null && !existing.controllerId().isBlank()
+          existing != null
+              && existing.controllerId() != null
+              && !existing.controllerId().trim().isEmpty()
               ? existing.controllerId()
               : controllerId;
       final String resolvedControllerDisplay =
-          existing != null && existing.controllerDisplay() != null && !existing.controllerDisplay().isBlank()
+          existing != null
+              && existing.controllerDisplay() != null
+              && !existing.controllerDisplay().trim().isEmpty()
               ? existing.controllerDisplay()
               : controllerDisplay;
       final OfflineCounterCheckpoint checkpoint =
@@ -244,7 +248,7 @@ public final class OfflineCounterJournal {
   }
 
   private void loadExisting() throws IOException {
-    final String json = Files.readString(journalFile, StandardCharsets.UTF_8).trim();
+    final String json = new String(Files.readAllBytes(journalFile), StandardCharsets.UTF_8).trim();
     if (json.isEmpty()) {
       return;
     }
@@ -266,10 +270,9 @@ public final class OfflineCounterJournal {
 
   private void persistLocked() throws IOException {
     final Map<String, Object> serialized = serializeEntriesLocked();
-    Files.writeString(
+    Files.write(
         journalFile,
-        JsonEncoder.encode(serialized),
-        StandardCharsets.UTF_8,
+        JsonEncoder.encode(serialized).getBytes(StandardCharsets.UTF_8),
         StandardOpenOption.CREATE,
         StandardOpenOption.TRUNCATE_EXISTING);
   }

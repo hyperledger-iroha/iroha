@@ -717,6 +717,8 @@ mod tests {
                     iroha_config::parameters::defaults::sumeragi::VALIDATION_WORK_QUEUE_CAP,
                 validation_result_queue_cap:
                     iroha_config::parameters::defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP,
+                validation_pending_cap:
+                    iroha_config::parameters::defaults::sumeragi::VALIDATION_PENDING_CAP,
             },
             pacemaker: SumeragiPacemaker {
                 backoff_multiplier: 1,

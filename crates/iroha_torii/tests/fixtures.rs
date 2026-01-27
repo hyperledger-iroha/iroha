@@ -5,6 +5,8 @@
 
 use std::sync::{Arc, LazyLock, Mutex};
 
+use iroha_core::state::World;
+use iroha_data_model::peer::PeerId;
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::ALICE_ID;
 
@@ -69,4 +71,24 @@ pub fn reset_shared_metrics() -> Arc<Metrics> {
     let metrics = Arc::new(Metrics::default());
     *guard = metrics.clone();
     metrics
+}
+
+/// Seed the world with the given peer IDs using the test-only mutator.
+#[allow(dead_code)]
+pub fn seed_peers<I>(world: &mut World, peer_ids: I)
+where
+    I: IntoIterator<Item = PeerId>,
+{
+    let mut world_block = world.block();
+    let peers = world_block.peers_mut_for_testing().get_mut();
+    for peer_id in peer_ids {
+        let _ = peers.push(peer_id);
+    }
+    world_block.commit();
+}
+
+/// Seed the world with a single peer ID.
+#[allow(dead_code)]
+pub fn seed_peer(world: &mut World, peer_id: PeerId) {
+    seed_peers(world, [peer_id]);
 }

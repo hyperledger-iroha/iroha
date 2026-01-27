@@ -79,12 +79,12 @@ impl GenesisProfile {
             GenesisProfile::Iroha3Testus => GenesisProfileDefaults {
                 chain_id: "iroha3-testus",
                 collectors_k: 3,
-                collectors_redundant_send_r: 2,
+                collectors_redundant_send_r: 3,
             },
             GenesisProfile::Iroha3Nexus => GenesisProfileDefaults {
                 chain_id: "iroha3-nexus",
                 collectors_k: 5,
-                collectors_redundant_send_r: 2,
+                collectors_redundant_send_r: 3,
             },
         }
     }

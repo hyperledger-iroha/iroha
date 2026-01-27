@@ -647,6 +647,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 validation_worker_threads: defaults::sumeragi::VALIDATION_WORKER_THREADS,
                 validation_work_queue_cap: defaults::sumeragi::VALIDATION_WORK_QUEUE_CAP,
                 validation_result_queue_cap: defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP,
+                validation_pending_cap: defaults::sumeragi::VALIDATION_PENDING_CAP,
             },
             pacemaker: A::SumeragiPacemaker {
                 backoff_multiplier: 1,
@@ -818,6 +819,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             access_set_cache_enabled: defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
             parallel_overlay: false,
             workers: defaults::pipeline::WORKERS,
+            stateless_cache_cap: defaults::pipeline::STATELESS_CACHE_CAP,
             parallel_apply: true,
             ready_queue_heap: defaults::pipeline::READY_QUEUE_HEAP,
             gpu_key_bucket: defaults::pipeline::GPU_KEY_BUCKET,

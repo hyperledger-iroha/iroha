@@ -141,6 +141,9 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
           }
         }
         """.data(using: .utf8)!
+        let registerPayload = """
+        {"certificate_id_hex": "deadbeef"}
+        """.data(using: .utf8)!
         let renewPayload = """
         {
           "certificate_id_hex": "beadfeed",
@@ -219,6 +222,15 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
                 XCTAssertNotNil(certificate["allowance"] as? [String: Any])
                 XCTAssertNotNil(certificate["attestation_report"] as? [Any])
             }),
+            ExpectedRequest(method: "POST", path: "/v1/offline/allowances", responseBody: registerPayload, assertBody: { data in
+                let body = try XCTUnwrap(data)
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(json["authority"] as? String, accountId)
+                XCTAssertNotNil(json["private_key"] as? String)
+                let certificate = try XCTUnwrap(json["certificate"] as? [String: Any])
+                XCTAssertNotNil(certificate["operator_signature"] as? String)
+                XCTAssertNotNil(certificate["allowance"] as? [String: Any])
+            }),
             ExpectedRequest(method: "POST", path: "/v1/offline/certificates/deadbeef/renew/issue", responseBody: renewPayload, assertBody: { data in
                 let body = try XCTUnwrap(data)
                 let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
@@ -281,6 +293,14 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
         let issueResponse = try await client.issueOfflineCertificate(issueRequest)
         let issuedCertificate = try issueResponse.decodeCertificate()
         XCTAssertEqual(issuedCertificate.controller, accountId)
+
+        let registerRequest = try ToriiOfflineAllowanceRegisterRequest(
+            authority: accountId,
+            privateKey: "ed0120deadbeef",
+            certificate: issuedCertificate
+        )
+        let registerResponse = try await client.registerOfflineAllowance(registerRequest)
+        XCTAssertEqual(registerResponse.certificateIdHex, issueResponse.certificateIdHex)
 
         let renewResponse = try await client.issueOfflineCertificateRenewal(certificateIdHex: "deadbeef",
                                                                             requestBody: renewRequest)

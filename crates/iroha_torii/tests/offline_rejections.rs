@@ -36,9 +36,7 @@ fn build_app_with_metrics(metrics: Arc<Metrics>, telemetry_enabled: bool) -> Rou
         Vec::new(),
         Vec::<iroha_data_model::asset::AssetDefinition>::new(),
     );
-    world.peers.mutate_vec(|peers| {
-        let _ = peers.push(local_peer_id.clone());
-    });
+    fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
 
     let queue_cfg = iroha_config::parameters::actual::Queue::default();

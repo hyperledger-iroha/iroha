@@ -68,9 +68,9 @@ public final class FilePendingTransactionQueue implements PendingTransactionQueu
       throw new IOException("Failed to encode offline signing envelope", ex);
     }
     synchronized (lock) {
-      Files.writeString(
+      Files.write(
           queueFile,
-          line + System.lineSeparator(),
+          (line + System.lineSeparator()).getBytes(StandardCharsets.UTF_8),
           StandardOpenOption.CREATE,
           StandardOpenOption.APPEND);
     }
@@ -85,12 +85,12 @@ public final class FilePendingTransactionQueue implements PendingTransactionQueu
       final List<String> lines = Files.readAllLines(queueFile, StandardCharsets.UTF_8);
       final List<SignedTransaction> transactions = new ArrayList<>(lines.size());
       for (final String line : lines) {
-        if (line.isBlank()) {
+        if (line.trim().isEmpty()) {
           continue;
         }
         transactions.add(decodeEntry(line));
       }
-      Files.writeString(queueFile, "", StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
+      Files.write(queueFile, new byte[0], StandardOpenOption.TRUNCATE_EXISTING);
       return transactions;
     }
   }
@@ -103,7 +103,7 @@ public final class FilePendingTransactionQueue implements PendingTransactionQueu
       }
       int count = 0;
       for (final String line : Files.readAllLines(queueFile, StandardCharsets.UTF_8)) {
-        if (!line.isBlank()) {
+        if (!line.trim().isEmpty()) {
           count++;
         }
       }
@@ -115,8 +115,7 @@ public final class FilePendingTransactionQueue implements PendingTransactionQueu
   public void clear() throws IOException {
     synchronized (lock) {
       if (Files.exists(queueFile)) {
-        Files.writeString(
-            queueFile, "", StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
+        Files.write(queueFile, new byte[0], StandardOpenOption.TRUNCATE_EXISTING);
       }
     }
   }

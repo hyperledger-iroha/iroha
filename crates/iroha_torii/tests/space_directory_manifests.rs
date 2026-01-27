@@ -53,9 +53,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     };
 
     let mut world = World::default();
-    world.peers.mutate_vec(|peers| {
-        let _ = peers.push(local_peer_id.clone());
-    });
+    fixtures::seed_peer(&mut world, local_peer_id.clone());
     let mut bindings = iroha_core::nexus::space_directory::UaidDataspaceBindings::default();
     bindings.bind_account(dataspace, account_id.clone());
     world
@@ -320,9 +318,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     let cfg_rev = iroha_torii::test_utils::mk_minimal_root_cfg();
     let local_peer_id_rev = PeerId::new(cfg_rev.common.key_pair.public_key().clone());
     let mut world_revoked = World::default();
-    world_revoked.peers.mutate_vec(|peers| {
-        let _ = peers.push(local_peer_id_rev.clone());
-    });
+    fixtures::seed_peer(&mut world_revoked, local_peer_id_rev.clone());
     let mut bindings = iroha_core::nexus::space_directory::UaidDataspaceBindings::default();
     let dataspace_two = DataSpaceId::new(13);
     bindings.bind_account(dataspace, account_id.clone());
