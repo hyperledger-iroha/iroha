@@ -385,6 +385,8 @@ impl Actor {
         };
         self.vote_log
             .retain(|(_, height, view, _, _), _| should_keep(*height, *view));
+        self.vote_validation_cache
+            .retain(|(_, height, view, _, _), _| should_keep(*height, *view));
         self.qc_cache
             .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
         self.qc_signer_tally
@@ -1030,6 +1032,7 @@ impl Actor {
             }
         }
         let key = vote_key(vote);
+        let cache_entry = VoteValidationCacheEntry { roster_hash };
         if let Some(existing) = self.vote_log.get(&key).cloned() {
             if existing.block_hash == vote.block_hash {
                 iroha_logger::debug!(
@@ -1082,6 +1085,7 @@ impl Actor {
             return false;
         }
         let previous = self.vote_log.insert(key, vote.clone());
+        self.vote_validation_cache.insert(key, cache_entry);
         iroha_logger::debug!(
             phase = ?vote.phase,
             height = vote.height,

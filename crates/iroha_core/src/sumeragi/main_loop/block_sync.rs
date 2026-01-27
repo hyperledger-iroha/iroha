@@ -343,6 +343,8 @@ impl Actor {
             stake_snapshot,
         } = update;
         let mut incoming_qc = incoming_qc;
+        let mut validator_checkpoint = validator_checkpoint;
+        let mut stake_snapshot = stake_snapshot;
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
@@ -540,54 +542,79 @@ impl Actor {
             );
             return Ok(());
         }
-        let snapshot_selection = if block_known && has_roster_hint {
-            self.state
-                .commit_roster_snapshot_for_block(block_height, block_hash)
-                .and_then(|snapshot| {
-                    let qc_match = incoming_qc
-                        .as_ref()
-                        .is_none_or(|qc| HashOf::new(qc) == HashOf::new(&snapshot.commit_qc));
-                    let checkpoint_match = validator_checkpoint.as_ref().is_none_or(|checkpoint| {
-                        HashOf::new(checkpoint) == HashOf::new(&snapshot.validator_checkpoint)
-                    });
-                    let stake_match = stake_snapshot.as_ref().is_none_or(|stake| {
-                        snapshot
-                            .stake_snapshot
-                            .as_ref()
-                            .is_some_and(|snapshot| HashOf::new(snapshot) == HashOf::new(stake))
-                    });
-                    if !(qc_match && checkpoint_match && stake_match) {
-                        return None;
-                    }
-                    let roster = snapshot.commit_qc.validator_set.clone();
-                    let stake_snapshot = snapshot
-                        .stake_snapshot
-                        .as_ref()
-                        .filter(|snapshot| snapshot.matches_roster(&roster))
-                        .cloned();
-                    let selection = BlockSyncRosterSelection {
-                        roster,
-                        source: BlockSyncRosterSource::CommitRosterJournal,
-                        commit_qc: Some(snapshot.commit_qc.clone()),
-                        checkpoint: Some(snapshot.validator_checkpoint.clone()),
-                        stake_snapshot,
-                    };
-                    if let Some(key) = BlockSyncRosterCacheKey::from_hints(
-                        block_hash,
-                        block_height,
-                        block_view,
-                        consensus_mode,
-                        selection.commit_qc.as_ref(),
-                        selection.checkpoint.as_ref(),
-                        selection.stake_snapshot.as_ref(),
-                    ) {
-                        self.block_sync_roster_cache.insert(key, selection.clone());
-                    }
-                    Some(selection)
-                })
-        } else {
-            None
-        };
+        // For known blocks, prefer the locally recorded commit roster snapshot and ignore
+        // mismatching hints to avoid re-validating rosters on the main loop.
+        let snapshot = block_known
+            .then(|| self.state.commit_roster_snapshot_for_block(block_height, block_hash))
+            .flatten();
+        if let Some(snapshot) = snapshot.as_ref() {
+            if let Some(qc) = incoming_qc.as_ref()
+                && HashOf::new(qc) != HashOf::new(&snapshot.commit_qc)
+            {
+                info!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    "dropping block sync QC: does not match local commit roster snapshot"
+                );
+                incoming_qc = None;
+            }
+            if let Some(checkpoint) = validator_checkpoint.as_ref()
+                && HashOf::new(checkpoint) != HashOf::new(&snapshot.validator_checkpoint)
+            {
+                info!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    "dropping block sync validator checkpoint: does not match local snapshot"
+                );
+                validator_checkpoint = None;
+            }
+            if let Some(stake) = stake_snapshot.as_ref()
+                && snapshot
+                    .stake_snapshot
+                    .as_ref()
+                    .is_none_or(|local| HashOf::new(local) != HashOf::new(stake))
+            {
+                info!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    "dropping block sync stake snapshot: does not match local snapshot"
+                );
+                stake_snapshot = None;
+            }
+        }
+        let snapshot_selection = snapshot.as_ref().and_then(|snapshot| {
+            let roster = snapshot.commit_qc.validator_set.clone();
+            if roster.is_empty() {
+                return None;
+            }
+            let stake_snapshot = snapshot
+                .stake_snapshot
+                .as_ref()
+                .filter(|snapshot| snapshot.matches_roster(&roster))
+                .cloned();
+            let selection = BlockSyncRosterSelection {
+                roster,
+                source: BlockSyncRosterSource::CommitRosterJournal,
+                commit_qc: Some(snapshot.commit_qc.clone()),
+                checkpoint: Some(snapshot.validator_checkpoint.clone()),
+                stake_snapshot,
+            };
+            if let Some(key) = BlockSyncRosterCacheKey::from_hints(
+                block_hash,
+                block_height,
+                block_view,
+                consensus_mode,
+                selection.commit_qc.as_ref(),
+                selection.checkpoint.as_ref(),
+                selection.stake_snapshot.as_ref(),
+            ) {
+                self.block_sync_roster_cache.insert(key, selection.clone());
+            }
+            Some(selection)
+        });
         let roster_start = Instant::now();
         let persisted_roster_start = Instant::now();
         let persisted_roster = snapshot_selection.or_else(|| {

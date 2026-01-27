@@ -3956,16 +3956,9 @@ pub(super) struct Actor {
     rbc_mismatch_log: RbcMismatchThrottle,
     invalid_sig_penalty: InvalidSigPenalty,
     genesis_account: AccountId,
-    vote_log: BTreeMap<
-        (
-            crate::sumeragi::consensus::Phase,
-            u64,
-            u64,
-            u64,
-            crate::sumeragi::consensus::ValidatorIndex,
-        ),
-        crate::sumeragi::consensus::Vote,
-    >,
+    vote_log: BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
+    /// Records the roster hash used to validate each stored vote to skip redundant rechecks.
+    vote_validation_cache: BTreeMap<votes::VoteLogKey, VoteValidationCacheEntry>,
     deferred_votes: BTreeMap<
         HashOf<BlockHeader>,
         BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
@@ -4023,6 +4016,11 @@ struct VoteRosterCacheEntry {
     roster: Vec<PeerId>,
     height: u64,
     view: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VoteValidationCacheEntry {
+    roster_hash: HashOf<Vec<PeerId>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -8133,6 +8131,7 @@ impl Actor {
             invalid_sig_penalty,
             genesis_account,
             vote_log: BTreeMap::new(),
+            vote_validation_cache: BTreeMap::new(),
             deferred_votes: BTreeMap::new(),
             deferred_qcs: BTreeMap::new(),
             deferred_block_sync_updates: BTreeMap::new(),

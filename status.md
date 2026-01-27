@@ -2,6 +2,12 @@
 
 Last update: 2026-01-27
 
+- Sumeragi missing-block retry: use local commit-roster snapshots or the active topology to avoid roster-validation stalls on the main loop; BlockSyncUpdate for known blocks now prefers the local snapshot and drops mismatching QC/checkpoint/stake hints before heavy validation; added `retry_missing_block_requests_uses_commit_roster_snapshot_without_validation` coverage.
+- Tests: not run (not requested).
+
+- Sumeragi vote QC tally: cache roster hashes for validated votes so `qc_signers_for_votes` can skip redundant signature checks while still revalidating on roster mismatch; added `qc_signers_for_votes_revalidates_on_roster_hash_mismatch` coverage.
+- Tests: `cargo test -p iroha_core qc_signers_for_votes_revalidates_on_roster_hash_mismatch -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/peers_gossiper.rs:1291`, `crates/iroha_core/src/sumeragi/main_loop/tests.rs:46901`, `crates/iroha_core/src/sumeragi/main_loop/tests.rs:50462`).
+
 - Peers gossiper tests: fix `topology_update_adds_new_trusted_peers` initial peer map typing to match `BTreeMap<PeerId, SocketAddr>` expectations.
 - Tests: not run (compile fix only).
 

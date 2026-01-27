@@ -4934,6 +4934,7 @@ impl Actor {
         self.pending.pending_processing.set(None);
         self.pending.pending_processing_parent.set(None);
         self.vote_log.clear();
+        self.vote_validation_cache.clear();
         self.deferred_votes.clear();
         self.deferred_qcs.clear();
         self.vote_roster_cache.clear();
