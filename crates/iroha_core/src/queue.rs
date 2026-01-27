@@ -2417,9 +2417,8 @@ impl Queue {
                 removed = removed.saturating_add(1);
             }
         }
-        if removed > 0 && !self.removed_hashes.is_empty() && !self.tx_hashes.is_empty() {
-            let _ = self.compact_hash_queue_locked();
-        }
+        // Keep removed markers until the consumer drains stale hashes or a push triggers
+        // compaction, so committed removals stay observable to in-flight guards.
         if removed > 0 {
             self.publish_backpressure_state(self.active_len(), telemetry);
         }
