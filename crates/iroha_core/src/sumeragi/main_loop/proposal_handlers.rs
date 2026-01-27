@@ -646,6 +646,17 @@ impl Actor {
                 return Ok(());
             }
         }
+        let proposal_roster = self
+            .roster_from_commit_qc_history_roll_forward(height, Some(proposal.header.parent_hash))
+            .unwrap_or_else(|| self.effective_commit_topology());
+        if !proposal_roster.is_empty() {
+            let mut topology = super::network_topology::Topology::new(proposal_roster);
+            if let Ok(leader_index) = self.leader_index_for(&mut topology, height, view) {
+                super::status::set_leader_index(
+                    u64::try_from(leader_index).unwrap_or(u64::MAX),
+                );
+            }
+        }
         self.update_prf_context(height, view);
         if !self.ensure_highest_qc_extends_locked(height, view, highest_qc, "proposal") {
             self.record_consensus_message_handling(
