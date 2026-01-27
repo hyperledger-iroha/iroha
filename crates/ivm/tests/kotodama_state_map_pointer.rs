@@ -12,8 +12,8 @@ fn encode_pointer_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&(ty as u16).to_be_bytes());
     out.push(1);
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(payload);
-    let hash: [u8; 32] = IrohaHash::new(payload).into();
+    out.extend_from_slice(&payload);
+    let hash: [u8; 32] = IrohaHash::new(&payload).into();
     out.extend_from_slice(&hash);
     out
 }

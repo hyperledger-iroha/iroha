@@ -277,15 +277,14 @@ impl Actor {
             self.roster_for_vote_with_mode(vote.block_hash, vote.height, vote.view, consensus_mode)
         };
         if topology_peers.is_empty() && matches!(vote.phase, Phase::Commit) {
-            let allow_fallback = self.block_known_locally(vote.block_hash)
-                || self.runtime_da_enabled()
-                || self
-                    .pending
-                    .missing_block_requests
-                    .contains_key(&vote.block_hash);
+            let allow_fallback = vote.height <= committed_height.saturating_add(1)
+                && (self.block_known_locally(vote.block_hash)
+                    || self.runtime_da_enabled()
+                    || self
+                        .pending
+                        .missing_block_requests
+                        .contains_key(&vote.block_hash));
             if allow_fallback {
-                let committed_height =
-                    u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
                 let committed_epoch = self.epoch_for_height(committed_height);
                 let epoch_matches = matches!(consensus_mode, ConsensusMode::Permissioned)
                     || vote.epoch == committed_epoch;
@@ -972,7 +971,10 @@ impl Actor {
         }
     }
 
-    pub(super) fn drop_precommit_vote_for_lock(&self, vote: &crate::sumeragi::consensus::Vote) -> bool {
+    pub(super) fn drop_precommit_vote_for_lock(
+        &self,
+        vote: &crate::sumeragi::consensus::Vote,
+    ) -> bool {
         if !matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit) {
             return false;
         }

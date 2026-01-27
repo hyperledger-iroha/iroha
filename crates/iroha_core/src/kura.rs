@@ -666,7 +666,7 @@ impl Kura {
         }
 
         let mut block_store = self.block_store.lock();
-        if let Err(err) = block_store.flush_pending_fsync(false) {
+        if let Err(err) = block_store.flush_pending_fsync(true) {
             warn!(?err, "failed to flush pending Kura writes before eviction");
         }
 
@@ -7319,6 +7319,75 @@ mod tests {
         assert!(
             kura.get_block(nonzero!(1_usize)).is_none(),
             "expected missing block to yield None"
+        );
+    }
+
+    #[test]
+    fn eviction_flushes_pending_fsync_before_rewrite() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: NonZeroUsize::new(1).expect("non-zero"),
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: FsyncMode::Batched,
+            fsync_interval: Duration::from_secs(3600),
+            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        };
+
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+
+        let mut blocks = DummyBlocks::new();
+        for _ in 0..3 {
+            let block = blocks.next();
+            kura.block_store
+                .lock()
+                .append_block_to_chain(block.as_ref())
+                .expect("append block");
+        }
+        {
+            let mut store = kura.block_store.lock();
+            store
+                .flush_pending_fsync(true)
+                .expect("flush pending fsync");
+        }
+
+        let block = blocks.next();
+        kura.block_store
+            .lock()
+            .append_block_to_chain(block.as_ref())
+            .expect("append block");
+
+        let (durable_before, index_before) = {
+            let mut store = kura.block_store.lock();
+            let durable = store
+                .read_durable_index_count()
+                .expect("durable count");
+            let index = store.read_index_count().expect("index count");
+            (durable, index)
+        };
+        assert_eq!(durable_before, 3);
+        assert_eq!(index_before, 4);
+
+        let evict_len = {
+            let mut store = kura.block_store.lock();
+            store.read_block_index(1).expect("block index").length
+        };
+        kura.evict_block_bodies(evict_len)
+            .expect("evict block bodies");
+
+        let index_after = {
+            let mut store = kura.block_store.lock();
+            store
+                .read_index_count()
+                .expect("index count after eviction")
+        };
+        assert_eq!(
+            index_after, 4,
+            "eviction should not truncate pending index entries"
         );
     }
 

@@ -13,8 +13,8 @@ fn make_blob_tlv(payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&(PointerType::Blob as u16).to_be_bytes());
     out.push(1);
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(payload);
-    let h: [u8; 32] = Hash::new(payload).into();
+    out.extend_from_slice(&payload);
+    let h: [u8; 32] = Hash::new(&payload).into();
     out.extend_from_slice(&h);
     out
 }

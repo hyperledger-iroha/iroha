@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use iroha_crypto::Hash;
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AccountId, DomainId, MockWorldStateView, PermissionToken, WsvHost},
+    mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
 
@@ -18,8 +18,8 @@ fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&(type_id as u16).to_be_bytes());
     out.push(1);
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(payload);
-    let h: [u8; 32] = Hash::new(payload).into();
+    out.extend_from_slice(&payload);
+    let h: [u8; 32] = Hash::new(&payload).into();
     out.extend_from_slice(&h);
     out
 }
