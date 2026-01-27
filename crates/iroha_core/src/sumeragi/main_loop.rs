@@ -631,6 +631,7 @@ struct VoteProcessingContext {
     mode_tag: &'static str,
     prf_seed: Option<[u8; 32]>,
     stale_view: Option<u64>,
+    pops: Arc<BTreeMap<PublicKey, Vec<u8>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4789,6 +4790,7 @@ struct VoteVerifyState {
     result_rx: Option<mpsc::Receiver<vote_verify::VoteVerifyResult>>,
     inflight: BTreeMap<VoteVerifyKey, VoteVerifyInFlight>,
     pending: BTreeMap<VoteVerifyKey, VoteVerifyPending>,
+    pop_cache: BTreeMap<HashOf<Vec<PeerId>>, Arc<BTreeMap<PublicKey, Vec<u8>>>>,
     next_id: u64,
     next_worker: usize,
 }
@@ -4800,6 +4802,7 @@ impl VoteVerifyState {
             result_rx: None,
             inflight: BTreeMap::new(),
             pending: BTreeMap::new(),
+            pop_cache: BTreeMap::new(),
             next_id: 0,
             next_worker: 0,
         }

@@ -695,10 +695,11 @@ mod tests {
             let mut hashes = state.block_hashes.block();
             let len = usize::try_from(current_height)
                 .expect("current height must fit into usize for resize");
-            hashes.resize(
-                len,
-                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xFF; 32])),
-            );
+            let fill_hash =
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xFF; 32]));
+            for _ in 0..len {
+                hashes.push(fill_hash);
+            }
             hashes.commit();
         }
         state

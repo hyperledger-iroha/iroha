@@ -1,6 +1,10 @@
 //! Vote signature verification workers.
 
-use std::{collections::BTreeMap, sync::mpsc, time::Instant};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, mpsc},
+    time::Instant,
+};
 
 use super::*;
 use super::votes::record_vote_drop_without_roster;
@@ -15,7 +19,7 @@ pub(super) struct VoteVerifyWork {
     pub(super) key: VoteVerifyKey,
     pub(super) vote: crate::sumeragi::consensus::Vote,
     pub(super) signature_topology: super::network_topology::Topology,
-    pub(super) pops: BTreeMap<PublicKey, Vec<u8>>,
+    pub(super) pops: Arc<BTreeMap<PublicKey, Vec<u8>>>,
     pub(super) chain_id: ChainId,
     pub(super) mode_tag: &'static str,
 }
