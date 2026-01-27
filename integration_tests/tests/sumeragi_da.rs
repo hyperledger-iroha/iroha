@@ -26,7 +26,7 @@ use iroha::{
     },
 };
 use iroha_config_base::toml::Writer as TomlWriter;
-use iroha_core::sumeragi::rbc_status;
+use iroha_core::sumeragi::{network_topology::Topology, rbc_status};
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
 use norito::json::{self, Value};
 use rand::{Rng, SeedableRng, distr::Alphanumeric};
@@ -103,6 +103,37 @@ impl SumeragiSnapshot {
             rbc_deliver_defer_chunks_total: json_u64(value, "rbc_deliver_defer_chunks_total"),
         }
     }
+}
+
+fn resolve_permissioned_leader_peer(
+    peers: &[NetworkPeer],
+    height: u64,
+    view: u64,
+    prf_seed: Option<[u8; 32]>,
+) -> Result<NetworkPeer> {
+    let mut roster: Vec<_> = peers.iter().map(NetworkPeer::id).collect();
+    roster.sort();
+    roster.dedup();
+    let mut topology = Topology::new(roster);
+    if let Some(seed) = prf_seed {
+        topology.shuffle_prf(seed, height);
+    }
+    topology.nth_rotation(view);
+    let leader_peer_id = topology
+        .as_ref()
+        .first()
+        .ok_or_else(|| eyre!("empty topology when resolving leader"))?;
+    peers
+        .iter()
+        .find(|peer| peer.id() == *leader_peer_id)
+        .cloned()
+        .ok_or_else(|| eyre!("leader peer id not found in network peers"))
+}
+
+fn chain_epoch_seed(chain_id: &iroha::data_model::ChainId) -> [u8; 32] {
+    let chain = chain_id.clone().into_inner();
+    let hash = iroha_crypto::Hash::new(chain.as_bytes());
+    <[u8; 32]>::from(hash)
 }
 
 #[allow(clippy::struct_field_names)]
@@ -1481,20 +1512,15 @@ async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()
             .first()
             .ok_or_else(|| eyre!("network must have at least one peer"))?;
         let status_before = fetch_status(&primary_peer.client()).await?;
-        let leader_index = status_before
-            .sumeragi
-            .as_ref()
-            .map(|sumeragi| sumeragi.leader_index)
-            .ok_or_else(|| eyre!("status missing leader_index"))?;
-        let leader_idx = usize::try_from(leader_index)
-            .wrap_err("leader_index does not fit into usize")?;
-
-        let leader_peer = peers.get(leader_idx).cloned().ok_or_else(|| {
-            eyre!(
-                "leader_index {leader_idx} out of bounds for topology size {}",
-                peers.len()
-            )
-        })?;
+        let target_height = status_before.blocks + 1;
+        let prf_seed = chain_epoch_seed(&network.chain_id());
+        let leader_peer = resolve_permissioned_leader_peer(
+            peers,
+            target_height,
+            0,
+            Some(prf_seed),
+        )
+        .wrap_err_with(|| format!("resolve permissioned leader for height {target_height} view 0"))?;
 
         let mut baseline_view_changes = Vec::with_capacity(peers.len());
         for peer in peers {
@@ -1547,7 +1573,6 @@ async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()
             ));
         }
 
-        let target_height = status_before.blocks + 1;
         let view_change_deadline = da_view_change_timeout();
 
         let status_url = submit_peer

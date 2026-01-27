@@ -545,7 +545,10 @@ impl Actor {
         // For known blocks, prefer the locally recorded commit roster snapshot and ignore
         // mismatching hints to avoid re-validating rosters on the main loop.
         let snapshot = block_known
-            .then(|| self.state.commit_roster_snapshot_for_block(block_height, block_hash))
+            .then(|| {
+                self.state
+                    .commit_roster_snapshot_for_block(block_height, block_hash)
+            })
             .flatten();
         if let Some(snapshot) = snapshot.as_ref() {
             if let Some(qc) = incoming_qc.as_ref()
