@@ -1,6 +1,6 @@
 //! Vote handling for consensus messages.
 
-use std::{collections::btree_map::Entry, time::Instant};
+use std::{collections::btree_map::Entry, sync::mpsc, time::Instant};
 
 use iroha_logger::prelude::*;
 
@@ -164,18 +164,44 @@ impl Actor {
             return;
         }
         let topology = super::network_topology::Topology::new(topology_peers.clone());
+        let signature_topology =
+            topology_for_view(&topology, vote.height, vote.view, mode_tag, prf_seed);
+        let context = VoteProcessingContext {
+            topology,
+            signature_topology,
+            consensus_mode,
+            mode_tag,
+            prf_seed,
+            stale_view,
+        };
+        if self.try_dispatch_vote_verification(&vote, &context) {
+            return;
+        }
         let chain_id = self.common_config.chain.clone();
         let evidence_context = super::evidence::EvidenceValidationContext {
-            topology: &topology,
+            topology: &context.topology,
             chain_id: &chain_id,
             mode_tag,
             prf_seed,
         };
-        let signature_topology =
-            topology_for_view(&topology, vote.height, vote.view, mode_tag, prf_seed);
-        if !self.validate_and_record_vote(&vote, &signature_topology, &evidence_context, mode_tag) {
+        if !self.validate_and_record_vote(
+            &vote,
+            &context.signature_topology,
+            &evidence_context,
+            mode_tag,
+        ) {
             return;
         }
+        self.apply_validated_vote(vote, context);
+    }
+
+    pub(super) fn apply_validated_vote(
+        &mut self,
+        vote: crate::sumeragi::consensus::Vote,
+        context: VoteProcessingContext,
+    ) {
+        let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        let topology_peers = context.topology.as_ref().to_vec();
         self.touch_pending_progress(vote.block_hash, vote.height, vote.view, Instant::now());
         if !matches!(vote.phase, Phase::NewView) {
             // NEW_VIEW votes reference the highest QC block hash; caching would poison rosters for
@@ -184,7 +210,7 @@ impl Actor {
                 vote.block_hash,
                 vote.height,
                 vote.view,
-                topology.as_ref().to_vec(),
+                topology_peers.clone(),
             );
         }
         self.prune_vote_caches_horizon(committed_height);
@@ -196,7 +222,7 @@ impl Actor {
                     vote.height,
                     vote.view,
                     vote.epoch,
-                    &topology,
+                    &context.topology,
                 );
                 if matches!(vote.phase, Phase::Commit) {
                     if let Some(pending) = self.pending.pending_blocks.get(&vote.block_hash) {
@@ -216,7 +242,7 @@ impl Actor {
                     };
                     let block_time = {
                         let current_view = self.state.view();
-                        self.block_time_for_mode(&current_view, consensus_mode)
+                        self.block_time_for_mode(&current_view, context.consensus_mode)
                     };
                     let cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
                     if self.block_sync_rebroadcast_log.allow(
@@ -255,8 +281,10 @@ impl Actor {
                             );
                             return;
                         }
-                        if self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode)
-                        {
+                        if self.prepare_block_sync_update_for_broadcast(
+                            &mut update,
+                            context.consensus_mode,
+                        ) {
                             self.broadcast_block_sync_update(update, &topology_peers);
                             iroha_logger::info!(
                                 height = vote.height,
@@ -304,21 +332,21 @@ impl Actor {
                 };
                 let signer_peer = usize::try_from(vote.signer)
                     .ok()
-                    .and_then(|idx| signature_topology.as_ref().get(idx))
+                    .and_then(|idx| context.signature_topology.as_ref().get(idx))
                     .cloned();
                 let Some(signer_peer) = signer_peer else {
                     warn!(
                         height = vote.height,
                         view = vote.view,
                         signer = vote.signer,
-                        roster_len = signature_topology.as_ref().len(),
+                        roster_len = context.signature_topology.as_ref().len(),
                         "dropping NEW_VIEW vote: signer index out of range"
                     );
                     return;
                 };
                 self.observe_new_view_highest_qc(highest);
                 crate::sumeragi::new_view_stats::note_receipt(vote.height, vote.view, &signer_peer);
-                if let Some(local_view) = stale_view {
+                if let Some(local_view) = context.stale_view {
                     debug!(
                         height = vote.height,
                         view = vote.view,
@@ -347,9 +375,98 @@ impl Actor {
                     vote.height,
                     vote.view,
                     vote.epoch,
-                    &topology,
+                    &context.topology,
                 );
             }
+        }
+    }
+
+    fn try_dispatch_vote_verification(
+        &mut self,
+        vote: &crate::sumeragi::consensus::Vote,
+        context: &VoteProcessingContext,
+    ) -> bool {
+        if self.subsystems.vote_verify.work_txs.is_empty() {
+            return false;
+        }
+        let key = super::VoteVerifyKey::from_vote(vote);
+        if self.subsystems.vote_verify.inflight.contains_key(&key) {
+            debug!(
+                phase = ?vote.phase,
+                height = vote.height,
+                view = vote.view,
+                epoch = vote.epoch,
+                signer = vote.signer,
+                block_hash = %vote.block_hash,
+                "dropping duplicate vote while verification is in flight"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::Duplicate,
+            );
+            record_vote_drop_without_roster(
+                vote,
+                super::status::VoteValidationDropReason::Duplicate,
+            );
+            return true;
+        }
+        let id = self.subsystems.vote_verify.next_id();
+        let mut work = super::vote_verify::VoteVerifyWork {
+            id,
+            key: key.clone(),
+            vote: vote.clone(),
+            signature_topology: context.signature_topology.clone(),
+            chain_id: self.common_config.chain.clone(),
+            mode_tag: context.mode_tag,
+        };
+        let mut dispatched = false;
+        let mut disconnected = Vec::new();
+        let total = self.subsystems.vote_verify.work_txs.len();
+        for _ in 0..total {
+            let idx = self.subsystems.vote_verify.next_worker % total;
+            self.subsystems.vote_verify.next_worker =
+                self.subsystems.vote_verify.next_worker.saturating_add(1);
+            let work_tx = &self.subsystems.vote_verify.work_txs[idx];
+            match work_tx.try_send(work) {
+                Ok(()) => {
+                    dispatched = true;
+                    break;
+                }
+                Err(mpsc::TrySendError::Full(returned)) => {
+                    work = returned;
+                }
+                Err(mpsc::TrySendError::Disconnected(returned)) => {
+                    work = returned;
+                    disconnected.push(idx);
+                }
+            }
+        }
+        if !disconnected.is_empty() {
+            disconnected.sort_unstable();
+            disconnected.dedup();
+            for idx in disconnected.into_iter().rev() {
+                if idx < self.subsystems.vote_verify.work_txs.len() {
+                    self.subsystems.vote_verify.work_txs.swap_remove(idx);
+                }
+            }
+            if self.subsystems.vote_verify.next_worker >= self.subsystems.vote_verify.work_txs.len()
+            {
+                self.subsystems.vote_verify.next_worker = 0;
+            }
+        }
+        if dispatched {
+            self.subsystems.vote_verify.inflight.insert(
+                key,
+                super::VoteVerifyInFlight {
+                    id,
+                    vote: vote.clone(),
+                    context: context.clone(),
+                },
+            );
+            true
+        } else {
+            false
         }
     }
 
@@ -816,6 +933,24 @@ impl Actor {
         evidence_context: &super::evidence::EvidenceValidationContext<'_>,
         mode_tag: &str,
     ) -> bool {
+        self.validate_and_record_vote_with_signature_result(
+            vote,
+            signature_topology,
+            evidence_context,
+            mode_tag,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn validate_and_record_vote_with_signature_result(
+        &mut self,
+        vote: &crate::sumeragi::consensus::Vote,
+        signature_topology: &super::network_topology::Topology,
+        evidence_context: &super::evidence::EvidenceValidationContext<'_>,
+        mode_tag: &str,
+        signature_result: Option<Result<(), VoteSignatureError>>,
+    ) -> bool {
         let roster_len = u32::try_from(signature_topology.as_ref().len()).unwrap_or(u32::MAX);
         let roster_hash = iroha_crypto::HashOf::new(&signature_topology.as_ref().to_vec());
         let peer_id = usize::try_from(vote.signer)
@@ -852,12 +987,15 @@ impl Actor {
             record_drop(super::status::VoteValidationDropReason::Duplicate);
             return false;
         }
-        match vote_signature_check(
-            vote,
-            signature_topology,
-            &self.common_config.chain,
-            mode_tag,
-        ) {
+        let signature_result = signature_result.unwrap_or_else(|| {
+            vote_signature_check(
+                vote,
+                signature_topology,
+                &self.common_config.chain,
+                mode_tag,
+            )
+        });
+        match signature_result {
             Ok(()) => {}
             Err(err) => {
                 let outcome = self.record_invalid_signature(
