@@ -2,6 +2,24 @@
 
 Last update: 2026-01-27
 
+- IrohaSwift: add offline allowance registration request/response + ToriiClient method for POST `/v1/offline/allowances`, plus request encoding coverage.
+- Tests: `swift test` (fails in `TxBuilderTests` `testSubmitAndWait*` cases with `httpStatus 404 not found`).
+
+- Pipeline stateless validation: reuse shared Rayon pool (no per-block pool creation), add stateless prepass cache with TTL/not-before gating, and batch signature verification for Ed25519/Secp/PQC/BLS (PoP-gated) with deterministic fallbacks; validation worker threads/queues now auto-scale when set to 0; config/docs updated and new unit coverage added.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config). `cargo test -p iroha_core signature_verification_result_reports_invalid_signature -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/peers_gossiper.rs:1291`, `crates/iroha_core/src/sumeragi/main_loop/tests.rs:47772`, `crates/iroha_core/src/sumeragi/main_loop/tests.rs:51333` persist). `cargo test -p iroha_core cache_respects_not_before_and_expiry -- --nocapture` (ok; same warnings).
+
+- NPoS localnet 1 Hz soak (release, default timeouts, `commit_time_ms=1000`): `/private/tmp/iroha-localnet-npos-1hz-20260127T192356Z` (ports 51080/56337). 100x1 Hz `iroha ledger transaction ping --msg 1hz-profile --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_20260127T192855Z.jsonl` (ping log `ping_1hz_20260127T192855Z.log`). `commit_qc.height` 1->53 (+52 over 120 samples, ~0.43 blocks/s), `view_change_install_total` +1 (`stake_quorum_timeout_total` +1), `missing_payload_total` +0, `missing_qc_total` +0, `missing_block_fetch.total` +28, `pending_rbc.bytes` max 3875 (sessions max 1).
+- Tests: not run (soak only).
+
+- NPoS localnet 1 Hz soak (release, default timeouts, `commit_time_ms=1000`): `/private/tmp/iroha-localnet-npos-1hz-20260127T174650Z` (ports 47080/52337). 100x1 Hz `iroha ledger transaction ping --msg 1hz-profile --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_20260127T174727Z.jsonl` (ping log `ping_1hz_20260127T174727Z.log`). `commit_qc.height` 1->64 (+63 over 120 samples, ~0.53 blocks/s), `view_change_install_total` +1, `missing_payload_total` +0, `missing_qc_total` +0, `stake_quorum_timeout_total` +0, `missing_block_fetch.total` +18, `pending_rbc.bytes` max 2187 (sessions max 1). Logs show missing BlockCreated fetch followed by BlockCreated receipt (peer3.log:167).
+- Tests: not run (soak only).
+
+- Android SDK offline client: add offline allowance registration, include response bodies in HTTP error messages, add certificate JSON serialization, and replace Java 9+ file APIs/isBlank usages for Java 8 compatibility.
+- Tests: not run (not requested).
+
+- NPoS QC tally: stake quorum now prefers the active validator roster (public lane validators) when present, falling back to the commit topology only when no active roster is available; added `npos_qc_uses_active_validator_roster_for_stake_quorum` coverage.
+- Tests: not run (not requested).
+
 - Block sync QC filtering/tests: canonicalize roster/signers for cached QCs, skip aggregate verification when the QC is derived locally, and update filter tests to sign against the aligned roster topology while making roster-metadata preference deterministic.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config). `RUST_BACKTRACE=1 cargo test -p iroha_core block_sync::message::filter_tests::filter_blocks_ -- --nocapture` (ok).
 
@@ -40,6 +58,10 @@ Last update: 2026-01-27
 - Sumeragi state view lock root-cause fix: rework `BlockHashes` block scope to hold a read guard and buffer appended hashes until commit (short write lock), so `state.view()` no longer blocks on long-lived block execution; `block_and_revert` now truncates on commit without mutating the shared vector mid-block; evidence tests updated to stage hashes via `push`. Added `block_hashes_commit_applies_pending_only_on_commit` + `block_hashes_block_and_revert_replaces_tail_on_commit` coverage.
 - Tests: `cargo test -p iroha_core block_hashes_ -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/peers_gossiper.rs:1291`, `crates/iroha_core/src/sumeragi/main_loop/tests.rs:47153`, `crates/iroha_core/src/sumeragi/main_loop/tests.rs:50714` persist).
 
+- NPoS localnet 1 Hz soak (debug, `LOG_FILTER=iroha_core::state=debug`) after block-hash lock fix: `/private/tmp/iroha-localnet-npos-1hz-lockfix-20260127T092225Z` (ports 58080/59337). Ran 317x1 Hz pings (command hit tool timeout at 20 min) with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_lockfix_20260127T092541Z.jsonl` (ping log `ping_1hz_lockfix_20260127T092541Z.log`). `commit_qc.height` 1->61 (+60), `view_change_install_total` +16, `missing_block_fetch.total` +18, `pending_rbc.bytes` max 15691, `rbc_store.bytes` max 63953. Slowest `state.view` wait: 116,515µs on `block_hashes` (peer0 `2026-01-27T09:31:17.858874Z`, caller `crates/iroha_core/src/gossiper.rs:1103:49`); all waits < 0.12s (no multi-second spikes seen).
+- Sumeragi missing-block fetch: when a FetchPendingBlock response would carry a BlockSyncUpdate, also push a BlockCreated payload (when it fits the consensus frame cap) so peers waiting on BlockCreated/INIT recover promptly; updated `fetch_pending_block_uses_block_sync_update_when_roster_available` coverage to assert the extra BlockCreated response.
+- Tests: not run (soak only).
+
 - Sumeragi vote QC tally: cache roster hashes for validated votes so `qc_signers_for_votes` can skip redundant signature checks while still revalidating on roster mismatch; added `qc_signers_for_votes_revalidates_on_roster_hash_mismatch` coverage.
 - Tests: `cargo test -p iroha_core qc_signers_for_votes_revalidates_on_roster_hash_mismatch -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/peers_gossiper.rs:1291`, `crates/iroha_core/src/sumeragi/main_loop/tests.rs:46901`, `crates/iroha_core/src/sumeragi/main_loop/tests.rs:50462`).
 
@@ -60,6 +82,9 @@ Last update: 2026-01-27
 
 - Sumeragi block sync: reuse cached QC tallies for known blocks only when the incoming QC hash matches the cached QC or roster certificate, avoiding redundant aggregate/signature validation while preventing hash-mismatch bypass; added `block_sync_update_known_block_revalidates_qc_on_hash_mismatch` coverage.
 - Tests: `cargo test -p iroha_core block_sync_update_known_block_revalidates_qc_on_hash_mismatch -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:46418`/`:49947` persist). `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+
+- Sumeragi block sync: allow known-block QC hash mismatches to proceed to validation when the validator set matches the local snapshot; accept the quorum QC and update the commit certificate cache; added `block_sync_update_known_block_accepts_quorum_qc_on_hash_mismatch` coverage.
+- Tests: `cargo test -p iroha_core block_sync_update_known_block_accepts_quorum_qc_on_hash_mismatch -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/peers_gossiper.rs:1291`, `crates/iroha_core/src/sumeragi/main_loop/tests.rs:47772`, `crates/iroha_core/src/sumeragi/main_loop/tests.rs:51333` persist).
 
 - Izanami run (tps=1, 300s, 4 peers) with QC fast-path gating: failed with `no block height progress for 180s` (min height 3); plan submissions hit connection refused/timeouts against `http://127.0.0.1:33251`; one peer exited with status 3; duplicate metric registration warnings observed. Network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_bLPG1H`.
 
@@ -1112,3 +1137,12 @@ Last update: 2026-01-27
 - Proposal assembly defers early when the highest QC block is missing to avoid building on the wrong parent.
 - Sora profile detection now injects a deterministic PoP entry to prevent trusted_peers_pop warnings in test networks.
 - Localnet P2P now supports `network.connect_startup_delay_ms` (Kagami localnet sets 2000ms) to reduce startup connection-refused spam; Sumeragi slow-iteration warnings now require backlog/progress to log.
+- Izanami: inject SumeragiParameters block/commit timings into NPoS genesis when Izanami pipeline_time is unset (keeps on-chain timings aligned with NPoS overrides); added `npos_genesis_sets_sumeragi_timing` regression coverage.
+- Tests: `cargo test -p izanami npos_genesis_sets_sumeragi_timing -- --nocapture` (ok; initial run timed out while compiling).
+- Build: `cargo build -p izanami --release --locked` (ok).
+- Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
+- Izanami NPoS 1 TPS run (300s) after SumeragiParameters update: stopped before target blocks; max commit height 41; `vote_drain_ms` p50=0, p90=734, max=3242; `block_payload_drain_ms` p90=155, max=1084. Logs: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_wWvhSZ`.
+- Votes: inbound handling now defers stale-height/locked-qc drops to the validation path to keep the hot queue light; added `vote_inbound_defers_stale_vote_drop`.
+- Tests: `cargo test -p iroha_core vote_inbound_defers_stale_vote_drop -- --nocapture` (timed out while compiling).
+- Izanami NPoS 1 TPS run (300s) after vote-inbound deferral: stopped before target blocks; max commit height 44; `vote_drain_ms` p50=0, p90=778, max=3485; `block_payload_drain_ms` p90=151, max=921. Logs: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_p4poFN`.
+- Defaults: redundant_send_r now derived as `2f+1` from validator count for Kagami profiles, localnet generation, and test-network genesis; default genesis templates and operator docs updated. Tests not run (not requested).

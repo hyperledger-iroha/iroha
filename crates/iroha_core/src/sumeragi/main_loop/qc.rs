@@ -162,6 +162,7 @@ impl Actor {
         block_hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
+        priority: super::MissingBlockPriority,
         targets: &[PeerId],
     ) {
         send_missing_block_request(
@@ -170,6 +171,7 @@ impl Actor {
             block_hash,
             height,
             view,
+            priority,
             targets,
         );
     }
@@ -246,7 +248,15 @@ impl Actor {
             &mut requests,
             telemetry,
             move |targets| {
-                send_missing_block_request(&network, &peer_id, block_hash, height, view, targets);
+                send_missing_block_request(
+                    &network,
+                    &peer_id,
+                    block_hash,
+                    height,
+                    view,
+                    super::MissingBlockPriority::Consensus,
+                    targets,
+                );
             },
         );
         self.pending.missing_block_requests = requests;
@@ -580,6 +590,7 @@ impl Actor {
                         block_hash,
                         stats_snapshot.height,
                         stats_snapshot.view,
+                        stats_snapshot.priority,
                         &targets,
                     );
                     iroha_logger::info!(
@@ -960,9 +971,22 @@ impl Actor {
                         }
                     };
                 let state_view = self.state.view();
+                let stake_roster = {
+                    let active = super::roster::derive_active_topology_for_mode(
+                        &state_view,
+                        self.common_config.trusted_peers.value(),
+                        self.common_config.peer.id(),
+                        consensus_mode,
+                    );
+                    if active.is_empty() {
+                        topology.as_ref().to_vec()
+                    } else {
+                        active
+                    }
+                };
                 match super::stake_snapshot::stake_quorum_reached_for_peers(
                     &state_view,
-                    topology.as_ref(),
+                    &stake_roster,
                     &signer_peers,
                 ) {
                     Ok(result) => result,
@@ -1501,6 +1525,7 @@ impl Actor {
                                 locked_hash,
                                 lock.height,
                                 lock.view,
+                                super::MissingBlockPriority::Consensus,
                                 targets,
                             )
                         },
@@ -2372,7 +2397,13 @@ impl Actor {
                     targets,
                     target_kind,
                 } => {
-                    self.request_missing_block(qc.subject_block_hash, qc.height, qc.view, &targets);
+                    self.request_missing_block(
+                        qc.subject_block_hash,
+                        qc.height,
+                        qc.view,
+                        super::MissingBlockPriority::Consensus,
+                        &targets,
+                    );
                     iroha_logger::info!(
                         height = qc.height,
                         view = qc.view,

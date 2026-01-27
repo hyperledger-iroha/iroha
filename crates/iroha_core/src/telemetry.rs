@@ -12024,9 +12024,11 @@ mod tests {
                 KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
             let local_peer_id = PeerId::new(leader_public_key);
             let mut world = World::default();
-            world.peers.mutate_vec(|peers| {
-                let _ = peers.push(local_peer_id.clone());
-            });
+            {
+                let mut peers_block = world.peers.block();
+                let _ = peers_block.get_mut().push(local_peer_id.clone());
+                peers_block.commit();
+            }
             let state = Arc::new(State::with_telemetry(
                 world,
                 kura.clone(),
@@ -12177,9 +12179,11 @@ mod tests {
         let (local_pk, _) = KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
         let local_peer_id = PeerId::new(local_pk);
         let mut world = World::default();
-        world.peers.mutate_vec(|peers| {
-            let _ = peers.push(local_peer_id.clone());
-        });
+        {
+            let mut peers_block = world.peers.block();
+            let _ = peers_block.get_mut().push(local_peer_id.clone());
+            peers_block.commit();
+        }
         let state = Arc::new(State::with_telemetry(
             world,
             kura.clone(),

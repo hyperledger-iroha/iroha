@@ -1029,6 +1029,27 @@ transport.offlineToriiClient().queryTransfers(query)
     .thenAccept(list -> System.out.println("Fetched " + list.total() + " transfers"));
 ```
 
+Register signed certificates on-ledger by posting them to the offline allowances endpoint:
+
+```java
+OfflineWalletCertificate certificate =
+    new OfflineWalletCertificate(
+        controllerId,
+        allowanceCommitment,
+        spendPublicKeyHex,
+        attestationReportBytes,
+        issuedAtMs,
+        expiresAtMs,
+        policy,
+        operatorSignatureHex,
+        metadata,
+        verdictIdHex,
+        attestationNonceHex,
+        refreshAtMs);
+
+transport.offlineToriiClient().registerAllowance(certificate, authorityId, authorityPrivateKeyHex);
+```
+
 For jurisdictions that require offline spend logs, use the shared audit logger
 and facade:
 

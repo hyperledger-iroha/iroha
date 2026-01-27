@@ -45,9 +45,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let authority_account = Account::new(authority_id.clone()).build(&authority_id);
     let mut world = World::with([domain], [authority_account], []);
-    world.peers.mutate_vec(|peers| {
-        let _ = peers.push(local_peer_id.clone());
-    });
+    fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     {
         let height_u64 = u64::try_from(state.view().height())

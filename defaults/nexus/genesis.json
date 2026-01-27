@@ -12,7 +12,7 @@
                     "commit_time_ms": 4000,
                     "max_clock_drift_ms": 1000,
                     "collectors_k": 3,
-                    "collectors_redundant_send_r": 2,
+                    "collectors_redundant_send_r": 3,
                     "da_enabled": true
                 },
                 "block": {
@@ -45,7 +45,7 @@
                             "timeout_da_ms": 300,
                             "timeout_aggregator_ms": 120,
                             "k_aggregators": 3,
-                            "redundant_send_r": 2,
+                            "redundant_send_r": 3,
                             "vrf_commit_window_blocks": 100,
                             "vrf_reveal_window_blocks": 40,
                             "min_self_bond": 1000,

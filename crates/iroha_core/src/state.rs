@@ -4104,6 +4104,213 @@ mod governance_slash_map_json {
 /// Torii/CLI helpers.
 pub type CouncilState = crate::governance::state::ParliamentTerm;
 
+#[derive(Debug, Clone)]
+struct PipelineParallelism {
+    workers: usize,
+    pool: Option<std::sync::Arc<rayon::ThreadPool>>,
+}
+
+impl PipelineParallelism {
+    fn new(pipeline: &iroha_config::parameters::actual::Pipeline) -> Self {
+        let workers = if pipeline.workers == 0 {
+            std::thread::available_parallelism()
+                .map(|count| count.get())
+                .unwrap_or(1)
+        } else {
+            pipeline.workers
+        };
+        let pool = if workers > 1 {
+            Some(std::sync::Arc::new(
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .thread_name(|i| format!("pipeline-worker-{i}"))
+                    .build()
+                    .expect("valid pipeline worker pool"),
+            ))
+        } else {
+            None
+        };
+        Self { workers, pool }
+    }
+
+    fn workers(&self) -> usize {
+        self.workers
+    }
+
+    fn pool(&self) -> Option<std::sync::Arc<rayon::ThreadPool>> {
+        self.pool.clone()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StatelessValidationContext {
+    chain_id: iroha_data_model::ChainId,
+    max_clock_drift_ms: u64,
+    tx_params: iroha_data_model::parameter::TransactionParameters,
+    allowed_signing: Vec<iroha_crypto::Algorithm>,
+}
+
+impl StatelessValidationContext {
+    pub(crate) fn new(
+        chain_id: iroha_data_model::ChainId,
+        max_clock_drift_ms: u64,
+        tx_params: iroha_data_model::parameter::TransactionParameters,
+        allowed_signing: Vec<iroha_crypto::Algorithm>,
+    ) -> Self {
+        Self {
+            chain_id,
+            max_clock_drift_ms,
+            tx_params,
+            allowed_signing,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StatelessValidationCacheEntry {
+    expires_at_ms: Option<u128>,
+    not_before_ms: u128,
+    order: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct StatelessValidationCache {
+    cap: usize,
+    next_order: u64,
+    context: Option<StatelessValidationContext>,
+    entries: std::collections::BTreeMap<
+        iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+        StatelessValidationCacheEntry,
+    >,
+    lru: std::collections::BTreeSet<(
+        u64,
+        iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+    )>,
+}
+
+impl StatelessValidationCache {
+    fn new(cap: usize) -> Self {
+        Self {
+            cap,
+            next_order: 0,
+            context: None,
+            entries: std::collections::BTreeMap::new(),
+            lru: std::collections::BTreeSet::new(),
+        }
+    }
+
+    pub(crate) fn set_cap(&mut self, cap: usize) {
+        self.cap = cap;
+        if self.cap == 0 {
+            self.entries.clear();
+            self.lru.clear();
+            self.next_order = 0;
+            return;
+        }
+        self.evict_capacity();
+    }
+
+    pub(crate) fn ensure_context(&mut self, context: StatelessValidationContext) {
+        if self.context.as_ref() != Some(&context) {
+            self.context = Some(context);
+            self.entries.clear();
+            self.lru.clear();
+            self.next_order = 0;
+        }
+    }
+
+    pub(crate) fn get_ok(
+        &mut self,
+        key: &iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+        now_ms: u128,
+    ) -> bool {
+        let Some(mut entry) = self.entries.remove(key) else {
+            return false;
+        };
+        if now_ms < entry.not_before_ms
+            || entry
+                .expires_at_ms
+                .is_some_and(|expires_at| now_ms > expires_at)
+        {
+            self.lru.remove(&(entry.order, key.clone()));
+            return false;
+        }
+        self.lru.remove(&(entry.order, key.clone()));
+        entry.order = self.next_order();
+        self.lru.insert((entry.order, key.clone()));
+        self.entries.insert(key.clone(), entry);
+        true
+    }
+
+    pub(crate) fn insert_ok(
+        &mut self,
+        key: iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>,
+        expires_at_ms: Option<u128>,
+        not_before_ms: u128,
+    ) {
+        if self.cap == 0 {
+            return;
+        }
+        self.evict_capacity();
+        let order = self.next_order();
+        self.entries.insert(
+            key.clone(),
+            StatelessValidationCacheEntry {
+                expires_at_ms,
+                not_before_ms,
+                order,
+            },
+        );
+        self.lru.insert((order, key));
+    }
+
+    fn next_order(&mut self) -> u64 {
+        let order = self.next_order;
+        self.next_order = self.next_order.wrapping_add(1);
+        order
+    }
+
+    fn evict_capacity(&mut self) {
+        if self.cap == 0 {
+            self.entries.clear();
+            self.lru.clear();
+            return;
+        }
+        while self.entries.len() >= self.cap {
+            let Some((order, key)) = self.lru.pop_first() else {
+                self.entries.clear();
+                break;
+            };
+            self.entries.remove(&key);
+            self.lru.remove(&(order, key));
+        }
+    }
+}
+
+#[cfg(test)]
+mod stateless_validation_cache_tests {
+    use super::StatelessValidationCache;
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::transaction::SignedTransaction;
+
+    fn dummy_hash(seed: u8) -> HashOf<SignedTransaction> {
+        HashOf::from_untyped_unchecked(Hash::new([seed]))
+    }
+
+    #[test]
+    fn cache_respects_not_before_and_expiry() {
+        let mut cache = StatelessValidationCache::new(4);
+        let key = dummy_hash(7);
+
+        cache.insert_ok(key, Some(200), 50);
+        assert!(!cache.get_ok(&key, 40));
+
+        cache.insert_ok(key, Some(200), 50);
+        assert!(cache.get_ok(&key, 199));
+        assert!(!cache.get_ok(&key, 201));
+    }
+}
+
 /// Current state of the blockchain.
 ///
 /// Merge-ledger finality plumbing is specified in `docs/source/merge_ledger.md`.
@@ -4150,6 +4357,10 @@ pub struct State {
     pub query_handle: LiveQueryStoreHandle,
     /// Pipeline execution preferences (dynamic prepass, parallel overlay).
     pub pipeline: iroha_config::parameters::actual::Pipeline,
+    /// Shared pipeline worker pool snapshot (derived from pipeline config).
+    pipeline_parallelism: PipelineParallelism,
+    /// Stateless validation cache shared across blocks.
+    stateless_validation_cache: parking_lot::Mutex<StatelessValidationCache>,
     /// Oracle aggregation configuration.
     pub oracle: iroha_config::parameters::actual::Oracle,
     /// Streaming configuration snapshot (spool paths, codec defaults).
@@ -4297,6 +4508,23 @@ impl<'state> StateBlock<'state> {
     #[inline]
     pub fn world(&self) -> &WorldBlock<'state> {
         &self.world
+    }
+
+    #[inline]
+    pub(crate) fn pipeline_worker_threads(&self) -> usize {
+        self.state_ref.pipeline_parallelism.workers()
+    }
+
+    #[inline]
+    pub(crate) fn pipeline_thread_pool(&self) -> Option<std::sync::Arc<rayon::ThreadPool>> {
+        self.state_ref.pipeline_parallelism.pool()
+    }
+
+    #[inline]
+    pub(crate) fn stateless_validation_cache(
+        &self,
+    ) -> &parking_lot::Mutex<StatelessValidationCache> {
+        self.state_ref.stateless_validation_cache()
     }
 
     /// Access the DA commitments collected while applying the block.
@@ -11951,6 +12179,72 @@ impl State {
                     CommitRosterJournal::new(commit_roster_journal_path, roster_retention)
                 }
             };
+        let pipeline = iroha_config::parameters::actual::Pipeline {
+            dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
+            access_set_cache_enabled:
+                iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
+            parallel_overlay: iroha_config::parameters::defaults::pipeline::PARALLEL_OVERLAY,
+            workers: iroha_config::parameters::defaults::pipeline::WORKERS,
+            stateless_cache_cap: iroha_config::parameters::defaults::pipeline::STATELESS_CACHE_CAP,
+            parallel_apply: iroha_config::parameters::defaults::pipeline::PARALLEL_APPLY,
+            ready_queue_heap: iroha_config::parameters::defaults::pipeline::READY_QUEUE_HEAP,
+            gpu_key_bucket: iroha_config::parameters::defaults::pipeline::GPU_KEY_BUCKET,
+            debug_trace_scheduler_inputs:
+                iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
+            debug_trace_tx_eval: iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_TX_EVAL,
+            signature_batch_max: iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX,
+            signature_batch_max_ed25519:
+                iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
+            signature_batch_max_secp256k1:
+                iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_SECP256K1,
+            signature_batch_max_pqc:
+                iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_PQC,
+            signature_batch_max_bls:
+                iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_BLS,
+            cache_size: iroha_config::parameters::defaults::pipeline::CACHE_SIZE,
+            ivm_cache_max_decoded_ops:
+                iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
+            ivm_cache_max_bytes: iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
+            ivm_prover_threads: iroha_config::parameters::defaults::pipeline::IVM_PROVER_THREADS,
+            overlay_max_instructions:
+                iroha_config::parameters::defaults::pipeline::OVERLAY_MAX_INSTRUCTIONS,
+            overlay_max_bytes: iroha_config::parameters::defaults::pipeline::OVERLAY_MAX_BYTES,
+            overlay_chunk_instructions:
+                iroha_config::parameters::defaults::pipeline::OVERLAY_CHUNK_INSTRUCTIONS,
+            gas: iroha_config::parameters::actual::Gas {
+                tech_account_id: iroha_config::parameters::defaults::pipeline::GAS_TECH_ACCOUNT_ID
+                    .to_string(),
+                accepted_assets: Vec::new(),
+                units_per_gas: Vec::new(),
+            },
+            ivm_max_cycles_upper_bound:
+                iroha_config::parameters::defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
+            ivm_max_decoded_instructions:
+                iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_INSTRUCTIONS,
+            ivm_max_decoded_bytes:
+                iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_BYTES,
+            quarantine_max_txs_per_block:
+                iroha_config::parameters::defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
+            quarantine_tx_max_cycles:
+                iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
+            quarantine_tx_max_millis:
+                iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
+            query_default_cursor_mode: iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
+            query_max_fetch_size:
+                iroha_config::parameters::defaults::pipeline::QUERY_MAX_FETCH_SIZE,
+            query_stored_min_gas_units:
+                iroha_config::parameters::defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,
+            amx_per_dataspace_budget_ms:
+                iroha_config::parameters::defaults::pipeline::AMX_PER_DATASPACE_BUDGET_MS,
+            amx_group_budget_ms: iroha_config::parameters::defaults::pipeline::AMX_GROUP_BUDGET_MS,
+            amx_per_instruction_ns:
+                iroha_config::parameters::defaults::pipeline::AMX_PER_INSTRUCTION_NS,
+            amx_per_memory_access_ns:
+                iroha_config::parameters::defaults::pipeline::AMX_PER_MEMORY_ACCESS_NS,
+            amx_per_syscall_ns: iroha_config::parameters::defaults::pipeline::AMX_PER_SYSCALL_NS,
+        };
+        let pipeline_parallelism = PipelineParallelism::new(&pipeline);
+        let stateless_cache_cap = pipeline.stateless_cache_cap;
         let mut s = Self {
             world,
             block_hashes: BlockHashes::default(),
@@ -11975,77 +12269,11 @@ impl State {
             lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
             da_indexes_hydrated: parking_lot::RwLock::new(None),
             chain_id: iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-            pipeline: iroha_config::parameters::actual::Pipeline {
-                dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
-                access_set_cache_enabled:
-                    iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
-                parallel_overlay: iroha_config::parameters::defaults::pipeline::PARALLEL_OVERLAY,
-                workers: iroha_config::parameters::defaults::pipeline::WORKERS,
-                parallel_apply: iroha_config::parameters::defaults::pipeline::PARALLEL_APPLY,
-                ready_queue_heap: iroha_config::parameters::defaults::pipeline::READY_QUEUE_HEAP,
-                gpu_key_bucket: iroha_config::parameters::defaults::pipeline::GPU_KEY_BUCKET,
-                debug_trace_scheduler_inputs:
-                    iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
-                debug_trace_tx_eval:
-                    iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_TX_EVAL,
-                signature_batch_max:
-                    iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX,
-                signature_batch_max_ed25519:
-                    iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
-                signature_batch_max_secp256k1:
-                    iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_SECP256K1,
-                signature_batch_max_pqc:
-                    iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_PQC,
-                signature_batch_max_bls:
-                    iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_BLS,
-                    cache_size: iroha_config::parameters::defaults::pipeline::CACHE_SIZE,
-                    ivm_cache_max_decoded_ops:
-                        iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_DECODED_OPS,
-                    ivm_cache_max_bytes:
-                        iroha_config::parameters::defaults::pipeline::IVM_CACHE_MAX_BYTES,
-                    ivm_prover_threads:
-                        iroha_config::parameters::defaults::pipeline::IVM_PROVER_THREADS,
-                    overlay_max_instructions:
-                        iroha_config::parameters::defaults::pipeline::OVERLAY_MAX_INSTRUCTIONS,
-                    overlay_max_bytes: iroha_config::parameters::defaults::pipeline::OVERLAY_MAX_BYTES,
-                    overlay_chunk_instructions:
-                        iroha_config::parameters::defaults::pipeline::OVERLAY_CHUNK_INSTRUCTIONS,
-                    gas: iroha_config::parameters::actual::Gas {
-                        tech_account_id:
-                            iroha_config::parameters::defaults::pipeline::GAS_TECH_ACCOUNT_ID
-                                .to_string(),
-                        accepted_assets: Vec::new(),
-                        units_per_gas: Vec::new(),
-                    },
-                    ivm_max_cycles_upper_bound:
-                        iroha_config::parameters::defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
-                    ivm_max_decoded_instructions:
-                        iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_INSTRUCTIONS,
-                    ivm_max_decoded_bytes:
-                        iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_BYTES,
-                    quarantine_max_txs_per_block:
-                        iroha_config::parameters::defaults::pipeline::QUARANTINE_MAX_TXS_PER_BLOCK,
-                    quarantine_tx_max_cycles:
-                        iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_CYCLES,
-                    quarantine_tx_max_millis:
-                        iroha_config::parameters::defaults::pipeline::QUARANTINE_TX_MAX_MILLIS,
-                    query_default_cursor_mode:
-                        iroha_config::parameters::actual::QueryCursorMode::Ephemeral,
-                    query_max_fetch_size:
-                        iroha_config::parameters::defaults::pipeline::QUERY_MAX_FETCH_SIZE,
-                    query_stored_min_gas_units:
-                        iroha_config::parameters::defaults::pipeline::QUERY_STORED_MIN_GAS_UNITS,
-                    amx_per_dataspace_budget_ms:
-                        iroha_config::parameters::defaults::pipeline::AMX_PER_DATASPACE_BUDGET_MS,
-                    amx_group_budget_ms:
-                        iroha_config::parameters::defaults::pipeline::AMX_GROUP_BUDGET_MS,
-                    amx_per_instruction_ns:
-                        iroha_config::parameters::defaults::pipeline::AMX_PER_INSTRUCTION_NS,
-                    amx_per_memory_access_ns:
-                        iroha_config::parameters::defaults::pipeline::AMX_PER_MEMORY_ACCESS_NS,
-                    amx_per_syscall_ns:
-                        iroha_config::parameters::defaults::pipeline::AMX_PER_SYSCALL_NS,
-            },
+            pipeline,
+            pipeline_parallelism,
+            stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
+                stateless_cache_cap,
+            )),
             oracle: default_oracle(),
             streaming,
             nexus: parking_lot::RwLock::new(nexus),
@@ -12523,7 +12751,8 @@ impl State {
         s.pipeline.parallel_overlay = false;
         s.pipeline.parallel_apply = false;
         s.pipeline.ready_queue_heap = false;
-        s.pipeline.workers = 0; // let rayon pick a sane default; overlay is off anyway
+        s.pipeline.workers = 1; // keep test execution single-threaded by default
+        s.pipeline_parallelism = PipelineParallelism::new(&s.pipeline);
         // Disable citizenship gating by default in unit tests; individual tests can override.
         s.gov.citizenship_bond_amount = 0;
         s
@@ -13842,6 +14071,10 @@ impl State {
     /// Update pipeline preferences using a loaded configuration.
     pub fn set_pipeline(&mut self, pipeline: iroha_config::parameters::actual::Pipeline) {
         self.pipeline = pipeline;
+        self.pipeline_parallelism = PipelineParallelism::new(&self.pipeline);
+        self.stateless_validation_cache
+            .lock()
+            .set_cap(self.pipeline.stateless_cache_cap);
         // Configure the IVM global pre-decode cache from pipeline settings.
         ivm::ivm_cache::configure_limits(ivm::ivm_cache::CacheLimits {
             capacity: self.pipeline.cache_size,
@@ -13849,6 +14082,13 @@ impl State {
             max_decoded_ops: self.pipeline.ivm_cache_max_decoded_ops,
         });
         ivm::zk::set_prover_threads(self.pipeline.ivm_prover_threads);
+    }
+
+    #[inline]
+    pub(crate) fn stateless_validation_cache(
+        &self,
+    ) -> &parking_lot::Mutex<StatelessValidationCache> {
+        &self.stateless_validation_cache
     }
 
     /// Update oracle aggregation preferences.
@@ -20595,6 +20835,9 @@ pub(crate) mod deserialize {
                     CommitRosterJournal::new(commit_roster_journal_path, roster_retention)
                 }
             };
+        let pipeline = default_pipeline();
+        let pipeline_parallelism = PipelineParallelism::new(&pipeline);
+        let stateless_cache_cap = pipeline.stateless_cache_cap;
         let state = State {
             world,
             block_hashes,
@@ -20615,7 +20858,11 @@ pub(crate) mod deserialize {
             kura,
             query_handle,
             oracle: default_oracle(),
-            pipeline: default_pipeline(),
+            pipeline,
+            pipeline_parallelism,
+            stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
+                stateless_cache_cap,
+            )),
             streaming,
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
             nexus: parking_lot::RwLock::new(nexus),
@@ -20652,6 +20899,7 @@ pub(crate) mod deserialize {
                 iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
             parallel_overlay: iroha_config::parameters::defaults::pipeline::PARALLEL_OVERLAY,
             workers: iroha_config::parameters::defaults::pipeline::WORKERS,
+            stateless_cache_cap: iroha_config::parameters::defaults::pipeline::STATELESS_CACHE_CAP,
             parallel_apply: iroha_config::parameters::defaults::pipeline::PARALLEL_APPLY,
             ready_queue_heap: iroha_config::parameters::defaults::pipeline::READY_QUEUE_HEAP,
             gpu_key_bucket: iroha_config::parameters::defaults::pipeline::GPU_KEY_BUCKET,
@@ -31080,8 +31328,14 @@ mod tests {
             block_hashes.commit_for_tests();
         }
 
-        let replacement_header =
-            BlockHeader::new(NonZeroU64::new(2).unwrap(), Some(first_hash), None, None, 0, 0);
+        let replacement_header = BlockHeader::new(
+            NonZeroU64::new(2).unwrap(),
+            Some(first_hash),
+            None,
+            None,
+            0,
+            0,
+        );
         let replacement_hash = replacement_header.hash();
         {
             let mut block_hashes = state.block_hashes.block_and_revert();

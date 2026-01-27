@@ -548,6 +548,7 @@ mod tests {
             block_hash,
             height: 1,
             view: 0,
+            priority: None,
         };
         let fetch_msg =
             NetworkMessage::SumeragiBlock(Box::new(BlockMessage::FetchPendingBlock(fetch)));

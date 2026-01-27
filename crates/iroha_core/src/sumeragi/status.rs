@@ -2370,6 +2370,8 @@ pub enum ConsensusMessageReason {
     AggregateVerifyDeferred,
     /// Delivery channel is unavailable.
     EnqueueFailed,
+    /// Message dropped due to backpressure limits.
+    Backpressure,
     /// Sender is currently penalized.
     PenalizedSender,
     /// Epoch mismatch on the payload.
@@ -2430,6 +2432,7 @@ impl ConsensusMessageReason {
             ConsensusMessageReason::CommitPipelineActive => "commit_pipeline_active",
             ConsensusMessageReason::AggregateVerifyDeferred => "aggregate_verify_deferred",
             ConsensusMessageReason::EnqueueFailed => "enqueue_failed",
+            ConsensusMessageReason::Backpressure => "backpressure",
             ConsensusMessageReason::PenalizedSender => "penalized_sender",
             ConsensusMessageReason::EpochMismatch => "epoch_mismatch",
             ConsensusMessageReason::Committed => "committed",
@@ -2487,6 +2490,8 @@ pub enum VoteValidationDropReason {
     LockedQc,
     /// Duplicate vote already recorded.
     Duplicate,
+    /// Vote dropped due to validation backpressure.
+    Backpressure,
     /// Signer index cannot be represented as usize.
     SignerIndexOverflow,
     /// Signer index exceeds the active roster length.
@@ -2513,6 +2518,7 @@ impl VoteValidationDropReason {
             VoteValidationDropReason::RosterMissing => "roster_missing",
             VoteValidationDropReason::LockedQc => "locked_qc",
             VoteValidationDropReason::Duplicate => "duplicate",
+            VoteValidationDropReason::Backpressure => "backpressure",
             VoteValidationDropReason::SignerIndexOverflow => "signer_index_overflow",
             VoteValidationDropReason::SignerOutOfRange => "signer_out_of_range",
             VoteValidationDropReason::SignatureInvalid => "invalid_signature",
@@ -4230,7 +4236,7 @@ pub fn record_consensus_message_handling(
     *entry = entry.saturating_add(1);
 }
 
-fn should_log_vote_drop_count(count: u64) -> bool {
+pub(crate) fn should_log_vote_drop_count(count: u64) -> bool {
     if count == 1 {
         return true;
     }
@@ -6785,6 +6791,14 @@ mod tests {
     }
 
     #[test]
+    fn vote_validation_drop_reason_includes_backpressure() {
+        assert_eq!(
+            super::VoteValidationDropReason::Backpressure.as_str(),
+            "backpressure"
+        );
+    }
+
+    #[test]
     fn commit_history_test_guard_is_reentrant() {
         let outer = super::commit_history_test_guard();
         assert_eq!(super::test_lock_depth(&super::COMMIT_HISTORY_TEST_LOCK), 1);
@@ -7283,6 +7297,10 @@ mod tests {
         assert_eq!(
             super::ConsensusMessageReason::AggregateVerifyDeferred.as_str(),
             "aggregate_verify_deferred"
+        );
+        assert_eq!(
+            super::ConsensusMessageReason::Backpressure.as_str(),
+            "backpressure"
         );
     }
 

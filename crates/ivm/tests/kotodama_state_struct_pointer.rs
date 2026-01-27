@@ -10,7 +10,7 @@ fn encode_pointer_tlv(ty: PointerType, payload: Vec<u8>) -> Vec<u8> {
     out.extend_from_slice(&(ty as u16).to_be_bytes());
     out.push(1);
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(&payload);
+    out.extend_from_slice(payload.as_ref());
     let hash: [u8; 32] = IrohaHash::new(&payload).into();
     out.extend_from_slice(&hash);
     out
@@ -35,7 +35,7 @@ fn encode_account_id_pointer_without_inner_hash(id: &str) -> Vec<u8> {
     inner.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
     inner.push(1);
     inner.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    inner.extend_from_slice(&payload);
+    inner.extend_from_slice(payload.as_ref());
     // Wrap in NoritoBytes with a valid outer hash so only the missing inner hash is exercised.
     let mut outer = Vec::with_capacity(2 + 1 + 4 + inner.len() + IrohaHash::LENGTH);
     outer.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
@@ -125,7 +125,7 @@ fn pointer_validate_rejects_unknown_type() {
     tlv.extend_from_slice(&0xFFFFu16.to_be_bytes());
     tlv.push(1);
     tlv.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    tlv.extend_from_slice(payload);
+    tlv.extend_from_slice(payload.as_ref());
     let hash: [u8; 32] = IrohaHash::new(payload).into();
     tlv.extend_from_slice(&hash);
 

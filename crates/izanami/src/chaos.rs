@@ -11,7 +11,9 @@ use std::{
 
 use color_eyre::{Result, eyre::eyre};
 use futures::FutureExt;
-use iroha_data_model::{parameter::system::SumeragiNposParameters, prelude::*};
+use iroha_data_model::{
+    parameter::SumeragiParameter, parameter::system::SumeragiNposParameters, prelude::*,
+};
 use iroha_genesis::GenesisBlock;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
 use rand::{
@@ -63,9 +65,10 @@ const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_ED25519: i64 = 64;
 const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_SECP256K1: i64 = 64;
 const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_PQC: i64 = 32;
 const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_BLS: i64 = 16;
-const IZANAMI_VALIDATION_WORKER_THREADS: i64 = 4;
-const IZANAMI_VALIDATION_WORK_QUEUE_CAP: i64 = 16;
-const IZANAMI_VALIDATION_RESULT_QUEUE_CAP: i64 = 16;
+const IZANAMI_VALIDATION_WORKER_THREADS: i64 = 8;
+const IZANAMI_VALIDATION_WORK_QUEUE_CAP: i64 = 64;
+const IZANAMI_VALIDATION_RESULT_QUEUE_CAP: i64 = 256;
+const IZANAMI_VALIDATION_PENDING_CAP: i64 = 8_192;
 
 #[derive(Clone, Copy, Debug)]
 struct NposTiming {
@@ -166,6 +169,37 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
     // NPoS timing parameters live on-chain; inject Izanami overrides into genesis.
     let npos_timing = derive_npos_timing(config);
     if config.nexus.is_some() {
+        let mut injected = Vec::new();
+        if config.pipeline_time.is_none() {
+            let has_block_time = genesis.iter().flat_map(|tx| tx.iter()).any(|isi| {
+                let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() else {
+                    return false;
+                };
+                matches!(
+                    set_param.inner(),
+                    Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(_))
+                )
+            });
+            let has_commit_time = genesis.iter().flat_map(|tx| tx.iter()).any(|isi| {
+                let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() else {
+                    return false;
+                };
+                matches!(
+                    set_param.inner(),
+                    Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(_))
+                )
+            });
+            if !has_block_time {
+                injected.push(InstructionBox::from(SetParameter::new(
+                    Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(npos_timing.block_ms)),
+                )));
+            }
+            if !has_commit_time {
+                injected.push(InstructionBox::from(SetParameter::new(
+                    Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(npos_timing.commit_ms)),
+                )));
+            }
+        }
         let has_npos_params = genesis.iter().flat_map(|tx| tx.iter()).any(|isi| {
             let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() else {
                 return false;
@@ -185,13 +219,15 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             npos_params.timeout_commit_ms = npos_timing.commit_ms;
             npos_params.timeout_da_ms = npos_timing.da_ms;
             npos_params.timeout_aggregator_ms = npos_timing.aggregator_ms;
-            let instruction = InstructionBox::from(SetParameter::new(Parameter::Custom(
+            injected.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
                 npos_params.into_custom_parameter(),
-            )));
+            ))));
+        }
+        if !injected.is_empty() {
             if let Some(first_tx) = genesis.first_mut() {
-                first_tx.insert(0, instruction);
+                first_tx.splice(0..0, injected);
             } else {
-                genesis.push(vec![instruction]);
+                genesis.push(injected);
             }
         }
     }
@@ -249,6 +285,10 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             .write(
                 ["sumeragi", "worker", "validation_result_queue_cap"],
                 IZANAMI_VALIDATION_RESULT_QUEUE_CAP,
+            )
+            .write(
+                ["sumeragi", "worker", "validation_pending_cap"],
+                IZANAMI_VALIDATION_PENDING_CAP,
             )
             .write(
                 ["sumeragi", "pacemaker", "pending_stall_grace_ms"],
@@ -875,7 +915,10 @@ mod tests {
     use std::{env, io};
 
     use color_eyre::eyre::{WrapErr, eyre};
-    use iroha_data_model::{isi::SetParameter, parameter::SumeragiParameter};
+    use iroha_data_model::{
+        isi::SetParameter,
+        parameter::{Parameter, SumeragiParameter},
+    };
     use iroha_test_network::init_instruction_registry;
     use tokio::time::timeout;
 
@@ -992,6 +1035,71 @@ mod tests {
             .wrap_err("NPoS network failed to reach expected height")?;
         network.shutdown().await;
 
+        Ok(())
+    }
+
+    #[test]
+    fn npos_genesis_sets_sumeragi_timing() -> Result<()> {
+        init_instruction_registry();
+        let profile = NexusProfile::sora_defaults()?;
+        let config = ChaosConfig {
+            allow_net: false,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: Some(7),
+            tps: 1.0,
+            max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: Some(profile),
+        };
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos {
+            state: _,
+            genesis,
+            recipes: _,
+        } = instructions::prepare_state(
+            account_qty,
+            config.nexus.as_ref(),
+            config.workload_profile,
+        )?;
+
+        let network = make_network_builder(&config, genesis).build();
+        let timing = derive_npos_timing(&config);
+        let mut block_time = None;
+        let mut commit_time = None;
+        for isi in network.genesis_isi().iter().flatten() {
+            if let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() {
+                match set_param.inner() {
+                    Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(ms)) => {
+                        block_time = Some(*ms);
+                    }
+                    Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(ms)) => {
+                        commit_time = Some(*ms);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        assert_eq!(
+            block_time,
+            Some(timing.block_ms),
+            "genesis should set sumeragi block_time_ms for NPoS"
+        );
+        assert_eq!(
+            commit_time,
+            Some(timing.commit_ms),
+            "genesis should set sumeragi commit_time_ms for NPoS"
+        );
         Ok(())
     }
 
@@ -1473,6 +1581,10 @@ mod tests {
         assert_eq!(
             lookup(&["sumeragi", "worker", "validation_result_queue_cap"]),
             Some(IZANAMI_VALIDATION_RESULT_QUEUE_CAP)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "worker", "validation_pending_cap"]),
+            Some(IZANAMI_VALIDATION_PENDING_CAP)
         );
         assert_eq!(
             lookup(&["sumeragi", "pacemaker", "pending_stall_grace_ms"]),

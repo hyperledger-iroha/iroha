@@ -2031,7 +2031,13 @@ impl Actor {
                 targets,
                 target_kind,
             } => {
-                self.request_missing_block(key.0, key.1, key.2, &targets);
+                self.request_missing_block(
+                    key.0,
+                    key.1,
+                    key.2,
+                    super::MissingBlockPriority::Background,
+                    &targets,
+                );
                 info!(
                     height = key.1,
                     view = key.2,
@@ -2172,7 +2178,13 @@ impl Actor {
                 targets,
                 target_kind,
             } => {
-                self.request_missing_block(key.0, key.1, key.2, &targets);
+                self.request_missing_block(
+                    key.0,
+                    key.1,
+                    key.2,
+                    super::MissingBlockPriority::Background,
+                    &targets,
+                );
                 match reason {
                     Some(reason) => {
                         info!(

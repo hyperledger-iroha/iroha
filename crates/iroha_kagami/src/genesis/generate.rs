@@ -5,6 +5,7 @@ use std::{
 
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use color_eyre::eyre::WrapErr as _;
+use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
     parameter::{
@@ -636,7 +637,7 @@ pub fn generate_default(
     if wants_npos_defaults {
         if profile_defaults.is_none() {
             parameters.sumeragi.collectors_k = 3;
-            parameters.sumeragi.collectors_redundant_send_r = 2;
+            parameters.sumeragi.collectors_redundant_send_r = redundant_send_r_from_len(4);
         }
         let defaults = profile_vrf_seed.map_or_else(SumeragiNposParameters::default, |seed| {
             SumeragiNposParameters::default().with_epoch_seed(seed)
@@ -1432,11 +1433,11 @@ mod tests {
         let testus = profile_defaults(GenesisProfile::Iroha3Testus);
         assert_eq!(testus.chain_id, ChainId::from("iroha3-testus"));
         assert_eq!(testus.collectors_k, 3);
-        assert_eq!(testus.collectors_redundant_send_r, 2);
+        assert_eq!(testus.collectors_redundant_send_r, 3);
 
         let nexus = profile_defaults(GenesisProfile::Iroha3Nexus);
         assert_eq!(nexus.chain_id, ChainId::from("iroha3-nexus"));
         assert_eq!(nexus.collectors_k, 5);
-        assert_eq!(nexus.collectors_redundant_send_r, 2);
+        assert_eq!(nexus.collectors_redundant_send_r, 3);
     }
 }

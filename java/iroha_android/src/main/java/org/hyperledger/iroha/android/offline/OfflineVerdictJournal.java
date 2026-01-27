@@ -57,7 +57,7 @@ public final class OfflineVerdictJournal {
   }
 
   public Optional<OfflineVerdictMetadata> find(final String certificateIdHex) {
-    if (certificateIdHex == null || certificateIdHex.isBlank()) {
+    if (certificateIdHex == null || certificateIdHex.trim().isEmpty()) {
       return Optional.empty();
     }
     synchronized (lock) {
@@ -145,7 +145,7 @@ public final class OfflineVerdictJournal {
   }
 
   private String resolveCertificateKeyLocked(final String certificateIdHex) {
-    if (certificateIdHex == null || certificateIdHex.isBlank()) {
+    if (certificateIdHex == null || certificateIdHex.trim().isEmpty()) {
       return null;
     }
     if (entries.containsKey(certificateIdHex)) {
@@ -161,7 +161,7 @@ public final class OfflineVerdictJournal {
   }
 
   private void loadExisting() throws IOException {
-    final String json = Files.readString(journalFile, StandardCharsets.UTF_8).trim();
+    final String json = new String(Files.readAllBytes(journalFile), StandardCharsets.UTF_8).trim();
     if (json.isEmpty()) {
       return;
     }
@@ -183,10 +183,9 @@ public final class OfflineVerdictJournal {
 
   private void persistLocked() throws IOException {
     final Map<String, Object> serialized = serializeEntriesLocked();
-    Files.writeString(
+    Files.write(
         journalFile,
-        JsonEncoder.encode(serialized),
-        StandardCharsets.UTF_8,
+        JsonEncoder.encode(serialized).getBytes(StandardCharsets.UTF_8),
         StandardOpenOption.CREATE,
         StandardOpenOption.TRUNCATE_EXISTING);
   }
@@ -306,7 +305,7 @@ public final class OfflineVerdictJournal {
   }
 
   private static IntegritySnapshot parseIntegritySnapshot(final String recordJson) {
-    if (recordJson == null || recordJson.isBlank()) {
+    if (recordJson == null || recordJson.trim().isEmpty()) {
       return IntegritySnapshot.empty();
     }
     final Object parsed = JsonParser.parse(recordJson);
@@ -322,7 +321,7 @@ public final class OfflineVerdictJournal {
       return IntegritySnapshot.empty();
     }
     final String policyRaw = optionalString(metadataMap.get("android.integrity.policy"));
-    if (policyRaw == null || policyRaw.isBlank()) {
+    if (policyRaw == null || policyRaw.trim().isEmpty()) {
       return IntegritySnapshot.empty();
     }
     final String policy = policyRaw.trim().toLowerCase(Locale.ROOT);
@@ -347,7 +346,7 @@ public final class OfflineVerdictJournal {
   private static OfflineVerdictMetadata.SafetyDetectMetadata parseSafetyDetectMetadata(
       final Map<?, ?> metadataMap) {
     final String appId = optionalString(metadataMap.get("android.hms_safety_detect.app_id"));
-    if (appId == null || appId.isBlank()) {
+    if (appId == null || appId.trim().isEmpty()) {
       return null;
     }
     final List<String> packages =
@@ -371,7 +370,7 @@ public final class OfflineVerdictJournal {
         optionalLong(metadataMap.get("android.play_integrity.cloud_project_number"));
     final String environment =
         optionalString(metadataMap.get("android.play_integrity.environment"));
-    if (project == null || project <= 0 || environment == null || environment.isBlank()) {
+    if (project == null || project <= 0 || environment == null || environment.trim().isEmpty()) {
       return null;
     }
     final List<String> packages =
@@ -403,7 +402,7 @@ public final class OfflineVerdictJournal {
         optionalString(metadataMap.get("android.provisioned.inspector_public_key"));
     final String schema =
         optionalString(metadataMap.get("android.provisioned.manifest_schema"));
-    if (inspector == null || inspector.isBlank() || schema == null || schema.isBlank()) {
+    if (inspector == null || inspector.trim().isEmpty() || schema == null || schema.trim().isEmpty()) {
       return null;
     }
     final Integer version =

@@ -19,3 +19,11 @@ public extension ToriiOfflineCertificateIssueRequest {
         self.init(certificate: try certificate.toriiJSON())
     }
 }
+
+public extension ToriiOfflineAllowanceRegisterRequest {
+    init(authority: String, privateKey: String, certificate: OfflineWalletCertificate) throws {
+        self.init(authority: authority,
+                  privateKey: privateKey,
+                  certificate: try certificate.toriiJSON())
+    }
+}

@@ -80,7 +80,7 @@ consensus_mode = "npos"
 
 [sumeragi.collectors]
 k = 3
-redundant_send_r = 2
+redundant_send_r = 3 # example for 4 validators (2f+1)
 
 [sumeragi.npos]
 block_time_ms = 1000 # bootstrap fallback; on-chain SumeragiParameters.block_time_ms is authoritative
@@ -241,7 +241,7 @@ Pacemaker (view changes)
 - View-change proofs advance once `f+1` validators raise suspicion (commit failure or quorum timeout); a full commit quorum is not required for a view change.
 
 K / r Parameters
-- Config keys: `sumeragi.collectors.k: usize` (collectors per height; default 1) and `sumeragi.collectors.redundant_send_r: u8` (redundant send fanout; default 1).
+- Config keys: `sumeragi.collectors.k: usize` (collectors per height; default 1 in config) and `sumeragi.collectors.redundant_send_r: u8` (redundant send fanout; tooling seeds on-chain defaults as `2f+1` from the validator count, config fallback remains 1 if parameters are absent).
 - On-chain: K and r live in `SumeragiParameters` and are authoritative for collector planning and `ConsensusParams` adverts; config values seed the genesis defaults. When peers advertise different K/r, the node logs a mismatch but keeps the on-chain values.
 - Fallbacks: if `k` yields no collectors, votes fall back to the full commit topology; `redundant_send_r` is treated as at least 1.
 - Determinism: primary/next collector order is a pure function of the canonical roster, PRF seed, and `(height, view)`; when the PRF seed is unavailable the fallback is the contiguous tail slice starting at `proxy_tail_index()`, with no per-node randomness.
@@ -315,8 +315,8 @@ role = "validator"                 # or "observer" (sync-only)
 consensus_mode = "permissioned"
 
 [sumeragi.collectors]
-k = 2                   # two collectors per height (tail + next)
-redundant_send_r = 2    # on timeout, target up to 2 collectors total
+k = 3                   # three collectors per height
+redundant_send_r = 3    # example for 4 validators (2f+1)
 
 [sumeragi.queues]
 votes = 8192             # vote channel capacity (commit votes + RBC READY/DELIVER)
@@ -332,6 +332,7 @@ tick_work_budget_cap_ms = 500        # cap per-tick proposal/commit work (0 disa
 validation_worker_threads = 1        # pre-vote validation worker threads
 validation_work_queue_cap = 4        # validation work queue per worker
 validation_result_queue_cap = 4      # validation result queue
+validation_pending_cap = 8192        # deferred vote-validation backlog cap
 
 [sumeragi.pacemaker]
 pending_stall_grace_ms = 250       # grace before pending progress counts as stalled

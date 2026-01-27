@@ -167,9 +167,7 @@ async fn router_builds_under_current_features() {
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let mut world = World::default();
-    world.peers.mutate_vec(|peers| {
-        let _ = peers.push(local_peer_id.clone());
-    });
+    fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
@@ -340,9 +338,7 @@ async fn router_exposes_status_when_telemetry_enabled() {
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let mut world = World::default();
-    world.peers.mutate_vec(|peers| {
-        let _ = peers.push(local_peer_id.clone());
-    });
+    fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;

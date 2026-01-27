@@ -43,9 +43,23 @@ pub(super) fn spawn_validation_workers(
     work_queue_cap: usize,
     result_queue_cap: usize,
 ) -> ValidationWorkerHandle {
-    let threads = worker_threads.max(1);
-    let work_queue_cap = work_queue_cap.max(1);
-    let result_queue_cap = result_queue_cap.max(1);
+    let threads = if worker_threads == 0 {
+        std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1)
+    } else {
+        worker_threads
+    };
+    let work_queue_cap = if work_queue_cap == 0 {
+        threads.saturating_mul(4).max(4)
+    } else {
+        work_queue_cap
+    };
+    let result_queue_cap = if result_queue_cap == 0 {
+        threads.saturating_mul(8).max(8)
+    } else {
+        result_queue_cap
+    };
     let (result_tx, result_rx) = mpsc::sync_channel::<ValidationResult>(result_queue_cap);
     let mut work_txs = Vec::with_capacity(threads);
     let mut join_handles = Vec::with_capacity(threads);

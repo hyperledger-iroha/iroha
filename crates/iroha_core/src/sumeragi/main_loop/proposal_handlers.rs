@@ -606,6 +606,7 @@ impl Actor {
                 payload = %proposal.payload_hash,
                 "caching proposal without local highest QC block; awaiting sync"
             );
+            self.observe_new_view_highest_qc(highest_qc);
         }
         if let Some((local_height, local_view)) =
             self.local_block_height_view(highest_qc.subject_block_hash)

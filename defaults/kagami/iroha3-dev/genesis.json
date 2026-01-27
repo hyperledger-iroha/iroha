@@ -161,7 +161,7 @@
               "max_entity_correlation_pct": 25,
               "max_nominator_concentration_pct": 25,
               "min_self_bond": 1000,
-              "redundant_send_r": 2,
+              "redundant_send_r": 1,
               "seat_band_pct": 5,
               "timeout_aggregator_ms": 120,
               "timeout_commit_ms": 150,

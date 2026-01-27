@@ -2884,6 +2884,8 @@ pub struct Pipeline {
     pub parallel_overlay: bool,
     /// Number of worker threads for overlay construction (0 = auto).
     pub workers: usize,
+    /// Capacity for the stateless validation cache (0 = disabled).
+    pub stateless_cache_cap: usize,
     /// Enable parallel application of overlays (per conflict-free layer).
     pub parallel_apply: bool,
     /// Use BinaryHeap-based ready queue in the deterministic scheduler.
@@ -3587,6 +3589,8 @@ pub struct SumeragiWorker {
     pub validation_work_queue_cap: usize,
     /// Validation result queue capacity (shared).
     pub validation_result_queue_cap: usize,
+    /// Cap on deferred vote-validation backlog before dropping inbound votes.
+    pub validation_pending_cap: usize,
 }
 
 /// Pacemaker configuration.

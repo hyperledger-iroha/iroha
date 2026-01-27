@@ -79,7 +79,7 @@ public final class OfflineAuditLogger {
   }
 
   private void loadExisting() throws IOException {
-    final String json = Files.readString(logFile, StandardCharsets.UTF_8).trim();
+    final String json = new String(Files.readAllBytes(logFile), StandardCharsets.UTF_8).trim();
     if (json.isEmpty()) {
       entries = new ArrayList<>();
       return;
@@ -102,10 +102,9 @@ public final class OfflineAuditLogger {
 
   private void persist() throws IOException {
     final String json = encodeEntries(entries);
-    Files.writeString(
+    Files.write(
         logFile,
-        json,
-        StandardCharsets.UTF_8,
+        json.getBytes(StandardCharsets.UTF_8),
         StandardOpenOption.CREATE,
         StandardOpenOption.TRUNCATE_EXISTING);
   }

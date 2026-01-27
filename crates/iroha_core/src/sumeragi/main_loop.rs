@@ -626,7 +626,7 @@ impl VoteVerifyKey {
 #[derive(Debug, Clone)]
 struct VoteProcessingContext {
     topology: super::network_topology::Topology,
-    signature_topology: super::network_topology::Topology,
+    signature_topology: Arc<super::network_topology::Topology>,
     consensus_mode: ConsensusMode,
     mode_tag: &'static str,
     prf_seed: Option<[u8; 32]>,
@@ -2628,17 +2628,25 @@ fn send_missing_block_request(
     block_hash: HashOf<BlockHeader>,
     height: u64,
     view: u64,
+    priority: MissingBlockPriority,
     targets: &[PeerId],
 ) {
     if targets.is_empty() {
         return;
     }
 
+    let priority = match priority {
+        MissingBlockPriority::Consensus => {
+            Some(super::message::FetchPendingBlockPriority::Consensus)
+        }
+        MissingBlockPriority::Background => None,
+    };
     let request = super::message::FetchPendingBlock {
         requester: peer_id.clone(),
         block_hash,
         height,
         view,
+        priority,
     };
     let message = BlockMessage::FetchPendingBlock(request);
     let post = crate::NetworkMessage::SumeragiBlock(Box::new(message));
@@ -2920,7 +2928,13 @@ impl Actor {
                 targets,
                 target_kind,
             } => {
-                self.request_missing_block(parent_hash, parent_height, block_view, &targets);
+                self.request_missing_block(
+                    parent_hash,
+                    parent_height,
+                    block_view,
+                    MissingBlockPriority::Background,
+                    &targets,
+                );
                 info!(
                     height = block_height,
                     view = block_view,
@@ -4671,7 +4685,8 @@ impl MergeCommitteeState {
 struct PendingBlockState {
     pending_blocks: BTreeMap<HashOf<BlockHeader>, PendingBlock>,
     missing_block_requests: BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
-    pending_fetch_requests: BTreeMap<HashOf<BlockHeader>, BTreeSet<PeerId>>,
+    pending_fetch_requests:
+        BTreeMap<HashOf<BlockHeader>, BTreeMap<PeerId, super::message::FetchPendingBlockPriority>>,
     pending_processing: Cell<Option<HashOf<BlockHeader>>>,
     pending_processing_parent: Cell<Option<HashOf<BlockHeader>>>,
     last_commit_pipeline_run: Instant,
@@ -4785,12 +4800,24 @@ struct VoteVerifyPending {
     context: VoteProcessingContext,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SignatureTopologyCacheKey {
+    height: u64,
+    view: u64,
+    roster_hash: HashOf<Vec<PeerId>>,
+    mode_tag: &'static str,
+    prf_seed: Option<[u8; 32]>,
+}
+
 struct VoteVerifyState {
     work_txs: Vec<mpsc::SyncSender<vote_verify::VoteVerifyWork>>,
     result_rx: Option<mpsc::Receiver<vote_verify::VoteVerifyResult>>,
     inflight: BTreeMap<VoteVerifyKey, VoteVerifyInFlight>,
+    pending_validation: BTreeMap<VoteVerifyKey, crate::sumeragi::consensus::Vote>,
     pending: BTreeMap<VoteVerifyKey, VoteVerifyPending>,
     pop_cache: BTreeMap<HashOf<Vec<PeerId>>, Arc<BTreeMap<PublicKey, Vec<u8>>>>,
+    signature_topology_cache:
+        BTreeMap<SignatureTopologyCacheKey, Arc<super::network_topology::Topology>>,
     next_id: u64,
     next_worker: usize,
 }
@@ -4801,8 +4828,10 @@ impl VoteVerifyState {
             work_txs: Vec::new(),
             result_rx: None,
             inflight: BTreeMap::new(),
+            pending_validation: BTreeMap::new(),
             pending: BTreeMap::new(),
             pop_cache: BTreeMap::new(),
+            signature_topology_cache: BTreeMap::new(),
             next_id: 0,
             next_worker: 0,
         }
@@ -9654,9 +9683,9 @@ impl Actor {
                     epoch = vote.epoch,
                     signer = vote.signer,
                     block_hash = %vote.block_hash,
-                    "processing incoming commit vote"
+                    "queueing incoming commit vote for validation"
                 );
-                self.handle_vote(vote);
+                self.handle_vote_inbound(vote);
                 Ok(())
             }
             BlockMessage::Qc(cert) => self.handle_qc(cert),

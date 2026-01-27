@@ -17,7 +17,7 @@ fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&type_id.to_be_bytes());
     out.push(version);
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(payload);
+    out.extend_from_slice(payload.as_ref());
     // Iroha Hash (blake2b-32 with LSB set)
     let h: [u8; 32] = Hash::new(payload).into();
     out.extend_from_slice(&h);

@@ -2,6 +2,7 @@
 
 use clap::ValueEnum;
 use color_eyre::eyre::{Result, eyre};
+use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::ChainId;
 
@@ -48,22 +49,22 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
         GenesisProfile::Iroha3Dev => ProfileDefaults {
             chain_id: ChainId::from("iroha3-dev.local"),
             collectors_k: 1,
-            collectors_redundant_send_r: 1,
             min_peers: 1,
+            collectors_redundant_send_r: redundant_send_r_from_len(1),
             seed_policy: SeedPolicy::DerivedFromChain,
         },
         GenesisProfile::Iroha3Testus => ProfileDefaults {
             chain_id: ChainId::from("iroha3-testus"),
             collectors_k: 3,
-            collectors_redundant_send_r: 2,
             min_peers: 4,
+            collectors_redundant_send_r: redundant_send_r_from_len(4),
             seed_policy: SeedPolicy::RequireExplicit,
         },
         GenesisProfile::Iroha3Nexus => ProfileDefaults {
             chain_id: ChainId::from("iroha3-nexus"),
             collectors_k: 5,
-            collectors_redundant_send_r: 2,
             min_peers: 4,
+            collectors_redundant_send_r: redundant_send_r_from_len(4),
             seed_policy: SeedPolicy::RequireExplicit,
         },
     }
@@ -129,13 +130,13 @@ mod tests {
         let testus = profile_defaults(GenesisProfile::Iroha3Testus);
         assert_eq!(testus.chain_id, ChainId::from("iroha3-testus"));
         assert_eq!(testus.collectors_k, 3);
-        assert_eq!(testus.collectors_redundant_send_r, 2);
+        assert_eq!(testus.collectors_redundant_send_r, 3);
         assert_eq!(testus.min_peers, 4);
 
         let nexus = profile_defaults(GenesisProfile::Iroha3Nexus);
         assert_eq!(nexus.chain_id, ChainId::from("iroha3-nexus"));
         assert_eq!(nexus.collectors_k, 5);
-        assert_eq!(nexus.collectors_redundant_send_r, 2);
+        assert_eq!(nexus.collectors_redundant_send_r, 3);
         assert_eq!(nexus.min_peers, 4);
     }
 

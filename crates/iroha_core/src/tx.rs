@@ -603,6 +603,46 @@ impl<'tx> AcceptedTransaction<'tx> {
         }
     }
 
+    fn signature_rejection_code(err: &TransactionSignatureError) -> SignatureRejectionCode {
+        match err {
+            TransactionSignatureError::UnsupportedMultisigAuthority => {
+                SignatureRejectionCode::UnsupportedAuthority
+            }
+            TransactionSignatureError::AlgorithmNotPermitted(_) => {
+                SignatureRejectionCode::AlgorithmNotPermitted
+            }
+            TransactionSignatureError::CryptoError(_) => SignatureRejectionCode::InvalidSignature,
+            TransactionSignatureError::NoSignatures
+            | TransactionSignatureError::MissingMultisigSignatures => {
+                SignatureRejectionCode::MissingSignatures
+            }
+            TransactionSignatureError::UnknownMultisigSigner => {
+                SignatureRejectionCode::UnknownSigner
+            }
+            TransactionSignatureError::InsufficientMultisigWeight { .. } => {
+                SignatureRejectionCode::InsufficientWeight
+            }
+        }
+    }
+
+    fn signature_fail_from_error(
+        tx: &SignedTransaction,
+        err: TransactionSignatureError,
+    ) -> SignatureVerificationFail {
+        SignatureVerificationFail::new(
+            tx.signature().clone(),
+            Self::signature_rejection_code(&err),
+            err.to_string(),
+        )
+    }
+
+    pub(crate) fn signature_verification_result(
+        tx: &SignedTransaction,
+    ) -> Result<(), SignatureVerificationFail> {
+        tx.verify_signature()
+            .map_err(|err| Self::signature_fail_from_error(tx, err))
+    }
+
     fn ensure_signature_limit(
         signature_count: usize,
         limits: &TransactionParameters,
@@ -717,16 +757,38 @@ impl<'tx> AcceptedTransaction<'tx> {
         crypto: &iroha_config::parameters::actual::Crypto,
         now: Duration,
     ) -> Result<(), AcceptTransactionFail> {
+        Self::validate_with_now_with_signature_result(
+            tx,
+            expected_chain_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            now,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn validate_with_now_with_signature_result(
+        tx: &SignedTransaction,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+        now: Duration,
+        signature_override: Option<Result<(), SignatureVerificationFail>>,
+    ) -> Result<(), AcceptTransactionFail> {
         let heartbeat_marker =
             heartbeat_marker_value(tx).map_err(AcceptTransactionFail::TransactionLimit)?;
         if heartbeat_marker == Some(true) {
-            return Self::validate_heartbeat_with_now(
+            return Self::validate_heartbeat_with_now_with_signature_result(
                 tx,
                 expected_chain_id,
                 max_clock_drift,
                 limits,
                 crypto,
                 now,
+                signature_override,
             );
         }
         Self::validate_common(tx, expected_chain_id, max_clock_drift, now)?;
@@ -747,34 +809,18 @@ impl<'tx> AcceptedTransaction<'tx> {
 
         Self::ensure_signing_allowed(tx, crypto)?;
 
-        if let Err(err) = tx.verify_signature() {
-            return Err(AcceptTransactionFail::SignatureVerification(
-                SignatureVerificationFail::new(
-                    tx.signature().clone(),
-                    match err {
-                        TransactionSignatureError::UnsupportedMultisigAuthority => {
-                            SignatureRejectionCode::UnsupportedAuthority
-                        }
-                        TransactionSignatureError::AlgorithmNotPermitted(_) => {
-                            SignatureRejectionCode::AlgorithmNotPermitted
-                        }
-                        TransactionSignatureError::CryptoError(_) => {
-                            SignatureRejectionCode::InvalidSignature
-                        }
-                        TransactionSignatureError::NoSignatures
-                        | TransactionSignatureError::MissingMultisigSignatures => {
-                            SignatureRejectionCode::MissingSignatures
-                        }
-                        TransactionSignatureError::UnknownMultisigSigner => {
-                            SignatureRejectionCode::UnknownSigner
-                        }
-                        TransactionSignatureError::InsufficientMultisigWeight { .. } => {
-                            SignatureRejectionCode::InsufficientWeight
-                        }
-                    },
-                    err.to_string(),
-                ),
-            ));
+        match signature_override {
+            Some(Ok(())) => {}
+            Some(Err(fail)) => {
+                return Err(AcceptTransactionFail::SignatureVerification(fail));
+            }
+            None => {
+                if let Err(err) = tx.verify_signature() {
+                    return Err(AcceptTransactionFail::SignatureVerification(
+                        Self::signature_fail_from_error(tx, err),
+                    ));
+                }
+            }
         }
 
         let signature_count = tx.signature_count();
@@ -987,6 +1033,27 @@ impl<'tx> AcceptedTransaction<'tx> {
         crypto: &iroha_config::parameters::actual::Crypto,
         now: Duration,
     ) -> Result<(), AcceptTransactionFail> {
+        Self::validate_heartbeat_with_now_with_signature_result(
+            tx,
+            expected_chain_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            now,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn validate_heartbeat_with_now_with_signature_result(
+        tx: &SignedTransaction,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+        now: Duration,
+        signature_override: Option<Result<(), SignatureVerificationFail>>,
+    ) -> Result<(), AcceptTransactionFail> {
         let _ = crypto;
         Self::validate_common(tx, expected_chain_id, max_clock_drift, now)?;
 
@@ -1020,34 +1087,18 @@ impl<'tx> AcceptedTransaction<'tx> {
             ));
         }
 
-        if let Err(err) = tx.verify_signature() {
-            return Err(AcceptTransactionFail::SignatureVerification(
-                SignatureVerificationFail::new(
-                    tx.signature().clone(),
-                    match err {
-                        TransactionSignatureError::UnsupportedMultisigAuthority => {
-                            SignatureRejectionCode::UnsupportedAuthority
-                        }
-                        TransactionSignatureError::AlgorithmNotPermitted(_) => {
-                            SignatureRejectionCode::AlgorithmNotPermitted
-                        }
-                        TransactionSignatureError::CryptoError(_) => {
-                            SignatureRejectionCode::InvalidSignature
-                        }
-                        TransactionSignatureError::NoSignatures
-                        | TransactionSignatureError::MissingMultisigSignatures => {
-                            SignatureRejectionCode::MissingSignatures
-                        }
-                        TransactionSignatureError::UnknownMultisigSigner => {
-                            SignatureRejectionCode::UnknownSigner
-                        }
-                        TransactionSignatureError::InsufficientMultisigWeight { .. } => {
-                            SignatureRejectionCode::InsufficientWeight
-                        }
-                    },
-                    err.to_string(),
-                ),
-            ));
+        match signature_override {
+            Some(Ok(())) => {}
+            Some(Err(fail)) => {
+                return Err(AcceptTransactionFail::SignatureVerification(fail));
+            }
+            None => {
+                if let Err(err) = tx.verify_signature() {
+                    return Err(AcceptTransactionFail::SignatureVerification(
+                        Self::signature_fail_from_error(tx, err),
+                    ));
+                }
+            }
         }
 
         let signature_count = tx.signature_count();
@@ -5093,6 +5144,48 @@ pub mod tests {
             result.is_ok(),
             "heartbeat should validate via heartbeat path"
         );
+    }
+
+    #[test]
+    fn signature_verification_result_reports_invalid_signature() {
+        use std::time::Duration;
+
+        let chain: ChainId = "sig-check".parse().unwrap();
+        let (authority_id, kp) = gen_account_in("wonderland");
+        let (other_id, _other_kp) = gen_account_in("underland");
+
+        let tx = TransactionBuilder::new(chain, authority_id)
+            .with_instructions([Log::new(Level::INFO, "sig".into())])
+            .sign(kp.private_key());
+        let tampered = tx.with_authority(other_id);
+
+        let err =
+            AcceptedTransaction::signature_verification_result(&tampered).expect_err("must fail");
+        assert_eq!(err.code, SignatureRejectionCode::InvalidSignature);
+
+        let now = tampered.creation_time();
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let override_err = SignatureVerificationFail::new(
+            tampered.signature().clone(),
+            SignatureRejectionCode::InvalidSignature,
+            "override".to_string(),
+        );
+
+        let chain_id = tampered.chain().clone();
+        let result = AcceptedTransaction::validate_with_now_with_signature_result(
+            &tampered,
+            &chain_id,
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+            now,
+            Some(Err(override_err.clone())),
+        );
+        assert!(matches!(
+            result,
+            Err(AcceptTransactionFail::SignatureVerification(err)) if err == override_err
+        ));
     }
 
     #[test]

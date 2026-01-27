@@ -2618,6 +2618,12 @@ pub struct Pipeline {
     /// Number of worker threads to use for overlay construction (0 = auto).
     #[config(env = "PIPELINE_WORKERS", default = "defaults::pipeline::WORKERS")]
     pub workers: usize,
+    /// Capacity for the stateless validation cache (0 = disabled).
+    #[config(
+        env = "PIPELINE_STATELESS_CACHE_CAP",
+        default = "defaults::pipeline::STATELESS_CACHE_CAP"
+    )]
+    pub stateless_cache_cap: usize,
     /// Enable parallel application of overlays (per conflict-free layer).
     #[config(
         env = "PIPELINE_PARALLEL_APPLY",
@@ -3497,6 +3503,7 @@ impl Pipeline {
             access_set_cache_enabled: self.access_set_cache_enabled,
             parallel_overlay: self.parallel_overlay,
             workers: self.workers,
+            stateless_cache_cap: self.stateless_cache_cap,
             parallel_apply: self.parallel_apply,
             ready_queue_heap: self.ready_queue_heap,
             gpu_key_bucket: self.gpu_key_bucket,
@@ -3582,6 +3589,7 @@ mod pipeline_tests {
             access_set_cache_enabled: defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
             parallel_overlay: defaults::pipeline::PARALLEL_OVERLAY,
             workers: defaults::pipeline::WORKERS,
+            stateless_cache_cap: defaults::pipeline::STATELESS_CACHE_CAP,
             parallel_apply: defaults::pipeline::PARALLEL_APPLY,
             ready_queue_heap: defaults::pipeline::READY_QUEUE_HEAP,
             gpu_key_bucket: defaults::pipeline::GPU_KEY_BUCKET,
@@ -5190,7 +5198,8 @@ pub struct SumeragiCollectors {
     )]
     pub k: usize,
     /// Redundant send fanout (r): how many distinct collectors a validator
-    /// will send its vote to over time on timeouts. Default 1 (no redundancy).
+    /// will send its vote to over time on timeouts. On-chain parameters are
+    /// authoritative; config fallback remains 1 if unset.
     #[config(
         env = "SUMERAGI_COLLECTORS_REDUNDANT_SEND_R",
         default = "defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R"
@@ -5256,24 +5265,30 @@ pub struct SumeragiWorker {
         default = "defaults::sumeragi::WORKER_TICK_WORK_BUDGET_CAP_MS"
     )]
     pub tick_work_budget_cap_ms: u64,
-    /// Validation worker threads for pre-vote checks.
+    /// Validation worker threads for pre-vote checks (0 = auto).
     #[config(
         env = "SUMERAGI_VALIDATION_WORKER_THREADS",
         default = "defaults::sumeragi::VALIDATION_WORKER_THREADS"
     )]
     pub validation_worker_threads: usize,
-    /// Validation work queue capacity per worker.
+    /// Validation work queue capacity per worker (0 = auto).
     #[config(
         env = "SUMERAGI_VALIDATION_WORK_QUEUE_CAP",
         default = "defaults::sumeragi::VALIDATION_WORK_QUEUE_CAP"
     )]
     pub validation_work_queue_cap: usize,
-    /// Validation result queue capacity (shared).
+    /// Validation result queue capacity (shared, 0 = auto).
     #[config(
         env = "SUMERAGI_VALIDATION_RESULT_QUEUE_CAP",
         default = "defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP"
     )]
     pub validation_result_queue_cap: usize,
+    /// Cap on deferred vote-validation backlog before dropping inbound votes.
+    #[config(
+        env = "SUMERAGI_VALIDATION_PENDING_CAP",
+        default = "defaults::sumeragi::VALIDATION_PENDING_CAP"
+    )]
+    pub validation_pending_cap: usize,
 }
 
 /// User-level configuration container for `SumeragiPacemaker`.
@@ -6095,33 +6110,18 @@ impl Sumeragi {
             } else {
                 true
             };
-        let validation_threads_ok = if worker.validation_worker_threads == 0 {
+        let validation_threads_ok = true;
+        let validation_work_queue_ok = true;
+        let validation_result_queue_ok = true;
+        let validation_pending_cap_ok = if worker.validation_pending_cap == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.worker.validation_worker_threads must be greater than zero"),
+                    .attach("sumeragi.worker.validation_pending_cap must be greater than zero"),
             );
             false
         } else {
             true
         };
-        let validation_work_queue_ok = if worker.validation_work_queue_cap == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.worker.validation_work_queue_cap must be greater than zero"),
-            );
-            false
-        } else {
-            true
-        };
-        let validation_result_queue_ok =
-            if worker.validation_result_queue_cap == 0 {
-                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.worker.validation_result_queue_cap must be greater than zero",
-                ));
-                false
-            } else {
-                true
-            };
         let pacemaker_backoff_ok = if pacemaker.backoff_multiplier == 0
             || pacemaker.rtt_floor_multiplier == 0
             || pacemaker.max_backoff_ms == 0
@@ -6293,6 +6293,7 @@ impl Sumeragi {
             && validation_threads_ok
             && validation_work_queue_ok
             && validation_result_queue_ok
+            && validation_pending_cap_ok
             && pacemaker_backoff_ok
             && da_enabled_ok
             && da_quorum_multiplier_ok
@@ -6391,6 +6392,7 @@ impl Sumeragi {
                 validation_worker_threads: worker.validation_worker_threads,
                 validation_work_queue_cap: worker.validation_work_queue_cap,
                 validation_result_queue_cap: worker.validation_result_queue_cap,
+                validation_pending_cap: worker.validation_pending_cap,
             },
             pacemaker: actual::SumeragiPacemaker {
                 backoff_multiplier: pacemaker.backoff_multiplier,

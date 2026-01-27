@@ -1801,6 +1801,32 @@ public struct ToriiOfflineCertificateIssueResponse: Decodable, Sendable, Equatab
     }
 }
 
+public struct ToriiOfflineAllowanceRegisterRequest: Encodable, Sendable {
+    public let authority: String
+    public let privateKey: String
+    public let certificate: ToriiJSONValue
+
+    private enum CodingKeys: String, CodingKey {
+        case authority
+        case privateKey = "private_key"
+        case certificate
+    }
+
+    public init(authority: String, privateKey: String, certificate: ToriiJSONValue) {
+        self.authority = authority
+        self.privateKey = privateKey
+        self.certificate = certificate
+    }
+}
+
+public struct ToriiOfflineAllowanceRegisterResponse: Decodable, Sendable, Equatable {
+    public let certificateIdHex: String
+
+    private enum CodingKeys: String, CodingKey {
+        case certificateIdHex = "certificate_id_hex"
+    }
+}
+
 public struct ToriiOfflineSpendReceiptsSubmitRequest: Encodable, Sendable {
     public let receipts: [ToriiJSONValue]
 
@@ -7077,6 +7103,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     @discardableResult
+    public func registerOfflineAllowance(_ requestBody: ToriiOfflineAllowanceRegisterRequest,
+                                         completion: @escaping (Result<ToriiOfflineAllowanceRegisterResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.registerOfflineAllowance(requestBody) }
+    }
+
+    @discardableResult
     public func issueOfflineCertificateRenewal(certificateIdHex: String,
                                                requestBody: ToriiOfflineCertificateIssueRequest,
                                                completion: @escaping (Result<ToriiOfflineCertificateIssueResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
@@ -7786,6 +7818,17 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       headers: ["Content-Type": "application/json"])
         let data = try await data(for: request)
         return try decodeJSON(ToriiOfflineCertificateIssueResponse.self, from: data)
+    }
+
+    public func registerOfflineAllowance(_ requestBody: ToriiOfflineAllowanceRegisterRequest) async throws -> ToriiOfflineAllowanceRegisterResponse {
+        let encoder = JSONEncoder()
+        let body = try encoder.encode(requestBody)
+        let request = try makeRequest(path: "/v1/offline/allowances",
+                                      method: .post,
+                                      body: body,
+                                      headers: ["Content-Type": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiOfflineAllowanceRegisterResponse.self, from: data)
     }
 
     public func issueOfflineCertificateRenewal(certificateIdHex: String,

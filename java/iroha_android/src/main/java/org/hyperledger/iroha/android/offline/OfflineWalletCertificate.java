@@ -93,4 +93,27 @@ public final class OfflineWalletCertificate {
   public Long refreshAtMs() {
     return refreshAtMs;
   }
+
+  public java.util.Map<String, Object> toJsonMap() {
+    final java.util.Map<String, Object> map = new java.util.LinkedHashMap<>();
+    map.put("controller", controller);
+    map.put("allowance", allowance.toJsonMap());
+    map.put("spend_public_key", spendPublicKey);
+    map.put("attestation_report", OfflineAllowanceCommitment.encodeBytes(attestationReport));
+    map.put("issued_at_ms", issuedAtMs);
+    map.put("expires_at_ms", expiresAtMs);
+    map.put("policy", policy.toJsonMap());
+    map.put("operator_signature", operatorSignatureHex);
+    map.put("metadata", metadata);
+    map.put(
+        "verdict_id",
+        verdictIdHex == null ? null : OfflineHashLiteral.normalize(verdictIdHex, "verdict_id"));
+    map.put(
+        "attestation_nonce",
+        attestationNonceHex == null
+            ? null
+            : OfflineHashLiteral.normalize(attestationNonceHex, "attestation_nonce"));
+    map.put("refresh_at_ms", refreshAtMs);
+    return map;
+  }
 }

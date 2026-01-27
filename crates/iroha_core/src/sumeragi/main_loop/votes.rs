@@ -53,31 +53,79 @@ pub(super) fn record_vote_drop_without_roster(
 
 const VOTE_VERIFY_DEFERRED_DISPATCH_MAX: usize = 32;
 const VOTE_VERIFY_POP_CACHE_MAX: usize = 64;
+const VOTE_VERIFY_TOPOLOGY_CACHE_MAX: usize = 64;
 
 impl Actor {
-    fn cached_vote_verify_pops(
+    pub(super) fn cached_vote_verify_pops(
         &mut self,
         roster: &Vec<PeerId>,
+        roster_hash: &HashOf<Vec<PeerId>>,
     ) -> Arc<BTreeMap<PublicKey, Vec<u8>>> {
-        let roster_hash = iroha_crypto::HashOf::new(roster);
-        if let Some(cached) = self.subsystems.vote_verify.pop_cache.get(&roster_hash) {
+        if let Some(cached) = self.subsystems.vote_verify.pop_cache.get(roster_hash) {
             return Arc::clone(cached);
         }
         let mut pops = BTreeMap::new();
+        let trusted_pops = &self.common_config.trusted_peers.value().pops;
         for peer in roster {
-            if let Some(pop) = self.roster_validation_cache.pops.get(peer.public_key()) {
-                pops.insert(peer.public_key().clone(), pop.clone());
+            let pk = peer.public_key();
+            if let Some(pop) = self
+                .roster_validation_cache
+                .pops
+                .get(pk)
+                .or_else(|| trusted_pops.get(pk))
+            {
+                pops.insert(pk.clone(), pop.clone());
             }
         }
         let pops = Arc::new(pops);
         if self.subsystems.vote_verify.pop_cache.len() >= VOTE_VERIFY_POP_CACHE_MAX {
             self.subsystems.vote_verify.pop_cache.clear();
         }
+        let roster_hash = roster_hash.clone();
         self.subsystems
             .vote_verify
             .pop_cache
             .insert(roster_hash, Arc::clone(&pops));
         pops
+    }
+
+    pub(super) fn cached_signature_topology(
+        &mut self,
+        height: u64,
+        view: u64,
+        roster_hash: &HashOf<Vec<PeerId>>,
+        topology: &super::network_topology::Topology,
+        mode_tag: &'static str,
+        prf_seed: Option<[u8; 32]>,
+    ) -> Arc<super::network_topology::Topology> {
+        let key = super::SignatureTopologyCacheKey {
+            height,
+            view,
+            roster_hash: roster_hash.clone(),
+            mode_tag,
+            prf_seed,
+        };
+        if let Some(cached) = self
+            .subsystems
+            .vote_verify
+            .signature_topology_cache
+            .get(&key)
+        {
+            return Arc::clone(cached);
+        }
+        let signature_topology = Arc::new(topology_for_view(
+            topology, height, view, mode_tag, prf_seed,
+        ));
+        if self.subsystems.vote_verify.signature_topology_cache.len()
+            >= VOTE_VERIFY_TOPOLOGY_CACHE_MAX
+        {
+            self.subsystems.vote_verify.signature_topology_cache.clear();
+        }
+        self.subsystems
+            .vote_verify
+            .signature_topology_cache
+            .insert(key, Arc::clone(&signature_topology));
+        signature_topology
     }
 
     fn build_vote_verify_work(
@@ -231,6 +279,138 @@ impl Actor {
         (consensus_mode, mode_tag, prf_seed)
     }
 
+    pub(super) fn handle_vote_inbound(&mut self, vote: crate::sumeragi::consensus::Vote) {
+        if self.invalid_sig_penalty.is_suppressed(
+            InvalidSigKind::Vote,
+            vote.signer.into(),
+            Instant::now(),
+        ) {
+            debug!(
+                phase = ?vote.phase,
+                height = vote.height,
+                view = vote.view,
+                signer = vote.signer,
+                block_hash = %vote.block_hash,
+                kind = InvalidSigKind::Vote.as_str(),
+                "dropping vote from penalized signer"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::PenalizedSender,
+            );
+            record_vote_drop_without_roster(
+                &vote,
+                super::status::VoteValidationDropReason::PenalizedSender,
+            );
+            return;
+        }
+        let key = super::VoteVerifyKey::from_vote(&vote);
+        if self
+            .subsystems
+            .vote_verify
+            .pending_validation
+            .contains_key(&key)
+            || self.subsystems.vote_verify.pending.contains_key(&key)
+            || self.subsystems.vote_verify.inflight.contains_key(&key)
+        {
+            debug!(
+                phase = ?vote.phase,
+                height = vote.height,
+                view = vote.view,
+                epoch = vote.epoch,
+                signer = vote.signer,
+                block_hash = %vote.block_hash,
+                "dropping duplicate vote while validation is queued"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::Duplicate,
+            );
+            record_vote_drop_without_roster(
+                &vote,
+                super::status::VoteValidationDropReason::Duplicate,
+            );
+            return;
+        }
+        if vote_duplicate(&self.vote_log, &vote) {
+            debug!(
+                phase = ?vote.phase,
+                height = vote.height,
+                view = vote.view,
+                epoch = vote.epoch,
+                signer = vote.signer,
+                block_hash = %vote.block_hash,
+                "dropping duplicate vote already recorded"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::Duplicate,
+            );
+            record_vote_drop_without_roster(
+                &vote,
+                super::status::VoteValidationDropReason::Duplicate,
+            );
+            return;
+        }
+        let pending_cap = self.config.worker.validation_pending_cap;
+        if self.subsystems.vote_verify.pending_validation.len() >= pending_cap {
+            debug!(
+                phase = ?vote.phase,
+                height = vote.height,
+                view = vote.view,
+                epoch = vote.epoch,
+                signer = vote.signer,
+                block_hash = %vote.block_hash,
+                pending = self.subsystems.vote_verify.pending_validation.len(),
+                cap = pending_cap,
+                "dropping vote: pending validation cap reached"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::QcVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::Backpressure,
+            );
+            record_vote_drop_without_roster(
+                &vote,
+                super::status::VoteValidationDropReason::Backpressure,
+            );
+            return;
+        }
+        self.subsystems
+            .vote_verify
+            .pending_validation
+            .insert(key, vote);
+    }
+
+    pub(super) fn process_pending_vote_validation(&mut self) -> bool {
+        if self.subsystems.vote_verify.pending_validation.is_empty() {
+            return false;
+        }
+        let keys: Vec<_> = self
+            .subsystems
+            .vote_verify
+            .pending_validation
+            .keys()
+            .cloned()
+            .take(VOTE_VERIFY_DEFERRED_DISPATCH_MAX)
+            .collect();
+        if keys.is_empty() {
+            return false;
+        }
+        let mut progress = false;
+        for key in keys {
+            let Some(vote) = self.subsystems.vote_verify.pending_validation.remove(&key) else {
+                continue;
+            };
+            self.handle_vote(vote);
+            progress = true;
+        }
+        progress
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(super) fn handle_vote(&mut self, vote: crate::sumeragi::consensus::Vote) {
         let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
@@ -323,10 +503,17 @@ impl Actor {
             self.defer_vote_for_roster(vote, "commit topology missing");
             return;
         }
-        let pops = self.cached_vote_verify_pops(&topology_peers);
+        let roster_hash = iroha_crypto::HashOf::new(&topology_peers);
+        let pops = self.cached_vote_verify_pops(&topology_peers, &roster_hash);
         let topology = super::network_topology::Topology::new(topology_peers);
-        let signature_topology =
-            topology_for_view(&topology, vote.height, vote.view, mode_tag, prf_seed);
+        let signature_topology = self.cached_signature_topology(
+            vote.height,
+            vote.view,
+            &roster_hash,
+            &topology,
+            mode_tag,
+            prf_seed,
+        );
         let context = VoteProcessingContext {
             topology,
             signature_topology,
@@ -348,7 +535,7 @@ impl Actor {
         };
         if !self.validate_and_record_vote(
             &vote,
-            &context.signature_topology,
+            context.signature_topology.as_ref(),
             &evidence_context,
             mode_tag,
         ) {
@@ -494,14 +681,14 @@ impl Actor {
                 };
                 let signer_peer = usize::try_from(vote.signer)
                     .ok()
-                    .and_then(|idx| context.signature_topology.as_ref().get(idx))
+                    .and_then(|idx| context.signature_topology.as_ref().as_ref().get(idx))
                     .cloned();
                 let Some(signer_peer) = signer_peer else {
                     warn!(
                         height = vote.height,
                         view = vote.view,
                         signer = vote.signer,
-                        roster_len = context.signature_topology.as_ref().len(),
+                        roster_len = context.signature_topology.as_ref().as_ref().len(),
                         "dropping NEW_VIEW vote: signer index out of range"
                     );
                     return;
@@ -651,6 +838,14 @@ impl Actor {
         self.subsystems
             .vote_verify
             .pending
+            .retain(|key, _| should_keep(key.height, key.view));
+        self.subsystems
+            .vote_verify
+            .pending_validation
+            .retain(|key, _| should_keep(key.height, key.view));
+        self.subsystems
+            .vote_verify
+            .signature_topology_cache
             .retain(|key, _| should_keep(key.height, key.view));
     }
 
@@ -875,6 +1070,13 @@ impl Actor {
             }
         }
         if roster.is_empty() {
+            roster = self.effective_commit_topology();
+            if !roster.is_empty() {
+                signers.clear();
+                roster_source = "commit topology fallback";
+            }
+        }
+        if roster.is_empty() {
             debug!(
                 height = highest.height,
                 view = highest.view,
@@ -934,6 +1136,7 @@ impl Actor {
                     highest.subject_block_hash,
                     highest.height,
                     highest.view,
+                    MissingBlockPriority::Consensus,
                     &targets,
                 );
                 iroha_logger::info!(
@@ -972,7 +1175,10 @@ impl Actor {
         }
     }
 
-    pub(super) fn drop_precommit_vote_for_lock(&self, vote: &crate::sumeragi::consensus::Vote) -> bool {
+    pub(super) fn drop_precommit_vote_for_lock(
+        &self,
+        vote: &crate::sumeragi::consensus::Vote,
+    ) -> bool {
         if !matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit) {
             return false;
         }
@@ -1539,7 +1745,13 @@ impl Actor {
                 targets,
                 target_kind,
             } => {
-                self.request_missing_block(vote.block_hash, vote.height, vote.view, &targets);
+                self.request_missing_block(
+                    vote.block_hash,
+                    vote.height,
+                    vote.view,
+                    MissingBlockPriority::Consensus,
+                    &targets,
+                );
                 iroha_logger::info!(
                     height = vote.height,
                     view = vote.view,

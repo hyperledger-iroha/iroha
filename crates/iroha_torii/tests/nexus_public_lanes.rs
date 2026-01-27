@@ -252,9 +252,7 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
         [validator_asset, delegator_asset],
         [],
     );
-    world.peers.mutate_vec(|peers| {
-        let _ = peers.push(local_peer_id);
-    });
+    fixtures::seed_peer(&mut world, local_peer_id.clone());
     (
         world,
         validator_keypair,

@@ -130,6 +130,7 @@ fn enable_bls_batching(state: &mut iroha_core::state::State) {
             iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
         parallel_overlay: iroha_config::parameters::defaults::pipeline::PARALLEL_OVERLAY,
         workers: iroha_config::parameters::defaults::pipeline::WORKERS,
+        stateless_cache_cap: iroha_config::parameters::defaults::pipeline::STATELESS_CACHE_CAP,
         parallel_apply: iroha_config::parameters::defaults::pipeline::PARALLEL_APPLY,
         ready_queue_heap: iroha_config::parameters::defaults::pipeline::READY_QUEUE_HEAP,
         gpu_key_bucket: iroha_config::parameters::defaults::pipeline::GPU_KEY_BUCKET,

@@ -29,7 +29,7 @@ Consensus collector settings are controlled both by node config and on‑chain p
 - Config keys: `sumeragi.collectors.k` (K) and `sumeragi.collectors.redundant_send_r` (r)
 - On‑chain: `SumeragiParameters { collectors_k, collectors_redundant_send_r }`
 
-At startup, nodes adopt the on‑chain values and log a mismatch if config differs. Invalid combinations (e.g., `k == 0`, `r == 0`, `r > k`, or `k` larger than available collectors for the current topology) are rejected at startup. This keeps pacing behavior consistent across validators.
+At startup, nodes adopt the on‑chain values and log a mismatch if config differs. Invalid values (`k == 0` or `r == 0`) are rejected at startup; oversized K/r fall back to the full commit topology when no collector plan can be built. This keeps pacing behavior consistent across validators.
 
 ### Sumeragi consensus helpers
 

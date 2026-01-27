@@ -9,7 +9,7 @@ fn build_tlv(type_id: u16, version: u8, payload: &[u8], corrupt_hash: bool) -> V
     v.extend_from_slice(&type_id.to_be_bytes());
     v.push(version);
     v.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    v.extend_from_slice(payload);
+    v.extend_from_slice(payload.as_ref());
     let h = Hash::new(payload);
     let mut hb = h.as_ref().to_vec();
     if corrupt_hash {

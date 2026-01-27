@@ -414,6 +414,17 @@ pub fn commit_quorum_from_len(len: usize) -> usize {
     len.saturating_mul(2).saturating_add(2) / 3
 }
 
+/// Compute the redundant send fan-out (r) for a topology of the given length.
+///
+/// Uses the standard `2f+1` formula with `f = floor((len - 1) / 3)`, clamped to `u8::MAX`.
+#[must_use]
+pub fn redundant_send_r_from_len(len: usize) -> u8 {
+    let len = len.max(1);
+    let max_faults = len.saturating_sub(1) / 3;
+    let r = max_faults.saturating_mul(2).saturating_add(1);
+    u8::try_from(r).unwrap_or(u8::MAX)
+}
+
 #[cfg(test)]
 mod prf_collectors_tests {
     use super::*;
@@ -1107,6 +1118,36 @@ mod tests {
                 "quorum mismatch for len={len}"
             );
         }
+    }
+
+    #[test]
+    fn redundant_send_r_tracks_2f_plus_1() {
+        let cases = [
+            (0_usize, 1_u8),
+            (1, 1),
+            (2, 1),
+            (3, 1),
+            (4, 3),
+            (5, 3),
+            (6, 3),
+            (7, 5),
+            (8, 5),
+            (9, 5),
+            (10, 7),
+        ];
+        for (len, expected) in cases {
+            assert_eq!(
+                redundant_send_r_from_len(len),
+                expected,
+                "redundant_send_r mismatch for len={len}"
+            );
+        }
+    }
+
+    #[test]
+    fn redundant_send_r_clamps_to_u8_max() {
+        let len = usize::from(u8::MAX).saturating_mul(4);
+        assert_eq!(redundant_send_r_from_len(len), u8::MAX);
     }
 
     #[test]

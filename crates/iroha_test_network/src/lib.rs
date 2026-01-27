@@ -41,6 +41,7 @@ use iroha_config::{
 use iroha_core::sumeragi::consensus::{
     NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
 };
+use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey, PublicKey};
 #[cfg(test)]
 use iroha_data_model::da::commitment::DaProofPolicyBundle;
@@ -3650,6 +3651,22 @@ impl NetworkBuilder {
         let topology_entries: Vec<GenesisTopologyEntry> = collected_entries.clone();
 
         let peer_topology: Vec<PeerId> = peer_ids.iter().cloned().collect();
+        let default_redundant_send_r = redundant_send_r_from_len(peer_ids.len());
+        let effective_redundant_send_r = sumeragi_parameters
+            .iter()
+            .find_map(|param| match param {
+                SumeragiParameter::RedundantSendR(value) => Some(*value),
+                _ => None,
+            })
+            .unwrap_or(default_redundant_send_r);
+        if !sumeragi_parameters
+            .iter()
+            .any(|param| matches!(param, SumeragiParameter::RedundantSendR(_)))
+        {
+            sumeragi_parameters.push(SumeragiParameter::RedundantSendR(
+                effective_redundant_send_r,
+            ));
+        }
         let cached_genesis = OnceLock::new();
         if let Some(builder_fn) = custom_genesis.as_ref() {
             let mut block = builder_fn(peer_ids.clone(), topology_entries.clone());
@@ -3752,8 +3769,10 @@ impl NetworkBuilder {
         if matches!(consensus_mode, ConsensusMode::Npos)
             && !genesis_contains_npos_parameters(&genesis_isi)
         {
+            let mut npos = SumeragiNposParameters::default();
+            npos.redundant_send_r = effective_redundant_send_r;
             parameter_prefix.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
-                SumeragiNposParameters::default().into_custom_parameter(),
+                npos.into_custom_parameter(),
             ))));
         }
 

@@ -13,20 +13,19 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
-import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.client.PlatformHttpTransportExecutor;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceList;
 import org.hyperledger.iroha.android.offline.OfflineCertificateIssueResponse;
 import org.hyperledger.iroha.android.offline.OfflineJsonParser;
 import org.hyperledger.iroha.android.offline.OfflineListParams;
 import org.hyperledger.iroha.android.offline.OfflineQueryEnvelope;
-import org.hyperledger.iroha.android.offline.OfflineProofRequestKind;
 import org.hyperledger.iroha.android.offline.OfflineProofRequestParams;
 import org.hyperledger.iroha.android.offline.OfflineProofRequestResult;
 import org.hyperledger.iroha.android.offline.OfflineRevocationList;
 import org.hyperledger.iroha.android.offline.OfflineSummaryList;
 import org.hyperledger.iroha.android.offline.OfflineToriiException;
 import org.hyperledger.iroha.android.offline.OfflineTransferList;
+import org.hyperledger.iroha.android.offline.OfflineWalletCertificate;
 import org.hyperledger.iroha.android.offline.OfflineWalletCertificateDraft;
 
 /**
@@ -138,6 +137,24 @@ public final class OfflineToriiClient {
     final TransportRequest request = buildPostRequest(CERTIFICATE_ISSUE_PATH, body);
     notifyRequest(request);
     return executeHttpRequest(request, OfflineJsonParser::parseCertificateIssueResponse);
+  }
+
+  /** Register a signed certificate on-ledger as an offline allowance. */
+  public CompletableFuture<Void> registerAllowance(
+      final OfflineWalletCertificate certificate,
+      final String authority,
+      final String privateKeyHex) {
+    Objects.requireNonNull(certificate, "certificate");
+    Objects.requireNonNull(authority, "authority");
+    Objects.requireNonNull(privateKeyHex, "privateKeyHex");
+    final java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+    body.put("authority", authority);
+    body.put("private_key", privateKeyHex);
+    body.put("certificate", certificate.toJsonMap());
+    final byte[] bodyBytes = JsonEncoder.encode(body).getBytes(StandardCharsets.UTF_8);
+    final TransportRequest request = buildPostRequest(ALLOWANCES_PATH, bodyBytes);
+    notifyRequest(request);
+    return executeHttpRequest(request, payload -> (Void) null);
   }
 
   /** Issue a signed renewal certificate for an existing allowance. */
@@ -319,9 +336,11 @@ public final class OfflineToriiClient {
               final ClientResponse clientResponse =
                   new ClientResponse(response.statusCode(), response.body());
               if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                final String bodyStr =
+                    new String(response.body(), java.nio.charset.StandardCharsets.UTF_8);
                 final OfflineToriiException error =
                     new OfflineToriiException(
-                        "Offline request failed with status " + response.statusCode());
+                        "Offline request failed with status " + response.statusCode() + ": " + bodyStr);
                 notifyFailure(request, error);
                 future.completeExceptionally(error);
                 return;

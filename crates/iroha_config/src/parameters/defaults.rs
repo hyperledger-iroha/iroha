@@ -2064,8 +2064,10 @@ pub mod pipeline {
     pub const ACCESS_SET_CACHE_ENABLED: bool = true;
     /// Enable parallel overlay construction.
     pub const PARALLEL_OVERLAY: bool = true;
-    /// Number of worker threads for overlay construction (0 = Rayon default).
+    /// Number of worker threads for stateless/overlay pipeline stages (0 = auto).
     pub const WORKERS: usize = 0;
+    /// Capacity for the stateless validation cache (0 = disabled).
+    pub const STATELESS_CACHE_CAP: usize = 4_096;
     /// Enable per-layer parallel application of overlays.
     pub const PARALLEL_APPLY: bool = true;
     /// Use a binary-heap ready queue in the scheduler instead of stable sort.
@@ -2338,12 +2340,14 @@ pub mod sumeragi {
     pub const WORKER_ITERATION_DRAIN_BUDGET_CAP_MS: u64 = 2_000;
     /// Cap (ms) on per-tick proposal/commit work (0 disables).
     pub const WORKER_TICK_WORK_BUDGET_CAP_MS: u64 = 500;
-    /// Validation worker threads for pre-vote checks.
-    pub const VALIDATION_WORKER_THREADS: usize = 1;
-    /// Validation worker work-queue capacity per worker.
-    pub const VALIDATION_WORK_QUEUE_CAP: usize = 4;
-    /// Validation worker result-queue capacity (shared).
-    pub const VALIDATION_RESULT_QUEUE_CAP: usize = 4;
+    /// Validation worker threads for pre-vote checks (0 = auto).
+    pub const VALIDATION_WORKER_THREADS: usize = 0;
+    /// Validation worker work-queue capacity per worker (0 = auto).
+    pub const VALIDATION_WORK_QUEUE_CAP: usize = 0;
+    /// Validation worker result-queue capacity (shared, 0 = auto).
+    pub const VALIDATION_RESULT_QUEUE_CAP: usize = 0;
+    /// Cap on deferred vote-validation backlog before dropping inbound votes.
+    pub const VALIDATION_PENDING_CAP: usize = 8_192;
     /// Default runtime consensus mode: "permissioned".
     pub const CONSENSUS_MODE: &str = "permissioned";
     /// Default: allow runtime consensus mode flips driven by on-chain parameters.

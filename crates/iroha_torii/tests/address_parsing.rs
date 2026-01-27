@@ -2964,9 +2964,7 @@ fn build_test_router() -> (Router, Arc<Metrics>) {
     let account = Account::new(account_id.clone()).build(&account_id);
     let domain = Domain::new(domain_id).build(&account_id);
     let mut world = World::with([domain], [account], Vec::<AssetDefinition>::new());
-    world.peers.mutate_vec(|peers| {
-        let _ = peers.push(local_peer_id.clone());
-    });
+    fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;

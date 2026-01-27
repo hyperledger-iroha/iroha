@@ -2,15 +2,22 @@
 
 use std::{
     collections::BTreeMap,
-    sync::{Arc, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
     time::Instant,
 };
 
-use super::*;
 use super::votes::record_vote_drop_without_roster;
+use super::*;
 use iroha_crypto::Algorithm;
 
 const VOTE_VERIFY_BATCH_MAX: usize = 64;
+static VOTE_VERIFY_AGGREGATE_USED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static VOTE_VERIFY_AGGREGATE_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
+static VOTE_VERIFY_MISSING_POP_TOTAL: AtomicU64 = AtomicU64::new(0);
 
 /// Vote signature verification request payload.
 #[derive(Debug)]
@@ -18,7 +25,7 @@ pub(super) struct VoteVerifyWork {
     pub(super) id: u64,
     pub(super) key: VoteVerifyKey,
     pub(super) vote: crate::sumeragi::consensus::Vote,
-    pub(super) signature_topology: super::network_topology::Topology,
+    pub(super) signature_topology: Arc<super::network_topology::Topology>,
     pub(super) pops: Arc<BTreeMap<PublicKey, Vec<u8>>>,
     pub(super) chain_id: ChainId,
     pub(super) mode_tag: &'static str,
@@ -104,18 +111,14 @@ pub(super) fn spawn_vote_verify_workers(
                                 continue;
                             }
                         };
-                        let Some(peer) = work.signature_topology.as_ref().get(idx) else {
+                        let roster = work.signature_topology.as_ref().as_ref();
+                        let Some(peer) = roster.get(idx) else {
                             results.push(VoteVerifyResult {
                                 id: work.id,
                                 key: work.key,
                                 signature_result: Err(VoteSignatureError::SignerOutOfRange {
                                     signer: idx.try_into().unwrap_or(u32::MAX),
-                                    roster_len: work
-                                        .signature_topology
-                                        .as_ref()
-                                        .len()
-                                        .try_into()
-                                        .unwrap_or(u32::MAX),
+                                    roster_len: roster.len().try_into().unwrap_or(u32::MAX),
                                 }),
                             });
                             continue;
@@ -208,17 +211,30 @@ pub(super) fn spawn_vote_verify_workers(
                             .collect();
                         let mut public_keys: Vec<&PublicKey> = Vec::with_capacity(indices.len());
                         let mut pops: Vec<&[u8]> = Vec::with_capacity(indices.len());
-                        let mut missing_pop = false;
+                        let mut missing_pop_count = 0usize;
                         for idx in &indices {
                             let prepared_vote = prepared[*idx].as_ref().expect("prepared vote");
-                            let Some(pop) = prepared_vote.pop.as_ref() else {
-                                missing_pop = true;
-                                break;
-                            };
-                            public_keys.push(&prepared_vote.public_key);
-                            pops.push(pop.as_slice());
+                            if let Some(pop) = prepared_vote.pop.as_ref() {
+                                public_keys.push(&prepared_vote.public_key);
+                                pops.push(pop.as_slice());
+                            } else {
+                                missing_pop_count = missing_pop_count.saturating_add(1);
+                            }
                         }
-                        let use_batch = if missing_pop {
+                        if missing_pop_count > 0 {
+                            let total = VOTE_VERIFY_MISSING_POP_TOTAL
+                                .fetch_add(missing_pop_count as u64, Ordering::Relaxed)
+                                .saturating_add(missing_pop_count as u64);
+                            if super::status::should_log_vote_drop_count(total) {
+                                debug!(
+                                    missing_pop_total = total,
+                                    missing_pop = missing_pop_count,
+                                    batch = indices.len(),
+                                    "vote verify missing PoP; aggregate verification disabled"
+                                );
+                            }
+                        }
+                        let use_batch = if missing_pop_count > 0 {
                             false
                         } else {
                             match algorithm {
@@ -243,6 +259,24 @@ pub(super) fn spawn_vote_verify_workers(
                                 _ => false,
                             }
                         };
+                        let aggregate_total = if use_batch {
+                            VOTE_VERIFY_AGGREGATE_USED_TOTAL
+                                .fetch_add(indices.len() as u64, Ordering::Relaxed)
+                                .saturating_add(indices.len() as u64)
+                        } else {
+                            VOTE_VERIFY_AGGREGATE_FALLBACK_TOTAL
+                                .fetch_add(indices.len() as u64, Ordering::Relaxed)
+                                .saturating_add(indices.len() as u64)
+                        };
+                        if super::status::should_log_vote_drop_count(aggregate_total) {
+                            debug!(
+                                aggregate_total,
+                                batch = indices.len(),
+                                use_batch,
+                                ?algorithm,
+                                "vote verify aggregate status"
+                            );
+                        }
 
                         for idx in indices {
                             let prepared_vote = prepared[idx].as_ref().expect("prepared vote");
@@ -286,10 +320,13 @@ pub(super) fn spawn_vote_verify_workers(
 
 impl Actor {
     pub(in crate::sumeragi) fn poll_vote_verify_results(&mut self) -> bool {
+        let mut progress = self.process_pending_vote_validation();
         let Some(result_rx) = self.subsystems.vote_verify.result_rx.take() else {
-            return false;
+            if self.dispatch_pending_vote_verifications() {
+                progress = true;
+            }
+            return progress;
         };
-        let mut progress = false;
         let mut keep_rx = true;
         loop {
             match result_rx.try_recv() {
@@ -364,7 +401,7 @@ impl Actor {
                     };
                     if self.validate_and_record_vote_with_signature_result(
                         &inflight.vote,
-                        &context.signature_topology,
+                        context.signature_topology.as_ref(),
                         &evidence_context,
                         context.mode_tag,
                         Some(signature_result),
