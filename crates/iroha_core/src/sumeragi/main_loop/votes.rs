@@ -30,7 +30,7 @@ fn vote_duplicate(
         .is_some_and(|existing| existing.block_hash == vote.block_hash)
 }
 
-fn record_vote_drop_without_roster(
+pub(super) fn record_vote_drop_without_roster(
     vote: &crate::sumeragi::consensus::Vote,
     reason: super::status::VoteValidationDropReason,
 ) {
@@ -47,7 +47,143 @@ fn record_vote_drop_without_roster(
     });
 }
 
+const VOTE_VERIFY_DEFERRED_DISPATCH_MAX: usize = 32;
+
 impl Actor {
+    fn build_vote_verify_work(
+        &self,
+        id: u64,
+        key: VoteVerifyKey,
+        vote: &crate::sumeragi::consensus::Vote,
+        context: &VoteProcessingContext,
+    ) -> super::vote_verify::VoteVerifyWork {
+        let mut pops = BTreeMap::new();
+        for peer in context.signature_topology.as_ref() {
+            if let Some(pop) = self.roster_validation_cache.pops.get(peer.public_key()) {
+                pops.insert(peer.public_key().clone(), pop.clone());
+            }
+        }
+        super::vote_verify::VoteVerifyWork {
+            id,
+            key,
+            vote: vote.clone(),
+            signature_topology: context.signature_topology.clone(),
+            pops,
+            chain_id: self.common_config.chain.clone(),
+            mode_tag: context.mode_tag,
+        }
+    }
+
+    fn try_send_vote_verify_work(
+        &mut self,
+        mut work: super::vote_verify::VoteVerifyWork,
+    ) -> Result<(), super::vote_verify::VoteVerifyWork> {
+        let mut disconnected = Vec::new();
+        let total = self.subsystems.vote_verify.work_txs.len();
+        for _ in 0..total {
+            let idx = self.subsystems.vote_verify.next_worker % total;
+            self.subsystems.vote_verify.next_worker =
+                self.subsystems.vote_verify.next_worker.saturating_add(1);
+            let work_tx = &self.subsystems.vote_verify.work_txs[idx];
+            match work_tx.try_send(work) {
+                Ok(()) => {
+                    if !disconnected.is_empty() {
+                        disconnected.sort_unstable();
+                        disconnected.dedup();
+                        for idx in disconnected.into_iter().rev() {
+                            if idx < self.subsystems.vote_verify.work_txs.len() {
+                                self.subsystems.vote_verify.work_txs.swap_remove(idx);
+                            }
+                        }
+                        if self.subsystems.vote_verify.next_worker
+                            >= self.subsystems.vote_verify.work_txs.len()
+                        {
+                            self.subsystems.vote_verify.next_worker = 0;
+                        }
+                    }
+                    return Ok(());
+                }
+                Err(mpsc::TrySendError::Full(returned)) => {
+                    work = returned;
+                }
+                Err(mpsc::TrySendError::Disconnected(returned)) => {
+                    work = returned;
+                    disconnected.push(idx);
+                }
+            }
+        }
+        if !disconnected.is_empty() {
+            disconnected.sort_unstable();
+            disconnected.dedup();
+            for idx in disconnected.into_iter().rev() {
+                if idx < self.subsystems.vote_verify.work_txs.len() {
+                    self.subsystems.vote_verify.work_txs.swap_remove(idx);
+                }
+            }
+            if self.subsystems.vote_verify.next_worker >= self.subsystems.vote_verify.work_txs.len()
+            {
+                self.subsystems.vote_verify.next_worker = 0;
+            }
+        }
+        Err(work)
+    }
+
+    pub(super) fn dispatch_pending_vote_verifications(&mut self) -> bool {
+        if self.subsystems.vote_verify.pending.is_empty()
+            || self.subsystems.vote_verify.work_txs.is_empty()
+        {
+            return false;
+        }
+        let keys: Vec<_> = self
+            .subsystems
+            .vote_verify
+            .pending
+            .keys()
+            .cloned()
+            .take(VOTE_VERIFY_DEFERRED_DISPATCH_MAX)
+            .collect();
+        if keys.is_empty() {
+            return false;
+        }
+        let mut progress = false;
+        for key in keys {
+            let Some(pending) = self.subsystems.vote_verify.pending.remove(&key) else {
+                continue;
+            };
+            if self.subsystems.vote_verify.inflight.contains_key(&key) {
+                continue;
+            }
+            if self.subsystems.vote_verify.work_txs.is_empty() {
+                self.subsystems.vote_verify.pending.insert(key, pending);
+                break;
+            }
+            let work = self.build_vote_verify_work(
+                pending.id,
+                key.clone(),
+                &pending.vote,
+                &pending.context,
+            );
+            match self.try_send_vote_verify_work(work) {
+                Ok(()) => {
+                    self.subsystems.vote_verify.inflight.insert(
+                        key,
+                        super::VoteVerifyInFlight {
+                            id: pending.id,
+                            vote: pending.vote,
+                            context: pending.context,
+                        },
+                    );
+                    progress = true;
+                }
+                Err(_) => {
+                    self.subsystems.vote_verify.pending.insert(key, pending);
+                    break;
+                }
+            }
+        }
+        progress
+    }
+
     pub(super) fn consensus_context_for_height(
         &self,
         height: u64,
@@ -390,7 +526,9 @@ impl Actor {
             return false;
         }
         let key = super::VoteVerifyKey::from_vote(vote);
-        if self.subsystems.vote_verify.inflight.contains_key(&key) {
+        if self.subsystems.vote_verify.inflight.contains_key(&key)
+            || self.subsystems.vote_verify.pending.contains_key(&key)
+        {
             debug!(
                 phase = ?vote.phase,
                 height = vote.height,
@@ -412,57 +550,8 @@ impl Actor {
             return true;
         }
         let id = self.subsystems.vote_verify.next_id();
-        let mut pops = BTreeMap::new();
-        for peer in context.signature_topology.as_ref() {
-            if let Some(pop) = self.roster_validation_cache.pops.get(peer.public_key()) {
-                pops.insert(peer.public_key().clone(), pop.clone());
-            }
-        }
-        let mut work = super::vote_verify::VoteVerifyWork {
-            id,
-            key: key.clone(),
-            vote: vote.clone(),
-            signature_topology: context.signature_topology.clone(),
-            pops,
-            chain_id: self.common_config.chain.clone(),
-            mode_tag: context.mode_tag,
-        };
-        let mut dispatched = false;
-        let mut disconnected = Vec::new();
-        let total = self.subsystems.vote_verify.work_txs.len();
-        for _ in 0..total {
-            let idx = self.subsystems.vote_verify.next_worker % total;
-            self.subsystems.vote_verify.next_worker =
-                self.subsystems.vote_verify.next_worker.saturating_add(1);
-            let work_tx = &self.subsystems.vote_verify.work_txs[idx];
-            match work_tx.try_send(work) {
-                Ok(()) => {
-                    dispatched = true;
-                    break;
-                }
-                Err(mpsc::TrySendError::Full(returned)) => {
-                    work = returned;
-                }
-                Err(mpsc::TrySendError::Disconnected(returned)) => {
-                    work = returned;
-                    disconnected.push(idx);
-                }
-            }
-        }
-        if !disconnected.is_empty() {
-            disconnected.sort_unstable();
-            disconnected.dedup();
-            for idx in disconnected.into_iter().rev() {
-                if idx < self.subsystems.vote_verify.work_txs.len() {
-                    self.subsystems.vote_verify.work_txs.swap_remove(idx);
-                }
-            }
-            if self.subsystems.vote_verify.next_worker >= self.subsystems.vote_verify.work_txs.len()
-            {
-                self.subsystems.vote_verify.next_worker = 0;
-            }
-        }
-        if dispatched {
+        let work = self.build_vote_verify_work(id, key.clone(), vote, context);
+        if self.try_send_vote_verify_work(work).is_ok() {
             self.subsystems.vote_verify.inflight.insert(
                 key,
                 super::VoteVerifyInFlight {
@@ -471,10 +560,20 @@ impl Actor {
                     context: context.clone(),
                 },
             );
-            true
-        } else {
-            false
+            return true;
         }
+        if self.subsystems.vote_verify.work_txs.is_empty() {
+            return false;
+        }
+        self.subsystems.vote_verify.pending.insert(
+            key,
+            super::VoteVerifyPending {
+                id,
+                vote: vote.clone(),
+                context: context.clone(),
+            },
+        );
+        true
     }
 
     pub(super) fn prune_vote_caches_horizon(&mut self, committed_height: u64) {
@@ -523,10 +622,14 @@ impl Actor {
             votes.retain(|(_, height, view, _, _), _| should_keep(*height, *view));
             !votes.is_empty()
         });
+        self.subsystems
+            .vote_verify
+            .pending
+            .retain(|key, _| should_keep(key.height, key.view));
     }
 
     #[allow(clippy::too_many_lines)]
-    fn drop_vote_for_height_or_view(
+    pub(super) fn drop_vote_for_height_or_view(
         &self,
         vote: &crate::sumeragi::consensus::Vote,
         committed_height: u64,
@@ -843,7 +946,7 @@ impl Actor {
         }
     }
 
-    fn drop_precommit_vote_for_lock(&self, vote: &crate::sumeragi::consensus::Vote) -> bool {
+    pub(super) fn drop_precommit_vote_for_lock(&self, vote: &crate::sumeragi::consensus::Vote) -> bool {
         if !matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit) {
             return false;
         }

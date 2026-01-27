@@ -13003,16 +13003,31 @@ impl State {
     }
 
     /// Create point in time view of [`State`]
+    #[track_caller]
     pub fn view(&self) -> StateView<'_> {
+        const STATE_VIEW_LOG_THRESHOLD: Duration = Duration::from_millis(10);
+        let total_start = Instant::now();
+        let block_hashes_start = Instant::now();
         // Acquire inner views before taking the coarse view lock so we don't deadlock
         // with block-scoped writers that already hold those locks and will later try
         // to grab `view_lock` during commit.
         let block_hashes = self.block_hashes.view();
+        let block_hashes_wait = block_hashes_start.elapsed();
+        let world_start = Instant::now();
         let world = self.world.view();
+        let world_wait = world_start.elapsed();
+        let transactions_start = Instant::now();
         let transactions = self.transactions.view();
+        let transactions_wait = transactions_start.elapsed();
+        let commit_topology_start = Instant::now();
         let commit_topology = self.commit_topology.view();
+        let commit_topology_wait = commit_topology_start.elapsed();
+        let prev_commit_topology_start = Instant::now();
         let prev_commit_topology = self.prev_commit_topology.view();
+        let prev_commit_topology_wait = prev_commit_topology_start.elapsed();
+        let nexus_start = Instant::now();
         let nexus = self.nexus_snapshot();
+        let nexus_wait = nexus_start.elapsed();
         let _view_lock = self.view_lock.try_read().map_or_else(
             || {
                 warn!("state view lock contended; returning unlocked view");
@@ -13020,6 +13035,44 @@ impl State {
             },
             Some,
         );
+        let total_wait = total_start.elapsed();
+        let (mut max_component, mut max_wait) = ("block_hashes", block_hashes_wait);
+        if world_wait > max_wait {
+            max_component = "world";
+            max_wait = world_wait;
+        }
+        if transactions_wait > max_wait {
+            max_component = "transactions";
+            max_wait = transactions_wait;
+        }
+        if commit_topology_wait > max_wait {
+            max_component = "commit_topology";
+            max_wait = commit_topology_wait;
+        }
+        if prev_commit_topology_wait > max_wait {
+            max_component = "prev_commit_topology";
+            max_wait = prev_commit_topology_wait;
+        }
+        if nexus_wait > max_wait {
+            max_component = "nexus";
+            max_wait = nexus_wait;
+        }
+        if max_wait >= STATE_VIEW_LOG_THRESHOLD {
+            debug!(
+                caller = %core::panic::Location::caller(),
+                max_component,
+                max_wait_us = max_wait.as_micros(),
+                total_wait_us = total_wait.as_micros(),
+                block_hashes_wait_us = block_hashes_wait.as_micros(),
+                world_wait_us = world_wait.as_micros(),
+                transactions_wait_us = transactions_wait.as_micros(),
+                commit_topology_wait_us = commit_topology_wait.as_micros(),
+                prev_commit_topology_wait_us = prev_commit_topology_wait.as_micros(),
+                nexus_wait_us = nexus_wait.as_micros(),
+                view_lock_contended = _view_lock.is_none(),
+                "state view acquisition slow"
+            );
+        }
         StateView {
             world,
             block_hashes,
@@ -13513,6 +13566,7 @@ impl State {
         &self,
         entry: MergeLedgerEntry,
     ) -> core::result::Result<Arc<MergeLedgerEntry>, MergeLedgerCommitError> {
+        const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         let lane_tips = entry.lane_tips.len();
         if lane_tips == 0 {
             return Err(MergeLedgerCommitError::EmptyEntry);
@@ -13530,9 +13584,22 @@ impl State {
         self.kura.append_merge_entry(&entry)?;
 
         let stored_entry = {
+            let view_lock_wait_start = Instant::now();
             let _view_lock = self.view_lock.write();
+            let view_lock_wait = view_lock_wait_start.elapsed();
+            let view_lock_hold_start = Instant::now();
             let stored_entry = self.merge_ledger.push(entry);
             self.update_merge_metadata(stored_entry.as_ref());
+            let view_lock_hold = view_lock_hold_start.elapsed();
+            if view_lock_wait >= STATE_VIEW_LOCK_THRESHOLD
+                || view_lock_hold >= STATE_VIEW_LOCK_THRESHOLD
+            {
+                debug!(
+                    view_lock_wait_us = view_lock_wait.as_micros(),
+                    view_lock_hold_us = view_lock_hold.as_micros(),
+                    "state view_lock write held (merge_ledger commit)"
+                );
+            }
             stored_entry
         };
         {
@@ -13862,8 +13929,12 @@ impl State {
         &self,
         plan: &iroha_data_model::nexus::LaneLifecyclePlan,
     ) -> core::result::Result<(), LaneLifecycleError> {
+        const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         let retired_lanes = {
+            let view_lock_wait_start = Instant::now();
             let _view_lock = self.view_lock.write();
+            let view_lock_wait = view_lock_wait_start.elapsed();
+            let view_lock_hold_start = Instant::now();
             let (updated_catalog, previous_lane_config, updated_lane_config, retired_lanes) = {
                 let nexus = self.nexus.read();
                 if !nexus.enabled {
@@ -13913,6 +13984,16 @@ impl State {
                     .write()
                     .prune_lanes(&retired_lanes);
                 self.da_pin_intents.write().prune_lanes(&retired_lanes);
+            }
+            let view_lock_hold = view_lock_hold_start.elapsed();
+            if view_lock_wait >= STATE_VIEW_LOCK_THRESHOLD
+                || view_lock_hold >= STATE_VIEW_LOCK_THRESHOLD
+            {
+                debug!(
+                    view_lock_wait_us = view_lock_wait.as_micros(),
+                    view_lock_hold_us = view_lock_hold.as_micros(),
+                    "state view_lock write held (lane lifecycle)"
+                );
             }
             retired_lanes
         };
@@ -15618,9 +15699,11 @@ impl<'state> StateBlock<'state> {
     /// # Errors
     /// Returns [`TransactionsBlockError`] when flushing the transaction batch fails.
     pub fn commit(self) -> Result<(), TransactionsBlockError> {
+        const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
         if self.mode_cutover_next_set_in_block ^ self.mode_cutover_activation_set_in_block {
             return Err(TransactionsBlockError::ModeStagingInvariant);
         }
+        let block_height = self._curr_block.height().get();
         // NOTE: intentionally destruct self not to forget commit some fields
         let Self {
             state_ref,
@@ -15637,16 +15720,78 @@ impl<'state> StateBlock<'state> {
         } = self;
         let mut backend_guard = tiered_backend.lock();
         {
+            let view_lock_wait_start = Instant::now();
             let _view_lock = view_lock.write();
+            let view_lock_wait = view_lock_wait_start.elapsed();
+            let view_lock_hold_start = Instant::now();
+            let prev_topology_start = Instant::now();
             prev_committed_topology.commit();
+            let prev_topology_hold = prev_topology_start.elapsed();
+            let commit_topology_start = Instant::now();
             committed_topology.commit();
-            if let Err(err) = transactions.commit()
-                && !matches!(err, TransactionsBlockError::MissingInsertBlock)
+            let commit_topology_hold = commit_topology_start.elapsed();
+            let tx_commit_start = Instant::now();
+            let tx_commit_result = transactions.commit();
+            let tx_commit_hold = tx_commit_start.elapsed();
+            let mut commit_error = None;
+            if let Err(err) = tx_commit_result {
+                if !matches!(err, TransactionsBlockError::MissingInsertBlock) {
+                    commit_error = Some(err);
+                }
+            }
+            let block_hashes_hold = if commit_error.is_none() {
+                let block_hashes_start = Instant::now();
+                block_hashes.commit();
+                block_hashes_start.elapsed()
+            } else {
+                Duration::ZERO
+            };
+            let world_hold = if commit_error.is_none() {
+                let world_start = Instant::now();
+                world.commit();
+                world_start.elapsed()
+            } else {
+                Duration::ZERO
+            };
+            let view_lock_hold = view_lock_hold_start.elapsed();
+            let (mut max_component, mut max_hold) = ("prev_commit_topology", prev_topology_hold);
+            if commit_topology_hold > max_hold {
+                max_component = "commit_topology";
+                max_hold = commit_topology_hold;
+            }
+            if tx_commit_hold > max_hold {
+                max_component = "transactions";
+                max_hold = tx_commit_hold;
+            }
+            if block_hashes_hold > max_hold {
+                max_component = "block_hashes";
+                max_hold = block_hashes_hold;
+            }
+            if world_hold > max_hold {
+                max_component = "world";
+                max_hold = world_hold;
+            }
+            if view_lock_wait >= STATE_VIEW_LOCK_THRESHOLD
+                || view_lock_hold >= STATE_VIEW_LOCK_THRESHOLD
+                || max_hold >= STATE_VIEW_LOCK_THRESHOLD
             {
+                debug!(
+                    block_height,
+                    view_lock_wait_us = view_lock_wait.as_micros(),
+                    view_lock_hold_us = view_lock_hold.as_micros(),
+                    prev_commit_topology_us = prev_topology_hold.as_micros(),
+                    commit_topology_us = commit_topology_hold.as_micros(),
+                    transactions_commit_us = tx_commit_hold.as_micros(),
+                    block_hashes_commit_us = block_hashes_hold.as_micros(),
+                    world_commit_us = world_hold.as_micros(),
+                    max_component,
+                    max_component_us = max_hold.as_micros(),
+                    "state view_lock write held (block commit)"
+                );
+            }
+            if let Some(err) = commit_error {
                 return Err(err);
             }
-            block_hashes.commit();
-            world.commit();
         }
         let snapshot_err = backend_guard.record_world_snapshot(&state_ref.world).err();
         drop(backend_guard);
@@ -16282,6 +16427,27 @@ mod fragment_counter_tests {
         assert!(
             state_block.has_committed_fragments(),
             "applying a transaction should increment committed fragments counter"
+        );
+    }
+}
+
+#[cfg(test)]
+mod state_view_lock_tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::kura::Kura;
+
+    #[test]
+    fn state_view_returns_when_view_lock_held() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+        let _guard = state.view_lock.write();
+        let view = state.view();
+        assert!(
+            view.world().peers().is_empty(),
+            "state view should be available even when view_lock is held"
         );
     }
 }

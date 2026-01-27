@@ -1,8 +1,9 @@
 //! Vote signature verification workers.
 
-use std::{collections::BTreeMap, sync::mpsc};
+use std::{collections::BTreeMap, sync::mpsc, time::Instant};
 
 use super::*;
+use super::votes::record_vote_drop_without_roster;
 use iroha_crypto::Algorithm;
 
 const VOTE_VERIFY_BATCH_MAX: usize = 64;
@@ -310,8 +311,47 @@ impl Actor {
                         );
                         continue;
                     }
+                    let committed_height =
+                        u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+                    let stale_view = self.stale_view(inflight.vote.height, inflight.vote.view);
+                    if self.drop_vote_for_height_or_view(
+                        &inflight.vote,
+                        committed_height,
+                        stale_view,
+                    ) || self.drop_precommit_vote_for_lock(&inflight.vote)
+                    {
+                        progress = true;
+                        continue;
+                    }
+                    if self.invalid_sig_penalty.is_suppressed(
+                        InvalidSigKind::Vote,
+                        inflight.vote.signer.into(),
+                        Instant::now(),
+                    ) {
+                        debug!(
+                            phase = ?inflight.vote.phase,
+                            height = inflight.vote.height,
+                            view = inflight.vote.view,
+                            signer = inflight.vote.signer,
+                            block_hash = %inflight.vote.block_hash,
+                            kind = InvalidSigKind::Vote.as_str(),
+                            "dropping vote from penalized signer"
+                        );
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::QcVote,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::PenalizedSender,
+                        );
+                        record_vote_drop_without_roster(
+                            &inflight.vote,
+                            super::status::VoteValidationDropReason::PenalizedSender,
+                        );
+                        progress = true;
+                        continue;
+                    }
                     let chain_id = self.common_config.chain.clone();
-                    let context = inflight.context;
+                    let mut context = inflight.context;
+                    context.stale_view = stale_view;
                     let evidence_context = super::evidence::EvidenceValidationContext {
                         topology: &context.topology,
                         chain_id: &chain_id,
@@ -336,11 +376,15 @@ impl Actor {
                 }
             }
         }
+        if self.dispatch_pending_vote_verifications() {
+            progress = true;
+        }
         if keep_rx {
             self.subsystems.vote_verify.result_rx = Some(result_rx);
         } else {
             self.subsystems.vote_verify.work_txs.clear();
             self.subsystems.vote_verify.inflight.clear();
+            self.subsystems.vote_verify.pending.clear();
         }
         progress
     }

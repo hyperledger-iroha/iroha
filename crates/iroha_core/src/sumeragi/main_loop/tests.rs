@@ -3268,6 +3268,84 @@ async fn vote_verify_worker_records_vote_after_async_check() {
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn vote_verify_defers_when_queue_full_and_dispatches_later() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 1;
+    let view = 0;
+    let topology_peers = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(topology_peers);
+    let chain_id = actor.chain_id.clone();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH]));
+
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: crate::sumeragi::consensus::Phase::Commit,
+        block_hash,
+        parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+        post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+        height,
+        view,
+        epoch: 0,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(&mut vote, &chain_id, &topology, &harness.key_pairs);
+
+    let (full_tx, _full_rx) = mpsc::sync_channel(0);
+    actor.subsystems.vote_verify.work_txs = vec![full_tx];
+    let (_result_tx, result_rx) = mpsc::sync_channel(1);
+    actor.subsystems.vote_verify.result_rx = Some(result_rx);
+
+    actor.handle_vote(vote.clone());
+
+    let verify_key = VoteVerifyKey::from_vote(&vote);
+    assert!(
+        actor
+            .subsystems
+            .vote_verify
+            .pending
+            .contains_key(&verify_key),
+        "vote should be deferred when verify queue is full"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .vote_verify
+            .inflight
+            .contains_key(&verify_key),
+        "vote should not be in inflight when deferred"
+    );
+
+    let (work_tx, _work_rx) = mpsc::sync_channel(1);
+    actor.subsystems.vote_verify.work_txs = vec![work_tx];
+
+    actor.poll_vote_verify_results();
+
+    assert!(
+        !actor
+            .subsystems
+            .vote_verify
+            .pending
+            .contains_key(&verify_key),
+        "deferred vote should be dispatched once queue has capacity"
+    );
+    assert!(
+        actor
+            .subsystems
+            .vote_verify
+            .inflight
+            .contains_key(&verify_key),
+        "vote should move to inflight after dispatch"
+    );
+
+    harness.shutdown.send();
+    drop(harness);
+}
+
 #[cfg(feature = "telemetry")]
 #[tokio::test(flavor = "current_thread")]
 async fn rbc_persist_queue_full_increments_metric() {

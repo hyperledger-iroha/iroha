@@ -4778,10 +4778,17 @@ struct VoteVerifyInFlight {
     context: VoteProcessingContext,
 }
 
+struct VoteVerifyPending {
+    id: u64,
+    vote: crate::sumeragi::consensus::Vote,
+    context: VoteProcessingContext,
+}
+
 struct VoteVerifyState {
     work_txs: Vec<mpsc::SyncSender<vote_verify::VoteVerifyWork>>,
     result_rx: Option<mpsc::Receiver<vote_verify::VoteVerifyResult>>,
     inflight: BTreeMap<VoteVerifyKey, VoteVerifyInFlight>,
+    pending: BTreeMap<VoteVerifyKey, VoteVerifyPending>,
     next_id: u64,
     next_worker: usize,
 }
@@ -4792,6 +4799,7 @@ impl VoteVerifyState {
             work_txs: Vec::new(),
             result_rx: None,
             inflight: BTreeMap::new(),
+            pending: BTreeMap::new(),
             next_id: 0,
             next_worker: 0,
         }
