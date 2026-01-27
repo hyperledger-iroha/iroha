@@ -887,9 +887,19 @@ fn align_topology_for_block_signatures(
     let view = block.header().view_change_index();
     match mode_tag {
         PERMISSIONED_TAG => {
+            rotated.canonicalize_order();
+            if let Some(seed) = prf_seed {
+                rotated.shuffle_prf(seed, height);
+            } else {
+                warn!(
+                    height,
+                    view, "skipping PRF shuffle for block signatures: missing seed"
+                );
+            }
             rotated.nth_rotation(view);
         }
         NPOS_TAG => {
+            rotated.canonicalize_order();
             if let Some(seed) = prf_seed {
                 let leader = rotated.leader_index_prf(seed, height, view);
                 rotated.rotate_preserve_view_to_front(leader);
@@ -1069,12 +1079,41 @@ mod signature_topology_tests {
         let block = BlockBuilder::new(header).build_with_signature(0, keypairs[0].private_key());
 
         let rotated = align_topology_for_block_signatures(NPOS_TAG, &topology, &block, Some(seed));
-        let expected_leader = topology.leader_index_prf(seed, 3, 2);
+        let mut canonical = topology.clone();
+        canonical.canonicalize_order();
+        let expected_leader = canonical.leader_index_prf(seed, 3, 2);
 
         assert_eq!(
             rotated.as_ref().first(),
-            topology.as_ref().get(expected_leader),
+            canonical.as_ref().get(expected_leader),
             "PRF leader should be at index 0"
+        );
+    }
+
+    #[test]
+    fn align_topology_for_block_signatures_permissioned_prf_shuffle() {
+        let seed = [0xA1; 32];
+        let keypairs = (0..4).map(|_| KeyPair::random()).collect::<Vec<_>>();
+        let peers: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let topology = Topology::new(peers);
+        let header = BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 1);
+        let block = BlockBuilder::new(header).build_with_signature(0, keypairs[0].private_key());
+
+        let rotated =
+            align_topology_for_block_signatures(PERMISSIONED_TAG, &topology, &block, Some(seed));
+
+        let mut expected = topology.clone();
+        expected.canonicalize_order();
+        expected.shuffle_prf(seed, 5);
+        expected.nth_rotation(1);
+
+        assert_eq!(
+            rotated.as_ref(),
+            expected.as_ref(),
+            "permissioned rotation should follow canonical PRF shuffle"
         );
     }
 }
@@ -2470,6 +2509,7 @@ pub mod message {
         } else {
             block_signers
         };
+        let aggregate_ok = qc_from_cache.then_some(true);
         if let Err(err) = crate::sumeragi::main_loop::validate_block_sync_qc(
             &qc,
             topology,
@@ -2482,7 +2522,7 @@ pub mod message {
             stake_snapshot,
             mode_tag,
             prf_seed,
-            None,
+            aggregate_ok,
         ) {
             warn!(
                 ?err,
@@ -3887,7 +3927,7 @@ pub mod message {
             block::ValidBlock,
             kura::Kura,
             query::store::LiveQueryStore,
-            state::{State, World},
+            state::{State, StateView, World},
             sumeragi::{consensus::ValidatorIndex, network_topology::Topology},
         };
 
@@ -3975,6 +4015,84 @@ pub mod message {
             })
         }
 
+        fn signature_topology_for_block(
+            block: &SignedBlock,
+            topology: &Topology,
+            state_view: &StateView<'_>,
+            mode_tag: &str,
+        ) -> Topology {
+            let prf_seed =
+                super::prf_seed_for_block_sync(mode_tag, state_view, block.header().height().get());
+            align_topology_for_block_signatures(mode_tag, topology, block, prf_seed)
+        }
+
+        fn sign_block_for_topology(
+            mut block: SignedBlock,
+            signature_topology: &Topology,
+            signers: &[&KeyPair],
+        ) -> SignedBlock {
+            let block_hash = block.hash();
+            let mut signatures = BTreeSet::new();
+            for signer in signers {
+                let idx = signature_topology
+                    .position(signer.public_key())
+                    .expect("signer in topology");
+                signatures.insert(BlockSignature::new(
+                    idx as u64,
+                    SignatureOf::from_hash(signer.private_key(), block_hash),
+                ));
+            }
+            block
+                .replace_signatures(signatures)
+                .expect("signature replacement succeeds");
+            block
+        }
+
+        fn sign_block_for_block_sync(
+            block: ValidBlock,
+            topology: &Topology,
+            state_view: &StateView<'_>,
+            mode_tag: &str,
+            signers: &[&KeyPair],
+        ) -> SignedBlock {
+            let block: SignedBlock = block.into();
+            let signature_topology =
+                signature_topology_for_block(&block, topology, state_view, mode_tag);
+            sign_block_for_topology(block, &signature_topology, signers)
+        }
+
+        fn leader_keypair<'a>(
+            signature_topology: &Topology,
+            keypairs: &'a [&KeyPair],
+        ) -> &'a KeyPair {
+            let leader_pk = signature_topology
+                .as_ref()
+                .first()
+                .expect("topology non-empty")
+                .public_key();
+            keypairs
+                .iter()
+                .copied()
+                .find(|kp| kp.public_key() == leader_pk)
+                .expect("leader keypair available")
+        }
+
+        fn signer_indices_for_topology(
+            topology: &Topology,
+            signers: &[&KeyPair],
+        ) -> BTreeSet<ValidatorIndex> {
+            let mut indices = BTreeSet::new();
+            for signer in signers {
+                let idx = topology
+                    .position(signer.public_key())
+                    .expect("signer in topology");
+                indices.insert(
+                    ValidatorIndex::try_from(idx as u32).expect("validator index fits u32"),
+                );
+            }
+            indices
+        }
+
         fn qc_preimage(
             chain_id: &ChainId,
             mode_tag: &str,
@@ -4032,6 +4150,30 @@ pub mod message {
             iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate signature")
         }
 
+        fn canonicalize_roster_and_signers(
+            topology: &Topology,
+            signers: &BTreeSet<ValidatorIndex>,
+        ) -> (Vec<PeerId>, BTreeSet<ValidatorIndex>) {
+            let original = topology.as_ref();
+            let mut roster: Vec<PeerId> = original.iter().cloned().collect();
+            roster.sort();
+            roster.dedup();
+            let mut mapped = BTreeSet::new();
+            for signer in signers {
+                let idx = usize::try_from(*signer).expect("signer index fits usize");
+                let peer = original.get(idx).expect("signer in topology");
+                let canonical_idx = roster
+                    .iter()
+                    .position(|candidate| candidate == peer)
+                    .expect("signer in canonical roster");
+                mapped.insert(
+                    ValidatorIndex::try_from(canonical_idx as u32)
+                        .expect("canonical index fits ValidatorIndex"),
+                );
+            }
+            (roster, mapped)
+        }
+
         #[allow(clippy::too_many_arguments)]
         fn qc_from_signers_with_aggregate(
             chain_id: &ChainId,
@@ -4057,18 +4199,20 @@ pub mod message {
                 keypairs,
             );
             let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+            let (validator_set, canonical_signers) =
+                canonicalize_roster_and_signers(topology, &signers);
             BlockSynchronizer::qc_from_signers(
                 ConsensusMode::Permissioned,
                 None,
                 mode_tag,
-                topology.as_ref().to_vec(),
+                validator_set,
                 block_hash,
                 zero_root,
                 zero_root,
                 height,
                 view,
                 epoch,
-                signers,
+                canonical_signers,
                 aggregate_signature,
             )
             .expect("QC should build from signers")
@@ -4083,15 +4227,20 @@ pub mod message {
                 PeerId::new(kp_validator.public_key().clone()),
             ]);
 
-            let mut block = unique_dummy_block(kp_leader.private_key(), |header| {
-                header.set_height(nonzero_ext::nonzero!(2_u64));
-            });
-            block.sign(&kp_validator, &topology);
-            let block: SignedBlock = block.into();
-
             let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
             let state_view = state.view();
             let (_, mode_tag) = test_chain_config();
+
+            let block = unique_dummy_block(kp_leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(2_u64));
+            });
+            let block = sign_block_for_block_sync(
+                block,
+                &topology,
+                &state_view,
+                &mode_tag,
+                &[&kp_leader, &kp_validator],
+            );
             let context =
                 super::BlockSyncValidationContext::new(&block, &topology, &state_view, &mode_tag);
 
@@ -4104,6 +4253,7 @@ pub mod message {
 
         #[test]
         fn sanitize_block_sync_qc_keeps_incoming_without_cached_signers() {
+            let _guard = crate::sumeragi::status::commit_history_test_guard();
             crate::sumeragi::status::reset_precommit_signer_history_for_tests();
             let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -4112,14 +4262,19 @@ pub mod message {
                 PeerId::new(kp_validator.public_key().clone()),
             ]);
 
-            let mut block = unique_dummy_block(kp_leader.private_key(), |_| {});
-            block.sign(&kp_validator, &topology);
-            let block: SignedBlock = block.into();
-
             let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
             let state_view = state.view();
             let (chain_id, mode_tag) = test_chain_config();
-            let signers = super::Message::commit_role_signers(&block, &topology)
+            let block = sign_block_for_block_sync(
+                unique_dummy_block(kp_leader.private_key(), |_| {}),
+                &topology,
+                &state_view,
+                &mode_tag,
+                &[&kp_leader, &kp_validator],
+            );
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            let signers = super::Message::commit_role_signers(&block, &signature_topology)
                 .expect("commit quorum should be met");
             let qc = qc_from_signers_with_aggregate(
                 &chain_id,
@@ -4129,7 +4284,7 @@ pub mod message {
                 block.header().view_change_index(),
                 0,
                 signers.clone(),
-                &topology,
+                &signature_topology,
                 &[kp_leader.clone(), kp_validator.clone()],
             );
             let context =
@@ -4150,6 +4305,7 @@ pub mod message {
 
         #[test]
         fn sanitize_block_sync_qc_drops_view_mismatch() {
+            let _guard = crate::sumeragi::status::commit_history_test_guard();
             crate::sumeragi::status::reset_precommit_signer_history_for_tests();
             let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -4158,14 +4314,19 @@ pub mod message {
                 PeerId::new(kp_validator.public_key().clone()),
             ]);
 
-            let mut block = unique_dummy_block(kp_leader.private_key(), |_| {});
-            block.sign(&kp_validator, &topology);
-            let block: SignedBlock = block.into();
-
             let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
             let state_view = state.view();
             let (chain_id, mode_tag) = test_chain_config();
-            let signers = super::Message::commit_role_signers(&block, &topology)
+            let block = sign_block_for_block_sync(
+                unique_dummy_block(kp_leader.private_key(), |_| {}),
+                &topology,
+                &state_view,
+                &mode_tag,
+                &[&kp_leader, &kp_validator],
+            );
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            let signers = super::Message::commit_role_signers(&block, &signature_topology)
                 .expect("commit quorum should be met");
             let qc = qc_from_signers_with_aggregate(
                 &chain_id,
@@ -4175,7 +4336,7 @@ pub mod message {
                 block.header().view_change_index().saturating_add(1),
                 0,
                 signers.clone(),
-                &topology,
+                &signature_topology,
                 &[kp_leader.clone(), kp_validator.clone()],
             );
             let context =
@@ -4204,11 +4365,18 @@ pub mod message {
                 PeerId::new(kp_validator.public_key().clone()),
             ]);
 
-            let mut block = unique_dummy_block(kp_leader.private_key(), |header| {
-                header.set_height(nonzero_ext::nonzero!(2_u64));
-            });
-            block.sign(&kp_validator, &topology);
-            let block: SignedBlock = block.into();
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
+            let state_view = state.view();
+            let (_, mode_tag) = test_chain_config();
+            let block = sign_block_for_block_sync(
+                unique_dummy_block(kp_leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(2_u64));
+                }),
+                &topology,
+                &state_view,
+                &mode_tag,
+                &[&kp_leader, &kp_validator],
+            );
 
             let mut invalid_block = block.clone();
             let mut signatures = BTreeSet::new();
@@ -4220,10 +4388,10 @@ pub mod message {
                 .replace_signatures(signatures)
                 .expect("signature replacement succeeds");
 
-            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
-            let state_view = state.view();
             let (chain_id, mode_tag) = test_chain_config();
-            let signers = super::Message::commit_role_signers(&block, &topology)
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            let signers = super::Message::commit_role_signers(&block, &signature_topology)
                 .expect("commit quorum should be met");
             let qc = qc_from_signers_with_aggregate(
                 &chain_id,
@@ -4233,7 +4401,7 @@ pub mod message {
                 block.header().view_change_index(),
                 0,
                 signers,
-                &topology,
+                &signature_topology,
                 &[kp_leader.clone(), kp_validator.clone()],
             );
             let context = super::BlockSyncValidationContext::new(
@@ -4299,18 +4467,22 @@ pub mod message {
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_validator.public_key().clone()),
             ]);
-
-            let mut valid_block = unique_dummy_block(kp_leader.private_key(), |header| {
-                header.set_height(nonzero_ext::nonzero!(2_u64));
-            });
-            valid_block.sign(&kp_validator, &topology);
-            let valid_block: SignedBlock = valid_block.into();
-
             let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
+            let state_view = state.view();
+            let (_, mode_tag) = test_chain_config();
+            let valid_block = sign_block_for_block_sync(
+                unique_dummy_block(kp_leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(2_u64));
+                }),
+                &topology,
+                &state_view,
+                &mode_tag,
+                &[&kp_leader, &kp_validator],
+            );
             let tip_height = u64::try_from(state.view().height()).unwrap_or(0);
             let wrong_parent =
                 HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9u8; 32]));
-            let insufficient_block: SignedBlock =
+            let mut insufficient_block: SignedBlock =
                 unique_dummy_block(kp_leader.private_key(), |header| {
                     let height =
                         NonZeroU64::new(tip_height.saturating_add(2)).expect("non-zero height");
@@ -4318,6 +4490,16 @@ pub mod message {
                     header.set_prev_block_hash(Some(wrong_parent));
                 })
                 .into();
+            let signature_topology = signature_topology_for_block(
+                &insufficient_block,
+                &topology,
+                &state_view,
+                &mode_tag,
+            );
+            let leader_candidates = [&kp_leader, &kp_validator];
+            let leader = leader_keypair(&signature_topology, &leader_candidates);
+            insufficient_block =
+                sign_block_for_topology(insufficient_block, &signature_topology, &[leader]);
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(insufficient_block, None), (valid_block.clone(), None)],
                 &BTreeMap::new(),
@@ -4339,17 +4521,25 @@ pub mod message {
                 PeerId::new(kp_validator.public_key().clone()),
             ]);
             let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
+            let state_view = state.view();
+            let (_, mode_tag) = test_chain_config();
             let tip_height = u64::try_from(state.view().height()).unwrap_or(0);
             let tip_hash = state.view().latest_block_hash();
             let (next_height, prev_hash) =
                 tip_hash.map_or((1, None), |hash| (tip_height.saturating_add(1), Some(hash)));
 
-            let next_block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |header| {
-                let height = NonZeroU64::new(next_height).expect("non-zero height");
-                header.set_height(height);
-                header.set_prev_block_hash(prev_hash);
-            })
-            .into();
+            let mut next_block: SignedBlock =
+                unique_dummy_block(kp_leader.private_key(), |header| {
+                    let height = NonZeroU64::new(next_height).expect("non-zero height");
+                    header.set_height(height);
+                    header.set_prev_block_hash(prev_hash);
+                })
+                .into();
+            let signature_topology =
+                signature_topology_for_block(&next_block, &topology, &state_view, &mode_tag);
+            let leader_candidates = [&kp_leader, &kp_validator];
+            let leader = leader_keypair(&signature_topology, &leader_candidates);
+            next_block = sign_block_for_topology(next_block, &signature_topology, &[leader]);
 
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(next_block.clone(), None)],
@@ -4406,16 +4596,16 @@ pub mod message {
                 PeerId::new(kp_b.public_key().clone()),
             ]);
 
-            let mut block = unique_dummy_block(kp_b.private_key(), |header| {
+            let block = unique_dummy_block(kp_b.private_key(), |header| {
                 header.set_height(nonzero_ext::nonzero!(2_u64));
                 header.set_view_change_index(1);
             });
-            let mut rotated = topology.clone();
-            rotated.nth_rotation(1);
-            block.sign(&kp_a, &rotated);
-            let block: SignedBlock = block.into();
-
             let state = state_with_consensus_key_pops(&[&kp_a, &kp_b]);
+            let state_view = state.view();
+            let (_, mode_tag) = test_chain_config();
+            let mut block: SignedBlock = block.into();
+            let rotated = signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            block = sign_block_for_topology(block, &rotated, &[&kp_a, &kp_b]);
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), None)],
                 &BTreeMap::new(),
@@ -4442,8 +4632,11 @@ pub mod message {
             for seed in [[0x5A; 32], [0xA5; 32], [0x3C; 32]] {
                 for view in 0_u64..=2 {
                     let mut permissioned = topology.clone();
+                    permissioned.canonicalize_order();
+                    permissioned.shuffle_prf(seed, height);
                     permissioned.nth_rotation(view);
                     let mut npos = topology.clone();
+                    npos.canonicalize_order();
                     let leader = npos.leader_index_prf(seed, height, view);
                     npos.rotate_preserve_view_to_front(leader);
                     if permissioned.as_ref() != npos.as_ref() {
@@ -4475,20 +4668,7 @@ pub mod message {
                 header.set_view_change_index(view);
             })
             .into();
-            let block_hash = block.hash();
-            let mut signatures = BTreeSet::new();
-            for kp in [&kp_a, &kp_b] {
-                let idx = rotated
-                    .position(kp.public_key())
-                    .expect("signer in rotated topology");
-                signatures.insert(BlockSignature::new(
-                    idx as u64,
-                    SignatureOf::from_hash(kp.private_key(), block_hash),
-                ));
-            }
-            block
-                .replace_signatures(signatures)
-                .expect("signature replacement succeeds");
+            block = sign_block_for_topology(block, &rotated, &[&kp_a, &kp_b]);
 
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), None)],
@@ -4506,32 +4686,40 @@ pub mod message {
         fn filter_blocks_prefers_roster_metadata() {
             let kp_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let kp_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_c = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let fallback_topology = Topology::new(vec![
                 PeerId::new(kp_a.public_key().clone()),
-                PeerId::new(kp_b.public_key().clone()),
+                PeerId::new(kp_c.public_key().clone()),
             ]);
 
+            let state = state_with_consensus_key_pops(&[&kp_a, &kp_b, &kp_c]);
+            let state_view = state.view();
+            let (_, mode_tag) = test_chain_config();
             let mut block: SignedBlock = unique_dummy_block(kp_b.private_key(), |header| {
                 header.set_height(nonzero_ext::nonzero!(4_u64));
             })
             .into();
             let block_hash = block.hash();
+            let roster_topology = Topology::new(vec![
+                PeerId::new(kp_a.public_key().clone()),
+                PeerId::new(kp_b.public_key().clone()),
+            ]);
+            let signature_topology =
+                signature_topology_for_block(&block, &roster_topology, &state_view, &mode_tag);
             let mut signatures = BTreeSet::new();
-            signatures.insert(BlockSignature::new(
-                0,
-                SignatureOf::from_hash(kp_b.private_key(), block_hash),
-            ));
-            signatures.insert(BlockSignature::new(
-                1,
-                SignatureOf::from_hash(kp_a.private_key(), block_hash),
-            ));
+            for signer in [&kp_a, &kp_b] {
+                let idx = signature_topology
+                    .position(signer.public_key())
+                    .expect("signer in topology");
+                signatures.insert(BlockSignature::new(
+                    idx as u64,
+                    SignatureOf::from_hash(signer.private_key(), block_hash),
+                ));
+            }
             block
                 .replace_signatures(signatures)
                 .expect("signature replacement succeeds");
-            let roster = vec![
-                PeerId::new(kp_b.public_key().clone()),
-                PeerId::new(kp_a.public_key().clone()),
-            ];
+            let roster = roster_topology.as_ref().to_vec();
             let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
             let checkpoint = ValidatorSetCheckpoint::new(
                 block.header().height().get(),
@@ -4554,8 +4742,6 @@ pub mod message {
                     stake_snapshot: None,
                 },
             );
-
-            let state = state_with_consensus_key_pops(&[&kp_a, &kp_b]);
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), None)],
                 &BTreeMap::new(),
@@ -4601,19 +4787,27 @@ pub mod message {
                 0,
                 0,
             );
-            let mut expired_block = unique_dummy_block(leader.private_key(), |header| {
-                header.set_height(nonzero_ext::nonzero!(4_u64));
-            });
-            expired_block.sign(&validator, &topology);
-            expired_block.sign(&proxy, &topology);
-            let expired_block: SignedBlock = expired_block.into();
+            let state_view = state.view();
+            let (_, mode_tag) = test_chain_config();
+            let expired_block = sign_block_for_block_sync(
+                unique_dummy_block(leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(4_u64));
+                }),
+                &topology,
+                &state_view,
+                &mode_tag,
+                &[&leader, &validator, &proxy],
+            );
 
-            let mut fresh_block = unique_dummy_block(leader.private_key(), |header| {
-                header.set_height(nonzero_ext::nonzero!(2_u64));
-            });
-            fresh_block.sign(&validator, &topology);
-            fresh_block.sign(&proxy, &topology);
-            let fresh_block: SignedBlock = fresh_block.into();
+            let fresh_block = sign_block_for_block_sync(
+                unique_dummy_block(leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(2_u64));
+                }),
+                &topology,
+                &state_view,
+                &mode_tag,
+                &[&leader, &validator, &proxy],
+            );
 
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(expired_block, None), (fresh_block.clone(), None)],
@@ -4636,10 +4830,18 @@ pub mod message {
                 PeerId::new(kp_validator.public_key().clone()),
             ]);
 
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
+            let state_view = state.view();
+            let (_, mode_tag) = test_chain_config();
             // Block only carries the leader signature; commit quorum not satisfied.
-            let block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |_| {}).into();
+            let mut block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |_| {}).into();
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            let leader_candidates = [&kp_leader, &kp_validator];
+            let leader = leader_keypair(&signature_topology, &leader_candidates);
+            block = sign_block_for_topology(block, &signature_topology, &[leader]);
 
-            let signers = super::Message::commit_role_signers(&block, &topology);
+            let signers = super::Message::commit_role_signers(&block, &signature_topology);
             assert!(
                 signers.is_none(),
                 "commit-role quorum must require leader + proxy-tail signatures"
@@ -4655,11 +4857,22 @@ pub mod message {
                 PeerId::new(kp_validator.public_key().clone()),
             ]);
 
-            let block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |_| {}).into();
-            let signers = super::Message::commit_role_signers_all(&block, &topology);
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
+            let state_view = state.view();
+            let (_, mode_tag) = test_chain_config();
+            let mut block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |_| {}).into();
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            let leader_candidates = [&kp_leader, &kp_validator];
+            let leader = leader_keypair(&signature_topology, &leader_candidates);
+            block = sign_block_for_topology(block, &signature_topology, &[leader]);
+            let signers = super::Message::commit_role_signers_all(&block, &signature_topology);
 
             assert_eq!(signers.len(), 1);
-            assert!(signers.contains(&ValidatorIndex::try_from(0u32).expect("index")));
+            let leader_idx = signature_topology
+                .position(leader.public_key())
+                .expect("leader in topology");
+            assert!(signers.contains(&ValidatorIndex::try_from(leader_idx as u32).expect("index")));
         }
 
         #[test]
@@ -4675,15 +4888,28 @@ pub mod message {
                 PeerId::new(kp_set_b.public_key().clone()),
             ]);
 
-            let mut block = unique_dummy_block(kp_leader.private_key(), |_| {});
-            block.sign(&kp_validator, &topology);
-            block.sign(&kp_set_b, &topology);
-            let block: SignedBlock = block.into();
+            let state =
+                state_with_consensus_key_pops(&[&kp_leader, &kp_validator, &kp_proxy, &kp_set_b]);
+            let state_view = state.view();
+            let (_, mode_tag) = test_chain_config();
+            let mut block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |_| {}).into();
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            let leader_candidates = [&kp_leader, &kp_validator, &kp_proxy, &kp_set_b];
+            let leader = leader_keypair(&signature_topology, &leader_candidates);
+            block = sign_block_for_topology(
+                block,
+                &signature_topology,
+                &[leader, &kp_validator, &kp_set_b],
+            );
 
-            let signers = super::Message::commit_role_signers(&block, &topology)
+            let signers = super::Message::commit_role_signers(&block, &signature_topology)
                 .expect("set B quorum should be accepted");
             assert_eq!(signers.len(), 3);
-            assert!(signers.contains(&ValidatorIndex::try_from(3u32).expect("index")));
+            let set_b_idx = signature_topology
+                .position(kp_set_b.public_key())
+                .expect("set B in topology");
+            assert!(signers.contains(&ValidatorIndex::try_from(set_b_idx as u32).expect("index")));
         }
 
         #[test]
@@ -4696,16 +4922,21 @@ pub mod message {
                 PeerId::new(kp_leader.public_key().clone()),
                 PeerId::new(kp_proxy.public_key().clone()),
             ]);
-            let mut block = unique_dummy_block(kp_leader.private_key(), |_| {});
-            block.sign(&kp_proxy, &topology);
-            let block: SignedBlock = block.into();
-            let block_hash = block.hash();
-
             let state = state_with_consensus_key_pops(&[&kp_leader, &kp_proxy]);
             let state_view = state.view();
             let (chain_id, mode_tag) = test_chain_config();
+            let block = sign_block_for_block_sync(
+                unique_dummy_block(kp_leader.private_key(), |_| {}),
+                &topology,
+                &state_view,
+                &mode_tag,
+                &[&kp_leader, &kp_proxy],
+            );
+            let block_hash = block.hash();
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
 
-            let commit_signers = super::Message::commit_role_signers(&block, &topology)
+            let commit_signers = super::Message::commit_role_signers(&block, &signature_topology)
                 .expect("commit-role quorum available");
             let aggregate_signature = aggregate_signature_for_signers(
                 &chain_id,
@@ -4716,10 +4947,12 @@ pub mod message {
                 block.header().view_change_index(),
                 0,
                 &commit_signers,
-                &topology,
+                &signature_topology,
                 &[kp_leader.clone(), kp_proxy.clone()],
             );
             let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+            let (validator_set, canonical_signers) =
+                canonicalize_roster_and_signers(&signature_topology, &commit_signers);
             crate::sumeragi::status::record_precommit_signers(
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash,
@@ -4728,11 +4961,11 @@ pub mod message {
                     epoch: 0,
                     parent_state_root: zero_root,
                     post_state_root: zero_root,
-                    signers: commit_signers.clone(),
-                    roster_len: topology.as_ref().len(),
+                    signers: canonical_signers,
+                    roster_len: validator_set.len(),
                     mode_tag: mode_tag.clone(),
                     bls_aggregate_signature: aggregate_signature.clone(),
-                    validator_set: topology.as_ref().to_vec(),
+                    validator_set,
                     stake_snapshot: None,
                 },
             );
@@ -4771,20 +5004,22 @@ pub mod message {
                 PeerId::new(kp_validator.public_key().clone()),
             ]);
 
-            let mut block = unique_dummy_block(kp_leader.private_key(), |header| {
-                header.set_height(nonzero_ext::nonzero!(10_u64));
-            });
-            block.sign(&kp_validator, &topology);
-            let block: SignedBlock = block.into();
-
             let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
             let state_view = state.view();
             let (chain_id, mode_tag) = test_chain_config();
-            let mut recorded_signers = BTreeSet::new();
-            recorded_signers
-                .insert(ValidatorIndex::try_from(0u32).expect("validator index parses"));
-            recorded_signers
-                .insert(ValidatorIndex::try_from(1u32).expect("validator index parses"));
+            let block = sign_block_for_block_sync(
+                unique_dummy_block(kp_leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(10_u64));
+                }),
+                &topology,
+                &state_view,
+                &mode_tag,
+                &[&kp_leader, &kp_validator],
+            );
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            let recorded_signers =
+                signer_indices_for_topology(&signature_topology, &[&kp_leader, &kp_validator]);
             let aggregate_signature = aggregate_signature_for_signers(
                 &chain_id,
                 &mode_tag,
@@ -4794,10 +5029,12 @@ pub mod message {
                 block.header().view_change_index(),
                 0,
                 &recorded_signers,
-                &topology,
+                &signature_topology,
                 &[kp_leader.clone(), kp_validator.clone()],
             );
             let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+            let (validator_set, canonical_signers) =
+                canonicalize_roster_and_signers(&signature_topology, &recorded_signers);
             crate::sumeragi::status::record_precommit_signers(
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash: block.hash(),
@@ -4806,11 +5043,11 @@ pub mod message {
                     epoch: 0,
                     parent_state_root: zero_root,
                     post_state_root: zero_root,
-                    signers: recorded_signers,
-                    roster_len: topology.as_ref().len(),
+                    signers: canonical_signers,
+                    roster_len: validator_set.len(),
                     mode_tag: mode_tag.clone(),
                     bls_aggregate_signature: aggregate_signature.clone(),
-                    validator_set: topology.as_ref().to_vec(),
+                    validator_set,
                     stake_snapshot: None,
                 },
             );
@@ -4860,23 +5097,25 @@ pub mod message {
                 PeerId::new(kp_extra.public_key().clone()),
             ]);
 
-            let mut block = unique_dummy_block(kp_leader.private_key(), |header| {
-                header.set_height(nonzero_ext::nonzero!(11_u64));
-            });
-            block.sign(&kp_validator, &topology);
-            let block: SignedBlock = block.into();
-
             let state =
                 state_with_consensus_key_pops(&[&kp_leader, &kp_validator, &kp_proxy, &kp_extra]);
             let state_view = state.view();
             let (chain_id, mode_tag) = test_chain_config();
-            let mut recorded_signers = BTreeSet::new();
-            recorded_signers
-                .insert(ValidatorIndex::try_from(0u32).expect("validator index parses"));
-            recorded_signers
-                .insert(ValidatorIndex::try_from(1u32).expect("validator index parses"));
-            recorded_signers
-                .insert(ValidatorIndex::try_from(2u32).expect("validator index parses"));
+            let block = sign_block_for_block_sync(
+                unique_dummy_block(kp_leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(11_u64));
+                }),
+                &topology,
+                &state_view,
+                &mode_tag,
+                &[&kp_leader, &kp_validator],
+            );
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            let recorded_signers = signer_indices_for_topology(
+                &signature_topology,
+                &[&kp_leader, &kp_validator, &kp_proxy],
+            );
             let aggregate_signature = aggregate_signature_for_signers(
                 &chain_id,
                 &mode_tag,
@@ -4886,7 +5125,7 @@ pub mod message {
                 block.header().view_change_index(),
                 0,
                 &recorded_signers,
-                &topology,
+                &signature_topology,
                 &[
                     kp_leader.clone(),
                     kp_validator.clone(),
@@ -4895,6 +5134,8 @@ pub mod message {
                 ],
             );
             let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+            let (validator_set, canonical_signers) =
+                canonicalize_roster_and_signers(&signature_topology, &recorded_signers);
             crate::sumeragi::status::record_precommit_signers(
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash: block.hash(),
@@ -4903,11 +5144,11 @@ pub mod message {
                     epoch: 0,
                     parent_state_root: zero_root,
                     post_state_root: zero_root,
-                    signers: recorded_signers,
-                    roster_len: topology.as_ref().len(),
+                    signers: canonical_signers,
+                    roster_len: validator_set.len(),
                     mode_tag: mode_tag.clone(),
                     bls_aggregate_signature: aggregate_signature.clone(),
-                    validator_set: topology.as_ref().to_vec(),
+                    validator_set,
                     stake_snapshot: None,
                 },
             );
@@ -4922,10 +5163,10 @@ pub mod message {
             )
             .expect("derived QC should be available for valid block");
 
-            let mut forged_signers = BTreeSet::new();
-            forged_signers.insert(ValidatorIndex::try_from(0u32).expect("validator index parses"));
-            forged_signers.insert(ValidatorIndex::try_from(1u32).expect("validator index parses"));
-            forged_signers.insert(ValidatorIndex::try_from(3u32).expect("validator index parses"));
+            let forged_signers = signer_indices_for_topology(
+                &signature_topology,
+                &[&kp_leader, &kp_validator, &kp_extra],
+            );
             let forged_qc = qc_from_signers_with_aggregate(
                 &chain_id,
                 &mode_tag,
@@ -4934,7 +5175,7 @@ pub mod message {
                 block.header().view_change_index(),
                 0,
                 forged_signers,
-                &topology,
+                &signature_topology,
                 &[
                     kp_leader.clone(),
                     kp_validator.clone(),
@@ -4967,15 +5208,21 @@ pub mod message {
             ]);
 
             // Block only carries the leader signature, so it fails commit validation.
-            let block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |header| {
+            let (chain_id, mode_tag) = test_chain_config();
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
+            let state_view = state.view();
+            let mut block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |header| {
                 header.set_height(nonzero_ext::nonzero!(6_u64));
             })
             .into();
-            let mut signers = BTreeSet::new();
-            signers.insert(ValidatorIndex::try_from(0).expect("validator index parses"));
-            signers.insert(ValidatorIndex::try_from(1).expect("validator index parses"));
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            let leader_candidates = [&kp_leader, &kp_validator];
+            let leader = leader_keypair(&signature_topology, &leader_candidates);
+            block = sign_block_for_topology(block, &signature_topology, &[leader]);
+            let signers =
+                signer_indices_for_topology(&signature_topology, &[&kp_leader, &kp_validator]);
 
-            let (chain_id, mode_tag) = test_chain_config();
             let qc = qc_from_signers_with_aggregate(
                 &chain_id,
                 &mode_tag,
@@ -4984,11 +5231,10 @@ pub mod message {
                 block.header().view_change_index(),
                 0,
                 signers,
-                &topology,
+                &signature_topology,
                 &[kp_leader.clone(), kp_validator.clone()],
             );
 
-            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), Some(qc.clone()))],
                 &BTreeMap::new(),
@@ -5012,17 +5258,24 @@ pub mod message {
                 PeerId::new(kp_proxy.public_key().clone()),
             ]);
 
-            let mut block = unique_dummy_block(kp_leader.private_key(), |header| {
-                header.set_height(nonzero_ext::nonzero!(7_u64));
-            });
-            block.sign(&kp_validator, &topology);
-            let block: SignedBlock = block.into();
-
-            let mut signers = BTreeSet::new();
-            signers.insert(ValidatorIndex::try_from(0u32).expect("validator index parses"));
-            signers.insert(ValidatorIndex::try_from(1u32).expect("validator index parses"));
-            signers.insert(ValidatorIndex::try_from(2u32).expect("validator index parses"));
             let (chain_id, mode_tag) = test_chain_config();
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator, &kp_proxy]);
+            let state_view = state.view();
+            let block = sign_block_for_block_sync(
+                unique_dummy_block(kp_leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(7_u64));
+                }),
+                &topology,
+                &state_view,
+                &mode_tag,
+                &[&kp_leader, &kp_validator],
+            );
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            let signers = signer_indices_for_topology(
+                &signature_topology,
+                &[&kp_leader, &kp_validator, &kp_proxy],
+            );
             let forged_qc = qc_from_signers_with_aggregate(
                 &chain_id,
                 &mode_tag,
@@ -5031,11 +5284,10 @@ pub mod message {
                 block.header().view_change_index(),
                 0,
                 signers,
-                &topology,
+                &signature_topology,
                 &[kp_leader.clone(), kp_validator.clone(), kp_proxy.clone()],
             );
 
-            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator, &kp_proxy]);
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block, Some(forged_qc))],
                 &BTreeMap::new(),
@@ -5062,21 +5314,25 @@ pub mod message {
                 PeerId::new(kp_extra.public_key().clone()),
             ]);
 
-            let mut block = unique_dummy_block(kp_leader.private_key(), |header| {
-                header.set_height(nonzero_ext::nonzero!(12_u64));
-            });
-            block.sign(&kp_validator, &topology);
-            block.sign(&kp_proxy, &topology);
-            let block: SignedBlock = block.into();
-
             let (chain_id, mode_tag) = test_chain_config();
-            let mut recorded_signers = BTreeSet::new();
-            recorded_signers
-                .insert(ValidatorIndex::try_from(0u32).expect("validator index parses"));
-            recorded_signers
-                .insert(ValidatorIndex::try_from(1u32).expect("validator index parses"));
-            recorded_signers
-                .insert(ValidatorIndex::try_from(3u32).expect("validator index parses"));
+            let state =
+                state_with_consensus_key_pops(&[&kp_leader, &kp_validator, &kp_proxy, &kp_extra]);
+            let state_view = state.view();
+            let block = sign_block_for_block_sync(
+                unique_dummy_block(kp_leader.private_key(), |header| {
+                    header.set_height(nonzero_ext::nonzero!(12_u64));
+                }),
+                &topology,
+                &state_view,
+                &mode_tag,
+                &[&kp_leader, &kp_validator, &kp_proxy],
+            );
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            let recorded_signers = signer_indices_for_topology(
+                &signature_topology,
+                &[&kp_leader, &kp_validator, &kp_extra],
+            );
             let aggregate_signature = aggregate_signature_for_signers(
                 &chain_id,
                 &mode_tag,
@@ -5086,7 +5342,7 @@ pub mod message {
                 block.header().view_change_index(),
                 0,
                 &recorded_signers,
-                &topology,
+                &signature_topology,
                 &[
                     kp_leader.clone(),
                     kp_validator.clone(),
@@ -5095,6 +5351,8 @@ pub mod message {
                 ],
             );
             let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+            let (validator_set, canonical_signers) =
+                canonicalize_roster_and_signers(&signature_topology, &recorded_signers);
             crate::sumeragi::status::record_precommit_signers(
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash: block.hash(),
@@ -5103,11 +5361,11 @@ pub mod message {
                     epoch: 0,
                     parent_state_root: zero_root,
                     post_state_root: zero_root,
-                    signers: recorded_signers,
-                    roster_len: topology.as_ref().len(),
+                    signers: canonical_signers,
+                    roster_len: validator_set.len(),
                     mode_tag: mode_tag.clone(),
                     bls_aggregate_signature: aggregate_signature,
-                    validator_set: topology.as_ref().to_vec(),
+                    validator_set,
                     stake_snapshot: None,
                 },
             );
@@ -5116,8 +5374,6 @@ pub mod message {
                 "precommit signer record should be visible to block sync QC builder"
             );
 
-            let state =
-                state_with_consensus_key_pops(&[&kp_leader, &kp_validator, &kp_proxy, &kp_extra]);
             let (filtered, dropped) = super::Message::filter_blocks_with_valid_signatures(
                 vec![(block.clone(), None)],
                 &BTreeMap::new(),
