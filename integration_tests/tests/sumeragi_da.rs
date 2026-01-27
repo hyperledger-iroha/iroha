@@ -252,7 +252,7 @@ fn parse_pending_rbc_stash_counters(root: &Value) -> PendingRbcStashCounters {
 const LARGE_PAYLOAD_BYTES: usize = 1024; // keep payload light to ensure timely DA/RBC
 // Use a multi-chunk payload to ensure the recovery test observes an in-flight session.
 const RBC_RECOVERY_PAYLOAD_BYTES: usize = 1024 * 1024;
-const RBC_RECOVERY_CHUNK_BYTES: i64 = 8 * 1024;
+const RBC_RECOVERY_CHUNK_BYTES: i64 = 16 * 1024;
 const RBC_DELIVER_BUDGET_MS: u64 = 20_000;
 const RBC_DELIVER_GRACE_MS: u64 = 1_000;
 const COMMIT_BUDGET_MS: u64 = 50_000;
@@ -1697,7 +1697,7 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
                 .write(["sumeragi", "rbc", "store_soft_sessions"], 1_536i64)
                 .write(["sumeragi", "rbc", "store_max_bytes"], 536_870_912i64)
                 .write(["sumeragi", "rbc", "store_soft_bytes"], 402_653_184i64)
-                .write(["sumeragi", "rbc", "pending_max_chunks"], 256i64)
+                .write(["sumeragi", "rbc", "pending_max_chunks"], 1_024i64)
                 .write(["sumeragi", "rbc", "pending_max_bytes"], 16_777_216i64)
                 .write(["sumeragi", "rbc", "disk_store_max_bytes"], 536_870_912i64)
                 .write(["sumeragi", "rbc", "disk_store_ttl_ms"], 600_000i64)

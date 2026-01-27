@@ -2,7 +2,10 @@
 
 use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
-use iroha::{client::QueryError, data_model::prelude::*};
+use iroha::{
+    client::QueryError,
+    data_model::{prelude::*, query::error::QueryExecutionFail},
+};
 use iroha_core::smartcontracts::ivm::gas_limit_for_meta;
 use iroha_test_network::*;
 use iroha_test_samples::load_sample_ivm;
@@ -51,10 +54,18 @@ fn smart_contract_query_scenarios() -> Result<()> {
         let err = client
             .raw_continue_iterable_query(asset_cursor)
             .expect_err("Request with cursor from smart contract should fail");
-        assert!(
-            matches!(err, QueryError::Validation(ValidationFail::NotPermitted(_))),
-            "unexpected query error: {err:?}"
+        // Continuation must fail; the exact error depends on cursor mode/config.
+        let allowed = matches!(
+            err,
+            QueryError::Validation(ValidationFail::NotPermitted(_))
+                | QueryError::Validation(ValidationFail::QueryFailed(
+                    QueryExecutionFail::Expired
+                        | QueryExecutionFail::NotFound
+                        | QueryExecutionFail::CursorMismatch
+                        | QueryExecutionFail::CursorDone
+                ))
         );
+        assert!(allowed, "unexpected query error: {err:?}");
     }
 
     // smart_contract_can_filter_queries

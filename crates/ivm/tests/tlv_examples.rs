@@ -17,9 +17,9 @@ fn make_tlv(type_id: u16, version: u8, payload: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&type_id.to_be_bytes());
     out.push(version);
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(payload);
+    out.extend_from_slice(&payload);
     // Iroha Hash (blake2b-32 with LSB set)
-    let h: [u8; 32] = Hash::new(payload).into();
+    let h: [u8; 32] = Hash::new(&payload).into();
     out.extend_from_slice(&h);
     out
 }
@@ -63,7 +63,7 @@ fn tlv_account_id_structure() {
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
         .unwrap();
-    let exp_hash: [u8; 32] = Hash::new(payload).into();
+    let exp_hash: [u8; 32] = Hash::new(&payload).into();
     assert_eq!(got_hash, exp_hash);
 
     // Preload into INPUT and read back a slice
@@ -87,7 +87,7 @@ fn tlv_assetdef_structure() {
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
         .unwrap();
-    let exp_hash: [u8; 32] = Hash::new(payload).into();
+    let exp_hash: [u8; 32] = Hash::new(&payload).into();
     assert_eq!(got_hash, exp_hash);
 }
 
@@ -103,7 +103,7 @@ fn tlv_name_structure() {
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
         .unwrap();
-    let exp_hash: [u8; 32] = Hash::new(payload).into();
+    let exp_hash: [u8; 32] = Hash::new(&payload).into();
     assert_eq!(got_hash, exp_hash);
 }
 
@@ -119,7 +119,7 @@ fn tlv_json_structure() {
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
         .unwrap();
-    let exp_hash: [u8; 32] = Hash::new(payload).into();
+    let exp_hash: [u8; 32] = Hash::new(&payload).into();
     assert_eq!(got_hash, exp_hash);
 }
 
@@ -135,7 +135,7 @@ fn tlv_nftid_structure() {
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
         .unwrap();
-    let exp_hash: [u8; 32] = Hash::new(payload).into();
+    let exp_hash: [u8; 32] = Hash::new(&payload).into();
     assert_eq!(got_hash, exp_hash);
 }
 

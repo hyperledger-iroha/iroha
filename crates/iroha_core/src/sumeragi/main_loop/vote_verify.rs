@@ -6,8 +6,8 @@ use std::{
     time::Instant,
 };
 
-use super::*;
 use super::votes::record_vote_drop_without_roster;
+use super::*;
 use iroha_crypto::Algorithm;
 
 const VOTE_VERIFY_BATCH_MAX: usize = 64;

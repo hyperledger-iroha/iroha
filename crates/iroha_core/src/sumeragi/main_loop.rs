@@ -1114,35 +1114,8 @@ fn normalize_signer_indices_to_canonical(
     normalized
 }
 
-fn compute_topology_rotation_offset(
-    base: &super::network_topology::Topology,
-    rotated: &super::network_topology::Topology,
-) -> Option<usize> {
-    if base.as_ref().is_empty() || rotated.as_ref().is_empty() {
-        return Some(0);
-    }
-    // Assumes rotated is a rotation of base.
-    // Find where rotated[0] is in base.
-    let leader = &rotated.as_ref()[0];
-    base.position(leader.public_key())
-}
-
-fn map_canonical_to_view_index(
-    canonical_idx: ValidatorIndex,
-    rotation_offset: usize,
-    topology_len: usize,
-) -> Option<ValidatorIndex> {
-    let c = usize::try_from(canonical_idx).ok()?;
-    if c >= topology_len {
-        return None;
-    }
-    // rotated left by offset.
-    // view_idx = (c + len - offset) % len
-    let v = (c + topology_len - rotation_offset) % topology_len;
-    ValidatorIndex::try_from(v).ok()
-}
-
-#[cfg(test)]
+/// Map a canonical roster index to the signer index in a view-specific topology.
+/// Uses peer identity lookup so PRF shuffles are handled correctly.
 fn view_index_for_canonical_signer(
     canonical_idx: ValidatorIndex,
     signature_topology: &super::network_topology::Topology,
@@ -1152,8 +1125,13 @@ fn view_index_for_canonical_signer(
     if roster_len == 0 {
         return None;
     }
-    let offset = compute_topology_rotation_offset(canonical_topology, signature_topology)?;
-    map_canonical_to_view_index(canonical_idx, offset, roster_len)
+    let idx = usize::try_from(canonical_idx).ok()?;
+    if idx >= roster_len {
+        return None;
+    }
+    let peer = canonical_topology.as_ref().get(idx)?;
+    let view_idx = signature_topology.as_ref().iter().position(|p| p == peer)?;
+    ValidatorIndex::try_from(view_idx).ok()
 }
 
 fn normalize_signer_indices_to_view(
@@ -1168,13 +1146,11 @@ fn normalize_signer_indices_to_view(
     if roster_len == 0 {
         return BTreeSet::new();
     }
-    let offset = match compute_topology_rotation_offset(canonical_topology, signature_topology) {
-        Some(offset) => offset,
-        None => return BTreeSet::new(),
-    };
     let mut normalized = BTreeSet::new();
     for signer in signers {
-        if let Some(view_idx) = map_canonical_to_view_index(*signer, offset, roster_len) {
+        if let Some(view_idx) =
+            view_index_for_canonical_signer(*signer, signature_topology, canonical_topology)
+        {
             normalized.insert(view_idx);
         }
     }
@@ -1666,8 +1642,11 @@ pub(crate) fn validate_block_sync_qc(
     prf_seed: Option<[u8; 32]>,
     aggregate_ok: Option<bool>,
 ) -> Result<(BTreeSet<crate::sumeragi::consensus::ValidatorIndex>, usize), QcValidationError> {
-    let signature_topology = topology_for_view(topology, qc.height, qc.view, mode_tag, prf_seed);
-    let roster_len = topology.as_ref().len();
+    let canonical_roster = roster::canonicalize_roster(topology.as_ref().to_vec());
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
+    let signature_topology =
+        topology_for_view(&canonical_topology, qc.height, qc.view, mode_tag, prf_seed);
+    let roster_len = canonical_topology.as_ref().len();
     let required = signature_topology.min_votes_for_commit().max(1);
     let voting_len = roster_len;
     if qc.mode_tag != mode_tag {
@@ -1679,15 +1658,23 @@ pub(crate) fn validate_block_sync_qc(
             actual: qc.view,
         });
     }
-    if !qc_validator_set_matches_topology(qc, topology) {
+    if !qc_validator_set_matches_topology(qc, &canonical_topology) {
         return Err(QcValidationError::ValidatorSetMismatch);
     }
     let parsed_signers = qc_signer_indices(qc, roster_len, voting_len)?;
     // Normalize block signer indices to canonical topology so view rotations align with QC bitmaps.
-    let block_signature_topology =
-        topology_for_view(topology, qc.height, block_view, mode_tag, prf_seed);
-    let block_signers_canonical =
-        normalize_signer_indices_to_canonical(block_signers, &block_signature_topology, topology);
+    let block_signature_topology = topology_for_view(
+        &canonical_topology,
+        qc.height,
+        block_view,
+        mode_tag,
+        prf_seed,
+    );
+    let block_signers_canonical = normalize_signer_indices_to_canonical(
+        block_signers,
+        &block_signature_topology,
+        &canonical_topology,
+    );
     if block_signers_canonical.len() >= parsed_signers.voting.len() {
         if let Some(missing) = parsed_signers
             .voting
@@ -1700,7 +1687,7 @@ pub(crate) fn validate_block_sync_qc(
     let resolved_snapshot = match consensus_mode {
         ConsensusMode::Permissioned => None,
         ConsensusMode::Npos => {
-            resolve_stake_snapshot_for_roster(stake_snapshot, world, topology.as_ref())
+            resolve_stake_snapshot_for_roster(stake_snapshot, world, canonical_topology.as_ref())
         }
     };
     match consensus_mode {
@@ -1716,8 +1703,13 @@ pub(crate) fn validate_block_sync_qc(
             let snapshot = resolved_snapshot
                 .as_ref()
                 .ok_or(QcValidationError::StakeSnapshotUnavailable)?;
-            let signer_peers = signer_peers_for_topology(&parsed_signers.voting, topology)?;
-            match stake_quorum_reached_for_snapshot(snapshot, topology.as_ref(), &signer_peers) {
+            let signer_peers =
+                signer_peers_for_topology(&parsed_signers.voting, &canonical_topology)?;
+            match stake_quorum_reached_for_snapshot(
+                snapshot,
+                canonical_topology.as_ref(),
+                &signer_peers,
+            ) {
                 Ok(true) => {}
                 Ok(false) => return Err(QcValidationError::StakeQuorumMissing),
                 Err(_) => return Err(QcValidationError::StakeSnapshotUnavailable),
@@ -1726,7 +1718,7 @@ pub(crate) fn validate_block_sync_qc(
     }
     let aggregate_ok = match aggregate_ok {
         Some(value) => value,
-        None => qc_aggregate_consistent(qc, topology, pops, chain_id, mode_tag),
+        None => qc_aggregate_consistent(qc, &canonical_topology, pops, chain_id, mode_tag),
     };
     if !aggregate_ok {
         return Err(QcValidationError::AggregateMismatch);
@@ -1988,8 +1980,11 @@ fn validate_qc_against_votes(
     prf_seed: Option<[u8; 32]>,
     aggregate_ok: Option<bool>,
 ) -> Result<QcValidationOutcome, QcValidationError> {
-    let signature_topology = topology_for_view(topology, qc.height, qc.view, mode_tag, prf_seed);
-    let roster_len = topology.as_ref().len();
+    let canonical_roster = roster::canonicalize_roster(topology.as_ref().to_vec());
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
+    let signature_topology =
+        topology_for_view(&canonical_topology, qc.height, qc.view, mode_tag, prf_seed);
+    let roster_len = canonical_topology.as_ref().len();
     let required = signature_topology.min_votes_for_commit();
     let voting_len = roster_len;
     let qc_highest = if qc.phase == crate::sumeragi::consensus::Phase::NewView {
@@ -2000,7 +1995,7 @@ fn validate_qc_against_votes(
     if qc.mode_tag != mode_tag {
         return Err(QcValidationError::ModeTagMismatch);
     }
-    if !qc_validator_set_matches_topology(qc, topology) {
+    if !qc_validator_set_matches_topology(qc, &canonical_topology) {
         return Err(QcValidationError::ValidatorSetMismatch);
     }
     let parsed_signers = qc_signer_indices(qc, roster_len, voting_len)?;
@@ -2014,13 +2009,21 @@ fn validate_qc_against_votes(
             }
         }
         ConsensusMode::Npos => {
-            let resolved_snapshot =
-                resolve_stake_snapshot_for_roster(stake_snapshot, world, topology.as_ref());
+            let resolved_snapshot = resolve_stake_snapshot_for_roster(
+                stake_snapshot,
+                world,
+                canonical_topology.as_ref(),
+            );
             let snapshot = resolved_snapshot
                 .as_ref()
                 .ok_or(QcValidationError::StakeSnapshotUnavailable)?;
-            let signer_peers = signer_peers_for_topology(&parsed_signers.voting, topology)?;
-            match stake_quorum_reached_for_snapshot(snapshot, topology.as_ref(), &signer_peers) {
+            let signer_peers =
+                signer_peers_for_topology(&parsed_signers.voting, &canonical_topology)?;
+            match stake_quorum_reached_for_snapshot(
+                snapshot,
+                canonical_topology.as_ref(),
+                &signer_peers,
+            ) {
                 Ok(true) => {}
                 Ok(false) => return Err(QcValidationError::StakeQuorumMissing),
                 Err(_) => return Err(QcValidationError::StakeSnapshotUnavailable),
@@ -2030,17 +2033,16 @@ fn validate_qc_against_votes(
 
     let aggregate_ok = match aggregate_ok {
         Some(value) => value,
-        None => qc_aggregate_consistent(qc, topology, pops, chain_id, mode_tag),
+        None => qc_aggregate_consistent(qc, &canonical_topology, pops, chain_id, mode_tag),
     };
     if !aggregate_ok {
         return Err(QcValidationError::AggregateMismatch);
     }
     let mut missing = 0usize;
-    let rotation_offset =
-        compute_topology_rotation_offset(topology, &signature_topology).unwrap_or(0);
 
     for signer in &parsed_signers.voting {
-        let Some(view_signer) = map_canonical_to_view_index(*signer, rotation_offset, roster_len)
+        let Some(view_signer) =
+            view_index_for_canonical_signer(*signer, &signature_topology, &canonical_topology)
         else {
             let signer = usize::try_from(*signer).unwrap_or(usize::MAX);
             return Err(QcValidationError::SignerOutOfBounds {
@@ -2116,11 +2118,14 @@ fn fallback_qc_tally_from_bitmap(
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
 ) -> Option<QcSignerTally> {
-    let _signature_topology = topology_for_view(topology, qc.height, qc.view, mode_tag, prf_seed);
-    if !qc_aggregate_consistent(qc, topology, pops, chain_id, mode_tag) {
+    let canonical_roster = roster::canonicalize_roster(topology.as_ref().to_vec());
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
+    let _signature_topology =
+        topology_for_view(&canonical_topology, qc.height, qc.view, mode_tag, prf_seed);
+    if !qc_aggregate_consistent(qc, &canonical_topology, pops, chain_id, mode_tag) {
         return None;
     }
-    let roster_len = topology.as_ref().len();
+    let roster_len = canonical_topology.as_ref().len();
     let parsed_signers = qc_signer_indices(qc, roster_len, roster_len).ok()?;
     Some(QcSignerTally {
         voting_signers: parsed_signers.voting.into_iter().collect(),
@@ -6215,29 +6220,19 @@ fn select_block_sync_roster(
 
     if allow_uncertified {
         let view = state.view();
-        let mut roster = derive_active_topology_for_mode(&view, trusted, me, consensus_mode);
+        let roster = derive_active_topology_for_mode(&view, trusted, me, consensus_mode);
         let source = if view.commit_topology().is_empty() {
             BlockSyncRosterSource::TrustedPeersFallback
         } else {
             BlockSyncRosterSource::CommitTopologySnapshot
         };
-        let mut stake_snapshot = match consensus_mode {
+        let stake_snapshot = match consensus_mode {
             ConsensusMode::Npos => roster_cache.stake_snapshot_for_roster(&roster),
             ConsensusMode::Permissioned => None,
         };
         drop(view);
 
         if !roster.is_empty() {
-            if !trusted.pops.is_empty() {
-                roster.retain(|peer| trusted.pops.contains_key(peer.public_key()));
-                stake_snapshot = match consensus_mode {
-                    ConsensusMode::Npos => roster_cache.stake_snapshot_for_roster(&roster),
-                    ConsensusMode::Permissioned => None,
-                };
-            }
-            if roster.is_empty() {
-                return None;
-            }
             return Some(BlockSyncRosterSelection {
                 roster,
                 source,
@@ -6284,6 +6279,16 @@ enum TopologyRefreshDecision {
     AdvertiseForStrays { stray_count: usize },
 }
 
+fn topology_update_for_local_removal(
+    last_advertised: &BTreeSet<PeerId>,
+) -> Option<BTreeSet<PeerId>> {
+    if last_advertised.is_empty() {
+        None
+    } else {
+        Some(BTreeSet::new())
+    }
+}
+
 fn topology_refresh_decision(
     current: &BTreeSet<PeerId>,
     last_advertised: &BTreeSet<PeerId>,
@@ -6303,6 +6308,20 @@ fn topology_refresh_decision(
     } else {
         TopologyRefreshDecision::AdvertiseChanged
     }
+}
+
+fn topology_advertisement_for_refresh(
+    current: &BTreeSet<PeerId>,
+    last_advertised: &BTreeSet<PeerId>,
+    online_outside_topology: &[PeerId],
+) -> (TopologyRefreshDecision, Option<BTreeSet<PeerId>>) {
+    let decision = topology_refresh_decision(current, last_advertised, online_outside_topology);
+    let advertise = match decision {
+        TopologyRefreshDecision::NoPeers | TopologyRefreshDecision::Unchanged => None,
+        TopologyRefreshDecision::AdvertiseChanged
+        | TopologyRefreshDecision::AdvertiseForStrays { .. } => Some(current.clone()),
+    };
+    (decision, advertise)
 }
 
 struct MessageTimingGuard {

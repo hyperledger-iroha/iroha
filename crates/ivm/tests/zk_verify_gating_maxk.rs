@@ -50,8 +50,8 @@ fn make_tlv(payload: &[u8]) -> Vec<u8> {
     tlv.extend_from_slice(&u16::to_be_bytes(ivm::PointerType::NoritoBytes as u16));
     tlv.push(1u8);
     tlv.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    tlv.extend_from_slice(payload);
-    let h: [u8; 32] = iroha_crypto::Hash::new(payload).into();
+    tlv.extend_from_slice(&payload);
+    let h: [u8; 32] = iroha_crypto::Hash::new(&payload).into();
     tlv.extend_from_slice(&h);
     tlv
 }

@@ -1852,7 +1852,7 @@ impl MaybeTelemetry {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
-            let mut world = World::default();
+            let world = World::default();
             let mut world_block = world.block();
             let peers = world_block.peers_mut_for_testing().get_mut();
             let _ = peers.push(local_peer_id.clone());

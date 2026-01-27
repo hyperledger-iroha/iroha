@@ -31,9 +31,12 @@ fn build_torii(push: actual::Push) -> (Torii, axum::Router) {
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let mut world = World::default();
-    world.peers.mutate_vec(|peers| {
+    {
+        let mut world_block = world.block();
+        let peers = world_block.peers_mut_for_testing().get_mut();
         let _ = peers.push(local_peer_id.clone());
-    });
+        world_block.commit();
+    }
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(4).0;

@@ -125,8 +125,8 @@ fn pointer_validate_rejects_unknown_type() {
     tlv.extend_from_slice(&0xFFFFu16.to_be_bytes());
     tlv.push(1);
     tlv.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    tlv.extend_from_slice(payload);
-    let hash: [u8; 32] = IrohaHash::new(payload).into();
+    tlv.extend_from_slice(&payload);
+    let hash: [u8; 32] = IrohaHash::new(&payload).into();
     tlv.extend_from_slice(&hash);
 
     let err = pointer_abi::validate_tlv_bytes(&tlv).expect_err("unknown type must fail");
