@@ -14,6 +14,7 @@ pub(super) struct VoteVerifyWork {
     pub(super) key: VoteVerifyKey,
     pub(super) vote: crate::sumeragi::consensus::Vote,
     pub(super) signature_topology: super::network_topology::Topology,
+    pub(super) pops: BTreeMap<PublicKey, Vec<u8>>,
     pub(super) chain_id: ChainId,
     pub(super) mode_tag: &'static str,
 }
@@ -39,7 +40,7 @@ struct PreparedVote {
     preimage: Vec<u8>,
     algorithm: Algorithm,
     public_key: PublicKey,
-    public_key_bytes: Vec<u8>,
+    pop: Option<Vec<u8>>,
 }
 
 /// Spawn vote signature verification workers.
@@ -125,16 +126,14 @@ pub(super) fn spawn_vote_verify_workers(
                         let preimage =
                             super::vote_preimage(&work.chain_id, work.mode_tag, &work.vote);
                         let public_key = peer.public_key().clone();
-                        let (algorithm, public_key_bytes) = {
-                            let (algorithm, payload) = public_key.to_bytes();
-                            (algorithm, payload.to_vec())
-                        };
+                        let algorithm = public_key.algorithm();
+                        let pop = work.pops.get(&public_key).cloned();
                         prepared.push(Some(PreparedVote {
                             work,
                             preimage,
                             algorithm,
                             public_key,
-                            public_key_bytes,
+                            pop,
                         }));
                     }
 
@@ -202,37 +201,43 @@ pub(super) fn spawn_vote_verify_workers(
                                     .as_slice()
                             })
                             .collect();
-                        let public_keys: Vec<&[u8]> = indices
-                            .iter()
-                            .map(|idx| {
-                                prepared[*idx]
-                                    .as_ref()
-                                    .expect("prepared vote")
-                                    .public_key_bytes
-                                    .as_slice()
-                            })
-                            .collect();
-                        let messages: Vec<&[u8]> = vec![preimage.as_slice(); indices.len()];
-                        let verify_result = match algorithm {
-                            Algorithm::BlsNormal => {
-                                iroha_crypto::bls_normal_verify_batch_deterministic(
-                                    &messages,
-                                    &signatures,
-                                    &public_keys,
-                                    [0u8; 32],
-                                )
+                        let mut public_keys: Vec<&PublicKey> = Vec::with_capacity(indices.len());
+                        let mut pops: Vec<&[u8]> = Vec::with_capacity(indices.len());
+                        let mut missing_pop = false;
+                        for idx in &indices {
+                            let prepared_vote = prepared[*idx].as_ref().expect("prepared vote");
+                            let Some(pop) = prepared_vote.pop.as_ref() else {
+                                missing_pop = true;
+                                break;
+                            };
+                            public_keys.push(&prepared_vote.public_key);
+                            pops.push(pop.as_slice());
+                        }
+                        let use_batch = if missing_pop {
+                            false
+                        } else {
+                            match algorithm {
+                                Algorithm::BlsNormal => {
+                                    iroha_crypto::bls_normal_verify_aggregate_same_message(
+                                        &preimage,
+                                        &signatures,
+                                        &public_keys,
+                                        &pops,
+                                    )
+                                    .is_ok()
+                                }
+                                Algorithm::BlsSmall => {
+                                    iroha_crypto::bls_small_verify_aggregate_same_message(
+                                        &preimage,
+                                        &signatures,
+                                        &public_keys,
+                                        &pops,
+                                    )
+                                    .is_ok()
+                                }
+                                _ => false,
                             }
-                            Algorithm::BlsSmall => {
-                                iroha_crypto::bls_small_verify_batch_deterministic(
-                                    &messages,
-                                    &signatures,
-                                    &public_keys,
-                                    [0u8; 32],
-                                )
-                            }
-                            _ => Err(iroha_crypto::Error::BadSignature),
                         };
-                        let use_batch = verify_result.is_ok();
 
                         for idx in indices {
                             let prepared_vote = prepared[idx].as_ref().expect("prepared vote");

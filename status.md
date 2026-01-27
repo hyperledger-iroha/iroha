@@ -7,6 +7,11 @@ Last update: 2026-01-27
 
 - Izanami run (tps=1, 300s, 4 peers) after vote-verify batching: stopped before target blocks; lane_000_core blocks.hashes=49–50 across peers (1568–1600 bytes), network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_VZnTAY`. Worker slow-line parsing across peers: `vote_drain_ms` mean 432–490ms (p95 2182–2344ms, max 3638–4500ms); `block_payload_drain_ms` mean 75–104ms (p95 267–422ms, max 622–1872ms), so vote drain still dominates. Duplicate metric registration warnings still present.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config). Izanami command: `RUST_LOG=izanami::summary=info,izanami::workload=warn,iroha_core::sumeragi::main_loop=debug,iroha_core::sumeragi=info,iroha_p2p=info IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo run -p izanami --release --locked -- --allow-net --nexus --peers 4 --faulty 0 --duration 300s --target-blocks 200 --progress-interval 10s --progress-timeout 180s --tps 1 --max-inflight 8 --workload-profile stable` (stopped before target blocks reached).
+- Sumeragi evidence test: align subject-height permissioned vote signing with the rotated roster so evidence validation uses the correct mode tag after a runtime flip.
+- Tests: `cargo test -p iroha_core sumeragi::main_loop::tests::handle_evidence_uses_subject_height_mode_tag -- --nocapture` (ok; command timed out after filtered binaries continued running).
+
+- Sumeragi DA idle view-change test: derive the permissioned leader for the next height from the chain-id PRF seed and shuffled topology so the leader shutdown always forces a view change; avoids relying on `/v1/sumeragi/leader` during startup.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config). `cargo test -p integration_tests sumeragi_idle_view_change_recovers_after_leader_shutdown -- --nocapture` (ok).
 
 - Sumeragi missing-block retry: use local commit-roster snapshots or the active topology to avoid roster-validation stalls on the main loop; BlockSyncUpdate for known blocks now prefers the local snapshot and drops mismatching QC/checkpoint/stake hints before heavy validation; added `retry_missing_block_requests_uses_commit_roster_snapshot_without_validation` coverage.
 - Tests: not run (not requested).

@@ -412,11 +412,18 @@ impl Actor {
             return true;
         }
         let id = self.subsystems.vote_verify.next_id();
+        let mut pops = BTreeMap::new();
+        for peer in context.signature_topology.as_ref() {
+            if let Some(pop) = self.roster_validation_cache.pops.get(peer.public_key()) {
+                pops.insert(peer.public_key().clone(), pop.clone());
+            }
+        }
         let mut work = super::vote_verify::VoteVerifyWork {
             id,
             key: key.clone(),
             vote: vote.clone(),
             signature_topology: context.signature_topology.clone(),
+            pops,
             chain_id: self.common_config.chain.clone(),
             mode_tag: context.mode_tag,
         };
