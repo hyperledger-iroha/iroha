@@ -1288,10 +1288,7 @@ mod tests {
     fn topology_update_adds_new_trusted_peers() {
         let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::from(key_pair.public_key().clone());
-        let local_peer = Peer::new(
-            "127.0.0.1:9100".parse().expect("addr"),
-            peer_id.clone(),
-        );
+        let local_peer = Peer::new("127.0.0.1:9100".parse().expect("addr"), peer_id.clone());
 
         let observer_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let observer_peer = Peer::new(
@@ -1299,8 +1296,9 @@ mod tests {
             observer_kp.public_key().clone(),
         );
 
-        let trusted_set: BTreeSet<_> =
-            [peer_id.clone(), observer_peer.id().clone()].into_iter().collect();
+        let trusted_set: BTreeSet<_> = [peer_id.clone(), observer_peer.id().clone()]
+            .into_iter()
+            .collect();
         let trust_candidates = trusted_set.clone();
         let current_topology = trusted_set.clone();
         let initial_peers =

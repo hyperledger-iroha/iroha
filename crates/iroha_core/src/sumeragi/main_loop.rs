@@ -123,6 +123,7 @@ mod reschedule;
 static WARNED_IGNORED_CONFIG_OVERRIDES: AtomicBool = AtomicBool::new(false);
 mod roster;
 mod validation;
+mod vote_verify;
 mod votes;
 mod vrf;
 
@@ -593,6 +594,43 @@ impl QcVerifyKey {
             block_hash: qc.subject_block_hash.clone(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct VoteVerifyKey {
+    phase: crate::sumeragi::consensus::Phase,
+    height: u64,
+    view: u64,
+    epoch: u64,
+    signer: crate::sumeragi::consensus::ValidatorIndex,
+    block_hash: HashOf<BlockHeader>,
+    parent_state_root: Hash,
+    post_state_root: Hash,
+}
+
+impl VoteVerifyKey {
+    fn from_vote(vote: &crate::sumeragi::consensus::Vote) -> Self {
+        Self {
+            phase: vote.phase,
+            height: vote.height,
+            view: vote.view,
+            epoch: vote.epoch,
+            signer: vote.signer,
+            block_hash: vote.block_hash,
+            parent_state_root: vote.parent_state_root,
+            post_state_root: vote.post_state_root,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct VoteProcessingContext {
+    topology: super::network_topology::Topology,
+    signature_topology: super::network_topology::Topology,
+    consensus_mode: ConsensusMode,
+    mode_tag: &'static str,
+    prf_seed: Option<[u8; 32]>,
+    stale_view: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4232,6 +4270,7 @@ struct DeferredBlockSyncUpdate {
 struct ActorSubsystems {
     validation: ValidationState,
     qc_verify: QcVerifyState,
+    vote_verify: VoteVerifyState,
     commit: CommitState,
     propose: ProposeState,
     da_rbc: DaRbcState,
@@ -4733,6 +4772,38 @@ impl QcVerifyState {
     }
 }
 
+struct VoteVerifyInFlight {
+    id: u64,
+    vote: crate::sumeragi::consensus::Vote,
+    context: VoteProcessingContext,
+}
+
+struct VoteVerifyState {
+    work_txs: Vec<mpsc::SyncSender<vote_verify::VoteVerifyWork>>,
+    result_rx: Option<mpsc::Receiver<vote_verify::VoteVerifyResult>>,
+    inflight: BTreeMap<VoteVerifyKey, VoteVerifyInFlight>,
+    next_id: u64,
+    next_worker: usize,
+}
+
+impl VoteVerifyState {
+    fn new() -> Self {
+        Self {
+            work_txs: Vec::new(),
+            result_rx: None,
+            inflight: BTreeMap::new(),
+            next_id: 0,
+            next_worker: 0,
+        }
+    }
+
+    fn next_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        id
+    }
+}
+
 struct ProposeState {
     backpressure_gate: BackpressureGate,
     pacemaker: Pacemaker,
@@ -4807,6 +4878,18 @@ impl Actor {
         );
         self.subsystems.qc_verify.work_txs = handle.work_txs;
         self.subsystems.qc_verify.result_rx = Some(handle.result_rx);
+        handle.join_handles
+    }
+
+    pub(super) fn attach_vote_verify_worker(&mut self) -> Vec<std::thread::JoinHandle<()>> {
+        let handle = vote_verify::spawn_vote_verify_workers(
+            self.wake_tx.clone(),
+            self.config.worker.validation_worker_threads,
+            self.config.worker.validation_work_queue_cap,
+            self.config.worker.validation_result_queue_cap,
+        );
+        self.subsystems.vote_verify.work_txs = handle.work_txs;
+        self.subsystems.vote_verify.result_rx = Some(handle.result_rx);
         handle.join_handles
     }
 }
@@ -8066,6 +8149,7 @@ impl Actor {
         let subsystems = ActorSubsystems {
             validation: ValidationState::new(),
             qc_verify: QcVerifyState::new(),
+            vote_verify: VoteVerifyState::new(),
             commit: CommitState::new(),
             propose: propose_state,
             da_rbc: DaRbcState {

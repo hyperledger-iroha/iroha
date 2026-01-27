@@ -652,9 +652,7 @@ impl Actor {
         if !proposal_roster.is_empty() {
             let mut topology = super::network_topology::Topology::new(proposal_roster);
             if let Ok(leader_index) = self.leader_index_for(&mut topology, height, view) {
-                super::status::set_leader_index(
-                    u64::try_from(leader_index).unwrap_or(u64::MAX),
-                );
+                super::status::set_leader_index(u64::try_from(leader_index).unwrap_or(u64::MAX));
             }
         }
         self.update_prf_context(height, view);

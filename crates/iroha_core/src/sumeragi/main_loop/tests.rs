@@ -3197,6 +3197,77 @@ async fn rbc_persist_worker_does_not_block_on_full_wake_channel() {
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn vote_verify_worker_records_vote_after_async_check() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let worker_joins = actor.attach_vote_verify_worker();
+
+    let height = 1;
+    let view = 0;
+    let topology_peers = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(topology_peers);
+    let chain_id = actor.chain_id.clone();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x66; Hash::LENGTH]));
+
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: crate::sumeragi::consensus::Phase::Commit,
+        block_hash,
+        parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+        post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+        height,
+        view,
+        epoch: 0,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view(&mut vote, &chain_id, &topology, &harness.key_pairs);
+
+    actor.handle_vote(vote.clone());
+
+    let verify_key = VoteVerifyKey::from_vote(&vote);
+    assert!(
+        actor
+            .subsystems
+            .vote_verify
+            .inflight
+            .contains_key(&verify_key),
+        "vote should be queued for async verification"
+    );
+
+    let vote_key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        actor.poll_vote_verify_results();
+        if actor.vote_log.contains_key(&vote_key) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for vote verify worker"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        !actor
+            .subsystems
+            .vote_verify
+            .inflight
+            .contains_key(&verify_key),
+        "vote should be removed from inflight once verified"
+    );
+
+    harness.shutdown.send();
+    drop(harness);
+    for join in worker_joins {
+        if let Err(err) = join.join() {
+            panic!("vote verify worker panicked: {err:?}");
+        }
+    }
+}
+
 #[cfg(feature = "telemetry")]
 #[tokio::test(flavor = "current_thread")]
 async fn rbc_persist_queue_full_increments_metric() {
@@ -32185,8 +32256,14 @@ async fn qc_signers_for_votes_revalidates_on_roster_hash_mismatch() {
         "vote validation cache should track validated votes"
     );
 
-    let signers =
-        actor.qc_signers_for_votes(Phase::Commit, block_hash, height, view, epoch, &signature_topology);
+    let signers = actor.qc_signers_for_votes(
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        &signature_topology,
+    );
     assert!(
         signers.contains(&vote.signer),
         "cached signers should include the validated vote"
@@ -40026,8 +40103,9 @@ async fn proposal_updates_leader_index_status() {
         "expected non-empty commit topology for leader selection"
     );
     let mut topology = super::network_topology::Topology::new(roster);
-    let expected_leader =
-        actor.leader_index_for(&mut topology, height, view).expect("leader index");
+    let expected_leader = actor
+        .leader_index_for(&mut topology, height, view)
+        .expect("leader index");
     let expected_u32 = u32::try_from(expected_leader).expect("leader index fits u32");
     proposal.header.proposer = expected_u32;
 

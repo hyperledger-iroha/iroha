@@ -9243,6 +9243,9 @@ trait WorkerActor {
     fn poll_qc_verify_results(&mut self) -> bool {
         false
     }
+    fn poll_vote_verify_results(&mut self) -> bool {
+        false
+    }
     fn poll_rbc_persist_results(&mut self) -> bool {
         false
     }
@@ -9282,6 +9285,10 @@ impl WorkerActor for crate::sumeragi::main_loop::Actor {
 
     fn poll_qc_verify_results(&mut self) -> bool {
         crate::sumeragi::main_loop::Actor::poll_qc_verify_results(self)
+    }
+
+    fn poll_vote_verify_results(&mut self) -> bool {
+        crate::sumeragi::main_loop::Actor::poll_vote_verify_results(self)
     }
 
     fn poll_rbc_persist_results(&mut self) -> bool {
@@ -9906,6 +9913,9 @@ fn run_worker_iteration<A: WorkerActor>(
     if actor.poll_qc_verify_results() {
         stats.progress = true;
     }
+    if actor.poll_vote_verify_results() {
+        stats.progress = true;
+    }
     if actor.poll_rbc_persist_results() {
         stats.progress = true;
     }
@@ -10376,6 +10386,7 @@ impl SumeragiWorker {
         let commit_worker_join = actor.attach_commit_worker();
         let validation_worker_joins = actor.attach_validation_worker();
         let qc_verify_worker_joins = actor.attach_qc_verify_worker();
+        let vote_verify_worker_joins = actor.attach_vote_verify_worker();
         let rbc_persist_worker_join: Option<std::thread::JoinHandle<()>> =
             actor.attach_rbc_persist_worker();
         let rbc_seed_worker_join: Option<std::thread::JoinHandle<()>> =
@@ -10457,6 +10468,11 @@ impl SumeragiWorker {
         for join in qc_verify_worker_joins {
             if let Err(err) = join.join() {
                 iroha_logger::warn!(?err, "sumeragi QC verify worker thread exited with error");
+            }
+        }
+        for join in vote_verify_worker_joins {
+            if let Err(err) = join.join() {
+                iroha_logger::warn!(?err, "sumeragi vote verify worker thread exited with error");
             }
         }
         if let Some(join) = rbc_persist_worker_join {
