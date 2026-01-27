@@ -2967,6 +2967,24 @@ mod tests {
         // Restore prior state to avoid leaking configuration between tests.
         flag.store(previous, Ordering::Relaxed);
     }
+
+    #[test]
+    fn metrics_default_registers_without_duplicate_metrics() {
+        struct DuplicateMetricsGuard(bool);
+
+        impl Drop for DuplicateMetricsGuard {
+            fn drop(&mut self) {
+                set_duplicate_metrics_panic(self.0);
+            }
+        }
+
+        let flag = duplicate_metrics_flag();
+        let previous = flag.load(Ordering::Relaxed);
+        set_duplicate_metrics_panic(true);
+        let _guard = DuplicateMetricsGuard(previous);
+
+        let _metrics = Metrics::default();
+    }
 }
 
 #[cfg(feature = "otel-exporter")]
@@ -13424,12 +13442,6 @@ impl Default for Metrics {
             sumeragi_commit_stage_ms,
             sumeragi_commit_pipeline_tick_total,
             sumeragi_prevote_timeout_total,
-            sumeragi_tx_queue_depth,
-            sumeragi_tx_queue_capacity,
-            sumeragi_tx_queue_saturated,
-            sumeragi_pending_blocks_total,
-            sumeragi_pending_blocks_blocking,
-            sumeragi_commit_inflight_queue_depth,
             sumeragi_rbc_backlog_chunks_total,
             sumeragi_rbc_backlog_chunks_max,
             sumeragi_rbc_backlog_sessions_pending,
