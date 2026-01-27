@@ -27160,6 +27160,95 @@ async fn retry_missing_block_requests_uses_active_roster_when_commit_topology_em
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn retry_missing_block_requests_uses_commit_roster_snapshot_without_validation() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let height = 12_u64;
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "test requires commit roster");
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    let mut signers = BTreeSet::new();
+    for idx in 0..topology.as_ref().len() {
+        if signers.len() >= required {
+            break;
+        }
+        signers.insert(
+            ValidatorIndex::try_from(u32::try_from(idx).expect("signer idx fits"))
+                .expect("signer idx fits"),
+        );
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD3; Hash::LENGTH]));
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        view,
+        block_hash,
+        qc.parent_state_root,
+        qc.post_state_root,
+        roster,
+        signers_bitmap,
+        qc.aggregate.bls_aggregate_signature.clone(),
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut journal = state.commit_roster_journal.write();
+        journal.upsert(qc, checkpoint, None);
+    }
+
+    actor.roster_validation_cache.pops.clear();
+
+    let retry_window = Duration::from_millis(10);
+    let now = Instant::now();
+    let last_requested = now - retry_window - Duration::from_millis(1);
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window,
+            view_change_window: Some(retry_window),
+            first_seen: last_requested,
+            last_requested,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+
+    let progress = actor.retry_missing_block_requests(now);
+    assert!(
+        progress,
+        "retry should proceed using local commit roster snapshot"
+    );
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("request entry retained");
+    assert!(stats.attempts > 0, "retry should record an attempt");
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn plan_missing_block_fetch_respects_backoff_window() {
     let mut requests = BTreeMap::new();
@@ -32038,6 +32127,98 @@ fn vote_signature_check_reports_out_of_range_error() {
             roster_len: 1
         })
     ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn qc_signers_for_votes_revalidates_on_roster_hash_mismatch() {
+    let mut harness = test_actor_harness(3).await;
+    let actor = &mut harness.actor;
+    let chain = actor.common_config.chain.clone();
+    let height = 1u64;
+    let view = 0u64;
+    let epoch = actor.epoch_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    assert_eq!(
+        consensus_mode,
+        ConsensusMode::Permissioned,
+        "test assumes permissioned consensus"
+    );
+
+    let roster: Vec<PeerId> = harness
+        .key_pairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect();
+    let topology = super::network_topology::Topology::new(roster);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; Hash::LENGTH]));
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view_with_seed(
+        &mut vote,
+        &chain,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
+
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+    let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
+    actor.vote_log.insert(key, vote.clone());
+    actor
+        .vote_validation_cache
+        .insert(key, super::VoteValidationCacheEntry { roster_hash });
+    assert!(
+        actor.vote_validation_cache.contains_key(&key),
+        "vote validation cache should track validated votes"
+    );
+
+    let signers =
+        actor.qc_signers_for_votes(Phase::Commit, block_hash, height, view, epoch, &signature_topology);
+    assert!(
+        signers.contains(&vote.signer),
+        "cached signers should include the validated vote"
+    );
+
+    let mismatched_roster = vec![PeerId::new(
+        KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            .public_key()
+            .clone(),
+    )];
+    let mismatched_topology = super::network_topology::Topology::new(mismatched_roster);
+    let mismatched_signature_topology =
+        super::topology_for_view(&mismatched_topology, height, view, mode_tag, prf_seed);
+    assert_ne!(
+        HashOf::new(&signature_topology.as_ref().to_vec()),
+        HashOf::new(&mismatched_signature_topology.as_ref().to_vec()),
+        "test setup must use mismatched roster hashes"
+    );
+    let mismatched_signers = actor.qc_signers_for_votes(
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        &mismatched_signature_topology,
+    );
+    assert!(
+        mismatched_signers.is_empty(),
+        "mismatched roster hash should force signature revalidation"
+    );
+
+    harness.shutdown.send();
 }
 
 #[test]

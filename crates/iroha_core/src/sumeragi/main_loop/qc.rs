@@ -185,6 +185,7 @@ impl Actor {
     ) -> BTreeSet<ValidatorIndex> {
         let chain_id = &self.common_config.chain;
         let (_, mode_tag, _) = self.consensus_context_for_height(height);
+        let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
         self.vote_log
             .values()
             .filter(|stored| {
@@ -194,7 +195,13 @@ impl Actor {
                     && stored.view == view
                     && stored.epoch == epoch
             })
-            .filter(|vote| vote_signature_valid(vote, signature_topology, chain_id, mode_tag))
+            .filter(|vote| {
+                let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+                self.vote_validation_cache
+                    .get(&key)
+                    .is_some_and(|entry| entry.roster_hash == roster_hash)
+                    || vote_signature_valid(vote, signature_topology, chain_id, mode_tag)
+            })
             .map(|vote| vote.signer)
             .collect()
     }
@@ -448,33 +455,27 @@ impl Actor {
                 }
             }
             if roster.is_none() {
+                if let Some(snapshot) = self
+                    .state
+                    .commit_roster_snapshot_for_block(stats_snapshot.height, block_hash)
+                {
+                    if !snapshot.commit_qc.validator_set.is_empty() {
+                        roster = Some(snapshot.commit_qc.validator_set.clone());
+                    }
+                }
+            }
+            if roster.is_none() {
                 let (consensus_mode, _, _) =
                     self.consensus_context_for_height(stats_snapshot.height);
-                let commit_topology = if matches!(
-                    stats_snapshot.phase,
-                    crate::sumeragi::consensus::Phase::NewView
-                ) {
-                    self.roster_for_new_view_with_mode(
-                        block_hash,
-                        stats_snapshot.height,
-                        stats_snapshot.view,
-                        consensus_mode,
-                    )
-                } else {
-                    self.roster_for_vote_with_mode(
-                        block_hash,
-                        stats_snapshot.height,
-                        stats_snapshot.view,
-                        consensus_mode,
-                    )
-                };
-                if commit_topology.is_empty() {
-                    let active = self.effective_commit_topology();
-                    if !active.is_empty() {
-                        roster = Some(active);
-                    }
-                } else {
-                    roster = Some(commit_topology);
+                let view = self.state.view();
+                let active = super::roster::derive_active_topology_for_mode(
+                    &view,
+                    self.common_config.trusted_peers.value(),
+                    self.common_config.peer.id(),
+                    consensus_mode,
+                );
+                if !active.is_empty() {
+                    roster = Some(active);
                 }
             }
             let topology = roster
@@ -1901,6 +1902,7 @@ impl Actor {
 
         for key in drop_keys {
             self.vote_log.remove(&key);
+            self.vote_validation_cache.remove(&key);
         }
         for (hash, _) in &drop_blocks {
             self.vote_roster_cache.remove(hash);

@@ -180,6 +180,7 @@ impl Actor {
         self.subsystems.propose.proposals_seen.clear();
         self.qc_cache.clear();
         self.vote_log.clear();
+        self.vote_validation_cache.clear();
         self.deferred_votes.clear();
         self.deferred_qcs.clear();
         self.vote_roster_cache.clear();
