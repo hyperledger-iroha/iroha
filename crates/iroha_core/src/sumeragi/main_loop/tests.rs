@@ -386,14 +386,21 @@ fn sign_vote_for_view(
     topology: &super::network_topology::Topology,
     keypairs: &[KeyPair],
 ) {
+    let prf_seed = Some(prf_seed_for_chain(chain));
     sign_vote_for_view_with_seed(
         vote,
         chain,
         topology,
         keypairs,
         super::PERMISSIONED_TAG,
-        None,
+        prf_seed,
     );
+}
+
+fn prf_seed_for_chain(chain: &ChainId) -> [u8; 32] {
+    let chain_id = chain.clone().into_inner();
+    let hash = Hash::new(chain_id.as_bytes());
+    <[u8; 32]>::from(hash)
 }
 
 fn sign_vote_for_view_with_seed(

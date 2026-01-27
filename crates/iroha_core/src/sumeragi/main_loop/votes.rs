@@ -106,7 +106,7 @@ impl Actor {
             return;
         }
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
-        let topology_peers = if matches!(vote.phase, Phase::NewView) {
+        let mut topology_peers = if matches!(vote.phase, Phase::NewView) {
             self.roster_for_new_view_with_mode(
                 vote.block_hash,
                 vote.height,
@@ -116,6 +116,42 @@ impl Actor {
         } else {
             self.roster_for_vote_with_mode(vote.block_hash, vote.height, vote.view, consensus_mode)
         };
+        if topology_peers.is_empty() && matches!(vote.phase, Phase::Commit) {
+            let allow_fallback = self.block_known_locally(vote.block_hash)
+                || self.runtime_da_enabled()
+                || self
+                    .pending
+                    .missing_block_requests
+                    .contains_key(&vote.block_hash);
+            if allow_fallback {
+                let committed_height =
+                    u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+                let committed_epoch = self.epoch_for_height(committed_height);
+                let epoch_matches = matches!(consensus_mode, ConsensusMode::Permissioned)
+                    || vote.epoch == committed_epoch;
+                if epoch_matches {
+                    let view = self.state.view();
+                    let fallback = super::roster::derive_active_topology_for_mode(
+                        &view,
+                        self.common_config.trusted_peers.value(),
+                        self.common_config.peer.id(),
+                        consensus_mode,
+                    );
+                    drop(view);
+                    if !fallback.is_empty() {
+                        topology_peers =
+                            super::roster::canonicalize_roster_for_mode(fallback, consensus_mode);
+                        debug!(
+                            height = vote.height,
+                            view = vote.view,
+                            signer = vote.signer,
+                            block_hash = %vote.block_hash,
+                            "using active topology fallback for precommit vote roster"
+                        );
+                    }
+                }
+            }
+        }
         if topology_peers.is_empty() {
             if matches!(vote.phase, Phase::Prepare | Phase::Commit) {
                 self.maybe_request_missing_block_for_unresolved_roster(&vote);
