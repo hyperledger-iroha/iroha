@@ -1,6 +1,9 @@
 # Status
 
-Last update: 2026-01-26
+Last update: 2026-01-27
+
+- Peers gossiper tests: fix `topology_update_adds_new_trusted_peers` initial peer map typing to match `BTreeMap<PeerId, SocketAddr>` expectations.
+- Tests: not run (compile fix only).
 
 - Izanami run (tps=1, 300s, 4 peers) after caching known-block block signers: stopped before target blocks; lane_000_core blocks.hashes=40 across peers (counted from 1280-byte hashes files), network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_kzkISp`. Worker slow-line parsing across peers: `block_payload_drain_ms` mean 86ms (p95 565ms, max 3652ms); `BlockSyncUpdate` handled elapsed mean 158ms (p95 642ms, max 3627ms); `vote_drain_ms` mean 608ms (p95 2397ms, max 8438ms), suggesting vote drain dominates over block-payload handling. Duplicate metric registration warnings still present.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config). Izanami command: `RUST_LOG=izanami::summary=info,izanami::workload=warn,iroha_core::sumeragi::main_loop=debug,iroha_core::sumeragi=info,iroha_p2p=info IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo run -p izanami --release --locked -- --allow-net --nexus --peers 4 --faulty 0 --duration 300s --target-blocks 200 --progress-interval 10s --progress-timeout 180s --tps 1 --max-inflight 8 --workload-profile stable` (stopped before target blocks reached).
@@ -10,6 +13,9 @@ Last update: 2026-01-26
 
 - Sumeragi vote intake: align permissioned test vote signing with PRF-seeded view topology and allow precommit vote validation to fall back to the active roster when the persisted roster is missing but DA/pending/missing-block context keeps stale votes valid.
 - Tests: `cargo test -p iroha_core handle_precommit_vote_ -- --nocapture` (ok). `cargo test -p iroha_core stale_view_accepts_precommit_vote_when_missing_block_requested -- --nocapture` (ok; command timed out after filtered binaries continued running).
+
+- Sumeragi/telemetry: update leader_index on proposal handling, seed trust for newly added topology peers, and remove duplicate queue/pending/commit metric registrations; added unit coverage for leader index, topology add, and duplicate-metric guard.
+- Tests: not run (not requested).
 
 - Sumeragi block sync: reuse cached QC tallies for known blocks only when the incoming QC hash matches the cached QC or roster certificate, avoiding redundant aggregate/signature validation while preventing hash-mismatch bypass; added `block_sync_update_known_block_revalidates_qc_on_hash_mismatch` coverage.
 - Tests: `cargo test -p iroha_core block_sync_update_known_block_revalidates_qc_on_hash_mismatch -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7407` and unused variables in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:46418`/`:49947` persist). `cargo fmt --all` (warns about nightly-only rustfmt options in config).
