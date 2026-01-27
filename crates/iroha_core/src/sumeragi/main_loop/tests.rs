@@ -32185,8 +32185,14 @@ async fn qc_signers_for_votes_revalidates_on_roster_hash_mismatch() {
         "vote validation cache should track validated votes"
     );
 
-    let signers =
-        actor.qc_signers_for_votes(Phase::Commit, block_hash, height, view, epoch, &signature_topology);
+    let signers = actor.qc_signers_for_votes(
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        &signature_topology,
+    );
     assert!(
         signers.contains(&vote.signer),
         "cached signers should include the validated vote"
@@ -35051,14 +35057,24 @@ async fn handle_evidence_uses_subject_height_mode_tag() {
         .expect("mode flip");
     assert_eq!(actor.consensus_mode, ConsensusMode::Npos);
 
-    let topology_peers = actor.effective_commit_topology();
-    let topology = super::network_topology::Topology::new(topology_peers.clone());
     let height = 1u64;
     let view = 0u64;
     let epoch = actor.epoch_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    assert_eq!(
+        mode_tag,
+        super::PERMISSIONED_TAG,
+        "subject height should resolve to permissioned tag"
+    );
+    let block_hash_a =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC1; Hash::LENGTH]));
+    let topology_peers =
+        actor.roster_for_vote_with_mode(block_hash_a, height, view, consensus_mode);
+    let topology = super::network_topology::Topology::new(topology_peers.clone());
+    let rotated = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     let signer_idx = 0usize;
     let signer = u32::try_from(signer_idx).expect("signer index fits u32");
-    let peer = topology
+    let peer = rotated
         .as_ref()
         .get(signer_idx)
         .expect("signer present in topology");
@@ -35068,8 +35084,6 @@ async fn handle_evidence_uses_subject_height_mode_tag() {
         .find(|kp| kp.public_key() == peer.public_key())
         .expect("matching keypair for signer");
 
-    let block_hash_a =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC1; Hash::LENGTH]));
     let block_hash_b =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC2; Hash::LENGTH]));
     let mut vote_a = crate::sumeragi::consensus::Vote {
@@ -35098,8 +35112,7 @@ async fn handle_evidence_uses_subject_height_mode_tag() {
     };
 
     for vote in [&mut vote_a, &mut vote_b] {
-        let preimage =
-            super::vote_preimage(&actor.common_config.chain, super::PERMISSIONED_TAG, vote);
+        let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, vote);
         let sig = Signature::new(keypair.private_key(), &preimage);
         vote.bls_sig = sig.payload().to_vec();
     }
@@ -40026,8 +40039,9 @@ async fn proposal_updates_leader_index_status() {
         "expected non-empty commit topology for leader selection"
     );
     let mut topology = super::network_topology::Topology::new(roster);
-    let expected_leader =
-        actor.leader_index_for(&mut topology, height, view).expect("leader index");
+    let expected_leader = actor
+        .leader_index_for(&mut topology, height, view)
+        .expect("leader index");
     let expected_u32 = u32::try_from(expected_leader).expect("leader index fits u32");
     proposal.header.proposer = expected_u32;
 
