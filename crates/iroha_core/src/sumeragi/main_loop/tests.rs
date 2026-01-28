@@ -48250,7 +48250,6 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
     use iroha_futures::supervisor::ShutdownSignal;
 
     let consensus_cfg = test_sumeragi_config();
-    let consensus_mode = consensus_cfg.consensus_mode;
     let shutdown = ShutdownSignal::new();
     let key_pair = KeyPair::random();
     let peer_id = PeerId::new(key_pair.public_key().clone());
@@ -51844,12 +51843,7 @@ async fn block_sync_update_accepts_stale_view_when_missing_block_requested() {
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
         super::topology_for_view(&topology, height, stale_view, mode_tag, prf_seed);
-    let leader_peer = signature_topology.as_ref().first().expect("leader present");
-    let leader_kp = harness
-        .key_pairs
-        .iter()
-        .find(|kp| kp.public_key() == leader_peer.public_key())
-        .expect("leader keypair");
+    let _leader_peer = signature_topology.as_ref().first().expect("leader present");
     let mut block = nonempty_block_for_actor(actor, &harness.key_pairs, height, stale_view, None);
     let required = signature_topology.min_votes_for_commit().max(1);
     let mut present = BTreeSet::new();
