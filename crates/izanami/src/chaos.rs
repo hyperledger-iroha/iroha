@@ -185,6 +185,10 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             .with_data_availability_enabled(profile.da_enabled)
             .with_config_table(profile.config_layer.clone());
     }
+    if config.nexus.is_some() {
+        let stake_amount = SumeragiNposParameters::default().min_self_bond();
+        builder = builder.with_npos_genesis_bootstrap(stake_amount);
+    }
     if let Ok(filter) = std::env::var("RUST_LOG") {
         let filter = filter.trim();
         if !filter.is_empty() {

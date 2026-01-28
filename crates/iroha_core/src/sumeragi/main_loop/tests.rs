@@ -29,7 +29,9 @@ use iroha_config::parameters::actual::{
     SumeragiNposReconfig, SumeragiNposTimeoutOverrides, SumeragiNposVrf, SumeragiPacemaker,
     SumeragiPersistence, SumeragiQueues, SumeragiRbc, SumeragiRecovery, SumeragiWorker,
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
+use iroha_crypto::{
+    Algorithm, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature, SignatureOf,
+};
 use iroha_data_model::{
     ChainId, Encode as _,
     asset::{AssetDefinitionId, AssetId},
@@ -50846,6 +50848,34 @@ fn detect_proposal_mismatch_returns_none_for_matching_block() {
     let block_bytes = block.encode();
     let payload_hash = Hash::new(&block_bytes);
     assert!(super::detect_proposal_mismatch(&proposal, &block.header(), &payload_hash).is_none());
+}
+
+#[test]
+fn detect_proposal_mismatch_ignores_default_state_root() {
+    let parent = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x24; 32]));
+    let block = sample_block(6, 3, Some(parent));
+    let payload_hash = Hash::new(&block.encode());
+    let qc = QcHeaderRef {
+        height: block.header().height().get().saturating_sub(1),
+        view: block.header().view_change_index(),
+        epoch: 0,
+        subject_block_hash: parent,
+        phase: crate::sumeragi::consensus::Phase::Prepare,
+    };
+    let proposal = Actor::build_consensus_proposal(
+        &block,
+        payload_hash,
+        qc,
+        0,
+        block.header().view_change_index(),
+        0,
+    );
+    let mut header = block.header();
+    let fake_root = HashOf::<MerkleTree<iroha_data_model::transaction::signed::TransactionResult>>::from_untyped_unchecked(
+        Hash::prehashed([0x33; 32]),
+    );
+    header.result_merkle_root = Some(fake_root);
+    assert!(super::detect_proposal_mismatch(&proposal, &header, &payload_hash).is_none());
 }
 
 #[test]
