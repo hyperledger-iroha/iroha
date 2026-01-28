@@ -34,6 +34,12 @@ pub(super) struct ValidationWorkerHandle {
     pub(super) join_handles: Vec<std::thread::JoinHandle<()>>,
 }
 
+#[derive(Copy, Clone, Debug)]
+enum ValidationDispatch {
+    TryWorker,
+    Inline,
+}
+
 pub(super) fn spawn_validation_workers(
     state: Arc<State>,
     chain_id: ChainId,
@@ -130,6 +136,32 @@ impl Actor {
         hash: HashOf<BlockHeader>,
         commit_topology: &[PeerId],
     ) -> ValidationGateOutcome {
+        self.validate_pending_block_for_voting_with_dispatch(
+            hash,
+            commit_topology,
+            ValidationDispatch::TryWorker,
+        )
+    }
+
+    /// Validate a pending block before voting, running validation inline.
+    pub(super) fn validate_pending_block_for_voting_inline(
+        &mut self,
+        hash: HashOf<BlockHeader>,
+        commit_topology: &[PeerId],
+    ) -> ValidationGateOutcome {
+        self.validate_pending_block_for_voting_with_dispatch(
+            hash,
+            commit_topology,
+            ValidationDispatch::Inline,
+        )
+    }
+
+    fn validate_pending_block_for_voting_with_dispatch(
+        &mut self,
+        hash: HashOf<BlockHeader>,
+        commit_topology: &[PeerId],
+        dispatch: ValidationDispatch,
+    ) -> ValidationGateOutcome {
         let pending = match self.pending.pending_blocks.remove(&hash) {
             Some(pending) => pending,
             None => return ValidationGateOutcome::Deferred,
@@ -166,7 +198,9 @@ impl Actor {
             return ValidationGateOutcome::Deferred;
         }
 
-        if !self.subsystems.validation.work_txs.is_empty() {
+        if matches!(dispatch, ValidationDispatch::TryWorker)
+            && !self.subsystems.validation.work_txs.is_empty()
+        {
             if self.subsystems.validation.inflight.contains_key(&hash) {
                 debug!(
                     height = pending.height,

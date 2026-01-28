@@ -11,7 +11,7 @@ use std::{
 
 use color_eyre::{Result, eyre::eyre};
 use futures::FutureExt;
-use iroha_config::parameters::actual::SumeragiNposTimeouts;
+use iroha_config::parameters::{actual::SumeragiNposTimeouts, defaults};
 use iroha_data_model::{
     parameter::SumeragiParameter, parameter::system::SumeragiNposParameters, prelude::*,
 };
@@ -113,6 +113,30 @@ fn split_pipeline_time(duration: Duration) -> (u64, u64) {
     (block_ms, commit_ms)
 }
 
+fn default_npos_timeout_sum_ms() -> u64 {
+    defaults::sumeragi::npos::TIMEOUT_PROPOSE_MS
+        .saturating_add(defaults::sumeragi::npos::TIMEOUT_PREVOTE_MS)
+        .saturating_add(defaults::sumeragi::npos::TIMEOUT_PRECOMMIT_MS)
+        .saturating_add(defaults::sumeragi::npos::TIMEOUT_EXEC_MS)
+        .saturating_add(defaults::sumeragi::npos::TIMEOUT_WITNESS_MS)
+        .saturating_add(defaults::sumeragi::npos::TIMEOUT_COMMIT_MS)
+        .saturating_add(defaults::sumeragi::npos::TIMEOUT_DA_MS)
+        .saturating_add(defaults::sumeragi::npos::TIMEOUT_AGG_MS)
+}
+
+fn scaled_timeout_block_ms(block_ms: u64) -> u64 {
+    let block_ms = clamp_nonzero_ms(block_ms);
+    let default_block_ms = defaults::sumeragi::npos::BLOCK_TIME_MS;
+    let default_sum_ms = default_npos_timeout_sum_ms();
+    if default_sum_ms == 0 || default_sum_ms <= default_block_ms {
+        return block_ms;
+    }
+    let numerator = u128::from(block_ms).saturating_mul(u128::from(default_block_ms));
+    let scaled = (numerator + u128::from(default_sum_ms) / 2) / u128::from(default_sum_ms);
+    let scaled = u64::try_from(scaled).unwrap_or(u64::MAX).max(1);
+    scaled.min(block_ms)
+}
+
 fn derive_npos_timing(config: &ChaosConfig) -> NposTiming {
     let (block_ms, commit_time_ms) = if let Some(duration) = config.pipeline_time {
         let (block_ms, commit_ms) = split_pipeline_time(duration);
@@ -126,7 +150,9 @@ fn derive_npos_timing(config: &ChaosConfig) -> NposTiming {
     };
     let block_ms = clamp_nonzero_ms(block_ms);
     let commit_time_ms = clamp_nonzero_ms(commit_time_ms);
-    let timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(block_ms));
+    // Align per-phase timeout budget with the target block time instead of the default sum.
+    let timeout_block_ms = scaled_timeout_block_ms(block_ms);
+    let timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(timeout_block_ms));
     let propose_ms = clamp_nonzero_ms(duration_ms(timeouts.propose));
     let prevote_ms = clamp_nonzero_ms(duration_ms(timeouts.prevote));
     let precommit_ms = clamp_nonzero_ms(duration_ms(timeouts.precommit));
@@ -1141,7 +1167,7 @@ mod tests {
     }
 
     #[test]
-    fn derive_npos_timing_uses_block_time_for_timeouts() {
+    fn derive_npos_timing_scales_timeouts_to_block_time() {
         let config = ChaosConfig {
             allow_net: false,
             peer_count: 4,
@@ -1162,9 +1188,11 @@ mod tests {
         };
 
         let timing = derive_npos_timing(&config);
+        let timeout_block_ms = scaled_timeout_block_ms(timing.block_ms);
         let expected =
-            SumeragiNposTimeouts::from_block_time(Duration::from_millis(timing.block_ms));
+            SumeragiNposTimeouts::from_block_time(Duration::from_millis(timeout_block_ms));
         assert_eq!(timing.commit_timeout_ms, duration_ms(expected.commit));
+        assert!(timeout_block_ms <= timing.block_ms);
         assert_ne!(timing.commit_timeout_ms, timing.commit_time_ms);
     }
 
