@@ -275,6 +275,7 @@ impl Actor {
                 block = %highest_qc.subject_block_hash,
                 "caching proposal hint without local highest QC block; awaiting sync"
             );
+            self.request_missing_block_for_highest_qc(highest_qc, "proposal_hint");
         }
         if let Some((local_height, local_view)) =
             self.local_block_height_view(highest_qc.subject_block_hash)

@@ -971,23 +971,11 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(super) fn observe_new_view_highest_qc(
+    pub(super) fn request_missing_block_for_highest_qc(
         &mut self,
         highest: crate::sumeragi::consensus::QcHeaderRef,
+        source: &'static str,
     ) {
-        let should_update = self.highest_qc.is_none_or(|current| {
-            let incoming = (highest.height, highest.view);
-            let existing = (current.height, current.view);
-            let promotes_phase = incoming == existing
-                && highest.phase == crate::sumeragi::consensus::Phase::Commit
-                && current.phase != crate::sumeragi::consensus::Phase::Commit;
-            incoming > existing || promotes_phase
-        });
-        if should_update {
-            self.highest_qc = Some(highest);
-            super::status::set_highest_qc(highest.height, highest.view);
-            super::status::set_highest_qc_hash(highest.subject_block_hash);
-        }
         if self.block_payload_available_for_progress(highest.subject_block_hash) {
             self.clear_missing_block_request(
                 &highest.subject_block_hash,
@@ -1076,11 +1064,23 @@ impl Actor {
             }
         }
         if roster.is_empty() {
+            let view = self.state.view();
+            let commit_topology = view.commit_topology().to_vec();
+            drop(view);
+            if !commit_topology.is_empty() {
+                roster =
+                    super::roster::canonicalize_roster_for_mode(commit_topology, consensus_mode);
+                signers.clear();
+                roster_source = "commit topology snapshot";
+            }
+        }
+        if roster.is_empty() {
             debug!(
                 height = highest.height,
                 view = highest.view,
                 block = %highest.subject_block_hash,
-                "skipping NEW_VIEW highest QC fetch: no roster available"
+                source,
+                "skipping highest QC fetch: no roster available"
             );
             return;
         }
@@ -1090,7 +1090,8 @@ impl Actor {
                 view = highest.view,
                 block = %highest.subject_block_hash,
                 roster_source,
-                "using fallback roster for NEW_VIEW highest QC fetch"
+                source,
+                "using fallback roster for highest QC fetch"
             );
         }
         let topology = super::network_topology::Topology::new(roster);
@@ -1146,7 +1147,8 @@ impl Actor {
                     target_kind = target_kind.label(),
                     retry_window_ms = retry_window.as_millis(),
                     dwell_ms,
-                    "requested missing block payload from NEW_VIEW highest QC"
+                    source,
+                    "requested missing block payload from highest QC"
                 );
             }
             MissingBlockFetchDecision::NoTargets => {
@@ -1157,7 +1159,8 @@ impl Actor {
                     retry_window_ms = retry_window.as_millis(),
                     dwell_ms,
                     targets = targets_len,
-                    "unable to request missing block payload from NEW_VIEW highest QC: no peers available"
+                    source,
+                    "unable to request missing block payload from highest QC: no peers available"
                 );
             }
             MissingBlockFetchDecision::Backoff => {
@@ -1168,10 +1171,32 @@ impl Actor {
                     retry_window_ms = retry_window.as_millis(),
                     dwell_ms,
                     targets = targets_len,
-                    "skipping missing-block fetch from NEW_VIEW highest QC during backoff"
+                    source,
+                    "skipping missing-block fetch from highest QC during backoff"
                 );
             }
         }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn observe_new_view_highest_qc(
+        &mut self,
+        highest: crate::sumeragi::consensus::QcHeaderRef,
+    ) {
+        let should_update = self.highest_qc.is_none_or(|current| {
+            let incoming = (highest.height, highest.view);
+            let existing = (current.height, current.view);
+            let promotes_phase = incoming == existing
+                && highest.phase == crate::sumeragi::consensus::Phase::Commit
+                && current.phase != crate::sumeragi::consensus::Phase::Commit;
+            incoming > existing || promotes_phase
+        });
+        if should_update {
+            self.highest_qc = Some(highest);
+            super::status::set_highest_qc(highest.height, highest.view);
+            super::status::set_highest_qc_hash(highest.subject_block_hash);
+        }
+        self.request_missing_block_for_highest_qc(highest, "new_view");
     }
 
     pub(super) fn drop_precommit_vote_for_lock(

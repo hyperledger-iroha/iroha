@@ -1202,7 +1202,7 @@ mod defaults {
             1
         }
         pub const fn redundant_send_r() -> u8 {
-            1
+            3
         }
         pub const fn da_enabled() -> bool {
             true
@@ -1252,7 +1252,7 @@ mod defaults {
                 3
             }
             pub const fn redundant_send_r() -> u8 {
-                2
+                3
             }
             pub const fn vrf_commit_window_blocks() -> u64 {
                 100

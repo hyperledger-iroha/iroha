@@ -620,7 +620,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             },
             collectors: A::SumeragiCollectors {
                 k: 1,
-                redundant_send_r: 1,
+                redundant_send_r: defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
             },
             block: A::SumeragiBlock {
                 max_transactions: defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,

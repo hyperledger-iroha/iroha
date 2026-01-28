@@ -975,7 +975,7 @@ fn minimal_config_snapshot() {
                 },
                 collectors: SumeragiCollectors {
                     k: 1,
-                    redundant_send_r: 1,
+                    redundant_send_r: 3,
                 },
                 block: SumeragiBlock {
                     max_transactions: None,

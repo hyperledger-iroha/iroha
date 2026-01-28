@@ -1018,7 +1018,7 @@ fn test_sumeragi_config() -> SumeragiConfig {
         },
         collectors: SumeragiCollectors {
             k: 1,
-            redundant_send_r: 1,
+            redundant_send_r: iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
         },
         block: SumeragiBlock {
             max_transactions: None,
@@ -7338,6 +7338,53 @@ async fn fetch_pending_block_uses_block_sync_update_when_roster_available() {
         found_created,
         "expected BlockCreated response for pending block"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_pending_block_highest_qc_bypasses_background_queue() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 2u64;
+    let view = 0u64;
+    let block = sample_block(height, view, None);
+    let block_hash = block.hash();
+    actor.kura.store_block(block.clone()).expect("store block");
+
+    actor.highest_qc = Some(QcHeaderRef {
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+        subject_block_hash: block_hash,
+        phase: Phase::Commit,
+    });
+    super::status::set_highest_qc(height, view);
+    super::status::set_highest_qc_hash(block_hash);
+
+    let request = super::message::FetchPendingBlock {
+        requester: actor.common_config.peer.id.clone(),
+        block_hash,
+        height,
+        view,
+        priority: None,
+    };
+    let _ = harness.background_rx.try_iter().count();
+    actor
+        .handle_fetch_pending_block(request)
+        .expect("fetch pending block");
+
+    assert!(
+        harness.background_rx.try_iter().next().is_none(),
+        "highest-QC fetch responses should bypass the background queue"
+    );
+
+    super::status::set_highest_qc(0, 0);
+    super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+        [0; Hash::LENGTH],
+    )));
 
     harness.shutdown.send();
 }
@@ -35138,6 +35185,88 @@ async fn new_view_highest_qc_fetch_uses_commit_topology_when_roster_missing() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn new_view_highest_qc_fetch_uses_commit_topology_snapshot_when_effective_empty() {
+    use iroha_data_model::consensus::ConsensusKeyStatus;
+
+    let _guard = super::status::qc_status_test_guard();
+    super::status::reset_commit_certs_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let commit_topology = actor.effective_commit_topology();
+    assert!(
+        !commit_topology.is_empty(),
+        "expected non-empty commit topology before disabling keys"
+    );
+
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        {
+            let mut block = state.world.block();
+            let key_ids: Vec<_> = block
+                .consensus_keys
+                .iter()
+                .map(|(id, _)| id.clone())
+                .collect();
+            for key_id in key_ids {
+                if let Some(mut record) = block.consensus_keys.get(&key_id).cloned() {
+                    record.status = ConsensusKeyStatus::Disabled;
+                    record.expiry_height = Some(0);
+                    block.consensus_keys.insert(key_id, record);
+                }
+            }
+            block.commit();
+        }
+        {
+            let mut block = state.commit_topology.block();
+            let mut tx = block.transaction();
+            *tx = commit_topology.clone();
+            tx.apply();
+            block.commit();
+        }
+    }
+
+    assert!(
+        actor.effective_commit_topology().is_empty(),
+        "effective commit topology should be empty after disabling consensus keys"
+    );
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(2);
+    let view = 0u64;
+    let missing_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x99; Hash::LENGTH]));
+
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let roster_for_vote =
+        actor.roster_for_vote_with_mode(missing_hash, height, view, consensus_mode);
+    assert!(
+        roster_for_vote.is_empty(),
+        "roster should be empty to exercise commit topology snapshot fallback"
+    );
+
+    let highest_qc = QcHeaderRef {
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+        subject_block_hash: missing_hash,
+        phase: Phase::Commit,
+    };
+    actor.observe_new_view_highest_qc(highest_qc);
+
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&missing_hash),
+        "missing-block fetch should be scheduled using commit topology snapshot"
+    );
+
+    super::status::reset_commit_certs_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn new_view_highest_qc_skips_missing_fetch_for_aborted_payload() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -37509,6 +37638,9 @@ async fn new_view_gossip_targets_excludes_sender_and_local() {
 async fn new_view_votes_target_topology_when_collectors_below_quorum() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let background_log: Arc<Mutex<Vec<super::BackgroundRequestLogEntry>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    actor.background_request_log = Some(Arc::clone(&background_log));
 
     seed_genesis_block_for_state(&actor.state);
     while harness.background_rx.try_recv().is_ok() {}
@@ -37528,14 +37660,20 @@ async fn new_view_votes_target_topology_when_collectors_below_quorum() {
         "new view vote should be emitted"
     );
 
-    let mut targets = Vec::new();
-    while let Ok(post) = harness.background_rx.try_recv() {
-        if let BackgroundPost::Post { peer, msg, .. } = post
-            && matches!(msg, BlockMessage::QcVote(_))
-        {
-            targets.push(peer);
-        }
-    }
+    let targets: Vec<_> = background_log
+        .lock()
+        .expect("background request log mutex poisoned")
+        .iter()
+        .filter_map(|entry| {
+            if entry.kind == super::BackgroundRequestLogKind::Post
+                && entry.msg_kind == Some("QcVote")
+            {
+                entry.peer.clone()
+            } else {
+                None
+            }
+        })
+        .collect();
 
     let expected: Vec<_> = signature_topology
         .as_ref()
@@ -37557,6 +37695,9 @@ async fn new_view_votes_target_collectors_when_local_leads_in_npos() {
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
+    let background_log: Arc<Mutex<Vec<super::BackgroundRequestLogEntry>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    actor.background_request_log = Some(Arc::clone(&background_log));
 
     seed_genesis_block_for_state(&actor.state);
     while harness.background_rx.try_recv().is_ok() {}
@@ -37586,14 +37727,20 @@ async fn new_view_votes_target_collectors_when_local_leads_in_npos() {
         "new view vote should be emitted"
     );
 
-    let mut targets = Vec::new();
-    while let Ok(post) = harness.background_rx.try_recv() {
-        if let BackgroundPost::Post { peer, msg, .. } = post
-            && matches!(msg, BlockMessage::QcVote(_))
-        {
-            targets.push(peer);
-        }
-    }
+    let targets: Vec<_> = background_log
+        .lock()
+        .expect("background request log mutex poisoned")
+        .iter()
+        .filter_map(|entry| {
+            if entry.kind == super::BackgroundRequestLogKind::Post
+                && entry.msg_kind == Some("QcVote")
+            {
+                entry.peer.clone()
+            } else {
+                None
+            }
+        })
+        .collect();
 
     let mut expected = super::collectors::deterministic_collectors(
         &signature_topology,
@@ -40816,6 +40963,48 @@ async fn proposal_missing_highest_qc_triggers_missing_block_fetch() {
         .missing_block_requests
         .get(&missing_parent)
         .expect("missing block fetch should be scheduled");
+    assert_eq!(request.height, height.saturating_sub(1));
+    assert_eq!(request.view, view);
+    assert_eq!(request.priority, super::MissingBlockPriority::Consensus);
+
+    super::status::set_locked_qc(0, 0, None);
+    super::status::set_highest_qc(0, 0);
+    super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+        [0; Hash::LENGTH],
+    )));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_hint_missing_highest_qc_triggers_missing_block_fetch() {
+    let _guard = super::status::qc_status_test_guard();
+    super::status::set_locked_qc(0, 0, None);
+    super::status::set_highest_qc(0, 0);
+    super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+        [0; Hash::LENGTH],
+    )));
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let missing_parent =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x12; Hash::LENGTH]));
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x34; Hash::LENGTH]));
+    let height = 2;
+    let view = 0;
+    let hint = sample_hint(block_hash, height, view, Some(missing_parent));
+
+    actor
+        .handle_proposal_hint(hint)
+        .expect("handle proposal hint");
+
+    let request = actor
+        .pending
+        .missing_block_requests
+        .get(&missing_parent)
+        .expect("missing block fetch should be scheduled from proposal hint");
     assert_eq!(request.height, height.saturating_sub(1));
     assert_eq!(request.view, view);
     assert_eq!(request.priority, super::MissingBlockPriority::Consensus);
@@ -44901,6 +45090,55 @@ fn validate_block_for_voting_runs_before_votes() {
 }
 
 #[test]
+fn validate_block_for_voting_records_timings() {
+    let world = World::default();
+    let kura = Arc::new(Kura::blank_kura_for_testing());
+    let query = LiveQueryStore::start_test();
+    let state = State::new_for_testing(world, Arc::clone(&kura), query);
+    let chain: ChainId = "vote-validation-timings".parse().expect("chain id parses");
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer = PeerId::new(kp.public_key().clone());
+    let mut topology = super::network_topology::Topology::new(vec![peer]);
+    let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
+    let mut voting_block = None;
+
+    let genesis_hash = seed_genesis_block_for_state(&state);
+    let block_ok = heartbeat_block_for_state(&state, &chain, 2, 0, Some(genesis_hash), &kp, 0);
+    let (result_ok, timings_ok) = super::validate_block_for_voting_with_timings(
+        block_ok,
+        &mut topology,
+        &chain,
+        &genesis_account,
+        &state,
+        &mut voting_block,
+    );
+    assert!(result_ok.is_ok(), "expected valid block to pass validation");
+    assert!(
+        timings_ok.total_ms >= timings_ok.stateless_ms,
+        "total timing must cover stateless stage"
+    );
+    assert!(
+        timings_ok.total_ms >= timings_ok.execution_ms,
+        "total timing must cover execution stage"
+    );
+
+    voting_block = None;
+    let block_bad = heartbeat_block_for_state(&state, &chain, 2, 0, None, &kp, 0);
+    let (_result_bad, timings_bad) = super::validate_block_for_voting_with_timings(
+        block_bad,
+        &mut topology,
+        &chain,
+        &genesis_account,
+        &state,
+        &mut voting_block,
+    );
+    assert_eq!(
+        timings_bad.execution_ms, 0,
+        "stateless failures should not record execution time"
+    );
+}
+
+#[test]
 fn exec_roots_capture_fallback_uses_witness_snapshot() {
     let _guard = crate::sumeragi::witness::exec_witness_guard();
     let world = World::default();
@@ -47430,6 +47668,51 @@ async fn precommit_vote_broadcast_uses_background_queue() {
             })
         ),
         "precommit votes should be queued for background posting"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn qc_vote_post_bypasses_background_queue() {
+    let mut harness = test_actor_harness(4).await;
+
+    let _ = harness.background_rx.try_iter().collect::<Vec<_>>();
+
+    let block = sample_block(1, 0, None);
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: crate::sumeragi::consensus::Phase::Commit,
+        block_hash: block.hash(),
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 1,
+        view: 0,
+        epoch: 0,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let preimage = super::vote_preimage(
+        &harness.actor.common_config.chain,
+        super::PERMISSIONED_TAG,
+        &vote,
+    );
+    let signature = Signature::new(
+        harness.actor.common_config.key_pair.private_key(),
+        &preimage,
+    );
+    vote.bls_sig = signature.payload().to_vec();
+
+    let msg = BlockMessage::QcVote(vote);
+    let peer = PeerId::from(KeyPair::random().public_key().clone());
+    harness
+        .actor
+        .schedule_background(BackgroundRequest::Post { peer, msg });
+
+    let queued = harness.background_rx.try_iter().next();
+    assert!(
+        queued.is_none(),
+        "QcVote posts should bypass the background queue"
     );
 
     harness.shutdown.send();

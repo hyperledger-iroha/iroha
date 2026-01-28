@@ -348,7 +348,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             },
             collectors: A::SumeragiCollectors {
                 k: 1,
-                redundant_send_r: 1,
+                redundant_send_r: iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
             },
             block: A::SumeragiBlock {
                 max_transactions: iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,

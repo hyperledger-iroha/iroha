@@ -43,7 +43,7 @@ translator: manual
 - v1 ではビュー 0 における観測ピアの投票猶予が削除され、観測ピアはビュー 0 で投票しません。ビュー 0 でローカルタイムアウトした際は（ローテーション前の広げる処理なしで）ビュー変更を提案します。タイミングはオンチェーンのパラメータで制御され、permissioned では `SumeragiParameters`（`BlockTimeMs`/`CommitTimeMs`）、NPoS では `sumeragi_npos_parameters`（`block_time_ms` と `timeouts.timeout_commit_ms`）を使います。リーダー提案はパイプライン時間の約 1/3、期待コミットは約 2/3 です。
 
 ### K / r パラメータ
-- 設定キー: `sumeragi.collectors.k: usize`（高さごとのコレクター数、設定の既定は 1）、`sumeragi.collectors.redundant_send_r: u8`（冗長送信ファンアウト。ツールはバリデータ数から `2f+1` をオンチェーン既定として播種し、オンチェーン値がない場合の設定既定は 1）。
+- 設定キー: `sumeragi.collectors.k: usize`（高さごとのコレクター数、設定の既定は 1）、`sumeragi.collectors.redundant_send_r: u8`（冗長送信ファンアウト。ツールはバリデータ数から `2f+1` をオンチェーン既定として播種し、オンチェーン値がない場合の設定既定は 3（4 バリデータでの 2f+1））。
 - オンチェーン: K と r は `SumeragiParameters` に保存され、コレクタ計画と `ConsensusParams` 広告の正となります。設定値はジェネシスの初期値を与えます。ピア間で K/r の広告が異なる場合でも、ミスマッチを記録してオンチェーン値を維持します。
 - フォールバック: `k` でコレクタが選べない場合、投票はコミットトポロジ全体にフォールバックします。`redundant_send_r` は最小 1 として扱われます。
 

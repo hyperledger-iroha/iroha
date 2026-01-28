@@ -2312,8 +2312,8 @@ pub mod sumeragi {
     /// Number of collectors to use (K). Default is 1 (single proxy tail).
     pub const COLLECTORS_K: usize = 1;
     /// Redundant send fanout (r): how many distinct collectors a validator sends to over time.
-    /// Default is 1 (no redundancy beyond the primary collector unless view-change logic decides).
-    pub const COLLECTORS_REDUNDANT_SEND_R: u8 = 1;
+    /// Default targets 2f+1 for a 4-peer topology (r=3).
+    pub const COLLECTORS_REDUNDANT_SEND_R: u8 = 3;
     /// Optional cap on transactions per block (None = unlimited).
     pub const BLOCK_MAX_TRANSACTIONS: Option<NonZeroUsize> = None;
     /// Optional cap on payload bytes per block when RBC is disabled (None = unlimited).
@@ -2516,8 +2516,8 @@ pub mod sumeragi {
         pub const TIMEOUT_AGG_MS: u64 = 120;
         /// Default number of aggregators (K) used in NPoS mode.
         pub const K_AGGREGATORS: usize = 3;
-        /// Default redundant send fanout (r) for NPoS validators.
-        pub const REDUNDANT_SEND_R: u8 = 2;
+        /// Default redundant send fanout (r) for NPoS validators (2f+1 for 4 peers).
+        pub const REDUNDANT_SEND_R: u8 = 3;
         /// VRF commitment window size in blocks from epoch start.
         pub const VRF_COMMIT_WINDOW_BLOCKS: u64 = 100;
         /// VRF reveal window size in blocks after the commit window closes.

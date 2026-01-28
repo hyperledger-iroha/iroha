@@ -241,7 +241,7 @@ Pacemaker (view changes)
 - View-change proofs advance once `f+1` validators raise suspicion (commit failure or quorum timeout); a full commit quorum is not required for a view change.
 
 K / r Parameters
-- Config keys: `sumeragi.collectors.k: usize` (collectors per height; default 1 in config) and `sumeragi.collectors.redundant_send_r: u8` (redundant send fanout; tooling seeds on-chain defaults as `2f+1` from the validator count, config fallback remains 1 if parameters are absent).
+- Config keys: `sumeragi.collectors.k: usize` (collectors per height; default 1 in config) and `sumeragi.collectors.redundant_send_r: u8` (redundant send fanout; tooling may seed on-chain defaults as `2f+1` from the validator count, and the config fallback is 3 (2f+1 for 4 validators) when parameters are absent).
 - On-chain: K and r live in `SumeragiParameters` and are authoritative for collector planning and `ConsensusParams` adverts; config values seed the genesis defaults. When peers advertise different K/r, the node logs a mismatch but keeps the on-chain values.
 - Fallbacks: if `k` yields no collectors, votes fall back to the full commit topology; `redundant_send_r` is treated as at least 1.
 - Determinism: primary/next collector order is a pure function of the canonical roster, PRF seed, and `(height, view)`; when the PRF seed is unavailable the fallback is the contiguous tail slice starting at `proxy_tail_index()`, with no per-node randomness.

@@ -66,6 +66,8 @@ COMMIT_TIME_MS=""
 CONSENSUS_MODE=""
 PERF_PROFILE=""
 CURL_TIMEOUT_SECS=2
+PORT_SCAN_MAX_TRIES=200
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -187,6 +189,14 @@ for cmd in cargo curl; do
     exit 1
   fi
 done
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  if command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+  else
+    echo "Missing prerequisite: python3 (or python)" >&2
+    exit 1
+  fi
+fi
 
 if [[ ! -d "$IROHA_DIR" ]]; then
   echo "IROHA_DIR does not exist: $IROHA_DIR" >&2
@@ -220,6 +230,59 @@ if [[ -d "$OUT_DIR" ]]; then
     echo "Out-dir $OUT_DIR already exists. Re-run with --force to regenerate." >&2
     exit 1
   fi
+fi
+
+port_range_free() {
+  local host="$1"
+  local base="$2"
+  local peers="$3"
+  "$PYTHON_BIN" - "$host" "$base" "$peers" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+base = int(sys.argv[2])
+peers = int(sys.argv[3])
+for port in range(base, base + peers):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind((host, port))
+    except OSError:
+        sys.exit(1)
+    finally:
+        sock.close()
+sys.exit(0)
+PY
+}
+
+find_free_port_range() {
+  local host="$1"
+  local base="$2"
+  local peers="$3"
+  local tries="$4"
+  for ((i = 0; i < tries; i++)); do
+    local candidate=$((base + i))
+    if port_range_free "$host" "$candidate" "$peers"; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if ! port_range_free "$BIND_HOST" "$BASE_API_PORT" "$PEERS"; then
+  new_base=$(find_free_port_range "$BIND_HOST" "$BASE_API_PORT" "$PEERS" "$PORT_SCAN_MAX_TRIES") \
+    || { echo "No free API port range found near ${BASE_API_PORT} (peers=${PEERS})." >&2; exit 2; }
+  echo "API port range ${BASE_API_PORT}..$((BASE_API_PORT + PEERS - 1)) in use; using ${new_base}..$((new_base + PEERS - 1))."
+  BASE_API_PORT="$new_base"
+fi
+
+if ! port_range_free "$BIND_HOST" "$BASE_P2P_PORT" "$PEERS"; then
+  new_base=$(find_free_port_range "$BIND_HOST" "$BASE_P2P_PORT" "$PEERS" "$PORT_SCAN_MAX_TRIES") \
+    || { echo "No free P2P port range found near ${BASE_P2P_PORT} (peers=${PEERS})." >&2; exit 2; }
+  echo "P2P port range ${BASE_P2P_PORT}..$((BASE_P2P_PORT + PEERS - 1)) in use; using ${new_base}..$((new_base + PEERS - 1))."
+  BASE_P2P_PORT="$new_base"
 fi
 
 echo "Building Iroha tools ($PROFILE)..."

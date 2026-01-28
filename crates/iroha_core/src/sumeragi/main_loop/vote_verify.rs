@@ -12,7 +12,7 @@ use std::{
 
 use super::votes::record_vote_drop_without_roster;
 use super::*;
-use iroha_crypto::Algorithm;
+use iroha_crypto::{Algorithm, HashOf};
 
 const VOTE_VERIFY_BATCH_MAX: usize = 64;
 static VOTE_VERIFY_AGGREGATE_USED_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -53,6 +53,25 @@ struct PreparedVote {
     algorithm: Algorithm,
     public_key: PublicKey,
     pop: Option<Vec<u8>>,
+}
+
+fn log_vote_verify_rejection(work: &VoteVerifyWork, err: &VoteSignatureError) {
+    let roster = work.signature_topology.as_ref().as_ref();
+    let roster_len = roster.len();
+    let roster_hash = HashOf::new(&roster.to_vec());
+    debug!(
+        phase = ?work.vote.phase,
+        height = work.vote.height,
+        view = work.vote.view,
+        epoch = work.vote.epoch,
+        signer = work.vote.signer,
+        block_hash = %work.vote.block_hash,
+        roster_len,
+        roster_hash = %roster_hash,
+        mode_tag = work.mode_tag,
+        reason = ?err,
+        "vote verify rejected vote"
+    );
 }
 
 /// Spawn vote signature verification workers.
@@ -101,33 +120,45 @@ pub(super) fn spawn_vote_verify_workers(
                         let idx = match usize::try_from(signer_raw) {
                             Ok(idx) => idx,
                             Err(_) => {
+                                let signature_result = Err(
+                                    VoteSignatureError::SignerIndexOverflow(u64::from(signer_raw)),
+                                );
+                                if let Err(err) = &signature_result {
+                                    log_vote_verify_rejection(&work, err);
+                                }
                                 results.push(VoteVerifyResult {
                                     id: work.id,
                                     key: work.key,
-                                    signature_result: Err(VoteSignatureError::SignerIndexOverflow(
-                                        u64::from(signer_raw),
-                                    )),
+                                    signature_result,
                                 });
                                 continue;
                             }
                         };
                         let roster = work.signature_topology.as_ref().as_ref();
                         let Some(peer) = roster.get(idx) else {
+                            let signature_result = Err(VoteSignatureError::SignerOutOfRange {
+                                signer: idx.try_into().unwrap_or(u32::MAX),
+                                roster_len: roster.len().try_into().unwrap_or(u32::MAX),
+                            });
+                            if let Err(err) = &signature_result {
+                                log_vote_verify_rejection(&work, err);
+                            }
                             results.push(VoteVerifyResult {
                                 id: work.id,
                                 key: work.key,
-                                signature_result: Err(VoteSignatureError::SignerOutOfRange {
-                                    signer: idx.try_into().unwrap_or(u32::MAX),
-                                    roster_len: roster.len().try_into().unwrap_or(u32::MAX),
-                                }),
+                                signature_result,
                             });
                             continue;
                         };
                         if work.vote.bls_sig.is_empty() {
+                            let signature_result = Err(VoteSignatureError::SignatureInvalid);
+                            if let Err(err) = &signature_result {
+                                log_vote_verify_rejection(&work, err);
+                            }
                             results.push(VoteVerifyResult {
                                 id: work.id,
                                 key: work.key,
-                                signature_result: Err(VoteSignatureError::SignatureInvalid),
+                                signature_result,
                             });
                             continue;
                         }
@@ -175,6 +206,9 @@ pub(super) fn spawn_vote_verify_workers(
                     for idx in fallback_indices {
                         let prepared_vote = prepared[idx].as_ref().expect("prepared vote");
                         let signature_result = verify_single(prepared_vote);
+                        if let Err(err) = &signature_result {
+                            log_vote_verify_rejection(&prepared_vote.work, err);
+                        }
                         let prepared_vote = prepared[idx].take().expect("prepared vote");
                         results.push(VoteVerifyResult {
                             id: prepared_vote.work.id,
@@ -188,6 +222,9 @@ pub(super) fn spawn_vote_verify_workers(
                             let idx = indices[0];
                             let prepared_vote = prepared[idx].as_ref().expect("prepared vote");
                             let signature_result = verify_single(prepared_vote);
+                            if let Err(err) = &signature_result {
+                                log_vote_verify_rejection(&prepared_vote.work, err);
+                            }
                             let prepared_vote = prepared[idx].take().expect("prepared vote");
                             results.push(VoteVerifyResult {
                                 id: prepared_vote.work.id,
@@ -285,6 +322,9 @@ pub(super) fn spawn_vote_verify_workers(
                             } else {
                                 verify_single(prepared_vote)
                             };
+                            if let Err(err) = &signature_result {
+                                log_vote_verify_rejection(&prepared_vote.work, err);
+                            }
                             let prepared_vote = prepared[idx].take().expect("prepared vote");
                             results.push(VoteVerifyResult {
                                 id: prepared_vote.work.id,

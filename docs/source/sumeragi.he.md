@@ -46,7 +46,7 @@ translator: manual
 - ב-v1 בוטל מרווח ההצבעה של Observers ב-View 0: עמיתי צפייה אינם מצביעים כלל ב-View 0. בטיימאאוט מקומי הם מבקשים שינוי View ללא הרחבה לפני הרוטציה. התזמונים נשלטים על ידי פרמטרים on-chain: ב-permissioned משתמשים ב-`SumeragiParameters` (`BlockTimeMs`,‏ `CommitTimeMs`), וב‑NPoS ב-`sumeragi_npos_parameters` (`block_time_ms`, `timeouts.timeout_commit_ms`) – הצעת לידר סביב שליש זמן הצינור וקומיט צפוי סביב שני שלישים.
 
 ### פרמטרים K / r
-- בקונפיג: ‏`sumeragi.collectors.k: usize` (מספר אספנים לגובה, ברירת מחדל 1 בקונפיג) ו-`sumeragi.collectors.redundant_send_r: u8` (פיזור שליחות עודפות; tooling מזריע ברירת מחדל on-chain של `2f+1` לפי גודל הרוסטר, ובקונפיג ברירת המחדל נשארת 1 אם אין פרמטרים בשרשרת).
+- בקונפיג: ‏`sumeragi.collectors.k: usize` (מספר אספנים לגובה, ברירת מחדל 1 בקונפיג) ו-`sumeragi.collectors.redundant_send_r: u8` (פיזור שליחות עודפות; tooling מזריע ברירת מחדל on-chain של `2f+1` לפי גודל הרוסטר, וברירת המחדל בקונפיג היא 3 כאשר אין פרמטרים בשרשרת (2f+1 ל־4 ולידטורים)).
 - בשרשרת: K ו-r נמצאים ב-`SumeragiParameters` והם המקור הקובע לתכנון הקולקטורים ולפרסום `ConsensusParams`; ערכי הקונפיג מזינים את ברירות המחדל ב-genesis. כאשר פירים מפרסמים K/r שונים, נרשם mismatch אך נשמרים הערכים מהשרשרת.
 - פולבק: אם `k` לא מחזיר קולקטורים, ההצבעות נופלות לטופולוגיית ה-commit המלאה; `redundant_send_r` מטופל לפחות כ-1.
 
