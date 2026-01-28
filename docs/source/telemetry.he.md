@@ -31,7 +31,7 @@ Iroha חושפת מדדים תואמי Prometheus ותמצית סטטוס בפו
 - `/v1/sumeragi/leader` (JSON): צילום מדד מנהיג; במצב NPoS כולל הקשר PRF `{ height, view, epoch_seed }`.
 - `/v1/sumeragi/phases` (JSON): זמני שלבים קומפקטיים (ms) ללוחות מחוונים של מפעילים; מחזיר את משכי השלבים האחרונים.
 - `/v1/sumeragi/collectors` (JSON): צילום של תוכנית ה-Collectors הדטרמיניסטית שמופקת מהטופולוגיה הקומיטד ומהפרמטרים on-chain; חושף `mode`, ‎`plan (height, view)`‎, ‎`collectors_k`, ‎`redundant_send_r`, ‎`proxy_tail_index`, ‎`min_votes_for_commit`, רשימת האוספים המסודרת ו-`epoch_seed` (ב-הקס) במצב NPoS.
-- `/v1/sumeragi/params` (JSON): צילום פרמטרי Sumeragi on-chain `{ block_time_ms, commit_time_ms, min_finality_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
+- `/v1/sumeragi/params` (JSON): צילום פרמטרי Sumeragi on-chain `{ block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
 - `/v1/sumeragi/new_view/json` (JSON): צילום NEW_VIEW `{ ts_ms, items: [{ height, view, count }] }` עם `locked_qc { height, view }` (חלון זיכרון מוגבל; רשומות ישנות נזרקות).
 
 השדות המצטברים `lane_governance_sealed_total` ו-`lane_governance_sealed_aliases` מאפשרים לבדוק מיידית אם קיימות מסילות שעדיין חסומות בגלל חוסר במניפסט ממשל. הן זמינות גם ב-`/v1/sumeragi/status` וגם ב-`iroha_cli --output-format text ops sumeragi status`, וה-CLI מציג את רשימת הכינויים כפי שהם. לצורך בדיקות והרצות CI מומלץ לשלב את `iroha_cli app nexus lane-report --only-missing --fail-on-sealed` כך שתהליכים ייעצרו אוטומטית כשעדיין קיימות מסילות חסומות.

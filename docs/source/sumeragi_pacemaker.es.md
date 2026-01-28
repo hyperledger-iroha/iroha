@@ -13,7 +13,7 @@ translation_last_reviewed: 2026-01-01
 
 Esta nota describe la politica de pacemaker (timer) para Sumeragi y ofrece guia para operadores y ejemplos. Los temporizadores gobiernan cuando los lideres proponen y cuando los validadores sugieren/entran a una nueva vista tras inactividad.
 
-Estado: implementada la ventana base derivada de EMA, el piso RTT y los topes configurables de jitter/backoff. El intervalo de propuesta del pacemaker ahora se limita entre el objetivo de block-time y el propose timeout con piso RTT, limitado por `sumeragi.advanced.pacemaker.max_backoff_ms`. El jitter se aplica de forma determinista por nodo y por (height, view).
+Estado: implementada la ventana base derivada de EMA, el piso RTT y los topes configurables de jitter/backoff. El intervalo de propuesta del pacemaker ahora se limita entre el objetivo de block-time y el propose timeout con piso RTT, limitado por `sumeragi.advanced.pacemaker.max_backoff_ms`. (`effective_block_time_ms` = `block_time_ms` scaled by `pacing_factor_bps`). El jitter se aplica de forma determinista por nodo y por (height, view).
 
 ## Conceptos
 - Ventana base: media movil exponencial de las fases de consenso observadas
@@ -26,7 +26,7 @@ Estado: implementada la ventana base derivada de EMA, el piso RTT y los topes co
 - Multiplicador de backoff: `sumeragi.advanced.pacemaker.backoff_multiplier` (por defecto 1). Cada timeout agrega `base * multiplier` a la ventana actual.
 - Piso RTT: `avg_rtt_ms * sumeragi.advanced.pacemaker.rtt_floor_multiplier` (por defecto 2). Evita timeouts demasiado agresivos en enlaces de alta latencia.
 - Cap: `sumeragi.advanced.pacemaker.max_backoff_ms` (por defecto 60_000 ms). Techo duro de la ventana.
-- Semilla del intervalo de propuesta: `max(block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` y nunca por encima de `sumeragi.advanced.pacemaker.max_backoff_ms`. Este es el intervalo en estado estable incluso sin backoff.
+- Semilla del intervalo de propuesta: `max(effective_block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` y nunca por encima de `sumeragi.advanced.pacemaker.max_backoff_ms`. (`effective_block_time_ms` = `block_time_ms` scaled by `pacing_factor_bps`). Este es el intervalo en estado estable incluso sin backoff.
 
 Actualizacion de ventana efectiva en timeout:
 - `window = min(cap, max(window + base * backoff_mul, avg_rtt * rtt_floor_mul))`

@@ -43,7 +43,7 @@ translator: manual
 - מכיוון שרק שני גבהים פתוחים בו-זמנית, אספנים, RBC וטלמטריה יכולים לצנר עבודה ללא סכנת קומיטים מתפצלים. האינווריאנטים מיושמים ב-`sumeragi::main_loop`: ‏`ensure_locked_qc_allows` מגן על הרכבת הצעות, בלוקים ממתינים נשמרים בזיכרון והקומיט משחרר `locked_qc` רק לאחר תצפית ב-commit certificate ילד תואם.
 
 ### פייסמייקר (שינויי View)
-- ב-v1 בוטל מרווח ההצבעה של Observers ב-View 0: עמיתי צפייה אינם מצביעים כלל ב-View 0. בטיימאאוט מקומי הם מבקשים שינוי View ללא הרחבה לפני הרוטציה. התזמונים נשלטים על ידי פרמטרים on-chain: ב-permissioned משתמשים ב-`SumeragiParameters` (`BlockTimeMs`,‏ `CommitTimeMs`,‏ `MinFinalityMs`), וב‑NPoS הטיימאאוטים נגזרים מ-`SumeragiParameters.block_time_ms` עם אפשרות ל־`sumeragi.advanced.npos.timeouts` override – הצעת לידר סביב שליש זמן הצינור וקומיט צפוי סביב שני שלישים.
+- ב-v1 בוטל מרווח ההצבעה של Observers ב-View 0: עמיתי צפייה אינם מצביעים כלל ב-View 0. בטיימאאוט מקומי הם מבקשים שינוי View ללא הרחבה לפני הרוטציה. התזמונים נשלטים על ידי פרמטרים on-chain: ב-permissioned משתמשים ב-`SumeragiParameters` (`BlockTimeMs`,‏ `CommitTimeMs`,‏ `MinFinalityMs`,‏ `PacingFactorBps`), וב‑NPoS הטיימאאוטים נגזרים מ-`SumeragiParameters.block_time_ms (scaled by pacing_factor_bps)` עם אפשרות ל־`sumeragi.advanced.npos.timeouts` override – הצעת לידר סביב שליש זמן הצינור וקומיט צפוי סביב שני שלישים.
 
 ### פרמטרים K / r
 - בקונפיג: ‏`sumeragi.collectors.k: usize` (מספר אספנים לגובה, ברירת מחדל 1 בקונפיג) ו-`sumeragi.collectors.redundant_send_r: u8` (פיזור שליחות עודפות; tooling מזריע ברירת מחדל on-chain של `2f+1` לפי גודל הרוסטר, וברירת המחדל בקונפיג היא 3 כאשר אין פרמטרים בשרשרת (2f+1 ל־4 ולידטורים)).
