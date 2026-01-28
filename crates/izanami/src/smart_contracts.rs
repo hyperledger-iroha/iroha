@@ -11,7 +11,7 @@ use iroha_data_model::transaction::IvmBytecode;
 use iroha_test_network::repo_root;
 use ivm::KotodamaCompiler;
 
-const IVM_TRIGGER_ARTIFACT: &str = "artifact_v1_0_mode00_vlen0_cycles0_abi1";
+const IVM_TRIGGER_ARTIFACT: &str = "artifact_v1_0_mode03_vlen8_cycles1000_abi1";
 
 /// Compile a Kotodama sample from `crates/kotodama_lang/src/samples` into bytecode.
 ///
