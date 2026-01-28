@@ -45,7 +45,7 @@ impl ParsedAccountAddress {
         self.address.to_ih58(network_prefix)
     }
 
-    /// Encode the address using the Sora compressed alphabet (`snx1…`).
+    /// Encode the address using the Sora compressed alphabet (`sora…`).
     ///
     /// # Errors
     ///
@@ -73,7 +73,7 @@ pub fn encode_account_id_to_ih58(
     AccountAddress::from_account_id(account)?.to_ih58(network_prefix)
 }
 
-/// Encode an [`AccountId`] using the Sora compressed alphabet (`snx1…`).
+/// Encode an [`AccountId`] using the Sora compressed alphabet (`sora…`).
 ///
 /// # Errors
 ///

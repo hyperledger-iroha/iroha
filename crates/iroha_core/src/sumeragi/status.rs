@@ -306,6 +306,7 @@ static CONSENSUS_CAPS: OnceLock<Mutex<Option<iroha_p2p::ConsensusConfigCaps>>> =
 static EFFECTIVE_MIN_FINALITY_MS: AtomicU64 = AtomicU64::new(0);
 static EFFECTIVE_BLOCK_TIME_MS: AtomicU64 = AtomicU64::new(0);
 static EFFECTIVE_COMMIT_TIME_MS: AtomicU64 = AtomicU64::new(0);
+static EFFECTIVE_PACING_FACTOR_BPS: AtomicU64 = AtomicU64::new(0);
 static EFFECTIVE_COMMIT_QUORUM_TIMEOUT_MS: AtomicU64 = AtomicU64::new(0);
 static EFFECTIVE_AVAILABILITY_TIMEOUT_MS: AtomicU64 = AtomicU64::new(0);
 static EFFECTIVE_PACEMAKER_INTERVAL_MS: AtomicU64 = AtomicU64::new(0);
@@ -1850,6 +1851,7 @@ pub fn set_effective_timing(
     min_finality_ms: u64,
     block_time_ms: u64,
     commit_time_ms: u64,
+    pacing_factor_bps: u64,
     commit_quorum_timeout_ms: u64,
     availability_timeout_ms: u64,
     pacemaker_interval_ms: u64,
@@ -1860,6 +1862,7 @@ pub fn set_effective_timing(
     EFFECTIVE_MIN_FINALITY_MS.store(min_finality_ms, Ordering::Relaxed);
     EFFECTIVE_BLOCK_TIME_MS.store(block_time_ms, Ordering::Relaxed);
     EFFECTIVE_COMMIT_TIME_MS.store(commit_time_ms, Ordering::Relaxed);
+    EFFECTIVE_PACING_FACTOR_BPS.store(pacing_factor_bps, Ordering::Relaxed);
     EFFECTIVE_COMMIT_QUORUM_TIMEOUT_MS.store(commit_quorum_timeout_ms, Ordering::Relaxed);
     EFFECTIVE_AVAILABILITY_TIMEOUT_MS.store(availability_timeout_ms, Ordering::Relaxed);
     EFFECTIVE_PACEMAKER_INTERVAL_MS.store(pacemaker_interval_ms, Ordering::Relaxed);
@@ -3165,6 +3168,8 @@ pub struct StatusSnapshot {
     pub effective_block_time_ms: u64,
     /// Effective commit time for the active mode (ms).
     pub effective_commit_time_ms: u64,
+    /// Effective pacing factor (basis points, 10_000 = 1.0x).
+    pub effective_pacing_factor_bps: u64,
     /// Effective commit quorum timeout (ms).
     pub effective_commit_quorum_timeout_ms: u64,
     /// Effective availability timeout (ms).
@@ -4005,6 +4010,7 @@ pub fn snapshot() -> StatusSnapshot {
         effective_min_finality_ms: EFFECTIVE_MIN_FINALITY_MS.load(Ordering::Relaxed),
         effective_block_time_ms: EFFECTIVE_BLOCK_TIME_MS.load(Ordering::Relaxed),
         effective_commit_time_ms: EFFECTIVE_COMMIT_TIME_MS.load(Ordering::Relaxed),
+        effective_pacing_factor_bps: EFFECTIVE_PACING_FACTOR_BPS.load(Ordering::Relaxed),
         effective_commit_quorum_timeout_ms: EFFECTIVE_COMMIT_QUORUM_TIMEOUT_MS
             .load(Ordering::Relaxed),
         effective_availability_timeout_ms: EFFECTIVE_AVAILABILITY_TIMEOUT_MS
@@ -6718,6 +6724,7 @@ mod tests {
             150,
             1_000,
             1_500,
+            12_500,
             3_000,
             2_500,
             750,
@@ -6739,6 +6746,7 @@ mod tests {
         assert_eq!(snap.effective_min_finality_ms, 150);
         assert_eq!(snap.effective_block_time_ms, 1_000);
         assert_eq!(snap.effective_commit_time_ms, 1_500);
+        assert_eq!(snap.effective_pacing_factor_bps, 12_500);
         assert_eq!(snap.effective_commit_quorum_timeout_ms, 3_000);
         assert_eq!(snap.effective_availability_timeout_ms, 2_500);
         assert_eq!(snap.effective_pacemaker_interval_ms, 750);
@@ -6748,7 +6756,7 @@ mod tests {
         assert_eq!(npos.propose_ms, 200);
         assert_eq!(npos.witness_ms, 270);
 
-        super::set_effective_timing(0, 0, 0, 0, 0, 0, 0, 0, None);
+        super::set_effective_timing(0, 0, 0, 0, 0, 0, 0, 0, 0, None);
         assert!(super::snapshot().effective_npos_timeouts.is_none());
     }
 

@@ -9538,6 +9538,16 @@ pub mod isi {
                         commit_time_ms = value;
                         should_validate = true;
                     }
+                    SumeragiParameter::PacingFactorBps(value) => {
+                        if value < 10_000 {
+                            return Err(InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(
+                                    "sumeragi.pacing_factor_bps must be greater than or equal to 10_000"
+                                        .to_owned(),
+                                ),
+                            ));
+                        }
+                    }
                     _ => {}
                 }
                 if should_validate {
@@ -9636,6 +9646,7 @@ pub mod isi {
                 Sumeragi(sumeragi.block_time_ms) => SumeragiParameter::BlockTimeMs,
                 Sumeragi(sumeragi.commit_time_ms) => SumeragiParameter::CommitTimeMs,
                 Sumeragi(sumeragi.min_finality_ms) => SumeragiParameter::MinFinalityMs,
+                Sumeragi(sumeragi.pacing_factor_bps) => SumeragiParameter::PacingFactorBps,
                 Sumeragi(sumeragi.collectors_k) => SumeragiParameter::CollectorsK,
                 Sumeragi(sumeragi.collectors_redundant_send_r) => SumeragiParameter::RedundantSendR,
                 Sumeragi(sumeragi.da_enabled) => SumeragiParameter::DaEnabled,

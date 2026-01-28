@@ -7,7 +7,7 @@ use crate::Result;
 pub enum AddressFormatPreference {
     /// IH58 literal (`{ih58}`).
     Ih58,
-    /// Compressed `snx1` literal.
+    /// Compressed `sora` literal.
     Compressed,
 }
 
@@ -23,7 +23,7 @@ impl AddressFormatPreference {
         }
         match trimmed.to_ascii_lowercase().as_str() {
             "ih58" | "ih-b32" | "canonical" => Ok(Self::Ih58),
-            "compressed" | "snx1" => Ok(Self::Compressed),
+            "compressed" | "sora" => Ok(Self::Compressed),
             other => Err(crate::Error::Query(
                 iroha_data_model::ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
                     format!("address_format `{other}` must be `ih58` or `compressed`"),
@@ -130,8 +130,8 @@ mod tests {
             AddressFormatPreference::Ih58
         );
         assert_eq!(
-            AddressFormatPreference::from_param(Some("snx1"))
-                .expect("snx1 alias should map to compressed"),
+            AddressFormatPreference::from_param(Some("sora"))
+                .expect("sora alias should map to compressed"),
             AddressFormatPreference::Compressed
         );
         assert!(
@@ -190,6 +190,12 @@ mod tests {
         let literal = ALICE_ID.to_string();
         let parsed = AccountId::parse(&literal).expect("resolver should parse IH58 literal");
         assert_eq!(parsed.account_id(), &*ALICE_ID);
+
+        clear_account_domain_selector_resolver();
+        crate::ensure_test_domain_selector_resolver();
+
+        let reparsed = AccountId::parse(&literal).expect("resolver reinstalls after clear");
+        assert_eq!(reparsed.account_id(), &*ALICE_ID);
 
         clear_account_domain_selector_resolver();
         if let Some(resolver) = previous {

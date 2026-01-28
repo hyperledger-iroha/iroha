@@ -14020,7 +14020,7 @@ mod address_metrics_tests {
     async fn kaigi_sse_invalid_literal_records_metric() {
         let telemetry = MaybeTelemetry::for_tests();
         let metrics = telemetry.metrics().await;
-        let literal = "snx1invalid@kaigi";
+        let literal = "sorainvalid@kaigi";
         let reason = AccountId::parse(literal)
             .expect_err("literal must fail")
             .reason();
@@ -21653,6 +21653,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("effective_block_time_ms", snap.effective_block_time_ms),
         json_entry("effective_commit_time_ms", snap.effective_commit_time_ms),
         json_entry(
+            "effective_pacing_factor_bps",
+            snap.effective_pacing_factor_bps,
+        ),
+        json_entry(
             "effective_commit_quorum_timeout_ms",
             snap.effective_commit_quorum_timeout_ms,
         ),
@@ -22296,6 +22300,7 @@ mod status_tests {
             effective_min_finality_ms: 150,
             effective_block_time_ms: 1_000,
             effective_commit_time_ms: 1_500,
+            effective_pacing_factor_bps: 12_500,
             effective_commit_quorum_timeout_ms: 3_000,
             effective_availability_timeout_ms: 2_500,
             effective_pacemaker_interval_ms: 750,
@@ -22339,6 +22344,12 @@ mod status_tests {
                 .get("effective_commit_time_ms")
                 .and_then(Value::as_u64),
             Some(1_500)
+        );
+        assert_eq!(
+            payload
+                .get("effective_pacing_factor_bps")
+                .and_then(Value::as_u64),
+            Some(12_500)
         );
         let npos_timeouts = payload
             .get("effective_npos_timeouts")
@@ -23180,6 +23191,7 @@ pub async fn handle_v1_sumeragi_status(
             effective_min_finality_ms: snap.effective_min_finality_ms,
             effective_block_time_ms: snap.effective_block_time_ms,
             effective_commit_time_ms: snap.effective_commit_time_ms,
+            effective_pacing_factor_bps: snap.effective_pacing_factor_bps,
             effective_commit_quorum_timeout_ms: snap.effective_commit_quorum_timeout_ms,
             effective_availability_timeout_ms: snap.effective_availability_timeout_ms,
             effective_pacemaker_interval_ms: snap.effective_pacemaker_interval_ms,
@@ -25611,7 +25623,7 @@ pub struct OfflineAllowanceListParams {
     pub sort: Option<String>,
     /// Optional response address format (`ih58` or `compressed`).
     pub address_format: Option<String>,
-    /// Filter allowances by controller account literal (IH58 (preferred)/snx1 (second-best)/public-key supported).
+    /// Filter allowances by controller account literal (IH58 (preferred)/sora (second-best)/public-key supported).
     pub controller_id: Option<String>,
     /// Require allowances whose certificate expiry is <= this timestamp.
     pub certificate_expires_before_ms: Option<u64>,
@@ -25660,11 +25672,11 @@ pub struct OfflineTransferListParams {
     pub sort: Option<String>,
     /// Optional response address format (`ih58` or `compressed`).
     pub address_format: Option<String>,
-    /// Filter transfers by originating controller (IH58 (preferred)/snx1 (second-best)/public-key literals accepted).
+    /// Filter transfers by originating controller (IH58 (preferred)/sora (second-best)/public-key literals accepted).
     pub controller_id: Option<String>,
-    /// Filter transfers by receiver account literal (IH58 (preferred)/snx1 (second-best)/public-key literals accepted).
+    /// Filter transfers by receiver account literal (IH58 (preferred)/sora (second-best)/public-key literals accepted).
     pub receiver_id: Option<String>,
-    /// Filter transfers by deposit account literal (IH58 (preferred)/snx1 (second-best)/public-key literals accepted).
+    /// Filter transfers by deposit account literal (IH58 (preferred)/sora (second-best)/public-key literals accepted).
     pub deposit_account_id: Option<String>,
     /// Match a specific certificate identifier (hex, case-insensitive).
     pub certificate_id_hex: Option<String>,

@@ -21,7 +21,7 @@ translation_last_reviewed: 2026-01-01
 
 ### 1. نظرة عامة
 
-- Fixture: `fixtures/account/address_vectors.json` (IH58 (preferred) + compressed (`snx1`, second-best) + multisig حالات ايجابية/سلبية).
+- Fixture: `fixtures/account/address_vectors.json` (IH58 (preferred) + compressed (`sora`, second-best) + multisig حالات ايجابية/سلبية).
 - النطاق: payloads V1 حتمية تغطي implicit-default و Local-12 و Global registry و multisig controllers مع تصنيف كامل للاخطاء.
 - التوزيع: مشترك بين Rust data-model و Torii و SDKs لـ JS/TS و Swift و Android؛ يفشل CI اذا انحرف اي مستهلك.
 - مصدر الحقيقة: المولد موجود في `crates/iroha_data_model/src/account/address/compliance_vectors.rs` ويكشف عبر `cargo xtask address-vectors`.
@@ -46,10 +46,10 @@ cargo xtask address-vectors --verify
 
 | السطح | الانفاذ | ملاحظات |
 |---------|-------------|-------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | يفك JSON، يعيد بناء payloads canonical، ويتحقق من تحويلات IH58 (preferred)/snx1 (second-best)/canonical + اخطاء منظمة. |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | يتحقق من codecs جهة الخادم لكي يرفض Torii payloads IH58 (preferred)/snx1 (second-best) غير الصحيحة بشكل حتمي. |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | يعكس fixtures V1 (IH58 (preferred)/snx1 (second-best)/fullwidth) ويتحقق من رموز الاخطاء بنمط Norito لكل حالة سلبية. |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | يمتحن فك ترميز IH58 (preferred)/snx1 (second-best) و multisig payloads واظهار الاخطاء على منصات Apple. |
+| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | يفك JSON، يعيد بناء payloads canonical، ويتحقق من تحويلات IH58 (preferred)/sora (second-best)/canonical + اخطاء منظمة. |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | يتحقق من codecs جهة الخادم لكي يرفض Torii payloads IH58 (preferred)/sora (second-best) غير الصحيحة بشكل حتمي. |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | يعكس fixtures V1 (IH58 (preferred)/sora (second-best)/fullwidth) ويتحقق من رموز الاخطاء بنمط Norito لكل حالة سلبية. |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | يمتحن فك ترميز IH58 (preferred)/sora (second-best) و multisig payloads واظهار الاخطاء على منصات Apple. |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | يضمن بقاء bindings Kotlin/Java متوافقة مع fixture canonical. |
 
 ### 4. المراقبة والعمل المتبقي

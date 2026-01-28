@@ -824,7 +824,7 @@ pub enum AddressFormatArg {
     #[default]
     #[value(name = "ih58", alias = "ih-b32", alias = "canonical")]
     Ih58,
-    #[value(name = "compressed", alias = "snx1")]
+    #[value(name = "compressed", alias = "sora")]
     Compressed,
 }
 

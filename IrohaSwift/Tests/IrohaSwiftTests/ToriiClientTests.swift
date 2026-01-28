@@ -1307,7 +1307,7 @@ final class ToriiClientTests: XCTestCase {
             let body = """
             {
                 "canonical_id":"ih58example",
-                "literal":"snx1example",
+                "literal":"soraexample",
                 "address_format":"compressed",
                 "network_prefix":1206,
                 "error_correction":"M",
@@ -1323,7 +1323,7 @@ final class ToriiClientTests: XCTestCase {
                                                              addressFormat: .compressed)
         XCTAssertEqual(qr.addressFormat, "compressed")
         XCTAssertEqual(qr.preferredFormat, .compressed)
-        XCTAssertEqual(qr.literal, "snx1example")
+        XCTAssertEqual(qr.literal, "soraexample")
         XCTAssertEqual(qr.qrVersion, 6)
     }
 

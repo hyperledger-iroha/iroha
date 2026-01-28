@@ -134,4 +134,4 @@ def test_query_asset_holders_rejects_alias() -> None:
     client, _ = _client_with_session()
 
     with pytest.raises(ValueError):
-        client.query_asset_holders("xor#wonderland", address_format="snx1")
+        client.query_asset_holders("xor#wonderland", address_format="sora")

@@ -239,7 +239,7 @@ Este ISI e idempotente por `(lane_id, epoch)` e fundamenta a contabilidade notur
     - `GET /v1/nexus/public_lanes/{lane}/validators` - metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), epoca/altura de ativacao,
       timers de release, stake bonded, ultima epoca de recompensa.
-      `address_format=ih58|compressed` controla o rendering literal (IH58 preferido; compressed (`snx1`) e segunda melhor opcao Sora-only).
+      `address_format=ih58|compressed` controla o rendering literal (IH58 preferido; compressed (`sora`) e segunda melhor opcao Sora-only).
     - `GET /v1/nexus/public_lanes/{lane}/stake` - shares de stake (`validator`,
       `staker`, bonded amount) mais timers de pending unbond. `?validator=ih58...`
       filtra a resposta para dashboards focados em um validador; `address_format` aplica-se

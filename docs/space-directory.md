@@ -240,7 +240,7 @@ belong to that slice. Downstream components use this ledger-backed view:
   reloading manifest JSON.
 - Torii now exposes `GET /v1/space-directory/uaids/{uaid}` for operators and
   SDKs that need to introspect bindings directly. Append
-  `?address_format=compressed` if you need the `snx1…` literals for QR
+  `?address_format=compressed` if you need the `sora…` literals for QR
   payloads; IH58 strings remain the default.【docs/source/torii/portfolio_api.md】
 
 ### 5.1 CLI manifest & binding inspectors
@@ -312,7 +312,7 @@ GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}
 
 Use the optional `dataspace` query parameter (u64) to filter the response to a
 single dataspace. `address_format=compressed` rewrites the embedded `accounts`
-arrays to the Sora-specific `snx1` encoding for wallet/UI parity. Each entry
+arrays to the Sora-specific `sora` encoding for wallet/UI parity. Each entry
 includes the manifest hash, lifecycle metadata, ledger bindings, and the
 canonical `AssetPermissionManifest` JSON:
 

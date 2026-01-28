@@ -18,7 +18,7 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 `examples/android/retail-wallet` מדגימה כעת את דפוס ה-UX הנדרש:
 
 - **שתי מטרות העתקה.** ספקו שני כפתורי העתקה מפורשים: IH58 (מועדף)
-  והצורה הדחוסה עבור Sora בלבד (`snx1...`, אפשרות שנייה). IH58 תמיד בטוחה לשיתוף חיצוני
+  והצורה הדחוסה עבור Sora בלבד (`sora...`, אפשרות שנייה). IH58 תמיד בטוחה לשיתוף חיצוני
   ומזינה את מטען ה-QR. הצורה הדחוסה חייבת לכלול אזהרה מוטמעת משום שהיא עובדת
   רק באפליקציות מודעות Sora. דוגמת Android מחברת את שני כפתורי Material ואת
   ה-tooltips שלהם ב-
@@ -60,7 +60,7 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
 - JavaScript inspector: `inspectAccountId(...)` מחזיר את מחרוזת האזהרה הדחוסה
-  ומוסיף אותה ל-`warnings` כאשר קוראים מספקים literal `snx1...`, כדי שסיירים/
+  ומוסיף אותה ל-`warnings` כאשר קוראים מספקים literal `sora...`, כדי שסיירים/
   לוחות ארנקים יוכלו להציג את אזהרת Sora-only במהלך זרימות הדבקה/אימות במקום
   רק כאשר הם מייצרים את הצורה הדחוסה בעצמם.
 - Python: `AccountAddress.display_formats(network_prefix: int = 753)`
@@ -165,7 +165,7 @@ payload bit: │version  │ class  │  norm  │ext │
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("snx1...");
+   const summary = inspectAccountId("sora...");
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }

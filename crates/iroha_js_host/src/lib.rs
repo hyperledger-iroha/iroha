@@ -289,7 +289,7 @@ pub struct JsAccountAddressRender {
     pub canonical_hex: String,
     /// IH58 encoding generated with the supplied network prefix.
     pub ih58: String,
-    /// Compressed half-width Sora encoding (`snx1…`).
+    /// Compressed half-width Sora encoding (`sora…`).
     pub compressed: String,
     /// Compressed full-width Sora encoding (イロハ glyphs).
     pub compressed_fullwidth: String,
@@ -430,7 +430,7 @@ pub fn soradns_derive_gateway_hosts(fqdn: String) -> napi::Result<JsGatewayHosts
     })
 }
 
-/// Parse an account address string (IH58 (preferred), compressed (`snx1`, second-best), or canonical hex).
+/// Parse an account address string (IH58 (preferred), compressed (`sora`, second-best), or canonical hex).
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for bindings
 pub fn account_address_parse_any(

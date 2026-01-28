@@ -100,7 +100,7 @@ console.log(formats.domainSummary.selector.registryId); // registry id when Glob
 > ℹ️ When showing addresses in wallets, explorers, or SDK samples, follow the
 > dual-format UX checklist captured in
 > [`docs/source/sns/address_display_guidelines.md`](../../docs/source/sns/address_display_guidelines.md):
-> IH58 remains the default copy/share target, compressed (`snx1`, second-best) strings need an inline
+> IH58 remains the default copy/share target, compressed (`sora`, second-best) strings need an inline
 > warning, and QR codes should always encode the IH58 value.
 
 ## Subscriptions
@@ -1466,7 +1466,7 @@ Each helper normalises/validates the response payloads:
   sorted dataspace/account tree.
 - `getUaidBindings` mirrors the Space Directory bindings map so tooling can
   confirm which Torii account IDs are active per dataspace. Pass
-  `addressFormat: "compressed"` to retrieve `snx1…@domain` literals when you
+  `addressFormat: "compressed"` to retrieve `sora…@domain` literals when you
   need QR-friendly output; IH58 strings remain the default.
 - `getUaidManifests` validates lifecycle metadata, manifest hashes, allow/deny
   entries, and optional dataspace filters (set `dataspaceId` to restrict the
@@ -2877,7 +2877,7 @@ plain object. Passing primitives, arrays, or class instances throws a
 `TypeError` before any HTTP call, keeping the JS-04 validation guarantees aligned
 with the Rust/Python SDKs.
 
-`addressFormat` accepts `"compressed"` to request the snx1 form or `"ih58"`/`"canonical"`
+`addressFormat` accepts `"compressed"` to request the sora form or `"ih58"`/`"canonical"`
 to stick with the multihash default; any other value is rejected before the HTTP call.
 
 All pagination knobs (`limit`, `offset`, `pageSize`, `maxItems`, `fetchSize`) accept the
@@ -3048,7 +3048,7 @@ console.log(
 
 for await (const account of torii.iterateAccountsQuery({
   pageSize: 100,
-  filter: { Eq: ["id", "snx1alicepayload@wonderland"] },
+  filter: { Eq: ["id", "soraalicepayload@wonderland"] },
   select: [{ Fields: ["id", "metadata.display_name"] }],
 })) {
   console.log("matching account", account.id);
@@ -3083,7 +3083,7 @@ for await (const trigger of torii.iterateTriggersQuery({
 //     NFT_DEFINITION_ID=art#wonderland
 ```
 
-> **Roadmap ADDR-5a:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and their query/iterator variants) now accept canonical, IH58 (preferred), or compressed (`snx1`, second-best) literals and automatically percent-encode them when constructing `/v1/accounts/{account_id}/…` routes, so SDK callers can forward whatever selector they surface in wallets without hand-escaping.
+> **Roadmap ADDR-5a:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and their query/iterator variants) now accept canonical, IH58 (preferred), or compressed (`sora`, second-best) literals and automatically percent-encode them when constructing `/v1/accounts/{account_id}/…` routes, so SDK callers can forward whatever selector they surface in wallets without hand-escaping.
 
 Use the SNS helpers to manage Sora Name Service records without hand-crafting JSON:
 
@@ -3157,7 +3157,7 @@ if (explorerMetrics) {
   console.log("explorer metrics disabled on this node");
 }
 
-const qr = await torii.getExplorerAccountQr("snx1exampleaddress@wonderland", {
+const qr = await torii.getExplorerAccountQr("soraexampleaddress@wonderland", {
   addressFormat: "compressed",
 });
 console.log(qr.literal); // compressed literal embedded in the QR SVG
@@ -3445,7 +3445,7 @@ await torii.registerTrigger({
 ```
 
 When calling `list*` helpers or `getExplorerAccountQr`, set `addressFormat` to
-`"compressed"` for snx1 literals or `"ih58"`/`"canonical"` for the default multihash
+`"compressed"` for sora literals or `"ih58"`/`"canonical"` for the default multihash
 form—other values throw before the HTTP request is made.
 
 `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` normalise

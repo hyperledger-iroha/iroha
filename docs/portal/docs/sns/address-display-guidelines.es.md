@@ -22,7 +22,7 @@ cuenta como payloads inmutables. El ejemplo de billetera retail de Android en
 `examples/android/retail-wallet` ahora demuestra el patron de UX requerido:
 
 - **Dos objetivos de copia.** Envia dos botones de copia explicitos: IH58
-  (preferido) y la forma comprimida solo Sora (`snx1...`, segunda mejor opción).
+  (preferido) y la forma comprimida solo Sora (`sora...`, segunda mejor opción).
   IH58 siempre es seguro para compartir externamente y alimenta el payload del QR. La variante
   comprimida debe incluir una advertencia en linea porque solo funciona dentro
   de apps con soporte de Sora. El ejemplo de billetera retail de Android
@@ -71,7 +71,7 @@ consistentes:
   (`javascript/iroha_js/src/address.js`)
 - JavaScript inspector: `inspectAccountId(...)` devuelve la cadena de advertencia
   comprimida y la agrega a `warnings` cuando los llamadores proporcionan un
-  literal `snx1...`, de modo que los exploradores/dashboards de billeteras puedan
+  literal `sora...`, de modo que los exploradores/dashboards de billeteras puedan
   mostrar el aviso solo Sora durante los flujos de pegado/validacion en lugar de
   hacerlo solo cuando generan la forma comprimida por su cuenta.
 - Python: `AccountAddress.display_formats(network_prefix: int = 753)`
@@ -190,7 +190,7 @@ cadenas comprimidas deben seguir el flujo CLI documentado en ADDR-5:
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("snx1...");
+   const summary = inspectAccountId("sora...");
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }

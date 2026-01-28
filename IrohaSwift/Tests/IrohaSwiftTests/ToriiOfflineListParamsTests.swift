@@ -53,7 +53,7 @@ final class ToriiOfflineListParamsTests: XCTestCase {
     }
 
     func testAddressFormatAliasRejection() {
-        let params = ToriiOfflineListParams(addressFormat: "  SnX1 ")
+        let params = ToriiOfflineListParams(addressFormat: "  SoRa ")
         XCTAssertThrowsError(try params.queryItems()) { error in
             guard case ToriiClientError.invalidPayload = error else {
                 return XCTFail("Expected invalidPayload, got \(error)")

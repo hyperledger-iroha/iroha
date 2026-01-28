@@ -87,7 +87,7 @@ SDK, etc.).
 These examples should be mirrored in fixtures for Torii and SDKs so that
 cross-language implementations converge on the same behaviour. The canonical
 bundle in `fixtures/account/address_vectors.json` contains the corresponding
-IH58 (preferred)/snx1 (second-best) encodings for regression tests.
+IH58 (preferred)/sora (second-best) encodings for regression tests.
 
 ## Reference pseudocode
 

@@ -241,7 +241,7 @@ Enum RegistryEventKind {
 Gateways は `RegistryEventV1` を購読し、DNS/SoraFS を次の手順で同期する:
 
 1. イベントシーケンスで参照される最新の `NameRecordV1` を取得。
-2. Resolver templates を再生成 (IH58 推奨 + compressed (`snx1`) 次善の addresses, text records)。
+2. Resolver templates を再生成 (IH58 推奨 + compressed (`sora`) 次善の addresses, text records)。
 3. [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) の SoraDNS フローで更新ゾーンを pin。
 
 イベント配信の保証:

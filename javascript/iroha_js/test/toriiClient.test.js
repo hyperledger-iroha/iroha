@@ -11407,7 +11407,7 @@ test("listAccountPermissions validates entry names", async () => {
   );
 });
 
-test("listAccountPermissions normalizes IH58 and compressed (`snx1`) account ids", async () => {
+test("listAccountPermissions normalizes IH58 and compressed (`sora`) account ids", async () => {
   const forms = sampleAccountForms();
   for (const literal of [forms.ih58, forms.compressed]) {
     let requestedPath = null;
@@ -14783,7 +14783,7 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
       {
         certificate_id_hex: "cafebabe",
         controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
-        controller_display: "snx1qqqqqqqq",
+        controller_display: "soraqqqqqqqq",
         asset_id: "usd#wonderland",
             registered_at_ms: "1234",
             expires_at_ms: "9999",
@@ -14801,7 +14801,7 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
           {
             certificate_id_hex: "feedface",
             controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
-            controller_display: "snx1qqqqqqqr",
+            controller_display: "soraqqqqqqqr",
             asset_id: "usd#wonderland",
             registered_at_ms: 2000,
             expires_at_ms: 3000,
@@ -14836,7 +14836,7 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
   const item = page.items[0];
   assert.equal(item.certificate_id_hex, "cafebabe");
   assert.equal(item.controller_id, "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx");
-  assert.equal(item.controller_display, "snx1qqqqqqqq");
+  assert.equal(item.controller_display, "soraqqqqqqqq");
   assert.equal(item.asset_id, "usd#wonderland");
   assert.equal(item.registered_at_ms, 1234);
   assert.equal(item.expires_at_ms, 9999);
@@ -14900,7 +14900,7 @@ test("listOfflineAllowances captures play integrity metadata", async () => {
           {
             certificate_id_hex: "cafebabe",
             controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
-            controller_display: "snx1qqqqqqqq",
+            controller_display: "soraqqqqqqqq",
             asset_id: "usd#wonderland",
             registered_at_ms: "1234",
             expires_at_ms: "9999",
@@ -14956,7 +14956,7 @@ test("listOfflineAllowances captures hms safety detect metadata", async () => {
           {
             certificate_id_hex: "deadbeef",
             controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
-            controller_display: "snx1qqqqqqqq",
+            controller_display: "soraqqqqqqqq",
             asset_id: "usd#wonderland",
             registered_at_ms: "1234",
             expires_at_ms: "9999",
@@ -15010,11 +15010,11 @@ test("listOfflineTransfers normalizes payloads and metadata", async () => {
           {
             bundle_id_hex: "CAFEBABE",
             controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
-            controller_display: "snx1qqqqqqqq",
+            controller_display: "soraqqqqqqqq",
             receiver_id: "34mSYnDgbaJM58rbLoif4Tkp7G67C73PKjYE6fuJBME5VfWthHXdZoWkGoteTkgG8vKpfRrci",
-            receiver_display: "snx1qqqqqqqr",
+            receiver_display: "soraqqqqqqqr",
             deposit_account_id: "34mSYnDgbaJM58rbLoif4Tkp7G67C73PKjYE6fuJBME5VfWthHXdZoWkGoteTkgG8vKpfRrci",
-            deposit_account_display: "snx1qqqqqqqs",
+            deposit_account_display: "soraqqqqqqqs",
             asset_id: "usd#wonderland",
             receipt_count: "2",
             total_amount: "15",
@@ -15039,11 +15039,11 @@ test("listOfflineTransfers normalizes payloads and metadata", async () => {
           {
             bundle_id_hex: "FEEDBEEF",
             controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
-            controller_display: "snx1qqqqqqqt",
+            controller_display: "soraqqqqqqqt",
             receiver_id: "34mSYnDgbaJM58rbLoif4Tkp7G67C73PKjYE6fuJBME5VfWthHXdZoWkGoteTkgG8vKpfRrci",
-            receiver_display: "snx1qqqqqqqu",
+            receiver_display: "soraqqqqqqqu",
             deposit_account_id: "34mSYnDgbaJM58rbLoif4Tkp7G67C73PKjYE6fuJBME5VfWthHXdZoWkGoteTkgG8vKpfRrci",
-            deposit_account_display: "snx1qqqqqqqv",
+            deposit_account_display: "soraqqqqqqqv",
             asset_id: null,
             receipt_count: 1,
             total_amount: "5",
@@ -15503,7 +15503,7 @@ test("listOfflineRevocations normalizes payloads and query params", async () => 
           {
             verdict_id_hex: "DEADBEEF",
             issuer_id: "34mSYnDgbaJM58rbLoif4Tkp7G3LK6omG8ADbG9xFzScZtGz4E1xiodxK2zhisn9dsGDuAVgS",
-            issuer_display: "snx1qqqqqqqq",
+            issuer_display: "soraqqqqqqqq",
             revoked_at_ms: "1234",
             reason: "compromised_device",
             note: "rotated",
@@ -15536,7 +15536,7 @@ test("listOfflineRevocations normalizes payloads and query params", async () => 
   const item = page.items[0];
   assert.equal(item.verdict_id_hex, "deadbeef");
   assert.equal(item.issuer_id, "34mSYnDgbaJM58rbLoif4Tkp7G3LK6omG8ADbG9xFzScZtGz4E1xiodxK2zhisn9dsGDuAVgS");
-  assert.equal(item.issuer_display, "snx1qqqqqqqq");
+  assert.equal(item.issuer_display, "soraqqqqqqqq");
   assert.equal(item.revoked_at_ms, 1234);
   assert.equal(item.reason, "compromised_device");
   assert.equal(item.note, "rotated");
@@ -15605,7 +15605,7 @@ test("listOfflineSummaries normalizes counters and query params", async () => {
       {
         certificate_id_hex: "feedface",
         controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
-        controller_display: "snx1alice",
+        controller_display: "soraalice",
         summary_hash_hex: "beadbead",
         apple_key_counters: { primary: "4" },
         android_series_counters: null,
@@ -15652,7 +15652,7 @@ test("listOfflineSummaries normalizes counters and query params", async () => {
   const item = page.items[0];
   assert.equal(item.certificate_id_hex, "feedface");
   assert.equal(item.controller_id, "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx");
-  assert.equal(item.controller_display, "snx1alice");
+  assert.equal(item.controller_display, "soraalice");
   assert.equal(item.summary_hash_hex, "beadbead");
   assert.deepEqual(item.apple_key_counters, { primary: 4 });
   assert.deepEqual(item.android_series_counters, {});
@@ -15674,7 +15674,7 @@ test("queryOfflineSummaries posts envelope and normalizes payload", async () => 
       {
         certificate_id_hex: "cafebabe",
         controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
-        controller_display: "snx1bob",
+        controller_display: "sorabob",
         summary_hash_hex: "abbaabba",
         apple_key_counters: { regional: "7" },
         android_series_counters: { fallback: 2 },
@@ -15832,11 +15832,11 @@ test("queryOfflineTransfers posts envelope and normalizes optional fields", asyn
       {
         bundle_id_hex: "ff00",
         controller_id: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx",
-        controller_display: "snx1controller",
+        controller_display: "soracontroller",
         receiver_id: "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
-        receiver_display: "snx1receiver",
+        receiver_display: "sorareceiver",
         deposit_account_id: "34mSYnDgbaJM58rbLoif4Tkp7G6qLzY5gaqJUfCvT4YHbbY5YhYjzprYUUjE9KJ5qNAisCxyW",
-        deposit_account_display: "snx1vault",
+        deposit_account_display: "soravault",
         status: "Pending",
         recorded_at_ms: 1_000,
         recorded_at_height: 5,
@@ -16349,7 +16349,7 @@ test("getExplorerAccountQr normalizes payloads and accepts address format option
         status: 200,
         jsonData: {
           canonical_id: accountId,
-          literal: "snx1testliteral",
+          literal: "soratestliteral",
           address_format: "compressed",
           network_prefix: 73,
           error_correction: "M",
@@ -16382,7 +16382,7 @@ test("getExplorerAccountQr normalizes payloads and accepts address format option
   });
   assert.deepEqual(compressedSnapshot, {
     canonicalId: accountId,
-    literal: "snx1testliteral",
+    literal: "soratestliteral",
     addressFormat: "compressed",
     networkPrefix: 73,
     errorCorrection: "M",
@@ -16441,7 +16441,7 @@ test("registerSnsName posts payload and normalizes response", async () => {
           name_hash: nameHash,
           owner: SAMPLE_ACCOUNT_ID,
           controllers: [
-            { controller_type: "Account", account_address: "snx1owner", payload: { note: "primary" } },
+            { controller_type: "Account", account_address: "soraowner", payload: { note: "primary" } },
           ],
           status: { status: "Frozen", detail: { reason: "review", until_ms: 42 } },
           pricing_class: 2,
@@ -16468,7 +16468,7 @@ test("registerSnsName posts payload and normalizes response", async () => {
     selector: { suffix_id: 1, label: "makoto" },
     owner: SAMPLE_ACCOUNT_ID,
     term_years: 1,
-    controllers: [{ controller_type: "Account", account_address: "snx1owner", payload: { note: "primary" } }],
+    controllers: [{ controller_type: "Account", account_address: "soraowner", payload: { note: "primary" } }],
     payment: {
       asset_id: "xor#sora",
       gross_amount: 120,

@@ -124,7 +124,7 @@ address-manifest-<REVISION>/
 2. **Derive canonical payloads.** For each alias being updated, run:
 
    ```bash
-   iroha tools address convert snx1...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
+   iroha tools address convert sora...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
    jq '.canonical_hex, .input_domain' /tmp/alias.json
    ```
 
@@ -170,7 +170,7 @@ address-manifest-<REVISION>/
     `scripts/address_local_toolkit.sh` to confirm the digest mapping, and
     coordinate with Nexus governance before reissuing the affected registry
     entry.
-  - `AddressInvalidRatioSlo` — warns when invalid IH58 (preferred)/snx1 (second-best) submissions
+  - `AddressInvalidRatioSlo` — warns when invalid IH58 (preferred)/sora (second-best) submissions
     exceed the 0.1 % fleet-wide SLO for ten minutes. Investigate
     `torii_address_invalid_total` by context/reason and coordinate with the
     owning SDK team before declaring the incident resolved.

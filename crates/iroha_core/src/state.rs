@@ -7789,6 +7789,13 @@ impl DetachedStateTransactionDelta {
                                 Sumeragi(SumeragiParameter::MinFinalityMs)
                             )
                         }
+                        iroha_data_model::parameter::SumeragiParameter::PacingFactorBps(_) => {
+                            set_param_and_emit!(
+                                params,
+                                iroha_data_model::parameter::Parameter::Sumeragi(x),
+                                Sumeragi(SumeragiParameter::PacingFactorBps)
+                            )
+                        }
                         iroha_data_model::parameter::SumeragiParameter::CollectorsK(_) => {
                             set_param_and_emit!(
                                 params,

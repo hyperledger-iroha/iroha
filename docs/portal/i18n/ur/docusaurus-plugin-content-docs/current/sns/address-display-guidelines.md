@@ -18,7 +18,7 @@ Android کی ریٹیل والٹ مثال
 `examples/android/retail-wallet` میں مطلوبہ UX پیٹرن دکھایا گیا ہے:
 
 - **دو کاپی اہداف۔** دو واضح کاپی بٹنز دیں: IH58 (ترجیحی) اور صرف Sora والا
-  کمپریسڈ فارم (`snx1...`، second‑best). IH58 ہمیشہ بیرونی شیئرنگ کے لئے محفوظ ہے اور QR
+  کمپریسڈ فارم (`sora...`، second‑best). IH58 ہمیشہ بیرونی شیئرنگ کے لئے محفوظ ہے اور QR
   payload بناتا ہے۔ کمپریسڈ فارم میں inline وارننگ لازمی ہے کیونکہ یہ صرف
   Sora-aware ایپس میں کام کرتا ہے۔ Android مثال دونوں Material بٹنز اور ٹول ٹپس
   کو `examples/android/retail-wallet/src/main/res/layout/activity_main.xml` میں
@@ -61,7 +61,7 @@ string دیتا ہے تاکہ UI لیئرز مستقل رہیں:
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
 - JavaScript inspector: `inspectAccountId(...)` کمپریسڈ وارننگ string لوٹاتا ہے
-  اور اسے `warnings` میں شامل کرتا ہے جب کالرز `snx1...` literal دیں، تاکہ والٹ/
+  اور اسے `warnings` میں شامل کرتا ہے جب کالرز `sora...` literal دیں، تاکہ والٹ/
   ایکسپلورر ڈیش بورڈز paste/validation فلو میں Sora-only وارننگ دکھا سکیں، نہ کہ
   صرف تب جب وہ کمپریسڈ فارم خود بنائیں۔
 - Python: `AccountAddress.display_formats(network_prefix: int = 753)`
@@ -80,7 +80,7 @@ helper `domainSummary` میں `selector` payload (`tag`, `digest_hex`, `registry
 
 ایکسپلوررز کو والٹ کی telemetry اور accessibility کے کام کو mirror کرنا چاہیے:
 
-- کاپی بٹنز پر `data-copy-mode="ih58|compressed (`snx1`)|qr"` لگائیں تاکہ فرنٹ اینڈز Torii
+- کاپی بٹنز پر `data-copy-mode="ih58|compressed (`sora`)|qr"` لگائیں تاکہ فرنٹ اینڈز Torii
   میٹرک `torii_address_format_total` کے ساتھ usage counters نکال سکیں۔ اوپر والا
   ڈیمو کمپوننٹ `{mode,timestamp}` کے ساتھ `iroha:address-copy` ایونٹ بھیجتا ہے؛
   اسے اپنے analytics/telemetry pipeline (مثلاً Segment یا NORITO-backed collector)
@@ -170,17 +170,17 @@ UIs اور SDKs کو selector کی قسم دکھانے کے لئے تیار ہو
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("snx1...");
+   const summary = inspectAccountId("sora...");
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
-   console.log(summary.ih58.value, summary.compressed (`snx1`));
+   console.log(summary.ih58.value, summary.compressed (`sora`));
    ```
   helper literal سے detect کیا گیا IH58 prefix محفوظ رکھتا ہے جب تک آپ
   `networkPrefix` واضح طور پر فراہم نہ کریں؛ اس لئے non-default networks کے
   summaries خاموشی سے default prefix کے ساتھ دوبارہ render نہیں ہوتے۔
 
-3. canonical payload کو `ih58.value` یا `compressed (`snx1`)` فیلڈز سے reuse کر کے تبدیل
+3. canonical payload کو `ih58.value` یا `compressed (`sora`)` فیلڈز سے reuse کر کے تبدیل
    کریں (یا `--format` کے ذریعے دوسری encoding مانگیں)۔ یہ strings پہلے سے
    بیرونی شیئرنگ کے لئے محفوظ ہیں۔
 4. manifests، registries اور customer-facing docs کو canonical فارم سے اپ ڈیٹ
@@ -190,14 +190,14 @@ UIs اور SDKs کو selector کی قسم دکھانے کے لئے تیار ہو
    `iroha tools address audit --input addresses.txt --network-prefix 753` چلائیں۔ کمانڈ
    newline-separated literals پڑھتی ہے ( `#` سے شروع ہونے والے comments نظرانداز
    ہوتے ہیں، اور `--input -` یا کوئی فلیگ نہ ہو تو STDIN استعمال ہوتا ہے)، ہر
-   اندراج کے لئے canonical/IH58 (ترجیحی)/compressed (`snx1`, second-best) summaries کے ساتھ JSON رپورٹ بناتی
+   اندراج کے لئے canonical/IH58 (ترجیحی)/compressed (`sora`, second-best) summaries کے ساتھ JSON رپورٹ بناتی
    rows ہوں تو `--allow-errors` استعمال کریں، اور جب آپریٹرز Local selectors کو
    CI میں بلاک کرنے کے لئے تیار ہوں تو `--fail-on-warning` سے آٹومیشن گیٹ کریں۔
 6. اگر newline-to-newline rewrite چاہیے تو
   Local-selector remediation spreadsheets کے لئے
   استعمال کریں تاکہ `input,status,format,...` CSV برآمد ہو جو canonical encodings،
   warnings اور parse failures کو ایک پاس میں نمایاں کرے۔ helper ڈیفالٹ طور پر
-  non-Local rows چھوڑ دیتا ہے، باقی entries کو مطلوبہ encoding (IH58 ترجیحی/compressed (`snx1`) second‑best/hex/JSON)
+  non-Local rows چھوڑ دیتا ہے، باقی entries کو مطلوبہ encoding (IH58 ترجیحی/compressed (`sora`) second‑best/hex/JSON)
   میں بدلتا ہے، اور `--append-domain` پر اصل ڈومین محفوظ رکھتا ہے۔ `--allow-errors`
   کے ساتھ جوڑیں تاکہ خراب literals والے dumps پر بھی scan جاری رہے۔
 7. CI/lint automation `ci/check_address_normalize.sh` چلا سکتی ہے، جو

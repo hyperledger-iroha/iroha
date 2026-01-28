@@ -37,7 +37,7 @@ translator: manual
 
 **ייצוגים טקסטואליים:**
 - `DomainId`: `wonderland`
-- `AccountId`: הכתובת הקנונית מנוהלת דרך `AccountAddress` עם קודקים ל‑IH58, תצוגת סורה הדחוסה (`snx1…`) והקסדצימלית (`canonical_hex`). IH58 הוא הפורמט המועדף, ו־`snx1…` הוא אפשרות שנייה ייעודית ל‑Sora. מחרוזות `alias@domain` נשמרות ככינויי ניתוב בלבד. Torii מנרמל קלטים דרך `AccountAddress::parse_any`. Supports single-key and multisig controllers.
+- `AccountId`: הכתובת הקנונית מנוהלת דרך `AccountAddress` עם קודקים ל‑IH58, תצוגת סורה הדחוסה (`sora…`) והקסדצימלית (`canonical_hex`). IH58 הוא הפורמט המועדף, ו־`sora…` הוא אפשרות שנייה ייעודית ל‑Sora. מחרוזות `alias@domain` נשמרות ככינויי ניתוב בלבד. Torii מנרמל קלטים דרך `AccountAddress::parse_any`. Supports single-key and multisig controllers.
 - `AssetDefinitionId`: `asset#domain`
 - `AssetId`: `asset#domain#account`
 - `NftId`: `nft$domain`

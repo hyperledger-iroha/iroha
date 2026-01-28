@@ -2,7 +2,7 @@ import React, {useState} from 'react';
 
 const SAMPLE_ADDRESS = {
   ih58: 'RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA',
-  compressed: 'snx12QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8',
+  compressed: 'sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8',
   warning: 'Compressed addresses are Sora-only and second-best; prefer IH58.',
   domain: 'default',
   implicitDefault: true,
@@ -70,7 +70,7 @@ export default function ExplorerAddressCard() {
             aria-pressed="false"
             aria-label="Copy compressed Sora-only address (second-best; warn recipients)"
             onClick={() => handleCopy('compressed', SAMPLE_ADDRESS.compressed, SAMPLE_ADDRESS.warning)}>
-            Copy compressed (`snx1`, second-best)
+            Copy compressed (`sora`, second-best)
           </button>
         </div>
 

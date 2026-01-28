@@ -76,7 +76,7 @@ final class DemoConnectViewModelTests: XCTestCase {
       return
     }
     XCTAssertFalse(preview.ih58.isEmpty)
-    XCTAssertTrue(preview.compressed.hasPrefix("snx1"))
+    XCTAssertTrue(preview.compressed.hasPrefix("sora"))
     XCTAssertTrue(preview.compressedWarning.lowercased().contains("compressed"))
 #else
     throw XCTSkip("IrohaSwift framework is unavailable on this platform")

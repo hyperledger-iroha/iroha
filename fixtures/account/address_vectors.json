@@ -30,7 +30,7 @@
         },
         "format": "compressed",
         "input": "2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8",
-        "note": "Missing required snx1 sentinel prefix."
+        "note": "Missing required sora sentinel prefix."
       },
       {
         "case_id": "compressed-invalid-character",
@@ -38,7 +38,7 @@
           "kind": "ChecksumMismatch"
         },
         "format": "compressed",
-        "input": "snx12QAﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8",
+        "input": "sora2QAﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8",
         "note": "Introduces ASCII 'A' outside the Sora compressed alphabet."
       },
       {
@@ -47,7 +47,7 @@
           "kind": "ChecksumMismatch"
         },
         "format": "compressed",
-        "input": "snx12QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VFﾇ",
+        "input": "sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VFﾇ",
         "note": "Checksum nibble replaced to trigger Bech32m verification failure."
       },
       {
@@ -91,8 +91,8 @@
         },
         "encodings": {
           "canonical_hex": "0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
-          "compressed": "snx12QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8",
-          "compressed_fullwidth": "snx12QGネkタヘrNメBホwヘwルwラXHwワCリツY8ryGUネホyQイHyヰD8イチYVY9VF8",
+          "compressed": "sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8",
+          "compressed_fullwidth": "sora2QGネkタヘrNメBホwヘwルwラXHwワCリツY8ryGUネホyQイHyヰD8イチYVY9VF8",
           "ih58": {
             "prefix": 753,
             "string": "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA"
@@ -120,8 +120,8 @@
         },
         "encodings": {
           "canonical_hex": "0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-          "compressed": "snx15ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU",
-          "compressed_fullwidth": "snx15サu6rタCヰTGwマ1ナヱフQイヨヌqCヲヰモZQCZRDSSナMアルヱケチク8セeトロ6C8bZuwラケCZヲRSLQFU",
+          "compressed": "sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU",
+          "compressed_fullwidth": "sora5サu6rタCヰTGwマ1ナヱフQイヨヌqCヲヰモZQCZRDSSナMアルヱケチク8セeトロ6C8bZuwラケCZヲRSLQFU",
           "ih58": {
             "prefix": 753,
             "string": "34mSYnCXkCzHXm31UDHh7SJfGvDr5J6dmRfd2uSV4p9c6R8J4RtERSzJskHar6uZsUVTKSKNU"
@@ -150,8 +150,8 @@
         },
         "encodings": {
           "canonical_hex": "0x02020000002a0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-          "compressed": "snx1kXｹ6NｻﾍﾀﾖTRuﾜmﾚHWﾜJeﾈjbxｦﾜN7ﾄ1ﾍUnﾄrｶﾔﾊﾑｲｲﾎbｶｽヰJﾛM7PUK8",
-          "compressed_fullwidth": "snx1kXケ6NサヘタヨTRuワmレHWワJeネjbxヲワN7ト1ヘUnトrカヤハムイイホbカスヰJロM7PUK8",
+          "compressed": "sorakXｹ6NｻﾍﾀﾖTRuﾜmﾚHWﾜJeﾈjbxｦﾜN7ﾄ1ﾍUnﾄrｶﾔﾊﾑｲｲﾎbｶｽヰJﾛM7PUK8",
+          "compressed_fullwidth": "sorakXケ6NサヘタヨTRuワmレHWワJeネjbxヲワN7ト1ヘUnトrカヤハムイイホbカスヰJロM7PUK8",
           "ih58": {
             "prefix": 753,
             "string": "3oE9sLeRGP49Cu7oBgh6zmbDeoohgTqtabbjxhm7bTpTLxu3tWf6LKQsWoH8Wd"
@@ -205,8 +205,8 @@
         },
         "encodings": {
           "canonical_hex": "0x0a014b5d81318d0cdf5559258c8e0101000303010001002068f4b6017d0f876a55c80a82b8388a54aad264d367269e2de8be079c935b5f9601000100207ea0e3bd52e207c9d3b0eba65c0704e66fca2d8e165a175218b174fc4160e4130100020020884b8857f4eaa1613c61504db34d4beaf346517a0e31de3cddd4d9b4201d9d0b",
-          "compressed": "snx13vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnﾖgoGdgQyjVVezjﾁｽkｲtﾌn8ｵvﾉ9ﾃﾘDｶPﾜｳtKpzｾyヰaﾂｼQｦ9hｳヱSXDﾕｷbqLh3ﾛJTMﾔﾓZﾆﾏｸMﾃJKﾃtｻヱﾃ4uBﾂxﾂヱ5BﾐwaﾇﾒkYﾐquhgヰｹHﾗｶdJNvEﾊXc9ﾇJｺXﾆﾔUｼY6ﾄEyTMMVPR",
-          "compressed_fullwidth": "snx13vム2zkaoUwヒナGリレyツe3ヨfルヰカリノwキnヨgoGdgQyjVVezjチスkイtフn8オvノ9テリDカPワウtKpzセyヰaツシQヲ9hウヱSXDユキbqLh3ロJTMヤモZニマクMテJKテtサヱテ4uBツxツヱ5BミwaヌメkYミquhgヰケHラカdJNvEハXc9ヌJコXニヤUシY6トEyTMMVPR",
+          "compressed": "sora3vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnﾖgoGdgQyjVVezjﾁｽkｲtﾌn8ｵvﾉ9ﾃﾘDｶPﾜｳtKpzｾyヰaﾂｼQｦ9hｳヱSXDﾕｷbqLh3ﾛJTMﾔﾓZﾆﾏｸMﾃJKﾃtｻヱﾃ4uBﾂxﾂヱ5BﾐwaﾇﾒkYﾐquhgヰｹHﾗｶdJNvEﾊXc9ﾇJｺXﾆﾔUｼY6ﾄEyTMMVPR",
+          "compressed_fullwidth": "sora3vム2zkaoUwヒナGリレyツe3ヨfルヰカリノwキnヨgoGdgQyjVVezjチスkイtフn8オvノ9テリDカPワウtKpzセyヰaツシQヲ9hウヱSXDユキbqLh3ロJTMヤモZニマクMテJKテtサヱテ4uBツxツヱ5BミwaヌメkYミquhgヰケHラカdJNvEハXc9ヌJコXニヤUシY6トEyTMMVPR",
           "ih58": {
             "prefix": 753,
             "string": "SRfSHsrH3tEmYaaAYyD248F3vfT1oQ3WEGS2UjLZqBxT5poRc8tQJCPkhpsauft2f9VjRBqE3UnhEjMCp2WZR9FDAQzDpQJRzrZPPqwnSQ9vfDJXANTFyiWFcz67g1JaqjXZbnUiYyURRCLA2ty39PsAAVPvmjfCgpnUmB6aH48eaCpGJW9PeHh"
@@ -261,8 +261,8 @@
         },
         "encodings": {
           "canonical_hex": "0x0a01b8ae571b79c5a80f5834da2b010100020201000100205c9c6df261c9cb840475776aaefcd944b405328fab28f9b3a95ef40490d3de840100020020d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
-          "compressed": "snx12ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐqvﾄWBﾅnJqｻｷk6ﾖｼ5ﾛｲﾐYﾘPafcHヰﾆヰﾏVTﾙﾆ1LjﾇcuﾌヱcCTnﾗWJヱﾖﾛﾙcﾕdwｿfﾂﾚE5eg2GﾛmFAxtﾇﾗs5ｲｽBqdSW41JA",
-          "compressed_fullwidth": "snx12ヨZリeエAdx3ツノヤXhnケタ2ノアヒxナトフヱwミqvトWBナnJqサキk6ヨシ5ロイミYリPafcHヰニヰマVTルニ1LjヌcuフヱcCTnラWJヱヨロルcユdwソfツレE5eg2GロmFAxtヌラs5イスBqdSW41JA",
+          "compressed": "sora2ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐqvﾄWBﾅnJqｻｷk6ﾖｼ5ﾛｲﾐYﾘPafcHヰﾆヰﾏVTﾙﾆ1LjﾇcuﾌヱcCTnﾗWJヱﾖﾛﾙcﾕdwｿfﾂﾚE5eg2GﾛmFAxtﾇﾗs5ｲｽBqdSW41JA",
+          "compressed_fullwidth": "sora2ヨZリeエAdx3ツノヤXhnケタ2ノアヒxナトフヱwミqvトWBナnJqサキk6ヨシ5ロイミYリPafcHヰニヰマVTルニ1LjヌcuフヱcCTnラWJヱヨロルcユdwソfツレE5eg2GロmFAxtヌラs5イスBqdSW41JA",
           "ih58": {
             "prefix": 753,
             "string": "3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9r3qxjrVwQQSrRbAiCMs2j6v2sVEFe56jgfyepc188oJVkv5iKJtzzrfnR8euecsLkut93ACQGdkFvo9eqt8WDJgeE5MPrSFA"
@@ -329,8 +329,8 @@
         },
         "encodings": {
           "canonical_hex": "0x0a000101000304010001002065e8f9b0bc6eae124169f0576f97362d295a8cf5f770b45e14357ce647d33eec0100010020acf12b4acc1c660a8326aed34039efb728a5e496488240f50a932ab7aba517510100010020b533d8ad9fcfbdde0b481c1b334ddc3c53412fd614564e7e5afd020368d382c30100010020bc7cbcb5636375fa1d82434d466724d92377f53b980695dd49d26d0ce12205a5",
-          "compressed": "snx1ﾐ38ﾅｴｸﾜ8ﾃzwBrsﾖﾜﾅﾉ1ﾆ8ｼｷﾉﾖｳｽLwXVｿ54DUinvｷJﾕﾀﾔｺ9zx4ｲNﾙｲwﾖﾗYｽｦVｷ6ﾊtk8vﾄﾓVqﾛ9ｴDheiuﾔbヰｦ4ﾊヱRﾍﾈﾗpbﾋﾈPcﾐﾔMﾊoﾐﾎxVヰﾓｳPﾚcﾋ2ｾﾁﾏｿﾔMoﾆﾈｱtYNfﾉMﾙAﾑeWﾜﾕﾁeaﾆbﾜﾋw1GｱgqJﾁﾇrKﾃ1ﾜﾎS9sﾔﾎFXヰﾔxumｶ5ciﾇヰcﾐﾎｹXrﾎﾛ5SS4X8",
-          "compressed_fullwidth": "snx1ミ38ナエクワ8テzwBrsヨワナノ1ニ8シキノヨウスLwXVソ54DUinvキJユタヤコ9zx4イNルイwヨラYスヲVキ6ハtk8vトモVqロ9エDheiuヤbヰヲ4ハヱRヘネラpbヒネPcミヤMハoミホxVヰモウPレcヒ2セチマソヤMoニネアtYNfノMルAムeWワユチeaニbワヒw1GアgqJチヌrKテ1ワホS9sヤホFXヰヤxumカ5ciヌヰcミホケXrホロ5SS4X8",
+          "compressed": "soraﾐ38ﾅｴｸﾜ8ﾃzwBrsﾖﾜﾅﾉ1ﾆ8ｼｷﾉﾖｳｽLwXVｿ54DUinvｷJﾕﾀﾔｺ9zx4ｲNﾙｲwﾖﾗYｽｦVｷ6ﾊtk8vﾄﾓVqﾛ9ｴDheiuﾔbヰｦ4ﾊヱRﾍﾈﾗpbﾋﾈPcﾐﾔMﾊoﾐﾎxVヰﾓｳPﾚcﾋ2ｾﾁﾏｿﾔMoﾆﾈｱtYNfﾉMﾙAﾑeWﾜﾕﾁeaﾆbﾜﾋw1GｱgqJﾁﾇrKﾃ1ﾜﾎS9sﾔﾎFXヰﾔxumｶ5ciﾇヰcﾐﾎｹXrﾎﾛ5SS4X8",
+          "compressed_fullwidth": "soraミ38ナエクワ8テzwBrsヨワナノ1ニ8シキノヨウスLwXVソ54DUinvキJユタヤコ9zx4イNルイwヨラYスヲVキ6ハtk8vトモVqロ9エDheiuヤbヰヲ4ハヱRヘネラpbヒネPcミヤMハoミホxVヰモウPレcヒ2セチマソヤMoニネアtYNfノMルAムeWワユチeaニbワヒw1GアgqJチヌrKテ1ワホS9sヤホFXヰヤxumカ5ciヌヰcミホケXrホロ5SS4X8",
           "ih58": {
             "prefix": 753,
             "string": "nA2bDNhMqXz7ERkHNoEtHtMbMcSzLGsDGAHYE6LN3nRXMXcN8a5U8MqJvUg47xd8rf4kaxej9qcziwF1Fo8n62TeyGrysCTAhzUaRSHZ3TgrxL9jhdAJbUnvi7dtjEYXR4RyMYj6DuYpcDK3PeJy7aDkKJpU2Bwytfb4dwiopfN28HANpTaTx5aavNeR26FdUsipAPLnbsMq8gQ2TMWVd4Wxx"

@@ -56,7 +56,7 @@ client = create_torii_client(
 ## Account addresses
 
 The `iroha_python.address` module mirrors the Rust codecs so applications can
-switch between canonical bytes, IH58 strings, and the Sora-only compressed (`snx1`, second-best)
+switch between canonical bytes, IH58 strings, and the Sora-only compressed (`sora`, second-best)
 alphabet without writing bespoke conversions:
 
 ```python
@@ -76,7 +76,7 @@ print(formats["compressed_warning"])
 > ℹ️ Follow the dual-format UX checklist described in
 > [`docs/source/sns/address_display_guidelines.md`](../../docs/source/sns/address_display_guidelines.md)
 > whenever you surface addresses in SDK samples or operator tooling: IH58 remains the default share
-> target, compressed (`snx1`, second-best) strings need an inline warning, and QR payloads should
+> target, compressed (`sora`, second-best) strings need an inline warning, and QR payloads should
 > always encode the IH58 value.
 
 ## CUDA helpers

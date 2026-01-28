@@ -4,6 +4,6 @@
     "filter": null,
     "id": 1,
     "secret": null,
-    "url": "https://example.com/webhook"
+    "url": "http://localhost:18080/callback"
   }
 ]

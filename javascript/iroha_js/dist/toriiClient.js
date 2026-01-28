@@ -8929,7 +8929,7 @@ export class ToriiClient {
     if (normalized === "ih58" || normalized === "ih-b32" || normalized === "canonical") {
       return "ih58";
     }
-    if (normalized === "compressed" || normalized === "snx1") {
+    if (normalized === "compressed" || normalized === "sora") {
       return "compressed";
     }
     throw createValidationError(

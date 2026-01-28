@@ -50,7 +50,7 @@ formats without compromising safety or accessibility.
 
 ## Sora-only compressed addresses
 
-- Gating: hide the `snx1…` compressed string behind an explicit confirmation.
+- Gating: hide the `sora…` compressed string behind an explicit confirmation.
   The confirmation must reiterate that the form only works on Sora Nexus chains.
 - Labelling: every occurrence must include a visible “Sora-only” badge and a
   tooltip describing why other networks require the IH58 form.

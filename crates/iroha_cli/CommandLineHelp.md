@@ -692,8 +692,8 @@ Transfer ownership of a domain
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Domain name
-* `-f`, `--from <FROM>` — Source account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
-* `-t`, `--to <TO>` — Destination account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-f`, `--from <FROM>` — Source account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-t`, `--to <TO>` — Destination account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 
 
 
@@ -790,7 +790,7 @@ List account role IDs
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
 * `--offset <OFFSET>` — Offset into the result set (server-side offset)
 
@@ -807,7 +807,7 @@ Grant a role to an account
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `-r`, `--role <ROLE>` — Role name
 
 
@@ -820,7 +820,7 @@ Revoke a role from an account
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `-r`, `--role <ROLE>` — Role name
 
 
@@ -847,7 +847,7 @@ List account permissions
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
 * `--offset <OFFSET>` — Offset into the result set (server-side offset)
 
@@ -864,7 +864,7 @@ Grant an account permission using JSON input from stdin
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 
 
 
@@ -876,7 +876,7 @@ Revoke an account permission using JSON input from stdin
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 
 
 
@@ -950,7 +950,7 @@ Retrieve details of a specific account
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 
 
 
@@ -962,7 +962,7 @@ Register an account
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 
 
 
@@ -974,7 +974,7 @@ Unregister an account
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-i`, `--id <ID>` — Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 
 
 
@@ -1183,8 +1183,8 @@ Transfer ownership of an asset definition
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Asset definition in the format "asset#domain"
-* `-f`, `--from <FROM>` — Source account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
-* `-t`, `--to <TO>` — Destination account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-f`, `--from <FROM>` — Source account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-t`, `--to <TO>` — Destination account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 
 
 
@@ -1350,7 +1350,7 @@ Transfer an asset between accounts
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Asset in the format `asset#domain#account` or `asset##account`
-* `-t`, `--to <TO>` — Destination account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-t`, `--to <TO>` — Destination account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `-q`, `--quantity <QUANTITY>` — Transfer amount (integer or decimal)
 * `--ensure-destination` — Attempt to register the destination when implicit receive is disabled
 
@@ -1480,8 +1480,8 @@ Transfer ownership of NFT
 ###### **Options:**
 
 * `-i`, `--id <ID>` — NFT in the format "name$domain"
-* `-f`, `--from <FROM>` — Source account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
-* `-t`, `--to <TO>` — Destination account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-f`, `--from <FROM>` — Source account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-t`, `--to <TO>` — Destination account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 
 
 
@@ -1845,7 +1845,7 @@ Register a trigger
 * `--instructions-stdin` — Read JSON array of instructions from stdin instead of bytecode path Example: echo "[ {\"Log\": {\"level\": \"INFO\", \"message\": \"hi\"}} ]" | iroha trigger register -i `my_trig` --instructions-stdin
 * `--instructions <PATH>` — Read JSON array of instructions from a file instead of bytecode path
 * `-r`, `--repeats <REPEATS>` — Number of permitted executions (default: indefinitely)
-* `--authority <AUTHORITY>` — Account executing the trigger (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <AUTHORITY>` — Account executing the trigger (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--filter <FILTER>` — Filter type for the trigger
 
   Default value: `execute`
@@ -1856,7 +1856,7 @@ Register a trigger
 * `--time-period-ms <TIME_PERIOD_MS>` — Period in milliseconds for time filter (optional)
 * `--data-filter <JSON>` — JSON for a `DataEventFilter` to use as filter
 * `--data-domain <DATA_DOMAIN>` — Data filter preset: events within a domain
-* `--data-account <DATA_ACCOUNT>` — Data filter preset: events for an account (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--data-account <DATA_ACCOUNT>` — Data filter preset: events for an account (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--data-asset <DATA_ASSET>` — Data filter preset: events for an asset
 * `--data-asset-definition <DATA_ASSET_DEFINITION>` — Data filter preset: events for an asset definition
 * `--data-role <DATA_ROLE>` — Data filter preset: events for a role
@@ -2133,7 +2133,7 @@ Register a multisig account
 
 ###### **Options:**
 
-* `-s`, `--signatories <SIGNATORIES>` — List of signatories for the multisig account (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `-s`, `--signatories <SIGNATORIES>` — List of signatories for the multisig account (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `-w`, `--weights <WEIGHTS>` — Relative weights of signatories' responsibilities
 * `-q`, `--quorum <QUORUM>` — Threshold of total weight required for authentication
 * `--account <ACCOUNT>` — Account id to use for the multisig controller. If omitted, a new random account is generated in the signatory domain and the private key is discarded locally
@@ -4314,7 +4314,7 @@ Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
 
 ###### **Options:**
 
-* `--authority <AUTHORITY>` — Authority account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <AUTHORITY>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--code-file <CODE_FILE>` — Path to compiled `.to` file (mutually exclusive with --code-b64)
 * `--code-b64 <CODE_B64>` — Base64-encoded code (mutually exclusive with --code-file)
@@ -4329,7 +4329,7 @@ Deploy bytecode, register manifest, and activate a namespace binding in one tran
 
 ###### **Options:**
 
-* `--authority <AUTHORITY>` — Authority account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <AUTHORITY>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--private-key <HEX>` — Hex-encoded private key for signing and manifest provenance
 * `--namespace <NAMESPACE>` — Governance namespace to bind (e.g., apps)
 * `--contract-id <ID>` — Contract identifier within the namespace
@@ -4389,7 +4389,7 @@ Run an offline simulation of IVM bytecode to see the queued ISIs and header meta
 
 ###### **Options:**
 
-* `--authority <AUTHORITY>` — Authority account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <AUTHORITY>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--private-key <HEX>` — Hex-encoded private key used to sign the simulated transaction
 * `--code-file <CODE_FILE>` — Path to compiled `.to` file (mutually exclusive with --code-b64)
 * `--code-b64 <CODE_B64>` — Base64-encoded code (mutually exclusive with --code-file)
@@ -4624,7 +4624,7 @@ Shield public funds into a shielded ledger (demo flow)
 ###### **Options:**
 
 * `--asset <ASSET_ID>` — `AssetDefinitionId` like `rose#wonderland`
-* `--from <ACCOUNT_ID>` — Account identifier to debit (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--from <ACCOUNT_ID>` — Account identifier to debit (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--amount <AMOUNT>` — Public amount to debit
 * `--note-commitment <HEX32>` — Output note commitment (hex, 64 chars)
 * `--enc-payload <PATH>` — Encrypted recipient payload envelope (Norito bytes). Optional; empty if not provided
@@ -4643,7 +4643,7 @@ Unshield funds from shielded ledger to public (demo flow)
 ###### **Options:**
 
 * `--asset <ASSET_ID>` — `AssetDefinitionId` like `rose#wonderland`
-* `--to <ACCOUNT_ID>` — Recipient account identifier to credit (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--to <ACCOUNT_ID>` — Recipient account identifier to credit (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--amount <AMOUNT>` — Public amount to credit
 * `--inputs <HEX32[,HEX32,...]>` — Spent nullifiers (comma-separated list of 64-hex strings)
 * `--proof-json <PATH>` — Proof attachment JSON file describing { backend, `proof_b64`, `vk_ref{backend,name}`, `vk_inline{backend,bytes_b64}`, optional `vk_commitment_hex` }
@@ -5691,7 +5691,7 @@ Register a stake-elected validator on a public lane
 ###### **Options:**
 
 * `--lane-id <LANE_ID>` — Lane id to register against
-* `--validator <ACCOUNT_ID>` — Validator account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--validator <ACCOUNT_ID>` — Validator account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--stake-account <ACCOUNT_ID>` — Optional staking account (defaults to validator)
 * `--initial-stake <AMOUNT>` — Initial self-bond (integer, uses the staking asset scale)
 * `--metadata <PATH>` — Optional metadata JSON (Norito JSON object)
@@ -5707,7 +5707,7 @@ Activate a pending validator once its activation epoch is reached
 ###### **Options:**
 
 * `--lane-id <LANE_ID>` — Lane id containing the pending validator
-* `--validator <ACCOUNT_ID>` — Validator account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--validator <ACCOUNT_ID>` — Validator account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 
 
 
@@ -5720,7 +5720,7 @@ Schedule or finalize a validator exit
 ###### **Options:**
 
 * `--lane-id <LANE_ID>` — Lane id containing the validator
-* `--validator <ACCOUNT_ID>` — Validator account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--validator <ACCOUNT_ID>` — Validator account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--release-at-ms <MILLIS>` — Release timestamp in milliseconds (must not precede current block timestamp)
 
 
@@ -5759,7 +5759,7 @@ Register a subscription plan on an asset definition
 
 ###### **Options:**
 
-* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--plan-id <ASSET_DEF_ID>` — Asset definition id where the plan metadata is stored
 * `--plan-json <PATH>` — Path to JSON plan payload (reads stdin when omitted)
@@ -5810,7 +5810,7 @@ Create a subscription and billing trigger
 
 ###### **Options:**
 
-* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--subscription-id <NFT_ID>` — Subscription NFT id to register
 * `--plan-id <ASSET_DEF_ID>` — Subscription plan asset definition id
@@ -5863,7 +5863,7 @@ Pause billing for a subscription
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--charge-at-ms <CHARGE_AT_MS>` — Optional charge time override in UTC milliseconds
 * `--cancel-at-period-end` — Cancel at the end of the current billing period (cancel only)
@@ -5879,7 +5879,7 @@ Resume billing for a subscription
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--charge-at-ms <CHARGE_AT_MS>` — Optional charge time override in UTC milliseconds
 * `--cancel-at-period-end` — Cancel at the end of the current billing period (cancel only)
@@ -5895,7 +5895,7 @@ Cancel a subscription and remove its billing trigger
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--charge-at-ms <CHARGE_AT_MS>` — Optional charge time override in UTC milliseconds
 * `--cancel-at-period-end` — Cancel at the end of the current billing period (cancel only)
@@ -5911,7 +5911,7 @@ Undo a scheduled period-end cancellation
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--charge-at-ms <CHARGE_AT_MS>` — Optional charge time override in UTC milliseconds
 * `--cancel-at-period-end` — Cancel at the end of the current billing period (cancel only)
@@ -5927,7 +5927,7 @@ Execute billing immediately
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--charge-at-ms <CHARGE_AT_MS>` — Optional charge time override in UTC milliseconds
 * `--cancel-at-period-end` — Cancel at the end of the current billing period (cancel only)
@@ -5943,7 +5943,7 @@ Record usage for a subscription usage plan
 ###### **Options:**
 
 * `--subscription-id <NFT_ID>` — Subscription NFT id
-* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--authority <ACCOUNT_ID>` — Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--unit-key <UNIT_KEY>` — Usage counter key to update
 * `--delta <DELTA>` — Usage increment (must be non-negative)
@@ -6461,14 +6461,14 @@ Create a new Kaigi session
 
 * `--domain <DOMAIN-ID>` — Domain identifier hosting the call (e.g. `kaigi`)
 * `--call-name <NAME>` — Call name within the domain (e.g. `daily-sync`)
-* `--host <ACCOUNT-ID>` — Host account identifier responsible for the call (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--host <ACCOUNT-ID>` — Host account identifier responsible for the call (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--title <TITLE>` — Optional human friendly title
 * `--description <DESCRIPTION>` — Optional description for participants
 * `--max-participants <U32>` — Maximum concurrent participants (excluding host)
 * `--gas-rate-per-minute <U64>` — Gas rate charged per minute (defaults to 0)
 
   Default value: `0`
-* `--billing-account <ACCOUNT-ID>` — Optional billing account that will cover usage (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--billing-account <ACCOUNT-ID>` — Optional billing account that will cover usage (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--scheduled-start-ms <U64>` — Optional scheduled start timestamp (milliseconds since epoch)
 * `--privacy-mode <PRIVACY_MODE>` — Privacy mode for the session (defaults to `transparent`)
 
@@ -6499,7 +6499,7 @@ Bootstrap a Kaigi session for demos and shareable testing metadata
 
   Default value: `wonderland`
 * `--call-name <NAME>` — Call name within the domain (defaults to a timestamp-based identifier)
-* `--host <ACCOUNT-ID>` — Host account identifier responsible for the call (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--host <ACCOUNT-ID>` — Host account identifier responsible for the call (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--privacy-mode <PRIVACY_MODE>` — Privacy mode for the session (defaults to `transparent`)
 
   Default value: `transparent`
@@ -6532,7 +6532,7 @@ Join a Kaigi session
 
 * `--domain <DOMAIN-ID>` — Domain identifier hosting the call
 * `--call-name <NAME>` — Call name within the domain
-* `--participant <ACCOUNT-ID>` — Participant account joining the call (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--participant <ACCOUNT-ID>` — Participant account joining the call (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--commitment-hex <HEX>` — Commitment hash (hex) for privacy mode joins
 * `--commitment-alias <COMMITMENT_ALIAS>` — Alias tag describing the commitment (privacy mode)
 * `--nullifier-hex <HEX>` — Nullifier hash (hex) preventing duplicate joins (privacy mode)
@@ -6552,7 +6552,7 @@ Leave a Kaigi session
 
 * `--domain <DOMAIN-ID>` — Domain identifier hosting the call
 * `--call-name <NAME>` — Call name within the domain
-* `--participant <ACCOUNT-ID>` — Participant account leaving the call (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--participant <ACCOUNT-ID>` — Participant account leaving the call (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--commitment-hex <HEX>` — Commitment hash (hex) identifying the participant in privacy mode
 * `--nullifier-hex <HEX>` — Nullifier hash (hex) preventing duplicate leaves (privacy mode)
 * `--nullifier-issued-at-ms <U64>` — Nullifier issuance timestamp (milliseconds since epoch)
@@ -6604,7 +6604,7 @@ Report the health status of a relay used by a Kaigi session
 
 * `--domain <DOMAIN-ID>` — Domain identifier hosting the call
 * `--call-name <NAME>` — Call name within the domain
-* `--relay <ACCOUNT-ID>` — Relay account identifier being reported (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+* `--relay <ACCOUNT-ID>` — Relay account identifier being reported (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
 * `--status <STATUS>` — Observed health status for the relay
 
   Possible values: `healthy`, `degraded`, `unavailable`
@@ -8121,7 +8121,7 @@ Fetch a SNS name record
 
 ###### **Options:**
 
-* `--selector <SELECTOR>` — Selector literal (`label.suffix`). IH58 (preferred)/snx1 (second-best) inputs are accepted
+* `--selector <SELECTOR>` — Selector literal (`label.suffix`). IH58 (preferred)/sora (second-best) inputs are accepted
 
 
 
@@ -8467,7 +8467,7 @@ Developer utilities and diagnostics
 
 ###### **Subcommands:**
 
-* `address` — Account address helpers (IH58 (preferred)/snx1 (second-best) conversions)
+* `address` — Account address helpers (IH58 (preferred)/sora (second-best) conversions)
 * `crypto` — Cryptography helpers (SM2/SM3/SM4)
 * `ivm` — IVM/ABI helpers (e.g., compute ABI hash)
 * `markdown-help` — Output CLI documentation in Markdown format
@@ -8477,7 +8477,7 @@ Developer utilities and diagnostics
 
 ## `iroha_cli tools address`
 
-Account address helpers (IH58 (preferred)/snx1 (second-best) conversions)
+Account address helpers (IH58 (preferred)/sora (second-best) conversions)
 
 **Usage:** `iroha_cli tools address <COMMAND>`
 
@@ -8497,7 +8497,7 @@ Convert account addresses between supported textual encodings
 
 ###### **Arguments:**
 
-* `<ADDRESS>` — Address literal to parse (IH58, `snx1…`, or canonical `0x…`)
+* `<ADDRESS>` — Address literal to parse (IH58, `sora…`, or canonical `0x…`)
 
 ###### **Options:**
 
