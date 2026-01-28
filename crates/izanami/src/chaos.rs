@@ -260,75 +260,115 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
                 IZANAMI_PIPELINE_STATELESS_CACHE_CAP,
             )
             .write(
-                ["sumeragi", "queues", "block_payload"],
+                ["sumeragi", "advanced", "queues", "block_payload"],
                 IZANAMI_BLOCK_PAYLOAD_QUEUE,
             )
             .write(
-                ["sumeragi", "worker", "validation_worker_threads"],
+                [
+                    "sumeragi",
+                    "advanced",
+                    "worker",
+                    "validation_worker_threads",
+                ],
                 IZANAMI_VALIDATION_WORKER_THREADS,
             )
             .write(
-                ["sumeragi", "worker", "validation_work_queue_cap"],
+                [
+                    "sumeragi",
+                    "advanced",
+                    "worker",
+                    "validation_work_queue_cap",
+                ],
                 IZANAMI_VALIDATION_WORK_QUEUE_CAP,
             )
             .write(
-                ["sumeragi", "worker", "validation_result_queue_cap"],
+                [
+                    "sumeragi",
+                    "advanced",
+                    "worker",
+                    "validation_result_queue_cap",
+                ],
                 IZANAMI_VALIDATION_RESULT_QUEUE_CAP,
             )
             .write(
-                ["sumeragi", "worker", "validation_pending_cap"],
+                ["sumeragi", "advanced", "worker", "validation_pending_cap"],
                 IZANAMI_VALIDATION_PENDING_CAP,
             )
             .write(
-                ["sumeragi", "pacemaker", "pending_stall_grace_ms"],
+                [
+                    "sumeragi",
+                    "advanced",
+                    "pacemaker",
+                    "pending_stall_grace_ms",
+                ],
                 IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS,
             )
             .write(
-                ["sumeragi", "pacemaker", "active_pending_soft_limit"],
+                [
+                    "sumeragi",
+                    "advanced",
+                    "pacemaker",
+                    "active_pending_soft_limit",
+                ],
                 IZANAMI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT,
             )
             .write(
-                ["sumeragi", "pacemaker", "rbc_backlog_session_soft_limit"],
+                [
+                    "sumeragi",
+                    "advanced",
+                    "pacemaker",
+                    "rbc_backlog_session_soft_limit",
+                ],
                 IZANAMI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT,
             )
             .write(
-                ["sumeragi", "pacemaker", "rbc_backlog_chunk_soft_limit"],
+                [
+                    "sumeragi",
+                    "advanced",
+                    "pacemaker",
+                    "rbc_backlog_chunk_soft_limit",
+                ],
                 IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
             )
             .write(
-                ["sumeragi", "rbc", "pending_max_chunks"],
+                ["sumeragi", "advanced", "rbc", "pending_max_chunks"],
                 IZANAMI_RBC_PENDING_MAX_CHUNKS,
             )
             .write(
-                ["sumeragi", "rbc", "pending_max_bytes"],
+                ["sumeragi", "advanced", "rbc", "pending_max_bytes"],
                 IZANAMI_RBC_PENDING_MAX_BYTES,
             )
             .write(
-                ["sumeragi", "rbc", "pending_session_limit"],
+                ["sumeragi", "advanced", "rbc", "pending_session_limit"],
                 IZANAMI_RBC_PENDING_SESSION_LIMIT,
             )
             .write(
-                ["sumeragi", "rbc", "pending_ttl_ms"],
+                ["sumeragi", "advanced", "rbc", "pending_ttl_ms"],
                 IZANAMI_RBC_PENDING_TTL_MS,
             )
             .write(
-                ["sumeragi", "rbc", "session_ttl_ms"],
+                ["sumeragi", "advanced", "rbc", "session_ttl_ms"],
                 IZANAMI_RBC_SESSION_TTL_MS,
             )
             .write(
-                ["sumeragi", "rbc", "disk_store_ttl_ms"],
+                ["sumeragi", "advanced", "rbc", "disk_store_ttl_ms"],
                 IZANAMI_RBC_SESSION_TTL_MS,
             )
             .write(
-                ["sumeragi", "rbc", "rebroadcast_sessions_per_tick"],
+                [
+                    "sumeragi",
+                    "advanced",
+                    "rbc",
+                    "rebroadcast_sessions_per_tick",
+                ],
                 IZANAMI_RBC_REBROADCAST_SESSIONS_PER_TICK,
             )
             .write(
-                ["sumeragi", "rbc", "payload_chunks_per_tick"],
+                ["sumeragi", "advanced", "rbc", "payload_chunks_per_tick"],
                 IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK,
             )
             .write(
-                ["sumeragi", "da", "quorum_timeout_multiplier"],
+                ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
                 IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER,
             )
             .write(
@@ -338,10 +378,6 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             .write(
                 ["sumeragi", "gating", "future_view_window"],
                 IZANAMI_FUTURE_VIEW_WINDOW,
-            )
-            .write(
-                ["sumeragi", "npos", "block_time_ms"],
-                as_i64(npos_timing.block_ms),
             )
             .write(
                 ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
@@ -1602,8 +1638,6 @@ mod tests {
         let lookup = |path| layers.iter().rev().find_map(|layer| read_i64(layer, path));
         let lookup_bool = |path| layers.iter().rev().find_map(|layer| read_bool(layer, path));
         let npos_timing = derive_npos_timing(&config);
-        let npos_block_ms =
-            i64::try_from(npos_timing.block_ms).expect("npos block time fits into i64");
         let npos_propose_ms =
             i64::try_from(npos_timing.propose_ms).expect("npos propose timeout fits into i64");
         let npos_prevote_ms =
@@ -1656,75 +1690,115 @@ mod tests {
             Some(IZANAMI_PIPELINE_STATELESS_CACHE_CAP)
         );
         assert_eq!(
-            lookup(&["sumeragi", "queues", "block_payload"]),
+            lookup(&["sumeragi", "advanced", "queues", "block_payload"]),
             Some(IZANAMI_BLOCK_PAYLOAD_QUEUE)
         );
         assert_eq!(
-            lookup(&["sumeragi", "worker", "validation_worker_threads"]),
+            lookup(&[
+                "sumeragi",
+                "advanced",
+                "worker",
+                "validation_worker_threads"
+            ]),
             Some(IZANAMI_VALIDATION_WORKER_THREADS)
         );
         assert_eq!(
-            lookup(&["sumeragi", "worker", "validation_work_queue_cap"]),
+            lookup(&[
+                "sumeragi",
+                "advanced",
+                "worker",
+                "validation_work_queue_cap"
+            ]),
             Some(IZANAMI_VALIDATION_WORK_QUEUE_CAP)
         );
         assert_eq!(
-            lookup(&["sumeragi", "worker", "validation_result_queue_cap"]),
+            lookup(&[
+                "sumeragi",
+                "advanced",
+                "worker",
+                "validation_result_queue_cap"
+            ]),
             Some(IZANAMI_VALIDATION_RESULT_QUEUE_CAP)
         );
         assert_eq!(
-            lookup(&["sumeragi", "worker", "validation_pending_cap"]),
+            lookup(&["sumeragi", "advanced", "worker", "validation_pending_cap"]),
             Some(IZANAMI_VALIDATION_PENDING_CAP)
         );
         assert_eq!(
-            lookup(&["sumeragi", "pacemaker", "pending_stall_grace_ms"]),
+            lookup(&[
+                "sumeragi",
+                "advanced",
+                "pacemaker",
+                "pending_stall_grace_ms"
+            ]),
             Some(IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS)
         );
         assert_eq!(
-            lookup(&["sumeragi", "pacemaker", "active_pending_soft_limit"]),
+            lookup(&[
+                "sumeragi",
+                "advanced",
+                "pacemaker",
+                "active_pending_soft_limit"
+            ]),
             Some(IZANAMI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT)
         );
         assert_eq!(
-            lookup(&["sumeragi", "pacemaker", "rbc_backlog_session_soft_limit"]),
+            lookup(&[
+                "sumeragi",
+                "advanced",
+                "pacemaker",
+                "rbc_backlog_session_soft_limit",
+            ]),
             Some(IZANAMI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT)
         );
         assert_eq!(
-            lookup(&["sumeragi", "pacemaker", "rbc_backlog_chunk_soft_limit"]),
+            lookup(&[
+                "sumeragi",
+                "advanced",
+                "pacemaker",
+                "rbc_backlog_chunk_soft_limit",
+            ]),
             Some(IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT)
         );
         assert_eq!(
-            lookup(&["sumeragi", "rbc", "pending_max_chunks"]),
+            lookup(&["sumeragi", "advanced", "rbc", "pending_max_chunks"]),
             Some(IZANAMI_RBC_PENDING_MAX_CHUNKS)
         );
         assert_eq!(
-            lookup(&["sumeragi", "rbc", "pending_max_bytes"]),
+            lookup(&["sumeragi", "advanced", "rbc", "pending_max_bytes"]),
             Some(IZANAMI_RBC_PENDING_MAX_BYTES)
         );
         assert_eq!(
-            lookup(&["sumeragi", "rbc", "pending_session_limit"]),
+            lookup(&["sumeragi", "advanced", "rbc", "pending_session_limit"]),
             Some(IZANAMI_RBC_PENDING_SESSION_LIMIT)
         );
         assert_eq!(
-            lookup(&["sumeragi", "rbc", "pending_ttl_ms"]),
+            lookup(&["sumeragi", "advanced", "rbc", "pending_ttl_ms"]),
             Some(IZANAMI_RBC_PENDING_TTL_MS)
         );
         assert_eq!(
-            lookup(&["sumeragi", "rbc", "session_ttl_ms"]),
+            lookup(&["sumeragi", "advanced", "rbc", "session_ttl_ms"]),
             Some(IZANAMI_RBC_SESSION_TTL_MS)
         );
         assert_eq!(
-            lookup(&["sumeragi", "rbc", "disk_store_ttl_ms"]),
+            lookup(&["sumeragi", "advanced", "rbc", "disk_store_ttl_ms"]),
             Some(IZANAMI_RBC_SESSION_TTL_MS)
         );
         assert_eq!(
-            lookup(&["sumeragi", "rbc", "rebroadcast_sessions_per_tick"]),
+            lookup(&[
+                "sumeragi",
+                "advanced",
+                "rbc",
+                "rebroadcast_sessions_per_tick"
+            ]),
             Some(IZANAMI_RBC_REBROADCAST_SESSIONS_PER_TICK)
         );
         assert_eq!(
-            lookup(&["sumeragi", "rbc", "payload_chunks_per_tick"]),
+            lookup(&["sumeragi", "advanced", "rbc", "payload_chunks_per_tick"]),
             Some(IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK)
         );
         assert_eq!(
-            lookup(&["sumeragi", "da", "quorum_timeout_multiplier"]),
+            lookup(&["sumeragi", "advanced", "da", "quorum_timeout_multiplier"]),
             Some(IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER)
         );
         assert_eq!(
@@ -1734,10 +1808,6 @@ mod tests {
         assert_eq!(
             lookup(&["sumeragi", "gating", "future_view_window"]),
             Some(IZANAMI_FUTURE_VIEW_WINDOW)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "npos", "block_time_ms"]),
-            Some(npos_block_ms)
         );
         assert_eq!(
             lookup(&["sumeragi", "advanced", "npos", "timeouts", "propose_ms"]),

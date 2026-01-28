@@ -36,7 +36,7 @@ use iroha_config::{
         read::ConfigReader,
         toml::{TomlSource, WriteExt as _, Writer as TomlWriter},
     },
-    parameters::actual::ConsensusMode,
+    parameters::actual::{ConsensusMode, SumeragiNposTimeoutOverrides},
 };
 use iroha_core::sumeragi::consensus::{
     NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
@@ -53,7 +53,10 @@ use iroha_data_model::{
         InstructionBox, SetParameter, set_instruction_registry,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
-    parameter::{SmartContractParameter, SumeragiParameter, system::SumeragiNposParameters},
+    parameter::{
+        CustomParameter, SmartContractParameter, SumeragiParameter,
+        system::{SumeragiNposParameters, consensus_metadata},
+    },
     transaction::Executable,
 };
 use iroha_genesis::{GenesisBlock, GenesisTopologyEntry};
@@ -3131,78 +3134,102 @@ fn normalize_legacy_sumeragi_config(table: &mut Table) {
     move_key("da_enabled", &["da", "enabled"], false);
     move_key(
         "da_quorum_timeout_multiplier",
-        &["da", "quorum_timeout_multiplier"],
+        &["advanced", "da", "quorum_timeout_multiplier"],
         false,
     );
     move_key(
         "da_availability_timeout_multiplier",
-        &["da", "availability_timeout_multiplier"],
+        &["advanced", "da", "availability_timeout_multiplier"],
         false,
     );
     move_key(
         "pacemaker_backoff_multiplier",
-        &["pacemaker", "backoff_multiplier"],
+        &["advanced", "pacemaker", "backoff_multiplier"],
         false,
     );
     move_key(
         "pacemaker_rtt_floor_multiplier",
-        &["pacemaker", "rtt_floor_multiplier"],
+        &["advanced", "pacemaker", "rtt_floor_multiplier"],
         false,
     );
     move_key(
         "pacemaker_max_backoff_ms",
-        &["pacemaker", "max_backoff_ms"],
+        &["advanced", "pacemaker", "max_backoff_ms"],
         false,
     );
     move_key(
         "pacemaker_jitter_frac_permille",
-        &["pacemaker", "jitter_frac_permille"],
+        &["advanced", "pacemaker", "jitter_frac_permille"],
         false,
     );
-    move_key("msg_channel_cap_blocks", &["queues", "blocks"], false);
-    move_key("rbc_chunk_max_bytes", &["rbc", "chunk_max_bytes"], false);
+    move_key(
+        "msg_channel_cap_blocks",
+        &["advanced", "queues", "blocks"],
+        false,
+    );
+    move_key(
+        "rbc_chunk_max_bytes",
+        &["advanced", "rbc", "chunk_max_bytes"],
+        false,
+    );
     move_key(
         "rbc_disk_store_max_bytes",
-        &["rbc", "disk_store_max_bytes"],
+        &["advanced", "rbc", "disk_store_max_bytes"],
         false,
     );
     move_key(
         "rbc_disk_store_ttl_secs",
-        &["rbc", "disk_store_ttl_ms"],
+        &["advanced", "rbc", "disk_store_ttl_ms"],
         true,
     );
     move_key(
         "rbc_payload_chunks_per_tick",
-        &["rbc", "payload_chunks_per_tick"],
+        &["advanced", "rbc", "payload_chunks_per_tick"],
         false,
     );
     move_key(
         "rbc_pending_max_bytes",
-        &["rbc", "pending_max_bytes"],
+        &["advanced", "rbc", "pending_max_bytes"],
         false,
     );
     move_key(
         "rbc_pending_max_chunks",
-        &["rbc", "pending_max_chunks"],
+        &["advanced", "rbc", "pending_max_chunks"],
         false,
     );
-    move_key("rbc_pending_ttl_ms", &["rbc", "pending_ttl_ms"], false);
+    move_key(
+        "rbc_pending_ttl_ms",
+        &["advanced", "rbc", "pending_ttl_ms"],
+        false,
+    );
     move_key(
         "rbc_rebroadcast_sessions_per_tick",
-        &["rbc", "rebroadcast_sessions_per_tick"],
+        &["advanced", "rbc", "rebroadcast_sessions_per_tick"],
         false,
     );
-    move_key("rbc_session_ttl_secs", &["rbc", "session_ttl_ms"], true);
-    move_key("rbc_store_max_bytes", &["rbc", "store_max_bytes"], false);
+    move_key(
+        "rbc_session_ttl_secs",
+        &["advanced", "rbc", "session_ttl_ms"],
+        true,
+    );
+    move_key(
+        "rbc_store_max_bytes",
+        &["advanced", "rbc", "store_max_bytes"],
+        false,
+    );
     move_key(
         "rbc_store_max_sessions",
-        &["rbc", "store_max_sessions"],
+        &["advanced", "rbc", "store_max_sessions"],
         false,
     );
-    move_key("rbc_store_soft_bytes", &["rbc", "store_soft_bytes"], false);
+    move_key(
+        "rbc_store_soft_bytes",
+        &["advanced", "rbc", "store_soft_bytes"],
+        false,
+    );
     move_key(
         "rbc_store_soft_sessions",
-        &["rbc", "store_soft_sessions"],
+        &["advanced", "rbc", "store_soft_sessions"],
         false,
     );
     move_key(
@@ -3250,6 +3277,71 @@ fn get_nested_value<'a>(table: &'a Table, path: &[&str]) -> Option<&'a Value> {
 
 fn read_bool(table: &Table, path: &[&str]) -> Option<bool> {
     get_nested_value(table, path).and_then(Value::as_bool)
+}
+
+fn npos_timeout_override_from_table(table: &Table, path: &[&str]) -> Option<Duration> {
+    let value = get_nested_value(table, path).and_then(Value::as_integer)?;
+    if value <= 0 {
+        return None;
+    }
+    let millis = u64::try_from(value).ok()?;
+    Some(Duration::from_millis(millis))
+}
+
+fn npos_timeout_overrides_from_table(table: &Table) -> Option<SumeragiNposTimeoutOverrides> {
+    let overrides = SumeragiNposTimeoutOverrides {
+        propose: npos_timeout_override_from_table(
+            table,
+            &["advanced", "npos", "timeouts", "propose_ms"],
+        ),
+        prevote: npos_timeout_override_from_table(
+            table,
+            &["advanced", "npos", "timeouts", "prevote_ms"],
+        ),
+        precommit: npos_timeout_override_from_table(
+            table,
+            &["advanced", "npos", "timeouts", "precommit_ms"],
+        ),
+        exec: npos_timeout_override_from_table(table, &["advanced", "npos", "timeouts", "exec_ms"]),
+        witness: npos_timeout_override_from_table(
+            table,
+            &["advanced", "npos", "timeouts", "witness_ms"],
+        ),
+        commit: npos_timeout_override_from_table(
+            table,
+            &["advanced", "npos", "timeouts", "commit_ms"],
+        ),
+        da: npos_timeout_override_from_table(table, &["advanced", "npos", "timeouts", "da_ms"]),
+        aggregator: npos_timeout_override_from_table(
+            table,
+            &["advanced", "npos", "timeouts", "aggregator_ms"],
+        ),
+    };
+    if overrides.propose.is_none()
+        && overrides.prevote.is_none()
+        && overrides.precommit.is_none()
+        && overrides.exec.is_none()
+        && overrides.witness.is_none()
+        && overrides.commit.is_none()
+        && overrides.da.is_none()
+        && overrides.aggregator.is_none()
+    {
+        None
+    } else {
+        Some(overrides)
+    }
+}
+
+fn genesis_contains_parameter(genesis_isi: &[Vec<InstructionBox>], parameter: &Parameter) -> bool {
+    genesis_isi
+        .iter()
+        .flat_map(|tx| tx.iter())
+        .any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<SetParameter>()
+                .is_some_and(|set_param| set_param.inner() == parameter)
+        })
 }
 
 fn genesis_contains_npos_parameters(genesis_isi: &[Vec<InstructionBox>]) -> bool {
@@ -3878,33 +3970,47 @@ impl NetworkBuilder {
                 }
             }
         }
+        let npos_timeout_overrides = peers
+            .first()
+            .and_then(|peer| resolve_actual_config(peer, &config_layers))
+            .map(|config| config.sumeragi.npos.timeouts_overrides)
+            .or_else(|| npos_timeout_overrides_from_table(&merged_sumeragi));
+        let min_finality =
+            Duration::from_millis(parameter_state.sumeragi().min_finality_ms().max(1));
+        let derive_npos_timeouts = |block_time_ms: u64| {
+            let block_time = Duration::from_millis(block_time_ms.max(1));
+            let mut timeouts = npos_timeout_overrides
+                .map(|overrides| overrides.resolve(block_time))
+                .unwrap_or_else(|| {
+                    iroha_config::parameters::actual::SumeragiNposTimeouts::from_block_time(
+                        block_time,
+                    )
+                });
+            let clamp = |value: Duration| {
+                if value < min_finality {
+                    min_finality
+                } else {
+                    value
+                }
+            };
+            timeouts.propose = clamp(timeouts.propose);
+            timeouts.prevote = clamp(timeouts.prevote);
+            timeouts.precommit = clamp(timeouts.precommit);
+            timeouts.commit = clamp(timeouts.commit);
+            timeouts.da = clamp(timeouts.da);
+            timeouts.aggregator = clamp(timeouts.aggregator);
+            timeouts.exec = clamp(timeouts.exec);
+            timeouts.witness = clamp(timeouts.witness);
+            timeouts
+        };
+
         let npos_payload = parameter_state
             .custom()
             .get(&SumeragiNposParameters::parameter_id())
             .and_then(SumeragiNposParameters::from_custom_parameter);
         let (epoch_length_blocks, npos_params) = match npos_payload {
             Some(npos) => {
-                let mut timeouts =
-                    iroha_config::parameters::actual::SumeragiNposTimeouts::from_block_time(
-                        Duration::from_millis(parameter_state.sumeragi().block_time_ms().max(1)),
-                    );
-                let min_finality =
-                    Duration::from_millis(parameter_state.sumeragi().min_finality_ms().max(1));
-                let clamp = |value: Duration| {
-                    if value < min_finality {
-                        min_finality
-                    } else {
-                        value
-                    }
-                };
-                timeouts.propose = clamp(timeouts.propose);
-                timeouts.prevote = clamp(timeouts.prevote);
-                timeouts.precommit = clamp(timeouts.precommit);
-                timeouts.commit = clamp(timeouts.commit);
-                timeouts.da = clamp(timeouts.da);
-                timeouts.aggregator = clamp(timeouts.aggregator);
-                timeouts.exec = clamp(timeouts.exec);
-                timeouts.witness = clamp(timeouts.witness);
+                let timeouts = derive_npos_timeouts(parameter_state.sumeragi().block_time_ms());
                 let duration_ms = |value: Duration| -> u64 {
                     let ms = value.as_millis();
                     u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
@@ -3939,27 +4045,7 @@ impl NetworkBuilder {
             }
             None if matches!(consensus_mode, ConsensusMode::Npos) => {
                 let npos = SumeragiNposParameters::default();
-                let mut timeouts =
-                    iroha_config::parameters::actual::SumeragiNposTimeouts::from_block_time(
-                        Duration::from_millis(parameter_state.sumeragi().block_time_ms().max(1)),
-                    );
-                let min_finality =
-                    Duration::from_millis(parameter_state.sumeragi().min_finality_ms().max(1));
-                let clamp = |value: Duration| {
-                    if value < min_finality {
-                        min_finality
-                    } else {
-                        value
-                    }
-                };
-                timeouts.propose = clamp(timeouts.propose);
-                timeouts.prevote = clamp(timeouts.prevote);
-                timeouts.precommit = clamp(timeouts.precommit);
-                timeouts.commit = clamp(timeouts.commit);
-                timeouts.da = clamp(timeouts.da);
-                timeouts.aggregator = clamp(timeouts.aggregator);
-                timeouts.exec = clamp(timeouts.exec);
-                timeouts.witness = clamp(timeouts.witness);
+                let timeouts = derive_npos_timeouts(parameter_state.sumeragi().block_time_ms());
                 let duration_ms = |value: Duration| -> u64 {
                     let ms = value.as_millis();
                     u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
@@ -4037,6 +4123,43 @@ impl NetworkBuilder {
             "resolved consensus profile for genesis"
         );
 
+        let handshake_fingerprint = format!("0x{}", hex_lower(&consensus_profile.fingerprint()));
+        let handshake_mode = match consensus_mode {
+            ConsensusMode::Permissioned => "Permissioned",
+            ConsensusMode::Npos => "Npos",
+        };
+        let mut handshake_fields = json::Map::new();
+        handshake_fields.insert(
+            "mode".to_string(),
+            JsonValue::String(handshake_mode.to_string()),
+        );
+        handshake_fields.insert(
+            "bls_domain".to_string(),
+            JsonValue::String(consensus_profile.bls_domain.to_string()),
+        );
+        handshake_fields.insert(
+            "wire_proto_versions".to_string(),
+            json::to_value(&consensus_profile.wire_proto_versions)
+                .expect("serialize handshake proto versions"),
+        );
+        handshake_fields.insert(
+            "consensus_fingerprint".to_string(),
+            JsonValue::String(handshake_fingerprint),
+        );
+        let handshake_payload = Json::from_norito_value_ref(&JsonValue::Object(handshake_fields))
+            .expect("handshake metadata JSON must serialize");
+        let handshake_param = Parameter::Custom(CustomParameter::new(
+            consensus_metadata::handshake_meta_id(),
+            handshake_payload,
+        ));
+        if !genesis_contains_parameter(&genesis_isi, &handshake_param)
+            && !genesis_contains_parameter(&genesis_post_topology_isi, &handshake_param)
+        {
+            genesis_post_topology_isi.push(vec![InstructionBox::from(SetParameter::new(
+                handshake_param,
+            ))]);
+        }
+
         let gossip_ms = i64::try_from(block_sync_gossip_period.as_millis())
             .expect("block gossip period fits in i64 milliseconds");
 
@@ -4049,37 +4172,37 @@ impl NetworkBuilder {
                 ["network", "block_gossip_size"],
                 i64::try_from(peers.len()).unwrap_or(i64::MAX),
             );
-        base_layer = base_layer.write(["sumeragi", "queues", "blocks"], 512i64);
+        base_layer = base_layer.write(["sumeragi", "advanced", "queues", "blocks"], 512i64);
         if da_enabled {
             base_layer = base_layer
                 .write(["sumeragi", "da", "enabled"], true)
                 .write(
-                    ["sumeragi", "rbc", "store_max_sessions"],
+                    ["sumeragi", "advanced", "rbc", "store_max_sessions"],
                     DEFAULT_RBC_STORE_MAX_SESSIONS,
                 )
                 .write(
-                    ["sumeragi", "rbc", "store_soft_sessions"],
+                    ["sumeragi", "advanced", "rbc", "store_soft_sessions"],
                     DEFAULT_RBC_STORE_SOFT_SESSIONS,
                 )
                 .write(
-                    ["sumeragi", "rbc", "store_max_bytes"],
+                    ["sumeragi", "advanced", "rbc", "store_max_bytes"],
                     DEFAULT_RBC_STORE_MAX_BYTES,
                 )
                 .write(
-                    ["sumeragi", "rbc", "store_soft_bytes"],
+                    ["sumeragi", "advanced", "rbc", "store_soft_bytes"],
                     DEFAULT_RBC_STORE_SOFT_BYTES,
                 );
         } else {
             base_layer = base_layer
                 .write(["sumeragi", "da", "enabled"], false)
-                .write(["sumeragi", "rbc", "store_max_sessions"], 0i64)
-                .write(["sumeragi", "rbc", "store_soft_sessions"], 0i64)
-                .write(["sumeragi", "rbc", "store_max_bytes"], 0i64)
-                .write(["sumeragi", "rbc", "store_soft_bytes"], 0i64);
+                .write(["sumeragi", "advanced", "rbc", "store_max_sessions"], 0i64)
+                .write(["sumeragi", "advanced", "rbc", "store_soft_sessions"], 0i64)
+                .write(["sumeragi", "advanced", "rbc", "store_max_bytes"], 0i64)
+                .write(["sumeragi", "advanced", "rbc", "store_soft_bytes"], 0i64);
         }
         base_layer = base_layer
             .write(
-                ["sumeragi", "rbc", "chunk_max_bytes"],
+                ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                 LOCALNET_RBC_CHUNK_MAX_BYTES,
             )
             // Test networks always provision BLS validator keys; drop the HSM binding requirement
@@ -7868,6 +7991,57 @@ exit 0
     }
 
     #[test]
+    fn genesis_consensus_metadata_respects_npos_timeout_overrides() {
+        init_instruction_registry();
+        let network = NetworkBuilder::new()
+            .with_peers(4)
+            .with_config_layer(|layer| {
+                layer
+                    .write(["sumeragi", "consensus_mode"], "npos")
+                    .write(
+                        ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
+                        166i64,
+                    )
+                    .write(
+                        ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
+                        213i64,
+                    )
+                    .write(
+                        ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
+                        260i64,
+                    )
+                    .write(
+                        ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
+                        355i64,
+                    )
+                    .write(
+                        ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
+                        307i64,
+                    )
+                    .write(
+                        ["sumeragi", "advanced", "npos", "timeouts", "aggregator_ms"],
+                        57i64,
+                    );
+            })
+            .build();
+        let genesis = network.genesis();
+        let actual = consensus_fingerprint_from_block(&genesis)
+            .expect("genesis should contain consensus fingerprint")
+            .to_ascii_lowercase();
+        let profile = network.consensus_bootstrap_profile();
+        let expected_bytes = compute_consensus_fingerprint_from_params(
+            &network.chain_id(),
+            &profile.params,
+            profile.mode_tag,
+        );
+        let expected = format!("0x{}", hex_lower(&expected_bytes));
+        assert_eq!(
+            actual, expected,
+            "consensus fingerprint must respect NPoS timeout overrides"
+        );
+    }
+
+    #[test]
     fn genesis_embeds_da_proof_policies_from_config_layers() {
         init_instruction_registry();
         let network = NetworkBuilder::new()
@@ -8170,12 +8344,15 @@ exit 0
         );
         assert!(!sumeragi_writer.contains_key("pacemaker_max_backoff_ms"));
         assert_eq!(
-            get_nested_value(sumeragi_writer, &["pacemaker", "max_backoff_ms"]),
+            get_nested_value(
+                sumeragi_writer,
+                &["advanced", "pacemaker", "max_backoff_ms"]
+            ),
             Some(&TomlValue::Integer(12_000))
         );
         assert!(!sumeragi_writer.contains_key("rbc_session_ttl_secs"));
         assert_eq!(
-            get_nested_value(sumeragi_writer, &["rbc", "session_ttl_ms"]),
+            get_nested_value(sumeragi_writer, &["advanced", "rbc", "session_ttl_ms"]),
             Some(&TomlValue::Integer(5_000))
         );
 
@@ -8190,12 +8367,12 @@ exit 0
         );
         assert!(!sumeragi_table.contains_key("rbc_disk_store_ttl_secs"));
         assert_eq!(
-            get_nested_value(sumeragi_table, &["rbc", "disk_store_ttl_ms"]),
+            get_nested_value(sumeragi_table, &["advanced", "rbc", "disk_store_ttl_ms"]),
             Some(&TomlValue::Integer(7_000))
         );
         assert!(!sumeragi_table.contains_key("rbc_pending_ttl_ms"));
         assert_eq!(
-            get_nested_value(sumeragi_table, &["rbc", "pending_ttl_ms"]),
+            get_nested_value(sumeragi_table, &["advanced", "rbc", "pending_ttl_ms"]),
             Some(&TomlValue::Integer(500))
         );
     }
@@ -8257,7 +8434,7 @@ exit 0
         let cap = base
             .get("sumeragi")
             .and_then(TomlValue::as_table)
-            .and_then(|table| get_nested_value(table, &["queues", "blocks"]))
+            .and_then(|table| get_nested_value(table, &["advanced", "queues", "blocks"]))
             .and_then(TomlValue::as_integer);
         assert_eq!(
             cap,
@@ -8278,7 +8455,9 @@ exit 0
         let rbc_chunk_max = base
             .get("sumeragi")
             .and_then(toml::Value::as_table)
-            .and_then(|sumeragi| get_nested_value(sumeragi, &["rbc", "chunk_max_bytes"]))
+            .and_then(|sumeragi| {
+                get_nested_value(sumeragi, &["advanced", "rbc", "chunk_max_bytes"])
+            })
             .and_then(toml::Value::as_integer);
 
         assert_eq!(
@@ -8668,7 +8847,7 @@ exit 0
             Some(true)
         );
         assert_eq!(
-            get_nested_value(sumeragi, &["rbc", "store_max_sessions"])
+            get_nested_value(sumeragi, &["advanced", "rbc", "store_max_sessions"])
                 .and_then(|value| value.as_integer()),
             Some(DEFAULT_RBC_STORE_MAX_SESSIONS)
         );
