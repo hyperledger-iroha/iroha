@@ -7,8 +7,9 @@ returns deterministic data for dataspace bindings used in the roadmap’s NX-16 
 ## Files
 
 - `global_default_portfolio.json` — Snapshot for a UAID bound to the default
-  dataspace and two accounts inside the `portfolio_fixture` domain. The values
-  match the seed-based builders exercised in
+  dataspace and a single account inside the `portfolio_fixture` domain with two
+  asset positions (cash + points). The values match the seed-based builders
+  exercised in
   `crates/iroha_torii/tests/accounts_portfolio.rs::accounts_portfolio_snapshot_matches_fixture`.
 
 ## Regenerating

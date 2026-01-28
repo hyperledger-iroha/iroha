@@ -364,13 +364,13 @@ in the incident doc.
    prove mismatched authorities. Attach the CLI output and Grafana screenshots
    to the incident record.
 2. **Prepare a signed request.** Populate
-   `docs/examples/android_override_request.ko` (or a JSON twin) with the ticket
-   id, requester, expiry, and justification. Store the file next to the incident
-   artefacts so compliance can audit the inputs.
+   `docs/examples/android_override_request.json` with the ticket id, requester,
+   expiry, and justification. Store the file next to the incident artefacts so
+   compliance can audit the inputs.
 3. **Issue the override.** Invoke
    ```bash
    scripts/android_override_tool.sh apply \
-     --request docs/examples/android_override_request.ko \
+     --request docs/examples/android_override_request.json \
      --log docs/source/sdk/android/telemetry_override_log.md \
      --out artifacts/android/telemetry/override-$(date -u +%Y%m%dT%H%M%SZ).json \
      --event-log docs/source/sdk/android/readiness/override_logs/override_events.ndjson \
@@ -483,7 +483,7 @@ quickly each responder is expected to join the bridge.
 2. Clear the failure with `--clear` and confirm the alert resolves within
    10 minutes; attach Grafana screenshots of the salt/authority panels.
 3. Create a signed override request using
-   `docs/examples/android_override_request.ko`, apply it with
+   `docs/examples/android_override_request.json`, apply it with
    `scripts/android_override_tool.sh apply`, and verify the unhashed sample by
    inspecting the exporter payload in staging (look for
    `android.telemetry.redaction.override`).
