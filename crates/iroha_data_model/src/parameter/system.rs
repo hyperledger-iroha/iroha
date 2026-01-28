@@ -130,27 +130,6 @@ mod json_support {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use norito::json::{Number, Value};
-
-    #[test]
-    fn expect_u32_accepts_valid_range() {
-        let value = Value::Number(Number::from(u32::MAX));
-        let parsed = super::json_support::expect_u32(&value, "value")
-            .expect("u32 should parse from JSON number");
-        assert_eq!(parsed, u32::MAX);
-    }
-
-    #[test]
-    fn expect_u32_rejects_out_of_range() {
-        let value = Value::Number(Number::from(u64::from(u32::MAX) + 1));
-        let err = super::json_support::expect_u32(&value, "value")
-            .expect_err("out-of-range u32 should fail");
-        assert!(err.to_string().contains("out of range"));
-    }
-}
-
 #[cfg(feature = "json")]
 fn parse_custom_parameters_value(value: json::Value) -> Result<CustomParameters, json::Error> {
     let map = json_support::expect_object(value, "Parameters.custom")?;
@@ -2244,6 +2223,7 @@ mod tests {
     // Norito core helpers for header-framed encode/decode in tests
     use norito::codec::{DecodeAll as _, Encode as _};
     use norito::core as norito_core;
+    use norito::json::{Number, Value};
 
     use super::*;
     use crate::{
@@ -2269,6 +2249,22 @@ mod tests {
             max_transactions,
         )));
         assert_eq!(params.block().max_transactions(), max_transactions);
+    }
+
+    #[test]
+    fn expect_u32_accepts_valid_range() {
+        let value = Value::Number(Number::from(u64::from(u32::MAX)));
+        let parsed = super::json_support::expect_u32(&value, "value")
+            .expect("u32 should parse from JSON number");
+        assert_eq!(parsed, u32::MAX);
+    }
+
+    #[test]
+    fn expect_u32_rejects_out_of_range() {
+        let value = Value::Number(Number::from(u64::from(u32::MAX) + 1));
+        let err = super::json_support::expect_u32(&value, "value")
+            .expect_err("out-of-range u32 should fail");
+        assert!(err.to_string().contains("out of range"));
     }
 
     #[test]

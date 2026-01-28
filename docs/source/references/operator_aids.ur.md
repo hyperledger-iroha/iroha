@@ -39,7 +39,7 @@ translation_last_reviewed: 2026-01-01
 - GET `/v1/sumeragi/collectors`
   - کمِٹڈ ٹوپولوجی اور آن‑چین پیرامیٹرز سے اخذ کردہ deterministic collector پلان: `mode`, پلان `(height, view)` (جہاں `height` موجودہ چین ہائٹ کے برابر ہے)، `collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, کلیکٹرز کی ترتیب شدہ فہرست، اور `epoch_seed` (hex) جب NPoS فعال ہو۔
 - GET `/v1/sumeragi/params`
-  - آن‑چین Sumeragi پیرامیٹرز کا سنیپ شاٹ `{ block_time_ms, commit_time_ms, min_finality_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`۔
+  - آن‑چین Sumeragi پیرامیٹرز کا سنیپ شاٹ `{ block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`۔
   - جب `da_enabled` true ہو تو دستیابی کی گواہی (`availability evidence` یا RBC `READY`) ٹریک ہوتی ہے مگر commit اس کا انتظار نہیں کرتا؛ لوکل RBC `DELIVER` بھی لازمی نہیں۔ آپریٹرز نیچے دیے گئے RBC endpoints سے payload ٹرانسپورٹ ہیلتھ کی تصدیق کر سکتے ہیں۔
 - GET `/v1/sumeragi/rbc`
   - Reliable Broadcast کے مجموعی کاؤنٹرز: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`۔

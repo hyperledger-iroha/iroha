@@ -140,6 +140,7 @@ Adaptive observability remains off by default:
 Expose effective values in `/v1/sumeragi/status`:
 - `effective_block_time_ms`
 - `effective_commit_time_ms`
+- `effective_pacing_factor_bps`
 - `effective_min_finality_ms`
 - `effective_commit_quorum_timeout_ms`
 - `effective_availability_timeout_ms`

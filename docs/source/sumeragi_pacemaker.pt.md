@@ -13,7 +13,7 @@ translation_last_reviewed: 2026-01-01
 
 Esta nota descreve a politica de pacemaker (timer) para Sumeragi e fornece orientacao para operadores e exemplos. Timers governam quando lideres propoem e quando validadores sugerem/entram em uma nova view apos inatividade.
 
-Status: janela base derivada de EMA, piso RTT, e limites configuraveis de jitter/backoff implementados. O intervalo de proposta do pacemaker agora e limitado entre o alvo de block-time e o propose timeout com piso RTT, limitado por `sumeragi.advanced.pacemaker.max_backoff_ms`. O jitter e aplicado de forma deterministica por no e por (height, view).
+Status: janela base derivada de EMA, piso RTT, e limites configuraveis de jitter/backoff implementados. O intervalo de proposta do pacemaker agora e limitado entre o alvo de block-time e o propose timeout com piso RTT, limitado por `sumeragi.advanced.pacemaker.max_backoff_ms`. (`effective_block_time_ms` = `block_time_ms` scaled by `pacing_factor_bps`). O jitter e aplicado de forma deterministica por no e por (height, view).
 
 ## Conceitos
 - Janela base: media movel exponencial das fases de consenso observadas
@@ -26,7 +26,7 @@ Status: janela base derivada de EMA, piso RTT, e limites configuraveis de jitter
 - Multiplicador de backoff: `sumeragi.advanced.pacemaker.backoff_multiplier` (padrao 1). Cada timeout adiciona `base * multiplier` a janela atual.
 - Piso RTT: `avg_rtt_ms * sumeragi.advanced.pacemaker.rtt_floor_multiplier` (padrao 2). Evita timeouts agressivos em links de alta latencia.
 - Cap: `sumeragi.advanced.pacemaker.max_backoff_ms` (padrao 60_000 ms). Teto rigido da janela.
-- Semente do intervalo de proposta: `max(block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` e nunca acima de `sumeragi.advanced.pacemaker.max_backoff_ms`. Este e o intervalo em estado estavel mesmo sem backoff.
+- Semente do intervalo de proposta: `max(effective_block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` e nunca acima de `sumeragi.advanced.pacemaker.max_backoff_ms`. (`effective_block_time_ms` = `block_time_ms` scaled by `pacing_factor_bps`). Este e o intervalo em estado estavel mesmo sem backoff.
 
 Atualizacao efetiva da janela no timeout:
 - `window = min(cap, max(window + base * backoff_mul, avg_rtt * rtt_floor_mul))`

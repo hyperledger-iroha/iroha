@@ -37,7 +37,7 @@ translation_last_reviewed: 2026-01-01
 - GET `/v1/sumeragi/collectors`
   - Детерминированный план коллекторов, полученный из зафиксированной топологии и on-chain параметров: экспортирует `mode`, план `(height, view)` (где `height` равен текущей высоте цепи), `collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, упорядоченный список коллекторов и `epoch_seed` (hex), когда активен NPoS.
 - GET `/v1/sumeragi/params`
-  - Снимок on-chain параметров Sumeragi `{ block_time_ms, commit_time_ms, min_finality_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
+  - Снимок on-chain параметров Sumeragi `{ block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
   - Когда `da_enabled` равно true, доказательство доступности (`availability evidence` или RBC `READY`) отслеживается, но commit не ждёт его; локальный `DELIVER` RBC также не является требованием. Операторы могут подтвердить здоровье транспорта payload через endpoints RBC ниже.
 - GET `/v1/sumeragi/rbc`
   - Агрегированные счётчики Reliable Broadcast: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
