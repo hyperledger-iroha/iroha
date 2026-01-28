@@ -2,6 +2,10 @@
 
 Last update: 2026-01-28
 
+- Sumeragi block validation timings: record stateless/execution sub-stage timings (state-dependent, snapshot, DA index hydration, state-block creation, tx execution, AXT, DA cursor, genesis clean) and log them in `validate_block_for_voting` debug output; expanded timing coverage.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config). `cargo test -p iroha_core validate_block_for_voting_records_timings -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7474` and unused vars in `crates/iroha_core/src/peers_gossiper.rs:1291`, `crates/iroha_core/src/sumeragi/main_loop/tests.rs:48149`, `crates/iroha_core/src/sumeragi/main_loop/tests.rs:51710` persist).
+- Izanami run (tps=1, 300s, 4 peers) with validation sub-stage timings: stopped before target blocks; network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_mwreSi`. Parsed 152 `block validation timings` entries: `execution_tx_ms` dominates (mean 740ms, p95 ~4011ms, max 5313ms) while DA index/state-block/AXT/DA cursor/genesis sub-stages are ~0ms; `stateless_ms` mean 50ms p95 61ms. Top spikes at heights 6/34/36 across peers. Indicates the hot path is transaction execution, not stateless checks or DA plumbing.
+
 - IVM trigger execution: reuse a shared IVM cache for trigger metadata/runtime templates to avoid repeated parse/load overhead; added `ivm_time_trigger_reuses_cache_across_blocks` coverage.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config). `cargo test -p iroha_core ivm_time_trigger_reuses_cache_across_blocks -- --nocapture` (ok; warnings about unused `mut` in `crates/iroha_core/src/kura.rs:7474` and unused vars in `crates/iroha_core/src/peers_gossiper.rs:1291`, `crates/iroha_core/src/sumeragi/main_loop/tests.rs:48120`, `crates/iroha_core/src/sumeragi/main_loop/tests.rs:51681` persist).
 
@@ -49,6 +53,9 @@ Last update: 2026-01-28
 - Tests: not run (soak only).
 
 - NPoS localnet 1 Hz soak (release, default timeouts, `commit_time_ms=1000`): `/private/tmp/iroha-localnet-npos-1hz-20260127T174650Z` (ports 47080/52337). 100x1 Hz `iroha ledger transaction ping --msg 1hz-profile --no-wait` with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_20260127T174727Z.jsonl` (ping log `ping_1hz_20260127T174727Z.log`). `commit_qc.height` 1->64 (+63 over 120 samples, ~0.53 blocks/s), `view_change_install_total` +1, `missing_payload_total` +0, `missing_qc_total` +0, `stake_quorum_timeout_total` +0, `missing_block_fetch.total` +18, `pending_rbc.bytes` max 2187 (sessions max 1). Logs show missing BlockCreated fetch followed by BlockCreated receipt (peer3.log:167).
+- Tests: not run (soak only).
+
+- NPoS localnet 1 Hz soak (release, `block_time_ms=1000`, `commit_time_ms=1000`, tx gossip 100ms): `/private/tmp/iroha-localnet-npos-1hz-release-20260128T102419Z` (ports 29084/33341). 120x1 Hz `scripts/tx_load.py` (`--batch-size 1 --batch-interval 1`) with `/v1/sumeragi/status` sampling to `sumeragi_status_1hz_20260128T102830Z_peer*.jsonl` (tx log `tx_load_1hz_20260128T102830Z.log`). `commit_qc.height` 1->57 (+56 over ~135s, ~0.41 blocks/s) across peers; `view_change_install_total` +1 (peer0/1/3) and +2 (peer2) with `stake_quorum_timeout_total` +1 on all peers and `missing_qc_total` +1 on peer2; `missing_block_fetch.total` +25-38; `pending_rbc.bytes` max 8939 (sessions max 1). Tx submit window ~118.9s for 120 pings (~1.01 tps). `tx_load.py` could not capture /metrics samples, so throughput was derived from transaction timestamps.
 - Tests: not run (soak only).
 
 - Android SDK offline client: add offline allowance registration, include response bodies in HTTP error messages, add certificate JSON serialization, and replace Java 9+ file APIs/isBlank usages for Java 8 compatibility.
