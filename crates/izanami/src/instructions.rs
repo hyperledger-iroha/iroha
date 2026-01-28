@@ -489,7 +489,7 @@ const BASE_RECIPES_STABLE: &[RecipeKind] = &[
     RecipeKind::RegisterRole,
     RecipeKind::RegisterTimeTrigger,
     // TODO: Re-enable trigger repetition recipes once repeatable trigger tracking is concurrency-safe.
-    RecipeKind::DeployIvmContract,
+    // TODO: Re-enable DeployIvmContract in stable profile once IVM trigger execution is fast enough for perf runs.
     // TODO: Re-enable DeployKotodamaContract once Kotodama samples only use ABI v1 syscalls.
 ];
 
