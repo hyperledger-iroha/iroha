@@ -19827,9 +19827,15 @@ impl StateTransaction<'_, '_> {
                     #[cfg(feature = "telemetry")]
                     host.set_telemetry(self.telemetry.clone());
                     host.set_crypto_config(self.crypto());
+                    host.set_halo2_config(&self.zk.halo2);
+                    host.set_chain_id(self.chain_id());
                     host.set_durable_state_snapshot_from_world(&self.world);
                     host.set_public_inputs_from_parameters(self.world.parameters.get());
                     host.set_query_state(self);
+                    host.set_zk_snapshots_from_world(&self.world, &self.zk)
+                        .map_err(|e| {
+                            ValidationFail::InternalError(format!("invalid ZK snapshot state: {e}"))
+                        })?;
                     if eff_cycles > 0 {
                         vm.set_max_cycles(eff_cycles);
                     }

@@ -6,7 +6,7 @@ use iroha_data_model::prelude::ChainId;
 use iroha_data_model::{
     block::consensus::{
         SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus,
-        SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
+        SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiNposTimeoutsStatus,
         SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
         SumeragiDataspaceCommitment, SumeragiLaneCommitment, SumeragiLaneGovernance,
         SumeragiMembershipMismatchStatus, SumeragiMembershipStatus, SumeragiPeerKeyPolicyStatus,
@@ -1287,10 +1287,9 @@ mod evidence_submit_tests {
         let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer0 = PeerId::new(keypair0.public_key().clone());
         let peer1 = PeerId::new(keypair1.public_key().clone());
-        let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![
-            peer0.clone(),
-            peer1.clone(),
-        ]);
+        let mut peers = vec![peer0.clone(), peer1.clone()];
+        peers.sort();
+        let topology = iroha_core::sumeragi::network_topology::Topology::new(peers.clone());
         let height = 1_u64;
         let view = 0_u64;
         // Find two seeds that map to different leaders for the same (height, view).
@@ -1315,7 +1314,10 @@ mod evidence_submit_tests {
         let leader_epoch1 = topology.leader_index_prf(seed_epoch1, height, view);
         assert_ne!(leader_epoch0, leader_epoch1, "seed search must pick distinct leaders");
 
-        let signer_keypair = if leader_epoch0 == 0 {
+        let signer_peer = peers
+            .get(leader_epoch0)
+            .expect("leader index should be in range");
+        let signer_keypair = if signer_peer == &peer0 {
             &keypair0
         } else {
             &keypair1
@@ -2682,6 +2684,22 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             ])
         })
         .unwrap_or(Value::Null);
+    let effective_npos_timeouts = snap
+        .effective_npos_timeouts
+        .as_ref()
+        .map(|timeouts| {
+            json_object(vec![
+                json_entry("propose_ms", timeouts.propose_ms),
+                json_entry("prevote_ms", timeouts.prevote_ms),
+                json_entry("precommit_ms", timeouts.precommit_ms),
+                json_entry("commit_ms", timeouts.commit_ms),
+                json_entry("da_ms", timeouts.da_ms),
+                json_entry("aggregator_ms", timeouts.aggregator_ms),
+                json_entry("exec_ms", timeouts.exec_ms),
+                json_entry("witness_ms", timeouts.witness_ms),
+            ])
+        })
+        .unwrap_or(Value::Null);
     crate::json_object(vec![
         json_entry("mode_tag", &snap.mode_tag),
         json_entry(
@@ -2722,6 +2740,24 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                 .unwrap_or(Value::Null),
         ),
         json_entry("consensus_caps", consensus_caps),
+        json_entry("effective_min_finality_ms", snap.effective_min_finality_ms),
+        json_entry("effective_block_time_ms", snap.effective_block_time_ms),
+        json_entry("effective_commit_time_ms", snap.effective_commit_time_ms),
+        json_entry(
+            "effective_commit_quorum_timeout_ms",
+            snap.effective_commit_quorum_timeout_ms,
+        ),
+        json_entry(
+            "effective_availability_timeout_ms",
+            snap.effective_availability_timeout_ms,
+        ),
+        json_entry(
+            "effective_pacemaker_interval_ms",
+            snap.effective_pacemaker_interval_ms,
+        ),
+        json_entry("effective_npos_timeouts", effective_npos_timeouts),
+        json_entry("effective_collectors_k", snap.effective_collectors_k),
+        json_entry("effective_redundant_send_r", snap.effective_redundant_send_r),
         json_entry("leader_index", snap.leader_index),
         json_entry("view_change_index", snap.view_change_index),
         json_entry("view_change_causes", view_change_causes),
@@ -2870,6 +2906,24 @@ mod status_tests {
             epoch_length_blocks: 3600,
             epoch_commit_deadline_offset: 120,
             epoch_reveal_deadline_offset: 160,
+            effective_min_finality_ms: 150,
+            effective_block_time_ms: 1_000,
+            effective_commit_time_ms: 1_500,
+            effective_commit_quorum_timeout_ms: 3_000,
+            effective_availability_timeout_ms: 2_500,
+            effective_pacemaker_interval_ms: 750,
+            effective_npos_timeouts: Some(sumeragi::status::NposTimeoutsSnapshot {
+                propose_ms: 200,
+                prevote_ms: 210,
+                precommit_ms: 220,
+                commit_ms: 230,
+                da_ms: 240,
+                aggregator_ms: 250,
+                exec_ms: 260,
+                witness_ms: 270,
+            }),
+            effective_collectors_k: 4,
+            effective_redundant_send_r: 2,
             ..Default::default()
         };
         let payload = status_snapshot_json(&snap);
@@ -2900,6 +2954,53 @@ mod status_tests {
                 .and_then(Value::as_u64)
                 .unwrap(),
             4
+        );
+        assert_eq!(
+            payload
+                .get("effective_min_finality_ms")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            150
+        );
+        assert_eq!(
+            payload
+                .get("effective_block_time_ms")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            1_000
+        );
+        assert_eq!(
+            payload
+                .get("effective_commit_time_ms")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            1_500
+        );
+        let npos_timeouts = payload
+            .get("effective_npos_timeouts")
+            .and_then(Value::as_object)
+            .expect("effective_npos_timeouts object");
+        assert_eq!(
+            npos_timeouts.get("propose_ms").and_then(Value::as_u64),
+            Some(200)
+        );
+        assert_eq!(
+            npos_timeouts.get("witness_ms").and_then(Value::as_u64),
+            Some(270)
+        );
+        assert_eq!(
+            payload
+                .get("effective_collectors_k")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            4
+        );
+        assert_eq!(
+            payload
+                .get("effective_redundant_send_r")
+                .and_then(Value::as_u64)
+                .unwrap(),
+            2
         );
         assert_eq!(
             payload
@@ -3698,6 +3799,26 @@ pub async fn handle_v1_sumeragi_status(
                     rbc_store_max_bytes: caps.rbc_store_max_bytes,
                     rbc_store_soft_bytes: caps.rbc_store_soft_bytes,
                 }),
+            effective_min_finality_ms: snap.effective_min_finality_ms,
+            effective_block_time_ms: snap.effective_block_time_ms,
+            effective_commit_time_ms: snap.effective_commit_time_ms,
+            effective_commit_quorum_timeout_ms: snap.effective_commit_quorum_timeout_ms,
+            effective_availability_timeout_ms: snap.effective_availability_timeout_ms,
+            effective_pacemaker_interval_ms: snap.effective_pacemaker_interval_ms,
+            effective_npos_timeouts: snap.effective_npos_timeouts.as_ref().map(|timeouts| {
+                SumeragiNposTimeoutsStatus {
+                    propose_ms: timeouts.propose_ms,
+                    prevote_ms: timeouts.prevote_ms,
+                    precommit_ms: timeouts.precommit_ms,
+                    commit_ms: timeouts.commit_ms,
+                    da_ms: timeouts.da_ms,
+                    aggregator_ms: timeouts.aggregator_ms,
+                    exec_ms: timeouts.exec_ms,
+                    witness_ms: timeouts.witness_ms,
+                }
+            }),
+            effective_collectors_k: snap.effective_collectors_k,
+            effective_redundant_send_r: snap.effective_redundant_send_r,
             leader_index: snap.leader_index,
             highest_qc_height: snap.highest_qc_height,
             highest_qc_view: snap.highest_qc_view,

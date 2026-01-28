@@ -220,7 +220,7 @@ As macros do prelúdio fornecem aliases mais curtos e validação inline para es
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` ou literais estruturados como `json!{ hello: "world" }`
-- `nft_id!("dragon#demo")`, `blob!("bytes")`, `norito_bytes!("...")`
+- `nft_id!("dragon$demo")`, `blob!("bytes")`, `norito_bytes!("...")`
 
 As macros expandem para os construtores acima e rejeitam literais inválidos em tempo de compilação.
 

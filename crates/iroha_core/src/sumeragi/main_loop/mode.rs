@@ -188,7 +188,7 @@ impl Actor {
         let (effective_mode, pacemaker_block_time, pacemaker_timeouts) = {
             let view = self.state.view();
             let effective_mode = super::effective_consensus_mode(&view, self.config.consensus_mode);
-            let block_time = super::resolve_npos_block_time(&view, &self.config.npos);
+            let block_time = super::resolve_npos_block_time(&view);
             let timeouts = if matches!(effective_mode, ConsensusMode::Npos) {
                 super::resolve_npos_timeouts(&view, &self.config.npos)
             } else {
@@ -233,6 +233,8 @@ impl Actor {
             base_pacemaker_interval,
             now,
         );
+        let view = self.state.view();
+        self.update_effective_timing_status(&view, effective_mode);
     }
 
     fn apply_mode_specific_state(&mut self, target: ConsensusMode) -> Result<()> {

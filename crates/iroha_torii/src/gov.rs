@@ -2752,6 +2752,7 @@ mod tests {
     }
 
     fn canonical_literal(raw: &str) -> String {
+        crate::ensure_test_domain_selector_resolver();
         iroha_data_model::account::AccountId::parse(raw)
             .expect("literal parses")
             .canonical()
@@ -2759,6 +2760,7 @@ mod tests {
     }
 
     fn noncanonical_literal(raw: &str) -> String {
+        crate::ensure_test_domain_selector_resolver();
         let account_id = AccountId::parse(raw)
             .expect("literal parses")
             .into_account_id();

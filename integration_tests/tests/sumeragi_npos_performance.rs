@@ -166,7 +166,6 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
     init_instruction_registry();
 
     let npos_params = SumeragiNposParameters {
-        block_time_ms: BLOCK_TIME_MS,
         k_aggregators: COLLECTORS_K,
         redundant_send_r: REDUNDANT_SEND_R,
         ..SumeragiNposParameters::default()
@@ -189,6 +188,9 @@ async fn npos_baseline_1s_k3_captures_metrics() -> Result<()> {
         })
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::BlockTimeMs(BLOCK_TIME_MS),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(BLOCK_TIME_MS),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
@@ -539,6 +541,9 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
             SumeragiParameter::BlockTimeMs(1_500),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(1_500),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::CollectorsK(collectors_k),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
@@ -758,6 +763,9 @@ async fn npos_pacemaker_jitter_within_band() -> Result<()> {
             SumeragiParameter::BlockTimeMs(1_500),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(1_500),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::CollectorsK(collectors_k),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
@@ -946,6 +954,9 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
             SumeragiParameter::BlockTimeMs(1_500),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(1_500),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::NextMode(SumeragiConsensusMode::Npos),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
@@ -1120,6 +1131,9 @@ async fn npos_redundant_send_retries_update_metrics() -> Result<()> {
             SumeragiParameter::BlockTimeMs(1_500),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(1_500),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::NextMode(SumeragiConsensusMode::Npos),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
@@ -1248,6 +1262,9 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::BlockTimeMs(1_500),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(1_500),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::NextMode(SumeragiConsensusMode::Npos),

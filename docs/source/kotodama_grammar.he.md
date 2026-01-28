@@ -204,7 +204,7 @@ register_trigger wake {
 - ‎`domain!("wonderland")` / ‎`domain_id!("wonderland")`
 - ‎`name!("example")`
 - ‎`json!("{\"hello\":\"world\"}")` וכן ‎`json!{ hello: "world" }`
-- ‎`nft_id!("dragon#demo")`, ‏`blob!("bytes")`, ‏`norito_bytes!("...")`
+- ‎`nft_id!("dragon$demo")`, ‏`blob!("bytes")`, ‏`norito_bytes!("...")`
 
 המקרואים מתרחבים לבילט-אינים לעיל ומונעים ליטרלים שגויים כבר בזמן הקומפילציה.
 

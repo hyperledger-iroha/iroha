@@ -23,11 +23,11 @@ visibility and fetched via RBC or block sync.
 The availability deadline is derived from the configured block/commit times and the
 DA timeout tuning knobs; it is used to classify missing payloads as "stale" for logging
 and rebroadcast heuristics:
-- `sumeragi.da.quorum_timeout_multiplier` scales `block_time + 4 * commit_time`
+- `sumeragi.advanced.da.quorum_timeout_multiplier` scales `block_time + 4 * commit_time`
   when DA is enabled (default `3`).
-- `sumeragi.da.availability_timeout_multiplier` scales the availability timeout
+- `sumeragi.advanced.da.availability_timeout_multiplier` scales the availability timeout
   window in DA mode (default `2`).
-- `sumeragi.da.availability_timeout_floor_ms` enforces a minimum availability
+- `sumeragi.advanced.da.availability_timeout_floor_ms` enforces a minimum availability
   window (default `2000`, set to `0` to disable the floor).
 Keep these values aligned across validators to avoid divergent view-change
 pacing.
@@ -86,11 +86,11 @@ the full 2f+1 READY quorum.
 
 ## Expected baselines
 
-With the default `sumeragi.rbc.chunk_max_bytes = 256&nbsp;KiB`, the 10.5&nbsp;MiB
+With the default `sumeragi.advanced.rbc.chunk_max_bytes = 256&nbsp;KiB`, the 10.5&nbsp;MiB
 instruction (11 010 048 bytes), and `force_deliver_quorum_one` enabled, the
 following invariants hold:
 
-Note: `sumeragi.rbc.chunk_max_bytes` is clamped at startup so serialized RBC
+Note: `sumeragi.advanced.rbc.chunk_max_bytes` is clamped at startup so serialized RBC
 chunks fit within the consensus frame plaintext cap derived from
 `network.max_frame_bytes_block_sync`.
 

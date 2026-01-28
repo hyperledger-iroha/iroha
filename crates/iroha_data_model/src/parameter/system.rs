@@ -247,23 +247,6 @@ mod model {
         /// production manifests set a chain-specific, random seed to avoid correlated schedules.
         #[norito(default)]
         pub epoch_seed: [u8; 32],
-        /// Target block time for `NPoS` mode (ms).
-        ///
-        /// Deprecated: nodes ignore this in favor of `SumeragiParameters.block_time_ms`.
-        /// Keep the values aligned for backward compatibility.
-        pub block_time_ms: u64,
-        /// Proposal timeout window (ms).
-        pub timeout_propose_ms: u64,
-        /// Prevote aggregation timeout (ms).
-        pub timeout_prevote_ms: u64,
-        /// Precommit aggregation timeout (ms).
-        pub timeout_precommit_ms: u64,
-        /// Commit finalization timeout (ms).
-        pub timeout_commit_ms: u64,
-        /// Data-availability timeout (ms).
-        pub timeout_da_ms: u64,
-        /// Aggregator fallback timeout (ms).
-        pub timeout_aggregator_ms: u64,
         /// Number of aggregators (K) per round.
         pub k_aggregators: u16,
         /// Redundant send fanout (distinct aggregators contacted over time).
@@ -321,48 +304,6 @@ mod model {
                 return None;
             }
             custom.payload().try_into_any::<Self>().ok()
-        }
-
-        /// Configured block proposal interval in milliseconds.
-        #[must_use]
-        pub fn block_time_ms(&self) -> u64 {
-            self.block_time_ms
-        }
-
-        /// Timeout for proposing a block in milliseconds.
-        #[must_use]
-        pub fn timeout_propose_ms(&self) -> u64 {
-            self.timeout_propose_ms
-        }
-
-        /// Timeout for prevote collection in milliseconds.
-        #[must_use]
-        pub fn timeout_prevote_ms(&self) -> u64 {
-            self.timeout_prevote_ms
-        }
-
-        /// Timeout for precommit collection in milliseconds.
-        #[must_use]
-        pub fn timeout_precommit_ms(&self) -> u64 {
-            self.timeout_precommit_ms
-        }
-
-        /// Timeout for commit aggregation in milliseconds.
-        #[must_use]
-        pub fn timeout_commit_ms(&self) -> u64 {
-            self.timeout_commit_ms
-        }
-
-        /// Timeout for data-availability flow in milliseconds.
-        #[must_use]
-        pub fn timeout_da_ms(&self) -> u64 {
-            self.timeout_da_ms
-        }
-
-        /// Timeout for aggregator broadcast in milliseconds.
-        #[must_use]
-        pub fn timeout_aggregator_ms(&self) -> u64 {
-            self.timeout_aggregator_ms
         }
 
         /// Number of aggregators expected per round.
@@ -461,13 +402,6 @@ mod model {
             self.epoch_seed
         }
 
-        /// Override the commit timeout and return the updated payload.
-        #[must_use]
-        pub fn with_timeout_commit_ms(mut self, value: u64) -> Self {
-            self.timeout_commit_ms = value;
-            self
-        }
-
         /// Override the epoch seed and return the updated payload.
         #[must_use]
         pub fn with_epoch_seed(mut self, value: [u8; 32]) -> Self {
@@ -481,13 +415,6 @@ mod model {
             use defaults::sumeragi::npos::*;
             Self {
                 epoch_seed: [0u8; 32],
-                block_time_ms: block_time_ms(),
-                timeout_propose_ms: timeout_propose_ms(),
-                timeout_prevote_ms: timeout_prevote_ms(),
-                timeout_precommit_ms: timeout_precommit_ms(),
-                timeout_commit_ms: timeout_commit_ms(),
-                timeout_da_ms: timeout_da_ms(),
-                timeout_aggregator_ms: timeout_aggregator_ms(),
                 k_aggregators: k_aggregators(),
                 redundant_send_r: redundant_send_r(),
                 vrf_commit_window_blocks: vrf_commit_window_blocks(),
@@ -1317,27 +1244,6 @@ mod defaults {
         }
 
         pub mod npos {
-            pub const fn block_time_ms() -> u64 {
-                100
-            }
-            pub const fn timeout_propose_ms() -> u64 {
-                300
-            }
-            pub const fn timeout_prevote_ms() -> u64 {
-                300
-            }
-            pub const fn timeout_precommit_ms() -> u64 {
-                250
-            }
-            pub const fn timeout_commit_ms() -> u64 {
-                150
-            }
-            pub const fn timeout_da_ms() -> u64 {
-                300
-            }
-            pub const fn timeout_aggregator_ms() -> u64 {
-                120
-            }
             pub const fn k_aggregators() -> u16 {
                 3
             }

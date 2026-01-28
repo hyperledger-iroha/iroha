@@ -1756,6 +1756,23 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     let mut consensus_message_handling = Map::new();
     consensus_message_handling.insert("entries".into(), consensus_message_handling_entries);
 
+    let effective_npos_timeouts = wire
+        .effective_npos_timeouts
+        .as_ref()
+        .map(|timeouts| {
+            let mut map = Map::new();
+            map.insert("propose_ms".into(), Value::from(timeouts.propose_ms));
+            map.insert("prevote_ms".into(), Value::from(timeouts.prevote_ms));
+            map.insert("precommit_ms".into(), Value::from(timeouts.precommit_ms));
+            map.insert("commit_ms".into(), Value::from(timeouts.commit_ms));
+            map.insert("da_ms".into(), Value::from(timeouts.da_ms));
+            map.insert("aggregator_ms".into(), Value::from(timeouts.aggregator_ms));
+            map.insert("exec_ms".into(), Value::from(timeouts.exec_ms));
+            map.insert("witness_ms".into(), Value::from(timeouts.witness_ms));
+            Value::Object(map)
+        })
+        .unwrap_or(Value::Null);
+
     let mut block_sync_roster = Map::new();
     block_sync_roster.insert(
         "commit_qc_hint_total".into(),
@@ -2297,6 +2314,39 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
         .collect();
     let mut root = Map::new();
     root.insert("leader_index".into(), Value::from(wire.leader_index));
+    root.insert(
+        "effective_min_finality_ms".into(),
+        Value::from(wire.effective_min_finality_ms),
+    );
+    root.insert(
+        "effective_block_time_ms".into(),
+        Value::from(wire.effective_block_time_ms),
+    );
+    root.insert(
+        "effective_commit_time_ms".into(),
+        Value::from(wire.effective_commit_time_ms),
+    );
+    root.insert(
+        "effective_commit_quorum_timeout_ms".into(),
+        Value::from(wire.effective_commit_quorum_timeout_ms),
+    );
+    root.insert(
+        "effective_availability_timeout_ms".into(),
+        Value::from(wire.effective_availability_timeout_ms),
+    );
+    root.insert(
+        "effective_pacemaker_interval_ms".into(),
+        Value::from(wire.effective_pacemaker_interval_ms),
+    );
+    root.insert("effective_npos_timeouts".into(), effective_npos_timeouts);
+    root.insert(
+        "effective_collectors_k".into(),
+        Value::from(wire.effective_collectors_k),
+    );
+    root.insert(
+        "effective_redundant_send_r".into(),
+        Value::from(wire.effective_redundant_send_r),
+    );
     root.insert("highest_qc".into(), Value::Object(highest));
     root.insert("locked_qc".into(), Value::Object(locked));
     root.insert("tx_queue".into(), Value::Object(tx_queue));
@@ -10763,6 +10813,15 @@ mod tests {
             last_mode_flip_timestamp_ms: None,
             last_mode_flip_error: None,
             consensus_caps: None,
+            effective_min_finality_ms: 0,
+            effective_block_time_ms: 0,
+            effective_commit_time_ms: 0,
+            effective_commit_quorum_timeout_ms: 0,
+            effective_availability_timeout_ms: 0,
+            effective_pacemaker_interval_ms: 0,
+            effective_npos_timeouts: None,
+            effective_collectors_k: 0,
+            effective_redundant_send_r: 0,
             leader_index: 2,
             highest_qc_height: 12,
             highest_qc_view: 5,
@@ -12746,6 +12805,15 @@ mod tests {
             last_mode_flip_timestamp_ms: None,
             last_mode_flip_error: None,
             consensus_caps: None,
+            effective_min_finality_ms: 0,
+            effective_block_time_ms: 0,
+            effective_commit_time_ms: 0,
+            effective_commit_quorum_timeout_ms: 0,
+            effective_availability_timeout_ms: 0,
+            effective_pacemaker_interval_ms: 0,
+            effective_npos_timeouts: None,
+            effective_collectors_k: 0,
+            effective_redundant_send_r: 0,
             leader_index: 0,
             highest_qc_height: 0,
             highest_qc_view: 0,
@@ -13028,6 +13096,26 @@ mod tests {
             last_mode_flip_timestamp_ms: None,
             last_mode_flip_error: None,
             consensus_caps: None,
+            effective_min_finality_ms: 250,
+            effective_block_time_ms: 1_000,
+            effective_commit_time_ms: 1_800,
+            effective_commit_quorum_timeout_ms: 5_000,
+            effective_availability_timeout_ms: 4_000,
+            effective_pacemaker_interval_ms: 900,
+            effective_npos_timeouts: Some(
+                iroha_data_model::block::consensus::SumeragiNposTimeoutsStatus {
+                    propose_ms: 200,
+                    prevote_ms: 210,
+                    precommit_ms: 220,
+                    commit_ms: 230,
+                    da_ms: 240,
+                    aggregator_ms: 250,
+                    exec_ms: 260,
+                    witness_ms: 270,
+                },
+            ),
+            effective_collectors_k: 7,
+            effective_redundant_send_r: 3,
             leader_index: 2,
             highest_qc_height: 12,
             highest_qc_view: 5,
@@ -13181,6 +13269,14 @@ mod tests {
             .expect("sumeragi status JSON root is an object");
         for (key, expected) in [
             ("leader_index", 2),
+            ("effective_min_finality_ms", 250),
+            ("effective_block_time_ms", 1_000),
+            ("effective_commit_time_ms", 1_800),
+            ("effective_commit_quorum_timeout_ms", 5_000),
+            ("effective_availability_timeout_ms", 4_000),
+            ("effective_pacemaker_interval_ms", 900),
+            ("effective_collectors_k", 7),
+            ("effective_redundant_send_r", 3),
             ("view_change_proof_accepted_total", 5),
             ("view_change_proof_stale_total", 6),
             ("view_change_proof_rejected_total", 7),
@@ -13199,6 +13295,18 @@ mod tests {
                 "{key} mismatch"
             );
         }
+        let npos_timeouts = root
+            .get("effective_npos_timeouts")
+            .and_then(Value::as_object)
+            .expect("effective_npos_timeouts object");
+        assert_eq!(
+            npos_timeouts.get("propose_ms").and_then(Value::as_u64),
+            Some(200)
+        );
+        assert_eq!(
+            npos_timeouts.get("witness_ms").and_then(Value::as_u64),
+            Some(270)
+        );
         let handling = root
             .get("consensus_message_handling")
             .and_then(Value::as_object)

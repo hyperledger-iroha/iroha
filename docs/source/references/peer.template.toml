@@ -111,14 +111,14 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # k = 1
 # redundant_send_r = 3 # example for 4 validators (2f+1)
 
-[sumeragi.queues]
+[sumeragi.advanced.queues]
 # votes = 8192          # vote channel capacity
 # block_payload = 128   # block payload capacity (proposal backpressure if saturated)
 # rbc_chunks = 1024     # RBC chunk capacity (proposal backpressure if saturated)
 # blocks = 256          # block message capacity (block sync updates, params, etc.)
 # control = 1024        # control/background/lane channel capacity
 
-[sumeragi.worker]
+[sumeragi.advanced.worker]
 # iteration_budget_cap_ms = 2000       # cap worker loop time budget per iteration
 # iteration_drain_budget_cap_ms = 2000 # cap mailbox drain per iteration
 # tick_work_budget_cap_ms = 500        # cap per-tick proposal/commit work (0 disables)
@@ -127,7 +127,7 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # validation_result_queue_cap = 0      # validation result queue (0 = auto)
 # validation_pending_cap = 8192        # deferred vote-validation backlog cap
 
-[sumeragi.pacemaker]
+[sumeragi.advanced.pacemaker]
 # pending_stall_grace_ms = 250       # grace before pending progress counts as stalled
 # active_pending_soft_limit = 1      # allow proposals with <= N blocking pending blocks (0 = strict)
 # rbc_backlog_session_soft_limit = 2 # allow proposals with <= N backlog sessions (0 = strict)
@@ -155,19 +155,22 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # invalid_sig_penalty_cooldown_ms = 15000
 
 [sumeragi.da]
-# enabled = true                     # commit waits for availability evidence when enabled
+# enabled = true                       # commit waits for availability evidence when enabled
+# max_commitments_per_block = 16       # max DA commitments per block
+# max_proof_openings_per_block = 128   # max DA proof openings per block
+
+[sumeragi.advanced.da]
 # quorum_timeout_multiplier = 3          # DA quorum timeout scaling (block_time + 4 * commit_time)
 # availability_timeout_multiplier = 2    # availability timeout scaling for DA logging/rebroadcasts
 # availability_timeout_floor_ms = 2000   # floor for availability timeouts (0 disables floor)
 
 [sumeragi.npos]
-# block_time_ms = 1000                 # bootstrap fallback; on-chain SumeragiParameters.block_time_ms is authoritative
 # epoch_length_blocks = 3600           # validator set epoch length
 # use_stake_snapshot_roster = true     # hydrate roster from stake snapshots
-# timeouts.*_ms derive from block_time_ms when omitted (bootstrap fallback only)
+# advanced.npos.timeouts.*_ms derive from the effective block time when omitted
 # vrf.* windows/deadlines derive from epoch_length_blocks when omitted
 
-#[sumeragi.npos.timeouts]
+#[sumeragi.advanced.npos.timeouts]
 # propose_ms = 350
 # prevote_ms = 450
 # precommit_ms = 550
@@ -183,7 +186,7 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # commit_deadline_offset_blocks = 100
 # reveal_deadline_offset_blocks = 140
 
-[sumeragi.rbc]
+[sumeragi.advanced.rbc]
 # chunk_fanout = null               # RBC chunk fanout cap (null = full roster minus local)
 # chunk_max_bytes = 262144          # RBC chunk size cap (bytes)
 # payload_chunks_per_tick = 64      # max RBC chunks broadcast per tick

@@ -95,6 +95,26 @@ fn status_lock() -> &'static Mutex<()> {
 async fn sumeragi_status_endpoint_shape() {
     let _guard = status_lock().lock().unwrap();
     let app = build_status_router();
+    iroha_core::sumeragi::status::set_effective_timing(
+        150,
+        1_000,
+        1_500,
+        3_000,
+        2_500,
+        750,
+        4,
+        2,
+        Some(iroha_core::sumeragi::status::NposTimeoutsSnapshot {
+            propose_ms: 200,
+            prevote_ms: 210,
+            precommit_ms: 220,
+            commit_ms: 230,
+            da_ms: 240,
+            aggregator_ms: 250,
+            exec_ms: 260,
+            witness_ms: 270,
+        }),
+    );
 
     let resp = app
         .oneshot(
@@ -110,6 +130,62 @@ async fn sumeragi_status_endpoint_shape() {
     let body = BodyExt::collect(resp.into_body()).await.unwrap().to_bytes();
     let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
     assert!(v.get("leader_index").is_some());
+    assert_eq!(
+        v.get("effective_min_finality_ms")
+            .and_then(norito::json::Value::as_u64),
+        Some(150)
+    );
+    assert_eq!(
+        v.get("effective_block_time_ms")
+            .and_then(norito::json::Value::as_u64),
+        Some(1_000)
+    );
+    assert_eq!(
+        v.get("effective_commit_time_ms")
+            .and_then(norito::json::Value::as_u64),
+        Some(1_500)
+    );
+    assert_eq!(
+        v.get("effective_commit_quorum_timeout_ms")
+            .and_then(norito::json::Value::as_u64),
+        Some(3_000)
+    );
+    assert_eq!(
+        v.get("effective_availability_timeout_ms")
+            .and_then(norito::json::Value::as_u64),
+        Some(2_500)
+    );
+    assert_eq!(
+        v.get("effective_pacemaker_interval_ms")
+            .and_then(norito::json::Value::as_u64),
+        Some(750)
+    );
+    assert_eq!(
+        v.get("effective_collectors_k")
+            .and_then(norito::json::Value::as_u64),
+        Some(4)
+    );
+    assert_eq!(
+        v.get("effective_redundant_send_r")
+            .and_then(norito::json::Value::as_u64),
+        Some(2)
+    );
+    let npos_timeouts = v
+        .get("effective_npos_timeouts")
+        .and_then(|value| value.as_object())
+        .expect("effective_npos_timeouts object");
+    assert_eq!(
+        npos_timeouts
+            .get("propose_ms")
+            .and_then(norito::json::Value::as_u64),
+        Some(200)
+    );
+    assert_eq!(
+        npos_timeouts
+            .get("witness_ms")
+            .and_then(norito::json::Value::as_u64),
+        Some(270)
+    );
     let hq = v.get("highest_qc").and_then(|x| x.as_object()).unwrap();
     assert!(hq.get("height").is_some());
     assert!(hq.get("view").is_some());
@@ -198,6 +274,7 @@ async fn sumeragi_status_endpoint_shape() {
             .and_then(norito::json::Value::as_u64)
             .is_some()
     );
+    iroha_core::sumeragi::status::set_effective_timing(0, 0, 0, 0, 0, 0, 0, 0, None);
 }
 
 #[allow(clippy::await_holding_lock)]
@@ -435,6 +512,26 @@ async fn sumeragi_status_endpoint_supports_norito_payload() {
     iroha_core::sumeragi::status::record_kura_store_failure(5, 2, kura_hash);
     iroha_core::sumeragi::status::record_kura_store_retry(7, 11);
     iroha_core::sumeragi::status::inc_kura_store_abort();
+    iroha_core::sumeragi::status::set_effective_timing(
+        120,
+        900,
+        1_300,
+        2_600,
+        2_100,
+        700,
+        5,
+        3,
+        Some(iroha_core::sumeragi::status::NposTimeoutsSnapshot {
+            propose_ms: 210,
+            prevote_ms: 220,
+            precommit_ms: 230,
+            commit_ms: 240,
+            da_ms: 250,
+            aggregator_ms: 260,
+            exec_ms: 270,
+            witness_ms: 280,
+        }),
+    );
 
     let resp = app
         .oneshot(
@@ -460,18 +557,6 @@ async fn sumeragi_status_endpoint_supports_norito_payload() {
     assert!(wire.prf_epoch_seed.is_none());
     assert_eq!(wire.prf_height, 0);
     assert_eq!(wire.prf_view, 0);
-    assert_eq!(wire.membership.height, 0);
-    assert_eq!(wire.membership.view, 0);
-    assert_eq!(wire.membership.epoch, 0);
-    assert!(wire.membership.view_hash.is_none());
-    assert!(wire.membership_mismatch.active_peers.is_empty());
-    assert!(wire.membership_mismatch.last_peer.is_none());
-    assert_eq!(wire.membership_mismatch.last_height, 0);
-    assert_eq!(wire.membership_mismatch.last_view, 0);
-    assert_eq!(wire.membership_mismatch.last_epoch, 0);
-    assert!(wire.membership_mismatch.last_local_hash.is_none());
-    assert!(wire.membership_mismatch.last_remote_hash.is_none());
-    assert_eq!(wire.membership_mismatch.last_timestamp_ms, 0);
     assert!(wire.missing_block_fetch.total >= 1);
     assert_eq!(wire.missing_block_fetch.last_targets, 3);
     assert_eq!(wire.missing_block_fetch.last_dwell_ms, 17);
@@ -498,4 +583,18 @@ async fn sumeragi_status_endpoint_supports_norito_payload() {
     assert_eq!(wire.kura_store.last_hash, Some(kura_hash));
     assert_eq!(wire.kura_store.last_retry_attempt, 7);
     assert_eq!(wire.kura_store.last_retry_backoff_ms, 11);
+    assert_eq!(wire.effective_min_finality_ms, 120);
+    assert_eq!(wire.effective_block_time_ms, 900);
+    assert_eq!(wire.effective_commit_time_ms, 1_300);
+    assert_eq!(wire.effective_commit_quorum_timeout_ms, 2_600);
+    assert_eq!(wire.effective_availability_timeout_ms, 2_100);
+    assert_eq!(wire.effective_pacemaker_interval_ms, 700);
+    assert_eq!(wire.effective_collectors_k, 5);
+    assert_eq!(wire.effective_redundant_send_r, 3);
+    let npos_timeouts = wire
+        .effective_npos_timeouts
+        .expect("effective_npos_timeouts");
+    assert_eq!(npos_timeouts.propose_ms, 210);
+    assert_eq!(npos_timeouts.witness_ms, 280);
+    iroha_core::sumeragi::status::set_effective_timing(0, 0, 0, 0, 0, 0, 0, 0, None);
 }

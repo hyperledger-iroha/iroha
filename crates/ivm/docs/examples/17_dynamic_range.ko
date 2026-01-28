@@ -3,11 +3,14 @@
 // inserts runtime guards and currently treats the dynamic start as 0 for
 // addressing, while using n = end - start for the iteration count.
 // Literal `start` continues to adjust the address base. See docs for details.
+// Dynamic bounds are supported on state maps.
 
 seiyaku DynamicRange {
-  kotoage fn bounded_range_sum(m: Map<int, int>, start: int, end: int) -> int {
+  state Entries: Map<int, int>;
+
+  kotoage fn bounded_range_sum(start: int, end: int) -> int {
     let acc = 0;
-    for (k, v) in m.range(start, end) {
+    for (k, v) in Entries.range(start, end) {
       acc = acc + v;
     }
     return acc;

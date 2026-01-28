@@ -8,11 +8,13 @@ seiyaku ZkShieldDemo {
   }
 
   // Public entrypoint: demonstrates pointer constructors and host calls
-  kotoage fn run() {
-    let who = account!("alice@wonderland");
+  kotoage fn run() permission(Admin) {
+    let who = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
     let ad = asset_definition!("rose#wonderland");
 
     info("ZkShieldDemo: start");
+    let proof_env = norito_bytes("ENV-SHIELD");
+    zk_verify_transfer(proof_env);
     // Example: set an account detail (host syscall)
     set_account_detail(who, name!("zk_demo"), json!{ run: true });
     // Example: mint a tiny amount (host syscall)

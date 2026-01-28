@@ -5,6 +5,7 @@ use eyre::{Result, bail, ensure};
 use hex::{decode as hex_decode, encode as hex_encode};
 use integration_tests::sandbox;
 use iroha::client::Client;
+use iroha_config::parameters::actual::SumeragiNposTimeoutOverrides;
 use iroha_core::sumeragi::consensus::{
     ConsensusGenesisParams, NPOS_TAG, NposGenesisParams, PERMISSIONED_TAG,
     compute_consensus_fingerprint_from_params,
@@ -15,7 +16,8 @@ use iroha_data_model::{
     parameter::{
         Parameter, Parameters,
         system::{
-            SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter, consensus_metadata,
+            SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter, SumeragiParameters,
+            consensus_metadata,
         },
     },
     transaction::Executable,
@@ -27,6 +29,7 @@ use tokio::time::sleep;
 
 const ACTIVATION_HEIGHT: u64 = 4;
 const EPOCH_LENGTH_BLOCKS: u64 = 6;
+const BLOCK_TIME_MS: u64 = 500;
 const STATUS_POLL_LIMIT: usize = 30;
 const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v1";
 const MODE_POLL_DELAY: Duration = Duration::from_millis(200);
@@ -34,13 +37,6 @@ const MODE_POLL_DELAY: Duration = Duration::from_millis(200);
 fn staged_npos_params() -> SumeragiNposParameters {
     SumeragiNposParameters {
         epoch_length_blocks: EPOCH_LENGTH_BLOCKS,
-        block_time_ms: 500,
-        timeout_commit_ms: 500,
-        timeout_prevote_ms: 500,
-        timeout_precommit_ms: 500,
-        timeout_propose_ms: 500,
-        timeout_da_ms: 500,
-        timeout_aggregator_ms: 500,
         vrf_commit_window_blocks: 2,
         vrf_reveal_window_blocks: 4,
         ..SumeragiNposParameters::default()
@@ -68,6 +64,12 @@ fn cutover_builder(peers: usize, npos_params: SumeragiNposParameters) -> Network
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::RedundantSendR(1),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::BlockTimeMs(BLOCK_TIME_MS),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(BLOCK_TIME_MS),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::DaEnabled(true),
@@ -148,6 +150,46 @@ fn consensus_params_for_mode(
     bls_domain: &str,
     mode: SumeragiConsensusMode,
 ) -> ConsensusGenesisParams {
+    let sumeragi = params.sumeragi();
+    let defaults = SumeragiParameters::default();
+    let min_finality_ms = if sumeragi.min_finality_ms == 0 {
+        defaults.min_finality_ms()
+    } else {
+        sumeragi.min_finality_ms
+    }
+    .max(1);
+    let mut block_time_ms = if sumeragi.block_time_ms == 0 {
+        defaults.block_time_ms()
+    } else {
+        sumeragi.block_time_ms
+    }
+    .max(min_finality_ms);
+    if block_time_ms == 0 {
+        block_time_ms = 1;
+    }
+    let min_finality = Duration::from_millis(min_finality_ms);
+    let duration_ms = |value: Duration| -> u64 {
+        let ms = value.as_millis();
+        u64::try_from(ms).expect("timeout must fit in u64 milliseconds")
+    };
+    let clamp = |value: Duration| {
+        if value < min_finality {
+            min_finality
+        } else {
+            value
+        }
+    };
+    let mut npos_timeouts =
+        SumeragiNposTimeoutOverrides::default().resolve(Duration::from_millis(block_time_ms));
+    npos_timeouts.propose = clamp(npos_timeouts.propose);
+    npos_timeouts.prevote = clamp(npos_timeouts.prevote);
+    npos_timeouts.precommit = clamp(npos_timeouts.precommit);
+    npos_timeouts.exec = clamp(npos_timeouts.exec);
+    npos_timeouts.witness = clamp(npos_timeouts.witness);
+    npos_timeouts.commit = clamp(npos_timeouts.commit);
+    npos_timeouts.da = clamp(npos_timeouts.da);
+    npos_timeouts.aggregator = clamp(npos_timeouts.aggregator);
+
     let npos_payload = params
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
@@ -155,13 +197,13 @@ fn consensus_params_for_mode(
 
     let npos = if matches!(mode, SumeragiConsensusMode::Npos) {
         npos_payload.map(|payload| NposGenesisParams {
-            block_time_ms: payload.block_time_ms,
-            timeout_propose_ms: payload.timeout_propose_ms,
-            timeout_prevote_ms: payload.timeout_prevote_ms,
-            timeout_precommit_ms: payload.timeout_precommit_ms,
-            timeout_commit_ms: payload.timeout_commit_ms,
-            timeout_da_ms: payload.timeout_da_ms,
-            timeout_aggregator_ms: payload.timeout_aggregator_ms,
+            block_time_ms,
+            timeout_propose_ms: duration_ms(npos_timeouts.propose),
+            timeout_prevote_ms: duration_ms(npos_timeouts.prevote),
+            timeout_precommit_ms: duration_ms(npos_timeouts.precommit),
+            timeout_commit_ms: duration_ms(npos_timeouts.commit),
+            timeout_da_ms: duration_ms(npos_timeouts.da),
+            timeout_aggregator_ms: duration_ms(npos_timeouts.aggregator),
             k_aggregators: payload.k_aggregators,
             redundant_send_r: payload.redundant_send_r,
             epoch_seed: payload.epoch_seed,
