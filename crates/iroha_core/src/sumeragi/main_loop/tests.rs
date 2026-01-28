@@ -1246,7 +1246,8 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
         let params = block.parameters.get_mut();
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::DaEnabled(false)));
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1600)));
-        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(900)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1600)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)));
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(400)));
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CollectorsK(3)));
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::RedundantSendR(2)));
@@ -1292,7 +1293,8 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
         &common_config.chain,
         &ConsensusGenesisParams {
             block_time_ms: 1600,
-            commit_time_ms: 900,
+            commit_time_ms: 1600,
+            min_finality_ms: 100,
             max_clock_drift_ms: 400,
             collectors_k: 3,
             redundant_send_r: 2,
@@ -1384,7 +1386,8 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
         let params = block.parameters.get_mut();
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::DaEnabled(false)));
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1600)));
-        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(900)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1600)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)));
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::MaxClockDriftMs(400)));
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CollectorsK(3)));
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::RedundantSendR(2)));
@@ -1430,7 +1433,8 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
         &common_config.chain,
         &ConsensusGenesisParams {
             block_time_ms: 1600,
-            commit_time_ms: 900,
+            commit_time_ms: 1600,
+            min_finality_ms: 100,
             max_clock_drift_ms: 400,
             collectors_k: 3,
             redundant_send_r: 2,
@@ -2064,7 +2068,7 @@ async fn actor_next_tick_deadline_tracks_pending_quorum_timeout() {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut block = state.world.block();
         let params = block.parameters.get_mut();
-        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(2_000)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1_000)));
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1_000)));
         block.commit();
     }
@@ -2210,7 +2214,7 @@ async fn actor_next_tick_deadline_tracks_aborted_retention() {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut block = state.world.block();
         let params = block.parameters.get_mut();
-        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(2_000)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1_000)));
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1_000)));
         block.commit();
     }
@@ -2322,7 +2326,7 @@ async fn actor_next_tick_deadline_tracks_rbc_rebroadcast_cooldown() {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut block = state.world.block();
         let params = block.parameters.get_mut();
-        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(2_000)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1_000)));
         params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1_000)));
         block.commit();
     }
@@ -3691,8 +3695,8 @@ async fn quorum_timeout_extends_when_da_enabled() {
 
     let view = harness.actor.state.view();
     let params = view.world.parameters().sumeragi();
-    let block_time = params.block_time();
-    let commit_time = params.commit_time();
+    let block_time = params.effective_block_time();
+    let commit_time = params.effective_commit_time();
     drop(view);
     let multiplier = harness.actor.da_quorum_timeout_multiplier();
     let non_da =
@@ -11957,7 +11961,7 @@ async fn rebroadcast_cooldown_uses_npos_block_time() {
     let harness = test_actor_harness(4).await;
     let block_time = {
         let view = harness.actor.state.view();
-        view.world.parameters().sumeragi().block_time()
+        view.world.parameters().sumeragi().effective_block_time()
     };
     let cooldown = harness.actor.rebroadcast_cooldown();
     let payload_cooldown = harness.actor.payload_rebroadcast_cooldown();
@@ -48997,7 +49001,7 @@ fn commit_quorum_timeout_tracks_sumeragi_parameters() {
     };
     assert_eq!(
         commit_quorum_timeout_for_params(&params),
-        Duration::from_millis(4_800)
+        Duration::from_millis(15_000)
     );
 
     let params = SumeragiParameters {
@@ -49019,8 +49023,8 @@ fn commit_quorum_timeout_tracks_sumeragi_parameters() {
     };
     assert_eq!(
         commit_quorum_timeout_for_params(&params),
-        Duration::from_millis(1_000),
-        "zero commit timeout should fall back to block_time for liveness"
+        Duration::from_millis(15_000),
+        "zero commit timeout should clamp to block_time for liveness"
     );
 
     let params = SumeragiParameters {
@@ -49053,8 +49057,8 @@ fn commit_quorum_timeout_tracks_sumeragi_parameters() {
     };
     assert_eq!(
         commit_quorum_timeout_for_params(&params),
-        Duration::from_millis(1_000),
-        "zero commit timeout should fall back to block_time for liveness"
+        Duration::from_millis(2_000),
+        "zero commit timeout should clamp to block_time for liveness"
     );
 }
 

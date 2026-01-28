@@ -3946,6 +3946,7 @@ impl NetworkBuilder {
         let mut consensus_params = ConsensusGenesisParams {
             block_time_ms: parameter_state.sumeragi().block_time_ms(),
             commit_time_ms: parameter_state.sumeragi().commit_time_ms(),
+            min_finality_ms: parameter_state.sumeragi().min_finality_ms(),
             max_clock_drift_ms: parameter_state.sumeragi().max_clock_drift_ms(),
             collectors_k: parameter_state.sumeragi().collectors_k(),
             redundant_send_r: parameter_state.sumeragi().collectors_redundant_send_r(),
@@ -7681,6 +7682,7 @@ exit 0
         ConsensusGenesisParams {
             block_time_ms: sumeragi.block_time_ms(),
             commit_time_ms: sumeragi.commit_time_ms(),
+            min_finality_ms: sumeragi.min_finality_ms(),
             max_clock_drift_ms: sumeragi.max_clock_drift_ms(),
             collectors_k: sumeragi.collectors_k(),
             redundant_send_r: sumeragi.collectors_redundant_send_r(),

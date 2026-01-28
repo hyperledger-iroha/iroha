@@ -210,6 +210,7 @@ fn rng_consensus_genesis_params(rng: &mut DeterministicRng) -> ConsensusGenesisP
     ConsensusGenesisParams {
         block_time_ms: rng.next_u64(),
         commit_time_ms: rng.next_u64(),
+        min_finality_ms: rng.next_u64(),
         max_clock_drift_ms: rng.next_u64(),
         collectors_k: rng.next_u16(),
         redundant_send_r: rng.next_u8(),
@@ -1671,6 +1672,7 @@ fn consensus_genesis_norito_roundtrip() {
     let with_npos = ConsensusGenesisParams {
         block_time_ms: 750,
         commit_time_ms: 1_500,
+        min_finality_ms: 100,
         max_clock_drift_ms: 250,
         collectors_k: 4,
         redundant_send_r: 2,

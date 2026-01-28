@@ -40,9 +40,7 @@
               },
               "id": "rose#wonderland",
               "logo": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
@@ -55,9 +53,7 @@
             "Domain": {
               "id": "garden_of_live_flowers",
               "logo": null,
-              "metadata": {
-                
-              }
+              "metadata": {}
             }
           }
         },
@@ -66,9 +62,7 @@
             "Account": {
               "id": "34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD",
               "label": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "uaid": null
             }
           }
@@ -85,9 +79,7 @@
               },
               "id": "cabbage#garden_of_live_flowers",
               "logo": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
@@ -96,13 +88,11 @@
           }
         }
       ],
-      "ivm_triggers": [
-        
-      ],
+      "ivm_triggers": [],
       "parameters": {
         "sumeragi": {
-          "block_time_ms": 2000,
-          "commit_time_ms": 4000,
+          "block_time_ms": 100,
+          "commit_time_ms": 100,
           "max_clock_drift_ms": 1000,
           "collectors_k": 3,
           "collectors_redundant_send_r": 1,
@@ -118,7 +108,8 @@
             "pkcs11",
             "yubihsm",
             "softkey"
-          ]
+          ],
+          "min_finality_ms": 100
         },
         "block": {
           "max_transactions": 512
@@ -152,7 +143,7 @@
             "id": "sumeragi_npos_parameters",
             "payload": {
               "epoch_seed": "0000000000000000000000000000000000000000000000000000000000000000",
-              "block_time_ms": 1000,
+              "block_time_ms": 100,
               "timeout_propose_ms": 300,
               "timeout_prevote_ms": 300,
               "timeout_precommit_ms": 250,
@@ -178,9 +169,7 @@
           }
         }
       },
-      "topology": [
-        
-      ]
+      "topology": []
     },
     {
       "instructions": [
@@ -250,12 +239,8 @@
           }
         }
       ],
-      "ivm_triggers": [
-        
-      ],
-      "topology": [
-        
-      ]
+      "ivm_triggers": [],
+      "topology": []
     },
     {
       "instructions": [
@@ -271,9 +256,7 @@
               },
               "id": "sample#wonderland",
               "logo": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
@@ -290,24 +273,16 @@
           }
         }
       ],
-      "ivm_triggers": [
-        
-      ],
-      "topology": [
-        
-      ]
+      "ivm_triggers": [],
+      "topology": []
     },
     {
-      "instructions": [
-        
-      ],
-      "ivm_triggers": [
-        
-      ],
+      "instructions": [],
+      "ivm_triggers": [],
       "parameters": {
         "sumeragi": {
-          "block_time_ms": 1000,
-          "commit_time_ms": 1000,
+          "block_time_ms": 100,
+          "commit_time_ms": 100,
           "max_clock_drift_ms": 1000,
           "collectors_k": 3,
           "collectors_redundant_send_r": 1,
@@ -323,7 +298,8 @@
             "pkcs11",
             "yubihsm",
             "softkey"
-          ]
+          ],
+          "min_finality_ms": 100
         },
         "block": {
           "max_transactions": 10000
@@ -357,7 +333,7 @@
             "id": "sumeragi_npos_parameters",
             "payload": {
               "epoch_seed": "0000000000000000000000000000000000000000000000000000000000000000",
-              "block_time_ms": 1000,
+              "block_time_ms": 100,
               "timeout_propose_ms": 1000,
               "timeout_prevote_ms": 1000,
               "timeout_precommit_ms": 1000,
@@ -383,17 +359,11 @@
           }
         }
       },
-      "topology": [
-        
-      ]
+      "topology": []
     },
     {
-      "instructions": [
-        
-      ],
-      "ivm_triggers": [
-        
-      ],
+      "instructions": [],
+      "ivm_triggers": [],
       "topology": [
         {
           "peer": "ea0130999C999F728B0829387F4E93732EE0479F911DE0CE1E9409C8CEA66CF99376F57DB2E709892648F222D9F4E90DB29B84",
@@ -408,9 +378,7 @@
             "Domain": {
               "id": "nexus",
               "logo": null,
-              "metadata": {
-                
-              }
+              "metadata": {}
             }
           }
         },
@@ -419,9 +387,7 @@
             "Domain": {
               "id": "ivm",
               "logo": null,
-              "metadata": {
-                
-              }
+              "metadata": {}
             }
           }
         },
@@ -430,9 +396,7 @@
             "Account": {
               "id": "34mSYn9S1PeuZ5MzswzhvR2aSz3BRmzoPgUrmwuesJsQvMumSjTSrsNMhxV29uqZfWBY3QVuM",
               "label": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "uaid": null
             }
           }
@@ -449,9 +413,7 @@
               },
               "id": "xor#nexus",
               "logo": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
@@ -464,9 +426,7 @@
             "Account": {
               "id": "28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR",
               "label": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "uaid": null
             }
           }
@@ -480,12 +440,8 @@
           }
         }
       ],
-      "ivm_triggers": [
-        
-      ],
-      "topology": [
-        
-      ]
+      "ivm_triggers": [],
+      "topology": []
     },
     {
       "instructions": [
@@ -493,9 +449,7 @@
           "RegisterPublicLaneValidator": {
             "initial_stake": "10000",
             "lane_id": 0,
-            "metadata": {
-              
-            },
+            "metadata": {},
             "stake_account": "28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR",
             "validator": "28H3gJnePjJz7zBehK6Up8EHPYAGjKzNdmpoS5hQVm2sZpvdL3bkpcivTmkQR7JAmEfjLLD1xkbyatFEUAazH5P5euq6LsR"
           }
@@ -507,12 +461,8 @@
           }
         }
       ],
-      "ivm_triggers": [
-        
-      ],
-      "topology": [
-        
-      ]
+      "ivm_triggers": [],
+      "topology": []
     }
   ],
   "consensus_mode": "Npos",

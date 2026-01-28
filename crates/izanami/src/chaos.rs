@@ -174,10 +174,10 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
     if config.nexus.is_some() {
         let mut injected = Vec::new();
         injected.push(InstructionBox::from(SetParameter::new(
-            Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(npos_timing.block_ms)),
+            Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(npos_timing.commit_time_ms)),
         )));
         injected.push(InstructionBox::from(SetParameter::new(
-            Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(npos_timing.commit_time_ms)),
+            Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(npos_timing.block_ms)),
         )));
         let mut npos_params = SumeragiNposParameters::default();
         npos_params.block_time_ms = npos_timing.block_ms;
@@ -1070,6 +1070,72 @@ mod tests {
             commit_time,
             Some(timing.commit_time_ms),
             "genesis should set sumeragi commit_time_ms for NPoS"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn npos_genesis_sets_commit_time_before_block_time() -> Result<()> {
+        init_instruction_registry();
+        let profile = NexusProfile::sora_defaults()?;
+        let config = ChaosConfig {
+            allow_net: false,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: Some(7),
+            tps: 1.0,
+            max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: Some(profile),
+        };
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos {
+            state: _,
+            genesis,
+            recipes: _,
+        } = instructions::prepare_state(
+            account_qty,
+            config.nexus.as_ref(),
+            config.workload_profile,
+        )?;
+
+        let network = make_network_builder(&config, genesis).build();
+        let mut commit_pos = None;
+        let mut block_pos = None;
+        let mut idx = 0usize;
+        for isi in network.genesis_isi().iter().flatten() {
+            if let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() {
+                match set_param.inner() {
+                    Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(_)) => {
+                        if commit_pos.is_none() {
+                            commit_pos = Some(idx);
+                        }
+                    }
+                    Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(_)) => {
+                        if block_pos.is_none() {
+                            block_pos = Some(idx);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            idx = idx.saturating_add(1);
+        }
+
+        let commit_pos = commit_pos.expect("commit_time_ms should be injected");
+        let block_pos = block_pos.expect("block_time_ms should be injected");
+        assert!(
+            commit_pos < block_pos,
+            "commit_time_ms must be set before block_time_ms to satisfy validation"
         );
         Ok(())
     }

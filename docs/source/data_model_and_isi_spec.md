@@ -40,7 +40,7 @@ Events: Every entity has events emitted on mutations (create/delete/owner change
 ---
 
 ## Parameters (Chain Configuration)
-- Families: `SumeragiParameters { block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`, `BlockParameters { max_transactions }`, `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`, `SmartContractParameters { fuel, memory, execution_depth }`, plus `custom: BTreeMap`.
+- Families: `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`, `BlockParameters { max_transactions }`, `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`, `SmartContractParameters { fuel, memory, execution_depth }`, plus `custom: BTreeMap`.
 - Single enums for diffs: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter`. Aggregator: `Parameters`. Code: `crates/iroha_data_model/src/parameter/system.rs`.
 
 Setting parameters (ISI): `SetParameter(Parameter)` updates the corresponding field and emits `ConfigurationEvent::Changed`. Code: `crates/iroha_data_model/src/isi/transparent.rs`, executor in `crates/iroha_core/src/smartcontracts/isi/world.rs`.

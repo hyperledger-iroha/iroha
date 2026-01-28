@@ -48,6 +48,8 @@ pub struct ConsensusGenesisParams {
     pub block_time_ms: u64,
     /// Maximal amount of time to reach commit (ms).
     pub commit_time_ms: u64,
+    /// Minimum finality floor enforced for timing (ms).
+    pub min_finality_ms: u64,
     /// Allowed clock drift (ms) for transaction admission.
     pub max_clock_drift_ms: u64,
     /// Number of aggregators (collectors) targeted per block.

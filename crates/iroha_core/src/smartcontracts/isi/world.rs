@@ -62,7 +62,7 @@ pub mod isi {
             DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementRecord,
             LaneRelayEmergencyValidatorSet,
         },
-        parameter::Parameter,
+        parameter::{Parameter, SumeragiParameter},
         prelude::*,
         proof::{ProofId, VerifyingKeyId, VerifyingKeyRecord},
         query::error::FindError,
@@ -9486,6 +9486,64 @@ pub mod isi {
                 }
                 _ => {}
             }
+            let validate_timing = |min_finality_ms: u64,
+                                   block_time_ms: u64,
+                                   commit_time_ms: u64|
+             -> Result<(), Error> {
+                if min_finality_ms == 0 {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "sumeragi.min_finality_ms must be greater than zero".to_owned(),
+                        ),
+                    )
+                    .into());
+                }
+                if block_time_ms < min_finality_ms {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "sumeragi.block_time_ms must be greater than or equal to sumeragi.min_finality_ms"
+                                    .to_owned(),
+                            ),
+                        )
+                        .into());
+                }
+                if commit_time_ms < block_time_ms {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(
+                                "sumeragi.commit_time_ms must be greater than or equal to sumeragi.block_time_ms"
+                                    .to_owned(),
+                            ),
+                        )
+                        .into());
+                }
+                Ok(())
+            };
+            if let Parameter::Sumeragi(param) = self.inner().clone() {
+                let params_view = state_transaction.world.parameters.get();
+                let sumeragi = params_view.sumeragi();
+                let mut min_finality_ms = sumeragi.min_finality_ms();
+                let mut block_time_ms = sumeragi.block_time_ms();
+                let mut commit_time_ms = sumeragi.commit_time_ms();
+                let mut should_validate = false;
+                match param {
+                    SumeragiParameter::MinFinalityMs(value) => {
+                        min_finality_ms = value;
+                        should_validate = true;
+                    }
+                    SumeragiParameter::BlockTimeMs(value) => {
+                        block_time_ms = value;
+                        should_validate = true;
+                    }
+                    SumeragiParameter::CommitTimeMs(value) => {
+                        commit_time_ms = value;
+                        should_validate = true;
+                    }
+                    _ => {}
+                }
+                if should_validate {
+                    validate_timing(min_finality_ms, block_time_ms, commit_time_ms)?;
+                }
+            }
             match self.inner().clone() {
                 Parameter::Sumeragi(
                     iroha_data_model::parameter::SumeragiParameter::CollectorsK(0),
@@ -9577,6 +9635,7 @@ pub mod isi {
                 Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
                 Sumeragi(sumeragi.block_time_ms) => SumeragiParameter::BlockTimeMs,
                 Sumeragi(sumeragi.commit_time_ms) => SumeragiParameter::CommitTimeMs,
+                Sumeragi(sumeragi.min_finality_ms) => SumeragiParameter::MinFinalityMs,
                 Sumeragi(sumeragi.collectors_k) => SumeragiParameter::CollectorsK,
                 Sumeragi(sumeragi.collectors_redundant_send_r) => SumeragiParameter::RedundantSendR,
                 Sumeragi(sumeragi.da_enabled) => SumeragiParameter::DaEnabled,
@@ -12637,6 +12696,78 @@ pub mod isi {
                     msg,
                     "sumeragi.collectors_redundant_send_r must be greater than zero"
                 ),
+                other => panic!("unexpected error type: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn set_parameter_rejects_zero_min_finality() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let update = SetParameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(0)));
+            let err = update
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("min_finality_ms=0 must be rejected");
+            match err {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
+                    assert_eq!(msg, "sumeragi.min_finality_ms must be greater than zero")
+                }
+                other => panic!("unexpected error type: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn set_parameter_rejects_block_time_below_min_finality() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let update = SetParameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(50)));
+            let err = update
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("block_time_ms below min_finality must be rejected");
+            match err {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
+                    assert_eq!(
+                        msg,
+                        "sumeragi.block_time_ms must be greater than or equal to sumeragi.min_finality_ms"
+                    )
+                }
+                other => panic!("unexpected error type: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn set_parameter_rejects_commit_time_below_block_time() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let update = SetParameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(50)));
+            let err = update
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("commit_time_ms below block_time_ms must be rejected");
+            match err {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => {
+                    assert_eq!(
+                        msg,
+                        "sumeragi.commit_time_ms must be greater than or equal to sumeragi.block_time_ms"
+                    )
+                }
                 other => panic!("unexpected error type: {other:?}"),
             }
         }
