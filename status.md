@@ -2,6 +2,17 @@
 
 Last update: 2026-01-28
 
+- Torii UAID portfolio fixtures: align UAID portfolio tests/fixtures with the one-to-one UAID binding invariant (single UAID-bound account, two asset positions).
+- Tests: `cargo test -p iroha_torii --test accounts_portfolio --features app_api` (ok).
+
+- Sumeragi build cleanups: removed unused locals in Sumeragi main-loop and queue tests, added `min_finality_ms` to the consensus fingerprint helper in `sumeragi_mode_cutover`, and trimmed unused locals in gossiper/Kura tests.
+- Tests: `cargo test -p iroha_core block_sync_update_accepts_stale_view_when_missing_block_requested -- --nocapture` (ok). `cargo test -p integration_tests sumeragi_mode_cutover -- --nocapture` (ok; warning about unused import `std::time::Instant` in `crates/iroha_core/src/block.rs:55`).
+
+- Kotodama lint: suppress opaque-access and nonliteral map-key warnings when explicit `#[access]` hints are present; updated Kotodama docs to note the behavior, refreshed Kotodama samples/docs/examples to add access hints and pointer de-duplication, and regenerated the affected `.to` artifacts (IVM docs examples, Kotodama samples, test fixtures, NFT example).
+- Tests: `cargo test -p kotodama_lang lint_opaque_access_hints_with_explicit_access_is_silent` (ok). `cargo test -p kotodama_lang lint_nonliteral_state_map_key_with_explicit_access_is_silent` (ok).
+
+- Sumeragi vote/QC verify workers: honor auto sizing for worker threads + queue caps when config values are 0 (aligns with validation workers) so vote verification can buffer more work before synchronous fallback; added unit coverage.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-worker cargo test -p iroha_core worker_config_auto_scales -- --nocapture` (ok; warning about unused `mut` in `crates/iroha_core/src/kura.rs:7474` persists).
 - Izanami NPoS timeouts: scale the block-time input used for per-phase timeout derivation so the timeout budget tracks the target block time; updated `derive_npos_timing_scales_timeouts_to_block_time` coverage.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Izanami run (tps=1, 300s, 4 peers) after timeout scaling: stopped before target blocks; committed height 27 across peers; network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_8ioANR`. Slow-line parsing across peers: `vote_drain_ms` mean ~6–10ms (p95 ~1ms, max ~534ms), `block_payload_drain_ms` mean ~71–119ms (p95 ~366–594ms, max ~3562ms), so vote drain tightened but height still stalls around the high 20s.
@@ -17,6 +28,7 @@ Last update: 2026-01-28
 - Trigger execution: hydrate CoreHost with Halo2 config, chain id, and ZK snapshots; add CoreHost::from_state snapshot test.
 - Kotodama demo artifacts: added ZK `meta` to `zk_vote_and_unshield.ko`, regenerated demo `.to` bytecode + manifests from Kotodama sources (authority_probe, ivm_smoke, prediction_market, irohaswap, transfer), and re-signed `prediction_market.deploy.manifest.json`.
 - Tests: `cargo test -p iroha_core zk_vote_tally_syscall_reads_world_snapshot -- --nocapture` (ok; warnings about unused import `SumeragiNposTimeouts` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:29`, unused `mut` in `crates/iroha_core/src/kura.rs:7474`, unused `local_peer` in `crates/iroha_core/src/peers_gossiper.rs:1291`, unused `consensus_mode` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:48253`, unused `leader_kp` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:51847`).
+- Kotodama sweep: renamed the Android override request template to `docs/examples/android_override_request.json`, fixed the MFC sample Name literal and deduplicated its asset pointer helper, then compiled all tracked `.ko` sources (dynamic bounds examples built with the `kotodama_dynamic_bounds` feature).
 
 - Sumeragi config streamlining: introduce `sumeragi.advanced` (queues/worker/pacemaker/RBC + DA time multipliers + NPoS timeouts), keep `sumeragi.da` for enable + per-block limits, and refresh docs/templates/fixtures/error paths to the nested keys.
 - Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config). `cargo test -p iroha_config` (ok). `UPDATE_EXPECT=1 cargo test -p iroha_config --test fixtures minimal_config_snapshot` (ok).
@@ -1271,7 +1283,12 @@ Last update: 2026-01-28
 - Defaults: redundant_send_r now derived as `2f+1` from validator count for Kagami profiles, localnet generation, and test-network genesis; default genesis templates and operator docs updated. Tests not run (not requested).
 - State tests: use the configured Nexus lane catalog and a generated missing-owner account in `da_pin_intents_drop_missing_owner_accounts` to avoid false positives when default accounts exist.
 - Sumeragi: proposal hints now trigger missing-block fetches for the highest QC parent; highest-QC fetches fall back to the raw commit-topology snapshot when the effective roster is empty; fetch responses matching the local highest QC bypass the background queue.
-- Tests: updated fetch-pending coverage for priority handling and added `proposal_hint_missing_highest_qc_triggers_missing_block_fetch`, `fetch_pending_block_highest_qc_bypasses_background_queue`, `new_view_highest_qc_fetch_uses_commit_topology_snapshot_when_effective_empty` (not run).
+- Tests: updated fetch-pending coverage for priority handling and added `proposal_hint_missing_highest_qc_triggers_missing_block_fetch`, `fetch_pending_block_highest_qc_bypasses_background_queue`.
+- Tests: `cargo test -p iroha_core proposal_hint_missing_highest_qc_triggers_missing_block_fetch -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core fetch_pending_block_highest_qc_bypasses_background_queue -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core new_view_highest_qc_fetch_uses_commit_topology_snapshot_when_effective_empty -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core new_view_highest_qc_fetch_uses_commit_qc_history_fallback_when_roster_empty -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core assemble_proposal_defers_when_highest_qc_block_missing -- --nocapture` (ok).
 - Sumeragi ingress: route RbcReady/RbcDeliver into the rbc_chunk queue (higher priority) to avoid block-queue backlogs delaying READY quorum; updated queue-routing and backpressure tests (tests not run).
 - Izanami: `DeployIvmContract` removed from the stable recipe set (kept in chaos) and the IVM trigger artifact switched to the `cycles1000` fixture to reduce time-trigger stalls.
 - Izanami NPoS 1 TPS run (300s) with `cycles1000` artifact but IVM triggers still enabled: stopped before target blocks; validation dominated by time triggers from `ivm_trigger_*` (execution_tx_time_triggers_ms p95 ~3.8s, max ~3.8s). Logs: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_ugpHFr`.

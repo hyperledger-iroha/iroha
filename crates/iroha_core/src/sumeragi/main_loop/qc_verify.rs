@@ -30,6 +30,31 @@ pub(super) struct QcVerifyWorkerHandle {
     pub(super) join_handles: Vec<std::thread::JoinHandle<()>>,
 }
 
+fn resolve_worker_config(
+    worker_threads: usize,
+    work_queue_cap: usize,
+    result_queue_cap: usize,
+) -> (usize, usize, usize) {
+    let threads = if worker_threads == 0 {
+        std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1)
+    } else {
+        worker_threads
+    };
+    let work_queue_cap = if work_queue_cap == 0 {
+        threads.saturating_mul(4).max(4)
+    } else {
+        work_queue_cap
+    };
+    let result_queue_cap = if result_queue_cap == 0 {
+        threads.saturating_mul(8).max(8)
+    } else {
+        result_queue_cap
+    };
+    (threads, work_queue_cap, result_queue_cap)
+}
+
 /// Spawn QC aggregate verification workers.
 pub(super) fn spawn_qc_verify_workers(
     wake_tx: Option<mpsc::SyncSender<()>>,
@@ -37,9 +62,8 @@ pub(super) fn spawn_qc_verify_workers(
     work_queue_cap: usize,
     result_queue_cap: usize,
 ) -> QcVerifyWorkerHandle {
-    let threads = worker_threads.max(1);
-    let work_queue_cap = work_queue_cap.max(1);
-    let result_queue_cap = result_queue_cap.max(1);
+    let (threads, work_queue_cap, result_queue_cap) =
+        resolve_worker_config(worker_threads, work_queue_cap, result_queue_cap);
     let (result_tx, result_rx) = mpsc::sync_channel::<QcVerifyResult>(result_queue_cap);
     let mut work_txs = Vec::with_capacity(threads);
     let mut join_handles = Vec::with_capacity(threads);
@@ -134,5 +158,21 @@ impl Actor {
             self.subsystems.qc_verify.inflight.clear();
         }
         progress
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_worker_config;
+
+    #[test]
+    fn qc_verify_worker_config_auto_scales() {
+        let expected_threads = std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1);
+        let (threads, work_cap, result_cap) = resolve_worker_config(0, 0, 0);
+        assert_eq!(threads, expected_threads);
+        assert_eq!(work_cap, expected_threads.saturating_mul(4).max(4));
+        assert_eq!(result_cap, expected_threads.saturating_mul(8).max(8));
     }
 }
