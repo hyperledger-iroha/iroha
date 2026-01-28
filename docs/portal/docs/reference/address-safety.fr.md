@@ -37,7 +37,7 @@ Cette page capture le livrable de documentation ADDR-6c. Appliquez ces contraint
 
 ## Adresses compressees Sora-only
 
-- Gating: cachez la chaine compressee `snx1...` derriere une confirmation explicite. La confirmation doit reiterer que le format ne fonctionne que sur les chaines Sora Nexus.
+- Gating: cachez la chaine compressee `sora...` derriere une confirmation explicite. La confirmation doit reiterer que le format ne fonctionne que sur les chaines Sora Nexus.
 - Etiquetage: chaque occurrence doit inclure un badge visible "Sora-only" et un tooltip expliquant pourquoi les autres reseaux exigent la forme IH58.
 - Guardrails: si le discriminant de chaine active n'est pas l'allocation Nexus, refusez de generer l'adresse compressee et redirigez vers IH58.
 - Telemetrie: enregistrez la frequence de demande et de copie de la forme compressee afin que le playbook d'incident detecte les pics de partage accidentel.

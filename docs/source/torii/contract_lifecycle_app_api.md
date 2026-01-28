@@ -37,7 +37,7 @@ possess the manifest (including hashes) and only need Torii to queue it.【crate
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `authority` | `AccountId` | Canonical IH58 account id (no `@domain`, preferred). Torii accepts the full account-literal set (`alias@domain`, `public_key@domain`, `uaid:…`, `opaque:…`, IH58 (preferred)/snx1 (second-best)/0x) and canonicalizes to IH58; use `/v1/accounts/resolve` to preflight. |
+| `authority` | `AccountId` | Canonical IH58 account id (no `@domain`, preferred). Torii accepts the full account-literal set (`alias@domain`, `public_key@domain`, `uaid:…`, `opaque:…`, IH58 (preferred)/sora (second-best)/0x) and canonicalizes to IH58; use `/v1/accounts/resolve` to preflight. |
 | `private_key` | `ExposedPrivateKey` | Bare multihash hex as emitted by `ExposedPrivateKey::to_string()`; no `ed25519:` prefix is included.【crates/iroha_crypto/src/lib.rs:1994】 |
 | `manifest` | `ContractManifest` | Optional fields; if `code_hash`/`abi_hash` are present they must match node-side validation.【crates/iroha_data_model/src/smart_contract.rs:87】 |
 

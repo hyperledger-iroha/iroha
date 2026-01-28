@@ -1054,6 +1054,10 @@ async fn update_effective_timing_status_populates_snapshot() {
         super::duration_ms_u64(commit_time)
     );
     assert_eq!(
+        snap.effective_pacing_factor_bps,
+        u64::from(params.effective_pacing_factor_bps())
+    );
+    assert_eq!(
         snap.effective_commit_quorum_timeout_ms,
         super::duration_ms_u64(commit_quorum_timeout)
     );

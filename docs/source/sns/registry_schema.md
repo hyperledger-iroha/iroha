@@ -231,7 +231,7 @@ State transitions MUST emit the corresponding `RegistryEventKind` so downstream 
 Gateways subscribe to `RegistryEventV1` and synchronise to DNS/SoraFS by:
 
 1. Fetching the latest `NameRecordV1` referenced by the event sequence.
-2. Regenerating resolver templates (preferred IH58 + second-best compressed (`snx1`) addresses, text records).
+2. Regenerating resolver templates (preferred IH58 + second-best compressed (`sora`) addresses, text records).
 3. Pinning updated zone data via the SoraDNS workflow described in `docs/source/soradns/soradns_registry_rfc.md`.
 
 Event delivery guarantees:

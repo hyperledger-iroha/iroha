@@ -22,7 +22,7 @@ de compte comme des payloads immuables. L'exemple de portefeuille retail Android
 dans `examples/android/retail-wallet` montre maintenant le pattern UX requis:
 
 - **Deux cibles de copie.** Fournissez deux boutons de copie explicites: IH58
-  (prefere) et la forme compressee Sora-only (`snx1...`, second choix). IH58 est toujours
+  (prefere) et la forme compressee Sora-only (`sora...`, second choix). IH58 est toujours
   sure a partager en externe et alimente le payload du QR. La variante compressee
   doit inclure un avertissement inline parce qu'elle ne fonctionne que dans des
   apps prises en charge par Sora. L'exemple Android branche les deux boutons Material et
@@ -71,7 +71,7 @@ coherentes:
   (`javascript/iroha_js/src/address.js`)
 - JavaScript inspector: `inspectAccountId(...)` retourne la chaine
   d'avertissement compressee et l'ajoute a `warnings` quand les appelants
-  fournissent un literal `snx1...`, pour que les explorateurs/tableaux de bord de
+  fournissent un literal `sora...`, pour que les explorateurs/tableaux de bord de
   portefeuille puissent afficher l'avertissement Sora-only pendant les flux de
   collage/validation plutot que seulement lorsqu'ils generent eux-memes la forme
   compressee.
@@ -192,7 +192,7 @@ ou en chaines compressees doivent suivre le workflow CLI documente sous ADDR-5:
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("snx1...");
+   const summary = inspectAccountId("sora...");
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }

@@ -836,8 +836,8 @@ For higher-level walkthroughs, see:
   management, and general query envelopes. The `getExplorerAccountQr(accountId:addressFormat:)`
   helper wraps `/v1/explorer/accounts/{account_id}/qr` and returns the inline SVG, literal, and
   metadata defined in {doc}`sns/address_display_guidelines` so explorers can embed share-ready
-  preferred IH58 or second-best compressed (`snx1`) QR payloads without reimplementing the renderer
-  (omit the format to use IH58 or pass `.compressed` for the Sora-only `snx1` literal).
+  preferred IH58 or second-best compressed (`sora`) QR payloads without reimplementing the renderer
+  (omit the format to use IH58 or pass `.compressed` for the Sora-only `sora` literal).
 - **Domains & registries:** `listDomains(options:)` wraps `/v1/domains` with typed
   pagination/filtering via `ToriiListOptions`/`ToriiListFilter`/`ToriiListSort`, while
   `iterateDomains(pageSize:maxItems:)` (iOS 15/macOS 12+) emits an
@@ -871,7 +871,7 @@ For higher-level walkthroughs, see:
   snapshots via the typed helpers. Responses that include `tx_instructions` can be fed
   directly into `TxBuilder` to produce signed transactions.
 
-> **Roadmap ADDR-5a:** Account-aware helpers (`getAssets`, `getTransactions`, and the matching `IrohaSDK` wrappers) accept IH58 (preferred)/snx1 (second-best)/canonical literals and percent-encode `/v1/accounts/{account_id}/…` paths automatically so wallets can forward whatever selector they display without manual escaping.
+> **Roadmap ADDR-5a:** Account-aware helpers (`getAssets`, `getTransactions`, and the matching `IrohaSDK` wrappers) accept IH58 (preferred)/sora (second-best)/canonical literals and percent-encode `/v1/accounts/{account_id}/…` paths automatically so wallets can forward whatever selector they display without manual escaping.
 
 Upcoming work (tracked under IOS3) includes governance endpoints, additional query
 builders, and WebSocket/SSE subscribers shared with Android/JS.
@@ -898,7 +898,7 @@ or reserved characters (`@`, `#`, `$`). Use canonical ASCII/punycode labels when
 Account addresses also validate public key lengths for known algorithms (ed25519 requires 32 bytes;
 secp256k1 requires 33 bytes when enabled), and reject empty keys.
 
-Show IH58 as the preferred copy/share target (and QR payload), treat the compressed `snx1…`
+Show IH58 as the preferred copy/share target (and QR payload), treat the compressed `sora…`
 form as second-best alongside the warning, and highlight when the implicit `default` domain is in use. This keeps
 Swift parity with the Android/JS samples and prevents IME corruption of half-width kana.
 

@@ -165,7 +165,7 @@ public final class AccountAddressTests {
         : "canonical encoding mismatch";
     assert ih58.equals("RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9")
         : "IH58 encoding mismatch";
-    assert compressed.equals("snx12QGﾈkﾀLWP9ﾑﾐUﾓYq96rKRｻヱAAUｸGSﾊﾒｸCｺヰﾅijtJoﾎﾇｷ69DQ7G")
+    assert compressed.equals("sora2QGﾈkﾀLWP9ﾑﾐUﾓYq96rKRｻヱAAUｸGSﾊﾒｸCｺヰﾅijtJoﾎﾇｷ69DQ7G")
         : "compressed encoding mismatch";
 
     final AccountAddress.ParseResult ih58Parsed =

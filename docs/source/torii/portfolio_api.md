@@ -218,7 +218,7 @@ Sample response:
   present.
 - `accounts` reuse the `uaid_dataspaces` ledger map so operators can see which
   concrete account IDs are tied to the manifest’s dataspace. Set
-  `address_format=compressed` only when you need the second-best `snx1…` literals for
+  `address_format=compressed` only when you need the second-best `sora…` literals for
   offline or QR workflows.
 - The `manifest` object is the exact `AssetPermissionManifest` structure
   published to the Space Directory, making it easy for SDKs to replay the

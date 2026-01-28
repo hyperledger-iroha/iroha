@@ -1,4 +1,4 @@
-//! Account address tooling (IH58 (preferred)/snx1 (second-best)/canonical conversions).
+//! Account address tooling (IH58 (preferred)/sora (second-best)/canonical conversions).
 
 use super::*;
 use clap::ValueEnum;
@@ -19,7 +19,7 @@ use std::{
 /// Default IH58 prefix for Sora Nexus (see `address_prefix_registry.json`).
 const DEFAULT_IH58_PREFIX: u16 = 753;
 const LOCAL_SELECTOR_WARNING: &str = "local-domain selector detected: register the domain \
-with the Nexus registry and refresh IH58 (preferred)/snx1 (second-best) copies before Local selectors are blocked. \
+with the Nexus registry and refresh IH58 (preferred)/sora (second-best) copies before Local selectors are blocked. \
 Refer to docs/source/sns/address_display_guidelines.md for the cutover schedule.";
 
 #[derive(clap::Subcommand, Debug)]
@@ -44,7 +44,7 @@ impl Run for Command {
 
 #[derive(clap::Args, Debug)]
 pub struct Convert {
-    /// Address literal to parse (IH58, `snx1…`, or canonical `0x…`).
+    /// Address literal to parse (IH58, `sora…`, or canonical `0x…`).
     #[arg(value_name = "ADDRESS")]
     input: String,
     /// Require IH58 inputs to match the provided network prefix.

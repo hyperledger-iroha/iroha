@@ -455,7 +455,7 @@ pub fn compliance_vectors_json() -> Value {
     let compressed_missing = single_default
         .encodings
         .compressed
-        .strip_prefix("snx1")
+        .strip_prefix("sora")
         .unwrap()
         .to_string();
     let err_missing = AccountAddress::from_compressed_sora(&compressed_missing).unwrap_err();
@@ -503,7 +503,7 @@ pub fn compliance_vectors_json() -> Value {
         json_obj!({
             "case_id": "compressed-missing-sentinel",
             "format": "compressed",
-            "note": "Missing required snx1 sentinel prefix.",
+            "note": "Missing required sora sentinel prefix.",
             "input": compressed_missing,
             "expected_error": error_to_json(&err_missing),
         }),

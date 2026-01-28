@@ -155,7 +155,7 @@ requested format, network prefix/error-correction metadata, QR dimensions, and
 the inline SVG payload that wallets/explorers can embed directly. Omit
 `ExplorerAccountQrOptions` to default to the preferred IH58 output or set
 `address_format: Some(AddressFormat::Compressed)` to retrieve the second-best
-`snx1…` variant used by ADDR-6b.
+`sora…` variant used by ADDR-6b.
 
 ## 7. Subscribe to events
 

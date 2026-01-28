@@ -6512,7 +6512,7 @@
     },
     "/v1/nexus/public_lanes/{lane_id}/rewards/pending": {
       "get": {
-        "description": "Returns the unclaimed reward amount per asset for the requested account in the given public lane. Requires an `account` query parameter (IH58 (preferred)/snx1 (second-best)) and accepts an optional `upto_epoch` upper bound.",
+        "description": "Returns the unclaimed reward amount per asset for the requested account in the given public lane. Requires an `account` query parameter (IH58 (preferred)/sora (second-best)) and accepts an optional `upto_epoch` upper bound.",
         "operationId": "nexusPublicLaneRewards",
         "parameters": [
           {
@@ -6539,7 +6539,7 @@
             }
           },
           {
-            "description": "Account literal to evaluate pending rewards for (IH58 (preferred)/snx1 (second-best)).",
+            "description": "Account literal to evaluate pending rewards for (IH58 (preferred)/sora (second-best)).",
             "in": "query",
             "name": "account",
             "required": false,
@@ -6615,7 +6615,7 @@
             }
           },
           {
-            "description": "Optional validator account literal to filter stake entries (IH58 (preferred)/snx1 (second-best)).",
+            "description": "Optional validator account literal to filter stake entries (IH58 (preferred)/sora (second-best)).",
             "in": "query",
             "name": "validator",
             "required": false,
@@ -6889,7 +6889,7 @@
             }
           },
           {
-            "description": "Filter allowances by controller account (accepts IH58 (preferred)/snx1 (second-best)/public-key literals).",
+            "description": "Filter allowances by controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
             "in": "query",
             "name": "controller_id",
             "required": false,
@@ -7391,7 +7391,7 @@
             }
           },
           {
-            "description": "Filter allowances by controller account (accepts IH58 (preferred)/snx1 (second-best)/public-key literals).",
+            "description": "Filter allowances by controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
             "in": "query",
             "name": "controller_id",
             "required": false,
@@ -7973,7 +7973,7 @@
             }
           },
           {
-            "description": "Filter receipts by sender/controller account (accepts IH58 (preferred)/snx1 (second-best)/public-key literals).",
+            "description": "Filter receipts by sender/controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
             "in": "query",
             "name": "controller_id",
             "required": false,
@@ -7982,7 +7982,7 @@
             }
           },
           {
-            "description": "Filter receipts by receiver account (accepts IH58 (preferred)/snx1 (second-best)/public-key literals).",
+            "description": "Filter receipts by receiver account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
             "in": "query",
             "name": "receiver_id",
             "required": false,
@@ -8261,7 +8261,7 @@
             }
           },
           {
-            "description": "Filter bundles by originating controller account (accepts IH58 (preferred)/snx1 (second-best)/public-key literals).",
+            "description": "Filter bundles by originating controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
             "in": "query",
             "name": "controller_id",
             "required": false,
@@ -8270,7 +8270,7 @@
             }
           },
           {
-            "description": "Filter bundles by receiver account (accepts IH58 (preferred)/snx1 (second-best)/public-key literals).",
+            "description": "Filter bundles by receiver account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
             "in": "query",
             "name": "receiver_id",
             "required": false,
@@ -8279,7 +8279,7 @@
             }
           },
           {
-            "description": "Filter bundles by deposit account (accepts IH58 (preferred)/snx1 (second-best)/public-key literals).",
+            "description": "Filter bundles by deposit account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
             "in": "query",
             "name": "deposit_account_id",
             "required": false,
@@ -8871,7 +8871,7 @@
             }
           },
           {
-            "description": "Filter bundles by originating controller account (accepts IH58 (preferred)/snx1 (second-best)/public-key literals).",
+            "description": "Filter bundles by originating controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
             "in": "query",
             "name": "controller_id",
             "required": false,
@@ -8880,7 +8880,7 @@
             }
           },
           {
-            "description": "Filter bundles by receiver account (accepts IH58 (preferred)/snx1 (second-best)/public-key literals).",
+            "description": "Filter bundles by receiver account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
             "in": "query",
             "name": "receiver_id",
             "required": false,
@@ -8889,7 +8889,7 @@
             }
           },
           {
-            "description": "Filter bundles by deposit account (accepts IH58 (preferred)/snx1 (second-best)/public-key literals).",
+            "description": "Filter bundles by deposit account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
             "in": "query",
             "name": "deposit_account_id",
             "required": false,

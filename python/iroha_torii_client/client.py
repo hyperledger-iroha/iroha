@@ -6457,7 +6457,7 @@ class ToriiClient:
             return None
         if normalized in {"ih58", "ih-b32", "canonical"}:
             return "ih58"
-        if normalized in {"compressed", "snx1"}:
+        if normalized in {"compressed", "sora"}:
             return "compressed"
         raise RuntimeError(f"{context} must be 'ih58'/'canonical' or 'compressed'")
 
@@ -6596,7 +6596,7 @@ class ToriiClient:
             raise RuntimeError(f"{context}.owner must be a canonical account id")
         if "@" in trimmed:
             raise RuntimeError(f"{context}.owner must be a canonical account id")
-        if trimmed.lower().startswith(("0x", "snx1")):
+        if trimmed.lower().startswith(("0x", "sora")):
             raise RuntimeError(f"{context}.owner must be a canonical account id")
         try:
             _decode_ih58_string(trimmed)

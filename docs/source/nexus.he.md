@@ -123,7 +123,7 @@ Manifests של capabilities ו-UAID
 
 מפעילים ו-SDKs יכולים לבצע את אותן פעולות דרך HTTPS. Torii אוכף את אותן הרשאות וחותם על טרנזקציות עבור הסמכות שסופקה (מפתחות פרטיים נשארים בזיכרון בתוך handler מאובטח של Torii):
 
-- `GET /v1/space-directory/uaids/{uaid}` — לפתור binding נוכחי של dataspace ל-UAID (כתובות מנורמלות, ids של dataspace, program bindings). הוסיפו `address_format=compressed` לפלט Sora Name Service (IH58 מועדף; compressed (`snx1`) הוא אפשרות שנייה ל‑Sora בלבד).
+- `GET /v1/space-directory/uaids/{uaid}` — לפתור binding נוכחי של dataspace ל-UAID (כתובות מנורמלות, ids של dataspace, program bindings). הוסיפו `address_format=compressed` לפלט Sora Name Service (IH58 מועדף; compressed (`sora`) הוא אפשרות שנייה ל‑Sora בלבד).
 - `GET /v1/space-directory/uaids/{uaid}/portfolio` — אגרגטור Norito שממפה ל-`ToriiClient.getUaidPortfolio` כדי שארנקים יציגו נכסים אוניברסליים בלי גרידת מצב לכל dataspace.
 - `GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}` — להביא JSON של המניפסט, metadata של מחזור חיים וה-hash לביקורת.
 - `POST /v1/space-directory/manifests` — לשלוח מניפסט חדש או מחליף מ-JSON (`authority`, `private_key`, `manifest`, `reason` אופציונלי). Torii מחזיר `202 Accepted` כשהטרנזקציה בתור.

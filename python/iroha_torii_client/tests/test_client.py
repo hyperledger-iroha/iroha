@@ -351,7 +351,7 @@ def test_get_explorer_account_qr_normalizes_payload_variants() -> None:
         StubResponse(
             payload={
                 "canonicalId": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
-                "literal": "snx1bobacct",
+                "literal": "sorabobacct",
                 "addressFormat": "compressed",
                 "networkPrefix": 27,
                 "errorCorrection": "medium",
@@ -367,7 +367,7 @@ def test_get_explorer_account_qr_normalizes_payload_variants() -> None:
 
     assert qr == ExplorerAccountQr(
         canonical_id="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
-        literal="snx1bobacct",
+        literal="sorabobacct",
         address_format="compressed",
         network_prefix=27,
         error_correction="medium",
@@ -2350,7 +2350,7 @@ def test_submit_zk_ballot_rejects_noncanonical_owner() -> None:
             election_id="election-1",
             proof_b64="AAAA",
             public={
-                "owner": "snx1dead",
+                "owner": "soradead",
                 "amount": "100",
                 "duration_blocks": 5,
             },
@@ -2385,7 +2385,7 @@ def test_submit_zk_ballot_v1_rejects_noncanonical_owner() -> None:
             election_id="election-1",
             backend="halo2/ipa",
             envelope_b64="AAAA",
-            owner="snx1dead",
+            owner="soradead",
             amount="100",
             duration_blocks=5,
         )

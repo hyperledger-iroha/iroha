@@ -2470,6 +2470,8 @@ pub mod sumeragi {
     pub const PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: usize = 16;
     /// Permissioned default block time (ms); keep aligned with on-chain defaults.
     pub const BLOCK_TIME_MS: u64 = 100;
+    /// Base pacing factor for adaptive timing (basis points, 10_000 = 1.0x).
+    pub const PACING_FACTOR_BPS: u32 = 10_000;
     /// Minimum lead time (blocks) between publishing a new consensus key and its activation.
     pub const KEY_ACTIVATION_LEAD_BLOCKS: u64 = 1;
     /// Grace/overlap window (blocks) during which both old and new keys remain valid.

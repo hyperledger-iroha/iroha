@@ -231,7 +231,7 @@ Runtime ロジックは NX-9 実装時に `PublicLaneRewardRecord` 注釈を emi
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height,
       release timers, bonded stake, last reward epoch.
-      `address_format=ih58|compressed` で literal 表示を制御（IH58 推奨、compressed（`snx1`）は Sora 専用の次善）。
+      `address_format=ih58|compressed` で literal 表示を制御（IH58 推奨、compressed（`sora`）は Sora 専用の次善）。
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
       `staker`, bonded amount) と pending unbond timers。`?validator=ih58...` は
       特定バリデータ向けにフィルタし、`address_format` は全 literal に適用。

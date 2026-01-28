@@ -22,7 +22,7 @@ public final class AccountAddress {
 
   private static final byte[] LOCAL_DOMAIN_KEY = "SORA-LOCAL-K:v1".getBytes(StandardCharsets.UTF_8);
   private static final byte[] IH58_CHECKSUM_PREFIX = "IH58PRE".getBytes(StandardCharsets.UTF_8);
-  private static final String COMPRESSED_SENTINEL = "snx1";
+  private static final String COMPRESSED_SENTINEL = "sora";
   private static final int COMPRESSED_CHECKSUM_LEN = 6;
   private static final int BECH32M_CONST = 0x2bc830a3;
   private static final String COMPRESSED_WARNING =
@@ -111,7 +111,7 @@ public final class AccountAddress {
   }
 
   /**
-   * Convenience helper that surfaces the IH58 (preferred)/snx1 (second-best) pair alongside the shared warning string.
+   * Convenience helper that surfaces the IH58 (preferred)/sora (second-best) pair alongside the shared warning string.
    * Follow {@code docs/source/sns/address_display_guidelines.md} when presenting these values.
    */
   public DisplayFormats displayFormats() throws AccountAddressException {
@@ -119,7 +119,7 @@ public final class AccountAddress {
   }
 
   /**
-   * Convenience helper that surfaces the IH58 (preferred)/snx1 (second-best) pair alongside the shared warning string.
+   * Convenience helper that surfaces the IH58 (preferred)/sora (second-best) pair alongside the shared warning string.
    * Follow {@code docs/source/sns/address_display_guidelines.md} when presenting these values.
    */
   public DisplayFormats displayFormats(final int networkPrefix) throws AccountAddressException {
@@ -217,7 +217,7 @@ public final class AccountAddress {
     }
     if (containsCompressedGlyph(trimmed)) {
       throw new AccountAddressException(
-          AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "compressed address must start with snx1 sentinel");
+          AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "compressed address must start with sora sentinel");
     }
     if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
       return new ParseResult(fromCanonicalHex(trimmed), Format.CANONICAL_HEX);
@@ -789,7 +789,7 @@ public final class AccountAddress {
 
   private static byte[] decodeCompressed(final String encoded) throws AccountAddressException {
     if (!encoded.startsWith(COMPRESSED_SENTINEL)) {
-      throw new AccountAddressException(AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "compressed address must start with snx1 sentinel");
+      throw new AccountAddressException(AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "compressed address must start with sora sentinel");
     }
     final String payload = encoded.substring(COMPRESSED_SENTINEL.length());
     if (payload.length() <= COMPRESSED_CHECKSUM_LEN) {

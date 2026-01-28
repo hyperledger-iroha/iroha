@@ -2,7 +2,7 @@
 id: address-display-guidelines
 title: Sora Address Display Guidelines
 sidebar_label: Address display
-description: UX and CLI requirements for IH58 vs compressed (`snx1`) Sora address presentation (ADDR-6).
+description: UX and CLI requirements for IH58 vs compressed (`sora`) Sora address presentation (ADDR-6).
 ---
 
 import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
@@ -17,7 +17,7 @@ payloads. The Android retail wallet sample in
 `examples/android/retail-wallet` now demonstrates the required UX pattern:
 
 - **Dual copy targets.** Ship two explicit copy buttons—IH58 (preferred) and the
-  compressed Sora-only form (`snx1…`, second-best). IH58 is always safe to share externally
+  compressed Sora-only form (`sora…`, second-best). IH58 is always safe to share externally
   and powers the QR payload. The compressed variant must include an inline
   warning because it only works inside Sora-aware apps. The Android retail
   wallet sample wires both Material buttons and their tooltips in
@@ -54,13 +54,13 @@ tooltips, and warnings stay aligned across platforms:
 
 ## SDK helpers
 
-Each SDK exposes a convenience helper that returns the IH58 (preferred) and compressed (`snx1`, second-best)
+Each SDK exposes a convenience helper that returns the IH58 (preferred) and compressed (`sora`, second-best)
 forms alongside the warning string so UI layers can stay consistent:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
 - JavaScript inspector: `inspectAccountId(...)` returns the compressed warning
-  string and appends it to `warnings` whenever callers provide a `snx1…`
+  string and appends it to `warnings` whenever callers provide a `sora…`
   literal, so explorers/wallet dashboards can surface the Sora-only notice
   during paste/validation flows instead of only when they generate the
   compressed form themselves.
@@ -89,7 +89,7 @@ Explorers should mirror the wallet telemetry and accessibility work:
   export a 30-day `domain_kind="local12"` zero-usage proof directly from the `address_ingest`
   Grafana board.
 - Pair every control with distinct `aria-label`/`aria-describedby` hints that explain whether a
-  literal is safe to share (`IH58`) or Sora-only (compressed `snx1`). Include the implicit-domain caption in
+  literal is safe to share (`IH58`) or Sora-only (compressed `sora`). Include the implicit-domain caption in
   the description so assistive technology surfaces the same context shown visually.
 - Expose a live region (e.g., `<output aria-live="polite">…</output>`) announcing copy results and
   warnings, matching the VoiceOver/TalkBack behaviour now wired into the Swift/Android samples.
@@ -100,7 +100,7 @@ client-side copy modes before Local selectors are disabled.
 ## Local → Global migration toolkit
 
 Use the [Local → Global toolkit](local-to-global-toolkit.md) to automate
-JSON audit report and the converted preferred IH58 / second-best compressed (`snx1`) list that operators attach
+JSON audit report and the converted preferred IH58 / second-best compressed (`sora`) list that operators attach
 to readiness tickets, while the accompanying runbook links the Grafana
 dashboards and Alertmanager rules that gate the strict-mode cutover.
 
@@ -166,7 +166,7 @@ strings must follow the CLI workflow documented under ADDR-5:
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("snx1...");
+   const summary = inspectAccountId("sora...");
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }
@@ -186,14 +186,14 @@ strings must follow the CLI workflow documented under ADDR-5:
    `iroha tools address audit --input addresses.txt --network-prefix 753`. The command
    reads newline-separated literals (comments starting with `#` are ignored, and
    `--input -` or no flag uses STDIN), emits a JSON report with
-   canonical/preferred IH58/second-best compressed (`snx1`) summaries for every entry, and counts both parse
+   canonical/preferred IH58/second-best compressed (`sora`) summaries for every entry, and counts both parse
    dumps that contain junk rows, and gate automation with `--fail-on-warning`
    once operators are ready to block Local selectors in CI.
 6. When you need a newline-to-newline rewrite, use
   For Local-selector remediation spreadsheets, use
   to export a `input,status,format,…` CSV that highlights canonical encodings, warnings, and parse failures in one pass.
    The helper skips non-Local rows by default, converts every remaining entry
-   into the requested encoding (IH58 preferred/compressed (`snx1`) second-best/hex/JSON), and preserves the
+   into the requested encoding (IH58 preferred/compressed (`sora`) second-best/hex/JSON), and preserves the
    original domain when `--append-domain` is set. Pair it with `--allow-errors`
    to keep scanning even when a dump contains malformed literals.
 7. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts

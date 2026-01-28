@@ -530,11 +530,11 @@ pub(crate) fn ensure_test_domain_selector_resolver() {
     }
 
     RESOLVER_INSTALLED.with(|flag| {
-        if flag.get() {
+        let existing = account_domain_selector_resolver();
+        if flag.get() && existing.is_some() {
             return;
         }
 
-        let existing = account_domain_selector_resolver();
         let resolver = std::sync::Arc::new(move |selector: &AccountDomainSelector| {
             if let Some(ref resolver) = existing {
                 if let Some(domain) = resolver(selector) {
