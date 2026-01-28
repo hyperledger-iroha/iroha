@@ -37,7 +37,7 @@ Consenso (Sumeragi)
 - GET `/v1/sumeragi/collectors`
   - Plan determinista de colectores derivado de la topología confirmada y los parámetros en cadena: exporta `mode`, el plan `(height, view)` (con `height` igual a la altura actual de la cadena), `collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, la lista ordenada de colectores y `epoch_seed` (hex) cuando NPoS está activo.
 - GET `/v1/sumeragi/params`
-  - Instantánea de los parámetros de Sumeragi en cadena `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
+  - Instantánea de los parámetros de Sumeragi en cadena `{ block_time_ms, commit_time_ms, min_finality_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
   - Cuando `da_enabled` es true, la evidencia de disponibilidad (`availability evidence` o RBC `READY`) se rastrea pero el commit no espera a ella; el `DELIVER` local de RBC tampoco es un requisito. Los operadores pueden confirmar la salud del transporte de payloads mediante los endpoints RBC de abajo.
 - GET `/v1/sumeragi/rbc`
   - Contadores agregados de Reliable Broadcast: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.

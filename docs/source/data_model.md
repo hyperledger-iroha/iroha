@@ -82,7 +82,7 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
 ## Parameters and Configuration
 
 - System parameter families (all `Default`ed, carry getters, and convert to individual enums):
-- `SumeragiParameters { block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`.
+- `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`.
   - `BlockParameters { max_transactions: NonZeroU64 }`.
   - `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`.
   - `SmartContractParameters { fuel, memory, execution_depth }`.

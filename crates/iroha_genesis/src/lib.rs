@@ -1999,6 +1999,7 @@ impl RawGenesisTransaction {
         let custom = params.custom();
         let mut block_time_ms = sumeragi.block_time_ms();
         let mut commit_time_ms = sumeragi.commit_time_ms();
+        let mut min_finality_ms = sumeragi.min_finality_ms();
         let mut da_enabled = sumeragi.da_enabled();
         let mut collectors_k = sumeragi.collectors_k();
         let mut collectors_redundant_send_r = sumeragi.collectors_redundant_send_r();
@@ -2016,6 +2017,9 @@ impl RawGenesisTransaction {
                         }
                         Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(ms)) => {
                             commit_time_ms = *ms;
+                        }
+                        Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(ms)) => {
+                            min_finality_ms = *ms;
                         }
                         Parameter::Sumeragi(SumeragiParameter::DaEnabled(value)) => {
                             da_enabled = *value;
@@ -2082,6 +2086,7 @@ impl RawGenesisTransaction {
         let dm_params = ConsensusGenesisParams {
             block_time_ms,
             commit_time_ms,
+            min_finality_ms,
             max_clock_drift_ms: sumeragi.max_clock_drift_ms(),
             collectors_k,
             redundant_send_r: collectors_redundant_send_r,
@@ -2510,6 +2515,7 @@ mod tests2 {
             &ConsensusGenesisParams {
                 block_time_ms: params.sumeragi().block_time_ms(),
                 commit_time_ms: params.sumeragi().commit_time_ms(),
+                min_finality_ms: params.sumeragi().min_finality_ms(),
                 max_clock_drift_ms: params.sumeragi().max_clock_drift_ms(),
                 collectors_k: params.sumeragi().collectors_k(),
                 redundant_send_r: params.sumeragi().collectors_redundant_send_r(),
@@ -3099,6 +3105,7 @@ mod tests2 {
             let dm_params = iroha_data_model::block::consensus::ConsensusGenesisParams {
                 block_time_ms: sumeragi.block_time_ms(),
                 commit_time_ms: sumeragi.commit_time_ms(),
+                min_finality_ms: sumeragi.min_finality_ms(),
                 max_clock_drift_ms: sumeragi.max_clock_drift_ms(),
                 collectors_k: sumeragi.collectors_k(),
                 redundant_send_r: sumeragi.collectors_redundant_send_r(),

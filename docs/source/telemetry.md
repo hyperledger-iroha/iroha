@@ -21,7 +21,7 @@ Endpoints
 - `/v1/sumeragi/phases` (JSON): compact per-phase latencies (ms) for operator dashboards; returns the latest observed durations for consensus phases.
 - `/v1/soranet/privacy/{event,share}` (Norito): privacy telemetry ingest for relay/collector signals. Requires `torii.soranet_privacy_ingest.enabled = true`, a token header (`X-SoraNet-Privacy-Token` or `X-API-Token`) when `require_token` is set, and a CIDR allow-list entry (empty list denies). Rate limits come from the same config (`rate_per_sec`/`burst`), and rejects surface `401/403/429` plus `soranet_privacy_ingest_reject_total{endpoint,reason}` counters for alerting.
 - `/v1/sumeragi/collectors` (JSON): deterministic collector plan snapshot derived from the committed topology and on-chain parameters; exposes `mode`, plan `(height, view)` (where `height` mirrors the current chain height), `collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, the ordered collector list, and `epoch_seed` (hex) when NPoS is active.
-- `/v1/sumeragi/params` (JSON): snapshot of the on-chain Sumeragi parameters `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
+- `/v1/sumeragi/params` (JSON): snapshot of the on-chain Sumeragi parameters `{ block_time_ms, commit_time_ms, min_finality_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
 - `/v1/sumeragi/new_view/json` (JSON): NEW_VIEW receipt snapshot `{ ts_ms, items: [{height, view, count}] }` (bounded in-memory window; oldest entries evicted).
   - Updated: also returns `locked_qc { height, view }`.
 

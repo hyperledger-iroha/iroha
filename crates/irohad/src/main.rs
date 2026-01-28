@@ -6371,6 +6371,7 @@ fn consensus_caps_from_genesis(
     };
 
     let consensus_params = iroha_data_model::block::consensus::ConsensusGenesisParams {
+        min_finality_ms: params.sumeragi().min_finality_ms,
         block_time_ms: params.sumeragi().block_time_ms,
         commit_time_ms: params.sumeragi().commit_time_ms,
         max_clock_drift_ms: params.sumeragi().max_clock_drift_ms,
@@ -6615,6 +6616,7 @@ fn verify_genesis_metadata(
         None
     };
     let consensus_params = iroha_data_model::block::consensus::ConsensusGenesisParams {
+        min_finality_ms: params.sumeragi().min_finality_ms,
         block_time_ms: params.sumeragi().block_time_ms,
         commit_time_ms: params.sumeragi().commit_time_ms,
         max_clock_drift_ms: params.sumeragi().max_clock_drift_ms,

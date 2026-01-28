@@ -19,6 +19,7 @@ fn main() {
     let baseline = ConsensusGenesisParams {
         block_time_ms: 333,
         commit_time_ms: 667,
+        min_finality_ms: 100,
         max_clock_drift_ms: 1000,
         collectors_k: 1,
         redundant_send_r: 1,
@@ -31,6 +32,7 @@ fn main() {
     let default_like = ConsensusGenesisParams {
         block_time_ms: default_params.sumeragi().block_time_ms(),
         commit_time_ms: default_params.sumeragi().commit_time_ms(),
+        min_finality_ms: default_params.sumeragi().min_finality_ms(),
         max_clock_drift_ms: default_params.sumeragi().max_clock_drift_ms(),
         collectors_k: default_params.sumeragi().collectors_k(),
         redundant_send_r: default_params.sumeragi().collectors_redundant_send_r(),

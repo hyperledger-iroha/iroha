@@ -2469,7 +2469,7 @@ pub mod sumeragi {
     /// 0 keeps strict gating (any missing chunks defers).
     pub const PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: usize = 16;
     /// Permissioned default block time (ms); keep aligned with on-chain defaults.
-    pub const BLOCK_TIME_MS: u64 = 2_000;
+    pub const BLOCK_TIME_MS: u64 = 100;
     /// Minimum lead time (blocks) between publishing a new consensus key and its activation.
     pub const KEY_ACTIVATION_LEAD_BLOCKS: u64 = 1;
     /// Grace/overlap window (blocks) during which both old and new keys remain valid.

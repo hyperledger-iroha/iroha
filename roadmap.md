@@ -36,10 +36,6 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 ## Current Open Work
 
-0. **TEST-HARNESS-DETERMINISM — Validate Sumeragi unit tests under parallel execution** (QA/Consensus, Line: Shared, Owner: Core WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
- - [x] Run `cargo test -p iroha_core sumeragi::main_loop::tests::block_created_ -- --nocapture --test-threads=4` and confirm no hangs (suite passed in 59.84s; filtered-binary builds continued after the target tests).
- - [ ] Decide whether any unit tests should opt in to real P2P via `IROHA_TEST_REAL_NETWORK` and document the criteria.
-
 0. **KOTODAMA-LANG-PARITY — Close remaining Kotodama gaps** (IVM/Kotodama, Line: Shared, Owner: IVM WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
  - [x] Add access-list attributes and wire permission/read/write hints into entrypoint manifests.
  - [x] Add DSL trigger declarations and wire trigger metadata into entrypoint manifests.
@@ -83,7 +79,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Re-run `cargo test -p integration_tests sumeragi_rbc_da_large_payload_six_peers -- --nocapture` after wiring `sumeragi.debug.rbc.force_deliver_quorum_one` to confirm the 6-peer large-payload scenario stays within delivery budgets.
 
 4. **IZANAMI-NPOS-VALIDATION-LATENCY — Reduce pre-vote validation latency to meet 1 TPS targets** (Consensus/Perf, Line: Iroha 3, Owner: Core WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
-- [ ] Instrument `validate_block_for_voting` with stage timings (stateless checks vs execution) and surface per-block validation latency in Izanami logs.
+- [x] Instrument `validate_block_for_voting` with stage timings (stateless checks vs execution) and surface per-block validation latency in Izanami logs (debug log + testing guide note).
 - [ ] Optimize validation hot path (signature batching, trigger execution cost, or cached stateless results) so `pending_age_ms` stays below `fast_timeout_ms` at 1 TPS.
 - [ ] Re-run Izanami 1 TPS (300s/200 blocks) and confirm `commit pipeline defers validation` no longer appears and block height reaches target.
  - [x] Re-run `cargo test -p integration_tests --test address_canonicalisation -- --nocapture` to confirm the suite completes without timeouts (latest attempt with `IROHA_TEST_NETWORK_PARALLELISM=5` timed out after ~12m with tests still running and permit waits; sandbox run with `IROHA_TEST_NETWORK_PARALLELISM=4` skipped network startup due to loopback bind denial; rerun timed out after ~16m with network guard stuck at 4/4 permits; serialized rerun failed to compile `iroha_genesis` due to missing Norito JSON traits for `RegisterPublicLaneValidator`/`ActivatePublicLaneValidator`; fixes landed, but the subsequent rerun terminated by SIGKILL).
@@ -122,9 +118,9 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 - [ ] Re-run `cargo test -p integration_tests --test mod` after preserving `proposals_seen` across membership changes (prevents re-proposing the same view during roster updates) to confirm peer membership tests no longer stall consensus (2026-01-21 rerun timed out after ~1h; `by_call_trigger::call_execute_trigger_with_args` passes when run alone; 2026-01-21 rerun with `IROHA_TEST_NETWORK_PARALLELISM=1` + `--test-threads=1` timed out after 2h, last observed running `triggers::time_trigger::time_trigger_scenarios`, which now passes when run alone after the empty-block/time-trigger fix).
 - [ ] Re-run `cargo test --workspace` after the Sumeragi gap fixes; latest attempt (`cargo test -p iroha_core --lib sumeragi::main_loop::tests`) timed out after 600s; active-topology world-peer ordering and locked-QC status flake were fixed afterward.
 
-4. **ADAPTIVE-PACING-FLOOR — Genesis minimum finality + adaptive timing governor** (Consensus, Line: Shared, Owner: Core WG, Priority: High, Status: 🈳 Not Started, target TBD)
-- [ ] Data model + genesis: add `min_finality_ms` to `SumeragiParameters` (Norito + JSON) and consensus genesis fingerprint; update on-chain defaults to start at the floor (100ms) and refresh config templates/docs.
-- [ ] Validation + clamping: enforce `commit_time_ms >= block_time_ms >= min_finality_ms` in parameter parsing and clamp runtime timing resolution (permissioned + NPoS) so commit/quorum/availability/pacemaker derive from the floored values.
+4. **ADAPTIVE-PACING-FLOOR — Genesis minimum finality + adaptive timing governor** (Consensus, Line: Shared, Owner: Core WG, Priority: High, Status: 🈺 In Progress, target TBD)
+- [x] Data model + genesis: add `min_finality_ms` to `SumeragiParameters` (Norito + JSON) and consensus genesis fingerprint; update on-chain defaults to start at the floor (100ms) and refresh config templates/docs.
+- [x] Validation + clamping: enforce `commit_time_ms >= block_time_ms >= min_finality_ms` in parameter parsing and clamp runtime timing resolution (permissioned + NPoS) so commit/quorum/availability/pacemaker derive from the floored values.
 - [ ] Deterministic pacing governor: define window size + thresholds (view-change pressure + commit spacing), implement hysteresis (fast up/slow down) with a bounded factor, and emit `SetParameter` updates only at height boundaries.
 - [ ] Telemetry + tests: surface `effective_*` timing and pacing-factor fields in `/v1/sumeragi/status`, add unit tests for Norito/JSON round-trips, floor enforcement, and governor scale up/down decisions.
 

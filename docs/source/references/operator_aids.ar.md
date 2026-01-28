@@ -39,7 +39,7 @@ translation_last_reviewed: 2026-01-01
 - GET `/v1/sumeragi/collectors`
   - خطة مجمّعين حتمية مشتقة من الطوبولوجيا المُلتزم بها والمعلمات على السلسلة: تصدر `mode` وخطة `(height, view)` (مع `height` مساويًا لارتفاع السلسلة الحالي)، و`collectors_k` و`redundant_send_r` و`proxy_tail_index` و`min_votes_for_commit` والقائمة المرتبة للمجمّعين، و`epoch_seed` (hex) عند تفعيل NPoS.
 - GET `/v1/sumeragi/params`
-  - لقطة لمعلمات Sumeragi على السلسلة `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
+  - لقطة لمعلمات Sumeragi على السلسلة `{ block_time_ms, commit_time_ms, min_finality_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
   - عندما تكون `da_enabled` true، يتم تتبع دليل التوفر (`availability evidence` أو RBC `READY`) لكن الالتزام لا ينتظرها؛ كما أن `DELIVER` المحلي لـ RBC ليس شرطًا. يمكن للمشغّلين تأكيد سلامة نقل الحمولة عبر نقاط نهاية RBC أدناه.
 - GET `/v1/sumeragi/rbc`
   - عدادات Reliable Broadcast الإجمالية: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
