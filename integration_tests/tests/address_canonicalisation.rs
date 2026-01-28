@@ -576,7 +576,7 @@ async fn accounts_listing_supports_compressed_response() -> Result<()> {
         "compressed literal {expected} missing from response {ids:?}"
     );
     assert!(
-        ids.iter().all(|id| id.starts_with("snx1")),
+        ids.iter().all(|id| id.starts_with("sora")),
         "all ids should be compressed in the response: {ids:?}"
     );
 
@@ -829,7 +829,7 @@ async fn asset_holders_get_supports_compressed_response() -> Result<()> {
         "compressed literal {expected} missing from holders response {ids:?}"
     );
     assert!(
-        ids.iter().all(|id| id.starts_with("snx1")),
+        ids.iter().all(|id| id.starts_with("sora")),
         "all holders should render compressed literals when requested: {ids:?}"
     );
 
@@ -989,7 +989,7 @@ async fn account_transactions_get_supports_address_format() -> Result<()> {
     assert!(
         authorities
             .iter()
-            .all(|literal| literal.starts_with("snx1")),
+            .all(|literal| literal.starts_with("sora")),
         "compressed response should emit only compressed literals; got {authorities:?}"
     );
 
@@ -1087,7 +1087,7 @@ async fn account_transactions_query_supports_address_format() -> Result<()> {
     assert!(
         authorities
             .iter()
-            .all(|literal| literal.starts_with("snx1")),
+            .all(|literal| literal.starts_with("sora")),
         "compressed query response should emit only compressed literals; got {authorities:?}"
     );
 
@@ -1462,19 +1462,19 @@ async fn explorer_account_qr_supports_compressed_literals() -> Result<()> {
             .get("canonical_id")
             .and_then(norito::json::Value::as_str),
         Some(canonical_literal.as_str()),
-        "canonical_id should remain IH58 even when rendering compressed (`snx1`) literals"
+        "canonical_id should remain IH58 even when rendering compressed (`sora`) literals"
     );
     assert_eq!(
         parsed.get("literal").and_then(norito::json::Value::as_str),
         Some(compressed_literal.as_str()),
-        "literal should honour the compressed (`snx1`) preference"
+        "literal should honour the compressed (`sora`) preference"
     );
     assert_eq!(
         parsed
             .get("address_format")
             .and_then(norito::json::Value::as_str),
         Some("compressed"),
-        "address_format label should reflect the compressed (`snx1`) preference"
+        "address_format label should reflect the compressed (`sora`) preference"
     );
 
     Ok(())

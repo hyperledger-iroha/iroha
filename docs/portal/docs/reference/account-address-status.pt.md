@@ -15,7 +15,7 @@ title: Conformidade de enderecos de conta
 description: Resumo do fluxo do fixture ADDR-2 e como as equipes de SDK ficam sincronizadas.
 ---
 
-O pacote canonico ADDR-2 (`fixtures/account/address_vectors.json`) captura fixtures IH58 (preferred), compressed (`snx1`, second-best; half/full width), multisignature e negative. Cada superficie de SDK + Torii usa o mesmo JSON para detectar qualquer drift de codec antes de chegar a producao. Esta pagina espelha o brief interno de status (`docs/source/account_address_status.md` no repositorio raiz) para que leitores do portal consultem o fluxo sem vasculhar o mono-repo.
+O pacote canonico ADDR-2 (`fixtures/account/address_vectors.json`) captura fixtures IH58 (preferred), compressed (`sora`, second-best; half/full width), multisignature e negative. Cada superficie de SDK + Torii usa o mesmo JSON para detectar qualquer drift de codec antes de chegar a producao. Esta pagina espelha o brief interno de status (`docs/source/account_address_status.md` no repositorio raiz) para que leitores do portal consultem o fluxo sem vasculhar o mono-repo.
 
 ## Regenerar ou verificar o pacote
 

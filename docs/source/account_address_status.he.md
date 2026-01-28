@@ -21,7 +21,7 @@ translation_last_reviewed: 2026-01-01
 
 ### 1. סקירה
 
-- Fixture: `fixtures/account/address_vectors.json` (IH58 (preferred) + compressed (`snx1`, second-best) + multisig מקרי חיובי/שלילי).
+- Fixture: `fixtures/account/address_vectors.json` (IH58 (preferred) + compressed (`sora`, second-best) + multisig מקרי חיובי/שלילי).
 - היקף: payloads דטרמיניסטיים ב-V1 המכסים implicit-default, Local-12, Global registry, ו-controllers
   של multisig עם מיפוי שגיאות מלא.
 - הפצה: משותף בין Rust data-model, Torii, SDKs של JS/TS, Swift ו-Android; CI נכשל אם צרכן כלשהו סוטה.
@@ -49,10 +49,10 @@ cargo xtask address-vectors --verify
 
 | שכבה | אכיפה | הערות |
 |---------|-------------|-------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | מפרש את ה-JSON, משחזר payloads קנוניים, ובודק המרות IH58 (מועדף)/compressed (`snx1`, אפשרות שנייה)/canonical + שגיאות מובנות. |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | מאמת codecs בצד השרת כך ש-Torii דוחה payloads IH58 (מועדף)/compressed (`snx1`, אפשרות שנייה) פגומים באופן דטרמיניסטי. |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | משקף fixtures V1 (IH58 מועדף/compressed (`snx1`) אפשרות שנייה/fullwidth) ומאמת קודי שגיאה בסגנון Norito לכל מקרה שלילי. |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | בודק decoding של IH58 (מועדף)/compressed (`snx1`, אפשרות שנייה), payloads של multisig והצפת שגיאות בפלטפורמות Apple. |
+| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | מפרש את ה-JSON, משחזר payloads קנוניים, ובודק המרות IH58 (מועדף)/compressed (`sora`, אפשרות שנייה)/canonical + שגיאות מובנות. |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | מאמת codecs בצד השרת כך ש-Torii דוחה payloads IH58 (מועדף)/compressed (`sora`, אפשרות שנייה) פגומים באופן דטרמיניסטי. |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | משקף fixtures V1 (IH58 מועדף/compressed (`sora`) אפשרות שנייה/fullwidth) ומאמת קודי שגיאה בסגנון Norito לכל מקרה שלילי. |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | בודק decoding של IH58 (מועדף)/compressed (`sora`, אפשרות שנייה), payloads של multisig והצפת שגיאות בפלטפורמות Apple. |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | מבטיח שביינדינגים Kotlin/Java נשארים מיושרים עם ה-fixture הקנוני. |
 
 ### 4. ניטור ועבודה פתוחה

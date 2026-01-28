@@ -241,7 +241,7 @@ As transicoes de estado DEVEM emitir o `RegistryEventKind` correspondente para m
 Gateways assinam `RegistryEventV1` e sincronizam DNS/SoraFS ao:
 
 1. Buscar o ultimo `NameRecordV1` referenciado pela sequencia de eventos.
-2. Regenerar templates de resolver (enderecos IH58 preferidos + compressed (`snx1`) como segunda opcao, text records).
+2. Regenerar templates de resolver (enderecos IH58 preferidos + compressed (`sora`) como segunda opcao, text records).
 3. Pinnear dados de zona atualizados via o fluxo SoraDNS descrito em [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Garantias de entrega de eventos:

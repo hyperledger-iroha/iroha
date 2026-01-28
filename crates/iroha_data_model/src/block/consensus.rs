@@ -1756,6 +1756,9 @@ pub struct SumeragiStatusWire {
     /// Effective commit time (ms).
     #[norito(default)]
     pub effective_commit_time_ms: u64,
+    /// Effective pacing factor (basis points, 10_000 = 1.0x).
+    #[norito(default)]
+    pub effective_pacing_factor_bps: u64,
     /// Effective commit quorum timeout (ms).
     #[norito(default)]
     pub effective_commit_quorum_timeout_ms: u64,

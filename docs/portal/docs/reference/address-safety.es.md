@@ -37,7 +37,7 @@ Esta pagina captura el entregable de documentacion ADDR-6c. Aplica estas restric
 
 ## Direcciones comprimidas solo Sora
 
-- Gating: oculta la cadena comprimida `snx1...` detras de una confirmacion explicita. La confirmacion debe reiterar que el formato solo funciona en cadenas Sora Nexus.
+- Gating: oculta la cadena comprimida `sora...` detras de una confirmacion explicita. La confirmacion debe reiterar que el formato solo funciona en cadenas Sora Nexus.
 - Etiquetado: cada aparicion debe incluir una insignia visible "Solo Sora" y un tooltip que explique por que otras redes requieren la forma IH58.
 - Guardrails: si el discriminante de cadena activo no es la asignacion de Nexus, rechaza generar la direccion comprimida y dirige a la persona de vuelta a IH58.
 - Telemetria: registra con que frecuencia se solicita y se copia la forma comprimida para que el playbook de incidentes detecte picos de comparticion accidental.

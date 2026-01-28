@@ -344,7 +344,7 @@ async fn kaigi_sse_rejects_invalid_relay_filter() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/kaigi/relays/events?relay=snx1invalid@kaigi")
+                .uri("/v1/kaigi/relays/events?relay=sorainvalid@kaigi")
                 .body(Body::empty())
                 .unwrap(),
         )

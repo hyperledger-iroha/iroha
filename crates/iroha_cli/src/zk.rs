@@ -1251,7 +1251,7 @@ pub struct ShieldArgs {
     /// `AssetDefinitionId` like `rose#wonderland`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
-    /// Account identifier to debit (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+    /// Account identifier to debit (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
     #[arg(long, value_name = "ACCOUNT_ID")]
     from: String,
     /// Public amount to debit
@@ -1439,7 +1439,7 @@ pub struct UnshieldArgs {
     /// `AssetDefinitionId` like `rose#wonderland`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
-    /// Recipient account identifier to credit (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+    /// Recipient account identifier to credit (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
     #[arg(long, value_name = "ACCOUNT_ID")]
     to: String,
     /// Public amount to credit

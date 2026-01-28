@@ -13,7 +13,7 @@ const LOCAL_DOMAIN_KEY = Buffer.from("SORA-LOCAL-K:v1", "utf8");
 const IH58_CHECKSUM_PREFIX = Buffer.from("IH58PRE", "ascii");
 const HEADER_VERSION_V1 = 0;
 const HEADER_NORM_VERSION_V1 = 1;
-const COMPRESSED_SENTINEL = "snx1";
+const COMPRESSED_SENTINEL = "sora";
 const COMPRESSED_CHECKSUM_LEN = 6;
 const LOCAL_SELECTOR_DIGEST_LEN = 12;
 const LEGACY_LOCAL_DIGEST_DELTA = 4;
@@ -22,7 +22,7 @@ const IH58_CHECKSUM_BYTES = 2;
 const COMPRESSED_WARNING =
   "Compressed Sora addresses rely on half-width kana and are only interoperable inside Sora-aware apps. Prefer IH58 when sharing with explorers, wallets, or QR codes.";
 const LOCAL_SELECTOR_WARNING =
-  "local-domain selector detected: register the domain with the Nexus registry and refresh IH58 (preferred)/snx1 (second-best) copies before Local selectors are blocked. Refer to docs/source/sns/address_display_guidelines.md for the cutover schedule.";
+  "local-domain selector detected: register the domain with the Nexus registry and refresh IH58 (preferred)/sora (second-best) copies before Local selectors are blocked. Refer to docs/source/sns/address_display_guidelines.md for the cutover schedule.";
 const IH58_ALPHABET = [
   "1",
   "2",
@@ -1444,7 +1444,7 @@ export class AccountAddress {
     if (!literal.startsWith(COMPRESSED_SENTINEL)) {
       throw new AccountAddressError(
         AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL,
-        "compressed address must start with snx1 sentinel",
+        "compressed address must start with sora sentinel",
       );
     }
     const nativeParsed = parseWithNativeCodec(literal, undefined, AccountAddressFormat.COMPRESSED);
@@ -1553,7 +1553,7 @@ export class AccountAddress {
   }
 
   /**
-   * Convenience helper that returns both IH58 (preferred) and compressed (`snx1`, second-best) variants alongside
+   * Convenience helper that returns both IH58 (preferred) and compressed (`sora`, second-best) variants alongside
    * the network prefix. Follow the UX checklist in
    * `docs/source/sns/address_display_guidelines.md` when presenting these values.
    *
@@ -1855,10 +1855,10 @@ function classifyDetectedFormat(literal, format, networkPrefix) {
 }
 
 /**
- * Inspect an account-id literal (IH58 (preferred)/snx1 (second-best)/canonical) and emit canonical
+ * Inspect an account-id literal (IH58 (preferred)/sora (second-best)/canonical) and emit canonical
  * encodings plus domain warnings to aid the Local→Global cutover.
  *
- * @param {string} literal - Account literal (IH58 (preferred)/snx1 (second-best)/0x)
+ * @param {string} literal - Account literal (IH58 (preferred)/sora (second-best)/0x)
  * @param {{ networkPrefix?: number, expectPrefix?: number }} [options]
  * @returns {{
  *   detectedFormat: { kind: string, networkPrefix?: number },
@@ -2097,7 +2097,7 @@ function encodeCompressedString(canonical, options = {}) {
 
 function decodeCompressedString(encoded) {
   if (!encoded.startsWith(COMPRESSED_SENTINEL)) {
-    throw new AccountAddressError(AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "compressed address must start with snx1 sentinel");
+    throw new AccountAddressError(AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "compressed address must start with sora sentinel");
   }
   const payload = encoded.slice(COMPRESSED_SENTINEL.length);
   if (payload.length <= COMPRESSED_CHECKSUM_LEN) {

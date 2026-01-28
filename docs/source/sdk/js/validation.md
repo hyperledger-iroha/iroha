@@ -23,7 +23,7 @@ string matching.
 - `ERR_INVALID_STRING` — empty or whitespace-only string input.
 - `ERR_INVALID_HEX` — malformed or odd-length hexadecimal strings.
 - `ERR_INVALID_MULTIHASH` — multihash parsing failed.
-- `ERR_INVALID_ACCOUNT_ID` — account identifiers not in a supported format (IH58 (preferred)/`snx1` (second-best)/`0x`, `uaid:`, `opaque:`, or `<alias|public_key>@domain`).
+- `ERR_INVALID_ACCOUNT_ID` — account identifiers not in a supported format (IH58 (preferred)/`sora` (second-best)/`0x`, `uaid:`, `opaque:`, or `<alias|public_key>@domain`).
 - `ERR_INVALID_ASSET_ID` — asset identifiers missing required account segments or using invalid separators.
 - `ERR_INVALID_IBAN` — IBAN parsing/normalization failed (bad country code, length, or checksum).
 - `ERR_INVALID_OBJECT` — unexpected object shape or missing required keys.
@@ -56,7 +56,7 @@ try {
 } catch (error) {
   if (error instanceof ValidationError) {
     if (error.code === ValidationErrorCode.INVALID_ACCOUNT_ID) {
-      console.error("Account IDs must be IH58/snx1/0x, uaid:, opaque:, or alias@domain", {
+      console.error("Account IDs must be IH58/sora/0x, uaid:, opaque:, or alias@domain", {
         field: error.path,
         cause: error.cause,
       });

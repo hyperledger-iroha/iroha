@@ -129,7 +129,7 @@ address-manifest-<REVISION>/
 2. **Canonical payloads نکالیں۔** ہر alias کے لیے یہ چلائیں:
 
    ```bash
-   iroha tools address convert snx1...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
+   iroha tools address convert sora...@wonderland --expect-prefix 753 --format json > /tmp/alias.json
    jq '.canonical_hex, .input_domain' /tmp/alias.json
    ```
 

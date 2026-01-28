@@ -360,7 +360,7 @@ for await (const holding of torii.iterateAccountAssetsQuery("ih58...", {
 `iterateNfts` and `iterateAccountAssets` wrap the same Norito filter/sort
 envelopes as the POST query endpoints while handling pagination for you. Pass
 `pageSize`/`maxItems` to bound the iteration and `addressFormat` when you need
-preferred IH58-encoded IDs for display; reserve the compressed (`snx1`, second-best)
+preferred IH58-encoded IDs for display; reserve the compressed (`sora`, second-best)
 form for Sora-only UX. Torii returns permission errors as
 `ToriiHttpError` (status/`code`/`message`); catch them to surface deny reasons
 in UI flows.
@@ -530,7 +530,7 @@ Explorer telemetry surfaces two helper endpoints so SDKs can capture the same re
 snapshots and QR payloads exposed in the portal. `getExplorerMetrics()` fetches
 `/v1/explorer/metrics`, normalises the payload, and returns `null` when the route is
 disabled or gated. Pair it with `getExplorerAccountQr()` when you need a share-ready
-preferred IH58 literal (or the second-best compressed `snx1…` literal) plus inline SVG for QR buttons.
+preferred IH58 literal (or the second-best compressed `sora…` literal) plus inline SVG for QR buttons.
 
 ```js
 import { promises as fs } from "node:fs";

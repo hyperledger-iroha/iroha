@@ -21,7 +21,7 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 `examples/android/retail-wallet` نمط UX المطلوب:
 
 - **هدفا نسخ منفصلان.** وفر زرين واضحين للنسخ: IH58 (المفضل) والصيغة
-  المضغوطة الخاصة بـ Sora (`snx1...`، الخيار الثاني). IH58 امن دائما للمشاركة خارجيا ويغذي
+  المضغوطة الخاصة بـ Sora (`sora...`، الخيار الثاني). IH58 امن دائما للمشاركة خارجيا ويغذي
   حمولة QR. يجب ان تتضمن الصيغة المضغوطة تحذيرا مضمنا لانها تعمل فقط داخل
   تطبيقات واعية بـ Sora. مثال Android يربط زري Material وتلميحاتهما في
   `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`، ويطابق
@@ -63,7 +63,7 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
 - JavaScript inspector: `inspectAccountId(...)` يعيد سلسلة تحذير مضغوطة ويضيفها
-  الى `warnings` عندما يقدم المستدعون literal `snx1...`، حتى يتمكن مستكشفو
+  الى `warnings` عندما يقدم المستدعون literal `sora...`، حتى يتمكن مستكشفو
   المحافظ/لوحات التحكم من عرض تحذير Sora-only اثناء تدفقات اللصق/التحقق بدلا
   من عرضه فقط عند توليد الصيغة المضغوطة ذاتيا.
 - Python: `AccountAddress.display_formats(network_prefix: int = 753)`
@@ -169,7 +169,7 @@ payload bit: │version  │ class  │  norm  │ext │
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("snx1...");
+   const summary = inspectAccountId("sora...");
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }

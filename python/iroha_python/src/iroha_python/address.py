@@ -14,7 +14,7 @@ LOCAL_DOMAIN_KEY = b"SORA-LOCAL-K:v1"
 IH58_CHECKSUM_PREFIX = b"IH58PRE"
 HEADER_VERSION_V1 = 0
 HEADER_NORM_VERSION_V1 = 1
-COMPRESSED_SENTINEL = "snx1"
+COMPRESSED_SENTINEL = "sora"
 COMPRESSED_CHECKSUM_LEN = 6
 BECH32M_CONST = 0x2BC830A3
 IH58_CHECKSUM_BYTES = 2
@@ -515,7 +515,7 @@ def encode_compressed_string(canonical: bytes) -> str:
 
 def decode_compressed_string(encoded: str) -> bytes:
     if not encoded.startswith(COMPRESSED_SENTINEL):
-        raise AccountAddressError("compressed address must start with snx1 sentinel")
+        raise AccountAddressError("compressed address must start with sora sentinel")
     payload = encoded[len(COMPRESSED_SENTINEL) :]
     if len(payload) <= COMPRESSED_CHECKSUM_LEN:
         raise AccountAddressError("compressed address is too short")

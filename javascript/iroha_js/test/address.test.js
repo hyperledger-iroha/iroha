@@ -174,7 +174,7 @@ test("account address golden vectors round-trip", () => {
   assert.equal(ih58, "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiA");
   assert.equal(
     compressed,
-    "snx12QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8",
+    "sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8",
   );
 
   const { address: parsedIH58, format: formatIH58 } = AccountAddress.parseAny(ih58, 753);
@@ -607,7 +607,7 @@ test("compressed helper exports mirror instance methods", () => {
 });
 
 test("decodeCompressedAccountAddress enforces string input", () => {
-  for (const value of [null, undefined, 42, {}, [], Buffer.from("snx1dead")]) {
+  for (const value of [null, undefined, 42, {}, [], Buffer.from("soradead")]) {
     assert.throws(
       () => decodeCompressedAccountAddress(value),
       (error) =>

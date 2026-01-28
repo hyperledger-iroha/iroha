@@ -17,7 +17,7 @@ Referencia do roadmap: ADDR-2 - Dual-Format Compliance Suite
 
 ### 1. Visao geral
 
-- Fixture: `fixtures/account/address_vectors.json` (IH58 (preferred) + compressed (`snx1`, second-best) + multisig casos positivos/negativos).
+- Fixture: `fixtures/account/address_vectors.json` (IH58 (preferred) + compressed (`sora`, second-best) + multisig casos positivos/negativos).
 - Escopo: payloads V1 deterministas cobrindo implicit-default, Local-12, Global registry e controladores multisig com taxonomia completa de erros.
 - Distribuicao: compartilhado entre Rust data-model, Torii, SDKs JS/TS, Swift e Android; o CI falha se algum consumidor desvia.
 - Fonte da verdade: o gerador fica em `crates/iroha_data_model/src/account/address/compliance_vectors.rs` e e exposto via `cargo xtask address-vectors`.
@@ -42,10 +42,10 @@ Opcoes:
 
 | Superficie | Aplicacao | Notas |
 |---------|-------------|-------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | Analisa o JSON, reconstrui payloads canonicos e verifica conversoes IH58 (preferred)/snx1 (second-best)/canonical + erros estruturados. |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Valida codecs do lado servidor para que Torii rejeite payloads IH58 (preferred)/snx1 (second-best) malformados de forma determinista. |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Replica fixtures V1 (IH58 (preferred)/snx1 (second-best)/fullwidth) e confirma codigos de erro estilo Norito para cada caso negativo. |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Exercita decodificacao IH58 (preferred)/snx1 (second-best), payloads multisig e exposicao de erros em plataformas Apple. |
+| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | Analisa o JSON, reconstrui payloads canonicos e verifica conversoes IH58 (preferred)/sora (second-best)/canonical + erros estruturados. |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Valida codecs do lado servidor para que Torii rejeite payloads IH58 (preferred)/sora (second-best) malformados de forma determinista. |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Replica fixtures V1 (IH58 (preferred)/sora (second-best)/fullwidth) e confirma codigos de erro estilo Norito para cada caso negativo. |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Exercita decodificacao IH58 (preferred)/sora (second-best), payloads multisig e exposicao de erros em plataformas Apple. |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | Garante que os bindings Kotlin/Java fiquem alinhados ao fixture canonico. |
 
 ### 4. Monitoramento e pendencias

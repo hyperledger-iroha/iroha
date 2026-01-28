@@ -119,7 +119,7 @@ final class DemoConnectViewModel: ObservableObject {
     } catch {
       return AddressPreview(
         ih58: "ih58-unavailable",
-        compressed: "snx1-unavailable",
+        compressed: "sora-unavailable",
         compressedWarning: "Address preview unavailable: \(error.localizedDescription)",
         domain: sampleDomain,
         implicitDefault: sampleDomain == AccountAddress.defaultDomainName,

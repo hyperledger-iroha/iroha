@@ -221,12 +221,15 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
         status: iroha_core::state::GovernanceReferendumStatus::Open,
         mode: iroha_core::state::GovernanceReferendumMode::Plain,
     };
-    // Locks: one Aye with amount=10000, duration=conviction_step_blocks
+    // Locks: one Aye with amount=10000, duration=conviction_step_blocks (factor=2 before clamp).
     let kp = iroha_crypto::KeyPair::random();
     let owner: iroha_data_model::account::AccountId = iroha_data_model::account::AccountId::of(
         "wonderland".parse().unwrap(),
         kp.public_key().clone(),
     );
+    let conviction_step = raw_state.gov.conviction_step_blocks.max(1);
+    let duration_blocks = conviction_step;
+    let max_conviction = raw_state.gov.max_conviction;
     let mut locks = iroha_core::state::GovernanceLocksForReferendum::default();
     let rec = iroha_core::state::GovernanceLockRecord {
         owner: owner.clone(),
@@ -234,7 +237,7 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
         slashed: 0,
         expiry_height: 1_000,
         direction: 0,         // approve
-        duration_blocks: 100, // equals default conviction_step_blocks
+        duration_blocks,
     };
     locks.locks.insert(owner, rec);
     let prev_height = raw_state.view().height();
@@ -281,7 +284,7 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
         Some(&rid[..])
     );
 
-    // GET tally: sqrt(10000) = 100 and the test harness returns raw weight without conviction multiplier.
+    // GET tally: sqrt(10000) = 100, conviction factor = 1 + duration/step.
     let resp_t = iroha_torii::handle_gov_get_tally(state.clone(), AxPath(rid))
         .await
         .expect("handler ok")
@@ -289,9 +292,14 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
     assert_eq!(resp_t.status(), http::StatusCode::OK);
     let bt = resp_t.into_body().collect().await.unwrap().to_bytes();
     let vt: norito::json::Value = norito::json::from_slice(&bt).unwrap();
+    let mut factor = 1u64 + (duration_blocks / conviction_step);
+    if factor > max_conviction {
+        factor = max_conviction;
+    }
+    let expected_approve = 100u128.saturating_mul(u128::from(factor));
     assert_eq!(
         vt.get("approve").and_then(norito::json::Value::as_u64),
-        Some(100)
+        Some(expected_approve as u64)
     );
 
     // Missing ids: referendum/locks not present → found=false; tally zeros

@@ -1,4 +1,4 @@
-//! Ensure Torii account endpoints accept IH58 (preferred)/snx1 (second-best) path segments.
+//! Ensure Torii account endpoints accept IH58 (preferred)/sora (second-best) path segments.
 #![cfg(all(feature = "app_api", feature = "telemetry"))]
 
 use std::sync::Arc;
@@ -281,7 +281,7 @@ async fn transactions_endpoint_accepts_public_key_segments() {
 #[tokio::test]
 async fn invalid_account_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = "snx1baddigest";
+    let literal = "sorabaddigest";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -380,7 +380,7 @@ async fn transactions_query_endpoint_accepts_encoded_account_segments() {
 #[tokio::test]
 async fn transactions_query_endpoint_rejects_invalid_account_segment() {
     let app = test_router();
-    let literal = "snx1invalid";
+    let literal = "sorainvalid";
     let resp = app
         .clone()
         .oneshot(
@@ -399,7 +399,7 @@ async fn transactions_query_endpoint_rejects_invalid_account_segment() {
 #[tokio::test]
 async fn transactions_query_invalid_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = "snx1baddigest";
+    let literal = "sorabaddigest";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -613,7 +613,7 @@ async fn assets_endpoint_accepts_default_domain_without_suffix() {
 #[tokio::test]
 async fn assets_endpoint_rejects_invalid_segment() {
     let app = test_router();
-    let literal = "snx1invalid";
+    let literal = "sorainvalid";
     let resp = app
         .clone()
         .oneshot(
@@ -630,7 +630,7 @@ async fn assets_endpoint_rejects_invalid_segment() {
 #[tokio::test]
 async fn assets_endpoint_invalid_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = "snx1baddigest";
+    let literal = "sorabaddigest";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -726,7 +726,7 @@ async fn assets_query_endpoint_accepts_encoded_account_segments() {
 #[tokio::test]
 async fn assets_query_endpoint_invalid_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = "snx1baddigest";
+    let literal = "sorabaddigest";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -851,7 +851,7 @@ async fn permissions_endpoint_accepts_default_domain_without_suffix() {
 #[tokio::test]
 async fn permissions_endpoint_invalid_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = "snx1baddigest";
+    let literal = "sorabaddigest";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -913,7 +913,7 @@ async fn explorer_domains_query_accepts_encoded_account_params() {
 #[tokio::test]
 async fn explorer_domains_query_invalid_account_param_records_metric() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = "snx1invalid";
+    let literal = "sorainvalid";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -976,7 +976,7 @@ async fn explorer_account_detail_accepts_encoded_account_segments() {
 #[tokio::test]
 async fn explorer_account_detail_invalid_segments_increment_metric() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = "snx1invalid";
+    let literal = "sorainvalid";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -1537,7 +1537,7 @@ async fn repo_agreements_query_filter_accepts_default_domain_literals() {
 #[tokio::test]
 async fn repo_agreements_query_filter_rejects_invalid_literal() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = "snx1baddigest";
+    let literal = "sorabaddigest";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail")
         .reason();
@@ -2289,7 +2289,7 @@ async fn offline_revocations_endpoint_accepts_default_domain_filter_literals() {
 #[tokio::test]
 async fn offline_revocations_endpoint_filter_rejects_invalid_literal() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = "snx1baddigest";
+    let literal = "sorabaddigest";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -2431,7 +2431,7 @@ async fn offline_revocations_query_filter_accepts_default_domain_literals() {
 #[tokio::test]
 async fn offline_revocations_query_filter_rejects_invalid_literal() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = "snx1baddigest";
+    let literal = "sorabaddigest";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail")
         .reason();
@@ -2563,7 +2563,7 @@ async fn kaigi_relay_detail_accepts_encoded_segments() {
 #[tokio::test]
 async fn kaigi_relay_detail_rejects_invalid_segment() {
     let app = test_router();
-    let literal = "snx1invalid";
+    let literal = "sorainvalid";
     let resp = app
         .clone()
         .oneshot(
@@ -2580,7 +2580,7 @@ async fn kaigi_relay_detail_rejects_invalid_segment() {
 #[tokio::test]
 async fn kaigi_relay_detail_invalid_segment_increments_metric() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = "snx1invalid";
+    let literal = "sorainvalid";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail to parse")
         .reason();
@@ -2710,7 +2710,7 @@ async fn nexus_public_lane_stake_accepts_validator_literals() {
 #[tokio::test]
 async fn nexus_public_lane_stake_rejects_invalid_validator_literal() {
     let app = test_router();
-    let literal = "snx1invalid";
+    let literal = "sorainvalid";
     let resp = app
         .clone()
         .oneshot(
@@ -2791,7 +2791,7 @@ async fn nexus_public_lane_stake_accepts_public_key_validator() {
 #[tokio::test]
 async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = "snx1invalid";
+    let literal = "sorainvalid";
     let reason = AccountId::parse(literal)
         .expect_err("literal must fail")
         .reason();

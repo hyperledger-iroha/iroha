@@ -116,7 +116,7 @@ final class AccountAddressTests: XCTestCase {
         XCTAssertEqual(ih58, "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9")
         XCTAssertEqual(
             compressed,
-            "snx12QGﾈkﾀLWP9ﾑﾐUﾓYq96rKRｻヱAAUｸGSﾊﾒｸCｺヰﾅijtJoﾎﾇｷ69DQ7G"
+            "sora2QGﾈkﾀLWP9ﾑﾐUﾓYq96rKRｻヱAAUｸGSﾊﾒｸCｺヰﾅijtJoﾎﾇｷ69DQ7G"
         )
 
         let (parsedIH58, formatIH58) = try AccountAddress.parseAny(ih58, expectedPrefix: 753)
@@ -194,7 +194,7 @@ final class AccountAddressTests: XCTestCase {
     }
 
     func testCompressedTooShort() {
-        XCTAssertThrowsError(try AccountAddress.fromCompressedSora("snx1abc")) { error in
+        XCTAssertThrowsError(try AccountAddress.fromCompressedSora("soraabc")) { error in
             guard let addressError = error as? AccountAddressError else {
                 return XCTFail("unexpected error: \(error)")
             }
