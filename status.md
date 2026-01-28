@@ -2,6 +2,9 @@
 
 Last update: 2026-01-28
 
+- Izanami run (tps=1, 300s, 4 peers): stopped before target blocks; max committed height 16 on all peers; no `proposal mismatch` logs; `vote_drain_ms` max 829ms vs `block_payload_drain_ms` max 3871ms; repeated `not enough stake collected for QC` lines persisted; network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_ntHOWR`.
+- Tests: `cargo build -p izanami --release --locked` (warning: unused `min_finality` in `crates/iroha_core/src/sumeragi/mod.rs:360`). `RUST_LOG=izanami::summary=info,izanami::workload=warn,iroha_core::sumeragi::main_loop=debug,iroha_core::sumeragi=info,iroha_p2p=info IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo run -p izanami --release --locked -- --allow-net --nexus --peers 4 --faulty 0 --duration 300s --target-blocks 200 --progress-interval 10s --progress-timeout 180s --tps 1 --max-inflight 8 --workload-profile stable` (stopped before target blocks reached).
+
 - iroha_data_model JSON parsing: add `expect_u32` helper for `pacing_factor_bps` and unit coverage for range handling.
 - Tests: not run (not requested).
 
