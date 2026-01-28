@@ -45121,6 +45121,36 @@ fn validate_block_for_voting_records_timings() {
         timings_ok.total_ms >= timings_ok.execution_ms,
         "total timing must cover execution stage"
     );
+    let stateless_detail_ms = timings_ok
+        .stateless_state_dependent_ms
+        .saturating_add(timings_ok.stateless_snapshot_ms);
+    assert!(
+        timings_ok.stateless_ms >= stateless_detail_ms,
+        "stateless timing must cover stateless sub-stages"
+    );
+    let execution_tx_detail_ms = timings_ok
+        .execution_tx_signature_batch_ms
+        .saturating_add(timings_ok.execution_tx_stateless_ms)
+        .saturating_add(timings_ok.execution_tx_access_ms)
+        .saturating_add(timings_ok.execution_tx_overlay_ms)
+        .saturating_add(timings_ok.execution_tx_dag_ms)
+        .saturating_add(timings_ok.execution_tx_schedule_ms)
+        .saturating_add(timings_ok.execution_tx_apply_ms);
+    assert!(
+        timings_ok.execution_tx_ms >= execution_tx_detail_ms,
+        "execution tx timing must cover tx sub-stages"
+    );
+    let execution_detail_ms = timings_ok
+        .execution_da_indexes_ms
+        .saturating_add(timings_ok.execution_state_block_ms)
+        .saturating_add(timings_ok.execution_tx_ms)
+        .saturating_add(timings_ok.execution_axt_ms)
+        .saturating_add(timings_ok.execution_da_cursor_ms)
+        .saturating_add(timings_ok.execution_genesis_clean_ms);
+    assert!(
+        timings_ok.execution_ms >= execution_detail_ms,
+        "execution timing must cover execution sub-stages"
+    );
 
     voting_block = None;
     let block_bad = heartbeat_block_for_state(&state, &chain, 2, 0, None, &kp, 0);
@@ -45135,6 +45165,29 @@ fn validate_block_for_voting_records_timings() {
     assert_eq!(
         timings_bad.execution_ms, 0,
         "stateless failures should not record execution time"
+    );
+    let execution_bad_tx_detail_ms = timings_bad
+        .execution_tx_signature_batch_ms
+        .saturating_add(timings_bad.execution_tx_stateless_ms)
+        .saturating_add(timings_bad.execution_tx_access_ms)
+        .saturating_add(timings_bad.execution_tx_overlay_ms)
+        .saturating_add(timings_bad.execution_tx_dag_ms)
+        .saturating_add(timings_bad.execution_tx_schedule_ms)
+        .saturating_add(timings_bad.execution_tx_apply_ms);
+    let execution_bad_detail_ms = timings_bad
+        .execution_da_indexes_ms
+        .saturating_add(timings_bad.execution_state_block_ms)
+        .saturating_add(timings_bad.execution_tx_ms)
+        .saturating_add(timings_bad.execution_axt_ms)
+        .saturating_add(timings_bad.execution_da_cursor_ms)
+        .saturating_add(timings_bad.execution_genesis_clean_ms);
+    assert_eq!(
+        execution_bad_detail_ms, 0,
+        "stateless failures should not record execution sub-stages"
+    );
+    assert_eq!(
+        execution_bad_tx_detail_ms, 0,
+        "stateless failures should not record execution tx sub-stages"
     );
 }
 

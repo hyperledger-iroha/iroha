@@ -2410,8 +2410,38 @@ pub(crate) mod valid {
     pub(crate) struct ValidationTimings {
         /// Elapsed milliseconds for stateless checks.
         pub(crate) stateless_ms: u64,
+        /// Elapsed milliseconds spent in state-dependent stateless checks.
+        pub(crate) stateless_state_dependent_ms: u64,
+        /// Elapsed milliseconds spent in snapshot-based stateless checks.
+        pub(crate) stateless_snapshot_ms: u64,
         /// Elapsed milliseconds for execution/stateful checks.
         pub(crate) execution_ms: u64,
+        /// Elapsed milliseconds spent ensuring DA indexes are hydrated.
+        pub(crate) execution_da_indexes_ms: u64,
+        /// Elapsed milliseconds spent creating the state block.
+        pub(crate) execution_state_block_ms: u64,
+        /// Elapsed milliseconds spent executing transactions.
+        pub(crate) execution_tx_ms: u64,
+        /// Elapsed milliseconds spent in signature micro-batching for stateless pre-pass.
+        pub(crate) execution_tx_signature_batch_ms: u64,
+        /// Elapsed milliseconds spent in stateless transaction validation.
+        pub(crate) execution_tx_stateless_ms: u64,
+        /// Elapsed milliseconds spent deriving access sets.
+        pub(crate) execution_tx_access_ms: u64,
+        /// Elapsed milliseconds spent building overlays.
+        pub(crate) execution_tx_overlay_ms: u64,
+        /// Elapsed milliseconds spent building the conflict graph/DAG.
+        pub(crate) execution_tx_dag_ms: u64,
+        /// Elapsed milliseconds spent scheduling the transaction order.
+        pub(crate) execution_tx_schedule_ms: u64,
+        /// Elapsed milliseconds spent applying overlays and finalizing results.
+        pub(crate) execution_tx_apply_ms: u64,
+        /// Elapsed milliseconds spent validating AXT envelopes.
+        pub(crate) execution_axt_ms: u64,
+        /// Elapsed milliseconds spent validating DA shard cursors.
+        pub(crate) execution_da_cursor_ms: u64,
+        /// Elapsed milliseconds spent checking genesis transaction invariants.
+        pub(crate) execution_genesis_clean_ms: u64,
         /// Total elapsed milliseconds for validation.
         pub(crate) total_ms: u64,
     }
@@ -3513,7 +3543,7 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
-            Self::validate_and_record_transactions(&mut block, state_block);
+            Self::validate_and_record_transactions(&mut block, state_block, None);
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
@@ -3559,7 +3589,7 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
-            Self::validate_and_record_transactions(&mut block, state_block);
+            Self::validate_and_record_transactions(&mut block, state_block, None);
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
@@ -3663,11 +3693,12 @@ pub(crate) mod valid {
             let to_ms = |duration: Duration| -> u64 {
                 u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
             };
+            let mut timings = timings;
             let record_timings =
-                |timings: Option<&mut ValidationTimings>,
+                |timings: &mut Option<&mut ValidationTimings>,
                  stateless_elapsed: Duration,
                  execution_start: Option<Instant>| {
-                    if let Some(timings) = timings {
+                    if let Some(timings) = timings.as_deref_mut() {
                         timings.stateless_ms = to_ms(stateless_elapsed);
                         timings.execution_ms = execution_start
                             .map(|start| to_ms(start.elapsed()))
@@ -3675,6 +3706,7 @@ pub(crate) mod valid {
                         timings.total_ms = to_ms(total_start.elapsed());
                     }
                 };
+            let static_state_start = Instant::now();
             let (static_data, transactions_view) = {
                 let view = state.view();
                 let static_data = match Self::validate_static_state_dependent(
@@ -3686,10 +3718,20 @@ pub(crate) mod valid {
                     soft_fork,
                     time_source,
                 ) {
-                    Ok(data) => data,
+                    Ok(data) => {
+                        if let Some(timings) = timings.as_deref_mut() {
+                            timings.stateless_state_dependent_ms =
+                                to_ms(static_state_start.elapsed());
+                        }
+                        data
+                    }
                     Err(error) => {
                         let stateless_elapsed = stateless_start.elapsed();
-                        record_timings(timings, stateless_elapsed, None);
+                        if let Some(timings) = timings.as_deref_mut() {
+                            timings.stateless_state_dependent_ms =
+                                to_ms(static_state_start.elapsed());
+                        }
+                        record_timings(&mut timings, stateless_elapsed, None);
                         let ev = PipelineEventBox::from(BlockEvent {
                             header: block.header(),
                             status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
@@ -3707,6 +3749,7 @@ pub(crate) mod valid {
             let metrics = Some(&state.telemetry);
             #[cfg(not(feature = "telemetry"))]
             let metrics = ();
+            let static_snapshot_start = Instant::now();
             if let Err(error) = Self::validate_static_with_snapshot(
                 &block,
                 expected_chain_id,
@@ -3716,7 +3759,10 @@ pub(crate) mod valid {
                 metrics,
             ) {
                 let stateless_elapsed = stateless_start.elapsed();
-                record_timings(timings, stateless_elapsed, None);
+                if let Some(timings) = timings.as_deref_mut() {
+                    timings.stateless_snapshot_ms = to_ms(static_snapshot_start.elapsed());
+                }
+                record_timings(&mut timings, stateless_elapsed, None);
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
                     status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
@@ -3726,12 +3772,19 @@ pub(crate) mod valid {
                 let _ = ev; // avoid unused warning if optimized out
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
+            if let Some(timings) = timings.as_deref_mut() {
+                timings.stateless_snapshot_ms = to_ms(static_snapshot_start.elapsed());
+            }
             let stateless_elapsed = stateless_start.elapsed();
             let execution_start = Instant::now();
             // Release block writer before creating new one
             let _ = voting_block.take();
+            let da_indexes_start = Instant::now();
             if let Err(error) = state.ensure_da_indexes_hydrated() {
-                record_timings(timings, stateless_elapsed, Some(execution_start));
+                if let Some(timings) = timings.as_deref_mut() {
+                    timings.execution_da_indexes_ms = to_ms(da_indexes_start.elapsed());
+                }
+                record_timings(&mut timings, stateless_elapsed, Some(execution_start));
                 let error = BlockValidationError::DaShardCursor(error);
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
@@ -3740,39 +3793,75 @@ pub(crate) mod valid {
                 let _ = ev;
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
+            if let Some(timings) = timings.as_deref_mut() {
+                timings.execution_da_indexes_ms = to_ms(da_indexes_start.elapsed());
+            }
+            let state_block_start = Instant::now();
             let mut state_block = if soft_fork {
                 state.block_and_revert(block.header())
             } else {
                 state.block(block.header())
             };
+            if let Some(timings) = timings.as_deref_mut() {
+                timings.execution_state_block_ms = to_ms(state_block_start.elapsed());
+            }
             let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
-            Self::validate_and_record_transactions(&mut block, &mut state_block);
+            let tx_start = Instant::now();
+            Self::validate_and_record_transactions(
+                &mut block,
+                &mut state_block,
+                timings.as_deref_mut(),
+            );
+            if let Some(timings) = timings.as_deref_mut() {
+                timings.execution_tx_ms = to_ms(tx_start.elapsed());
+            }
+            let axt_start = Instant::now();
             if let Err(error) = validate_axt_envelopes(&block, &state_block) {
                 drop(state_block);
-                record_timings(timings, stateless_elapsed, Some(execution_start));
+                if let Some(timings) = timings.as_deref_mut() {
+                    timings.execution_axt_ms = to_ms(axt_start.elapsed());
+                }
+                record_timings(&mut timings, stateless_elapsed, Some(execution_start));
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
+            if let Some(timings) = timings.as_deref_mut() {
+                timings.execution_axt_ms = to_ms(axt_start.elapsed());
+            }
+            let da_cursor_start = Instant::now();
             if let Err(error) = state_block.validate_da_shard_cursors(&block) {
                 drop(state_block);
-                record_timings(timings, stateless_elapsed, Some(execution_start));
+                if let Some(timings) = timings.as_deref_mut() {
+                    timings.execution_da_cursor_ms = to_ms(da_cursor_start.elapsed());
+                }
+                record_timings(&mut timings, stateless_elapsed, Some(execution_start));
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
+            }
+            if let Some(timings) = timings.as_deref_mut() {
+                timings.execution_da_cursor_ms = to_ms(da_cursor_start.elapsed());
             }
             state_block.capture_exec_witness();
             drop(exec_witness_guard);
             if block.is_empty() {
                 let error = BlockValidationError::EmptyBlock;
                 drop(state_block);
-                record_timings(timings, stateless_elapsed, Some(execution_start));
+                record_timings(&mut timings, stateless_elapsed, Some(execution_start));
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
+            let genesis_clean_start = Instant::now();
             if let Err(error) =
                 Self::ensure_genesis_transactions_clean(&block, genesis_account, expected_chain_id)
             {
                 drop(state_block);
-                record_timings(timings, stateless_elapsed, Some(execution_start));
+                if let Some(timings) = timings.as_deref_mut() {
+                    timings.execution_genesis_clean_ms = to_ms(genesis_clean_start.elapsed());
+                }
+                record_timings(&mut timings, stateless_elapsed, Some(execution_start));
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            record_timings(timings, stateless_elapsed, Some(execution_start));
+            if let Some(timings) = timings.as_deref_mut() {
+                timings.execution_genesis_clean_ms = to_ms(genesis_clean_start.elapsed());
+            }
+            record_timings(&mut timings, stateless_elapsed, Some(execution_start));
             WithEvents::new(Ok((ValidBlock(block), state_block)))
         }
 
@@ -3849,7 +3938,7 @@ pub(crate) mod valid {
                 state.block(block.header())
             };
             let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
-            Self::validate_and_record_transactions(&mut block, &mut state_block);
+            Self::validate_and_record_transactions(&mut block, &mut state_block, None);
             if let Err(error) = validate_axt_envelopes(&block, &state_block) {
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
@@ -4973,6 +5062,7 @@ pub(crate) mod valid {
         fn validate_and_record_transactions(
             block: &mut SignedBlock,
             state_block: &mut StateBlock<'_>,
+            timings: Option<&mut ValidationTimings>,
         ) {
             use rayon::prelude::*;
 
@@ -4981,6 +5071,10 @@ pub(crate) mod valid {
                 overlay::{TxOverlay, build_overlay_for_transaction_with_accounts_zk},
             };
 
+            let to_ms = |duration: Duration| -> u64 {
+                u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+            };
+            let mut timings = timings;
             let _ivm_cache = IvmCache::new();
             if block.has_results() {
                 if let Some(snapshot) = block.axt_policy_snapshot() {
@@ -5124,6 +5218,7 @@ pub(crate) mod valid {
                 ))
             };
 
+            let sig_batch_start = timings.as_ref().map(|_| Instant::now());
             // Ed25519 deterministic micro-batching for stateless pre-pass.
             {
                 #[derive(Clone)]
@@ -5565,6 +5660,11 @@ pub(crate) mod valid {
                     }
                 }
             }
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), sig_batch_start) {
+                timings.execution_tx_signature_batch_ms = to_ms(start.elapsed());
+            }
+
+            let stateless_start = timings.as_ref().map(|_| Instant::now());
             #[cfg(feature = "telemetry")]
             let t_stateless_start = Instant::now();
             let mut stateless_rejections: Vec<Option<TransactionRejectionReason>> = {
@@ -5675,8 +5775,12 @@ pub(crate) mod valid {
                     cache.insert_ok(tx.hash(), expires_at_ms, not_before_ms);
                 }
             }
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), stateless_start) {
+                timings.execution_tx_stateless_ms = to_ms(start.elapsed());
+            }
             #[cfg(feature = "telemetry")]
             let t_access_start = Instant::now();
+            let access_start = timings.as_ref().map(|_| Instant::now());
             let derived: Vec<_> = if dynamic_prepass {
                 if workers > 1 {
                     if let Some(pool) = pool.as_ref() {
@@ -5799,6 +5903,9 @@ pub(crate) mod valid {
                     t_access_start.elapsed().as_secs_f64() * 1_000.0,
                 );
             }
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), access_start) {
+                timings.execution_tx_access_ms = to_ms(start.elapsed());
+            }
             let call_hashes: Vec<_> = txs.iter().map(|tx| tx.hash_as_entrypoint()).collect();
             if debug_trace_scheduler_inputs {
                 let input_hashes: Vec<_> = call_hashes.clone();
@@ -5860,6 +5967,7 @@ pub(crate) mod valid {
 
             // Parallel overlay construction from configuration
             let build_parallel = state_block.pipeline.parallel_overlay;
+            let overlay_start = timings.as_ref().map(|_| Instant::now());
             // Quarantine lane: overlays for quarantined transactions will be built
             // sequentially with per-tx caps below. Normal lane follows configured parallelism.
             #[cfg(feature = "telemetry")]
@@ -5962,6 +6070,9 @@ pub(crate) mod valid {
                     t_overlay_start.elapsed().as_secs_f64() * 1_000.0,
                 );
             }
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), overlay_start) {
+                timings.execution_tx_overlay_ms = to_ms(start.elapsed());
+            }
 
             // Build conflict graph using key interning (strings -> compact IDs),
             // and partition transactions into independent components via DSF.
@@ -5969,6 +6080,7 @@ pub(crate) mod valid {
             // transactions reach this stage; rejected items have already been
             // recorded and are skipped from overlay construction.
             let n = txs.len();
+            let dag_start = timings.as_ref().map(|_| Instant::now());
             #[cfg(feature = "telemetry")]
             let t_dag_start = Instant::now();
             // Intern keys per block and convert access sets to ID vectors
@@ -6143,6 +6255,9 @@ pub(crate) mod valid {
                     t_dag_start.elapsed().as_secs_f64() * 1_000.0,
                 );
             }
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), dag_start) {
+                timings.execution_tx_dag_ms = to_ms(start.elapsed());
+            }
 
             // Kahn's algorithm with two deterministic variants:
             // - per-wave sort baseline (stable tie-break by (call_hash, idx))
@@ -6152,6 +6267,7 @@ pub(crate) mod valid {
 
             #[cfg(feature = "telemetry")]
             let t_sched_start = Instant::now();
+            let schedule_start = timings.as_ref().map(|_| Instant::now());
             let order = if crate::pipeline::force_fifo_scheduler() {
                 (0..n).collect()
             } else if use_ready_heap {
@@ -6201,7 +6317,11 @@ pub(crate) mod valid {
                     t_sched_start.elapsed().as_secs_f64() * 1_000.0,
                 );
             }
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), schedule_start) {
+                timings.execution_tx_schedule_ms = to_ms(start.elapsed());
+            }
 
+            let apply_start = timings.as_ref().map(|_| Instant::now());
             let routing_decisions: Vec<_> = txs
                 .iter()
                 .map(|tx| {
@@ -7738,6 +7858,9 @@ pub(crate) mod valid {
                     t_apply_start.elapsed().as_secs_f64() * 1_000.0,
                 );
             }
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), apply_start) {
+                timings.execution_tx_apply_ms = to_ms(start.elapsed());
+            }
         }
 
         /// Like [`Self::validate`], but without the static check part.
@@ -7752,7 +7875,7 @@ pub(crate) mod valid {
             state_block: &mut StateBlock<'_>,
         ) -> WithEvents<ValidBlock> {
             let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
-            Self::validate_and_record_transactions(&mut block, state_block);
+            Self::validate_and_record_transactions(&mut block, state_block, None);
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
                 panic!("AXT envelope validation failed on unchecked block: {error}");
             }
