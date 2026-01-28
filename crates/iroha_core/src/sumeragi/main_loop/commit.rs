@@ -2248,7 +2248,11 @@ impl Actor {
                 let view = self.state.view();
                 self.pending_fast_path_timeout(&view, consensus_mode)
             };
-            let validation_outcome = self.validate_pending_block_for_voting(hash, &commit_topology);
+            let validation_outcome = if fast_timeout <= std::time::Duration::from_secs(1) {
+                self.validate_pending_block_for_voting_inline(hash, &commit_topology)
+            } else {
+                self.validate_pending_block_for_voting(hash, &commit_topology)
+            };
             let validation_cost = validation_start.elapsed();
             match validation_outcome {
                 ValidationGateOutcome::Valid => {}
@@ -2256,6 +2260,29 @@ impl Actor {
                     if let Some(pending) = self.pending.pending_blocks.get(&hash) {
                         let pending_age = pending.age();
                         if pending_age >= fast_timeout {
+                            let rbc_log = {
+                                let key: super::rbc_store::SessionKey =
+                                    (hash, pending_height, pending_view);
+                                self.subsystems
+                                    .da_rbc
+                                    .rbc
+                                    .sessions
+                                    .get(&key)
+                                    .map(|session| {
+                                        let topology = super::network_topology::Topology::new(
+                                            commit_topology.clone(),
+                                        );
+                                        (
+                                            session.ready_signatures.len(),
+                                            self.rbc_deliver_quorum(&topology),
+                                            session.received_chunks(),
+                                            session.total_chunks(),
+                                            session.delivered,
+                                            session.sent_ready,
+                                            session.is_invalid(),
+                                        )
+                                    })
+                            };
                             debug!(
                                 height = pending.height,
                                 view = pending.view,
@@ -2266,6 +2293,14 @@ impl Actor {
                                 inflight_validations = self.subsystems.validation.inflight.len(),
                                 validation_workers = self.subsystems.validation.work_txs.len(),
                                 commit_roster_len = commit_topology.len(),
+                                rbc_session = rbc_log.is_some(),
+                                rbc_ready = rbc_log.as_ref().map(|entry| entry.0),
+                                rbc_required = rbc_log.as_ref().map(|entry| entry.1),
+                                rbc_received_chunks = rbc_log.as_ref().map(|entry| entry.2),
+                                rbc_total_chunks = rbc_log.as_ref().map(|entry| entry.3),
+                                rbc_delivered = rbc_log.as_ref().map(|entry| entry.4),
+                                rbc_sent_ready = rbc_log.as_ref().map(|entry| entry.5),
+                                rbc_invalid = rbc_log.as_ref().map(|entry| entry.6),
                                 trigger = ?trigger,
                                 "commit pipeline defers validation past fast timeout"
                             );
@@ -2525,6 +2560,26 @@ impl Actor {
             }
             if let Some(action) = precommit_action {
                 if pending_age >= fast_timeout && !pending.commit_qc_seen {
+                    let rbc_log = {
+                        let key: super::rbc_store::SessionKey =
+                            (hash, pending_height, pending_view);
+                        self.subsystems
+                            .da_rbc
+                            .rbc
+                            .sessions
+                            .get(&key)
+                            .map(|session| {
+                                (
+                                    session.ready_signatures.len(),
+                                    self.rbc_deliver_quorum(&topology),
+                                    session.received_chunks(),
+                                    session.total_chunks(),
+                                    session.delivered,
+                                    session.sent_ready,
+                                    session.is_invalid(),
+                                )
+                            })
+                    };
                     debug!(
                         height = pending_height,
                         view = pending_view,
@@ -2542,6 +2597,14 @@ impl Actor {
                         missing_local_data,
                         roster_len,
                         min_votes = min_votes_for_commit,
+                        rbc_session = rbc_log.is_some(),
+                        rbc_ready = rbc_log.as_ref().map(|entry| entry.0),
+                        rbc_required = rbc_log.as_ref().map(|entry| entry.1),
+                        rbc_received_chunks = rbc_log.as_ref().map(|entry| entry.2),
+                        rbc_total_chunks = rbc_log.as_ref().map(|entry| entry.3),
+                        rbc_delivered = rbc_log.as_ref().map(|entry| entry.4),
+                        rbc_sent_ready = rbc_log.as_ref().map(|entry| entry.5),
+                        rbc_invalid = rbc_log.as_ref().map(|entry| entry.6),
                         trigger = ?trigger,
                         "precommit gating past fast timeout"
                     );

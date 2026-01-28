@@ -41982,6 +41982,65 @@ async fn validation_records_state_roots_for_valid_block() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn validation_inline_records_state_roots_for_valid_block() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0;
+    let commit_topology = actor.effective_commit_topology();
+    let leader_peer = commit_topology
+        .first()
+        .expect("commit topology must contain the leader");
+    let leader_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == leader_peer.public_key())
+        .expect("leader keypair must be available");
+    let block = heartbeat_block_for_state(
+        &actor.state,
+        &actor.chain_id,
+        height,
+        view,
+        Some(parent_hash),
+        leader_kp,
+        0,
+    );
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let view_u64 = block.header().view_change_index();
+
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view_u64),
+    );
+
+    let outcome = actor.validate_pending_block_for_voting_inline(block_hash, &commit_topology);
+    assert!(
+        matches!(outcome, ValidationGateOutcome::Valid),
+        "valid pending block should pass inline validation"
+    );
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block retained after validation");
+    assert!(
+        pending.parent_state_root.is_some(),
+        "inline validation should record parent state root"
+    );
+    assert!(
+        pending.post_state_root.is_some(),
+        "inline validation should record post state root"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn gap_sweep_requests_missing_parents_for_pending_blocks() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -45220,6 +45279,19 @@ fn validate_block_for_voting_records_timings() {
         timings_ok.execution_tx_ms >= execution_tx_detail_ms,
         "execution tx timing must cover tx sub-stages"
     );
+    let execution_tx_apply_detail_ms = timings_ok
+        .execution_tx_apply_prep_ms
+        .saturating_add(timings_ok.execution_tx_apply_detached_ms)
+        .saturating_add(timings_ok.execution_tx_apply_merge_ms)
+        .saturating_add(timings_ok.execution_tx_apply_fallback_ms)
+        .saturating_add(timings_ok.execution_tx_apply_quarantine_ms)
+        .saturating_add(timings_ok.execution_tx_apply_sequential_ms)
+        .saturating_add(timings_ok.execution_tx_time_triggers_ms)
+        .saturating_add(timings_ok.execution_tx_finalize_ms);
+    assert!(
+        timings_ok.execution_tx_apply_ms >= execution_tx_apply_detail_ms,
+        "execution tx apply timing must cover apply sub-stages"
+    );
     let execution_detail_ms = timings_ok
         .execution_da_indexes_ms
         .saturating_add(timings_ok.execution_state_block_ms)
@@ -45254,6 +45326,15 @@ fn validate_block_for_voting_records_timings() {
         .saturating_add(timings_bad.execution_tx_dag_ms)
         .saturating_add(timings_bad.execution_tx_schedule_ms)
         .saturating_add(timings_bad.execution_tx_apply_ms);
+    let execution_bad_apply_detail_ms = timings_bad
+        .execution_tx_apply_prep_ms
+        .saturating_add(timings_bad.execution_tx_apply_detached_ms)
+        .saturating_add(timings_bad.execution_tx_apply_merge_ms)
+        .saturating_add(timings_bad.execution_tx_apply_fallback_ms)
+        .saturating_add(timings_bad.execution_tx_apply_quarantine_ms)
+        .saturating_add(timings_bad.execution_tx_apply_sequential_ms)
+        .saturating_add(timings_bad.execution_tx_time_triggers_ms)
+        .saturating_add(timings_bad.execution_tx_finalize_ms);
     let execution_bad_detail_ms = timings_bad
         .execution_da_indexes_ms
         .saturating_add(timings_bad.execution_state_block_ms)
@@ -45268,6 +45349,10 @@ fn validate_block_for_voting_records_timings() {
     assert_eq!(
         execution_bad_tx_detail_ms, 0,
         "stateless failures should not record execution tx sub-stages"
+    );
+    assert_eq!(
+        execution_bad_apply_detail_ms, 0,
+        "stateless failures should not record execution tx apply sub-stages"
     );
 }
 

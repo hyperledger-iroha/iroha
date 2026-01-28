@@ -2436,6 +2436,22 @@ pub(crate) mod valid {
         pub(crate) execution_tx_schedule_ms: u64,
         /// Elapsed milliseconds spent applying overlays and finalizing results.
         pub(crate) execution_tx_apply_ms: u64,
+        /// Elapsed milliseconds spent executing time triggers.
+        pub(crate) execution_tx_time_triggers_ms: u64,
+        /// Elapsed milliseconds spent finalizing block results after time triggers.
+        pub(crate) execution_tx_finalize_ms: u64,
+        /// Elapsed milliseconds spent preparing apply layers (validation + setup).
+        pub(crate) execution_tx_apply_prep_ms: u64,
+        /// Elapsed milliseconds spent executing detached overlays.
+        pub(crate) execution_tx_apply_detached_ms: u64,
+        /// Elapsed milliseconds spent merging detached deltas (excluding fallback).
+        pub(crate) execution_tx_apply_merge_ms: u64,
+        /// Elapsed milliseconds spent in sequential fallback during apply.
+        pub(crate) execution_tx_apply_fallback_ms: u64,
+        /// Elapsed milliseconds spent applying quarantine transactions.
+        pub(crate) execution_tx_apply_quarantine_ms: u64,
+        /// Elapsed milliseconds spent in the sequential apply path (when parallel apply is off).
+        pub(crate) execution_tx_apply_sequential_ms: u64,
         /// Elapsed milliseconds spent validating AXT envelopes.
         pub(crate) execution_axt_ms: u64,
         /// Elapsed milliseconds spent validating DA shard cursors.
@@ -6322,6 +6338,12 @@ pub(crate) mod valid {
             }
 
             let apply_start = timings.as_ref().map(|_| Instant::now());
+            let mut apply_prep_ms = 0u64;
+            let mut apply_detached_ms = 0u64;
+            let mut apply_merge_ms = 0u64;
+            let mut apply_fallback_ms = 0u64;
+            let mut apply_quarantine_ms = 0u64;
+            let mut apply_sequential_ms = 0u64;
             let routing_decisions: Vec<_> = txs
                 .iter()
                 .map(|tx| {
@@ -6855,6 +6877,7 @@ pub(crate) mod valid {
                             summary.layer_widths.push(width);
                         }
                     }
+                    let layer_prep_start = timings.as_ref().map(|_| Instant::now());
                     #[cfg(feature = "telemetry")]
                     let t_layer_prep = Instant::now();
                     let prepared_or_err: Vec<
@@ -7009,6 +7032,9 @@ pub(crate) mod valid {
                             .metrics()
                             .observe_amx_prepare_ms(aggregate_lane, elapsed_ms);
                     }
+                    if let (Some(_), Some(start)) = (timings.as_ref(), layer_prep_start) {
+                        apply_prep_ms = apply_prep_ms.saturating_add(to_ms(start.elapsed()));
+                    }
 
                     let mut prepared: Vec<PreparedEntry> = Vec::new();
                     for item in prepared_or_err {
@@ -7028,6 +7054,7 @@ pub(crate) mod valid {
                     }
                     prepared.sort_by_key(|p| (call_hashes[p.idx], p.idx));
 
+                    let layer_exec_start = timings.as_ref().map(|_| Instant::now());
                     #[cfg(feature = "telemetry")]
                     let t_layer_exec = Instant::now();
                     // Deterministically prefetch authority/account state and warm the first
@@ -7127,90 +7154,102 @@ pub(crate) mod valid {
                         );
                         metrics.observe_ivm_exec_ms(aggregate_lane, elapsed_ms);
                     }
+                    if let (Some(_), Some(start)) = (timings.as_ref(), layer_exec_start) {
+                        apply_detached_ms =
+                            apply_detached_ms.saturating_add(to_ms(start.elapsed()));
+                    }
                     #[cfg(feature = "telemetry")]
                     let t_layer_merge = Instant::now();
+                    let layer_merge_start = timings.as_ref().map(|_| Instant::now());
+                    let mut layer_fallback_ms = 0u64;
                     // Detached metadata merges rely on DetachedStateTransactionDelta's SoA + name
                     // interning layout to avoid redundant map probes while preserving determinism.
 
-                    let apply_overlay_sequential = |state_block_mut: &mut StateBlock<'_>,
-                                                    lane_summaries_mut: &mut BTreeMap<
-                        LaneId,
-                        LaneSummary,
-                    >,
-                                                    idx: usize|
-                     -> TransactionResultInner {
-                        let lane_id = routing_decisions[idx].lane_id;
-                        {
-                            let summary = lane_summaries_mut.entry(lane_id).or_default();
-                            summary.detached_fallback = summary.detached_fallback.saturating_add(1);
-                        }
-                        let tx = txs[idx];
-                        let hash = tx.hash_as_entrypoint();
-                        let overlay = match overlays[idx].as_ref() {
-                            Ok(ovl) => Arc::clone(ovl),
-                            Err(err) => {
-                                record_amx_abort(state_block_mut, idx, "prepare");
-                                let rej = map_overlay_error(err);
-                                return Err(rej);
-                            }
-                        };
-                        if let Some(aset) = access.get(idx) {
-                            for k in aset
-                                .read_keys
-                                .iter()
-                                .filter(|k| !aset.write_keys.contains(*k))
+                    let mut apply_overlay_sequential =
+                        |state_block_mut: &mut StateBlock<'_>,
+                         lane_summaries_mut: &mut BTreeMap<LaneId, LaneSummary>,
+                         idx: usize|
+                         -> TransactionResultInner {
+                            let fallback_start = timings.as_ref().map(|_| Instant::now());
+                            let lane_id = routing_decisions[idx].lane_id;
                             {
-                                crate::sumeragi::witness::record_read_from_access_key(
-                                    state_block_mut,
-                                    k,
-                                );
+                                let summary = lane_summaries_mut.entry(lane_id).or_default();
+                                summary.detached_fallback =
+                                    summary.detached_fallback.saturating_add(1);
                             }
-                        }
-                        let max_instrs = state_block_mut.pipeline.overlay_max_instructions;
-                        if max_instrs > 0 && overlay.instruction_count() > max_instrs {
-                            record_amx_abort(state_block_mut, idx, "prepare");
-                            return Err(TransactionRejectionReason::Validation(
-                                iroha_data_model::ValidationFail::NotPermitted(format!(
-                                    "overlay exceeds max instructions: {} > {}",
-                                    overlay.instruction_count(),
-                                    max_instrs
-                                )),
-                            ));
-                        }
-                        let max_bytes = state_block_mut.pipeline.overlay_max_bytes;
-                        if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
-                            record_amx_abort(state_block_mut, idx, "prepare");
-                            return Err(TransactionRejectionReason::Validation(
-                                iroha_data_model::ValidationFail::NotPermitted(format!(
-                                    "overlay exceeds max bytes: {} > {}",
-                                    overlay.byte_size(),
-                                    max_bytes
-                                )),
-                            ));
-                        }
-                        let chunk_size = state_block_mut.pipeline.overlay_chunk_instructions.max(1);
-                        let mut state_tx = state_block_mut.transaction();
-                        state_tx.current_lane_id = Some(routing_decisions[idx].lane_id);
-                        let authority = tx.authority().clone();
-                        state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
-                        if overlay.instruction_count() > 0
-                            && !block.header().is_genesis()
-                            && state_tx.world.accounts.get(&authority).is_none()
-                        {
-                            return Err(TransactionRejectionReason::AccountDoesNotExist(
-                                iroha_data_model::query::error::FindError::Account(
-                                    authority.clone(),
-                                ),
-                            ));
-                        }
-                        let executor = state_tx.world.executor.clone();
-                        if let Err(err) =
-                            configure_executor_fuel_budget(&executor, &mut state_tx, tx.metadata())
-                        {
-                            return Err(TransactionRejectionReason::Validation(err));
-                        }
-                        let result =
-                            match overlay.apply_with_chunk(&mut state_tx, &authority, chunk_size) {
+                            let tx = txs[idx];
+                            let hash = tx.hash_as_entrypoint();
+                            let overlay = match overlays[idx].as_ref() {
+                                Ok(ovl) => Arc::clone(ovl),
+                                Err(err) => {
+                                    record_amx_abort(state_block_mut, idx, "prepare");
+                                    let rej = map_overlay_error(err);
+                                    return Err(rej);
+                                }
+                            };
+                            if let Some(aset) = access.get(idx) {
+                                for k in aset
+                                    .read_keys
+                                    .iter()
+                                    .filter(|k| !aset.write_keys.contains(*k))
+                                {
+                                    crate::sumeragi::witness::record_read_from_access_key(
+                                        state_block_mut,
+                                        k,
+                                    );
+                                }
+                            }
+                            let max_instrs = state_block_mut.pipeline.overlay_max_instructions;
+                            if max_instrs > 0 && overlay.instruction_count() > max_instrs {
+                                record_amx_abort(state_block_mut, idx, "prepare");
+                                return Err(TransactionRejectionReason::Validation(
+                                    iroha_data_model::ValidationFail::NotPermitted(format!(
+                                        "overlay exceeds max instructions: {} > {}",
+                                        overlay.instruction_count(),
+                                        max_instrs
+                                    )),
+                                ));
+                            }
+                            let max_bytes = state_block_mut.pipeline.overlay_max_bytes;
+                            if max_bytes > 0 && overlay.byte_size() as u64 > max_bytes {
+                                record_amx_abort(state_block_mut, idx, "prepare");
+                                return Err(TransactionRejectionReason::Validation(
+                                    iroha_data_model::ValidationFail::NotPermitted(format!(
+                                        "overlay exceeds max bytes: {} > {}",
+                                        overlay.byte_size(),
+                                        max_bytes
+                                    )),
+                                ));
+                            }
+                            let chunk_size =
+                                state_block_mut.pipeline.overlay_chunk_instructions.max(1);
+                            let mut state_tx = state_block_mut.transaction();
+                            state_tx.current_lane_id = Some(routing_decisions[idx].lane_id);
+                            let authority = tx.authority().clone();
+                            state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
+                            if overlay.instruction_count() > 0
+                                && !block.header().is_genesis()
+                                && state_tx.world.accounts.get(&authority).is_none()
+                            {
+                                return Err(TransactionRejectionReason::AccountDoesNotExist(
+                                    iroha_data_model::query::error::FindError::Account(
+                                        authority.clone(),
+                                    ),
+                                ));
+                            }
+                            let executor = state_tx.world.executor.clone();
+                            if let Err(err) = configure_executor_fuel_budget(
+                                &executor,
+                                &mut state_tx,
+                                tx.metadata(),
+                            ) {
+                                return Err(TransactionRejectionReason::Validation(err));
+                            }
+                            let result = match overlay.apply_with_chunk(
+                                &mut state_tx,
+                                &authority,
+                                chunk_size,
+                            ) {
                                 Err(e) => Err(TransactionRejectionReason::Validation(e)),
                                 Ok(()) => match state_tx.execute_data_triggers_dfs(&authority) {
                                     Err(err) => Err(err),
@@ -7220,31 +7259,35 @@ pub(crate) mod valid {
                                     }
                                 },
                             };
-                        if let Err(reason) = &result {
-                            iroha_logger::debug!(
-                                tx=%hash,
-                                block=%block.hash(),
-                                reason=?reason,
-                                "Transaction rejected"
-                            );
-                            if debug_trace_tx_eval {
+                            if let Err(reason) = &result {
+                                iroha_logger::debug!(
+                                    tx=%hash,
+                                    block=%block.hash(),
+                                    reason=?reason,
+                                    "Transaction rejected"
+                                );
+                                if debug_trace_tx_eval {
+                                    eprintln!(
+                                        "[core-eval] reject(fallback) hash={} ts={} auth={}",
+                                        hash,
+                                        tx.creation_time().as_millis(),
+                                        authority,
+                                    );
+                                }
+                            } else if debug_trace_tx_eval {
                                 eprintln!(
-                                    "[core-eval] reject(fallback) hash={} ts={} auth={}",
+                                    "[core-eval] ok(fallback) hash={} ts={} auth={}",
                                     hash,
                                     tx.creation_time().as_millis(),
                                     authority,
                                 );
                             }
-                        } else if debug_trace_tx_eval {
-                            eprintln!(
-                                "[core-eval] ok(fallback) hash={} ts={} auth={}",
-                                hash,
-                                tx.creation_time().as_millis(),
-                                authority,
-                            );
-                        }
-                        result
-                    };
+                            if let Some(start) = fallback_start {
+                                layer_fallback_ms =
+                                    layer_fallback_ms.saturating_add(to_ms(start.elapsed()));
+                            }
+                            result
+                        };
 
                     for p in prepared {
                         match deltas.get(p.idx).cloned().flatten() {
@@ -7370,10 +7413,17 @@ pub(crate) mod valid {
                         );
                         metrics.observe_amx_commit_ms(aggregate_lane, elapsed_ms);
                     }
+                    if let Some(start) = layer_merge_start {
+                        let merge_total = to_ms(start.elapsed());
+                        apply_merge_ms = apply_merge_ms
+                            .saturating_add(merge_total.saturating_sub(layer_fallback_ms));
+                        apply_fallback_ms = apply_fallback_ms.saturating_add(layer_fallback_ms);
+                    }
                 }
                 // Execute quarantine transactions sequentially in deterministic order (hash, idx)
                 if !quarantine_seq.is_empty() {
                     quarantine_seq.sort_by_key(|&i| (call_hashes[i], i));
+                    let quarantine_start = timings.as_ref().map(|_| Instant::now());
                     #[cfg(feature = "telemetry")]
                     let t_quarantine = Instant::now();
                     for &idx in quarantine_seq.iter() {
@@ -7506,8 +7556,13 @@ pub(crate) mod valid {
                             t_quarantine.elapsed().as_secs_f64() * 1_000.0,
                         );
                     }
+                    if let (Some(_), Some(start)) = (timings.as_ref(), quarantine_start) {
+                        apply_quarantine_ms =
+                            apply_quarantine_ms.saturating_add(to_ms(start.elapsed()));
+                    }
                 }
             } else {
+                let seq_start = timings.as_ref().map(|_| Instant::now());
                 for &idx in &order {
                     let tx = txs[idx];
                     let hash = tx.hash_as_entrypoint();
@@ -7642,6 +7697,10 @@ pub(crate) mod valid {
                     if result_is_err {
                         record_amx_abort(state_block, idx, "exec");
                     }
+                }
+                if let (Some(_), Some(start)) = (timings.as_ref(), seq_start) {
+                    apply_sequential_ms =
+                        apply_sequential_ms.saturating_add(to_ms(start.elapsed()));
                 }
             }
 
@@ -7815,8 +7874,13 @@ pub(crate) mod valid {
                 ordered_results.push(result);
             }
 
+            let time_triggers_start = timings.as_ref().map(|_| Instant::now());
             let (time_trgs, mut time_trg_hashes, mut time_trg_results) =
                 state_block.execute_time_triggers(&block.header());
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), time_triggers_start) {
+                timings.execution_tx_time_triggers_ms = to_ms(start.elapsed());
+            }
+            let finalize_start = timings.as_ref().map(|_| Instant::now());
             let mut fastpq_entry_dataspaces = std::collections::BTreeMap::new();
             for (idx, entry_hash) in call_hashes.iter().enumerate() {
                 fastpq_entry_dataspaces.insert(
@@ -7849,6 +7913,9 @@ pub(crate) mod valid {
                 axt_envelopes,
                 axt_policy_snapshot,
             );
+            if let (Some(timings), Some(start)) = (timings.as_deref_mut(), finalize_start) {
+                timings.execution_tx_finalize_ms = to_ms(start.elapsed());
+            }
             #[cfg(feature = "telemetry")]
             {
                 let aggregate_lane = state_block.nexus.routing_policy.default_lane;
@@ -7860,6 +7927,12 @@ pub(crate) mod valid {
             }
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), apply_start) {
                 timings.execution_tx_apply_ms = to_ms(start.elapsed());
+                timings.execution_tx_apply_prep_ms = apply_prep_ms;
+                timings.execution_tx_apply_detached_ms = apply_detached_ms;
+                timings.execution_tx_apply_merge_ms = apply_merge_ms;
+                timings.execution_tx_apply_fallback_ms = apply_fallback_ms;
+                timings.execution_tx_apply_quarantine_ms = apply_quarantine_ms;
+                timings.execution_tx_apply_sequential_ms = apply_sequential_ms;
             }
         }
 
