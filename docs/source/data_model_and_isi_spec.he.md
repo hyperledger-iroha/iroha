@@ -45,7 +45,7 @@ translator: manual
 ---
 
 ## פרמטרים (קונפיגורציית שרשרת)
-- משפחות: ‏`SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`, ‏`BlockParameters { max_transactions }`, ‏`TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`, ‏`SmartContractParameters { fuel, memory, execution_depth }`, וכן ‏`custom: BTreeMap`.
+- משפחות: ‏`SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`, ‏`BlockParameters { max_transactions }`, ‏`TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`, ‏`SmartContractParameters { fuel, memory, execution_depth }`, וכן ‏`custom: BTreeMap`.
 - enums בודדים לשינויים: ‏`SumeragiParameter`, ‏`BlockParameter`, ‏`TransactionParameter`, ‏`SmartContractParameter`. אגרגטור: ‏`Parameters`. קוד: `crates/iroha_data_model/src/parameter/system.rs`.
 
 הגדרת פרמטרים (ISI): ‏`SetParameter(Parameter)` מעדכן את השדה המתאים ופולט `ConfigurationEvent::Changed`. קוד: `crates/iroha_data_model/src/isi/transparent.rs`, יישום באקזקיוטור: `crates/iroha_core/src/smartcontracts/isi/world.rs`.

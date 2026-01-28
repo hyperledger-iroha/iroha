@@ -245,7 +245,7 @@ async fn offline_allowances_issue_returns_certificate_id() {
     let mut map = json::Map::new();
     map.insert(
         "authority".into(),
-        Value::from(harness.fixtures.controller.to_string()),
+        json::to_value(&harness.fixtures.controller).expect("authority value"),
     );
     map.insert(
         "private_key".into(),
@@ -290,7 +290,7 @@ async fn offline_settlements_submit_returns_bundle_id() {
     let mut map = json::Map::new();
     map.insert(
         "authority".into(),
-        Value::from(harness.fixtures.receiver.to_string()),
+        json::to_value(&harness.fixtures.receiver).expect("authority value"),
     );
     map.insert(
         "private_key".into(),
@@ -353,7 +353,7 @@ async fn offline_allowances_renew_returns_new_certificate_id() {
     let mut map = json::Map::new();
     map.insert(
         "authority".into(),
-        Value::from(harness.fixtures.controller.to_string()),
+        json::to_value(&harness.fixtures.controller).expect("authority value"),
     );
     map.insert(
         "private_key".into(),
@@ -406,7 +406,7 @@ async fn offline_certificates_revoke_returns_verdict_id() {
     let mut map = json::Map::new();
     map.insert(
         "authority".into(),
-        Value::from(harness.fixtures.controller.to_string()),
+        json::to_value(&harness.fixtures.controller).expect("authority value"),
     );
     map.insert(
         "private_key".into(),

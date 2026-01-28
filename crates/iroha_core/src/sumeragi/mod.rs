@@ -357,7 +357,6 @@ pub(crate) fn resolve_npos_block_time(view: &StateView<'_>) -> Duration {
     } else {
         params.min_finality_ms()
     };
-    let min_finality = Duration::from_millis(min_finality_ms.max(1));
     let base_block_time_ms = if params.block_time_ms() == 0 {
         iroha_data_model::parameter::system::SumeragiParameters::default().block_time_ms()
     } else {

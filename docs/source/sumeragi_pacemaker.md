@@ -14,8 +14,8 @@ Status: implemented EMA-derived base window, RTT floor, and configurable jitter/
 - Backoff multiplier: `sumeragi.advanced.pacemaker.backoff_multiplier` (default 1). Each timeout adds `base * multiplier` to the current window.
 - RTT floor: `avg_rtt_ms * sumeragi.advanced.pacemaker.rtt_floor_multiplier` (default 2). Prevents too-aggressive timeouts on higher-latency links.
 - Cap: `sumeragi.advanced.pacemaker.max_backoff_ms` (default 60_000 ms). Hard ceiling on the window.
-- Proposal interval seed: `max(block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` and never above `sumeragi.advanced.pacemaker.max_backoff_ms`. This is the steady-state interval even without backoff.
-- Pending-block gating: proposals defer while a tip-extending pending block is unresolved. If no votes/QCs arrive by `min(block_time, commit_time)`, proposal backpressure lifts even before the full quorum-timeout window to avoid long stalls. The fast path is disabled once any votes/QCs are observed for the pending block.
+- Proposal interval seed: `max(effective_block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` and never above `sumeragi.advanced.pacemaker.max_backoff_ms`. Here `effective_block_time_ms` is the on-chain `block_time_ms` scaled by `pacing_factor_bps` (basis points). This is the steady-state interval even without backoff.
+- Pending-block gating: proposals defer while a tip-extending pending block is unresolved. If no votes/QCs arrive by `min(effective_block_time, effective_commit_time)`, proposal backpressure lifts even before the full quorum-timeout window to avoid long stalls. The fast path is disabled once any votes/QCs are observed for the pending block.
 
 Effective window update on timeout:
 - `window = min(cap, max(window + base * backoff_mul, avg_rtt * rtt_floor_mul))`

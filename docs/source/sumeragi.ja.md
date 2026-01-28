@@ -40,7 +40,7 @@ translator: manual
 - 任意の時点で開いている高さは 2 連続までのため、コレクター・RBC・テレメトリはフォークの危険なくパイプライン処理できます。`sumeragi::main_loop` 内の不変条件でこれを保証しており、`ensure_locked_qc_allows` が提案生成をガードし、保留ブロックはインメモリで追跡され、コミット経路では互換子 commit certificate を観測した後にのみ `locked_qc` を退役させます。
 
 ### ペースメーカー（ビュー変更）
-- v1 ではビュー 0 における観測ピアの投票猶予が削除され、観測ピアはビュー 0 で投票しません。ビュー 0 でローカルタイムアウトした際は（ローテーション前の広げる処理なしで）ビュー変更を提案します。タイミングはオンチェーンの `SumeragiParameters`（`BlockTimeMs`/`CommitTimeMs`/`MinFinalityMs`）を基準にし、NPoS の各フェーズタイムアウトは `SumeragiParameters.block_time_ms` から導出し、必要なら `sumeragi.advanced.npos.timeouts` の上書きが効きます。リーダー提案はパイプライン時間の約 1/3、期待コミットは約 2/3 です。
+- v1 ではビュー 0 における観測ピアの投票猶予が削除され、観測ピアはビュー 0 で投票しません。ビュー 0 でローカルタイムアウトした際は（ローテーション前の広げる処理なしで）ビュー変更を提案します。タイミングはオンチェーンの `SumeragiParameters`（`BlockTimeMs`/`CommitTimeMs`/`MinFinalityMs`/`PacingFactorBps`）を基準にし、NPoS の各フェーズタイムアウトは `SumeragiParameters.block_time_ms (scaled by pacing_factor_bps)` から導出し、必要なら `sumeragi.advanced.npos.timeouts` の上書きが効きます。リーダー提案はパイプライン時間の約 1/3、期待コミットは約 2/3 です。
 
 ### K / r パラメータ
 - 設定キー: `sumeragi.collectors.k: usize`（高さごとのコレクター数、設定の既定は 1）、`sumeragi.collectors.redundant_send_r: u8`（冗長送信ファンアウト。ツールはバリデータ数から `2f+1` をオンチェーン既定として播種し、オンチェーン値がない場合の設定既定は 3（4 バリデータでの 2f+1））。
@@ -61,7 +61,7 @@ translator: manual
 - `sumeragi::main_loop` がイベントループを担当し、commit certificate 更新、提案処理、コミット処理を管理します。
 - commit certificate ストレージは `HighestQc` と `LockedQc` を明示的な構造体で追跡し、ミスマッチ時に詳細ログとエビデンスを提供します。
 - RBC（Reliable Broadcast）は非同期で動作し、ブロック本体が揃うと commit certificate に基づいて即座にコミットを試行します。
-- Pacemaker はハートビートとビュー変更を制御し、permissioned は `SumeragiParameters` を基準に、NPoS は `SumeragiParameters.block_time_ms` 由来のタイムアウト（`sumeragi.advanced.npos.timeouts` の上書きを含む）に従ってローカルタイムアウトやビュー拡張を行います。
+- Pacemaker はハートビートとビュー変更を制御し、permissioned は `SumeragiParameters` を基準に、NPoS は `SumeragiParameters.block_time_ms (scaled by pacing_factor_bps)` 由来のタイムアウト（`sumeragi.advanced.npos.timeouts` の上書きを含む）に従ってローカルタイムアウトやビュー拡張を行います。
 - Telemetry は Prometheus メトリクスを公開し、`sumeragi_*` メトリクスで集約・キュー深さ・エビデンス件数などを可視化します。
 
 ### RBC／DA（データ可用性）

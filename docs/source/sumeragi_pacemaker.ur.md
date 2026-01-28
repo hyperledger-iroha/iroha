@@ -29,7 +29,7 @@ Status: EMA سے اخذ کردہ base window، RTT floor، اور configurable j
 - Backoff multiplier: `sumeragi.advanced.pacemaker.backoff_multiplier` (default 1). ہر timeout موجودہ window میں `base * multiplier` کا اضافہ کرتا ہے۔
 - RTT floor: `avg_rtt_ms * sumeragi.advanced.pacemaker.rtt_floor_multiplier` (default 2). زیادہ latency والے links پر overly aggressive timeouts روکتا ہے۔
 - Cap: `sumeragi.advanced.pacemaker.max_backoff_ms` (default 60_000 ms). window کیلئے سخت ceiling.
-- Proposal interval seed: `max(block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` اور کبھی `sumeragi.advanced.pacemaker.max_backoff_ms` سے اوپر نہیں۔ یہ steady-state interval ہے حتی کہ backoff کے بغیر بھی۔
+- Proposal interval seed: `max(effective_block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` اور کبھی `sumeragi.advanced.pacemaker.max_backoff_ms` سے اوپر نہیں۔ (`effective_block_time_ms` = `block_time_ms` scaled by `pacing_factor_bps`). یہ steady-state interval ہے حتی کہ backoff کے بغیر بھی۔
 
 timeout پر effective window اپ ڈیٹ:
 - `window = min(cap, max(window + base * backoff_mul, avg_rtt * rtt_floor_mul))`

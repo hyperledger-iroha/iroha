@@ -13,7 +13,7 @@ translation_last_reviewed: 2026-01-01
 
 Эта заметка описывает политику pacemaker (timer) для Sumeragi и дает рекомендации операторам и примеры. Таймеры определяют, когда лидеры делают propose и когда валидаторы предлагают/входят в новый view после бездействия.
 
-Статус: реализованы базовое окно на основе EMA, порог RTT и настраиваемые пределы jitter/backoff. Интервал предложений pacemaker теперь зажат между целевым block-time и propose timeout с RTT floor, ограничен `sumeragi.advanced.pacemaker.max_backoff_ms`. Jitter применяется детерминированно для каждого узла и каждой пары (height, view).
+Статус: реализованы базовое окно на основе EMA, порог RTT и настраиваемые пределы jitter/backoff. Интервал предложений pacemaker теперь зажат между целевым block-time и propose timeout с RTT floor, ограничен `sumeragi.advanced.pacemaker.max_backoff_ms`. (`effective_block_time_ms` = `block_time_ms` scaled by `pacing_factor_bps`). Jitter применяется детерминированно для каждого узла и каждой пары (height, view).
 
 ## Концепции
 - Базовое окно: экспоненциальная скользящая средняя наблюдаемых фаз консенсуса
@@ -26,7 +26,7 @@ translation_last_reviewed: 2026-01-01
 - Множитель backoff: `sumeragi.advanced.pacemaker.backoff_multiplier` (по умолчанию 1). Каждый timeout добавляет `base * multiplier` к текущему окну.
 - RTT floor: `avg_rtt_ms * sumeragi.advanced.pacemaker.rtt_floor_multiplier` (по умолчанию 2). Предотвращает слишком агрессивные timeouts на линках с высокой задержкой.
 - Cap: `sumeragi.advanced.pacemaker.max_backoff_ms` (по умолчанию 60_000 ms). Жесткий потолок окна.
-- Seed интервала предложений: `max(block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` и никогда не выше `sumeragi.advanced.pacemaker.max_backoff_ms`. Это интервал в устойчивом состоянии даже без backoff.
+- Seed интервала предложений: `max(effective_block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` и никогда не выше `sumeragi.advanced.pacemaker.max_backoff_ms`. (`effective_block_time_ms` = `block_time_ms` scaled by `pacing_factor_bps`). Это интервал в устойчивом состоянии даже без backoff.
 
 Обновление эффективного окна при timeout:
 - `window = min(cap, max(window + base * backoff_mul, avg_rtt * rtt_floor_mul))`

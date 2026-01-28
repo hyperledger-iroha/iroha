@@ -2,6 +2,9 @@
 
 Last update: 2026-01-28
 
+- Sumeragi pacing factor: `pacing_factor_bps` now scales effective block/commit timing and is surfaced via status/torii/client outputs; Sumeragi runbook, pacemaker/configuration references, parameter streamlining spec, data model/telemetry/operator aids, and evidence API docs now list the pacing factor and effective timing fields, plus cleanup for JSON helper tests and unused imports.
+- Tests: `cargo test -p iroha_core update_effective_timing_status_populates_snapshot -- --nocapture` (ok). `cargo test -p iroha_data_model sumeragi_parameters_effective_timing_applies_pacing_factor -- --nocapture` (ok).
+
 - iroha_data_model JSON parsing: add `expect_u32` helper for `pacing_factor_bps` and unit coverage for range handling.
 - Tests: not run (not requested).
 
@@ -1268,8 +1271,9 @@ Last update: 2026-01-28
 - Tests: `cargo test -p integration_tests genesis_norito_bytes_roundtrip_network -- --nocapture` (ok).
 - NPoS bootstrap: RBC roster derivation now falls back to the active topology near the tip to avoid empty-session snapshots; added `rbc_roster_for_session_uses_active_topology_in_npos_bootstrap`.
 - Tests: `cargo test -p iroha_core rbc_roster_for_session_uses_active_topology_in_npos_bootstrap -- --nocapture` (ok).
-- RBC ingress/backlog: treat RbcInit as blocking ingress to avoid non-blocking drops under load, and count pending RBC stashes for the next height as unresolved backlog so pacemaker won’t trigger view changes while BlockCreated/INIT is missing; added `rbc_backlog_counts_pending_stash_for_next_height` + updated relay blocking-variant test (relay blocking-variant test not run).
+- RBC ingress/backlog: treat RbcInit as blocking ingress to avoid non-blocking drops under load, and count pending RBC stashes for the next height as unresolved backlog so pacemaker won’t trigger view changes while BlockCreated/INIT is missing; added `rbc_backlog_counts_pending_stash_for_next_height` + updated relay blocking-variant test.
 - Tests: `cargo test -p iroha_core rbc_backlog_counts_pending_stash_for_next_height -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core try_incoming_paths_drop_on_full_channels -- --nocapture` (ok).
 - Lint: not run
 - Build: not run
 - Tests: `cargo test -p ivm` (timed out after 20m while running `kotodama_foreach_reads_durable_state_map_entries`)
@@ -1300,7 +1304,10 @@ Last update: 2026-01-28
 - Tests: `cargo test -p iroha_core new_view_highest_qc_fetch_uses_commit_topology_snapshot_when_effective_empty -- --nocapture` (ok).
 - Tests: `cargo test -p iroha_core new_view_highest_qc_fetch_uses_commit_qc_history_fallback_when_roster_empty -- --nocapture` (ok).
 - Tests: `cargo test -p iroha_core assemble_proposal_defers_when_highest_qc_block_missing -- --nocapture` (ok).
-- Sumeragi ingress: route RbcReady/RbcDeliver into the rbc_chunk queue (higher priority) to avoid block-queue backlogs delaying READY quorum; updated queue-routing and backpressure tests (tests not run).
+- Sumeragi ingress: route RbcReady/RbcDeliver into the rbc_chunk queue (higher priority) to avoid block-queue backlogs delaying READY quorum; updated queue-routing and backpressure tests.
+- Tests: `cargo test -p iroha_core incoming_block_message_routes_rbc_ready_via_rbc_chunk_queue -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core try_incoming_block_message_waits_when_rbc_ready_queue_full -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core try_incoming_block_message_waits_when_rbc_deliver_queue_full -- --nocapture` (ok).
 - Izanami: `DeployIvmContract` removed from the stable recipe set (kept in chaos) and the IVM trigger artifact switched to the `cycles1000` fixture to reduce time-trigger stalls.
 - Izanami NPoS 1 TPS run (300s) with `cycles1000` artifact but IVM triggers still enabled: stopped before target blocks; validation dominated by time triggers from `ivm_trigger_*` (execution_tx_time_triggers_ms p95 ~3.8s, max ~3.8s). Logs: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_ugpHFr`.
 - Izanami NPoS 1 TPS run (300s) after removing IVM trigger deployments from stable profile: stopped before target blocks; time-trigger cost eliminated (execution_tx_time_triggers_ms p95 0, max 3ms), execution_tx_ms p95 ~90ms; remaining spikes are DAG stage (execution_tx_dag_ms max ~2.25s). Logs: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_bGqaRa`.
