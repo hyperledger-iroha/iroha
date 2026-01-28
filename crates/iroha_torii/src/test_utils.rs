@@ -743,8 +743,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                     .collect(),
             },
             npos: A::SumeragiNpos {
-                block_time: Duration::from_millis(defaults::sumeragi::npos::BLOCK_TIME_MS),
-                timeouts: A::SumeragiNposTimeouts::default(),
+                timeouts_overrides: A::SumeragiNposTimeoutOverrides::default(),
                 vrf: A::SumeragiNposVrf {
                     commit_window_blocks: defaults::sumeragi::npos::VRF_COMMIT_WINDOW_BLOCKS,
                     reveal_window_blocks: defaults::sumeragi::npos::VRF_REVEAL_WINDOW_BLOCKS,

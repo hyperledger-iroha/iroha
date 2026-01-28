@@ -642,9 +642,6 @@ pub fn generate_default(
         let defaults = profile_vrf_seed.map_or_else(SumeragiNposParameters::default, |seed| {
             SumeragiNposParameters::default().with_epoch_seed(seed)
         });
-        if active_npos {
-            parameters.sumeragi.block_time_ms = defaults.block_time_ms();
-        }
         parameters.set_parameter(Parameter::Custom(defaults.into()));
     }
     // Pin block-level gas limit for IVM across peers via a custom parameter.

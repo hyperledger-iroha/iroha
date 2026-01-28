@@ -21,9 +21,9 @@ translator: manual
 כאשר `sumeragi.da.enabled=true`, צינור הקומיט רושם עדות זמינות (`availability evidence` או קוורום RBC `READY`) ועוקב אחריה כ‑advisory (הקומיט אינו ממתין). payload מקומי חסר מתקבל דרך RBC `DELIVER` או BlockCreated/סנכרון בלוקים. חוסר זמינות נרשם לצרכים תפעוליים. `sumeragi_da_gate_block_total{reason="missing_local_data"}` גדל, ו-`status_snapshot().da_reschedule_total` הוא legacy ולכן בדרך כלל נשאר 0.
 
 טיימאאוט הזמינות נגזר מזמני block/commit ומכווני ה-DA, ומשמש רק ללוגים ולהחלטות rebroadcast:
-- `sumeragi.da.quorum_timeout_multiplier` מקדם את `block_time + 4 * commit_time` כאשר DA פעיל (ברירת מחדל `3`).
-- `sumeragi.da.availability_timeout_multiplier` מקדם את חלון טיימאאוט הזמינות במצב DA (ברירת מחדל `2`).
-- `sumeragi.da.availability_timeout_floor_ms` כופה מינימום לחלון הטיימאאוט (ברירת מחדל `2000`, ערך `0` מבטל את הרצפה).
+- `sumeragi.advanced.da.quorum_timeout_multiplier` מקדם את `block_time + 4 * commit_time` כאשר DA פעיל (ברירת מחדל `3`).
+- `sumeragi.advanced.da.availability_timeout_multiplier` מקדם את חלון טיימאאוט הזמינות במצב DA (ברירת מחדל `2`).
+- `sumeragi.advanced.da.availability_timeout_floor_ms` כופה מינימום לחלון הטיימאאוט (ברירת מחדל `2000`, ערך `0` מבטל את הרצפה).
 שמרו על ערכים זהים בין הוולידטורים כדי למנוע קצב view-change שונה.
 
 מנגנון resend/abort אוטומטי של RBC שמבוסס על מעקב זמינות הוסר כדי למנוע המתנה מעגלית בין מסירה להצבעה. צומת שרואה `availability evidence` או קוורום RBC `READY` בלי המטען מבצע fetch דטרמיניסטי מהחותמים, ואז נופל לטופולוגיית הקומיט המלאה אם אין הצלחה.
@@ -55,9 +55,9 @@ cargo test -p integration_tests \
 
 ## קווי בסיס צפויים
 
-עם `sumeragi.rbc.chunk_max_bytes = 256 KiB`, הוראה בגודל 10.5 MiB (11 010 048 בייט), ובהנחה ש‑`force_deliver_quorum_one` פעיל, מתקיימים התנאים הבאים:
+עם `sumeragi.advanced.rbc.chunk_max_bytes = 256 KiB`, הוראה בגודל 10.5 MiB (11 010 048 בייט), ובהנחה ש‑`force_deliver_quorum_one` פעיל, מתקיימים התנאים הבאים:
 
-שים לב: `sumeragi.rbc.chunk_max_bytes` נחתך בזמן ההפעלה כך ש־`RbcChunk` סריאלי ייכנס לתקרת ה‑plaintext שמתקבלת מ־`network.max_frame_bytes_block_sync` לאחר ניכוי תקורת ההצפנה.
+שים לב: `sumeragi.advanced.rbc.chunk_max_bytes` נחתך בזמן ההפעלה כך ש־`RbcChunk` סריאלי ייכנס לתקרת ה‑plaintext שמתקבלת מ־`network.max_frame_bytes_block_sync` לאחר ניכוי תקורת ההצפנה.
 
 | תרחיש | מספר צ׳אנקים | סף READY | מונים לכל peer | תקציבי זמן |
 | --- | --- | --- | --- | --- |

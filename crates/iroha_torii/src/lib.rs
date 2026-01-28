@@ -513,6 +513,76 @@ fn install_account_resolvers(state: &Arc<CoreState>) {
     }));
 }
 
+#[cfg(test)]
+pub(crate) fn ensure_test_domain_selector_resolver() {
+    use std::cell::Cell;
+
+    use iroha_data_model::{
+        account::{
+            AccountDomainSelector, account_domain_selector_resolver,
+            set_account_domain_selector_resolver,
+        },
+        domain::DomainId,
+    };
+
+    thread_local! {
+        static RESOLVER_INSTALLED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    RESOLVER_INSTALLED.with(|flag| {
+        if flag.get() {
+            return;
+        }
+
+        let existing = account_domain_selector_resolver();
+        let resolver = std::sync::Arc::new(move |selector: &AccountDomainSelector| {
+            if let Some(ref resolver) = existing {
+                if let Some(domain) = resolver(selector) {
+                    return Some(domain);
+                }
+            }
+
+            let domains = [
+                "wonderland",
+                "garden_of_live_flowers",
+                "treasury",
+                "sora",
+                "soranet",
+                "default",
+                "iroha",
+                "alpha",
+                "omega",
+                "governance",
+                "validators",
+                "explorer",
+                "kitsune",
+                "da",
+                "council",
+                "genesis",
+                "test",
+                "payload",
+                "index_test",
+                "dummy",
+                "custom",
+                "sns",
+            ];
+
+            domains.iter().find_map(|label| {
+                let domain: DomainId = (*label).parse().ok()?;
+                let candidate = AccountDomainSelector::from_domain(&domain).ok()?;
+                if &candidate == selector {
+                    Some(domain)
+                } else {
+                    None
+                }
+            })
+        });
+
+        set_account_domain_selector_resolver(resolver);
+        flag.set(true);
+    });
+}
+
 const ALIAS_METRIC_LANE: &str = "torii";
 
 fn alias_json_response<T>(status: StatusCode, payload: T) -> Result<AxResponse, Error>
@@ -19377,7 +19447,7 @@ mod tests {
                 .expect("uaid hash"),
         );
         let opaque = OpaqueAccountId::from_hash(
-            Hash::from_str("ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100")
+            Hash::from_str("ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221101")
                 .expect("opaque hash"),
         );
 

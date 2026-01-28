@@ -5224,6 +5224,32 @@ pub struct SumeragiBlock {
     pub proposal_queue_scan_multiplier: NonZeroUsize,
 }
 
+/// User-level configuration container for advanced Sumeragi overrides.
+///
+/// These knobs are intended for targeted tuning; defaults are provided elsewhere
+/// and should be sufficient for typical deployments.
+#[derive(Debug, Clone, ReadConfig)]
+pub struct SumeragiAdvanced {
+    /// Consensus queue capacities (override-only).
+    #[config(nested)]
+    pub queues: SumeragiQueues,
+    /// Worker-loop scheduling limits (override-only).
+    #[config(nested)]
+    pub worker: SumeragiWorker,
+    /// Pacemaker tuning (override-only).
+    #[config(nested)]
+    pub pacemaker: SumeragiPacemaker,
+    /// DA timeout multipliers/floor overrides.
+    #[config(nested)]
+    pub da: SumeragiDaAdvanced,
+    /// RBC tuning overrides.
+    #[config(nested)]
+    pub rbc: SumeragiRbc,
+    /// NPoS timeout overrides (derived from on-chain `SumeragiParameters.block_time_ms` when unset).
+    #[config(nested)]
+    pub npos: SumeragiAdvancedNpos,
+}
+
 /// User-level configuration container for `SumeragiQueues`.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct SumeragiQueues {
@@ -5347,15 +5373,9 @@ pub struct SumeragiPacemaker {
     pub rbc_backlog_chunk_soft_limit: usize,
 }
 
-/// User-level configuration container for `SumeragiDa`.
+/// User-level configuration container for DA timeout overrides.
 #[derive(Debug, Clone, Copy, ReadConfig)]
-pub struct SumeragiDa {
-    /// Enable data availability for consensus (RBC + availability QC gating).
-    #[config(
-        env = "SUMERAGI_DA_ENABLED",
-        default = "defaults::sumeragi::DA_ENABLED"
-    )]
-    pub enabled: bool,
+pub struct SumeragiDaAdvanced {
     /// Multiplier for DA commit-quorum timeouts.
     #[config(
         env = "SUMERAGI_DA_QUORUM_TIMEOUT_MULTIPLIER",
@@ -5374,6 +5394,17 @@ pub struct SumeragiDa {
         default = "defaults::sumeragi::DA_AVAILABILITY_TIMEOUT_FLOOR_MS"
     )]
     pub availability_timeout_floor_ms: u64,
+}
+
+/// User-level configuration container for `SumeragiDa`.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiDa {
+    /// Enable data availability for consensus (RBC + availability QC gating).
+    #[config(
+        env = "SUMERAGI_DA_ENABLED",
+        default = "defaults::sumeragi::DA_ENABLED"
+    )]
+    pub enabled: bool,
     /// Maximum DA commitments (blobs) permitted in a single block.
     #[config(
         env = "SUMERAGI_DA_MAX_COMMITMENTS_PER_BLOCK",
@@ -5650,15 +5681,9 @@ pub struct Sumeragi {
     /// Block assembly limits.
     #[config(nested)]
     pub block: SumeragiBlock,
-    /// Consensus queue capacities.
+    /// Advanced consensus overrides.
     #[config(nested)]
-    pub queues: SumeragiQueues,
-    /// Worker-loop scheduling limits.
-    #[config(nested)]
-    pub worker: SumeragiWorker,
-    /// Pacemaker tuning.
-    #[config(nested)]
-    pub pacemaker: SumeragiPacemaker,
+    pub advanced: SumeragiAdvanced,
     /// Data-availability configuration.
     #[config(nested)]
     pub da: SumeragiDa,
@@ -5671,9 +5696,6 @@ pub struct Sumeragi {
     /// Ingress gating and penalties.
     #[config(nested)]
     pub gating: SumeragiGating,
-    /// RBC (reliable broadcast) tuning.
-    #[config(nested)]
-    pub rbc: SumeragiRbc,
     /// Finality/proof configuration.
     #[config(nested)]
     pub finality: SumeragiFinality,
@@ -5695,12 +5717,6 @@ pub struct Sumeragi {
 /// User-level configuration container for `SumeragiNpos`.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct SumeragiNpos {
-    /// Target block time in milliseconds (fallback only).
-    ///
-    /// On-chain `SumeragiParameters.block_time_ms` is authoritative for both permissioned and
-    /// NPoS modes. This value is only used when on-chain parameters are missing or invalid.
-    #[config(default = "defaults::sumeragi::npos::BLOCK_TIME_MS")]
-    pub block_time_ms: u64,
     /// Epoch length in blocks.
     #[config(default = "defaults::sumeragi::EPOCH_LENGTH_BLOCKS")]
     pub epoch_length_blocks: u64,
@@ -5710,11 +5726,6 @@ pub struct SumeragiNpos {
         default = "defaults::sumeragi::USE_STAKE_SNAPSHOT_ROSTER"
     )]
     pub use_stake_snapshot_roster: bool,
-    /// Per-phase pacemaker timeouts.
-    /// Unset values are derived from `block_time_ms`.
-    /// On-chain `sumeragi_npos_parameters` overrides these values when present.
-    #[config(nested)]
-    pub timeouts: SumeragiNposTimeouts,
     /// VRF commit/reveal window configuration.
     /// Unset values are derived from `epoch_length_blocks`.
     #[config(nested)]
@@ -5727,8 +5738,17 @@ pub struct SumeragiNpos {
     pub reconfig: SumeragiNposReconfig,
 }
 
+/// User-level configuration container for advanced NPoS overrides.
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+pub struct SumeragiAdvancedNpos {
+    /// Per-phase pacemaker timeouts.
+    /// Unset values are derived from on-chain `SumeragiParameters.block_time_ms`.
+    #[config(nested)]
+    pub timeouts: SumeragiNposTimeouts,
+}
+
 /// NPoS pacemaker timeout configuration (milliseconds).
-/// Unset values are derived from `block_time_ms`.
+/// Unset or zero values are derived from on-chain `SumeragiParameters.block_time_ms`.
 /// User-level configuration container for `SumeragiNposTimeouts`.
 #[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
@@ -6045,20 +6065,25 @@ impl Sumeragi {
             mode_flip,
             collectors,
             block,
-            queues,
-            worker,
-            pacemaker,
+            advanced,
             da,
             persistence,
             recovery,
             gating,
-            rbc,
             finality,
             keys,
             adaptive_observability,
             npos,
             debug,
         } = self;
+        let SumeragiAdvanced {
+            queues,
+            worker,
+            pacemaker,
+            da: da_advanced,
+            rbc,
+            npos: npos_advanced,
+        } = advanced;
 
         let collectors_ok = if collectors.k == 0 {
             emitter.emit(
@@ -6086,38 +6111,35 @@ impl Sumeragi {
         {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.queues.* must be greater than zero"),
+                    .attach("sumeragi.advanced.queues.* must be greater than zero"),
             );
             false
         } else {
             true
         };
         let worker_budget_ok = if worker.iteration_budget_cap_ms == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.worker.iteration_budget_cap_ms must be greater than zero"),
-            );
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.worker.iteration_budget_cap_ms must be greater than zero",
+            ));
             false
         } else {
             true
         };
-        let worker_drain_budget_ok =
-            if worker.iteration_drain_budget_cap_ms == 0 {
-                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.worker.iteration_drain_budget_cap_ms must be greater than zero",
-                ));
-                false
-            } else {
-                true
-            };
+        let worker_drain_budget_ok = if worker.iteration_drain_budget_cap_ms == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.worker.iteration_drain_budget_cap_ms must be greater than zero",
+            ));
+            false
+        } else {
+            true
+        };
         let validation_threads_ok = true;
         let validation_work_queue_ok = true;
         let validation_result_queue_ok = true;
         let validation_pending_cap_ok = if worker.validation_pending_cap == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.worker.validation_pending_cap must be greater than zero"),
-            );
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.worker.validation_pending_cap must be greater than zero",
+            ));
             false
         } else {
             true
@@ -6128,7 +6150,7 @@ impl Sumeragi {
         {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.pacemaker.backoff_multiplier, rtt_floor_multiplier, and max_backoff_ms must be greater than zero"),
+                    .attach("sumeragi.advanced.pacemaker.backoff_multiplier, rtt_floor_multiplier, and max_backoff_ms must be greater than zero"),
             );
             false
         } else {
@@ -6143,24 +6165,22 @@ impl Sumeragi {
         } else {
             true
         };
-        let da_quorum_multiplier_ok = if da.quorum_timeout_multiplier == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.da.quorum_timeout_multiplier must be greater than zero"),
-            );
+        let da_quorum_multiplier_ok = if da_advanced.quorum_timeout_multiplier == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.da.quorum_timeout_multiplier must be greater than zero",
+            ));
             false
         } else {
             true
         };
-        let da_availability_multiplier_ok =
-            if da.availability_timeout_multiplier == 0 {
-                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.da.availability_timeout_multiplier must be greater than zero",
-                ));
-                false
-            } else {
-                true
-            };
+        let da_availability_multiplier_ok = if da_advanced.availability_timeout_multiplier == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.da.availability_timeout_multiplier must be greater than zero",
+            ));
+            false
+        } else {
+            true
+        };
         let da_caps_ok = if da.max_commitments_per_block == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
@@ -6226,7 +6246,7 @@ impl Sumeragi {
         let rbc_chunk_max_ok = if rbc.chunk_max_bytes == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.rbc.chunk_max_bytes must be greater than zero"),
+                    .attach("sumeragi.advanced.rbc.chunk_max_bytes must be greater than zero"),
             );
             false
         } else {
@@ -6234,56 +6254,56 @@ impl Sumeragi {
         };
         let pending_caps_ok = if rbc.pending_max_chunks == 0 || rbc.pending_max_bytes == 0 {
             emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                "sumeragi.rbc.pending_max_chunks and pending_max_bytes must be greater than zero",
+                "sumeragi.advanced.rbc.pending_max_chunks and pending_max_bytes must be greater than zero",
             ));
             false
         } else if rbc.pending_ttl_ms == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.rbc.pending_ttl_ms must be greater than zero"),
+                    .attach("sumeragi.advanced.rbc.pending_ttl_ms must be greater than zero"),
             );
             false
         } else if rbc.pending_max_bytes < rbc.chunk_max_bytes {
             emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                "sumeragi.rbc.pending_max_bytes must be at least sumeragi.rbc.chunk_max_bytes",
+                "sumeragi.advanced.rbc.pending_max_bytes must be at least sumeragi.advanced.rbc.chunk_max_bytes",
             ));
             false
         } else if rbc.pending_session_limit == 0 {
             emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.rbc.pending_session_limit must be greater than zero"),
+                Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.advanced.rbc.pending_session_limit must be greater than zero",
+                ),
             );
             false
         } else if rbc.session_ttl_ms == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.rbc.session_ttl_ms must be greater than zero"),
+                    .attach("sumeragi.advanced.rbc.session_ttl_ms must be greater than zero"),
             );
             false
         } else {
             true
         };
         let rbc_rebroadcast_budget_ok = if rbc.rebroadcast_sessions_per_tick == 0 {
-            emitter
-                .emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.rbc.rebroadcast_sessions_per_tick must be greater than zero",
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.rbc.rebroadcast_sessions_per_tick must be greater than zero",
+            ));
+            false
+        } else {
+            true
+        };
+        let rbc_payload_budget_ok =
+            if rbc.payload_chunks_per_tick == 0 {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.advanced.rbc.payload_chunks_per_tick must be greater than zero",
                 ));
-            false
-        } else {
-            true
-        };
-        let rbc_payload_budget_ok = if rbc.payload_chunks_per_tick == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.rbc.payload_chunks_per_tick must be greater than zero"),
-            );
-            false
-        } else {
-            true
-        };
+                false
+            } else {
+                true
+            };
 
         let adaptive_observability = adaptive_observability.parse(emitter)?;
-        let npos = npos.parse(emitter)?;
+        let npos = npos.parse(npos_advanced.timeouts, emitter)?;
 
         if !(collectors_ok
             && redundant_ok
@@ -6408,10 +6428,10 @@ impl Sumeragi {
             },
             da: actual::SumeragiDa {
                 enabled: da.enabled,
-                quorum_timeout_multiplier: da.quorum_timeout_multiplier,
-                availability_timeout_multiplier: da.availability_timeout_multiplier,
+                quorum_timeout_multiplier: da_advanced.quorum_timeout_multiplier,
+                availability_timeout_multiplier: da_advanced.availability_timeout_multiplier,
                 availability_timeout_floor: std::time::Duration::from_millis(
-                    da.availability_timeout_floor_ms,
+                    da_advanced.availability_timeout_floor_ms,
                 ),
                 max_commitments_per_block: da.max_commitments_per_block,
                 max_proof_openings_per_block: da.max_proof_openings_per_block,
@@ -6514,26 +6534,19 @@ fn derive_vrf_window_blocks(epoch_length_blocks: u64, default_window_blocks: u64
 }
 
 impl SumeragiNpos {
-    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::SumeragiNpos> {
+    fn parse(
+        self,
+        timeouts: SumeragiNposTimeouts,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::SumeragiNpos> {
         let Self {
-            block_time_ms,
             epoch_length_blocks,
             use_stake_snapshot_roster,
-            timeouts,
             vrf,
             election,
             reconfig,
         } = self;
 
-        let block_time_ok = if block_time_ms == 0 {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig)
-                    .attach("sumeragi.npos.block_time_ms must be greater than zero"),
-            );
-            false
-        } else {
-            true
-        };
         let epoch_length_ok = if epoch_length_blocks == 0 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
@@ -6544,18 +6557,17 @@ impl SumeragiNpos {
             true
         };
 
-        let timeouts = timeouts.parse(block_time_ms, emitter)?;
+        let timeouts_overrides = timeouts.parse_overrides(emitter)?;
         let vrf = vrf.parse(epoch_length_blocks, emitter)?;
         let election = election.parse(emitter)?;
         let reconfig = reconfig.parse(emitter)?;
 
-        if !(block_time_ok && epoch_length_ok) {
+        if !epoch_length_ok {
             return None;
         }
 
         Some(actual::SumeragiNpos {
-            block_time: std::time::Duration::from_millis(block_time_ms),
-            timeouts,
+            timeouts_overrides,
             vrf,
             election,
             reconfig,
@@ -6566,54 +6578,26 @@ impl SumeragiNpos {
 }
 
 impl SumeragiNposTimeouts {
-    fn parse(
+    fn parse_overrides(
         self,
-        block_time_ms: u64,
-        emitter: &mut Emitter<ParseError>,
-    ) -> Option<actual::SumeragiNposTimeouts> {
-        let mut valid = true;
-        let derived = actual::SumeragiNposTimeouts::from_block_time(
-            std::time::Duration::from_millis(block_time_ms),
-        );
+        _emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::SumeragiNposTimeoutOverrides> {
+        let to_override = |value: Option<u64>| -> Option<Duration> {
+            match value {
+                Some(0) | None => None,
+                Some(value) => Some(Duration::from_millis(value)),
+            }
+        };
 
-        let mut resolve_timeout =
-            |value: Option<u64>, field: &'static str, derived: Duration| -> Duration {
-                match value {
-                    Some(value) => {
-                        if value == 0 {
-                            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                                format!("sumeragi.npos.timeouts.{field} must be greater than zero"),
-                            ));
-                            valid = false;
-                        }
-                        Duration::from_millis(value)
-                    }
-                    None => derived,
-                }
-            };
-
-        let propose = resolve_timeout(self.propose_ms, "propose_ms", derived.propose);
-        let prevote = resolve_timeout(self.prevote_ms, "prevote_ms", derived.prevote);
-        let precommit = resolve_timeout(self.precommit_ms, "precommit_ms", derived.precommit);
-        let exec = resolve_timeout(self.exec_ms, "exec_ms", derived.exec);
-        let witness = resolve_timeout(self.witness_ms, "witness_ms", derived.witness);
-        let commit = resolve_timeout(self.commit_ms, "commit_ms", derived.commit);
-        let da = resolve_timeout(self.da_ms, "da_ms", derived.da);
-        let aggregator = resolve_timeout(self.aggregator_ms, "aggregator_ms", derived.aggregator);
-
-        if !valid {
-            return None;
-        }
-
-        Some(actual::SumeragiNposTimeouts {
-            propose,
-            prevote,
-            precommit,
-            exec,
-            witness,
-            commit,
-            da,
-            aggregator,
+        Some(actual::SumeragiNposTimeoutOverrides {
+            propose: to_override(self.propose_ms),
+            prevote: to_override(self.prevote_ms),
+            precommit: to_override(self.precommit_ms),
+            exec: to_override(self.exec_ms),
+            witness: to_override(self.witness_ms),
+            commit: to_override(self.commit_ms),
+            da: to_override(self.da_ms),
+            aggregator: to_override(self.aggregator_ms),
         })
     }
 }
@@ -6801,20 +6785,19 @@ mod sumeragi_npos_tests {
 
     #[test]
     fn npos_parse_converts_to_durations() {
+        let timeouts = SumeragiNposTimeouts {
+            propose_ms: Some(200),
+            prevote_ms: Some(210),
+            precommit_ms: Some(220),
+            exec_ms: Some(225),
+            witness_ms: Some(228),
+            commit_ms: Some(230),
+            da_ms: Some(310),
+            aggregator_ms: Some(120),
+        };
         let user = SumeragiNpos {
-            block_time_ms: 1_500,
             epoch_length_blocks: 256,
             use_stake_snapshot_roster: true,
-            timeouts: SumeragiNposTimeouts {
-                propose_ms: Some(200),
-                prevote_ms: Some(210),
-                precommit_ms: Some(220),
-                exec_ms: Some(225),
-                witness_ms: Some(228),
-                commit_ms: Some(230),
-                da_ms: Some(310),
-                aggregator_ms: Some(120),
-            },
             vrf: SumeragiNposVrf {
                 commit_window_blocks: Some(42),
                 reveal_window_blocks: Some(13),
@@ -6839,26 +6822,28 @@ mod sumeragi_npos_tests {
 
         let mut emitter = Emitter::new();
         let actual = user
-            .parse(&mut emitter)
+            .parse(timeouts, &mut emitter)
             .expect("configuration should be valid");
         emitter
             .into_result()
             .expect("no validation errors expected");
-        assert_eq!(actual.block_time, std::time::Duration::from_millis(1_500));
         assert_eq!(actual.epoch_length_blocks, 256);
         assert!(actual.use_stake_snapshot_roster);
         assert_eq!(
-            actual.timeouts.propose,
-            std::time::Duration::from_millis(200)
-        );
-        assert_eq!(actual.timeouts.exec, std::time::Duration::from_millis(225));
-        assert_eq!(
-            actual.timeouts.witness,
-            std::time::Duration::from_millis(228)
+            actual.timeouts_overrides.propose,
+            Some(std::time::Duration::from_millis(200))
         );
         assert_eq!(
-            actual.timeouts.aggregator,
-            std::time::Duration::from_millis(120)
+            actual.timeouts_overrides.exec,
+            Some(std::time::Duration::from_millis(225))
+        );
+        assert_eq!(
+            actual.timeouts_overrides.witness,
+            Some(std::time::Duration::from_millis(228))
+        );
+        assert_eq!(
+            actual.timeouts_overrides.aggregator,
+            Some(std::time::Duration::from_millis(120))
         );
         assert_eq!(actual.vrf.commit_window_blocks, 42);
         assert_eq!(actual.vrf.reveal_window_blocks, 13);
@@ -6876,20 +6861,19 @@ mod sumeragi_npos_tests {
 
     #[test]
     fn npos_requires_positive_epoch_length() {
+        let timeouts = SumeragiNposTimeouts {
+            propose_ms: Some(1),
+            prevote_ms: Some(1),
+            precommit_ms: Some(1),
+            exec_ms: Some(1),
+            witness_ms: Some(1),
+            commit_ms: Some(1),
+            da_ms: Some(1),
+            aggregator_ms: Some(1),
+        };
         let user = SumeragiNpos {
-            block_time_ms: 1_000,
             epoch_length_blocks: 0,
             use_stake_snapshot_roster: false,
-            timeouts: SumeragiNposTimeouts {
-                propose_ms: Some(1),
-                prevote_ms: Some(1),
-                precommit_ms: Some(1),
-                exec_ms: Some(1),
-                witness_ms: Some(1),
-                commit_ms: Some(1),
-                da_ms: Some(1),
-                aggregator_ms: Some(1),
-            },
             vrf: SumeragiNposVrf {
                 commit_window_blocks: Some(1),
                 reveal_window_blocks: Some(1),
@@ -6913,28 +6897,27 @@ mod sumeragi_npos_tests {
         };
 
         let mut emitter = Emitter::new();
-        assert!(user.parse(&mut emitter).is_none());
+        assert!(user.parse(timeouts, &mut emitter).is_none());
         let report = emitter.into_result().expect_err("validation should fail");
         let message = format!("{report:?}");
         assert!(message.contains("sumeragi.npos.epoch_length_blocks must be greater than zero"));
     }
 
     #[test]
-    fn npos_timeouts_reject_zero() {
+    fn npos_timeouts_zero_clears_overrides() {
+        let timeouts = SumeragiNposTimeouts {
+            propose_ms: Some(0),
+            prevote_ms: None,
+            precommit_ms: None,
+            exec_ms: None,
+            witness_ms: None,
+            commit_ms: None,
+            da_ms: None,
+            aggregator_ms: None,
+        };
         let user = SumeragiNpos {
-            block_time_ms: 1_000,
             epoch_length_blocks: 1,
             use_stake_snapshot_roster: false,
-            timeouts: SumeragiNposTimeouts {
-                propose_ms: Some(0),
-                prevote_ms: Some(1),
-                precommit_ms: Some(1),
-                exec_ms: Some(1),
-                witness_ms: Some(1),
-                commit_ms: Some(1),
-                da_ms: Some(1),
-                aggregator_ms: Some(1),
-            },
             vrf: SumeragiNposVrf {
                 commit_window_blocks: Some(1),
                 reveal_window_blocks: Some(1),
@@ -6958,102 +6941,30 @@ mod sumeragi_npos_tests {
         };
 
         let mut emitter = Emitter::new();
-        assert!(user.parse(&mut emitter).is_none());
-        let report = emitter.into_result().expect_err("validation should fail");
-        let message = format!("{report:?}");
-        assert!(message.contains("sumeragi.npos.timeouts.propose_ms must be greater than zero"));
-    }
-
-    #[test]
-    fn npos_timeouts_derive_from_block_time() {
-        let user = SumeragiNpos {
-            block_time_ms: 2_000,
-            epoch_length_blocks: 3600,
-            use_stake_snapshot_roster: false,
-            timeouts: SumeragiNposTimeouts {
-                propose_ms: None,
-                prevote_ms: None,
-                precommit_ms: None,
-                exec_ms: None,
-                witness_ms: None,
-                commit_ms: None,
-                da_ms: None,
-                aggregator_ms: None,
-            },
-            vrf: SumeragiNposVrf {
-                commit_window_blocks: Some(10),
-                reveal_window_blocks: Some(5),
-                commit_deadline_offset_blocks: Some(3),
-                reveal_deadline_offset_blocks: Some(8),
-            },
-            election: SumeragiNposElection {
-                max_validators: 7,
-                min_self_bond: 10_000,
-                min_nomination_bond: 50,
-                max_nominator_concentration_pct: 55,
-                seat_band_pct: 18,
-                max_entity_correlation_pct: 27,
-                finality_margin_blocks: 12,
-            },
-            reconfig: SumeragiNposReconfig {
-                evidence_horizon_blocks: 256,
-                activation_lag_blocks: 2,
-                slashing_delay_blocks: 9,
-            },
-        };
-
-        let mut emitter = Emitter::new();
         let actual = user
-            .parse(&mut emitter)
+            .parse(timeouts, &mut emitter)
             .expect("configuration should be valid");
         emitter
             .into_result()
             .expect("no validation errors expected");
-
-        assert_eq!(
-            actual.timeouts.propose,
-            std::time::Duration::from_millis(700)
-        );
-        assert_eq!(
-            actual.timeouts.prevote,
-            std::time::Duration::from_millis(900)
-        );
-        assert_eq!(
-            actual.timeouts.precommit,
-            std::time::Duration::from_millis(1_100)
-        );
-        assert_eq!(actual.timeouts.exec, std::time::Duration::from_millis(300));
-        assert_eq!(
-            actual.timeouts.witness,
-            std::time::Duration::from_millis(300)
-        );
-        assert_eq!(
-            actual.timeouts.commit,
-            std::time::Duration::from_millis(1_500)
-        );
-        assert_eq!(actual.timeouts.da, std::time::Duration::from_millis(1_300));
-        assert_eq!(
-            actual.timeouts.aggregator,
-            std::time::Duration::from_millis(240)
-        );
+        assert!(actual.timeouts_overrides.propose.is_none());
     }
 
     #[test]
     fn npos_vrf_derive_from_epoch_length() {
+        let timeouts = SumeragiNposTimeouts {
+            propose_ms: Some(350),
+            prevote_ms: Some(450),
+            precommit_ms: Some(550),
+            exec_ms: Some(150),
+            witness_ms: Some(150),
+            commit_ms: Some(750),
+            da_ms: Some(650),
+            aggregator_ms: Some(120),
+        };
         let user = SumeragiNpos {
-            block_time_ms: 1_000,
             epoch_length_blocks: 7_200,
             use_stake_snapshot_roster: false,
-            timeouts: SumeragiNposTimeouts {
-                propose_ms: Some(350),
-                prevote_ms: Some(450),
-                precommit_ms: Some(550),
-                exec_ms: Some(150),
-                witness_ms: Some(150),
-                commit_ms: Some(750),
-                da_ms: Some(650),
-                aggregator_ms: Some(120),
-            },
             vrf: SumeragiNposVrf {
                 commit_window_blocks: None,
                 reveal_window_blocks: None,
@@ -7078,7 +6989,7 @@ mod sumeragi_npos_tests {
 
         let mut emitter = Emitter::new();
         let actual = user
-            .parse(&mut emitter)
+            .parse(timeouts, &mut emitter)
             .expect("configuration should be valid");
         emitter
             .into_result()

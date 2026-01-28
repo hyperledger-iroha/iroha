@@ -428,6 +428,9 @@ const ISO_PACS008_CONTEXT: &str = "/v1/iso20022/pacs008";
 const ISO_PACS009_CONTEXT: &str = "/v1/iso20022/pacs009";
 
 fn parse_config_account_id(literal: &str, field: &str) -> eyre::Result<AccountId> {
+    #[cfg(test)]
+    crate::ensure_test_domain_selector_resolver();
+
     AccountId::parse(literal)
         .map(|parsed| parsed.into_account_id())
         .wrap_err_with(|| format!("{field} must parse as an account identifier"))

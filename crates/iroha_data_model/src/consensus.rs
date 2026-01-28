@@ -11,10 +11,11 @@ pub use crate::block::consensus::{
     CertPhase, Qc, QcAggregate, QcRef, QcVote, SumeragiBlockSyncRosterStatus,
     SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
     SumeragiConsensusMessageHandlingStatus, SumeragiMembershipMismatchStatus,
-    SumeragiPeerKeyPolicyStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus,
-    SumeragiStatusWire, SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
-    SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
-    SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
+    SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus, SumeragiQcEntry, SumeragiQcSnapshot,
+    SumeragiQcStatus, SumeragiStatusWire, SumeragiViewChangeCauseStatus,
+    SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
+    SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
+    SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
 };
 use crate::prelude::*;
 

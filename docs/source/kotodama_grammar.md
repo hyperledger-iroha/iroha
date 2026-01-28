@@ -226,7 +226,7 @@ Prelude macros provide shorter aliases and inline validation for these construct
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` or structured literals such as `json!{ hello: "world" }`
-- `nft_id!("dragon#demo")`, `blob!("bytes")`, `norito_bytes!("...")`
+- `nft_id!("dragon$demo")`, `blob!("bytes")`, `norito_bytes!("...")`
 
 The macros expand to the constructors above and reject invalid literals at compile time.
 

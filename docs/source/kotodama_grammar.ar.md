@@ -221,7 +221,7 @@ register_trigger wake {
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` أو ليترالات مُهيكلة مثل `json!{ hello: "world" }`
-- `nft_id!("dragon#demo")`, `blob!("bytes")`, `norito_bytes!("...")`
+- `nft_id!("dragon$demo")`, `blob!("bytes")`, `norito_bytes!("...")`
 
 تُوسع الماكروهات إلى البناة أعلاه وترفض الليترالات غير الصحيحة وقت الترجمة.
 

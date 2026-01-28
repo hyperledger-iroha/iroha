@@ -1,6 +1,6 @@
 {
-  "code_hash": "hash:C2986C2C67A7CF391C2A0FC21E82A757F83873875C78C5D33C15B6478F1A3651#72BB",
-  "abi_hash": "hash:377F7125A0F20D40F65ED5E3A179BC5E04D68A385570B54D67D961861E8D9F83#1C50",
+  "code_hash": "hash:C380105D1E36B2C00052E51B829FC1226C8769FA134B4C58BAEAB7B3AD458929#18E6",
+  "abi_hash": "hash:BA1786031C3D0CDBD607DEBDAE1CC611A0807BF9CF49ED349A0632855724969F#FBDF",
   "compiler_fingerprint": null,
   "features_bitmap": null,
   "access_set_hints": {
@@ -36,8 +36,16 @@
       "write_keys": [
         "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs",
         "asset:xor#sora#34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K"
+      ],
+      "access_hints_complete": true,
+      "access_hints_skipped": [
+        
+      ],
+      "triggers": [
+        
       ]
     }
   ],
+  "kotoba": null,
   "provenance": null
 }

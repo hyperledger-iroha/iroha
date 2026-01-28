@@ -24,7 +24,7 @@ seiyaku StablecoinSimple {
     // health check
     let value = collateral_amount * price;
     let post_ratio = (value * 10_000) / mint_amount;
-    let ok = (post_ratio >= min_ratio_bps);
+    let ok = (post_ratio >= min_ratio_bps) ? 1 : 0;
     assert_eq(ok, 1);
     // mint
     mint_asset(user, stable_asset, mint_amount);

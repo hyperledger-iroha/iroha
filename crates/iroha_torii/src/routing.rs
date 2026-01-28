@@ -320,15 +320,15 @@ use iroha_data_model::{
         SumeragiConsensusMessageHandlingStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
         SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
         SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
-        SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
-        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
-        SumeragiQcStatus, SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry,
-        SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus, SumeragiRuntimeUpgradeHook,
-        SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
-        SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
-        SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
-        SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
-        SumeragiWorkerQueueTotals,
+        SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus, SumeragiNposTimeoutsStatus,
+        SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry, SumeragiPendingRbcStatus,
+        SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus, SumeragiRbcEvictedSession,
+        SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus,
+        SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
+        SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
+        SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
+        SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
+        SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
     },
     domain::DomainId,
     events::{
@@ -4603,6 +4603,8 @@ fn decode_and_validate_evidence(
 
 #[cfg(test)]
 mod evidence_submit_tests {
+    use std::sync::{LazyLock, Mutex};
+
     use iroha_core::sumeragi::consensus::{Evidence, EvidenceKind, EvidencePayload, Phase, Vote};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
@@ -4616,6 +4618,8 @@ mod evidence_submit_tests {
     use norito::codec::Encode as _;
 
     use super::*;
+
+    static MODE_TAG_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn test_state_with_peer(peer: PeerId) -> iroha_core::state::State {
         let kura = iroha_core::kura::Kura::blank_kura_for_testing();
@@ -4763,6 +4767,7 @@ mod evidence_submit_tests {
 
     #[test]
     fn decode_and_validate_evidence_accepts_valid_payload() {
+        let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
@@ -4787,6 +4792,7 @@ mod evidence_submit_tests {
 
     #[test]
     fn decode_and_validate_evidence_rejects_mismatched_mode_tag() {
+        let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let state = test_state_with_peer(PeerId::new(keypair.public_key().clone()));
@@ -4824,6 +4830,7 @@ mod evidence_submit_tests {
 
     #[test]
     fn decode_and_validate_evidence_uses_subject_height_seed() {
+        let _guard = MODE_TAG_GUARD.lock().expect("mode tag guard");
         let chain_id: ChainId = "torii-evidence".parse().expect("chain id parses");
         let (prev_mode, prev_staged, prev_activation, _) =
             iroha_core::sumeragi::status::mode_tags();
@@ -4836,10 +4843,9 @@ mod evidence_submit_tests {
         let keypair1 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer0 = PeerId::new(keypair0.public_key().clone());
         let peer1 = PeerId::new(keypair1.public_key().clone());
-        let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![
-            peer0.clone(),
-            peer1.clone(),
-        ]);
+        let mut peers = vec![peer0.clone(), peer1.clone()];
+        peers.sort();
+        let topology = iroha_core::sumeragi::network_topology::Topology::new(peers.clone());
         let height = 1_u64;
         let view = 0_u64;
         // Find two seeds that map to different leaders for the same (height, view).
@@ -4867,7 +4873,10 @@ mod evidence_submit_tests {
             "seed search must pick distinct leaders"
         );
 
-        let signer_keypair = if leader_epoch0 == 0 {
+        let signer_peer = peers
+            .get(leader_epoch0)
+            .expect("leader index should be in range");
+        let signer_keypair = if signer_peer == &peer0 {
             &keypair0
         } else {
             &keypair1
@@ -10212,7 +10221,12 @@ mod repair_query_tests {
     #[test]
     fn repair_status_handlers_apply_filters() {
         Runtime::new().expect("runtime").block_on(async {
-            let node = sorafs_node::NodeHandle::new(StorageConfig::default());
+            let temp_dir = tempfile::tempdir().expect("temp dir");
+            let config = StorageConfig::builder()
+                .enabled(true)
+                .data_dir(temp_dir.path().join("storage"))
+                .build();
+            let node = sorafs_node::NodeHandle::new(config);
             let manifest_a = [0x10; 32];
             let manifest_b = [0x11; 32];
             let provider_a = [0x22; 32];
@@ -10330,7 +10344,12 @@ mod repair_worker_tests {
     #[test]
     fn repair_worker_handlers_drive_state_transitions() {
         Runtime::new().expect("runtime").block_on(async {
-            let node = sorafs_node::NodeHandle::new(StorageConfig::default());
+            let temp_dir = tempfile::tempdir().expect("temp dir");
+            let config = StorageConfig::builder()
+                .enabled(true)
+                .data_dir(temp_dir.path().join("storage"))
+                .build();
+            let node = sorafs_node::NodeHandle::new(config);
             let signer = KeyPair::random();
             let report_a = report("REP-460", [0x10; 32], [0x20; 32], 1_700_500_000);
             let report_b = report("REP-461", [0x11; 32], [0x21; 32], 1_700_500_100);
@@ -13675,6 +13694,9 @@ fn canonicalize_query_account_literal(
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<Option<String>> {
+    #[cfg(test)]
+    crate::ensure_test_domain_selector_resolver();
+
     use iroha_data_model::{ValidationFail, account::AccountId, query::error::QueryExecutionFail};
 
     literal
@@ -13703,6 +13725,9 @@ pub fn parse_account_literal(
     context: &'static str,
 ) -> Result<iroha_data_model::account::ParsedAccountId, iroha_data_model::error::ParseError> {
     use iroha_data_model::account::AccountId;
+
+    #[cfg(test)]
+    crate::ensure_test_domain_selector_resolver();
 
     match AccountId::parse(literal) {
         Ok(parsed) => {
@@ -21586,6 +21611,22 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             ])
         })
         .unwrap_or(Value::Null);
+    let effective_npos_timeouts = snap
+        .effective_npos_timeouts
+        .as_ref()
+        .map(|timeouts| {
+            json_object(vec![
+                json_entry("propose_ms", timeouts.propose_ms),
+                json_entry("prevote_ms", timeouts.prevote_ms),
+                json_entry("precommit_ms", timeouts.precommit_ms),
+                json_entry("commit_ms", timeouts.commit_ms),
+                json_entry("da_ms", timeouts.da_ms),
+                json_entry("aggregator_ms", timeouts.aggregator_ms),
+                json_entry("exec_ms", timeouts.exec_ms),
+                json_entry("witness_ms", timeouts.witness_ms),
+            ])
+        })
+        .unwrap_or(Value::Null);
     crate::json_object(vec![
         json_entry("mode_tag", &snap.mode_tag),
         json_entry(
@@ -21608,6 +21649,27 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                 .unwrap_or(Value::Null),
         ),
         json_entry("consensus_caps", consensus_caps),
+        json_entry("effective_min_finality_ms", snap.effective_min_finality_ms),
+        json_entry("effective_block_time_ms", snap.effective_block_time_ms),
+        json_entry("effective_commit_time_ms", snap.effective_commit_time_ms),
+        json_entry(
+            "effective_commit_quorum_timeout_ms",
+            snap.effective_commit_quorum_timeout_ms,
+        ),
+        json_entry(
+            "effective_availability_timeout_ms",
+            snap.effective_availability_timeout_ms,
+        ),
+        json_entry(
+            "effective_pacemaker_interval_ms",
+            snap.effective_pacemaker_interval_ms,
+        ),
+        json_entry("effective_npos_timeouts", effective_npos_timeouts),
+        json_entry("effective_collectors_k", snap.effective_collectors_k),
+        json_entry(
+            "effective_redundant_send_r",
+            snap.effective_redundant_send_r,
+        ),
         json_entry("leader_index", snap.leader_index),
         json_entry("view_change_index", snap.view_change_index),
         json_entry(
@@ -22231,6 +22293,24 @@ mod status_tests {
                 rbc_store_max_bytes: 65_536,
                 rbc_store_soft_bytes: 32_768,
             }),
+            effective_min_finality_ms: 150,
+            effective_block_time_ms: 1_000,
+            effective_commit_time_ms: 1_500,
+            effective_commit_quorum_timeout_ms: 3_000,
+            effective_availability_timeout_ms: 2_500,
+            effective_pacemaker_interval_ms: 750,
+            effective_npos_timeouts: Some(sumeragi::status::NposTimeoutsSnapshot {
+                propose_ms: 200,
+                prevote_ms: 210,
+                precommit_ms: 220,
+                commit_ms: 230,
+                da_ms: 240,
+                aggregator_ms: 250,
+                exec_ms: 260,
+                witness_ms: 270,
+            }),
+            effective_collectors_k: 4,
+            effective_redundant_send_r: 2,
             ..Default::default()
         };
         let payload = status_snapshot_json(&snap);
@@ -22247,6 +22327,42 @@ mod status_tests {
         assert_eq!(
             caps.get("rbc_store_max_bytes").and_then(Value::as_u64),
             Some(65_536)
+        );
+        assert_eq!(
+            payload
+                .get("effective_min_finality_ms")
+                .and_then(Value::as_u64),
+            Some(150)
+        );
+        assert_eq!(
+            payload
+                .get("effective_commit_time_ms")
+                .and_then(Value::as_u64),
+            Some(1_500)
+        );
+        let npos_timeouts = payload
+            .get("effective_npos_timeouts")
+            .and_then(Value::as_object)
+            .expect("effective_npos_timeouts object");
+        assert_eq!(
+            npos_timeouts.get("propose_ms").and_then(Value::as_u64),
+            Some(200)
+        );
+        assert_eq!(
+            npos_timeouts.get("witness_ms").and_then(Value::as_u64),
+            Some(270)
+        );
+        assert_eq!(
+            payload
+                .get("effective_collectors_k")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            payload
+                .get("effective_redundant_send_r")
+                .and_then(Value::as_u64),
+            Some(2)
         );
     }
 
@@ -23061,6 +23177,26 @@ pub async fn handle_v1_sumeragi_status(
                     rbc_store_max_bytes: caps.rbc_store_max_bytes,
                     rbc_store_soft_bytes: caps.rbc_store_soft_bytes,
                 }),
+            effective_min_finality_ms: snap.effective_min_finality_ms,
+            effective_block_time_ms: snap.effective_block_time_ms,
+            effective_commit_time_ms: snap.effective_commit_time_ms,
+            effective_commit_quorum_timeout_ms: snap.effective_commit_quorum_timeout_ms,
+            effective_availability_timeout_ms: snap.effective_availability_timeout_ms,
+            effective_pacemaker_interval_ms: snap.effective_pacemaker_interval_ms,
+            effective_npos_timeouts: snap.effective_npos_timeouts.as_ref().map(|timeouts| {
+                SumeragiNposTimeoutsStatus {
+                    propose_ms: timeouts.propose_ms,
+                    prevote_ms: timeouts.prevote_ms,
+                    precommit_ms: timeouts.precommit_ms,
+                    commit_ms: timeouts.commit_ms,
+                    da_ms: timeouts.da_ms,
+                    aggregator_ms: timeouts.aggregator_ms,
+                    exec_ms: timeouts.exec_ms,
+                    witness_ms: timeouts.witness_ms,
+                }
+            }),
+            effective_collectors_k: snap.effective_collectors_k,
+            effective_redundant_send_r: snap.effective_redundant_send_r,
             leader_index: snap.leader_index,
             highest_qc_height: snap.highest_qc_height,
             highest_qc_view: snap.highest_qc_view,
@@ -32570,6 +32706,9 @@ pub async fn handle_v1_nexus_public_lane_stake(
     params: PublicLaneStakeQueryParams,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
+    #[cfg(test)]
+    crate::ensure_test_domain_selector_resolver();
+
     use iroha_data_model::{ValidationFail, account::AccountId, query::error::QueryExecutionFail};
 
     let canonical_validator = canonicalize_query_account_literal(
@@ -36331,6 +36470,9 @@ pub async fn handle_v1_subscription_plans(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<SubscriptionPlanListParams>,
 ) -> Result<impl IntoResponse> {
+    #[cfg(test)]
+    crate::ensure_test_domain_selector_resolver();
+
     let provider = match params.provider {
         Some(raw) if !raw.trim().is_empty() => Some(
             raw.parse::<AccountId>()
@@ -36534,6 +36676,9 @@ pub async fn handle_v1_subscriptions(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<SubscriptionListParams>,
 ) -> Result<impl IntoResponse> {
+    #[cfg(test)]
+    crate::ensure_test_domain_selector_resolver();
+
     let owned_by = match params.owned_by {
         Some(raw) if !raw.trim().is_empty() => Some(
             raw.parse::<AccountId>()

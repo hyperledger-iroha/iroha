@@ -3822,15 +3822,8 @@ pub struct Sumeragi {
 /// NPoS configuration bundle.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiNpos {
-    /// Target block time (fallback only).
-    ///
-    /// On-chain `SumeragiParameters.block_time_ms` is authoritative for both permissioned and
-    /// NPoS modes. This value is used only when on-chain parameters are missing or invalid.
-    pub block_time: Duration,
-    /// Pacemaker per-phase timeouts (fallback only).
-    ///
-    /// On-chain `sumeragi_npos_parameters` overrides these values when present.
-    pub timeouts: SumeragiNposTimeouts,
+    /// Explicit per-phase timeout overrides (advanced config only).
+    pub timeouts_overrides: SumeragiNposTimeoutOverrides,
     /// VRF commit/reveal windows.
     pub vrf: SumeragiNposVrf,
     /// Election policy knobs.
@@ -3862,6 +3855,64 @@ pub struct SumeragiNposTimeouts {
     pub da: Duration,
     /// Timeout before validators widen redundant collector fanout.
     pub aggregator: Duration,
+}
+
+/// Optional per-phase timeout overrides (advanced config only).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SumeragiNposTimeoutOverrides {
+    /// Override for the proposal broadcast stage.
+    pub propose: Option<Duration>,
+    /// Override for prevote aggregation.
+    pub prevote: Option<Duration>,
+    /// Override for precommit aggregation.
+    pub precommit: Option<Duration>,
+    /// Override for execution QC aggregation.
+    pub exec: Option<Duration>,
+    /// Override for witness availability QC aggregation.
+    pub witness: Option<Duration>,
+    /// Override for final commit confirmation.
+    pub commit: Option<Duration>,
+    /// Override for data-availability quorum formation.
+    pub da: Option<Duration>,
+    /// Override for redundant collector fanout widening.
+    pub aggregator: Option<Duration>,
+}
+
+impl SumeragiNposTimeoutOverrides {
+    /// Return `true` when any override value is explicitly set (non-zero).
+    pub fn has_overrides(&self) -> bool {
+        [
+            self.propose,
+            self.prevote,
+            self.precommit,
+            self.exec,
+            self.witness,
+            self.commit,
+            self.da,
+            self.aggregator,
+        ]
+        .iter()
+        .any(|value| value.map_or(false, |value| !value.is_zero()))
+    }
+
+    /// Apply overrides on top of the derived timeouts from `block_time`.
+    pub fn resolve(&self, block_time: Duration) -> SumeragiNposTimeouts {
+        let mut out = SumeragiNposTimeouts::from_block_time(block_time);
+        let apply = |slot: &mut Duration, value: Option<Duration>| {
+            if let Some(value) = value.filter(|value| !value.is_zero()) {
+                *slot = value;
+            }
+        };
+        apply(&mut out.propose, self.propose);
+        apply(&mut out.prevote, self.prevote);
+        apply(&mut out.precommit, self.precommit);
+        apply(&mut out.exec, self.exec);
+        apply(&mut out.witness, self.witness);
+        apply(&mut out.commit, self.commit);
+        apply(&mut out.da, self.da);
+        apply(&mut out.aggregator, self.aggregator);
+        out
+    }
 }
 
 fn scale_ratio_at_least_one(value: u64, numerator: u64, denominator: u64) -> u64 {
@@ -3945,8 +3996,7 @@ pub struct SumeragiNposReconfig {
 impl Default for SumeragiNpos {
     fn default() -> Self {
         Self {
-            block_time: Duration::from_millis(defaults::sumeragi::npos::BLOCK_TIME_MS),
-            timeouts: SumeragiNposTimeouts::default(),
+            timeouts_overrides: SumeragiNposTimeoutOverrides::default(),
             vrf: SumeragiNposVrf::default(),
             election: SumeragiNposElection::default(),
             reconfig: SumeragiNposReconfig::default(),
@@ -7403,5 +7453,37 @@ mod tests {
             timeouts.da,
             Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_DA_MS * 2)
         );
+    }
+
+    #[test]
+    fn npos_timeout_overrides_apply_to_derived_values() {
+        let overrides = SumeragiNposTimeoutOverrides {
+            propose: Some(Duration::from_millis(123)),
+            ..SumeragiNposTimeoutOverrides::default()
+        };
+        let resolved = overrides.resolve(Duration::from_millis(1_000));
+        assert_eq!(resolved.propose, Duration::from_millis(123));
+        assert_eq!(
+            resolved.prevote,
+            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_PREVOTE_MS)
+        );
+    }
+
+    #[test]
+    fn npos_timeout_overrides_detect_presence() {
+        let overrides = SumeragiNposTimeoutOverrides::default();
+        assert!(!overrides.has_overrides());
+
+        let overrides = SumeragiNposTimeoutOverrides {
+            commit: Some(Duration::from_millis(1)),
+            ..SumeragiNposTimeoutOverrides::default()
+        };
+        assert!(overrides.has_overrides());
+
+        let overrides = SumeragiNposTimeoutOverrides {
+            commit: Some(Duration::ZERO),
+            ..SumeragiNposTimeoutOverrides::default()
+        };
+        assert!(!overrides.has_overrides());
     }
 }

@@ -342,13 +342,6 @@ pub const DEFAULT_PUBLIC_HOST: &str = "127.0.0.1";
 /// Default total pipeline time (ms) injected for localnet when not overridden.
 const LOCALNET_PIPELINE_TIME_MS: u64 = 1_000;
 /// Baseline NPoS timeouts for localnet (keep in sync with config defaults).
-const LOCALNET_NPOS_DEFAULT_BLOCK_TIME_MS: u64 = 1_000;
-const LOCALNET_NPOS_TIMEOUT_PROPOSE_MS: u64 = 300;
-const LOCALNET_NPOS_TIMEOUT_PREVOTE_MS: u64 = 400;
-const LOCALNET_NPOS_TIMEOUT_PRECOMMIT_MS: u64 = 500;
-const LOCALNET_NPOS_TIMEOUT_COMMIT_MS: u64 = 650;
-const LOCALNET_NPOS_TIMEOUT_DA_MS: u64 = 600;
-const LOCALNET_NPOS_TIMEOUT_AGG_MS: u64 = 100;
 /// Default DA commit-quorum timeout multiplier for localnet configs.
 const LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 1;
 /// Default DA availability timeout multiplier for localnet configs.
@@ -1589,27 +1582,11 @@ fn apply_localnet_npos_overrides(
     redundant_send_r: Option<u8>,
     collectors_k: Option<u16>,
 ) {
-    let block_time_ms = parameters.sumeragi.block_time_ms.max(1);
-    let commit_time_ms = parameters.sumeragi.commit_time_ms.max(block_time_ms);
-    let default_block_ms = LOCALNET_NPOS_DEFAULT_BLOCK_TIME_MS.max(1);
-    let scale_timeout = |base_ms: u64, default_ms: u64| -> u64 {
-        let scaled = (u128::from(base_ms) * u128::from(default_ms)) / u128::from(default_block_ms);
-        let scaled = u64::try_from(scaled).unwrap_or(u64::MAX).max(1);
-        scaled.max(default_ms)
-    };
-
     let mut npos = parameters
         .custom()
         .get(&SumeragiNposParameters::parameter_id())
         .and_then(SumeragiNposParameters::from_custom_parameter)
         .unwrap_or_default();
-    npos.block_time_ms = block_time_ms;
-    npos.timeout_propose_ms = scale_timeout(block_time_ms, LOCALNET_NPOS_TIMEOUT_PROPOSE_MS);
-    npos.timeout_prevote_ms = scale_timeout(block_time_ms, LOCALNET_NPOS_TIMEOUT_PREVOTE_MS);
-    npos.timeout_precommit_ms = scale_timeout(block_time_ms, LOCALNET_NPOS_TIMEOUT_PRECOMMIT_MS);
-    npos.timeout_commit_ms = scale_timeout(commit_time_ms, LOCALNET_NPOS_TIMEOUT_COMMIT_MS);
-    npos.timeout_da_ms = scale_timeout(block_time_ms, LOCALNET_NPOS_TIMEOUT_DA_MS);
-    npos.timeout_aggregator_ms = scale_timeout(block_time_ms, LOCALNET_NPOS_TIMEOUT_AGG_MS);
     // Override seat band and bond to prevent validator drops on small localnets.
     npos.seat_band_pct = 100;
     npos.min_self_bond = 1;
@@ -2869,8 +2846,8 @@ mod tests {
             .expect("npos parameters must be present");
         assert_eq!(npos.k_aggregators(), 3);
         assert_eq!(npos.redundant_send_r(), expected_redundant_send_r);
-        assert_eq!(npos.block_time_ms(), 1_000);
-        assert_eq!(npos.timeout_commit_ms(), 650);
+        assert_eq!(npos.seat_band_pct(), 100);
+        assert_eq!(npos.min_self_bond(), 1);
     }
 
     #[test]
@@ -3349,7 +3326,7 @@ mod tests {
     }
 
     #[test]
-    fn npos_localnet_updates_timeouts_and_redundant_send() {
+    fn npos_localnet_updates_redundant_send() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
@@ -3385,18 +3362,13 @@ mod tests {
             .get(&SumeragiNposParameters::parameter_id())
             .and_then(SumeragiNposParameters::from_custom_parameter)
             .expect("npos parameters must be present");
-        assert_eq!(npos.block_time_ms(), 1_200);
-        assert_eq!(npos.timeout_propose_ms(), 360);
-        assert_eq!(npos.timeout_prevote_ms(), 480);
-        assert_eq!(npos.timeout_precommit_ms(), 600);
-        assert_eq!(npos.timeout_commit_ms(), 1_040);
-        assert_eq!(npos.timeout_da_ms(), 720);
-        assert_eq!(npos.timeout_aggregator_ms(), 120);
         assert_eq!(npos.redundant_send_r(), 3);
+        assert_eq!(npos.seat_band_pct(), 100);
+        assert_eq!(npos.min_self_bond(), 1);
     }
 
     #[test]
-    fn npos_localnet_clamps_timeouts_for_fast_block_time() {
+    fn npos_localnet_keeps_payload_for_fast_block_time() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
@@ -3431,17 +3403,8 @@ mod tests {
             .get(&SumeragiNposParameters::parameter_id())
             .and_then(SumeragiNposParameters::from_custom_parameter)
             .expect("npos parameters must be present");
-
-        assert_eq!(npos.block_time_ms(), 333);
-        assert_eq!(npos.timeout_propose_ms(), LOCALNET_NPOS_TIMEOUT_PROPOSE_MS);
-        assert_eq!(npos.timeout_prevote_ms(), LOCALNET_NPOS_TIMEOUT_PREVOTE_MS);
-        assert_eq!(
-            npos.timeout_precommit_ms(),
-            LOCALNET_NPOS_TIMEOUT_PRECOMMIT_MS
-        );
-        assert_eq!(npos.timeout_commit_ms(), LOCALNET_NPOS_TIMEOUT_COMMIT_MS);
-        assert_eq!(npos.timeout_da_ms(), LOCALNET_NPOS_TIMEOUT_DA_MS);
-        assert_eq!(npos.timeout_aggregator_ms(), LOCALNET_NPOS_TIMEOUT_AGG_MS);
+        assert_eq!(npos.seat_band_pct(), 100);
+        assert_eq!(npos.min_self_bond(), 1);
     }
 
     #[test]

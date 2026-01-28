@@ -1155,6 +1155,9 @@ where
     host.set_durable_state_snapshot_from_world(state_ro.world());
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
     host.set_query_state(state_ro);
+    host.set_chain_id(state_ro.chain_id());
+    host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
+        .map_err(|e| format!("ivm.zk_snapshots: {e}"))?;
     host.begin_tx(&ivm::parallel::StateAccessSet::default())
         .map_err(|e| format!("ivm.begin_tx: {e}"))?;
     vm.load_program(bytecode)

@@ -223,7 +223,7 @@ Prelude macros ان constructors کے لیے مختصر aliases اور inline va
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` یا structured literals جیسے `json!{ hello: "world" }`
-- `nft_id!("dragon#demo")`, `blob!("bytes")`, `norito_bytes!("...")`
+- `nft_id!("dragon$demo")`, `blob!("bytes")`, `norito_bytes!("...")`
 
 Macros اوپر والے constructors میں expand ہوتے ہیں اور غلط literals کو compile‑time پر reject کرتے ہیں۔
 

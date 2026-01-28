@@ -26,6 +26,7 @@ use tokio::time::sleep;
 const EPOCH_LENGTH_BLOCKS: u64 = 6;
 const VRF_COMMIT_WINDOW_BLOCKS: u64 = 2;
 const VRF_REVEAL_WINDOW_BLOCKS: u64 = 4;
+const BLOCK_TIME_MS: u64 = 600;
 const TELEMETRY_RETRY_INTERVAL: Duration = Duration::from_millis(200);
 const TELEMETRY_RETRY_ATTEMPTS: usize = 30;
 
@@ -385,6 +386,12 @@ fn randomness_network_builder() -> NetworkBuilder {
             SumeragiParameter::RedundantSendR(1),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::BlockTimeMs(BLOCK_TIME_MS),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(BLOCK_TIME_MS),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::DaEnabled(true),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
@@ -403,13 +410,6 @@ fn short_epoch_npos_parameters() -> SumeragiNposParameters {
         vrf_commit_window_blocks: VRF_COMMIT_WINDOW_BLOCKS,
         vrf_reveal_window_blocks: VRF_REVEAL_WINDOW_BLOCKS,
         epoch_length_blocks: EPOCH_LENGTH_BLOCKS,
-        block_time_ms: 600,
-        timeout_commit_ms: 600,
-        timeout_prevote_ms: 600,
-        timeout_precommit_ms: 600,
-        timeout_propose_ms: 600,
-        timeout_da_ms: 600,
-        timeout_aggregator_ms: 600,
         ..SumeragiNposParameters::default()
     }
 }

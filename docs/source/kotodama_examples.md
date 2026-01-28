@@ -13,11 +13,11 @@ Source: `examples/hello/hello.ko`
 seiyaku Hello {
   hajimari() { info("Hello from Kotodama"); }
 
-  kotoage fn write_detail() {
+  kotoage fn write_detail() permission(Admin) {
     set_account_detail(
       authority(),
-      name("example"),
-      json("{\"hello\":\"world\"}")
+      name!("example"),
+      json!{ hello: "world" }
     );
   }
 }
@@ -33,10 +33,10 @@ Source: `examples/transfer/transfer.ko`
 
 ```
 seiyaku TransferDemo {
-  kotoage fn do_transfer() {
+  kotoage fn do_transfer() permission(AssetTransferRole) {
     transfer_asset(
-      account!("ih58..."),
-      account!("ih58..."),
+      account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
+      account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"),
       asset_definition!("rose#wonderland"),
       10
     );
@@ -53,19 +53,17 @@ Source: `examples/nft/nft.ko`
 
 ```
 seiyaku NftDemo {
-  kotoage fn create() {
-    nft_mint_asset(
-      nft_id!("dragon#demo"),
-      account!("ih58...")
-    );
+  kotoage fn create() permission(NftAuthority) {
+    let owner = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
+    let nft = nft_id!("dragon$wonderland");
+    nft_mint_asset(nft, owner);
   }
 
-  kotoage fn transfer() {
-    nft_transfer_asset(
-      account!("ih58..."),
-      nft_id!("dragon#demo"),
-      account!("ih58...")
-    );
+  kotoage fn transfer() permission(NftAuthority) {
+    let owner = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
+    let recipient = account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland");
+    let nft = nft_id!("dragon$wonderland");
+    nft_transfer_asset(owner, nft, recipient);
   }
 }
 ```
@@ -86,12 +84,12 @@ seiyaku PointerDemo {
   state Owners: Map<int, AccountId>;
 
   fn hajimari() {
-    let alice = account_id("ih58...");
+    let alice = account_id("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
     let first = get_or_insert_default(Owners, 7, alice);
     assert(first == alice);
 
     // The second call decodes the stored pointer and re-encodes the input.
-    let bob = account_id("ih58...");
+    let bob = account_id("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland");
     let again = get_or_insert_default(Owners, 7, bob);
     assert(again == alice);
   }
@@ -112,11 +110,13 @@ exercises the round-trip against the `MockWorldStateView`.
 
 ## Deterministic Map Iteration (design)
 
-Deterministic map for‑each requires a bound. The compiler accepts `.take(n)` or a declared maximum length.
+Deterministic map for‑each requires a bound. Multi-entry iteration requires a state map; the compiler accepts `.take(n)` or a declared maximum length.
 
 ```
-// design example (iteration requires bounds)
-fn sum_first_two(M: Map<int, int>) -> int {
+// design example (iteration requires bounds and state storage)
+state M: Map<int, int>;
+
+fn sum_first_two() -> int {
   let s = 0;
   for (k, v) in M.take(2) {
     s = s + v;

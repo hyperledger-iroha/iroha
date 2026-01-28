@@ -19,7 +19,7 @@ seiyaku LendingSimple {
     let new_debt_value = current_debt_value + amount;
     let ratio = collateral_ratio_bps(collateral_value, new_debt_value);
     // assert(ratio >= min_ratio_bps)
-    let ok = (ratio >= min_ratio_bps);
+    let ok = (ratio >= min_ratio_bps) ? 1 : 0;
     // assert_eq emits a VM assertion; 1 means true
     assert_eq(ok, 1);
     // Mint borrowed asset to user

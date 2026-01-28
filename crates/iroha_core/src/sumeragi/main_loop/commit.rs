@@ -925,6 +925,7 @@ impl Actor {
                 let params_snapshot = {
                     let view = self.state.view();
                     let params = view.world().parameters();
+                    self.update_effective_timing_status(&view, self.consensus_mode);
                     (
                         params.block().max_transactions().get(),
                         params.smart_contract().execution_depth(),
@@ -2695,11 +2696,11 @@ impl Actor {
             );
             return;
         }
-        let cooldown = self
-            .config
-            .npos
-            .block_time
-            .max(std::time::Duration::from_millis(200));
+        let block_time = {
+            let view = self.state.view();
+            self.block_time_for_mode(&view, self.consensus_mode)
+        };
+        let cooldown = block_time.max(std::time::Duration::from_millis(200));
         let now = std::time::Instant::now();
         if self
             .block_sync_rebroadcast_log
@@ -3948,12 +3949,11 @@ impl Actor {
         if topology_peers.is_empty() {
             return;
         }
-        let cooldown = self
-            .config
-            .npos
-            .timeouts
-            .propose
-            .max(Duration::from_millis(50));
+        let timeouts = {
+            let view = self.state.view();
+            super::resolve_npos_timeouts(&view, &self.config.npos)
+        };
+        let cooldown = timeouts.propose.max(Duration::from_millis(50));
         let now = Instant::now();
         if !self
             .payload_rebroadcast_log

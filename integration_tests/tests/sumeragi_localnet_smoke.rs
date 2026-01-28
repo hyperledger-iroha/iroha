@@ -192,11 +192,26 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
                     "forward",
                 )
                 // Tighten local timeouts to keep proposal/view-change cadence bounded.
-                .write(["sumeragi", "npos", "timeouts", "propose_ms"], 400_i64)
-                .write(["sumeragi", "npos", "timeouts", "prevote_ms"], 800_i64)
-                .write(["sumeragi", "npos", "timeouts", "precommit_ms"], 1_200_i64)
-                .write(["sumeragi", "npos", "timeouts", "commit_ms"], 1_600_i64)
-                .write(["sumeragi", "npos", "timeouts", "da_ms"], 800_i64)
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
+                    400_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
+                    800_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
+                    1_200_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
+                    1_600_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
+                    800_i64,
+                )
                 .write(["sumeragi", "pacemaker", "max_backoff_ms"], 2_000_i64)
                 .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 1_i64);
         });
@@ -323,11 +338,26 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
                     "forward",
                 )
                 // Tighten local timeouts to keep proposal/view-change cadence bounded.
-                .write(["sumeragi", "npos", "timeouts", "propose_ms"], 200_i64)
-                .write(["sumeragi", "npos", "timeouts", "prevote_ms"], 400_i64)
-                .write(["sumeragi", "npos", "timeouts", "precommit_ms"], 600_i64)
-                .write(["sumeragi", "npos", "timeouts", "commit_ms"], 800_i64)
-                .write(["sumeragi", "npos", "timeouts", "da_ms"], 400_i64)
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
+                    200_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
+                    400_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
+                    600_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
+                    800_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
+                    400_i64,
+                )
                 .write(["sumeragi", "pacemaker", "max_backoff_ms"], 2_000_i64)
                 .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 1_i64);
         });
@@ -454,11 +484,26 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                     "forward",
                 )
                 // Tighten local timeouts to keep proposal/view-change cadence bounded.
-                .write(["sumeragi", "npos", "timeouts", "propose_ms"], 200_i64)
-                .write(["sumeragi", "npos", "timeouts", "prevote_ms"], 400_i64)
-                .write(["sumeragi", "npos", "timeouts", "precommit_ms"], 600_i64)
-                .write(["sumeragi", "npos", "timeouts", "commit_ms"], 800_i64)
-                .write(["sumeragi", "npos", "timeouts", "da_ms"], 400_i64)
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
+                    200_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
+                    400_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
+                    600_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
+                    800_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
+                    400_i64,
+                )
                 // Give DA quorum extra breathing room under sustained load.
                 .write(["sumeragi", "da", "quorum_timeout_multiplier"], 7_i64)
                 .write(["sumeragi", "da", "availability_timeout_multiplier"], 3_i64)
@@ -629,11 +674,26 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                     "forward",
                 )
                 // Tighten local timeouts to keep proposal/view-change cadence bounded.
-                .write(["sumeragi", "npos", "timeouts", "propose_ms"], 200_i64)
-                .write(["sumeragi", "npos", "timeouts", "prevote_ms"], 400_i64)
-                .write(["sumeragi", "npos", "timeouts", "precommit_ms"], 600_i64)
-                .write(["sumeragi", "npos", "timeouts", "commit_ms"], 800_i64)
-                .write(["sumeragi", "npos", "timeouts", "da_ms"], 400_i64)
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
+                    200_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
+                    400_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
+                    600_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
+                    800_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
+                    400_i64,
+                )
                 // Give DA quorum extra breathing room under sustained load.
                 .write(["sumeragi", "da", "quorum_timeout_multiplier"], 7_i64)
                 .write(["sumeragi", "da", "availability_timeout_multiplier"], 3_i64)
@@ -1187,7 +1247,6 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
     );
 
     let npos_params = SumeragiNposParameters {
-        block_time_ms: THROUGHPUT_BLOCK_TIME_MS,
         k_aggregators: 3,
         redundant_send_r: 2,
         ..SumeragiNposParameters::default()
