@@ -4996,14 +4996,15 @@ impl Actor {
             iroha_logger::warn!(
                 current_len = current.len(),
                 local = %local_peer,
-                "local peer removed from world state; staying in block-sync follower mode"
+                "local peer removed from world state; disconnecting from p2p"
             );
             self.queue.clear_all();
-            // Keep existing connections so block sync can still fetch updates after removal.
-            if current != self.last_advertised_topology {
-                self.last_advertised_topology.clone_from(&current);
+            if let Some(advertise) =
+                super::topology_update_for_local_removal(&self.last_advertised_topology)
+            {
+                self.last_advertised_topology.clone_from(&advertise);
                 self.peers_gossiper
-                    .update_topology(UpdateTopology(current.into_iter().collect()));
+                    .update_topology(UpdateTopology(advertise.into_iter().collect()));
             }
             return;
         }
@@ -5016,8 +5017,11 @@ impl Actor {
                 .collect()
         });
 
-        let decision =
-            topology_refresh_decision(&current, &self.last_advertised_topology, &stray_online);
+        let (decision, advertise) = super::topology_advertisement_for_refresh(
+            &current,
+            &self.last_advertised_topology,
+            &stray_online,
+        );
         match decision {
             TopologyRefreshDecision::NoPeers => {
                 iroha_logger::debug!("skipping p2p topology advertise: world state has no peers");
@@ -5034,7 +5038,7 @@ impl Actor {
                 topology_len = current.len(),
                 stray_count,
                 stray_peers = ?stray_online,
-                "p2p topology unchanged but network has peers outside world state; re-advertising"
+                "p2p topology unchanged but network has peers outside world state; disconnecting strays"
             ),
             TopologyRefreshDecision::AdvertiseChanged => iroha_logger::info!(
                 topology_len = current.len(),
@@ -5042,18 +5046,7 @@ impl Actor {
             ),
         }
 
-        let mut advertise = current;
-        if matches!(decision, TopologyRefreshDecision::AdvertiseForStrays { .. })
-            && !stray_online.is_empty()
-        {
-            advertise.extend(stray_online.clone());
-            iroha_logger::debug!(
-                advertise_len = advertise.len(),
-                stray_count = stray_online.len(),
-                "keeping connections to peers outside world state to allow block sync"
-            );
-        }
-
+        let advertise = advertise.expect("advertise topology required for decision");
         self.last_advertised_topology.clone_from(&advertise);
         self.peers_gossiper
             .update_topology(UpdateTopology(advertise.into_iter().collect()));

@@ -9594,6 +9594,13 @@ impl<'world> WorldBlock<'world> {
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
+            sorafs_pricing,
+            provider_credit_ledger,
+            provider_owners,
+            da_pin_intents_by_ticket,
+            da_pin_intents_by_alias,
+            da_pin_intents_by_manifest,
+            da_pin_intents_by_lane_epoch,
             pin_manifests,
             manifest_aliases,
             replication_orders,
@@ -9663,6 +9670,13 @@ impl<'world> WorldBlock<'world> {
         capacity_disputes.commit();
         capacity_fee_ledger.commit();
         capacity_declarations.commit();
+        sorafs_pricing.commit();
+        provider_credit_ledger.commit();
+        provider_owners.commit();
+        da_pin_intents_by_ticket.commit();
+        da_pin_intents_by_alias.commit();
+        da_pin_intents_by_manifest.commit();
+        da_pin_intents_by_lane_epoch.commit();
         pin_manifests.commit();
         manifest_aliases.commit();
         replication_orders.commit();
@@ -25920,7 +25934,6 @@ mod tests {
         let catalog =
             LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-        let lane_id = lane_config.primary().lane_id;
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
                 lane_catalog: catalog,
@@ -25928,6 +25941,8 @@ mod tests {
                 ..Default::default()
             })
             .expect("configure nexus");
+        let lane_id = state.nexus_snapshot().lane_config.primary().lane_id;
+        let (missing_owner_id, _) = gen_account_in("missing-owner");
 
         let mut missing_owner = DaPinIntent::new(
             lane_id,
@@ -25936,7 +25951,7 @@ mod tests {
             StorageTicketId::new([0x10; 32]),
             iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x20; 32]),
         );
-        missing_owner.owner = Some(ALICE_ID.clone());
+        missing_owner.owner = Some(missing_owner_id);
 
         let mut valid = DaPinIntent::new(
             lane_id,
