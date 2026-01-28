@@ -7782,6 +7782,13 @@ impl DetachedStateTransactionDelta {
                                 Sumeragi(SumeragiParameter::CommitTimeMs)
                             )
                         }
+                        iroha_data_model::parameter::SumeragiParameter::MinFinalityMs(_) => {
+                            set_param_and_emit!(
+                                params,
+                                iroha_data_model::parameter::Parameter::Sumeragi(x),
+                                Sumeragi(SumeragiParameter::MinFinalityMs)
+                            )
+                        }
                         iroha_data_model::parameter::SumeragiParameter::CollectorsK(_) => {
                             set_param_and_emit!(
                                 params,
@@ -31079,6 +31086,50 @@ mod tests {
         assert_eq!(updated, new_limit);
 
         // Verify ConfigurationEvent::Changed emitted
+        let events = state_block.world.take_external_events();
+        assert!(
+            events.iter().any(|e| {
+                if let EventBox::Data(ev) = e
+                    && matches!(
+                        ev.as_ref(),
+                        data_pre::DataEvent::Configuration(ConfigurationEvent::Changed(_))
+                    )
+                {
+                    return true;
+                }
+                false
+            }),
+            "expected ConfigurationEvent::Changed"
+        );
+    }
+
+    #[test]
+    fn delta_merge_set_sumeragi_min_finality_emits_configuration_event() {
+        use iroha_data_model::{
+            events::data::prelude::ConfigurationEvent,
+            parameter::{Parameter, SumeragiParameter},
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+
+        let mut delta = DetachedStateTransactionDelta::default();
+        let new_min_finality = 222_u64;
+        delta.set_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(
+            new_min_finality,
+        )));
+
+        let _ = delta
+            .merge_into(&mut state_block, &ALICE_ID)
+            .expect("merge ok");
+
+        let updated = state_block.world.parameters().sumeragi().min_finality_ms();
+        assert_eq!(updated, new_min_finality);
+
         let events = state_block.world.take_external_events();
         assert!(
             events.iter().any(|e| {

@@ -261,6 +261,7 @@ pub fn compute_consensus_handshake_caps_from_view(
     let canon = ConsensusGenesisParams {
         block_time_ms: sumeragi.block_time_ms,
         commit_time_ms: sumeragi.commit_time_ms,
+        min_finality_ms: sumeragi.min_finality_ms,
         max_clock_drift_ms: sumeragi.max_clock_drift_ms,
         collectors_k: sumeragi.collectors_k,
         redundant_send_r: sumeragi.collectors_redundant_send_r,
@@ -603,6 +604,7 @@ mod tests {
         let permissioned_params = ConsensusGenesisParams {
             block_time_ms: 1000,
             commit_time_ms: 1000,
+            min_finality_ms: 100,
             max_clock_drift_ms: 500,
             collectors_k: 1,
             redundant_send_r: 1,
@@ -615,6 +617,7 @@ mod tests {
         let npos_params = ConsensusGenesisParams {
             block_time_ms: 1000,
             commit_time_ms: 1000,
+            min_finality_ms: 100,
             max_clock_drift_ms: 500,
             collectors_k: 3,
             redundant_send_r: 2,
@@ -716,6 +719,7 @@ mod tests {
         let mut p = ConsensusGenesisParams {
             block_time_ms: 2000,
             commit_time_ms: 4000,
+            min_finality_ms: 100,
             max_clock_drift_ms: 1000,
             collectors_k: 1,
             redundant_send_r: 1,
@@ -737,6 +741,7 @@ mod tests {
         let mut p = ConsensusGenesisParams {
             block_time_ms: 2000,
             commit_time_ms: 4000,
+            min_finality_ms: 100,
             max_clock_drift_ms: 1000,
             collectors_k: 3,
             redundant_send_r: 2,
@@ -783,6 +788,7 @@ mod tests {
         let p1 = ConsensusGenesisParams {
             block_time_ms: 2000,
             commit_time_ms: 4000,
+            min_finality_ms: 100,
             max_clock_drift_ms: 1000,
             collectors_k: 1,
             redundant_send_r: 1,

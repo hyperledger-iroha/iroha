@@ -52,6 +52,25 @@ to `0` disables the guard entirely. Ensure your environment leaves enough CPU he
 first few seconds of every integration suite so peers can reach block 1 without tripping the
 watchdog.
 
+### Unit-test networking (`IROHA_TEST_REAL_NETWORK`)
+
+Unit tests in `iroha_core` default to closed P2P handles to avoid cross-test network races.
+Opt in to real networking only when a unit test must exercise OS-level socket behavior that
+cannot be covered by integration tests or mocked channels.
+
+Use real P2P in unit tests only if all of the following are true:
+
+- The behavior depends on actual socket binding/accept/backpressure or TLS handshakes.
+- The test runs with explicit timeouts and cleans up sockets; no reliance on shared ports.
+- The test doc comment explains why integration tests are insufficient for the scenario.
+
+Otherwise, keep unit tests hermetic and cover network flows in `integration_tests` or Izanami
+scenarios. To run opt-in tests locally:
+
+```bash
+IROHA_TEST_REAL_NETWORK=1 cargo test -p iroha_core <test_name> -- --nocapture
+```
+
 ## Log Collection and Analysis
 
 Start from a clean run directory so previous artifacts do not hide new issues. The scripts below collect logs in formats that downstream Norito tooling can consume.
@@ -65,6 +84,13 @@ Start from a clean run directory so previous artifacts do not hide new issues. T
   ```
 
 Collect a full bundle (integration, Python, telemetry) before opening an issue so the maintainers can replay the Norito traces.
+
+### Izanami validation timing logs
+
+When profiling validation latency in Izanami runs, enable main-loop debug logs so each block
+emits a `block validation timings` line with `stateless_ms`, `execution_ms`, and `total_ms`.
+Use `RUST_LOG=iroha_core::sumeragi::main_loop=debug` (or append it to `--log-filter`) and capture
+the peer logs for analysis.
 
 ## Next Steps
 

@@ -37,7 +37,7 @@ translator: manual
 - `GET /v1/sumeragi/collectors`
   - コレクタプランを決定論的にエクスポート。`mode`、計画 `(height, view)`（`height` は現在のチェーン高）、`collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, 並び順を維持したコレクタ一覧、および NPoS 有効時の `epoch_seed` (hex)。
 - `GET /v1/sumeragi/params`
-  - オンチェーンの Sumeragi パラメータ `{ block_time_ms, commit_time_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`。
+  - オンチェーンの Sumeragi パラメータ `{ block_time_ms, commit_time_ms, min_finality_ms, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`。
   - `da_enabled` が true の場合、コミットは `availability evidence` を待機します（ローカルの RBC `DELIVER` は条件ではありません）。後述のエンドポイントで RBC の輸送状況を確認できます。
 - `GET /v1/sumeragi/rbc`
   - Reliable Broadcast の集計カウンター `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`。
