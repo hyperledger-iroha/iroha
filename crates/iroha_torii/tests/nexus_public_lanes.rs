@@ -284,17 +284,15 @@ fn seed_public_lane_state(
     let peer_id = PeerId::from(validator_keypair.public_key().clone());
     let pop = iroha_crypto::bls_normal_pop_prove(validator_keypair.private_key())
         .expect("PoP prove for validator keypair");
+    let consensus_pop = pop.clone();
     RegisterPeerWithPop::new(peer_id.clone(), pop)
         .execute(validator, &mut tx)
         .expect("peer registration");
 
-    let consensus_keypair = KeyPair::from_seed(vec![0x03; 32], Algorithm::BlsNormal);
-    let consensus_pop = iroha_crypto::bls_normal_pop_prove(consensus_keypair.private_key())
-        .expect("PoP prove for consensus keypair");
     let consensus_id = ConsensusKeyId::new(ConsensusKeyRole::Validator, "main");
     let consensus_record = ConsensusKeyRecord {
         id: consensus_id.clone(),
-        public_key: consensus_keypair.public_key().clone(),
+        public_key: validator_keypair.public_key().clone(),
         pop: Some(consensus_pop),
         activation_height: 1,
         expiry_height: None,

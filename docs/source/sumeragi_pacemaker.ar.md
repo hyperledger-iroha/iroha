@@ -17,7 +17,7 @@ translation_last_reviewed: 2026-01-01
 
 توضح هذه المذكرة سياسة pacemaker (timer) في Sumeragi وتقدم ارشادات للمشغلين وامثلة. تتحكم المؤقتات في وقت تقديم القادة للمقترحات ومتى يقترح المدققون/يدخلون view جديدة بعد الخمول.
 
-الحالة: تم تنفيذ نافذة اساس مشتقة من EMA، وارضية RTT، وحدود jitter/backoff قابلة للضبط. اصبح فاصل اقتراح pacemaker الان محصورا بين هدف block-time و propose timeout مع ارضية RTT، ومقيدا بـ `sumeragi.advanced.pacemaker.max_backoff_ms`. يتم تطبيق jitter بشكل حتمي لكل عقدة ولكل (height, view).
+الحالة: تم تنفيذ نافذة اساس مشتقة من EMA، وارضية RTT، وحدود jitter/backoff قابلة للضبط. اصبح فاصل اقتراح pacemaker الان محصورا بين هدف block-time و propose timeout مع ارضية RTT، ومقيدا بـ `sumeragi.advanced.pacemaker.max_backoff_ms`. (`effective_block_time_ms` = `block_time_ms` scaled by `pacing_factor_bps`). يتم تطبيق jitter بشكل حتمي لكل عقدة ولكل (height, view).
 
 ## المفاهيم
 - النافذة الاساسية: متوسط متحرك اسي لمراحل التوافق المرصودة
@@ -29,7 +29,7 @@ translation_last_reviewed: 2026-01-01
 - مضاعف backoff: `sumeragi.advanced.pacemaker.backoff_multiplier` (الافتراضي 1). كل timeout يضيف `base * multiplier` الى النافذة الحالية.
 - ارضية RTT: `avg_rtt_ms * sumeragi.advanced.pacemaker.rtt_floor_multiplier` (الافتراضي 2). تمنع timeouts العدوانية على الروابط عالية الكمون.
 - السقف: `sumeragi.advanced.pacemaker.max_backoff_ms` (الافتراضي 60_000 ms). حد اعلى صارم للنافذة.
-- بذرة فاصل الاقتراح: `max(block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` ولا تتجاوز `sumeragi.advanced.pacemaker.max_backoff_ms`. هذا هو الفاصل في الحالة المستقرة حتى دون backoff.
+- بذرة فاصل الاقتراح: `max(effective_block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` ولا تتجاوز `sumeragi.advanced.pacemaker.max_backoff_ms`. (`effective_block_time_ms` = `block_time_ms` scaled by `pacing_factor_bps`). هذا هو الفاصل في الحالة المستقرة حتى دون backoff.
 
 تحديث النافذة الفعلية عند timeout:
 - `window = min(cap, max(window + base * backoff_mul, avg_rtt * rtt_floor_mul))`
