@@ -182,10 +182,13 @@ pub(super) fn detect_proposal_mismatch(
     }
     let expected_state_root = state_root_from_header(header);
     if proposal.header.state_root != expected_state_root {
-        return Some(ProposalMismatch::StateRoot {
-            expected: expected_state_root,
-            observed: proposal.header.state_root,
-        });
+        let zero_hash = Hash::prehashed([0; Hash::LENGTH]);
+        if proposal.header.state_root != zero_hash {
+            return Some(ProposalMismatch::StateRoot {
+                expected: expected_state_root,
+                observed: proposal.header.state_root,
+            });
+        }
     }
     if &proposal.payload_hash != payload_hash {
         return Some(ProposalMismatch::PayloadHash {
