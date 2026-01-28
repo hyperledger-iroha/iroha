@@ -10,7 +10,7 @@ seiyaku LendingSimple {
 
   // Borrow after checking ratio >= min_ratio_bps.
   kotoage fn borrow(user: AccountId,
-                    vault_account: AccountId,
+                    _vault_account: AccountId,
                     debt_asset: AssetDefinitionId,
                     amount: int,
                     collateral_value: int,

@@ -26,9 +26,8 @@ use iroha_config::parameters::actual::{
     SoranetHandshake, SoranetPrivacy, SoranetVpn, Sumeragi as SumeragiConfig, SumeragiBlock,
     SumeragiCollectors, SumeragiDa, SumeragiDebug, SumeragiDebugRbc, SumeragiFinality,
     SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNpos, SumeragiNposElection,
-    SumeragiNposReconfig, SumeragiNposTimeoutOverrides, SumeragiNposTimeouts, SumeragiNposVrf,
-    SumeragiPacemaker, SumeragiPersistence, SumeragiQueues, SumeragiRbc, SumeragiRecovery,
-    SumeragiWorker,
+    SumeragiNposReconfig, SumeragiNposTimeoutOverrides, SumeragiNposVrf, SumeragiPacemaker,
+    SumeragiPersistence, SumeragiQueues, SumeragiRbc, SumeragiRecovery, SumeragiWorker,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
 use iroha_data_model::{
@@ -35144,6 +35143,8 @@ async fn stale_new_view_vote_updates_highest_qc_without_tracking() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn new_view_highest_qc_fetch_uses_commit_qc_history_fallback_when_roster_empty() {
+    use iroha_data_model::consensus::ConsensusKeyStatus;
+
     let _guard = super::status::qc_status_test_guard();
     super::status::reset_commit_certs_for_tests();
     let mut harness = test_actor_harness(4).await;
@@ -35164,12 +35165,55 @@ async fn new_view_highest_qc_fetch_uses_commit_qc_history_fallback_when_roster_e
     let missing_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x77; Hash::LENGTH]));
 
-    let roster = actor.effective_commit_topology();
-    let topology = super::network_topology::Topology::new(roster.clone());
-    let signers: BTreeSet<ValidatorIndex> = (0..roster.len())
+    let commit_topology = actor.effective_commit_topology();
+    assert!(
+        !commit_topology.is_empty(),
+        "commit topology should be available for commit QC history"
+    );
+
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        {
+            let mut block = state.world.block();
+            let key_ids: Vec<_> = block
+                .consensus_keys
+                .iter()
+                .map(|(id, _)| id.clone())
+                .collect();
+            for key_id in key_ids {
+                if let Some(mut record) = block.consensus_keys.get(&key_id).cloned() {
+                    record.status = ConsensusKeyStatus::Disabled;
+                    record.expiry_height = Some(0);
+                    block.consensus_keys.insert(key_id, record);
+                }
+            }
+            block.commit();
+        }
+        {
+            let mut block = state.commit_topology.block();
+            let mut tx = block.transaction();
+            *tx = Vec::new();
+            tx.apply();
+            block.commit();
+        }
+    }
+
+    assert!(
+        actor.effective_commit_topology().is_empty(),
+        "effective commit topology should be empty to require commit QC history fallback"
+    );
+    let view_snapshot = actor.state.view();
+    assert!(
+        view_snapshot.commit_topology().is_empty(),
+        "commit topology snapshot should be empty to avoid topology fallback"
+    );
+    drop(view_snapshot);
+
+    let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let signers: BTreeSet<ValidatorIndex> = (0..commit_topology.len())
         .filter_map(|idx| ValidatorIndex::try_from(idx).ok())
         .collect();
-    let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+    let signers_bitmap = super::build_signers_bitmap(&signers, commit_topology.len());
     let commit_qc_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x66; Hash::LENGTH]));
     assert_ne!(
@@ -37095,13 +37139,15 @@ async fn assemble_proposal_defers_when_highest_qc_block_missing() {
         !assembled,
         "proposal assembly should defer when highest QC block is missing locally"
     );
-    assert!(
-        actor
-            .pending
-            .missing_block_requests
-            .contains_key(&missing_hash),
-        "missing-block fetch should be scheduled for the highest QC block"
-    );
+    let request = actor
+        .pending
+        .missing_block_requests
+        .get(&missing_hash)
+        .expect("missing-block fetch should be scheduled for the highest QC block");
+    assert_eq!(request.height, highest_qc.height);
+    assert_eq!(request.view, highest_qc.view);
+    assert_eq!(request.phase, Phase::Commit);
+    assert_eq!(request.priority, super::MissingBlockPriority::Consensus);
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
     assert!(
         !posts.iter().any(|post| matches!(

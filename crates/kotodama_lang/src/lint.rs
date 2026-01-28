@@ -245,6 +245,9 @@ fn lint_nonliteral_state_map_keys(program: &Program, warnings: &mut Vec<LintWarn
     }
     for item in &program.items {
         if let Item::Function(func) = item {
+            if !func.modifiers.access_reads.is_empty() || !func.modifiers.access_writes.is_empty() {
+                continue;
+            }
             lint_block_map_keys(&func.body, &state_maps, warnings);
         }
     }
@@ -371,6 +374,9 @@ fn lint_state_path_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
 fn lint_opaque_access_hints(program: &Program, warnings: &mut Vec<LintWarning>) {
     for item in &program.items {
         if let Item::Function(func) = item {
+            if !func.modifiers.access_reads.is_empty() || !func.modifiers.access_writes.is_empty() {
+                continue;
+            }
             lint_opaque_access_block(&func.body, warnings);
         }
     }
@@ -1634,6 +1640,22 @@ mod tests {
     }
 
     #[test]
+    fn lint_nonliteral_state_map_key_with_explicit_access_is_silent() {
+        let program = parse(
+            r#"state Foo: Map<Name, int>;
+#[access(read="*", write="*")]
+fn main(k: Name) { let _x = Foo[k]; }"#,
+        )
+        .expect("parse map with access hints");
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.code == "nonliteral-state-map-key")
+        );
+    }
+
+    #[test]
     fn lint_nonliteral_state_path_warns() {
         let program =
             parse("fn main() { let p = name(\"foo\"); state_get(p); }").expect("parse state path");
@@ -1655,6 +1677,17 @@ mod tests {
             parse("fn main() { execute_query(json(\"{}\")); }").expect("parse opaque call");
         let warnings = lint_program(&program);
         assert!(warnings.iter().any(|w| w.code == "opaque-access-hints"));
+    }
+
+    #[test]
+    fn lint_opaque_access_hints_with_explicit_access_is_silent() {
+        let program = parse(
+            r#"#[access(read="*", write="*")]
+fn main() { subscription_bill(); }"#,
+        )
+        .expect("parse opaque call with access hints");
+        let warnings = lint_program(&program);
+        assert!(!warnings.iter().any(|w| w.code == "opaque-access-hints"));
     }
 
     #[test]

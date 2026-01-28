@@ -3277,7 +3277,7 @@ mod tests {
     fn incoming_block_message_waits_when_block_queue_full() {
         const CAP: usize = 1;
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
-        let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(CAP);
         let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
         let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
@@ -3592,7 +3592,7 @@ mod tests {
     fn try_incoming_block_message_waits_when_rbc_ready_queue_full() {
         const CAP: usize = 1;
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
-        let (block_tx, block_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
         let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(CAP);
         let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
