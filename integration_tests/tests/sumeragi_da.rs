@@ -1489,11 +1489,26 @@ async fn sumeragi_idle_view_change_recovers_after_leader_shutdown() -> Result<()
         .with_config_layer(|layer| {
             layer
                 .write(["sumeragi", "consensus_mode"], "permissioned")
-                .write(["sumeragi", "npos", "timeouts", "propose_ms"], 200_i64)
-                .write(["sumeragi", "npos", "timeouts", "prevote_ms"], 400_i64)
-                .write(["sumeragi", "npos", "timeouts", "precommit_ms"], 600_i64)
-                .write(["sumeragi", "npos", "timeouts", "commit_ms"], 800_i64)
-                .write(["sumeragi", "npos", "timeouts", "da_ms"], 400_i64)
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
+                    200_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
+                    400_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
+                    600_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
+                    800_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
+                    400_i64,
+                )
                 .write(["sumeragi", "pacemaker", "max_backoff_ms"], 2_000_i64)
                 .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 1_i64);
         });

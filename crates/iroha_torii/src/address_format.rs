@@ -53,6 +53,9 @@ impl AddressFormatPreference {
 
     /// Render a canonical literal string (IH58) according to the preference.
     pub fn display_from_literal(self, literal: &str) -> String {
+        #[cfg(test)]
+        crate::ensure_test_domain_selector_resolver();
+
         match self {
             Self::Ih58 => literal.to_string(),
             Self::Compressed => {
@@ -103,9 +106,17 @@ impl AddressFormatPreference {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{LazyLock, Mutex};
+
+    use iroha_data_model::account::{
+        account_domain_selector_resolver, clear_account_domain_selector_resolver,
+        set_account_domain_selector_resolver,
+    };
     use iroha_test_samples::ALICE_ID;
 
     use super::*;
+
+    static RESOLVER_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     #[test]
     fn from_param_defaults_and_accepts_aliases() {
@@ -164,5 +175,25 @@ mod tests {
             AddressFormatPreference::Compressed.display_from_literal(invalid_literal),
             invalid_literal
         );
+    }
+
+    #[test]
+    fn ensure_test_domain_selector_resolver_enables_parsing() {
+        let _lock = RESOLVER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = account_domain_selector_resolver();
+        clear_account_domain_selector_resolver();
+
+        crate::ensure_test_domain_selector_resolver();
+
+        let literal = ALICE_ID.to_string();
+        let parsed = AccountId::parse(&literal).expect("resolver should parse IH58 literal");
+        assert_eq!(parsed.account_id(), &*ALICE_ID);
+
+        clear_account_domain_selector_resolver();
+        if let Some(resolver) = previous {
+            set_account_domain_selector_resolver(resolver);
+        }
     }
 }

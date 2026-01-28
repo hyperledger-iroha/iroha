@@ -4,11 +4,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
+    sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
 
@@ -32,7 +28,6 @@ use iroha_data_model::{
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
 use iroha_genesis::GenesisBlock;
-use iroha_logger::warn;
 use mv::storage::StorageReadOnly;
 use norito::codec::Encode as _;
 
@@ -44,7 +39,6 @@ use crate::{
 /// Stack size reserved for the consensus worker thread to handle deep recursion safely.
 const SUMERAGI_STACK_SIZE_BYTES: usize = 64 * 1024 * 1024;
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
-static WARNED_DEPRECATED_NPOS_BLOCK_TIME: AtomicBool = AtomicBool::new(false);
 
 /// Build the initial validator topology from trusted peers.
 /// Enforces BLS-normal keys and, when configured with a complete `PoP` map, valid `PoP` entries.
@@ -355,8 +349,8 @@ pub(crate) fn load_npos_epoch_params(
     )
 }
 
-/// Resolve the pacemaker block time from on-chain Sumeragi parameters, falling back to config.
-pub(crate) fn resolve_npos_block_time(view: &StateView<'_>, fallback: &SumeragiNpos) -> Duration {
+/// Resolve the pacemaker block time from on-chain Sumeragi parameters.
+pub(crate) fn resolve_npos_block_time(view: &StateView<'_>) -> Duration {
     let params = view.world.parameters().sumeragi();
     let min_finality_ms = if params.min_finality_ms() == 0 {
         iroha_data_model::parameter::system::SumeragiParameters::default().min_finality_ms()
@@ -365,7 +359,9 @@ pub(crate) fn resolve_npos_block_time(view: &StateView<'_>, fallback: &SumeragiN
     };
     let min_finality = Duration::from_millis(min_finality_ms.max(1));
     let mut block_time = if params.block_time() == Duration::ZERO {
-        fallback.block_time.max(Duration::from_millis(1))
+        Duration::from_millis(
+            iroha_data_model::parameter::system::SumeragiParameters::default().block_time_ms(),
+        )
     } else {
         params.block_time()
     };
@@ -380,8 +376,7 @@ pub(crate) fn resolve_npos_timeouts(
     view: &StateView<'_>,
     fallback: &SumeragiNpos,
 ) -> SumeragiNposTimeouts {
-    let block_time = resolve_npos_block_time(view, fallback);
-    let derived = SumeragiNposTimeouts::from_block_time(block_time);
+    let block_time = resolve_npos_block_time(view);
     let min_finality_ms = {
         let params = view.world.parameters().sumeragi();
         if params.min_finality_ms() == 0 {
@@ -398,45 +393,15 @@ pub(crate) fn resolve_npos_timeouts(
             value
         }
     };
-    let Some(params) = view.world.sumeragi_npos_parameters() else {
-        let mut out = fallback.timeouts;
-        out.propose = clamp(out.propose);
-        out.prevote = clamp(out.prevote);
-        out.precommit = clamp(out.precommit);
-        out.exec = clamp(out.exec);
-        out.witness = clamp(out.witness);
-        out.commit = clamp(out.commit);
-        out.da = clamp(out.da);
-        out.aggregator = clamp(out.aggregator);
-        return out;
-    };
-    let on_chain_block_ms = view.world.parameters().sumeragi().block_time_ms();
-    if params.block_time_ms() > 0 && params.block_time_ms() != on_chain_block_ms {
-        if !WARNED_DEPRECATED_NPOS_BLOCK_TIME.swap(true, Ordering::Relaxed) {
-            warn!(
-                on_chain_block_time_ms = on_chain_block_ms,
-                npos_block_time_ms = params.block_time_ms(),
-                "on-chain sumeragi_npos_parameters.block_time_ms is deprecated and ignored; update SumeragiParameters.block_time_ms instead"
-            );
-        }
-    }
-    let resolve = |value_ms: u64, fallback: Duration| {
-        let value = if value_ms == 0 {
-            fallback
-        } else {
-            Duration::from_millis(value_ms)
-        };
-        clamp(value)
-    };
-    let mut out = derived;
-    out.propose = resolve(params.timeout_propose_ms(), derived.propose);
-    out.prevote = resolve(params.timeout_prevote_ms(), derived.prevote);
-    out.precommit = resolve(params.timeout_precommit_ms(), derived.precommit);
-    out.commit = resolve(params.timeout_commit_ms(), derived.commit);
-    out.da = resolve(params.timeout_da_ms(), derived.da);
-    out.aggregator = resolve(params.timeout_aggregator_ms(), derived.aggregator);
+    let mut out = fallback.timeouts_overrides.resolve(block_time);
+    out.propose = clamp(out.propose);
+    out.prevote = clamp(out.prevote);
+    out.precommit = clamp(out.precommit);
     out.exec = clamp(out.exec);
     out.witness = clamp(out.witness);
+    out.commit = clamp(out.commit);
+    out.da = clamp(out.da);
+    out.aggregator = clamp(out.aggregator);
     out
 }
 
@@ -1826,59 +1791,43 @@ mod tests {
     }
 
     #[test]
-    fn resolve_npos_block_time_uses_on_chain_or_fallback() {
-        let fallback = SumeragiNpos {
-            block_time: Duration::from_millis(2_500),
-            ..SumeragiNpos::default()
-        };
-
+    fn resolve_npos_block_time_uses_on_chain_or_default() {
         let state = state_with_sumeragi_block_time(1_500);
         let view = state.view();
-        assert_eq!(
-            resolve_npos_block_time(&view, &fallback),
-            Duration::from_millis(1_500)
-        );
+        assert_eq!(resolve_npos_block_time(&view), Duration::from_millis(1_500));
         drop(view);
 
         let state = state_with_sumeragi_block_time(0);
         let view = state.view();
-        assert_eq!(
-            resolve_npos_block_time(&view, &fallback),
-            fallback.block_time
+        let default_block_time = Duration::from_millis(
+            iroha_data_model::parameter::system::SumeragiParameters::default().block_time_ms(),
         );
+        assert_eq!(resolve_npos_block_time(&view), default_block_time);
     }
 
     #[test]
-    fn resolve_npos_timeouts_overrides_config_fields() {
+    fn resolve_npos_timeouts_apply_overrides_and_ignore_on_chain_timeouts() {
         let mut fallback = SumeragiNpos::default();
-        fallback.timeouts.propose = Duration::from_millis(10);
-        fallback.timeouts.prevote = Duration::from_millis(20);
-        fallback.timeouts.precommit = Duration::from_millis(30);
-        fallback.timeouts.exec = Duration::from_millis(40);
-        fallback.timeouts.witness = Duration::from_millis(50);
-        fallback.timeouts.commit = Duration::from_millis(60);
-        fallback.timeouts.da = Duration::from_millis(70);
-        fallback.timeouts.aggregator = Duration::from_millis(80);
+        fallback.timeouts_overrides.propose = Some(Duration::from_millis(150));
+        fallback.timeouts_overrides.prevote = Some(Duration::from_millis(160));
+        fallback.timeouts_overrides.precommit = Some(Duration::from_millis(170));
+        fallback.timeouts_overrides.commit = Some(Duration::from_millis(180));
+        fallback.timeouts_overrides.da = Some(Duration::from_millis(190));
+        fallback.timeouts_overrides.aggregator = Some(Duration::from_millis(200));
 
         let state = state_with_npos_params(SumeragiNposParameters {
-            timeout_propose_ms: 100,
-            timeout_prevote_ms: 110,
-            timeout_precommit_ms: 120,
-            timeout_commit_ms: 0,
-            timeout_da_ms: 140,
-            timeout_aggregator_ms: 150,
+            epoch_seed: [0xAA; 32],
             ..SumeragiNposParameters::default()
         });
         let view = state.view();
         let resolved = resolve_npos_timeouts(&view, &fallback);
-        let derived =
-            SumeragiNposTimeouts::from_block_time(resolve_npos_block_time(&view, &fallback));
-        assert_eq!(resolved.propose, Duration::from_millis(100));
-        assert_eq!(resolved.prevote, Duration::from_millis(110));
-        assert_eq!(resolved.precommit, Duration::from_millis(120));
-        assert_eq!(resolved.commit, derived.commit);
-        assert_eq!(resolved.da, Duration::from_millis(140));
-        assert_eq!(resolved.aggregator, Duration::from_millis(150));
+        let derived = SumeragiNposTimeouts::from_block_time(resolve_npos_block_time(&view));
+        assert_eq!(resolved.propose, Duration::from_millis(150));
+        assert_eq!(resolved.prevote, Duration::from_millis(160));
+        assert_eq!(resolved.precommit, Duration::from_millis(170));
+        assert_eq!(resolved.commit, Duration::from_millis(180));
+        assert_eq!(resolved.da, Duration::from_millis(190));
+        assert_eq!(resolved.aggregator, Duration::from_millis(200));
         assert_eq!(resolved.exec, derived.exec);
         assert_eq!(resolved.witness, derived.witness);
     }
@@ -10409,7 +10358,7 @@ impl SumeragiWorker {
             let (block_time, commit_time) = match mode {
                 ConsensusMode::Permissioned => resolve_sumeragi_timeouts(params, &fallback_params),
                 ConsensusMode::Npos => {
-                    let block_time = resolve_npos_block_time(&view, &config.npos);
+                    let block_time = resolve_npos_block_time(&view);
                     let commit_time = resolve_npos_timeouts(&view, &config.npos).commit;
                     (block_time, commit_time)
                 }

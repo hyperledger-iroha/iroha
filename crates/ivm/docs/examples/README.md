@@ -50,7 +50,7 @@ Contents
 - `11_detail_and_transfer.ko`: Pointer-ABI typed calls for metadata write and asset transfer.
 - `12_nft_flow.ko`: Create an NFT and transfer it to another account.
 - `13_register_and_mint.ko`: Register a new asset and mint to an account.
-- `14_map_sum_take2.ko`: Deterministic two-iteration map sum via `.take(2)`.
+- `14_map_sum_take2.ko`: Deterministic two-iteration map sum via `.take(2)` on a state map.
 - `15_modulo.ko`: `%` modulo operator, returns `a % b`.
  - `16_dynamic_take.ko`: Dynamic `.take(n)` guarded iteration (feature-gated).
  - `17_dynamic_range.ko`: Dynamic `.range(start,end)` guarded iteration (feature-gated).
@@ -77,6 +77,7 @@ Notes:
 - The compiler inserts runtime assertions to ensure bounds are non-negative and consistent (e.g., `end >= start`).
 - Lowering emits up to K guarded iterations with `if (i < n)` checks (default K = 2) to avoid extra body executions.
 - You can tune K via CLI `--iter-cap <u8>` or programmatically with `CompilerOptions { dynamic_iter_cap, .. }`.
+- Dynamic bounds are supported on state maps; in-memory maps accept only literal bounds (max 1 element).
 - Run `koto_lint` on source files to review Kotodama lint warnings before invoking the compiler.
 
 Implementation notes:

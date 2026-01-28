@@ -1,9 +1,27 @@
 {
-  "code_hash": "hash:5DEC0956C761A3A191772B0B8BDC1AFE41FB8146572E16CEFCB91FC2926A6D1F#5ADE",
-  "abi_hash": "hash:377F7125A0F20D40F65ED5E3A179BC5E04D68A385570B54D67D961861E8D9F83#1C50",
+  "code_hash": "hash:EDEA11E0A89418D1D02BC585D129FAFF9BCD7DF9FBB6DCF8E52FA84C8F72B585#0AAC",
+  "abi_hash": "hash:BA1786031C3D0CDBD607DEBDAE1CC611A0807BF9CF49ED349A0632855724969F#FBDF",
   "compiler_fingerprint": null,
   "features_bitmap": null,
-  "access_set_hints": null,
+  "access_set_hints": {
+    "read_keys": [
+      "*",
+      "account:34mSYn6ySFTASoiVzNGuyBkedDcm9SLAm8D4armtHpLBJXKfftK4bMYxGesgte5bFs5JUu56R",
+      "account:34mSYn6ySFTASoiVzNGuyBkedDctAWSV9HsL6UDkU8oviFso4KrEhWrHg6Rtf91b93PRr2ygK",
+      "account:34mSYn6ySFTASoiVzNGuyBkedDdTPRMVs9yVTo92tv5Dqb1t5UL2LZBRB4A1tDAZoznFh6ESs",
+      "asset:xor##34mSYn6ySFTASoiVzNGuyBkedDcm9SLAm8D4armtHpLBJXKfftK4bMYxGesgte5bFs5JUu56R",
+      "asset:xor##34mSYn6ySFTASoiVzNGuyBkedDctAWSV9HsL6UDkU8oviFso4KrEhWrHg6Rtf91b93PRr2ygK",
+      "asset:xor##34mSYn6ySFTASoiVzNGuyBkedDdTPRMVs9yVTo92tv5Dqb1t5UL2LZBRB4A1tDAZoznFh6ESs",
+      "asset_def:xor#sora",
+      "domain:sora"
+    ],
+    "write_keys": [
+      "*",
+      "asset:xor##34mSYn6ySFTASoiVzNGuyBkedDcm9SLAm8D4armtHpLBJXKfftK4bMYxGesgte5bFs5JUu56R",
+      "asset:xor##34mSYn6ySFTASoiVzNGuyBkedDctAWSV9HsL6UDkU8oviFso4KrEhWrHg6Rtf91b93PRr2ygK",
+      "asset:xor##34mSYn6ySFTASoiVzNGuyBkedDdTPRMVs9yVTo92tv5Dqb1t5UL2LZBRB4A1tDAZoznFh6ESs"
+    ]
+  },
   "entrypoints": [
     {
       "name": "main",
@@ -13,12 +31,31 @@
       },
       "permission": "MarketUser",
       "read_keys": [
-        
+        "asset:xor##34mSYn6ySFTASoiVzNGuyBkedDdTPRMVs9yVTo92tv5Dqb1t5UL2LZBRB4A1tDAZoznFh6ESs",
+        "account:34mSYn6ySFTASoiVzNGuyBkedDdTPRMVs9yVTo92tv5Dqb1t5UL2LZBRB4A1tDAZoznFh6ESs",
+        "domain:sora",
+        "asset_def:xor#sora",
+        "asset:xor##34mSYn6ySFTASoiVzNGuyBkedDcm9SLAm8D4armtHpLBJXKfftK4bMYxGesgte5bFs5JUu56R",
+        "account:34mSYn6ySFTASoiVzNGuyBkedDcm9SLAm8D4armtHpLBJXKfftK4bMYxGesgte5bFs5JUu56R",
+        "asset:xor##34mSYn6ySFTASoiVzNGuyBkedDctAWSV9HsL6UDkU8oviFso4KrEhWrHg6Rtf91b93PRr2ygK",
+        "account:34mSYn6ySFTASoiVzNGuyBkedDctAWSV9HsL6UDkU8oviFso4KrEhWrHg6Rtf91b93PRr2ygK",
+        "*"
       ],
       "write_keys": [
+        "asset:xor##34mSYn6ySFTASoiVzNGuyBkedDdTPRMVs9yVTo92tv5Dqb1t5UL2LZBRB4A1tDAZoznFh6ESs",
+        "asset:xor##34mSYn6ySFTASoiVzNGuyBkedDcm9SLAm8D4armtHpLBJXKfftK4bMYxGesgte5bFs5JUu56R",
+        "asset:xor##34mSYn6ySFTASoiVzNGuyBkedDctAWSV9HsL6UDkU8oviFso4KrEhWrHg6Rtf91b93PRr2ygK",
+        "*"
+      ],
+      "access_hints_complete": true,
+      "access_hints_skipped": [
+        
+      ],
+      "triggers": [
         
       ]
     }
   ],
+  "kotoba": null,
   "provenance": null
 }

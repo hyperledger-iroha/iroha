@@ -168,7 +168,7 @@ cargo run -p iroha_cli --features sm -- \
      multihash ہونا چاہیے (بشمول GOST TC26 variants جب متعلقہ feature
      فعال ہو)۔
    - Sora Nexus کے public dataspace میں `--consensus-mode npos` لازمی ہے اور staged cutovers سپورٹ نہیں ہوتے؛ دوسرے Iroha3 dataspaces میں `permissioned` یا `npos` چل سکتے ہیں۔ Iroha2 میں default موڈ `permissioned` ہے۔
-   - جب `npos` منتخب کیا جائے تو Kagami `sumeragi_npos_parameters` payload seed کرتا ہے جو NPoS pacemaker timings، collectors fan-out، election policy اور reconfiguration windows کو کنٹرول کرتا ہے؛ normalization/signing اسے signed block میں `SetParameter` instructions میں بدل دیتا ہے۔
+   - جب `npos` منتخب کیا جائے تو Kagami `sumeragi_npos_parameters` payload seed کرتا ہے جو collectors fan-out، election policy اور reconfiguration windows کو کنٹرول کرتا ہے؛ normalization/signing اسے signed block میں `SetParameter` instructions میں بدل دیتا ہے۔
 
 2. edit کے دوران validate کریں:
 
@@ -217,7 +217,7 @@ sequence deterministically execute کریں:
   times، drift وغیرہ)، Block (زیادہ سے زیادہ ٹرانزیکشنز)، Transaction
   (زیادہ سے زیادہ instructions اور bytecode size)، executor اور smart
   contracts کے limits (fuel، memory، depth)، اور custom parameters۔ Kagami
-  `Sumeragi::NextMode` اور `sumeragi_npos_parameters` payload (NPoS timings، election، reconfiguration) کو
+  `Sumeragi::NextMode` اور `sumeragi_npos_parameters` payload (election، reconfiguration) کو
   `parameters` block میں seed کرتا ہے، اور signed block میں generated
   `SetParameter` instructions شامل ہوتی ہیں تاکہ startup پر consensus
   knobs کو on‑chain state سے apply کیا جا سکے۔

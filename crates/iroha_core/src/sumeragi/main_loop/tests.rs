@@ -26,8 +26,9 @@ use iroha_config::parameters::actual::{
     SoranetHandshake, SoranetPrivacy, SoranetVpn, Sumeragi as SumeragiConfig, SumeragiBlock,
     SumeragiCollectors, SumeragiDa, SumeragiDebug, SumeragiDebugRbc, SumeragiFinality,
     SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNpos, SumeragiNposElection,
-    SumeragiNposReconfig, SumeragiNposTimeouts, SumeragiNposVrf, SumeragiPacemaker,
-    SumeragiPersistence, SumeragiQueues, SumeragiRbc, SumeragiRecovery, SumeragiWorker,
+    SumeragiNposReconfig, SumeragiNposTimeoutOverrides, SumeragiNposTimeouts, SumeragiNposVrf,
+    SumeragiPacemaker, SumeragiPersistence, SumeragiQueues, SumeragiRbc, SumeragiRecovery,
+    SumeragiWorker,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
 use iroha_data_model::{
@@ -735,6 +736,15 @@ fn update_pending_mode_flip_sets_and_clears() {
 }
 
 #[test]
+fn duration_ms_u64_clamps_large_values() {
+    assert_eq!(super::duration_ms_u64(Duration::from_millis(1_500)), 1_500);
+    assert_eq!(
+        super::duration_ms_u64(Duration::from_secs(u64::MAX)),
+        u64::MAX
+    );
+}
+
+#[test]
 fn staged_mode_info_maps_next_mode_tags() {
     use iroha_data_model::parameter::system::{SumeragiConsensusMode, SumeragiParameters};
 
@@ -986,6 +996,89 @@ async fn actor_new_aligns_epoch_to_current_height_without_vrf_record() {
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn update_effective_timing_status_populates_snapshot() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.collectors.k = 3;
+    consensus_cfg.collectors.redundant_send_r = 2;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    actor.subsystems.propose.pacemaker.propose_interval = Duration::from_millis(700);
+    actor.subsystems.propose.collector_redundant_limit = 3;
+
+    let (collectors_k, _) = actor.collector_plan_params_for_mode(actor.consensus_mode);
+    let view = actor.state.view();
+    let params = view.world.parameters().sumeragi();
+    let block_time = actor.block_time_for_mode(&view, actor.consensus_mode);
+    let commit_time = actor.commit_timeout_for_mode(&view, actor.consensus_mode);
+    let commit_quorum_timeout = commit_quorum_timeout_from_durations(
+        block_time,
+        commit_time,
+        params.da_enabled(),
+        actor.da_quorum_timeout_multiplier(),
+    );
+    let availability_timeout = availability_timeout_from_quorum(
+        commit_quorum_timeout,
+        params.da_enabled(),
+        actor.config.da.availability_timeout_multiplier.max(1),
+        actor.config.da.availability_timeout_floor,
+    );
+    let expected_npos_timeouts = matches!(actor.consensus_mode, ConsensusMode::Npos).then(|| {
+        let timeouts = super::resolve_npos_timeouts(&view, &actor.config.npos);
+        super::status::NposTimeoutsSnapshot {
+            propose_ms: super::duration_ms_u64(timeouts.propose),
+            prevote_ms: super::duration_ms_u64(timeouts.prevote),
+            precommit_ms: super::duration_ms_u64(timeouts.precommit),
+            commit_ms: super::duration_ms_u64(timeouts.commit),
+            da_ms: super::duration_ms_u64(timeouts.da),
+            aggregator_ms: super::duration_ms_u64(timeouts.aggregator),
+            exec_ms: super::duration_ms_u64(timeouts.exec),
+            witness_ms: super::duration_ms_u64(timeouts.witness),
+        }
+    });
+
+    actor.update_effective_timing_status(&view, actor.consensus_mode);
+    let snap = super::status::snapshot();
+    assert_eq!(
+        snap.effective_min_finality_ms,
+        params.effective_min_finality_ms()
+    );
+    assert_eq!(
+        snap.effective_block_time_ms,
+        super::duration_ms_u64(block_time)
+    );
+    assert_eq!(
+        snap.effective_commit_time_ms,
+        super::duration_ms_u64(commit_time)
+    );
+    assert_eq!(
+        snap.effective_commit_quorum_timeout_ms,
+        super::duration_ms_u64(commit_quorum_timeout)
+    );
+    assert_eq!(
+        snap.effective_availability_timeout_ms,
+        super::duration_ms_u64(availability_timeout)
+    );
+    assert_eq!(
+        snap.effective_pacemaker_interval_ms,
+        super::duration_ms_u64(actor.subsystems.propose.pacemaker.propose_interval)
+    );
+    assert_eq!(
+        snap.effective_collectors_k,
+        u64::try_from(collectors_k).unwrap_or(u64::MAX)
+    );
+    assert_eq!(
+        snap.effective_redundant_send_r,
+        u64::from(actor.subsystems.propose.collector_redundant_limit.max(1))
+    );
+    assert_eq!(snap.effective_npos_timeouts, expected_npos_timeouts);
+
+    harness.shutdown.send();
+}
+
 fn block_with_da_commitment(manifest_hash: ManifestDigest) -> SignedBlock {
     let mut record = sample_da_record(Some(Hash::prehashed([0x77; 32])));
     record.manifest_hash = manifest_hash;
@@ -1150,8 +1243,7 @@ fn test_sumeragi_config() -> SumeragiConfig {
             allowed_hsm_providers: BTreeSet::new(),
         },
         npos: SumeragiNpos {
-            block_time: Duration::from_secs(1),
-            timeouts: SumeragiNposTimeouts::default(),
+            timeouts_overrides: SumeragiNposTimeoutOverrides::default(),
             vrf: SumeragiNposVrf::default(),
             reconfig: SumeragiNposReconfig::default(),
             election: SumeragiNposElection::default(),
@@ -1210,19 +1302,11 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
     consensus_cfg.npos.epoch_length_blocks = 3;
-    consensus_cfg.npos.block_time = Duration::from_millis(1000);
     consensus_cfg.collectors.k = 1;
     consensus_cfg.collectors.redundant_send_r = 1;
 
     let npos_params = SumeragiNposParameters {
         epoch_seed: [0x11; 32],
-        block_time_ms: 2000,
-        timeout_propose_ms: 250,
-        timeout_prevote_ms: 300,
-        timeout_precommit_ms: 350,
-        timeout_commit_ms: 400,
-        timeout_da_ms: 450,
-        timeout_aggregator_ms: 120,
         k_aggregators: 5,
         redundant_send_r: 4,
         vrf_commit_window_blocks: 100,
@@ -1289,6 +1373,11 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
     assert_eq!(mode_tag, NPOS_TAG.to_string());
     assert_eq!(bls_domain, "bls-iroha2:npos-sumeragi:v1");
 
+    let duration_ms = |value: Duration| -> u64 {
+        let ms = value.as_millis();
+        u64::try_from(ms).expect("timeout exceeds millisecond range")
+    };
+    let resolved_timeouts = crate::sumeragi::resolve_npos_timeouts(&view, &consensus_cfg.npos);
     let expected = crate::sumeragi::consensus::compute_consensus_fingerprint_from_params(
         &common_config.chain,
         &ConsensusGenesisParams {
@@ -1304,12 +1393,12 @@ fn handshake_fingerprint_uses_wsv_params_for_npos() {
             bls_domain: bls_domain.clone(),
             npos: Some(NposGenesisParams {
                 block_time_ms: 1600,
-                timeout_propose_ms: 250,
-                timeout_prevote_ms: 300,
-                timeout_precommit_ms: 350,
-                timeout_commit_ms: 400,
-                timeout_da_ms: 450,
-                timeout_aggregator_ms: 120,
+                timeout_propose_ms: duration_ms(resolved_timeouts.propose),
+                timeout_prevote_ms: duration_ms(resolved_timeouts.prevote),
+                timeout_precommit_ms: duration_ms(resolved_timeouts.precommit),
+                timeout_commit_ms: duration_ms(resolved_timeouts.commit),
+                timeout_da_ms: duration_ms(resolved_timeouts.da),
+                timeout_aggregator_ms: duration_ms(resolved_timeouts.aggregator),
                 k_aggregators: 5,
                 redundant_send_r: 4,
                 epoch_seed: npos_params.epoch_seed,
@@ -1359,13 +1448,12 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
     consensus_cfg.npos.epoch_length_blocks = 9;
-    consensus_cfg.npos.block_time = Duration::from_millis(1500);
-    consensus_cfg.npos.timeouts.propose = Duration::from_millis(200);
-    consensus_cfg.npos.timeouts.prevote = Duration::from_millis(220);
-    consensus_cfg.npos.timeouts.precommit = Duration::from_millis(240);
-    consensus_cfg.npos.timeouts.commit = Duration::from_millis(260);
-    consensus_cfg.npos.timeouts.da = Duration::from_millis(280);
-    consensus_cfg.npos.timeouts.aggregator = Duration::from_millis(300);
+    consensus_cfg.npos.timeouts_overrides.propose = Some(Duration::from_millis(200));
+    consensus_cfg.npos.timeouts_overrides.prevote = Some(Duration::from_millis(220));
+    consensus_cfg.npos.timeouts_overrides.precommit = Some(Duration::from_millis(240));
+    consensus_cfg.npos.timeouts_overrides.commit = Some(Duration::from_millis(260));
+    consensus_cfg.npos.timeouts_overrides.da = Some(Duration::from_millis(280));
+    consensus_cfg.npos.timeouts_overrides.aggregator = Some(Duration::from_millis(300));
     consensus_cfg.collectors.k = 2;
     consensus_cfg.collectors.redundant_send_r = 3;
     consensus_cfg.npos.vrf.commit_window_blocks = 42;
@@ -1429,6 +1517,7 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
         let ms = value.as_millis();
         u64::try_from(ms).expect("timeout exceeds millisecond range")
     };
+    let resolved_timeouts = crate::sumeragi::resolve_npos_timeouts(&view, &consensus_cfg.npos);
     let expected = crate::sumeragi::consensus::compute_consensus_fingerprint_from_params(
         &common_config.chain,
         &ConsensusGenesisParams {
@@ -1444,12 +1533,12 @@ fn handshake_fingerprint_uses_chain_seed_without_npos_params() {
             bls_domain: bls_domain.clone(),
             npos: Some(NposGenesisParams {
                 block_time_ms: 1600,
-                timeout_propose_ms: duration_ms(consensus_cfg.npos.timeouts.propose),
-                timeout_prevote_ms: duration_ms(consensus_cfg.npos.timeouts.prevote),
-                timeout_precommit_ms: duration_ms(consensus_cfg.npos.timeouts.precommit),
-                timeout_commit_ms: duration_ms(consensus_cfg.npos.timeouts.commit),
-                timeout_da_ms: duration_ms(consensus_cfg.npos.timeouts.da),
-                timeout_aggregator_ms: duration_ms(consensus_cfg.npos.timeouts.aggregator),
+                timeout_propose_ms: duration_ms(resolved_timeouts.propose),
+                timeout_prevote_ms: duration_ms(resolved_timeouts.prevote),
+                timeout_precommit_ms: duration_ms(resolved_timeouts.precommit),
+                timeout_commit_ms: duration_ms(resolved_timeouts.commit),
+                timeout_da_ms: duration_ms(resolved_timeouts.da),
+                timeout_aggregator_ms: duration_ms(resolved_timeouts.aggregator),
                 k_aggregators: consensus_cfg
                     .collectors
                     .k
@@ -2057,8 +2146,7 @@ async fn actor_next_tick_deadline_tracks_pending_quorum_timeout() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
-    consensus_cfg.npos.block_time = Duration::from_secs(2);
-    consensus_cfg.npos.timeouts.commit = Duration::from_secs(1);
+    consensus_cfg.npos.timeouts_overrides.commit = Some(Duration::from_secs(1));
 
     let mut harness = test_actor_harness_with_config_and_height(1, consensus_cfg, None, 1).await;
     let actor = &mut harness.actor;
@@ -2200,8 +2288,7 @@ async fn actor_next_tick_deadline_tracks_aborted_retention() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
-    consensus_cfg.npos.block_time = Duration::from_secs(2);
-    consensus_cfg.npos.timeouts.commit = Duration::from_secs(1);
+    consensus_cfg.npos.timeouts_overrides.commit = Some(Duration::from_secs(1));
     consensus_cfg
         .recovery
         .missing_block_signer_fallback_attempts = 1;
@@ -2315,8 +2402,7 @@ async fn actor_next_tick_deadline_tracks_rbc_rebroadcast_cooldown() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
-    consensus_cfg.npos.block_time = Duration::from_secs(2);
-    consensus_cfg.npos.timeouts.commit = Duration::from_secs(1);
+    consensus_cfg.npos.timeouts_overrides.commit = Some(Duration::from_secs(1));
 
     let mut harness = test_actor_harness_with_config(2, consensus_cfg, None).await;
     let actor = &mut harness.actor;
@@ -9447,8 +9533,6 @@ async fn commit_pipeline_runs_without_global_cooldown() {
 async fn commit_pipeline_qc_rebuild_cooldown_uses_chain_block_time() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
-
-    actor.config.npos.block_time = Duration::from_secs(10);
     {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut params_block = state.world.parameters.block();
@@ -11982,8 +12066,6 @@ async fn rebroadcast_cooldown_uses_npos_block_time() {
 async fn pacemaker_base_interval_uses_npos_block_time_on_mode_reset() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
-
-    actor.config.npos.block_time = Duration::from_secs(10);
     {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut params_block = state.world.parameters.block();
@@ -11994,7 +12076,7 @@ async fn pacemaker_base_interval_uses_npos_block_time_on_mode_reset() {
     actor.reset_mode_flip_state();
 
     let view = actor.state.view();
-    let block_time = crate::sumeragi::resolve_npos_block_time(&view, &actor.config.npos);
+    let block_time = crate::sumeragi::resolve_npos_block_time(&view);
     let timeouts = crate::sumeragi::resolve_npos_timeouts(&view, &actor.config.npos);
     let expected =
         pacemaker_base_interval_with_propose_timeout(block_time, timeouts.propose, &actor.config);
@@ -12021,11 +12103,7 @@ async fn commit_quorum_timeout_uses_npos_timeouts() {
         let params = block.parameters.get_mut();
         params.sumeragi.block_time_ms = 9_000;
         params.sumeragi.commit_time_ms = 9_000;
-        let npos_params = SumeragiNposParameters {
-            block_time_ms: 1_000,
-            timeout_commit_ms: 200,
-            ..SumeragiNposParameters::default()
-        };
+        let npos_params = SumeragiNposParameters::default();
         params.custom.insert(
             SumeragiNposParameters::parameter_id(),
             npos_params.into_custom_parameter(),
@@ -12034,7 +12112,7 @@ async fn commit_quorum_timeout_uses_npos_timeouts() {
     }
 
     let view = actor.state.view();
-    let block_time = crate::sumeragi::resolve_npos_block_time(&view, &actor.config.npos);
+    let block_time = crate::sumeragi::resolve_npos_block_time(&view);
     let commit_time = crate::sumeragi::resolve_npos_timeouts(&view, &actor.config.npos).commit;
     let da_enabled = view.world.parameters().sumeragi().da_enabled();
     drop(view);
@@ -12147,8 +12225,6 @@ async fn precommit_vote_payload_broadcast_is_rate_limited() {
 async fn precommit_vote_payload_broadcast_cooldown_uses_chain_block_time() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
-
-    actor.config.npos.block_time = Duration::from_secs(10);
     {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut params_block = state.world.parameters.block();
@@ -48922,52 +48998,87 @@ fn build_consensus_proposal_populates_defaults() {
 
 #[test]
 fn commit_quorum_timeout_tracks_block_time() {
-    let mut cfg = test_sumeragi_config();
-    cfg.da.enabled = true;
-    cfg.npos.block_time = Duration::from_millis(1_000);
-    cfg.npos.timeouts.commit = Duration::from_millis(150);
-    let default_multiplier = cfg.da.quorum_timeout_multiplier;
+    let block_time = Duration::from_millis(1_000);
+    let mut commit_time = Duration::from_millis(150);
+    let mut da_enabled = true;
+    let mut quorum_multiplier =
+        iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER;
 
     assert_eq!(
-        commit_quorum_timeout_for_config(&cfg),
+        super::commit_quorum_timeout_from_durations(
+            block_time,
+            commit_time,
+            da_enabled,
+            quorum_multiplier
+        ),
         Duration::from_millis(4_800)
     );
-    cfg.da.quorum_timeout_multiplier = 1;
+    quorum_multiplier = 1;
     assert_eq!(
-        commit_quorum_timeout_for_config(&cfg),
+        super::commit_quorum_timeout_from_durations(
+            block_time,
+            commit_time,
+            da_enabled,
+            quorum_multiplier
+        ),
         Duration::from_millis(1_600)
     );
-    cfg.da.quorum_timeout_multiplier = default_multiplier;
+    quorum_multiplier = iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER;
 
-    cfg.npos.timeouts.commit = Duration::from_millis(2_500);
+    commit_time = Duration::from_millis(2_500);
     assert_eq!(
-        commit_quorum_timeout_for_config(&cfg),
+        super::commit_quorum_timeout_from_durations(
+            block_time,
+            commit_time,
+            da_enabled,
+            quorum_multiplier
+        ),
         Duration::from_millis(33_000)
     );
 
-    cfg.npos.timeouts.commit = Duration::ZERO;
+    commit_time = Duration::ZERO;
     assert_eq!(
-        commit_quorum_timeout_for_config(&cfg),
+        super::commit_quorum_timeout_from_durations(
+            block_time,
+            commit_time,
+            da_enabled,
+            quorum_multiplier
+        ),
         Duration::from_millis(1_000),
         "zero commit timeout should fall back to block_time for liveness"
     );
 
-    cfg.da.enabled = false;
-    cfg.npos.timeouts.commit = Duration::from_millis(150);
+    da_enabled = false;
+    commit_time = Duration::from_millis(150);
     assert_eq!(
-        commit_quorum_timeout_for_config(&cfg),
+        super::commit_quorum_timeout_from_durations(
+            block_time,
+            commit_time,
+            da_enabled,
+            quorum_multiplier
+        ),
         Duration::from_millis(2_000)
     );
 
-    cfg.npos.timeouts.commit = Duration::from_millis(2_500);
+    commit_time = Duration::from_millis(2_500);
     assert_eq!(
-        commit_quorum_timeout_for_config(&cfg),
+        super::commit_quorum_timeout_from_durations(
+            block_time,
+            commit_time,
+            da_enabled,
+            quorum_multiplier
+        ),
         Duration::from_millis(2_500)
     );
 
-    cfg.npos.timeouts.commit = Duration::ZERO;
+    commit_time = Duration::ZERO;
     assert_eq!(
-        commit_quorum_timeout_for_config(&cfg),
+        super::commit_quorum_timeout_from_durations(
+            block_time,
+            commit_time,
+            da_enabled,
+            quorum_multiplier
+        ),
         Duration::from_millis(1_000),
         "zero commit timeout should fall back to block_time for liveness"
     );
@@ -49140,19 +49251,19 @@ fn availability_timeout_from_quorum_scales_for_da() {
 #[test]
 fn pacemaker_interval_respects_rtt_floor_and_cap() {
     let mut cfg = test_sumeragi_config();
-    cfg.npos.timeouts.propose = Duration::from_millis(300);
+    let propose_timeout = Duration::from_millis(300);
     cfg.pacemaker.rtt_floor_multiplier = 3; // 900ms floor from propose
     cfg.pacemaker.max_backoff = Duration::from_millis(1_200);
     let block_time = Duration::from_millis(800);
 
     assert_eq!(
-        pacemaker_base_interval_with_propose_timeout(block_time, cfg.npos.timeouts.propose, &cfg),
+        pacemaker_base_interval_with_propose_timeout(block_time, propose_timeout, &cfg),
         Duration::from_millis(900)
     );
 
     cfg.pacemaker.rtt_floor_multiplier = 5; // 1_500ms floor → capped by max_backoff
     assert_eq!(
-        pacemaker_base_interval_with_propose_timeout(block_time, cfg.npos.timeouts.propose, &cfg),
+        pacemaker_base_interval_with_propose_timeout(block_time, propose_timeout, &cfg),
         Duration::from_millis(1_200)
     );
 
@@ -49160,7 +49271,7 @@ fn pacemaker_interval_respects_rtt_floor_and_cap() {
     cfg.pacemaker.max_backoff = Duration::from_millis(5_000);
     let block_time = Duration::from_millis(1_500);
     assert_eq!(
-        pacemaker_base_interval_with_propose_timeout(block_time, cfg.npos.timeouts.propose, &cfg),
+        pacemaker_base_interval_with_propose_timeout(block_time, propose_timeout, &cfg),
         Duration::from_millis(1_500)
     );
 }
@@ -49168,7 +49279,6 @@ fn pacemaker_interval_respects_rtt_floor_and_cap() {
 #[test]
 fn pacemaker_interval_uses_explicit_propose_timeout() {
     let mut cfg = test_sumeragi_config();
-    cfg.npos.timeouts.propose = Duration::from_millis(300);
     cfg.pacemaker.rtt_floor_multiplier = 2;
     cfg.pacemaker.max_backoff = Duration::from_millis(2_000);
     let block_time = Duration::from_millis(800);

@@ -11,6 +11,12 @@
 // proper Norito TLVs (envelopes and InstructionBox bytes) and may preload them
 // into INPUT.
 seiyaku ZkVoteAndUnshield {
+  meta {
+    abi_version: 1,
+    features: ["zk"],
+    max_cycles: 0,
+  }
+
   // Verify a ballot proof, then enqueue a prebuilt SubmitBallot instruction via the vendor bridge.
   fn verify_and_submit_ballot(proof_env: Blob, submit: Blob) {
     // 1) Verify the ballot using ZK_VOTE_VERIFY_BALLOT.

@@ -10412,7 +10412,7 @@ mod advert_tests {
         inner.sorafs_node = node;
         let mut pin_cfg = iroha_config::parameters::actual::SorafsStoragePin::default();
         pin_cfg.rate_limit.max_requests = Some(NonZeroU32::new(1).expect("nonzero"));
-        pin_cfg.rate_limit.window = Duration::from_millis(200);
+        pin_cfg.rate_limit.window = Duration::from_secs(5);
         pin_cfg.allow_cidrs.push("127.0.0.0/8".to_owned());
         inner.sorafs_pin_policy =
             sorafs::PinSubmissionPolicy::from_config(&pin_cfg).expect("pin policy");

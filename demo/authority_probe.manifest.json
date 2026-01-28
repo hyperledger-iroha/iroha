@@ -1,9 +1,16 @@
 {
-  "code_hash": "hash:6D57C21641EF0368CC0C770006092CCA65B35198B7A5F1CF59DFC98BC9B02A99#C046",
-  "abi_hash": "hash:377F7125A0F20D40F65ED5E3A179BC5E04D68A385570B54D67D961861E8D9F83#1C50",
+  "code_hash": "hash:ADAA4B424806CE38B03B49652273645FB6AABC74F8BAE60A03DBC87006CF144F#3495",
+  "abi_hash": "hash:BA1786031C3D0CDBD607DEBDAE1CC611A0807BF9CF49ED349A0632855724969F#FBDF",
   "compiler_fingerprint": null,
   "features_bitmap": null,
-  "access_set_hints": null,
+  "access_set_hints": {
+    "read_keys": [
+      "*"
+    ],
+    "write_keys": [
+      "*"
+    ]
+  },
   "entrypoints": [
     {
       "name": "main",
@@ -13,12 +20,20 @@
       },
       "permission": "Admin",
       "read_keys": [
-        
+        "*"
       ],
       "write_keys": [
+        "*"
+      ],
+      "access_hints_complete": true,
+      "access_hints_skipped": [
+        
+      ],
+      "triggers": [
         
       ]
     }
   ],
+  "kotoba": null,
   "provenance": null
 }

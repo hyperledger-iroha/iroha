@@ -637,7 +637,7 @@ mod tests {
         AdaptiveObservability, ConsensusMode, NodeRole, ProofPolicy, Sumeragi as SumeragiConfig,
         SumeragiBlock, SumeragiCollectors, SumeragiDa, SumeragiDebug, SumeragiDebugRbc,
         SumeragiFinality, SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNpos,
-        SumeragiNposElection, SumeragiNposReconfig, SumeragiNposTimeouts, SumeragiNposVrf,
+        SumeragiNposElection, SumeragiNposReconfig, SumeragiNposTimeoutOverrides, SumeragiNposVrf,
         SumeragiPacemaker, SumeragiPersistence, SumeragiQueues, SumeragiRbc, SumeragiRecovery,
         SumeragiWorker,
     };
@@ -810,8 +810,7 @@ mod tests {
                 allowed_hsm_providers: BTreeSet::new(),
             },
             npos: SumeragiNpos {
-                block_time: Duration::from_secs(1),
-                timeouts: SumeragiNposTimeouts::default(),
+                timeouts_overrides: SumeragiNposTimeoutOverrides::default(),
                 vrf: SumeragiNposVrf::default(),
                 reconfig: SumeragiNposReconfig::default(),
                 election: SumeragiNposElection::default(),

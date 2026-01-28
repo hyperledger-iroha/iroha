@@ -1665,6 +1665,39 @@ pub struct SumeragiQcStatus {
     pub signatures_total: u64,
 }
 
+/// Effective NPoS timeout values (ms) exposed via `/v1/sumeragi/status`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiNposTimeoutsStatus {
+    /// Proposal timeout (ms).
+    #[norito(default)]
+    pub propose_ms: u64,
+    /// Prevote aggregation timeout (ms).
+    #[norito(default)]
+    pub prevote_ms: u64,
+    /// Precommit aggregation timeout (ms).
+    #[norito(default)]
+    pub precommit_ms: u64,
+    /// Commit finalization timeout (ms).
+    #[norito(default)]
+    pub commit_ms: u64,
+    /// Data-availability timeout (ms).
+    #[norito(default)]
+    pub da_ms: u64,
+    /// Aggregator fallback timeout (ms).
+    #[norito(default)]
+    pub aggregator_ms: u64,
+    /// Execution timeout (ms).
+    #[norito(default)]
+    pub exec_ms: u64,
+    /// Witness collection timeout (ms).
+    #[norito(default)]
+    pub witness_ms: u64,
+}
+
 /// Compact Norito payload returned by Torii for `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -1714,6 +1747,34 @@ pub struct SumeragiStatusWire {
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
     pub consensus_caps: Option<SumeragiConsensusCapsStatus>,
+    /// Effective minimum finality floor (ms).
+    #[norito(default)]
+    pub effective_min_finality_ms: u64,
+    /// Effective block time (ms).
+    #[norito(default)]
+    pub effective_block_time_ms: u64,
+    /// Effective commit time (ms).
+    #[norito(default)]
+    pub effective_commit_time_ms: u64,
+    /// Effective commit quorum timeout (ms).
+    #[norito(default)]
+    pub effective_commit_quorum_timeout_ms: u64,
+    /// Effective availability timeout (ms).
+    #[norito(default)]
+    pub effective_availability_timeout_ms: u64,
+    /// Effective pacemaker interval (ms).
+    #[norito(default)]
+    pub effective_pacemaker_interval_ms: u64,
+    /// Effective NPoS timeouts (ms) when in NPoS mode.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub effective_npos_timeouts: Option<SumeragiNposTimeoutsStatus>,
+    /// Effective collector count (K) for the active mode.
+    #[norito(default)]
+    pub effective_collectors_k: u64,
+    /// Effective redundant send fanout (r) for the active mode.
+    #[norito(default)]
+    pub effective_redundant_send_r: u64,
     /// Current leader index (topology position).
     pub leader_index: u64,
     /// `HighestQC` height.

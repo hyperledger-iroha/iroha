@@ -1,6 +1,6 @@
 // Using authority() in a metadata call inside a contract.
 seiyaku DetailAuthority {
-  kotoage fn write_cursor() {
+  kotoage fn write_cursor() permission(Admin) {
     set_account_detail(
       authority(),
       name!("cursor"),

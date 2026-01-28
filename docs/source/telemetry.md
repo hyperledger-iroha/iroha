@@ -782,9 +782,9 @@ Configuration
 
 DA/RBC (Sumeragi) configuration
 - `sumeragi.da.enabled` (bool): enables data availability tracking and Reliable Broadcast (RBC) payload distribution together. Availability evidence (`availability evidence` or an RBC `READY` quorum) is tracked (advisory; does not gate commit); missing local payloads are fetched via RBC or block sync, and RBC remains transport/recovery while its delivery latency is still tracked.
-- `sumeragi.rbc.chunk_max_bytes` (usize): maximum bytes per RBC chunk when broadcasting payloads; must be > 0. Clamped at startup so serialized RBC chunks fit within the consensus payload plaintext cap derived from `network.max_frame_bytes_block_sync`.
-- `sumeragi.rbc.session_ttl_ms` (u64): inactive RBC sessions are pruned after this TTL (milliseconds) to bound memory.
-- `sumeragi.rbc.rebroadcast_sessions_per_tick` (usize): cap on RBC session rebroadcasts per tick to prevent payload storms when backlogs accumulate.
+- `sumeragi.advanced.rbc.chunk_max_bytes` (usize): maximum bytes per RBC chunk when broadcasting payloads; must be > 0. Clamped at startup so serialized RBC chunks fit within the consensus payload plaintext cap derived from `network.max_frame_bytes_block_sync`.
+- `sumeragi.advanced.rbc.session_ttl_ms` (u64): inactive RBC sessions are pruned after this TTL (milliseconds) to bound memory.
+- `sumeragi.advanced.rbc.rebroadcast_sessions_per_tick` (usize): cap on RBC session rebroadcasts per tick to prevent payload storms when backlogs accumulate.
 
 Metrics: RBC exports gauges/counters (`sumeragi_rbc_sessions_active`, `sumeragi_rbc_sessions_pruned_total`, `sumeragi_rbc_ready_broadcasts_total`, `sumeragi_rbc_deliver_broadcasts_total`, `sumeragi_rbc_payload_bytes_delivered_total`, `sumeragi_rbc_rebroadcast_skipped_total{kind="payload|ready"}`, `sumeragi_rbc_mismatch_total{peer,kind}`, `sumeragi_rbc_persist_drops_total`) and per-lane/dataspace backlog gauges (`sumeragi_rbc_lane_{tx_count,total_chunks,pending_chunks,bytes_total}{lane_id}` and `sumeragi_rbc_dataspace_{tx_count,total_chunks,pending_chunks,bytes_total}{lane_id,dataspace_id}`) alongside the Torii JSON endpoints shown above.
 Additional gauges track backlog pressure: `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`, and `sumeragi_rbc_backlog_sessions_pending`.
@@ -804,16 +804,16 @@ Additional gauges track backlog pressure: `sumeragi_rbc_backlog_chunks_total`, `
 7. **Escalate persistent issues.** If backlog/deferral metrics stay high beyond two blocks:
    - Freeze new client submissions via admission rate limiting.
    - Manually inspect problematic sessions with `iroha_cli --output-format json ops sumeragi telemetry` to confirm which height/view is stuck.
-   - Consider increasing `sumeragi.rbc.chunk_max_bytes` or provisioning additional bandwidth before re-enabling full load.
+   - Consider increasing `sumeragi.advanced.rbc.chunk_max_bytes` or provisioning additional bandwidth before re-enabling full load.
 
 
 Availability collectors expose vote ingestion counters: `sumeragi_da_votes_ingested_total`, `sumeragi_da_votes_ingested_by_collector{collector_idx="..."}`, and `sumeragi_da_votes_ingested_by_peer{peer="..."}`. Availability-evidence assembly latency is recorded via the histogram `sumeragi_qc_assembly_latency_ms{kind="availability"}` with the latest observed latency mirrored in `sumeragi_qc_last_latency_ms{kind="availability"}`.
 
 Pacemaker configuration (Sumeragi)
-- `sumeragi.pacemaker.backoff_multiplier` (u32): scales each timeout backoff step (default 1).
-- `sumeragi.pacemaker.rtt_floor_multiplier` (u32): RTT floor multiplier; floor = avg_rtt * multiplier (default 2).
-- `sumeragi.pacemaker.max_backoff_ms` (u64): backoff cap in milliseconds (default 60000).
-- `sumeragi.pacemaker.jitter_frac_permille` (u32): jitter band in permille of the window (0..=1000, default 0 = off).
+- `sumeragi.advanced.pacemaker.backoff_multiplier` (u32): scales each timeout backoff step (default 1).
+- `sumeragi.advanced.pacemaker.rtt_floor_multiplier` (u32): RTT floor multiplier; floor = avg_rtt * multiplier (default 2).
+- `sumeragi.advanced.pacemaker.max_backoff_ms` (u64): backoff cap in milliseconds (default 60000).
+- `sumeragi.advanced.pacemaker.jitter_frac_permille` (u32): jitter band in permille of the window (0..=1000, default 0 = off).
 
 Notes
 - All metrics have deterministic semantics across hardware. Parallel paths publish counters only after deterministic commit.

@@ -9,7 +9,11 @@ use std::{
     num::NonZeroUsize,
     ops::Bound::{Excluded, Unbounded},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, atomic::AtomicBool, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -3263,6 +3267,10 @@ fn round_duration_ms(value: f64) -> u64 {
     {
         clamped.round() as u64
     }
+}
+
+fn duration_ms_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 impl NewViewTracker {
@@ -7827,7 +7835,7 @@ impl Actor {
                 common_config.peer.id(),
                 mode,
             );
-            let pacemaker_block_time = super::resolve_npos_block_time(&view, &config.npos);
+            let pacemaker_block_time = super::resolve_npos_block_time(&view);
             let pacemaker_timeouts = if matches!(mode, ConsensusMode::Npos) {
                 super::resolve_npos_timeouts(&view, &config.npos)
             } else {
@@ -7844,22 +7852,7 @@ impl Actor {
                 {
                     ignored.push("sumeragi.collectors.redundant_send_r");
                 }
-                if config.npos.block_time != pacemaker_block_time {
-                    ignored.push("sumeragi.npos.block_time_ms");
-                }
                 if view.world.sumeragi_npos_parameters().is_some() {
-                    let derived = SumeragiNposTimeouts::from_block_time(pacemaker_block_time);
-                    let timeouts_overridden = config.npos.timeouts.propose != derived.propose
-                        || config.npos.timeouts.prevote != derived.prevote
-                        || config.npos.timeouts.precommit != derived.precommit
-                        || config.npos.timeouts.exec != derived.exec
-                        || config.npos.timeouts.witness != derived.witness
-                        || config.npos.timeouts.commit != derived.commit
-                        || config.npos.timeouts.da != derived.da
-                        || config.npos.timeouts.aggregator != derived.aggregator;
-                    if timeouts_overridden {
-                        ignored.push("sumeragi.npos.timeouts.*");
-                    }
                     if config.npos.epoch_length_blocks
                         != iroha_config::parameters::defaults::sumeragi::EPOCH_LENGTH_BLOCKS
                     {
@@ -8418,6 +8411,10 @@ impl Actor {
                 .map(u64::from)
                 .unwrap_or_default(),
         );
+        {
+            let view = actor.state.view();
+            actor.update_effective_timing_status(&view, actor.consensus_mode);
+        }
         iroha_logger::info!(
             height = actor.state.view().height(),
             queue_len = actor.queue.active_len(),
@@ -8676,6 +8673,56 @@ impl Actor {
         config_caps
     }
 
+    fn update_effective_timing_status(&self, view: &StateView<'_>, consensus_mode: ConsensusMode) {
+        let params = view.world.parameters().sumeragi();
+        let min_finality_ms = params.effective_min_finality_ms();
+        let block_time = self.block_time_for_mode(view, consensus_mode);
+        let commit_time = self.commit_timeout_for_mode(view, consensus_mode);
+        let da_enabled = params.da_enabled();
+        let commit_quorum_timeout = commit_quorum_timeout_from_durations(
+            block_time,
+            commit_time,
+            da_enabled,
+            self.da_quorum_timeout_multiplier(),
+        );
+        let availability_timeout = availability_timeout_from_quorum(
+            commit_quorum_timeout,
+            da_enabled,
+            self.config.da.availability_timeout_multiplier.max(1),
+            self.config.da.availability_timeout_floor,
+        );
+        let pacemaker_interval = self.subsystems.propose.pacemaker.propose_interval;
+        let (collectors_k, _) = self.collector_plan_params_for_mode(consensus_mode);
+        let redundant_send_r = self.subsystems.propose.collector_redundant_limit.max(1);
+        let npos_timeouts = if matches!(consensus_mode, ConsensusMode::Npos) {
+            let timeouts = super::resolve_npos_timeouts(view, &self.config.npos);
+            Some(super::status::NposTimeoutsSnapshot {
+                propose_ms: duration_ms_u64(timeouts.propose),
+                prevote_ms: duration_ms_u64(timeouts.prevote),
+                precommit_ms: duration_ms_u64(timeouts.precommit),
+                commit_ms: duration_ms_u64(timeouts.commit),
+                da_ms: duration_ms_u64(timeouts.da),
+                aggregator_ms: duration_ms_u64(timeouts.aggregator),
+                exec_ms: duration_ms_u64(timeouts.exec),
+                witness_ms: duration_ms_u64(timeouts.witness),
+            })
+        } else {
+            None
+        };
+
+        super::status::set_effective_timing(
+            min_finality_ms,
+            duration_ms_u64(block_time),
+            duration_ms_u64(commit_time),
+            duration_ms_u64(commit_quorum_timeout),
+            duration_ms_u64(availability_timeout),
+            duration_ms_u64(pacemaker_interval),
+            u64::try_from(collectors_k).unwrap_or(u64::MAX),
+            u64::from(redundant_send_r),
+            npos_timeouts,
+        );
+    }
+
     fn apply_adaptive_observability(&mut self, now: Instant) -> bool {
         let metrics = AdaptiveObservabilityMetrics::gather();
         match self.subsystems.propose.adaptive_state.evaluate(
@@ -8698,6 +8745,8 @@ impl Actor {
                         .as_millis(),
                     "adaptive observability widened collector fan-out/pacemaker interval"
                 );
+                let view = self.state.view();
+                self.update_effective_timing_status(&view, self.consensus_mode);
                 true
             }
             AdaptiveAction::Reset => {
@@ -8711,6 +8760,8 @@ impl Actor {
                         .as_millis(),
                     "adaptive observability reset to baseline thresholds"
                 );
+                let view = self.state.view();
+                self.update_effective_timing_status(&view, self.consensus_mode);
                 true
             }
             AdaptiveAction::None => false,
@@ -10473,7 +10524,7 @@ impl Actor {
             ConsensusMode::Permissioned => {
                 view.world.parameters().sumeragi().effective_block_time()
             }
-            ConsensusMode::Npos => super::resolve_npos_block_time(view, &self.config.npos),
+            ConsensusMode::Npos => super::resolve_npos_block_time(view),
         }
     }
 
@@ -13042,17 +13093,6 @@ fn drain_rbc_state_for_block(
     }
 
     (lane_totals, dataspace_totals)
-}
-
-/// Derive the commit quorum timeout from the configured block time and commit timeout seed.
-#[cfg(test)]
-fn commit_quorum_timeout_for_config(config: &SumeragiConfig) -> Duration {
-    commit_quorum_timeout_from_durations(
-        config.npos.block_time,
-        config.npos.timeouts.commit,
-        config.da.enabled,
-        config.da.quorum_timeout_multiplier,
-    )
 }
 
 /// Derive the commit quorum timeout from the on-chain sumeragi parameters.

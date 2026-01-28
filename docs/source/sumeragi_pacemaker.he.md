@@ -16,13 +16,13 @@ translator: manual
 
 מסמך זה מתאר את מדיניות הפייסמייקר (הטיימר) ב-Sumeragi ומספק הכוונה ודוגמאות למפעילים. הטיימרים מגדירים מתי המנהיג מציע בלוק חדש ומתי מאמתים מציעים/נכנסים לתצוגה חדשה לאחר חוסר פעילות.
 
-מימוש נוכחי: חלון בסיס המבוסס EMA, backoff, רצפת RTT ורצועת ג׳יטר קונפיגורבילית (`sumeragi.pacemaker.jitter_frac_permille`). הג׳יטר מיושם באופן דטרמיניסטי לכל צומת ולכל `(height, view)`.
+מימוש נוכחי: חלון בסיס המבוסס EMA, backoff, רצפת RTT ורצועת ג׳יטר קונפיגורבילית (`sumeragi.advanced.pacemaker.jitter_frac_permille`). הג׳יטר מיושם באופן דטרמיניסטי לכל צומת ולכל `(height, view)`.
 
 ## מושגים
-- **חלון בסיס**: ממוצע נע מעריכי של זמני הפאזות (propose, collect_da, collect_prevote, collect_precommit, commit). ה-EMA מאותחל מערכי `sumeragi.npos.timeouts.*_ms`; עד הצטברות דגימות הוא דומה לערכים המוגדרים. ה-EMA של `collect_aggregator` נחשף לניטור אך אינו נכנס לחלון הפייסמייקר. הערכים המוחלקים זמינים כ-`sumeragi_phase_latency_ema_ms{phase=…}`.
-- **מקדם backoff**: ‏`sumeragi.pacemaker.backoff_multiplier` (ברירת מחדל 1). כל timeout מוסיף `base * multiplier` לחלון.
-- **רצפת RTT**: ‏`avg_rtt_ms * sumeragi.pacemaker.rtt_floor_multiplier` (ברירת מחדל 2). מונעת timeouts אגרסיביים בקישורים עתירי השהיה.
-- **תקרה**: ‏`sumeragi.pacemaker.max_backoff_ms` (ברירת מחדל ‎60 000 ms). מגבלה קשיחה לחלון.
+- **חלון בסיס**: ממוצע נע מעריכי של זמני הפאזות (propose, collect_da, collect_prevote, collect_precommit, commit). ה-EMA מאותחל מערכי `sumeragi.advanced.npos.timeouts.*_ms`; עד הצטברות דגימות הוא דומה לערכים המוגדרים. ה-EMA של `collect_aggregator` נחשף לניטור אך אינו נכנס לחלון הפייסמייקר. הערכים המוחלקים זמינים כ-`sumeragi_phase_latency_ema_ms{phase=…}`.
+- **מקדם backoff**: ‏`sumeragi.advanced.pacemaker.backoff_multiplier` (ברירת מחדל 1). כל timeout מוסיף `base * multiplier` לחלון.
+- **רצפת RTT**: ‏`avg_rtt_ms * sumeragi.advanced.pacemaker.rtt_floor_multiplier` (ברירת מחדל 2). מונעת timeouts אגרסיביים בקישורים עתירי השהיה.
+- **תקרה**: ‏`sumeragi.advanced.pacemaker.max_backoff_ms` (ברירת מחדל ‎60 000 ms). מגבלה קשיחה לחלון.
 
 עדכון חלון בעת timeout:
 ```
@@ -33,7 +33,7 @@ window = min(cap, max(window + base * backoff_mul, avg_rtt * rtt_floor_mul))
 טלמטריה (ראו telemetry.md):
 - זמן ריצה: ‏`sumeragi_pacemaker_backoff_ms`, ‏`sumeragi_pacemaker_rtt_floor_ms`, ‏`sumeragi_phase_latency_ema_ms{phase=…}`
 - REST: ‏`/v1/sumeragi/phases` מוסיף `ema_ms` לצד זמני הפאזות הגבוהים, כך שניתן לשרטט את הטרנד גם ללא Prometheus.
-- הגדרות: ‏`sumeragi.pacemaker.backoff_multiplier`, ‏`sumeragi.pacemaker.rtt_floor_multiplier`, ‏`sumeragi.pacemaker.max_backoff_ms`
+- הגדרות: ‏`sumeragi.advanced.pacemaker.backoff_multiplier`, ‏`sumeragi.advanced.pacemaker.rtt_floor_multiplier`, ‏`sumeragi.advanced.pacemaker.max_backoff_ms`
 
 ## מדיניות ג׳יטר
 כדי למנוע התנהגות עדר (timeouts מסונכרנים), הפייסמייקר מאפשר ג׳יטר קטן סביב החלון האפקטיבי.
@@ -98,7 +98,7 @@ WAN גיאוגרפי
 - מגמה של backoff: ‏`avg_over_time(sumeragi_pacemaker_backoff_ms[5m])`
 - בחינת רצפת RTT: ‏`avg_over_time(sumeragi_pacemaker_rtt_floor_ms[5m])`
 - השוואת EMA מול התפלגויות: ‏`sumeragi_phase_latency_ema_ms{phase=…}` לצד ‏`sumeragi_phase_latency_ms{phase=…}`
-- אימות קונפיגורציה: ‏`max(sumeragi.pacemaker.backoff_multiplier)` וכדומה
+- אימות קונפיגורציה: ‏`max(sumeragi.advanced.pacemaker.backoff_multiplier)` וכדומה
 
 ## דטרמיניזם ובטיחות
 - טיימרים/backoff/ג׳יטר משפיעים רק על זמני הצעות/שינויי תצוגה; הם אינם נוגעים בתוקף חתימות או בכללי commit certificate.

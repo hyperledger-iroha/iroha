@@ -25,11 +25,11 @@ translator: manual
 seiyaku Hello {
   hajimari() { info("Hello from Kotodama"); }
 
-  kotoage fn write_detail() {
+  kotoage fn write_detail() permission(Admin) {
     set_account_detail(
       authority(),
-      name("example"),
-      json("{\"hello\":\"world\"}")
+      name!("example"),
+      json!{ hello: "world" }
     );
   }
 }
@@ -45,10 +45,10 @@ seiyaku Hello {
 
 ```kotodama
 seiyaku TransferDemo {
-  kotoage fn do_transfer() {
+  kotoage fn do_transfer() permission(AssetTransferRole) {
     transfer_asset(
-      account!("ih58..."),
-      account!("ih58..."),
+      account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
+      account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"),
       asset_definition!("rose#wonderland"),
       10
     );
@@ -65,19 +65,17 @@ seiyaku TransferDemo {
 
 ```kotodama
 seiyaku NftDemo {
-  kotoage fn create() {
-    nft_mint_asset(
-      nft_id!("dragon#demo"),
-      account!("ih58...")
-    );
+  kotoage fn create() permission(NftAuthority) {
+    let owner = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
+    let nft = nft_id!("dragon$wonderland");
+    nft_mint_asset(nft, owner);
   }
 
-  kotoage fn transfer() {
-    nft_transfer_asset(
-      account!("ih58..."),
-      nft_id!("dragon#demo"),
-      account!("ih58...")
-    );
+  kotoage fn transfer() permission(NftAuthority) {
+    let owner = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
+    let recipient = account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland");
+    let nft = nft_id!("dragon$wonderland");
+    nft_transfer_asset(owner, nft, recipient);
   }
 }
 ```
@@ -88,11 +86,13 @@ seiyaku NftDemo {
 
 ## איטרציית Map דטרמיניסטית (תכנון)
 
-לולאת for על Map מחייבת גבול. הקומפיילר מקבל `.take(n)` או אורך מרבי שהוצהר מראש.
+לולאת for על Map מחייבת גבול. עבור איטרציה מרובת־פריטים נדרש Map במצב (state); הקומפיילר מקבל `.take(n)` או אורך מרבי שהוצהר מראש.
 
 ```kotodama
-// דוגמת תכנון (איטרציה מחייבת גבול)
-fn sum_first_two(M: Map<int, int>) -> int {
+// דוגמת תכנון (איטרציה מחייבת גבול ושמירה ב־state)
+state M: Map<int, int>;
+
+fn sum_first_two() -> int {
   let s = 0;
   for (k, v) in M.take(2) {
     s = s + v;

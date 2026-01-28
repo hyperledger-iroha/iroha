@@ -3,11 +3,8 @@
 seiyaku TransferDemo {
   // Public entrypoint to transfer 10 units of rose#wonderland from alice to bob
   kotoage fn do_transfer() permission(AssetTransferRole) {
-    transfer_asset(
-      account!("ih58..."),
-      account!("ih58..."),
-      asset_definition!("rose#wonderland"),
-      10
-    );
+    let from = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
+    let to = account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland");
+    transfer_asset(from, to, asset_definition!("rose#wonderland"), 10);
   }
 }

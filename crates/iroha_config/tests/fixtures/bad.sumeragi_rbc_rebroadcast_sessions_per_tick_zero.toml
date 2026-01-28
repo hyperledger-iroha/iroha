@@ -1,4 +1,4 @@
 extends = ["minimal_with_trusted_peers.toml"]
 
-[sumeragi.rbc]
+[sumeragi.advanced.rbc]
 rebroadcast_sessions_per_tick = 0

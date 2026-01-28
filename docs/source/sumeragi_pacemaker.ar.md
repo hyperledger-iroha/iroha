@@ -17,19 +17,19 @@ translation_last_reviewed: 2026-01-01
 
 توضح هذه المذكرة سياسة pacemaker (timer) في Sumeragi وتقدم ارشادات للمشغلين وامثلة. تتحكم المؤقتات في وقت تقديم القادة للمقترحات ومتى يقترح المدققون/يدخلون view جديدة بعد الخمول.
 
-الحالة: تم تنفيذ نافذة اساس مشتقة من EMA، وارضية RTT، وحدود jitter/backoff قابلة للضبط. اصبح فاصل اقتراح pacemaker الان محصورا بين هدف block-time و propose timeout مع ارضية RTT، ومقيدا بـ `sumeragi.pacemaker.max_backoff_ms`. يتم تطبيق jitter بشكل حتمي لكل عقدة ولكل (height, view).
+الحالة: تم تنفيذ نافذة اساس مشتقة من EMA، وارضية RTT، وحدود jitter/backoff قابلة للضبط. اصبح فاصل اقتراح pacemaker الان محصورا بين هدف block-time و propose timeout مع ارضية RTT، ومقيدا بـ `sumeragi.advanced.pacemaker.max_backoff_ms`. يتم تطبيق jitter بشكل حتمي لكل عقدة ولكل (height, view).
 
 ## المفاهيم
 - النافذة الاساسية: متوسط متحرك اسي لمراحل التوافق المرصودة
   (propose, collect_da, collect_prevote, collect_precommit, commit). يتم تهيئة
-  EMA من `sumeragi.npos.timeouts.*_ms`; حتى تتوفر عينات كافية فهي تطابق القيم
+  EMA من `sumeragi.advanced.npos.timeouts.*_ms`; حتى تتوفر عينات كافية فهي تطابق القيم
   الافتراضية المهيأة عمليا. يتم تصدير EMA لـ `collect_aggregator` للملاحظة
   لكنها غير مدرجة في نافذة pacemaker. تظهر القيم الملساء عبر
   `sumeragi_phase_latency_ema_ms{phase=...}`.
-- مضاعف backoff: `sumeragi.pacemaker.backoff_multiplier` (الافتراضي 1). كل timeout يضيف `base * multiplier` الى النافذة الحالية.
-- ارضية RTT: `avg_rtt_ms * sumeragi.pacemaker.rtt_floor_multiplier` (الافتراضي 2). تمنع timeouts العدوانية على الروابط عالية الكمون.
-- السقف: `sumeragi.pacemaker.max_backoff_ms` (الافتراضي 60_000 ms). حد اعلى صارم للنافذة.
-- بذرة فاصل الاقتراح: `max(block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` ولا تتجاوز `sumeragi.pacemaker.max_backoff_ms`. هذا هو الفاصل في الحالة المستقرة حتى دون backoff.
+- مضاعف backoff: `sumeragi.advanced.pacemaker.backoff_multiplier` (الافتراضي 1). كل timeout يضيف `base * multiplier` الى النافذة الحالية.
+- ارضية RTT: `avg_rtt_ms * sumeragi.advanced.pacemaker.rtt_floor_multiplier` (الافتراضي 2). تمنع timeouts العدوانية على الروابط عالية الكمون.
+- السقف: `sumeragi.advanced.pacemaker.max_backoff_ms` (الافتراضي 60_000 ms). حد اعلى صارم للنافذة.
+- بذرة فاصل الاقتراح: `max(block_time_ms, propose_timeout_ms * rtt_floor_multiplier)` ولا تتجاوز `sumeragi.advanced.pacemaker.max_backoff_ms`. هذا هو الفاصل في الحالة المستقرة حتى دون backoff.
 
 تحديث النافذة الفعلية عند timeout:
 - `window = min(cap, max(window + base * backoff_mul, avg_rtt * rtt_floor_mul))`
@@ -40,7 +40,7 @@ translation_last_reviewed: 2026-01-01
 - لقطة REST: `/v1/sumeragi/phases` تتضمن الان `ema_ms` الى جانب احدث
   زمنيات المراحل كي تتمكن لوحات المتابعة من رسم اتجاه EMA دون سحب
   Prometheus مباشرة.
-- Config: `sumeragi.pacemaker.backoff_multiplier`, `sumeragi.pacemaker.rtt_floor_multiplier`, `sumeragi.pacemaker.max_backoff_ms`
+- Config: `sumeragi.advanced.pacemaker.backoff_multiplier`, `sumeragi.advanced.pacemaker.rtt_floor_multiplier`, `sumeragi.advanced.pacemaker.max_backoff_ms`
 
 ## سياسة jitter
 لتجنب اثر القطيع (timeouts المتزامنة)، يدعم pacemaker jitter صغيرا لكل عقدة حول النافذة الفعلية.
@@ -52,7 +52,7 @@ jitter حتمي لكل عقدة:
 
 Pseudocode:
 ```
-base = ema_total_ms(view, height)  // seeded by sumeragi.npos.timeouts.*_ms
+base = ema_total_ms(view, height)  // seeded by sumeragi.advanced.npos.timeouts.*_ms
 window = min(cap, max(prev + base * backoff_mul, avg_rtt * rtt_floor_mul))
 seed = blake2(chain_id || peer_id || height || view)
 u = (seed % 10_000) as f64 / 10_000.0  // [0, 1)
@@ -109,7 +109,7 @@ WAN جغرافية موزعة
 - Trend backoff: `avg_over_time(sumeragi_pacemaker_backoff_ms[5m])`
 - Inspect RTT floor: `avg_over_time(sumeragi_pacemaker_rtt_floor_ms[5m])`
 - قارن EMA مع histogram: `sumeragi_phase_latency_ema_ms{phase=...}` الى جانب النسب المئوية المطابقة في `sumeragi_phase_latency_ms{phase=...}`
-- تحقق من config: `max(sumeragi.pacemaker.backoff_multiplier)`, `max(sumeragi.pacemaker.rtt_floor_multiplier)`, `max(sumeragi.pacemaker.max_backoff_ms)`
+- تحقق من config: `max(sumeragi.advanced.pacemaker.backoff_multiplier)`, `max(sumeragi.advanced.pacemaker.rtt_floor_multiplier)`, `max(sumeragi.advanced.pacemaker.max_backoff_ms)`
 
 ## الحتمية والسلامة
 - المؤقتات/backoff/jitter تؤثر فقط على توقيت اطلاق المقترحات/تغييرات view؛ ولا تؤثر على صحة التواقيع او قواعد commit certificate.

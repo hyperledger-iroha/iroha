@@ -507,10 +507,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                     .collect(),
             },
             npos: A::SumeragiNpos {
-                block_time: std::time::Duration::from_millis(
-                    iroha_config::parameters::defaults::sumeragi::npos::BLOCK_TIME_MS,
-                ),
-                timeouts: A::SumeragiNposTimeouts::default(),
+                timeouts_overrides: A::SumeragiNposTimeoutOverrides::default(),
                 vrf: A::SumeragiNposVrf {
                     commit_window_blocks:
                         iroha_config::parameters::defaults::sumeragi::npos::VRF_COMMIT_WINDOW_BLOCKS,

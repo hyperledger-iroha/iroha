@@ -91,7 +91,7 @@ metal = [
 ## Expose the optional circuit-params hook from halo2. Enabled when downstream
 ## users compile us alongside backends that expect the associated `Params` type.
 halo2-params = []
-kotodama_dynamic_bounds = []
+kotodama_dynamic_bounds = ["kotodama_lang/kotodama_dynamic_bounds"]
 ## Allow development fallback behavior for schema decode helpers when a registry
 ## implementation is incomplete. Disable this in strict/production builds.
 schema_fallback = []
