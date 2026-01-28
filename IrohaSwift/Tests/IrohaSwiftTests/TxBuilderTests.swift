@@ -55,6 +55,8 @@ private final class PipelineURLProtocol: URLProtocol {
         } else if PipelineURLProtocol.isStatusPath(url.path) {
             let body = PipelineURLProtocol.dequeueStatusBody()
             sendResponse(code: 200, body: body)
+        } else if PipelineURLProtocol.isNodeCapabilitiesPath(url.path) {
+            sendResponse(code: 200, body: PipelineURLProtocol.nodeCapabilitiesBody)
         } else {
             sendResponse(code: 404, body: Data())
         }
@@ -178,6 +180,19 @@ private final class PipelineURLProtocol: URLProtocol {
 
     private static func isStatusPath(_ path: String) -> Bool {
         path.hasSuffix("/v1/pipeline/transactions/status") || path.hasSuffix("/v1/transactions/status")
+    }
+
+    private static func isNodeCapabilitiesPath(_ path: String) -> Bool {
+        path.hasSuffix("/v1/node/capabilities")
+    }
+
+    private static var nodeCapabilitiesBody: Data {
+        let body: [String: Any] = [
+            "supported_abi_versions": [1],
+            "default_compile_target": 0,
+            "data_model_version": ToriiNodeCapabilities.expectedDataModelVersion
+        ]
+        return (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
     }
 }
 

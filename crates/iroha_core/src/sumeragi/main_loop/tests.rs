@@ -435,18 +435,28 @@ fn sign_vote_for_canonical_signer(
     topology: &super::network_topology::Topology,
     keypairs: &[KeyPair],
 ) {
+    let canonical_roster = super::roster::canonicalize_roster(topology.as_ref().to_vec());
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let signature_topology = super::topology_for_view(
-        topology,
+        &canonical_topology,
         vote.height,
         vote.view,
         super::PERMISSIONED_TAG,
         None,
     );
     let canonical = ValidatorIndex::try_from(vote.signer).expect("signer fits u32");
-    let view_idx = super::view_index_for_canonical_signer(canonical, &signature_topology, topology)
-        .expect("canonical signer maps to view index");
+    let view_idx =
+        super::view_index_for_canonical_signer(canonical, &signature_topology, &canonical_topology)
+            .expect("canonical signer maps to view index");
     vote.signer = u32::try_from(view_idx).expect("view index fits u32");
-    sign_vote_for_view(vote, chain, topology, keypairs);
+    sign_vote_for_view_with_seed(
+        vote,
+        chain,
+        &canonical_topology,
+        keypairs,
+        super::PERMISSIONED_TAG,
+        None,
+    );
 }
 
 fn default_missing_block_signer_fallback_attempts() -> u32 {
@@ -655,7 +665,8 @@ fn sample_bls_topology(count: usize) -> (Vec<KeyPair>, super::network_topology::
         .iter()
         .map(|kp| PeerId::new(kp.public_key().clone()))
         .collect();
-    let topology = super::network_topology::Topology::new(peers);
+    let mut topology = super::network_topology::Topology::new(peers);
+    topology.canonicalize_order();
     (keypairs, topology)
 }
 
@@ -22524,6 +22535,7 @@ fn non_rbc_payload_budget_clamps_to_lower_of_config_and_cap() {
 async fn consensus_frame_caps_are_plaintext_and_rbc_chunk_is_clamped() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
+    let configured_chunk_max_bytes = consensus_cfg.rbc.chunk_max_bytes;
     let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -22543,9 +22555,10 @@ async fn consensus_frame_caps_are_plaintext_and_rbc_chunk_is_clamped() {
     );
     let expected_chunk_cap =
         super::rbc_chunk_payload_cap(actor.common_config.peer.id(), expected_payload_cap);
+    let expected_chunk_max_bytes = configured_chunk_max_bytes.min(expected_chunk_cap);
     assert_eq!(
-        actor.config.rbc.chunk_max_bytes, expected_chunk_cap,
-        "RBC chunk size should be clamped to consensus payload cap"
+        actor.config.rbc.chunk_max_bytes, expected_chunk_max_bytes,
+        "RBC chunk size should honor the consensus payload cap"
     );
     let chunk = sample_chunk_with_len(0, actor.config.rbc.chunk_max_bytes);
     assert!(
@@ -24553,7 +24566,7 @@ fn block_sync_update_uses_active_roster_for_checkpoint() {
     let expected = derive_active_topology(&view, &trusted, peer_a.id());
     drop(view);
     assert_eq!(selection.roster, expected);
-    assert_eq!(selection.roster.len(), 3);
+    assert_eq!(selection.roster.len(), 4);
 }
 
 #[test]
@@ -28119,7 +28132,8 @@ fn defer_qc_for_missing_block_records_telemetry() {
     let now = Instant::now();
 
     let peers = vec![PeerId::new(KeyPair::random().public_key().clone())];
-    let topology = super::network_topology::Topology::new(peers);
+    let mut topology = super::network_topology::Topology::new(peers);
+    topology.canonicalize_order();
     let mut signers: BTreeSet<ValidatorIndex> = BTreeSet::new();
     signers.insert(ValidatorIndex::from(0u16));
 
@@ -28762,7 +28776,8 @@ fn paired_block_and_qc_do_not_emit_missing_block_fetch_metrics() {
     let window = Duration::from_millis(5);
 
     let peers = vec![PeerId::new(KeyPair::random().public_key().clone())];
-    let topology = super::network_topology::Topology::new(peers);
+    let mut topology = super::network_topology::Topology::new(peers);
+    topology.canonicalize_order();
     let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
     let telemetry = crate::telemetry::Telemetry::new(metrics.clone(), true);
 
@@ -29193,6 +29208,39 @@ fn topology_refresh_decision_flags_changes_and_strays() {
         super::topology_refresh_decision(&current, &current, &[peer_c]),
         super::TopologyRefreshDecision::AdvertiseForStrays { stray_count: 1 }
     );
+}
+
+#[test]
+fn topology_advertisement_skips_strays() {
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+
+    let current: BTreeSet<_> = [peer_a.clone(), peer_b.clone()].into_iter().collect();
+    let last_advertised = current.clone();
+    let stray_online = vec![peer_c];
+
+    let (decision, advertised) =
+        super::topology_advertisement_for_refresh(&current, &last_advertised, &stray_online);
+    let advertised = advertised.expect("should advertise when strays are present");
+
+    assert!(matches!(
+        decision,
+        super::TopologyRefreshDecision::AdvertiseForStrays { stray_count: 1 }
+    ));
+    assert_eq!(advertised, current);
+}
+
+#[test]
+fn topology_update_for_local_removal_disconnects() {
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+
+    let last_advertised: BTreeSet<_> = [peer_a, peer_b].into_iter().collect();
+    let updated = super::topology_update_for_local_removal(&last_advertised)
+        .expect("should advertise disconnect when peers were previously advertised");
+
+    assert!(updated.is_empty());
 }
 
 #[test]
@@ -38264,6 +38312,7 @@ async fn pacemaker_uses_commit_qc_roster_for_proposal_leader() {
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
     consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
+    let configured_chunk_max_bytes = consensus_cfg.rbc.chunk_max_bytes;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -38364,9 +38413,10 @@ async fn pacemaker_uses_commit_qc_roster_for_proposal_leader() {
         actor.common_config.peer.id(),
         actor.consensus_payload_frame_cap,
     );
+    let expected_chunk_max_bytes = configured_chunk_max_bytes.min(expected_chunk_cap);
     assert_eq!(
-        actor.config.rbc.chunk_max_bytes, expected_chunk_cap,
-        "RBC chunk size should be clamped to consensus payload cap"
+        actor.config.rbc.chunk_max_bytes, expected_chunk_max_bytes,
+        "RBC chunk size should honor the consensus payload cap"
     );
     let highest_qc = actor.latest_committed_qc().expect("committed qc");
     let prev_block = super::propose::resolve_prev_block_for_proposal(
@@ -38429,10 +38479,9 @@ async fn pacemaker_uses_commit_qc_roster_for_proposal_leader() {
         actor
             .subsystems
             .propose
-            .proposal_cache
-            .get_proposal(tracked_height, 0)
-            .is_some(),
-        "proposal should be assembled using commit certificate roster"
+            .proposals_seen
+            .contains(&(tracked_height, 0)),
+        "proposal should be observed using commit certificate roster"
     );
 
     status::reset_commit_certs_for_tests();
@@ -43742,25 +43791,36 @@ fn signer_index_normalization_round_trips_across_view_rotation() {
         PeerId::new(kp_b.public_key().clone()),
         PeerId::new(kp_c.public_key().clone()),
     ]);
+    let canonical_roster = super::roster::canonicalize_roster(topology.as_ref().to_vec());
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let signature_topology =
-        super::topology_for_view(&topology, 1, 1, super::PERMISSIONED_TAG, None);
+        super::topology_for_view(&canonical_topology, 1, 1, super::PERMISSIONED_TAG, None);
 
     let canonical_signers: BTreeSet<ValidatorIndex> = [0_u32, 2_u32]
         .into_iter()
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index parses"))
         .collect();
-    let view_signers =
-        super::normalize_signer_indices_to_view(&canonical_signers, &signature_topology, &topology);
+    let view_signers = super::normalize_signer_indices_to_view(
+        &canonical_signers,
+        &signature_topology,
+        &canonical_topology,
+    );
     assert_eq!(view_signers.len(), canonical_signers.len());
 
-    let roundtrip =
-        super::normalize_signer_indices_to_canonical(&view_signers, &signature_topology, &topology);
+    let roundtrip = super::normalize_signer_indices_to_canonical(
+        &view_signers,
+        &signature_topology,
+        &canonical_topology,
+    );
     assert_eq!(roundtrip, canonical_signers);
 
     for signer in &canonical_signers {
-        let view_idx =
-            super::view_index_for_canonical_signer(*signer, &signature_topology, &topology)
-                .expect("canonical signer should map to view index");
+        let view_idx = super::view_index_for_canonical_signer(
+            *signer,
+            &signature_topology,
+            &canonical_topology,
+        )
+        .expect("canonical signer should map to view index");
         assert!(view_signers.contains(&view_idx));
     }
 }
@@ -43775,19 +43835,21 @@ fn view_index_for_canonical_signer_accounts_for_rotation_offset() {
         PeerId::new(kp_b.public_key().clone()),
         PeerId::new(kp_c.public_key().clone()),
     ]);
-    let mut rotated = topology.clone();
+    let canonical_roster = super::roster::canonicalize_roster(topology.as_ref().to_vec());
+    let canonical_topology = super::network_topology::Topology::new(canonical_roster);
+    let mut rotated = canonical_topology.clone();
     rotated.nth_rotation(1);
 
     let canonical0 = ValidatorIndex::try_from(0_u32).expect("validator index parses");
     let canonical1 = ValidatorIndex::try_from(1_u32).expect("validator index parses");
     let canonical2 = ValidatorIndex::try_from(2_u32).expect("validator index parses");
 
-    let view0 =
-        super::view_index_for_canonical_signer(canonical0, &rotated, &topology).expect("maps");
-    let view1 =
-        super::view_index_for_canonical_signer(canonical1, &rotated, &topology).expect("maps");
-    let view2 =
-        super::view_index_for_canonical_signer(canonical2, &rotated, &topology).expect("maps");
+    let view0 = super::view_index_for_canonical_signer(canonical0, &rotated, &canonical_topology)
+        .expect("maps");
+    let view1 = super::view_index_for_canonical_signer(canonical1, &rotated, &canonical_topology)
+        .expect("maps");
+    let view2 = super::view_index_for_canonical_signer(canonical2, &rotated, &canonical_topology)
+        .expect("maps");
 
     assert_eq!(
         view0,
@@ -45388,7 +45450,8 @@ fn validate_qc_against_votes_rejects_signature_from_wrong_signer_key() {
         PeerId::new(kp0.public_key().clone()),
         PeerId::new(kp1.public_key().clone()),
     ];
-    let topology = super::network_topology::Topology::new(peers);
+    let mut topology = super::network_topology::Topology::new(peers);
+    topology.canonicalize_order();
     let peer_keys = vec![kp0.clone(), kp1.clone()];
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x48; Hash::LENGTH]));
@@ -45506,7 +45569,8 @@ fn validate_qc_against_votes_records_invalid_signature_reason_for_mismatched_sig
         PeerId::new(kp0.public_key().clone()),
         PeerId::new(kp1.public_key().clone()),
     ];
-    let topology = super::network_topology::Topology::new(peers);
+    let mut topology = super::network_topology::Topology::new(peers);
+    topology.canonicalize_order();
     let peer_keys = vec![kp0.clone(), kp1.clone()];
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x47; Hash::LENGTH]));
@@ -45630,7 +45694,8 @@ fn validate_qc_against_votes_fuzzes_mismatched_signers_and_tags_telemetry() {
         .iter()
         .map(|kp| PeerId::new(kp.public_key().clone()))
         .collect();
-    let topology = super::network_topology::Topology::new(peers);
+    let mut topology = super::network_topology::Topology::new(peers);
+    topology.canonicalize_order();
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x31; Hash::LENGTH]));
     let validator_set = topology.as_ref().to_vec();

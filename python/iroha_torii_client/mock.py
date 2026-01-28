@@ -205,6 +205,8 @@ class _MockState:
             return _json_response(HTTPStatus.OK, self.sumeragi_rbc_status)
         if method == "GET" and path == "/v1/sumeragi/rbc/sessions":
             return _json_response(HTTPStatus.OK, self.sumeragi_rbc_sessions)
+        if method == "GET" and path == "/v1/node/capabilities":
+            return _json_response(HTTPStatus.OK, self.node_capabilities)
         if method == "POST" and path == "/__mock__/pipeline/config":
             return self._pipeline_config(body)
         if method == "POST" and path == "/__mock__/gov/config":
@@ -249,6 +251,11 @@ class _MockState:
                 "expired_locks_now": 0,
                 "referenda_with_expired": 0,
                 "last_sweep_height": 0,
+            }
+            self.node_capabilities = {
+                "supported_abi_versions": [1],
+                "default_compile_target": 0,
+                "data_model_version": 1,
             }
             self._seed_reports()
             self._seed_sumeragi()

@@ -331,6 +331,10 @@ const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BURST: u32 = 600;
 const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC: u32 = 268_435_456; // 256 MiB
 /// Default critical consensus ingress bytes burst cap for localnet.
 const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_BURST: u32 = 536_870_912; // 512 MiB
+/// Transaction gossip cadence for 1s localnet pipelines (ms).
+const LOCALNET_TX_GOSSIP_PERIOD_FAST_MS: u64 = 100;
+/// Transaction gossip resend ticks for 1s localnet pipelines.
+const LOCALNET_TX_GOSSIP_RESEND_TICKS_FAST: u32 = 1;
 /// Default listener host for generated P2P and Torii services.
 pub const DEFAULT_BIND_HOST: &str = "0.0.0.0";
 /// Default advertised host for generated peers and client config.
@@ -683,6 +687,12 @@ fn localnet_should_enable_nexus(sora_profile: Option<SoraProfile>, npos_bootstra
     sora_profile.is_some() || npos_bootstrap
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LocalnetTxGossipOverrides {
+    period_ms: u64,
+    resend_ticks: u32,
+}
+
 fn localnet_gas_account_id(genesis_public_key: &iroha_crypto::PublicKey) -> Result<AccountId> {
     let domain: DomainId = LOCALNET_IVM_DOMAIN.parse()?;
     Ok(AccountId::new(domain, genesis_public_key.clone()))
@@ -738,6 +748,9 @@ fn generate_localnet_with_line<T: Write>(
         .or_else(|| perf_spec.map(|spec| spec.commit_time_ms));
     let (block_time_ms, commit_time_ms) =
         resolve_localnet_pipeline_times(block_time_override, commit_time_override);
+    let tx_gossip_overrides = localnet_tx_gossip_overrides(
+        block_time_ms.unwrap_or_else(|| SumeragiParameters::default().block_time_ms()),
+    );
     let redundant_send_r = resolve_localnet_redundant_send_r(
         opts.redundant_send_r
             .or_else(|| perf_spec.and_then(|spec| spec.redundant_send_r)),
@@ -856,6 +869,7 @@ fn generate_localnet_with_line<T: Write>(
             redundant_send_r,
             collectors_k,
             commit_inflight_timeout_ms,
+            tx_gossip_overrides,
             logger_filter,
         );
         let path = out_dir.join(format!("peer{idx}.toml"));
@@ -914,6 +928,16 @@ fn default_localnet_pipeline_times() -> (u64, u64) {
         }
     }
     (block_ms, commit_ms)
+}
+
+fn localnet_tx_gossip_overrides(block_time_ms: u64) -> Option<LocalnetTxGossipOverrides> {
+    if block_time_ms > LOCALNET_PIPELINE_TIME_MS {
+        return None;
+    }
+    Some(LocalnetTxGossipOverrides {
+        period_ms: LOCALNET_TX_GOSSIP_PERIOD_FAST_MS,
+        resend_ticks: LOCALNET_TX_GOSSIP_RESEND_TICKS_FAST,
+    })
 }
 
 fn localnet_commit_inflight_timeout_ms(
@@ -1042,6 +1066,7 @@ fn render_peer_config(
     redundant_send_r: Option<u8>,
     collectors_k: Option<u16>,
     commit_inflight_timeout_ms: u64,
+    tx_gossip_overrides: Option<LocalnetTxGossipOverrides>,
     logger_filter: Option<&str>,
 ) -> String {
     use toml::{Table, Value};
@@ -1411,6 +1436,33 @@ fn render_peer_config(
         "consensus_ingress_critical_bytes_burst".into(),
         Value::Integer(i64::from(LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_BURST)),
     );
+    if let Some(overrides) = tx_gossip_overrides {
+        network.insert(
+            "transaction_gossip_period_ms".into(),
+            Value::Integer(
+                i64::try_from(overrides.period_ms)
+                    .expect("LOCALNET_TX_GOSSIP_PERIOD_FAST_MS fits i64"),
+            ),
+        );
+        network.insert(
+            "transaction_gossip_resend_ticks".into(),
+            Value::Integer(i64::from(overrides.resend_ticks)),
+        );
+        network.insert(
+            "transaction_gossip_public_target_reshuffle_ms".into(),
+            Value::Integer(
+                i64::try_from(overrides.period_ms)
+                    .expect("LOCALNET_TX_GOSSIP_PERIOD_FAST_MS fits i64"),
+            ),
+        );
+        network.insert(
+            "transaction_gossip_restricted_target_reshuffle_ms".into(),
+            Value::Integer(
+                i64::try_from(overrides.period_ms)
+                    .expect("LOCALNET_TX_GOSSIP_PERIOD_FAST_MS fits i64"),
+            ),
+        );
+    }
     root.insert("network".into(), Value::Table(network));
 
     let mut torii = Table::new();
@@ -2626,6 +2678,26 @@ mod tests {
             Some(LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_BURST),
             "localnet should raise critical consensus ingress bytes burst caps"
         );
+        assert_eq!(
+            parsed.transaction_gossiper.gossip_period,
+            Duration::from_millis(LOCALNET_TX_GOSSIP_PERIOD_FAST_MS),
+            "localnet should shorten tx gossip period for 1s pipelines"
+        );
+        assert_eq!(
+            parsed.transaction_gossiper.gossip_resend_ticks.get(),
+            LOCALNET_TX_GOSSIP_RESEND_TICKS_FAST,
+            "localnet should lower tx gossip resend ticks for 1s pipelines"
+        );
+        assert_eq!(
+            parsed.transaction_gossiper.dataspace.public_target_reshuffle,
+            Duration::from_millis(LOCALNET_TX_GOSSIP_PERIOD_FAST_MS),
+            "localnet should reshuffle public tx gossip targets quickly"
+        );
+        assert_eq!(
+            parsed.transaction_gossiper.dataspace.restricted_target_reshuffle,
+            Duration::from_millis(LOCALNET_TX_GOSSIP_PERIOD_FAST_MS),
+            "localnet should reshuffle restricted tx gossip targets quickly"
+        );
         let (block_ms, commit_ms) = resolve_localnet_pipeline_times(None, None);
         let block_ms = block_ms.expect("localnet defaults provide block_time_ms");
         let commit_ms = commit_ms.expect("localnet defaults provide commit_time_ms");
@@ -2671,6 +2743,21 @@ mod tests {
         let (block_ms, commit_ms) = resolve_localnet_pipeline_times(None, Some(2_500));
         assert_eq!(block_ms, Some(2_500));
         assert_eq!(commit_ms, Some(2_500));
+    }
+
+    #[test]
+    fn localnet_tx_gossip_overrides_follow_fast_pipeline() {
+        let overrides =
+            localnet_tx_gossip_overrides(LOCALNET_PIPELINE_TIME_MS).expect("fast pipeline");
+        assert_eq!(overrides.period_ms, LOCALNET_TX_GOSSIP_PERIOD_FAST_MS);
+        assert_eq!(
+            overrides.resend_ticks,
+            LOCALNET_TX_GOSSIP_RESEND_TICKS_FAST
+        );
+        assert!(
+            localnet_tx_gossip_overrides(LOCALNET_PIPELINE_TIME_MS + 1).is_none(),
+            "slow pipelines should keep default tx gossip cadence"
+        );
     }
 
     #[test]

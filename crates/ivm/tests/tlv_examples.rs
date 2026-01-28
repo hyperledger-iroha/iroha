@@ -158,7 +158,7 @@ fn tlv_dataspace_id_roundtrip() {
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
         .unwrap();
-    let exp_hash: [u8; 32] = Hash::new(&payload).into();
+    let exp_hash: [u8; 32] = Hash::new(payload).into();
     assert_eq!(got_hash, exp_hash);
 }
 
@@ -182,7 +182,7 @@ fn tlv_axt_descriptor_roundtrip() {
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
         .unwrap();
-    let exp_hash: [u8; 32] = Hash::new(&payload).into();
+    let exp_hash: [u8; 32] = Hash::new(payload).into();
     assert_eq!(got_hash, exp_hash);
 }
 
@@ -230,7 +230,7 @@ fn tlv_asset_handle_roundtrip() {
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
         .unwrap();
-    let exp_hash: [u8; 32] = Hash::new(&payload).into();
+    let exp_hash: [u8; 32] = Hash::new(payload).into();
     assert_eq!(got_hash, exp_hash);
 }
 
@@ -256,6 +256,6 @@ fn tlv_proof_blob_roundtrip() {
     let got_hash: [u8; 32] = tlv[7 + payload.len()..7 + payload.len() + 32]
         .try_into()
         .unwrap();
-    let exp_hash: [u8; 32] = Hash::new(&payload).into();
+    let exp_hash: [u8; 32] = Hash::new(payload).into();
     assert_eq!(got_hash, exp_hash);
 }

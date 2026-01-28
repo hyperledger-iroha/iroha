@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use iroha_crypto::Hash;
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AccountId, DomainId, MockWorldStateView, PermissionToken, WsvHost},
+    mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
 

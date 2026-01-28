@@ -14,8 +14,9 @@ caps into the generated configs:
 - NPoS: `kagami localnet --perf-profile 10k-npos`
 
 These profiles set 1s block/commit timing, `collectors_k`, `redundant_send_r`,
-`block_max_transactions = 10_000`, and NPoS bootstrap stake. Explicit CLI flags
-still override individual values.
+`block_max_transactions = 10_000`, shorter transaction gossip cadence
+(`transaction_gossip_period_ms = 100`, `transaction_gossip_resend_ticks = 1`),
+and NPoS bootstrap stake. Explicit CLI flags still override individual values.
 
 ## 1s Finality SLO Thresholds
 
