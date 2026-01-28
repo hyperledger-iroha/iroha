@@ -233,6 +233,7 @@ fn consensus_params_for_mode(
     ConsensusGenesisParams {
         block_time_ms: params.sumeragi().block_time_ms,
         commit_time_ms: params.sumeragi().commit_time_ms,
+        min_finality_ms: params.sumeragi().min_finality_ms,
         max_clock_drift_ms: params.sumeragi().max_clock_drift_ms,
         collectors_k: params.sumeragi().collectors_k,
         redundant_send_r: params.sumeragi().collectors_redundant_send_r,

@@ -1,20 +1,23 @@
 seiyaku AssetOps {
   kotoage fn execute() permission(Admin) {
     // Typed pointer‑ABI arguments via constructors
+    let alice = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
+    let bob = account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland");
+    let coin = asset_definition!("coin#wonder");
     mint_asset(
-      account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
-      asset_definition!("coin#wonder"),
+      alice,
+      coin,
       1000
     );
     transfer_asset(
-      account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"),
-      account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"),
-      asset_definition!("coin#wonder"),
+      alice,
+      bob,
+      coin,
       500
     );
     burn_asset(
-      account!("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB@wonderland"),
-      asset_definition!("coin#wonder"),
+      bob,
+      coin,
       100
     );
   }

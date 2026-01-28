@@ -54,7 +54,7 @@ async fn accounts_portfolio_endpoint_returns_snapshot() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let value: Value = json::from_slice(&body).expect("valid portfolio payload");
-    assert_eq!(value["totals"]["accounts"], Value::from(2));
+    assert_eq!(value["totals"]["accounts"], Value::from(1));
     assert_eq!(value["totals"]["positions"], Value::from(2));
     let mut observed_quantities: Vec<String> = value["dataspaces"][0]["accounts"]
         .as_array()
@@ -178,17 +178,16 @@ where
 fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<AccountId>) {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii_portfolio"));
     let domain_id: DomainId = "portfolio".parse().unwrap();
-    let def_id: AssetDefinitionId = format!("cash#{domain_id}").parse().unwrap();
+    let cash_id: AssetDefinitionId = format!("cash#{domain_id}").parse().unwrap();
+    let points_id: AssetDefinitionId = format!("points#{domain_id}").parse().unwrap();
     let first_account = account_id_from_signatory(domain_id.clone(), ACCOUNT_SIGNATORY);
-    let (second_public, _) = KeyPair::random().into_parts();
-    let second_account = AccountId::new(domain_id.clone(), second_public);
     let register: [InstructionBox; 6] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(first_account.clone()).with_uaid(Some(uaid))).into(),
-        Register::account(NewAccount::new(second_account.clone()).with_uaid(Some(uaid))).into(),
-        Register::asset_definition(AssetDefinition::numeric(def_id.clone())).into(),
-        Mint::asset_numeric(500u64, AssetId::new(def_id.clone(), first_account.clone())).into(),
-        Mint::asset_numeric(250u64, AssetId::new(def_id, second_account.clone())).into(),
+        Register::asset_definition(AssetDefinition::numeric(cash_id.clone())).into(),
+        Register::asset_definition(AssetDefinition::numeric(points_id.clone())).into(),
+        Mint::asset_numeric(500u64, AssetId::new(cash_id, first_account.clone())).into(),
+        Mint::asset_numeric(250u64, AssetId::new(points_id, first_account.clone())).into(),
     ];
 
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -202,22 +201,22 @@ fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<Accou
     tx.apply();
     block.commit().unwrap();
 
-    (uaid, vec![first_account, second_account])
+    (uaid, vec![first_account])
 }
 
 fn seed_fixture_portfolio_accounts(state: &Arc<State>) -> UniversalAccountId {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii_fixture"));
     let domain_id: DomainId = "portfolio_fixture".parse().unwrap();
-    let def_id: AssetDefinitionId = format!("cash#{domain_id}").parse().unwrap();
+    let cash_id: AssetDefinitionId = format!("cash#{domain_id}").parse().unwrap();
+    let points_id: AssetDefinitionId = format!("points#{domain_id}").parse().unwrap();
     let first_account = account_id_from_seed(&domain_id, 0x11);
-    let second_account = account_id_from_seed(&domain_id, 0x22);
     let register: [InstructionBox; 6] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new(first_account.clone()).with_uaid(Some(uaid))).into(),
-        Register::account(NewAccount::new(second_account.clone()).with_uaid(Some(uaid))).into(),
-        Register::asset_definition(AssetDefinition::numeric(def_id.clone())).into(),
-        Mint::asset_numeric(875u64, AssetId::new(def_id.clone(), first_account.clone())).into(),
-        Mint::asset_numeric(320u64, AssetId::new(def_id, second_account.clone())).into(),
+        Register::asset_definition(AssetDefinition::numeric(cash_id.clone())).into(),
+        Register::asset_definition(AssetDefinition::numeric(points_id.clone())).into(),
+        Mint::asset_numeric(875u64, AssetId::new(cash_id, first_account.clone())).into(),
+        Mint::asset_numeric(320u64, AssetId::new(points_id, first_account.clone())).into(),
     ];
 
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);

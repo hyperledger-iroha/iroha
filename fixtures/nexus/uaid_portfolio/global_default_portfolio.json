@@ -8,24 +8,18 @@
       "dataspace_alias": "universal",
       "accounts": [
         {
-          "account_id": "34mSYn1E6gFyP5RsCgfyH1bMjVYMhmP2n1Q1epwJ27XfY5WzP7VkgQMCRKS1ktRQ9R2Enz2kz",
+          "account_id": "34mSYn1E6gFyP5RsCgfyH1bMjVaauvgE7P26P9Mc9TKjonTppJGvNWFKo6gEZd2Ryg9zL3WaT@portfolio_fixture",
           "label": null,
           "assets": [
             {
               "asset_definition_id": "cash#portfolio_fixture",
-              "asset_id": "cash##34mSYn1E6gFyP5RsCgfyH1bMjVYMhmP2n1Q1epwJ27XfY5WzP7VkgQMCRKS1ktRQ9R2Enz2kz",
-              "quantity": "320"
-            }
-          ]
-        },
-        {
-          "account_id": "34mSYn1E6gFyP5RsCgfyH1bMjVZ4AxtSjevDx8rvsCgwwg4rRs8vSpeyTXiPqbCuQzk7oZLpG",
-          "label": null,
-          "assets": [
-            {
-              "asset_definition_id": "cash#portfolio_fixture",
-              "asset_id": "cash##34mSYn1E6gFyP5RsCgfyH1bMjVZ4AxtSjevDx8rvsCgwwg4rRs8vSpeyTXiPqbCuQzk7oZLpG",
+              "asset_id": "cash##34mSYn1E6gFyP5RsCgfyH1bMjVaauvgE7P26P9Mc9TKjonTppJGvNWFKo6gEZd2Ryg9zL3WaT@portfolio_fixture",
               "quantity": "875"
+            },
+            {
+              "asset_definition_id": "points#portfolio_fixture",
+              "asset_id": "points##34mSYn1E6gFyP5RsCgfyH1bMjVaauvgE7P26P9Mc9TKjonTppJGvNWFKo6gEZd2Ryg9zL3WaT@portfolio_fixture",
+              "quantity": "320"
             }
           ]
         }
@@ -33,7 +27,7 @@
     }
   ],
   "totals": {
-    "accounts": 2,
+    "accounts": 1,
     "positions": 2
   }
 }

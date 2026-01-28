@@ -15,7 +15,7 @@ fn transfer(src_balance: int, dst_balance: int, from_account: AccountId, to_acco
 }
 
 // Approve a spender allowance.
-fn approve(current_allowance: int, wad: int) {
+fn approve(_current_allowance: int, wad: int) {
     let new_allowance = wad;
 }
 

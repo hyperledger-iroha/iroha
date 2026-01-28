@@ -1288,7 +1288,7 @@ mod tests {
     fn topology_update_adds_new_trusted_peers() {
         let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let peer_id = PeerId::from(key_pair.public_key().clone());
-        let local_peer = Peer::new("127.0.0.1:9100".parse().expect("addr"), peer_id.clone());
+        let _local_peer = Peer::new("127.0.0.1:9100".parse().expect("addr"), peer_id.clone());
 
         let observer_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let observer_peer = Peer::new(

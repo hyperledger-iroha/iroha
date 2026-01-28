@@ -7471,7 +7471,7 @@ mod tests {
             .expect("evict block bodies");
 
         let (da_path, block_hash) = {
-            let mut store = kura.block_store.lock();
+            let store = kura.block_store.lock();
             (
                 store.da_block_path(2),
                 kura.get_block_hash(nonzero!(2_usize))
