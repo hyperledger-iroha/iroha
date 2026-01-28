@@ -7,7 +7,7 @@ seiyaku Hello {
   }
 
   // Public entrypoint that sets an account detail on the caller
-  kotoage fn write_detail() {
+  kotoage fn write_detail() permission(Admin) {
     set_account_detail(
       authority(),
       name!("example"),

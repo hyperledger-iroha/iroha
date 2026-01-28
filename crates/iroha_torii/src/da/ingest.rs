@@ -1622,6 +1622,9 @@ fn registry_alias_from_metadata(
 fn registry_owner_from_metadata(
     metadata: &ExtraMetadata,
 ) -> Result<Option<AccountId>, (StatusCode, String)> {
+    #[cfg(test)]
+    crate::ensure_test_domain_selector_resolver();
+
     let Some(entry) = metadata
         .items
         .iter()

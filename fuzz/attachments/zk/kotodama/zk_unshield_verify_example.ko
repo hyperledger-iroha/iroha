@@ -9,20 +9,21 @@ seiyaku ZkUnshieldDemo {
     max_cycles: 0,
   }
 
-  kotoage fn run() {
+  kotoage fn run() permission(Admin) {
     info("ZkUnshieldDemo: preparing pointers");
-    let to = account!("alice@wonderland");
+    let to = account!("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland");
     let ad = asset_definition!("rose#wonderland");
 
     // In a real program, you would pass proof envelopes via NoritoBytes and
     // call zk verification builtins (backend-specific) prior to recording state.
     // Here we log placeholders to illustrate pointer-ABI usage.
-    let proof = norito_bytes("ZK1\u0000"); // minimal envelope magic as a placeholder
+    let proof = norito_bytes("ENV-UNSHIELD"); // minimal envelope magic as a placeholder
     let vk_name = name!("vk_unshield");
 
     info("ZkUnshieldDemo: (placeholder) would verify proof with vk_unshield");
+    zk_verify_unshield(proof);
     // Example: tag detail to signal an attempted unshield (demo only)
-    set_account_detail(to, name!("zk_unshield_demo"), json!{ attempt: true });
+    set_account_detail(to, vk_name, json!{ attempt: true });
     info("ZkUnshieldDemo: done");
   }
 }

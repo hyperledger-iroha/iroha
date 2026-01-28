@@ -63,11 +63,11 @@ DA/RBC note
 ### NPoS mode configuration (operators)
 
 2. **Choose the roster source.** `sumeragi.npos.use_stake_snapshot_roster = true` tells the validator to hydrate the epoch roster from the staking snapshot provider (required for production NPoS). Leaving it `false` continues to mirror `trusted_peers` so small devnets can stage upgrades without the staking sidecar. When stake records are missing for some roster peers, NPoS assigns the minimum self-bond (or 1 when unset) to the missing entries; if no public-lane stake records exist, every roster peer receives the same fallback stake for quorum checks. If the commit topology omits active validators, the epoch roster widens to include the active set before filtering so validator elections and quorum checks retain the full active roster.
-3. **Define epoch cadence.** `sumeragi.npos.epoch_length_blocks` controls how long a validator set lives. Within each epoch, `sumeragi.npos.vrf.commit_window_blocks` and `.reveal_window_blocks` fence the VRF commit/reveal RPCs (when omitted, VRF windows and deadlines are derived from `epoch_length_blocks`), and the on-chain `SumeragiParameters.block_time_ms` target informs telemetry dashboards and the pacemaker expectation (keep `sumeragi.npos.block_time_ms` aligned as a bootstrap fallback). When `sumeragi_npos_parameters` is present on-chain (genesis or governance), its pacemaker timeouts, collector fan-out, `epoch_length_blocks`, VRF commit/reveal windows, and election/reconfig knobs are authoritative and override the local config values; `sumeragi_npos_parameters.block_time_ms` is deprecated and ignored in favor of `SumeragiParameters.block_time_ms`.
+3. **Define epoch cadence.** `sumeragi.npos.epoch_length_blocks` controls how long a validator set lives. Within each epoch, `sumeragi.npos.vrf.commit_window_blocks` and `.reveal_window_blocks` fence the VRF commit/reveal RPCs (when omitted, VRF windows and deadlines are derived from `epoch_length_blocks`), and the on-chain `SumeragiParameters.block_time_ms` target informs telemetry dashboards and the pacemaker expectation. When `sumeragi_npos_parameters` is present on-chain (genesis or governance), its collector fan-out, `epoch_length_blocks`, VRF commit/reveal windows, and election/reconfig knobs are authoritative and override the local config values. Pacemaker timeouts are derived from `SumeragiParameters.block_time_ms` (clamped by `min_finality_ms`) plus any `sumeragi.advanced.npos.timeouts` overrides.
 4. **Calibrate collector fan-out.**
    - `sumeragi.collectors.k` decides how many collectors assemble votes per slot.
    - `sumeragi.collectors.redundant_send_r` caps how many additional collectors a validator targets when local timeouts expire.
-   - `sumeragi.npos.timeouts.*_ms` provide the per-phase pacemaker budget (proposal, prevote, precommit, commit, DA, aggregator). These values are milliseconds in the user config and are mirrored directly into the runtime; `exec`/`witness` timeouts remain reserved for future witness pacing and do not influence the pacemaker today. Unset fields derive from `SumeragiParameters.block_time_ms` on-chain; local config derives them from `sumeragi.npos.block_time_ms` as a bootstrap fallback.
+   - `sumeragi.advanced.npos.timeouts.*_ms` provide the per-phase pacemaker budget (proposal, prevote, precommit, commit, DA, aggregator). These values are milliseconds in the user config and are mirrored directly into the runtime; `exec`/`witness` timeouts remain reserved for future witness pacing and do not influence the pacemaker today. Unset fields derive from the on-chain `SumeragiParameters.block_time_ms`.
 5. **Record election and reconfiguration policy.**
    - `sumeragi.npos.election.*` sets self‑bond minimums and the guardrails for nominator concentration, seat variance, and validator correlation.
    - `sumeragi.npos.reconfig.{evidence_horizon_blocks,activation_lag_blocks,slashing_delay_blocks}` govern how long evidence is retained, how long it takes for a newly scheduled validator set to activate, and how long consensus slashing is delayed before it applies.
@@ -83,10 +83,9 @@ k = 3
 redundant_send_r = 3 # example for 4 validators (2f+1)
 
 [sumeragi.npos]
-block_time_ms = 1000 # bootstrap fallback; on-chain SumeragiParameters.block_time_ms is authoritative
 epoch_length_blocks = 7200
 use_stake_snapshot_roster = true
-# timeouts.*_ms derive from block_time_ms when omitted
+# advanced.npos.timeouts.*_ms derive from the effective block time when omitted
 
 ## Optional: override derived VRF windows.
 #[sumeragi.npos.vrf]
@@ -179,7 +178,7 @@ accepts traffic:
 | CLI `iroha --output-format text ops sumeragi params` | `consensus_mode`, `k_aggregators`, `redundant_send_r`, VRF windows | Match governance manifest; only change via tracked config updates | Re-deploy config or regenerate genesis when values drift |
 | CLI `iroha --output-format text ops sumeragi collectors` / HTTP `/v1/sumeragi/collectors` | Collector indices, epoch/view tuple, `k_aggregators` slice | Current collectors rotate deterministically; no gaps or duplicate indices | If a peer is missing or duplicated, re-run the staking snapshot sync, verify `epoch_length_blocks`, and restart collectors after confirming randomness evidence |
 | CLI `iroha --output-format text ops sumeragi vrf-epoch`, `iroha --output-format text ops sumeragi vrf-penalties` | `finalized=true`, participant count equals roster size, penalty lists reflect drills only | Every epoch emits a seed and penalty set that matches the staking roster/governance intent | When counts drift or unexpected penalties appear, follow {doc}`sumeragi_randomness_evidence_runbook` to resubmit commits/reveals and capture artefacts for governance |
-| Prometheus | `sumeragi_phase_latency_ms{phase="commit"}` and phase-specific histograms | P95 < `0.8 * sumeragi.npos.timeouts.<phase>_ms` | Trigger chaos harness + perf runbook if exceeded; investigate collector fan-out |
+| Prometheus | `sumeragi_phase_latency_ms{phase="commit"}` and phase-specific histograms | P95 < `0.8 * sumeragi.advanced.npos.timeouts.<phase>_ms` | Trigger chaos harness + perf runbook if exceeded; investigate collector fan-out |
 | Prometheus | `sumeragi_da_gate_block_total{reason="missing_local_data"}`, `sumeragi_rbc_store_evictions_total`, `sumeragi_rbc_persist_drops_total` | Flat line in steady state; spikes indicate missing local payloads or RBC churn | Verify `BlockCreated` delivery/RBC backlog, then capture artefacts |
 | Prometheus | `sumeragi_vrf_no_participation_total`, `sumeragi_vrf_reveals_late_total` | 0 outside planned drills | Follow {doc}`sumeragi_randomness_evidence_runbook`; page affected validators |
 | HTTP `/v1/sumeragi/evidence/count` and CLI `iroha ops sumeragi evidence count` | Monotonic growth when faults occur; zero drift between peers | If counts diverge, re-run evidence submit/list checks and inspect Alertmanager snapshots |
@@ -237,7 +236,7 @@ Commit rule (commit certificate)
 - Commit QCs always bind `parent_state_root` and `post_state_root`; there is no separate execution QC gate. When `sumeragi.da.enabled=true`, availability evidence is tracked but does not gate commit.
 
 Pacemaker (view changes)
-- View‑0 voting follows the same rules for Set A and Set B validators. On local timeout in view 0, nodes suggest a view change (no widen‑before‑rotate). Timing is driven by on‑chain parameters: `SumeragiParameters` (`BlockTimeMs`/`CommitTimeMs`/`MinFinalityMs`) set the base for both modes, and NPoS additionally consumes `sumeragi_npos_parameters` per‑phase timeouts (not `block_time_ms`, which is deprecated). Leader proposal is roughly at 1/3 and expected commit at 2/3 of the pipeline time.
+- View‑0 voting follows the same rules for Set A and Set B validators. On local timeout in view 0, nodes suggest a view change (no widen‑before‑rotate). Timing is driven by on‑chain parameters: `SumeragiParameters` (`BlockTimeMs`/`CommitTimeMs`/`MinFinalityMs`) set the base for both modes, and NPoS derives per‑phase timeouts from `SumeragiParameters.block_time_ms` with optional `sumeragi.advanced.npos.timeouts` overrides. Leader proposal is roughly at 1/3 and expected commit at 2/3 of the pipeline time.
 - View-change proofs advance once `f+1` validators raise suspicion (commit failure or quorum timeout); a full commit quorum is not required for a view change.
 
 K / r Parameters
@@ -246,9 +245,8 @@ K / r Parameters
 - Fallbacks: if `k` yields no collectors, votes fall back to the full commit topology; `redundant_send_r` is treated as at least 1.
 - Determinism: primary/next collector order is a pure function of the canonical roster, PRF seed, and `(height, view)`; when the PRF seed is unavailable the fallback is the contiguous tail slice starting at `proxy_tail_index()`, with no per-node randomness.
 
-NPoS Tunables (`sumeragi.npos.*`)
-- `block_time_ms` (default `1000`): bootstrap fallback for local config/genesis; on-chain `SumeragiParameters.block_time_ms` is authoritative at runtime, and `sumeragi_npos_parameters.block_time_ms` is deprecated/ignored.
-- `timeouts.{propose_ms, prevote_ms, precommit_ms, exec_ms, witness_ms, commit_ms, da_ms, aggregator_ms}` (optional): each value must be > 0 when set. Unset fields derive from the on‑chain `SumeragiParameters.block_time_ms` using the 1s ratios `350/450/550/150/150/750/650/120` (local config derives them from `sumeragi.npos.block_time_ms` before genesis). The pacemaker currently consumes propose/collect_da/collect_prevote/collect_precommit/commit; `exec_ms`/`witness_ms` are reserved for future witness pacing and `collect_aggregator` remains observability-only.
+NPoS Tunables (`sumeragi.npos.*` + `sumeragi.advanced.npos.timeouts.*`)
+- `advanced.npos.timeouts.{propose_ms, prevote_ms, precommit_ms, exec_ms, witness_ms, commit_ms, da_ms, aggregator_ms}` (optional): each value must be > 0 when set. Unset fields derive from on‑chain `SumeragiParameters.block_time_ms` using the 1s ratios `350/450/550/150/150/750/650/120`. The pacemaker currently consumes propose/collect_da/collect_prevote/collect_precommit/commit; `exec_ms`/`witness_ms` are reserved for future witness pacing and `collect_aggregator` remains observability-only.
 - Collector fan-out is configured under `sumeragi.collectors.{k,redundant_send_r}` (shared with permissioned). Both must be > 0; invalid values are rejected during config parsing.
 - `vrf.{commit_window_blocks, reveal_window_blocks}` (optional): length of the commit and reveal windows inside an epoch; both must be > 0 when set. Unset values derive from `epoch_length_blocks` using the 3600-block ratios `100/40`. `vrf.commit_deadline_offset_blocks` defaults to `commit_window_blocks` and `vrf.reveal_deadline_offset_blocks` defaults to `commit_window_blocks + reveal_window_blocks` when omitted.
 - `election.{min_self_bond, max_nominator_concentration_pct, seat_band_pct, max_entity_correlation_pct}` with defaults `1000`, `25`, `5`, and `25`. Percentages are clamped to the 0–100 range, and `min_self_bond` must be > 0.
@@ -267,7 +265,7 @@ Genesis manifests now seed `Sumeragi::NextMode` and the `sumeragi_npos_parameter
 - Sora Nexus localnet: `kagami localnet --sora-profile nexus --peers 4 --out-dir ./sora-nexus-local` generates a 4-node NPoS localnet and starts `irohad --sora` for Nexus dataspaces.
 - Sora dataspace localnet: `kagami localnet --sora-profile dataspace --peers 4 --out-dir ./sora-ds-local` keeps Sora multi-lane defaults under NPoS; use `--consensus-mode permissioned` only without `--sora-profile`.
 - Bare-metal (Iroha2 staged cutover): `kagami localnet --build-line iroha2 --peers 4 --out-dir ./npos-local --consensus-mode permissioned --next-consensus-mode npos --mode-activation-height 5 --seed demo` stages a permissioned→NPoS cutover at height 5 and keeps the advertised fingerprint on the permissioned mode until activation.
-- Localnet defaults to a fast 1s pipeline (block/commit split), shortens transaction gossip cadence (`transaction_gossip_period_ms = 100`, `transaction_gossip_resend_ticks = 1`, target reshuffle cadence = 100ms), raises `sumeragi.rbc.chunk_max_bytes` to 256 KiB, lifts queue capacity to 262,144, sets `nexus.fusion.exit_teu = 1,000,000` and `sumeragi.block.proposal_queue_scan_multiplier = 4` to bound proposal assembly, relaxes Torii tx rate limiting (`torii.tx_rate_per_authority_per_sec = 1,000,000`, `torii.tx_burst_per_authority = 2,000,000`, `torii.api_high_load_tx_threshold = 262,144`), disables Kura fsync (`kura.fsync_mode = "off"`), and bumps redundant-send fanout when DA is enabled; for NPoS localnets it seeds XOR stake, activates validators in genesis, and rewrites `SumeragiParameters` timing fields (`block_time_ms`, `commit_time_ms`) plus `sumeragi_npos_parameters` timeouts to match the selected pipeline (keeping the legacy `sumeragi_npos_parameters.block_time_ms` aligned). Override with `--block-time-ms`, `--commit-time-ms`, or `--redundant-send-r` if you need slower timings. When only one of the block/commit values is set, Kagami mirrors it to the other to keep the pipeline balanced; set both to decouple them.
+- Localnet defaults to a fast 1s pipeline (block/commit split), shortens transaction gossip cadence (`transaction_gossip_period_ms = 100`, `transaction_gossip_resend_ticks = 1`, target reshuffle cadence = 100ms), raises `sumeragi.advanced.rbc.chunk_max_bytes` to 256 KiB, lifts queue capacity to 262,144, sets `nexus.fusion.exit_teu = 1,000,000` and `sumeragi.block.proposal_queue_scan_multiplier = 4` to bound proposal assembly, relaxes Torii tx rate limiting (`torii.tx_rate_per_authority_per_sec = 1,000,000`, `torii.tx_burst_per_authority = 2,000,000`, `torii.api_high_load_tx_threshold = 262,144`), disables Kura fsync (`kura.fsync_mode = "off"`), and bumps redundant-send fanout when DA is enabled; for NPoS localnets it seeds XOR stake, activates validators in genesis, and rewrites `SumeragiParameters` timing fields (`block_time_ms`, `commit_time_ms`) to match the selected pipeline. Override with `--block-time-ms`, `--commit-time-ms`, or `--redundant-send-r` if you need slower timings. When only one of the block/commit values is set, Kagami mirrors it to the other to keep the pipeline balanced; set both to decouple them.
 - Localnet soak (permissioned, thousands of blocks/tx): `cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --ignored --nocapture` (long-running).
 - Docker Compose: point `--config-dir` at the same localnet output and run `kagami swarm --peers 4 --config-dir ./npos-local --image hyperledger/iroha:dev --out-file docker-compose.npos.yml --consensus-mode npos --no-banner --print` to emit a Compose file that re-signs genesis in-container with `GENESIS_CONSENSUS_MODE` overrides (add the `GENESIS_NEXT_CONSENSUS_MODE`/`GENESIS_MODE_ACTIVATION_HEIGHT` pair only on Iroha2 staged networks).
 - Rosters/PoPs: re-sign custom topologies with `kagami genesis sign --topology '<peers_json>' --peer-pop <public_key=pop_hex>...` (swarm’s inline signer accepts the same flags). Reuse the same `--seed` when regenerating localnet output so BLS/Ed25519 keys and PoPs stay deterministic for VRF sampling.
@@ -318,14 +316,14 @@ consensus_mode = "permissioned"
 k = 3                   # three collectors per height
 redundant_send_r = 3    # example for 4 validators (2f+1)
 
-[sumeragi.queues]
+[sumeragi.advanced.queues]
 votes = 8192             # vote channel capacity (commit votes + RBC READY/DELIVER)
 block_payload = 128      # block payload capacity (Proposal/BlockSyncUpdate)
 rbc_chunks = 1024        # RBC chunk capacity
 blocks = 256             # block message capacity (BlockCreated/FetchPendingBlock/RbcInit/etc.)
 control = 1024           # control/background/lane channel capacity
 
-[sumeragi.worker]
+[sumeragi.advanced.worker]
 iteration_budget_cap_ms = 2000       # cap worker loop time budget per iteration
 iteration_drain_budget_cap_ms = 2000 # cap mailbox drain per iteration
 tick_work_budget_cap_ms = 500        # cap per-tick proposal/commit work (0 disables)
@@ -334,7 +332,7 @@ validation_work_queue_cap = 4        # validation work queue per worker
 validation_result_queue_cap = 4      # validation result queue
 validation_pending_cap = 8192        # deferred vote-validation backlog cap
 
-[sumeragi.pacemaker]
+[sumeragi.advanced.pacemaker]
 pending_stall_grace_ms = 250       # grace before pending progress counts as stalled
 active_pending_soft_limit = 1      # allow proposals with <= N blocking pending blocks (0 = strict)
 rbc_backlog_session_soft_limit = 2 # allow proposals with <= N backlog sessions (0 = strict)
@@ -343,7 +341,7 @@ rbc_backlog_chunk_soft_limit = 16  # allow proposals with <= N missing chunks (0
 [sumeragi.da]
 enabled = true                  # enable DA + RBC; availability evidence tracked (commit does not wait)
 
-[sumeragi.rbc]
+[sumeragi.advanced.rbc]
 chunk_fanout = null             # RBC chunk fanout cap (null = full roster minus local)
 
 [sumeragi.persistence]
@@ -391,7 +389,7 @@ Notes
 - Vote/QC/deferred/roster caches are pruned to a bounded height/view window around the active round to prevent unbounded growth during view-change storms.
 - In DA mode, view changes still prune stale pending blocks but retain RBC sessions and missing-block requests while the payload is unavailable so availability can finish after a view change.
 - NEW_VIEW tracker entries are retained within the configured future-view window so late quorum receipts can still unblock proposal assembly after a timeout.
-- Timing uses on‑chain `SumeragiParameters` (`BlockTimeMs`/`CommitTimeMs`) for both modes; NPoS additionally consumes `sumeragi_npos_parameters` timeouts (`block_time_ms` is deprecated). Both affect pacing but not semantics.
+- Timing uses on‑chain `SumeragiParameters` (`BlockTimeMs`/`CommitTimeMs`/`MinFinalityMs`) for both modes; NPoS derives per‑phase timeouts from `SumeragiParameters.block_time_ms` with optional `sumeragi.advanced.npos.timeouts` overrides. Both affect pacing but not semantics.
 - DA-enabled runs derive the quorum timeout as `3 * (block_time + 4 * commit_time)` to leave headroom for RBC/availability-evidence propagation on slower hosts.
 - Quorum timeouts are evaluated against the last observed progress for the pending block (RBC chunks/READY/DELIVER or votes); the fast-path view-change window is suppressed while pre-vote validation is inflight, and in DA mode the fast-path shortcut is disabled so timeouts always use the full DA commit window. If progress stalls, the timeout still fires to recover.
 - Availability timeouts use `2 * max(quorum_timeout, 2s)` in DA mode to tolerate payload hydration before logging/rebroadcast; when `MissingLocalData` is recorded, quorum reschedules are deferred until the availability timeout so payload recovery can complete.
@@ -547,7 +545,7 @@ Stalled collectors or slow commit assembly manifest as missing
 availability-evidence records, prolonged DA collection, or `commit_ms` /
 `pipeline_total_ms` spikes. Operators should wire the following telemetry to
 detect and triage issues before commits approach the configured commit-time
-budget (permissioned `CommitTimeMs` or NPoS `timeouts.timeout_commit_ms`).
+budget (permissioned `CommitTimeMs` or NPoS `effective_npos_timeouts.commit_ms`).
 
 **Key dashboards**
 - `sum(rate(sumeragi_da_votes_ingested_by_collector[1m])) by (collector_idx)` —
@@ -586,18 +584,18 @@ budget (permissioned `CommitTimeMs` or NPoS `timeouts.timeout_commit_ms`).
 - Availability evidence latency: alert when `sumeragi_qc_last_latency_ms` for
   `kind="availability"` exceeds `0.6 * commit_time_ms` for two consecutive
   windows, or when the histogram P95 crosses `0.7 * commit_time_ms`
-  (permissioned `CommitTimeMs`, NPoS `timeouts.timeout_commit_ms`).
+  (permissioned `CommitTimeMs`, NPoS `effective_npos_timeouts.commit_ms`).
 - Vote ingress stagnation: alert when
   `sum(rate(sumeragi_da_votes_ingested_total[2m])) == 0` while
   `sumeragi_rbc_backlog_sessions_pending > 0` (collectors are not making
   progress despite active RBC sessions).
 - Commit latency: alert when `commit_ms` or the P95 of
   `sumeragi_phase_latency_ms{phase="commit"}` exceeds `0.75 * commit_time_ms`
-  (permissioned `CommitTimeMs`, NPoS `timeouts.timeout_commit_ms`), or when it
+  (permissioned `CommitTimeMs`, NPoS `effective_npos_timeouts.commit_ms`), or when it
   remains zero for ≥3 consecutive rounds while new blocks arrive (commit
   pipeline stalled).
 - Collector fan-out: alert when `collect_aggregator_ms` exceeds
-  `0.5 * sumeragi.npos.timeouts.aggregator_ms` for three consecutive rounds, or
+  `0.5 * sumeragi.advanced.npos.timeouts.aggregator_ms` for three consecutive rounds, or
   when redundant sends occur more than `sumeragi.collectors.redundant_send_r` times in a single view
   (watch `sumeragi_redundant_sends_total`), gossip fallback fires repeatedly
   (monitor `rate(sumeragi_gossip_fallback_total[5m]) > 0`), or proposals are
@@ -678,7 +676,7 @@ Operators can pull deterministic telemetry snapshots over Torii or via the CLI.
 
 | Metric | Meaning | Operator action |
 |--------|---------|-----------------|
-| `sumeragi_pacemaker_backpressure_deferrals_total` | Pacemaker skipped a proposal because the transaction queue is saturated, consensus block-payload/RBC chunk queues are saturated, relay/RBC backpressure is active, or a pending block still blocks proposal assembly. | Inspect `iroha --output-format text ops sumeragi status` for `rbc_store.pressure_level`, drain gossip/RBC queues, and consider temporarily raising the per-queue caps (especially `sumeragi.queues.rbc_chunks`/`sumeragi.queues.block_payload`) or reducing incoming traffic before resuming. |
+| `sumeragi_pacemaker_backpressure_deferrals_total` | Pacemaker skipped a proposal because the transaction queue is saturated, consensus block-payload/RBC chunk queues are saturated, relay/RBC backpressure is active, or a pending block still blocks proposal assembly. | Inspect `iroha --output-format text ops sumeragi status` for `rbc_store.pressure_level`, drain gossip/RBC queues, and consider temporarily raising the per-queue caps (especially `sumeragi.advanced.queues.rbc_chunks`/`sumeragi.advanced.queues.block_payload`) or reducing incoming traffic before resuming. |
 | `sumeragi_commit_pipeline_tick_total{mode,outcome}` | Pacemaker tick invoked the commit pipeline (`outcome="active"` when pending blocks existed, `"idle"` when empty). | Pair with `status_snapshot().commit_pipeline_tick_total` to prove timer-driven commits on quiet networks; alert if `idle` climbs while transactions are queued, or if `active` climbs without matching inbound votes. |
 | `sumeragi_pacemaker_backoff_ms` / `sumeragi_pacemaker_view_timeout_target_ms` | Current view timeout vs. target window derived from on-chain `sumeragi.block_time_ms`. Sustained values far above the block time indicate repeated view changes or retries. | Run `iroha --output-format text ops sumeragi pacemaker`, compare with the on-chain block time, and audit `p2p_*_throttled_total` plus RBC backlog metrics to find which stage is stretching the view timer. |
 | `sumeragi_phase_latency_ema_ms{phase="collect_da_ms",…}` / `sumeragi_phase_total_ema_ms` | EMA latency per phase and across the full pipeline as rendered by `iroha --output-format text ops sumeragi phases`. | Trigger alerts when EMA totals exceed the configured view timeout, then correlate the offending phase with Torii/RBC logs to determine whether DA, vote-collection, or aggregator legs are stalling. |
@@ -692,16 +690,16 @@ Operators can pull deterministic telemetry snapshots over Torii or via the CLI.
 
 #### RBC rebroadcast budget
 
-RBC payload recovery is capped per tick by `sumeragi.rbc.rebroadcast_sessions_per_tick` to avoid
+RBC payload recovery is capped per tick by `sumeragi.advanced.rbc.rebroadcast_sessions_per_tick` to avoid
 rebroadcast storms when many sessions are missing chunks. Increase it on well-provisioned
 networks to speed recovery, or lower it if P2P queues saturate during soak tests.
 
 #### Pending RBC stash bounds
 
 Before INIT arrives, RBC frames are bounded by per-session caps
-(`sumeragi.rbc.pending_max_chunks`, `sumeragi.rbc.pending_max_bytes`) and the
-session cap `sumeragi.rbc.pending_session_limit` (default 256). Entries also
-expire after `sumeragi.rbc.pending_ttl_ms` when the session is not yet active;
+(`sumeragi.advanced.rbc.pending_max_chunks`, `sumeragi.advanced.rbc.pending_max_bytes`) and the
+session cap `sumeragi.advanced.rbc.pending_session_limit` (default 256). Entries also
+expire after `sumeragi.advanced.rbc.pending_ttl_ms` when the session is not yet active;
 once a session exists, pending READY/DELIVER frames are retained until the
 session is cleared so roster delays do not drop availability evidence.
 Session-cap evictions skip active sessions; if the cap is reached by active
@@ -714,12 +712,12 @@ to preserve liveness; retries respect the standard backoff and roster-hash
 checks.
 
 ```
-sumeragi.rbc.pending_session_limit
-  * min(sumeragi.rbc.pending_max_bytes, sumeragi.rbc.chunk_max_bytes * RBC_MAX_TOTAL_CHUNKS)
+sumeragi.advanced.rbc.pending_session_limit
+  * min(sumeragi.advanced.rbc.pending_max_bytes, sumeragi.advanced.rbc.chunk_max_bytes * RBC_MAX_TOTAL_CHUNKS)
 ```
 
-Size `sumeragi.rbc.pending_max_bytes` to at least one chunk (`sumeragi.rbc.chunk_max_bytes`), and
-set `sumeragi.rbc.chunk_max_bytes` to a positive value (0 is rejected by config
+Size `sumeragi.advanced.rbc.pending_max_bytes` to at least one chunk (`sumeragi.advanced.rbc.chunk_max_bytes`), and
+set `sumeragi.advanced.rbc.chunk_max_bytes` to a positive value (0 is rejected by config
 validation) so payloads can always split into at least one chunk. Then
 use the bound above to keep memory budgets deterministic. Drops and evictions
 are surfaced via `/v1/sumeragi/telemetry.pending_rbc.{drops_cap_total,drops_cap_bytes_total,drops_ttl_total,drops_ttl_bytes_total,drops_bytes_total,evicted_total,max_*}`
@@ -730,7 +728,7 @@ help correlate missing-block fetch retries with roster hydration. Evictions neve
 availability still requires availability evidence (RBC `READY` quorum or availability votes) even when
 pending stash frames are discarded.
 
-At runtime, `sumeragi.rbc.chunk_max_bytes` is clamped so a serialized `RbcChunk` (including
+At runtime, `sumeragi.advanced.rbc.chunk_max_bytes` is clamped so a serialized `RbcChunk` (including
 headers and length prefix) fits within the consensus payload plaintext cap derived
 from `network.max_frame_bytes_block_sync`.
 
@@ -948,7 +946,7 @@ DA availability transitions also emit structured debug logs when the reason chan
 | Collector stops ingesting votes | `iroha --output-format text ops sumeragi telemetry` reports flat `availability.collectors[*].votes_ingested` for a single index and `sumeragi_bg_post_queue_depth_by_peer` spikes for that collector. | Use `iroha --output-format text ops sumeragi collectors` to confirm the assignments, bump `sumeragi.collectors.redundant_send_r` to fan out to another collector, and debug the peer’s networking (firewall, queue saturation) before restoring the baseline redundancy. |
 | Membership mismatch alert | `sumeragi_membership_mismatch_active` gauges flip to `1` and `/v1/sumeragi/status.membership.view_hash` differs between peers. | Compare `/v1/configuration.sumeragi` snapshots, ensure `trusted_peers`/stake snapshots are identical, restart any validator that failed to apply the latest config, and keep the lane quiesced until every peer reports the same roster hash. |
 | VRF penalties creeping up | Prometheus alerts on `increase(sumeragi_vrf_no_participation_total)` / `increase(sumeragi_vrf_non_reveal_penalties_total)` or CLI telemetry shows growing penalties. | Follow {doc}`sumeragi_randomness_evidence_runbook` to pull the per-epoch participation table, contact the validator, collect the late reveal via `POST /v1/sumeragi/vrf/reveal`, and confirm the `prf.epoch_seed` remained stable. |
-| RBC store evicts sessions faster than expected | `sumeragi_rbc_store_pressure=2`, `sumeragi_rbc_store_evictions_total` increases, and `iroha --output-format text ops sumeragi status` lists recent evictions for nearby heights. | Expand disk allowance, confirm `sumeragi.rbc.store_max_bytes` and `sumeragi.collectors.redundant_send_r` match the production template, and re-ingest the affected payload once collectors are healthy. |
+| RBC store evicts sessions faster than expected | `sumeragi_rbc_store_pressure=2`, `sumeragi_rbc_store_evictions_total` increases, and `iroha --output-format text ops sumeragi status` lists recent evictions for nearby heights. | Expand disk allowance, confirm `sumeragi.advanced.rbc.store_max_bytes` and `sumeragi.collectors.redundant_send_r` match the production template, and re-ingest the affected payload once collectors are healthy. |
 
 ### Governance Checklist: Reconfiguration & Slashing
 

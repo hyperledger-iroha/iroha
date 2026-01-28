@@ -903,15 +903,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
-    /// Construct a host that enforces AXT policy from the provided state snapshot.
+    /// Construct a host from a state snapshot, hydrating config, ZK snapshots, and AXT policy.
     pub fn from_state(authority: AccountId, state: &crate::state::State) -> Self {
         let view = state.view();
         let snapshot = view.axt_policy_snapshot();
         let mut host = Self::new(authority);
+        host.set_crypto_config(Arc::clone(&view.crypto));
+        host.set_halo2_config(&view.zk.halo2);
+        host.set_chain_id(&view.chain_id);
         host.set_axt_timing(view.nexus.axt);
         host.hydrate_axt_replay_ledger(&view);
         host.set_durable_state_snapshot_from_world(view.world());
         host.set_public_inputs_from_parameters(view.world().parameters());
+        host.set_zk_snapshots_from_world(view.world(), &view.zk)
+            .expect("valid ZK snapshot state");
         host = host.with_axt_policy_snapshot(&snapshot);
         host.set_amx_limits(Self::amx_limits_from_config(&view.pipeline));
         host
@@ -1721,6 +1726,38 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// Install a read-only snapshot of ZK roots per asset for state-read syscalls.
     pub fn set_zk_roots_snapshot(&mut self, map: BTreeMap<AssetDefinitionId, Vec<[u8; 32]>>) {
         self.zk_roots = map;
+    }
+
+    /// Hydrate ZK snapshots (roots, elections, verifying keys) from a world view.
+    ///
+    /// # Errors
+    /// Returns an error if the verifying key registry contains inconsistent entries.
+    pub(crate) fn set_zk_snapshots_from_world(
+        &mut self,
+        world: &impl WorldReadOnly,
+        zk_cfg: &iroha_config::parameters::actual::Zk,
+    ) -> Result<(), ivm::VMError> {
+        self.set_zk_root_history_cap(zk_cfg.root_history_cap);
+        self.set_zk_empty_root_policy(zk_cfg.empty_root_on_empty, zk_cfg.merkle_depth);
+
+        let mut roots = BTreeMap::new();
+        for (ad, st) in world.zk_assets().iter() {
+            roots.insert(ad.clone(), st.root_history.clone());
+        }
+        self.set_zk_roots_snapshot(roots);
+
+        let mut elections = BTreeMap::new();
+        for (id, st) in world.elections().iter() {
+            elections.insert(id.clone(), (st.finalized, st.tally.clone()));
+        }
+        self.set_zk_elections_snapshot(elections);
+
+        let mut vks = BTreeMap::new();
+        for (id, rec) in world.verifying_keys().iter() {
+            vks.insert(id.clone(), rec.clone());
+        }
+        self.set_verifying_keys(vks)?;
+        Ok(())
     }
 
     /// Snapshot durable smart-contract state from the provided world view.
@@ -8005,7 +8042,7 @@ mod tests {
             isi::triggers::specialized::{SpecializedAction, SpecializedTrigger},
             ivm::host::pointer_abi_tests::make_tlv,
         },
-        state::{State, World},
+        state::{ElectionState, State, World, ZkAssetState},
     };
 
     #[cfg(feature = "zk-halo2-ipa")]
@@ -9377,6 +9414,103 @@ mod tests {
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
         let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode state value");
         assert_eq!(value, 1);
+    }
+
+    #[test]
+    fn zk_vote_tally_syscall_reads_world_snapshot() {
+        crate::test_alias::ensure();
+        let mut world = World::new();
+        let mut election = ElectionState::default();
+        election.finalized = true;
+        election.tally = vec![2, 1, 0];
+        world.elections.insert("election-1".to_string(), election);
+
+        let backend = "halo2/ipa";
+        let vk_bytes = vec![9, 9, 9];
+        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+        let schema_hash = [5u8; 32];
+        let mut rec = active_vk_record(commitment, schema_hash, backend);
+        rec.key = Some(VerifyingKeyBox::new(backend.into(), vk_bytes));
+        let vk_id = VerifyingKeyId::new(backend, "vk");
+        world.verifying_keys.insert(vk_id.clone(), rec);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let mut host = CoreHost::new(authority);
+        host.set_halo2_config(&view.zk.halo2);
+        host.set_chain_id(&view.chain_id);
+        host.set_zk_snapshots_from_world(view.world(), &view.zk)
+            .expect("hydrate zk snapshots");
+        assert!(host.verifying_keys.contains_key(&vk_id));
+
+        let mut vm = IVM::new(10_000);
+        let req = ivm::zk_verify::VoteGetTallyRequest {
+            election_id: "election-1".to_string(),
+        };
+        let req_bytes = norito::to_bytes(&req).expect("encode request");
+        let req_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &req_bytes);
+        vm.set_register(10, req_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_ZK_VOTE_GET_TALLY, &mut vm),
+            Ok(0)
+        );
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let resp: ivm::zk_verify::VoteGetTallyResponse =
+            norito::decode_from_bytes(tlv.payload).expect("decode response");
+        assert!(resp.finalized);
+        assert_eq!(resp.tally, vec![2, 1, 0]);
+    }
+
+    #[test]
+    fn from_state_hydrates_zk_snapshots() {
+        crate::test_alias::ensure();
+        let mut world = World::new();
+
+        let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
+        let mut zk_state = ZkAssetState::default();
+        zk_state.root_history = vec![[1u8; 32], [2u8; 32]];
+        world.zk_assets.insert(asset_def_id.clone(), zk_state);
+
+        let mut election = ElectionState::default();
+        election.finalized = true;
+        election.tally = vec![1, 2];
+        world.elections.insert("election-1".to_string(), election);
+
+        let backend = "halo2/ipa";
+        let vk_bytes = vec![9, 9, 9];
+        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+        let schema_hash = [7u8; 32];
+        let mut rec = active_vk_record(commitment, schema_hash, backend);
+        rec.key = Some(VerifyingKeyBox::new(backend.into(), vk_bytes));
+        let vk_id = VerifyingKeyId::new(backend, "vk");
+        world.verifying_keys.insert(vk_id.clone(), rec);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = "alice@wonderland".parse().unwrap();
+        let host = CoreHost::from_state(authority, &state);
+
+        assert_eq!(
+            host.zk_roots
+                .get(&asset_def_id)
+                .cloned()
+                .unwrap_or_default(),
+            vec![[1u8; 32], [2u8; 32]]
+        );
+        let (finalized, tally) = host
+            .zk_elections
+            .get("election-1")
+            .cloned()
+            .unwrap_or((false, Vec::new()));
+        assert!(finalized);
+        assert_eq!(tally, vec![1, 2]);
+        assert!(host.verifying_keys.contains_key(&vk_id));
     }
 
     #[test]

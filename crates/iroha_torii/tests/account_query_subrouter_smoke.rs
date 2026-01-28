@@ -11,9 +11,11 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
+use iroha_data_model::{Registrable, account::Account, domain::Domain};
 use iroha_data_model::peer::PeerId;
 #[cfg(feature = "telemetry")]
 use iroha_primitives::time::TimeSource;
+use iroha_test_samples::ALICE_ID;
 use iroha_torii::Torii;
 use tower::ServiceExt as _;
 
@@ -29,7 +31,10 @@ async fn account_query_subrouter_exposes_endpoints() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let mut world = World::default();
+    let account_id = ALICE_ID.clone();
+    let domain = Domain::new(account_id.domain().clone()).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
+    let mut world = World::with([domain], [account], []);
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();

@@ -124,7 +124,7 @@ cargo run -p iroha_cli --features sm -- \
      --ivm-dir <ivm/dir> \
      --genesis-public-key <PUBLIC_KEY> > genesis.json
   ```
-   הפרמטר `--consensus-mode` קובע אילו פרמטרי קונצנזוס Kagami זורע בתוך בלוק ה-`parameters`. ב‑dataspace הציבורי של Sora Nexus `npos` הוא חובה ואין תמיכה בהחלפה מדורגת; dataspaces אחרים של Iroha3 יכולים להשתמש ב‑`permissioned` או `npos`. ב‑Iroha2 ברירת המחדל היא `permissioned`, וניתן לבצע מעבר מדורג באמצעות `--next-consensus-mode`/`--mode-activation-height`. בחירה ב‑`npos` תזרע את המטען `sumeragi_npos_parameters` שמגדיר את תזמוני pacemaker של NPoS, את fan-out של האוספים, את מדיניות הבחירה ואת חלונות הקונפיגורציה מחדש; ובמהלך נירמול/חתימה הוא מתורגם להוראות `SetParameter` בבלוק.
+   הפרמטר `--consensus-mode` קובע אילו פרמטרי קונצנזוס Kagami זורע בתוך בלוק ה-`parameters`. ב‑dataspace הציבורי של Sora Nexus `npos` הוא חובה ואין תמיכה בהחלפה מדורגת; dataspaces אחרים של Iroha3 יכולים להשתמש ב‑`permissioned` או `npos`. ב‑Iroha2 ברירת המחדל היא `permissioned`, וניתן לבצע מעבר מדורג באמצעות `--next-consensus-mode`/`--mode-activation-height`. בחירה ב‑`npos` תזרע את המטען `sumeragi_npos_parameters` שמגדיר את fan-out של האוספים, את מדיניות הבחירה ואת חלונות הקונפיגורציה מחדש; ובמהלך נירמול/חתימה הוא מתורגם להוראות `SetParameter` בבלוק.
 2. עריכת `genesis.json` (אופציונלי), ולאחר מכן אימות וחתימה:
    ```bash
    cargo run -p iroha_kagami -- genesis sign genesis.json \
@@ -146,7 +146,7 @@ cargo run -p iroha_cli --features sm -- \
 
 Genesis תומך בפעולות הבאות; Kagami מרכיבה אותן בסדר דטרמיניסטי:
 
-- **פרמטרים**: הגדרת ערכים התחלתיים ל-Sumeragi, Block, Transaction, Executor, חוזים חכמים ופרמטרים מותאמים. Kagami זורעת את `Sumeragi::NextMode` ו-`sumeragi_npos_parameters` (תזמוני NPoS, בחירה, קונפיגורציה מחדש) בתוך בלוק ה-`parameters`, והבלוק החתום מכיל את הוראות ה-`SetParameter` שנוצרו.
+- **פרמטרים**: הגדרת ערכים התחלתיים ל-Sumeragi, Block, Transaction, Executor, חוזים חכמים ופרמטרים מותאמים. Kagami זורעת את `Sumeragi::NextMode` ו-`sumeragi_npos_parameters` (בחירה, קונפיגורציה מחדש) בתוך בלוק ה-`parameters`, והבלוק החתום מכיל את הוראות ה-`SetParameter` שנוצרו.
 - **הוראות מובנות**: רישום/הסרה של דומיין, חשבון, הגדרת נכס; יציקת/שריפת/העברת נכסים; העברת בעלות; עריכת Metadata; הענקת הרשאות ותפקידים.
 - **טריגרי IVM**: רישום טריגרים המפעילים bytecode (נתיבים יחסיים ל-`ivm_dir`).
 - **טופולוגיה**: הגדרת כלי-peer ראשוניים דרך `topology` עם רשומות

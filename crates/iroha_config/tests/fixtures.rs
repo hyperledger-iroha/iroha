@@ -992,7 +992,7 @@ fn minimal_config_snapshot() {
                 worker: SumeragiWorker {
                     iteration_budget_cap: 2s,
                     iteration_drain_budget_cap: 2s,
-                    tick_work_budget_cap: 0ns,
+                    tick_work_budget_cap: 500ms,
                     validation_worker_threads: 0,
                     validation_work_queue_cap: 0,
                     validation_result_queue_cap: 0,
@@ -1073,16 +1073,15 @@ fn minimal_config_snapshot() {
                     },
                 },
                 npos: SumeragiNpos {
-                    block_time: 1s,
-                    timeouts: SumeragiNposTimeouts {
-                        propose: 350ms,
-                        prevote: 450ms,
-                        precommit: 550ms,
-                        exec: 150ms,
-                        witness: 150ms,
-                        commit: 750ms,
-                        da: 650ms,
-                        aggregator: 120ms,
+                    timeouts_overrides: SumeragiNposTimeoutOverrides {
+                        propose: None,
+                        prevote: None,
+                        precommit: None,
+                        exec: None,
+                        witness: None,
+                        commit: None,
+                        da: None,
+                        aggregator: None,
                     },
                     vrf: SumeragiNposVrf {
                         commit_window_blocks: 100,
@@ -3261,7 +3260,7 @@ fn da_timeout_multiplier_validation_propagates() {
     let message = format!("{report:?}");
     assert_contains!(
         message,
-        "sumeragi.da.quorum_timeout_multiplier must be greater than zero"
+        "sumeragi.advanced.da.quorum_timeout_multiplier must be greater than zero"
     );
 
     let env = MockEnv::new().set("SUMERAGI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER", "0");
@@ -3276,7 +3275,7 @@ fn da_timeout_multiplier_validation_propagates() {
     let message = format!("{report:?}");
     assert_contains!(
         message,
-        "sumeragi.da.availability_timeout_multiplier must be greater than zero"
+        "sumeragi.advanced.da.availability_timeout_multiplier must be greater than zero"
     );
 }
 

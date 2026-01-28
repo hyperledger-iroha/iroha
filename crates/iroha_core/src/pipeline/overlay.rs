@@ -645,7 +645,10 @@ where
             #[cfg(feature = "telemetry")]
             host.set_telemetry(state_ro.metrics().clone());
             host.set_crypto_config(state_ro.crypto());
+            host.set_halo2_config(&state_ro.zk().halo2);
             host.set_chain_id(state_ro.chain_id());
+            host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
+                .map_err(OverlayBuildError::IvmRun)?;
             vm.set_gas_limit(gas_limit);
             run_vm_with_host(&mut vm, &mut host)?;
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
@@ -839,7 +842,10 @@ where
             #[cfg(feature = "telemetry")]
             host.set_telemetry(state_ro.metrics().clone());
             host.set_crypto_config(state_ro.crypto());
+            host.set_halo2_config(&state_ro.zk().halo2);
             host.set_chain_id(state_ro.chain_id());
+            host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
+                .map_err(OverlayBuildError::IvmRun)?;
             vm.load_program(bytecode.as_ref())
                 .map_err(OverlayBuildError::IvmLoad)?;
             vm.set_gas_limit(tx_gas_limit);

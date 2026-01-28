@@ -3883,45 +3883,97 @@ impl NetworkBuilder {
             .get(&SumeragiNposParameters::parameter_id())
             .and_then(SumeragiNposParameters::from_custom_parameter);
         let (epoch_length_blocks, npos_params) = match npos_payload {
-            Some(npos) => (
-                npos.epoch_length_blocks(),
-                Some(NposGenesisParams {
-                    block_time_ms: parameter_state.sumeragi().block_time_ms(),
-                    timeout_propose_ms: npos.timeout_propose_ms(),
-                    timeout_prevote_ms: npos.timeout_prevote_ms(),
-                    timeout_precommit_ms: npos.timeout_precommit_ms(),
-                    timeout_commit_ms: npos.timeout_commit_ms(),
-                    timeout_da_ms: npos.timeout_da_ms(),
-                    timeout_aggregator_ms: npos.timeout_aggregator_ms(),
-                    k_aggregators: npos.k_aggregators(),
-                    redundant_send_r: npos.redundant_send_r(),
-                    epoch_seed: npos.epoch_seed(),
-                    vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
-                    vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
-                    max_validators: npos.max_validators(),
-                    min_self_bond: npos.min_self_bond(),
-                    min_nomination_bond: npos.min_nomination_bond(),
-                    max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
-                    seat_band_pct: npos.seat_band_pct(),
-                    max_entity_correlation_pct: npos.max_entity_correlation_pct(),
-                    finality_margin_blocks: npos.finality_margin_blocks(),
-                    evidence_horizon_blocks: npos.evidence_horizon_blocks(),
-                    activation_lag_blocks: npos.activation_lag_blocks(),
-                    slashing_delay_blocks: npos.slashing_delay_blocks(),
-                }),
-            ),
-            None if matches!(consensus_mode, ConsensusMode::Npos) => {
-                let npos = SumeragiNposParameters::default();
+            Some(npos) => {
+                let mut timeouts =
+                    iroha_config::parameters::actual::SumeragiNposTimeouts::from_block_time(
+                        Duration::from_millis(parameter_state.sumeragi().block_time_ms().max(1)),
+                    );
+                let min_finality =
+                    Duration::from_millis(parameter_state.sumeragi().min_finality_ms().max(1));
+                let clamp = |value: Duration| {
+                    if value < min_finality {
+                        min_finality
+                    } else {
+                        value
+                    }
+                };
+                timeouts.propose = clamp(timeouts.propose);
+                timeouts.prevote = clamp(timeouts.prevote);
+                timeouts.precommit = clamp(timeouts.precommit);
+                timeouts.commit = clamp(timeouts.commit);
+                timeouts.da = clamp(timeouts.da);
+                timeouts.aggregator = clamp(timeouts.aggregator);
+                timeouts.exec = clamp(timeouts.exec);
+                timeouts.witness = clamp(timeouts.witness);
+                let duration_ms = |value: Duration| -> u64 {
+                    let ms = value.as_millis();
+                    u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
+                };
                 (
                     npos.epoch_length_blocks(),
                     Some(NposGenesisParams {
                         block_time_ms: parameter_state.sumeragi().block_time_ms(),
-                        timeout_propose_ms: npos.timeout_propose_ms(),
-                        timeout_prevote_ms: npos.timeout_prevote_ms(),
-                        timeout_precommit_ms: npos.timeout_precommit_ms(),
-                        timeout_commit_ms: npos.timeout_commit_ms(),
-                        timeout_da_ms: npos.timeout_da_ms(),
-                        timeout_aggregator_ms: npos.timeout_aggregator_ms(),
+                        timeout_propose_ms: duration_ms(timeouts.propose),
+                        timeout_prevote_ms: duration_ms(timeouts.prevote),
+                        timeout_precommit_ms: duration_ms(timeouts.precommit),
+                        timeout_commit_ms: duration_ms(timeouts.commit),
+                        timeout_da_ms: duration_ms(timeouts.da),
+                        timeout_aggregator_ms: duration_ms(timeouts.aggregator),
+                        k_aggregators: npos.k_aggregators(),
+                        redundant_send_r: npos.redundant_send_r(),
+                        epoch_seed: npos.epoch_seed(),
+                        vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
+                        vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
+                        max_validators: npos.max_validators(),
+                        min_self_bond: npos.min_self_bond(),
+                        min_nomination_bond: npos.min_nomination_bond(),
+                        max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
+                        seat_band_pct: npos.seat_band_pct(),
+                        max_entity_correlation_pct: npos.max_entity_correlation_pct(),
+                        finality_margin_blocks: npos.finality_margin_blocks(),
+                        evidence_horizon_blocks: npos.evidence_horizon_blocks(),
+                        activation_lag_blocks: npos.activation_lag_blocks(),
+                        slashing_delay_blocks: npos.slashing_delay_blocks(),
+                    }),
+                )
+            }
+            None if matches!(consensus_mode, ConsensusMode::Npos) => {
+                let npos = SumeragiNposParameters::default();
+                let mut timeouts =
+                    iroha_config::parameters::actual::SumeragiNposTimeouts::from_block_time(
+                        Duration::from_millis(parameter_state.sumeragi().block_time_ms().max(1)),
+                    );
+                let min_finality =
+                    Duration::from_millis(parameter_state.sumeragi().min_finality_ms().max(1));
+                let clamp = |value: Duration| {
+                    if value < min_finality {
+                        min_finality
+                    } else {
+                        value
+                    }
+                };
+                timeouts.propose = clamp(timeouts.propose);
+                timeouts.prevote = clamp(timeouts.prevote);
+                timeouts.precommit = clamp(timeouts.precommit);
+                timeouts.commit = clamp(timeouts.commit);
+                timeouts.da = clamp(timeouts.da);
+                timeouts.aggregator = clamp(timeouts.aggregator);
+                timeouts.exec = clamp(timeouts.exec);
+                timeouts.witness = clamp(timeouts.witness);
+                let duration_ms = |value: Duration| -> u64 {
+                    let ms = value.as_millis();
+                    u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
+                };
+                (
+                    npos.epoch_length_blocks(),
+                    Some(NposGenesisParams {
+                        block_time_ms: parameter_state.sumeragi().block_time_ms(),
+                        timeout_propose_ms: duration_ms(timeouts.propose),
+                        timeout_prevote_ms: duration_ms(timeouts.prevote),
+                        timeout_precommit_ms: duration_ms(timeouts.precommit),
+                        timeout_commit_ms: duration_ms(timeouts.commit),
+                        timeout_da_ms: duration_ms(timeouts.da),
+                        timeout_aggregator_ms: duration_ms(timeouts.aggregator),
                         k_aggregators: npos.k_aggregators(),
                         redundant_send_r: npos.redundant_send_r(),
                         epoch_seed: npos.epoch_seed(),

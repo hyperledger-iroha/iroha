@@ -19,12 +19,6 @@ const SAMPLE_BLOCKS: u64 = 8;
 const BLOCK_SPACING_BUDGET_MS: f64 = 1_500.0;
 const COLLECTORS_K: u16 = 3;
 const REDUNDANT_SEND_R: u8 = 2;
-const TIMEOUT_PROPOSE_MS: u64 = 350;
-const TIMEOUT_PREVOTE_MS: u64 = 450;
-const TIMEOUT_PRECOMMIT_MS: u64 = 550;
-const TIMEOUT_COMMIT_MS: u64 = 750;
-const TIMEOUT_DA_MS: u64 = 650;
-const TIMEOUT_AGG_MS: u64 = 120;
 const PROPOSE_EMA_BUDGET_MS: f64 = 1_100.0;
 const PREVOTE_EMA_BUDGET_MS: f64 = 1_200.0;
 const PRECOMMIT_EMA_BUDGET_MS: f64 = 1_300.0;
@@ -38,13 +32,6 @@ async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
     init_instruction_registry();
 
     let npos_params = SumeragiNposParameters {
-        block_time_ms: BLOCK_TIME_MS,
-        timeout_propose_ms: TIMEOUT_PROPOSE_MS,
-        timeout_prevote_ms: TIMEOUT_PREVOTE_MS,
-        timeout_precommit_ms: TIMEOUT_PRECOMMIT_MS,
-        timeout_commit_ms: TIMEOUT_COMMIT_MS,
-        timeout_da_ms: TIMEOUT_DA_MS,
-        timeout_aggregator_ms: TIMEOUT_AGG_MS,
         k_aggregators: COLLECTORS_K,
         redundant_send_r: REDUNDANT_SEND_R,
         ..SumeragiNposParameters::default()
@@ -68,6 +55,9 @@ async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
         })
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::BlockTimeMs(BLOCK_TIME_MS),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(BLOCK_TIME_MS),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::CollectorsK(COLLECTORS_K),

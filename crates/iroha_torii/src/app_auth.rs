@@ -125,6 +125,9 @@ pub fn verify_canonical_request(
     body: &[u8],
     expected_account: Option<&AccountId>,
 ) -> Result<Option<AccountId>, crate::Error> {
+    #[cfg(test)]
+    crate::ensure_test_domain_selector_resolver();
+
     let account_hdr = headers.get(HEADER_ACCOUNT);
     let signature_hdr = headers.get(HEADER_SIGNATURE);
     let (Some(account_hdr), Some(signature_hdr)) = (account_hdr, signature_hdr) else {

@@ -866,12 +866,9 @@ impl ConsensusIngressLimiter {
             rate_per_sec: rate,
             burst: network.consensus_ingress_bytes_burst.unwrap_or(rate),
         });
-        let bulk_scale = Self::bulk_scale_factor(match sumeragi.consensus_mode {
-            iroha_config::parameters::actual::ConsensusMode::Npos => sumeragi.npos.block_time,
-            iroha_config::parameters::actual::ConsensusMode::Permissioned => Duration::from_millis(
-                iroha_config::parameters::defaults::sumeragi::BLOCK_TIME_MS,
-            ),
-        });
+        let bulk_scale = Self::bulk_scale_factor(Duration::from_millis(
+            iroha_config::parameters::defaults::sumeragi::BLOCK_TIME_MS,
+        ));
         let bulk_msg_rate = msg_rate.map(|cfg| cfg.scaled(bulk_scale));
         let bulk_bytes_rate = bytes_rate.map(|cfg| cfg.scaled(bulk_scale));
         let critical_msg_rate = network
@@ -925,14 +922,9 @@ impl ConsensusIngressLimiter {
         if configured == 0 || sumeragi.rbc.session_ttl.is_zero() {
             return configured;
         }
-        let block_time = match sumeragi.consensus_mode {
-            iroha_config::parameters::actual::ConsensusMode::Npos => sumeragi.npos.block_time,
-            iroha_config::parameters::actual::ConsensusMode::Permissioned => {
-                std::time::Duration::from_millis(
-                    iroha_config::parameters::defaults::sumeragi::BLOCK_TIME_MS,
-                )
-            }
-        };
+        let block_time = std::time::Duration::from_millis(
+            iroha_config::parameters::defaults::sumeragi::BLOCK_TIME_MS,
+        );
         Self::rbc_session_limit_from_ttl(configured, sumeragi.rbc.session_ttl, block_time)
     }
 
@@ -3233,7 +3225,12 @@ impl Iroha {
         let config_caps = build_consensus_config_caps(&config.sumeragi)?;
         let consensus_caps_override = if block_count.0 == 0 {
             genesis.as_ref().and_then(|block| {
-                consensus_caps_from_genesis(block, &config.common.chain, &config_caps)
+                consensus_caps_from_genesis(
+                    block,
+                    &config.common.chain,
+                    &config_caps,
+                    &config.sumeragi,
+                )
             })
         } else {
             None
@@ -6250,29 +6247,37 @@ fn build_consensus_config_caps(
     })?;
     let rbc_chunk_max_bytes = u64::try_from(sumeragi.rbc.chunk_max_bytes).map_err(|_| {
         Report::new(StartError::StartP2p)
-            .attach("sumeragi.rbc.chunk_max_bytes exceeds handshake limits (must fit into u64)")
+            .attach(
+                "sumeragi.advanced.rbc.chunk_max_bytes exceeds handshake limits (must fit into u64)",
+            )
     })?;
     let rbc_store_max_bytes = u64::try_from(sumeragi.rbc.store_max_bytes).map_err(|_| {
         Report::new(StartError::StartP2p)
-            .attach("sumeragi.rbc.store_max_bytes exceeds handshake limits (must fit into u64)")
+            .attach(
+                "sumeragi.advanced.rbc.store_max_bytes exceeds handshake limits (must fit into u64)",
+            )
     })?;
     let rbc_store_soft_bytes = u64::try_from(sumeragi.rbc.store_soft_bytes).map_err(|_| {
         Report::new(StartError::StartP2p)
-            .attach("sumeragi.rbc.store_soft_bytes exceeds handshake limits (must fit into u64)")
+            .attach(
+                "sumeragi.advanced.rbc.store_soft_bytes exceeds handshake limits (must fit into u64)",
+            )
     })?;
     let rbc_store_max_sessions = u32::try_from(sumeragi.rbc.store_max_sessions).map_err(|_| {
         Report::new(StartError::StartP2p)
-            .attach("sumeragi.rbc.store_max_sessions exceeds handshake limits (must fit into u32)")
+            .attach(
+                "sumeragi.advanced.rbc.store_max_sessions exceeds handshake limits (must fit into u32)",
+            )
     })?;
     let rbc_store_soft_sessions =
         u32::try_from(sumeragi.rbc.store_soft_sessions).map_err(|_| {
             Report::new(StartError::StartP2p).attach(
-                "sumeragi.rbc.store_soft_sessions exceeds handshake limits (must fit into u32)",
+                "sumeragi.advanced.rbc.store_soft_sessions exceeds handshake limits (must fit into u32)",
             )
         })?;
     let rbc_session_ttl_ms = u64::try_from(sumeragi.rbc.session_ttl.as_millis()).map_err(|_| {
         Report::new(StartError::StartP2p).attach(
-            "sumeragi.rbc.session_ttl exceeds handshake limits (must fit into u64 milliseconds)",
+            "sumeragi.advanced.rbc.session_ttl exceeds handshake limits (must fit into u64 milliseconds)",
         )
     })?;
 
@@ -6293,6 +6298,7 @@ fn consensus_caps_from_genesis(
     genesis: &GenesisBlock,
     chain_id: &ChainId,
     config_caps: &iroha_p2p::ConsensusConfigCaps,
+    sumeragi: &iroha_config::parameters::actual::Sumeragi,
 ) -> Option<(String, String, iroha_p2p::ConsensusHandshakeCaps)> {
     let mut params = iroha_data_model::parameter::Parameters::default();
     let mut handshake_entries = Vec::new();
@@ -6335,20 +6341,50 @@ fn consensus_caps_from_genesis(
     let epoch_length_blocks = if use_npos {
         npos_payload
             .as_ref()
-            .map_or(0, SumeragiNposParameters::epoch_length_blocks)
+            .map_or(sumeragi.npos.epoch_length_blocks, SumeragiNposParameters::epoch_length_blocks)
     } else {
         0
     };
+    let npos_timeouts = if use_npos {
+        let min_finality_ms = params.sumeragi().min_finality_ms.max(1);
+        let mut block_time_ms = params.sumeragi().block_time_ms.max(1);
+        if block_time_ms < min_finality_ms {
+            block_time_ms = min_finality_ms;
+        }
+        let mut timeouts =
+            sumeragi
+                .npos
+                .timeouts_overrides
+                .resolve(Duration::from_millis(block_time_ms));
+        let min_finality = Duration::from_millis(min_finality_ms);
+        let clamp = |value: Duration| if value < min_finality { min_finality } else { value };
+        timeouts.propose = clamp(timeouts.propose);
+        timeouts.prevote = clamp(timeouts.prevote);
+        timeouts.precommit = clamp(timeouts.precommit);
+        timeouts.commit = clamp(timeouts.commit);
+        timeouts.da = clamp(timeouts.da);
+        timeouts.aggregator = clamp(timeouts.aggregator);
+        timeouts.exec = clamp(timeouts.exec);
+        timeouts.witness = clamp(timeouts.witness);
+        Some(timeouts)
+    } else {
+        None
+    };
     let npos_params = if use_npos {
-        npos_payload.map(
-            |npos| iroha_data_model::block::consensus::NposGenesisParams {
+        let timeouts = npos_timeouts.expect("timeouts computed for NPoS");
+        let duration_ms = |value: Duration| -> u64 {
+            let ms = value.as_millis();
+            u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
+        };
+        Some(match npos_payload {
+            Some(npos) => iroha_data_model::block::consensus::NposGenesisParams {
                 block_time_ms: params.sumeragi().block_time_ms,
-                timeout_propose_ms: npos.timeout_propose_ms(),
-                timeout_prevote_ms: npos.timeout_prevote_ms(),
-                timeout_precommit_ms: npos.timeout_precommit_ms(),
-                timeout_commit_ms: npos.timeout_commit_ms(),
-                timeout_da_ms: npos.timeout_da_ms(),
-                timeout_aggregator_ms: npos.timeout_aggregator_ms(),
+                timeout_propose_ms: duration_ms(timeouts.propose),
+                timeout_prevote_ms: duration_ms(timeouts.prevote),
+                timeout_precommit_ms: duration_ms(timeouts.precommit),
+                timeout_commit_ms: duration_ms(timeouts.commit),
+                timeout_da_ms: duration_ms(timeouts.da),
+                timeout_aggregator_ms: duration_ms(timeouts.aggregator),
                 k_aggregators: npos.k_aggregators(),
                 redundant_send_r: npos.redundant_send_r(),
                 epoch_seed: npos.epoch_seed(),
@@ -6365,7 +6401,39 @@ fn consensus_caps_from_genesis(
                 activation_lag_blocks: npos.activation_lag_blocks(),
                 slashing_delay_blocks: npos.slashing_delay_blocks(),
             },
-        )
+            None => {
+                let chain_hash = iroha_crypto::Hash::new(chain_id.clone().into_inner().as_bytes());
+                let epoch_seed: [u8; 32] = chain_hash.into();
+                iroha_data_model::block::consensus::NposGenesisParams {
+                    block_time_ms: params.sumeragi().block_time_ms,
+                    timeout_propose_ms: duration_ms(timeouts.propose),
+                    timeout_prevote_ms: duration_ms(timeouts.prevote),
+                    timeout_precommit_ms: duration_ms(timeouts.precommit),
+                    timeout_commit_ms: duration_ms(timeouts.commit),
+                    timeout_da_ms: duration_ms(timeouts.da),
+                    timeout_aggregator_ms: duration_ms(timeouts.aggregator),
+                    k_aggregators: u16::try_from(sumeragi.collectors.k)
+                        .expect("sumeragi.collectors.k must fit into u16"),
+                    redundant_send_r: sumeragi.collectors.redundant_send_r,
+                    epoch_seed,
+                    vrf_commit_window_blocks: sumeragi.npos.vrf.commit_window_blocks,
+                    vrf_reveal_window_blocks: sumeragi.npos.vrf.reveal_window_blocks,
+                    max_validators: sumeragi.npos.election.max_validators,
+                    min_self_bond: sumeragi.npos.election.min_self_bond,
+                    min_nomination_bond: sumeragi.npos.election.min_nomination_bond,
+                    max_nominator_concentration_pct: sumeragi
+                        .npos
+                        .election
+                        .max_nominator_concentration_pct,
+                    seat_band_pct: sumeragi.npos.election.seat_band_pct,
+                    max_entity_correlation_pct: sumeragi.npos.election.max_entity_correlation_pct,
+                    finality_margin_blocks: sumeragi.npos.election.finality_margin_blocks,
+                    evidence_horizon_blocks: sumeragi.npos.reconfig.evidence_horizon_blocks,
+                    activation_lag_blocks: sumeragi.npos.reconfig.activation_lag_blocks,
+                    slashing_delay_blocks: sumeragi.npos.reconfig.slashing_delay_blocks,
+                }
+            }
+        })
     } else {
         None
     };
@@ -6581,20 +6649,44 @@ fn verify_genesis_metadata(
     let epoch_length_blocks = if use_npos {
         npos_payload
             .as_ref()
-            .map_or(0, SumeragiNposParameters::epoch_length_blocks)
+            .map_or(config.sumeragi.npos.epoch_length_blocks, SumeragiNposParameters::epoch_length_blocks)
     } else {
         0
     };
     let npos_params = if use_npos {
-        npos_payload.map(
-            |npos| iroha_data_model::block::consensus::NposGenesisParams {
+        let min_finality_ms = params.sumeragi().min_finality_ms.max(1);
+        let mut block_time_ms = params.sumeragi().block_time_ms.max(1);
+        if block_time_ms < min_finality_ms {
+            block_time_ms = min_finality_ms;
+        }
+        let mut timeouts = config
+            .sumeragi
+            .npos
+            .timeouts_overrides
+            .resolve(Duration::from_millis(block_time_ms));
+        let min_finality = Duration::from_millis(min_finality_ms);
+        let clamp = |value: Duration| if value < min_finality { min_finality } else { value };
+        timeouts.propose = clamp(timeouts.propose);
+        timeouts.prevote = clamp(timeouts.prevote);
+        timeouts.precommit = clamp(timeouts.precommit);
+        timeouts.commit = clamp(timeouts.commit);
+        timeouts.da = clamp(timeouts.da);
+        timeouts.aggregator = clamp(timeouts.aggregator);
+        timeouts.exec = clamp(timeouts.exec);
+        timeouts.witness = clamp(timeouts.witness);
+        let duration_ms = |value: Duration| -> u64 {
+            let ms = value.as_millis();
+            u64::try_from(ms).expect("NPoS timeout exceeds millisecond range")
+        };
+        Some(match npos_payload {
+            Some(npos) => iroha_data_model::block::consensus::NposGenesisParams {
                 block_time_ms: params.sumeragi().block_time_ms,
-                timeout_propose_ms: npos.timeout_propose_ms(),
-                timeout_prevote_ms: npos.timeout_prevote_ms(),
-                timeout_precommit_ms: npos.timeout_precommit_ms(),
-                timeout_commit_ms: npos.timeout_commit_ms(),
-                timeout_da_ms: npos.timeout_da_ms(),
-                timeout_aggregator_ms: npos.timeout_aggregator_ms(),
+                timeout_propose_ms: duration_ms(timeouts.propose),
+                timeout_prevote_ms: duration_ms(timeouts.prevote),
+                timeout_precommit_ms: duration_ms(timeouts.precommit),
+                timeout_commit_ms: duration_ms(timeouts.commit),
+                timeout_da_ms: duration_ms(timeouts.da),
+                timeout_aggregator_ms: duration_ms(timeouts.aggregator),
                 k_aggregators: npos.k_aggregators(),
                 redundant_send_r: npos.redundant_send_r(),
                 epoch_seed: npos.epoch_seed(),
@@ -6611,7 +6703,45 @@ fn verify_genesis_metadata(
                 activation_lag_blocks: npos.activation_lag_blocks(),
                 slashing_delay_blocks: npos.slashing_delay_blocks(),
             },
-        )
+            None => {
+                let chain_hash =
+                    iroha_crypto::Hash::new(config.common.chain.clone().into_inner().as_bytes());
+                let epoch_seed: [u8; 32] = chain_hash.into();
+                iroha_data_model::block::consensus::NposGenesisParams {
+                    block_time_ms: params.sumeragi().block_time_ms,
+                    timeout_propose_ms: duration_ms(timeouts.propose),
+                    timeout_prevote_ms: duration_ms(timeouts.prevote),
+                    timeout_precommit_ms: duration_ms(timeouts.precommit),
+                    timeout_commit_ms: duration_ms(timeouts.commit),
+                    timeout_da_ms: duration_ms(timeouts.da),
+                    timeout_aggregator_ms: duration_ms(timeouts.aggregator),
+                    k_aggregators: u16::try_from(config.sumeragi.collectors.k)
+                        .expect("sumeragi.collectors.k must fit into u16"),
+                    redundant_send_r: config.sumeragi.collectors.redundant_send_r,
+                    epoch_seed,
+                    vrf_commit_window_blocks: config.sumeragi.npos.vrf.commit_window_blocks,
+                    vrf_reveal_window_blocks: config.sumeragi.npos.vrf.reveal_window_blocks,
+                    max_validators: config.sumeragi.npos.election.max_validators,
+                    min_self_bond: config.sumeragi.npos.election.min_self_bond,
+                    min_nomination_bond: config.sumeragi.npos.election.min_nomination_bond,
+                    max_nominator_concentration_pct: config
+                        .sumeragi
+                        .npos
+                        .election
+                        .max_nominator_concentration_pct,
+                    seat_band_pct: config.sumeragi.npos.election.seat_band_pct,
+                    max_entity_correlation_pct: config
+                        .sumeragi
+                        .npos
+                        .election
+                        .max_entity_correlation_pct,
+                    finality_margin_blocks: config.sumeragi.npos.election.finality_margin_blocks,
+                    evidence_horizon_blocks: config.sumeragi.npos.reconfig.evidence_horizon_blocks,
+                    activation_lag_blocks: config.sumeragi.npos.reconfig.activation_lag_blocks,
+                    slashing_delay_blocks: config.sumeragi.npos.reconfig.slashing_delay_blocks,
+                }
+            }
+        })
     } else {
         None
     };

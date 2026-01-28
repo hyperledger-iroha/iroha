@@ -126,18 +126,36 @@ pub fn clear_account_domain_selector_resolver() {
     }
 }
 
+/// Read the currently configured domain-selector resolver, if any.
+pub fn account_domain_selector_resolver() -> Option<Arc<AccountDomainSelectorResolver>> {
+    #[cfg(test)]
+    if let Some(resolver) =
+        ACCOUNT_DOMAIN_SELECTOR_RESOLVER_OVERRIDE.with(|cell| cell.borrow().clone())
+    {
+        return Some(resolver);
+    }
+    let guard = ACCOUNT_DOMAIN_SELECTOR_RESOLVER
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.as_ref().cloned()
+}
+
 fn resolve_account_domain_selector(selector: &AccountDomainSelector) -> Option<DomainId> {
     #[cfg(test)]
     if let Some(resolver) =
         ACCOUNT_DOMAIN_SELECTOR_RESOLVER_OVERRIDE.with(|cell| cell.borrow().clone())
     {
-        return resolver(selector);
+        if let Some(domain) = resolver(selector) {
+            return Some(domain);
+        }
     }
     let guard = ACCOUNT_DOMAIN_SELECTOR_RESOLVER
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(resolver) = guard.as_ref() {
-        return resolver(selector);
+        if let Some(domain) = resolver(selector) {
+            return Some(domain);
+        }
     }
     #[cfg(test)]
     {
@@ -172,24 +190,16 @@ thread_local! {
 }
 
 #[cfg(test)]
-static TEST_DOMAIN_SELECTOR_MAP: std::sync::LazyLock<Vec<(AccountDomainSelector, DomainId)>> =
-    std::sync::LazyLock::new(|| {
-        TEST_DOMAIN_SELECTOR_CANDIDATES
-            .iter()
-            .filter_map(|label| {
-                let domain: DomainId = (*label).parse().ok()?;
-                let selector = AccountDomainSelector::from_domain(&domain).ok()?;
-                Some((selector, domain))
-            })
-            .collect()
-    });
-
-#[cfg(test)]
 fn resolve_test_domain_selector(selector: &AccountDomainSelector) -> Option<DomainId> {
-    TEST_DOMAIN_SELECTOR_MAP
-        .iter()
-        .find(|(candidate, _)| candidate == selector)
-        .map(|(_, domain)| domain.clone())
+    TEST_DOMAIN_SELECTOR_CANDIDATES.iter().find_map(|label| {
+        let domain: DomainId = (*label).parse().ok()?;
+        let candidate = AccountDomainSelector::from_domain(&domain).ok()?;
+        if &candidate == selector {
+            Some(domain)
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(test)]
@@ -1463,6 +1473,86 @@ mod account_id_parsing_tests {
                 "unexpected parse error for literal without domain suffix"
             );
         }
+    }
+
+    #[test]
+    fn implicit_literals_survive_default_domain_changes() {
+        let _guard_chain = guard_chain_discriminant();
+        let _guard_label = guard_default_domain_label();
+        let _reset_label = reset_default_domain_to_default();
+
+        address::set_default_domain_name("wonderland")
+            .expect("configure test default domain label");
+
+        let treasury: DomainId = "treasury".parse().expect("domain");
+        let treasury_kp = KeyPair::from_seed(vec![0xED; 32], Algorithm::Ed25519);
+        let treasury_account = AccountId::new(treasury, treasury_kp.public_key().clone());
+        let treasury_address =
+            AccountAddress::from_account_id(&treasury_account).expect("account encodes");
+        let treasury_literal = treasury_address
+            .to_compressed_sora()
+            .expect("compressed encode");
+        let parsed_treasury =
+            AccountId::parse(&treasury_literal).expect("treasury literal should parse");
+        assert_eq!(parsed_treasury.account_id(), &treasury_account);
+
+        address::set_default_domain_name(address::DEFAULT_DOMAIN_NAME)
+            .expect("restore default domain label");
+
+        let wonderland: DomainId = "wonderland".parse().expect("domain");
+        let wonderland_kp = KeyPair::from_seed(vec![0xEC; 32], Algorithm::Ed25519);
+        let wonderland_account = AccountId::new(wonderland, wonderland_kp.public_key().clone());
+        let wonderland_address =
+            AccountAddress::from_account_id(&wonderland_account).expect("account encodes");
+        let wonderland_literal = wonderland_address
+            .to_compressed_sora()
+            .expect("compressed encode");
+        let parsed_wonderland =
+            AccountId::parse(&wonderland_literal).expect("wonderland literal should parse");
+        assert_eq!(parsed_wonderland.account_id(), &wonderland_account);
+    }
+
+    #[test]
+    fn implicit_literals_fall_back_when_resolver_returns_none() {
+        let _guard_chain = guard_chain_discriminant();
+        let domain: DomainId = "wonderland".parse().expect("valid domain");
+        let key_pair = KeyPair::from_seed(vec![0xEF; 32], Algorithm::Ed25519);
+        let account = AccountId::new(domain, key_pair.public_key().clone());
+        let address = AccountAddress::from_account_id(&account).expect("account encodes");
+        let ih58 = address
+            .to_ih58(address::chain_discriminant())
+            .expect("IH58 encode");
+        let compressed = address.to_compressed_sora().expect("compressed encode");
+        let _resolver_guard = guard_domain_selector_resolver(Arc::new(|_| None));
+
+        for literal in [ih58, compressed] {
+            let parsed = AccountId::parse(&literal).expect("fallback should resolve");
+            assert_eq!(parsed.account_id(), &account);
+        }
+    }
+
+    #[test]
+    fn domain_selector_resolver_accessor_reports_state() {
+        let lock = DOMAIN_SELECTOR_RESOLVER_GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        clear_account_domain_selector_resolver();
+        assert!(account_domain_selector_resolver().is_none());
+
+        let domain: DomainId = "wonderland".parse().expect("valid domain");
+        let selector = AccountDomainSelector::from_domain(&domain).expect("selector");
+        let resolver_domain = domain.clone();
+        set_account_domain_selector_resolver(Arc::new(move |candidate| {
+            if candidate == &selector {
+                Some(resolver_domain.clone())
+            } else {
+                None
+            }
+        }));
+
+        assert!(account_domain_selector_resolver().is_some());
+        clear_account_domain_selector_resolver();
+        drop(lock);
     }
 
     #[test]

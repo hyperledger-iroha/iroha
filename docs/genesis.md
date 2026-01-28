@@ -122,7 +122,7 @@ cargo run -p iroha_cli --features sm -- \
      --ivm-dir <ivm/dir> \
      --genesis-public-key <PUBLIC_KEY> > genesis.json
    ```
-`--consensus-mode` controls which consensus parameters Kagami seeds into the `parameters` block. The public Sora Nexus dataspace requires `npos` and does not support staged cutovers; other Iroha3 dataspaces may use permissioned or NPoS. Iroha2 defaults to `permissioned` and may stage `npos` via `--next-consensus-mode`/`--mode-activation-height`. When `npos` is selected, Kagami seeds the `sumeragi_npos_parameters` payload that drives NPoS pacemaker timing, collector fan-out, election policy, and reconfiguration windows; normalization/signing turns these into `SetParameter` instructions in the signed block.
+`--consensus-mode` controls which consensus parameters Kagami seeds into the `parameters` block. The public Sora Nexus dataspace requires `npos` and does not support staged cutovers; other Iroha3 dataspaces may use permissioned or NPoS. Iroha2 defaults to `permissioned` and may stage `npos` via `--next-consensus-mode`/`--mode-activation-height`. When `npos` is selected, Kagami seeds the `sumeragi_npos_parameters` payload that drives NPoS collector fan-out, election policy, and reconfiguration windows; normalization/signing turns these into `SetParameter` instructions in the signed block.
 2. Optionally edit `genesis.json`, then validate and sign it:
    ```bash
    cargo run -p iroha_kagami -- genesis sign genesis.json \
@@ -150,7 +150,7 @@ By default, `kagami genesis sign` uses the manifest's `consensus_mode`; pass `--
 
 Genesis supports the following operations. Kagami assembles them into transactions in a well‑defined order so peers deterministically execute the same sequence.
 
-- Parameters: Set initial values for Sumeragi (block/commit times, drift), Block (max txs), Transaction (max instructions, bytecode size), Executor and Smart Contract limits (fuel, memory, depth), and custom parameters. Kagami seeds `Sumeragi::NextMode` and the `sumeragi_npos_parameters` payload (NPoS timing, election, reconfig) via the `parameters` block so startup can apply consensus knobs from on-chain state; the signed block carries the generated `SetParameter` instructions.
+- Parameters: Set initial values for Sumeragi (block/commit times, drift), Block (max txs), Transaction (max instructions, bytecode size), Executor and Smart Contract limits (fuel, memory, depth), and custom parameters. Kagami seeds `Sumeragi::NextMode` and the `sumeragi_npos_parameters` payload (NPoS election, reconfig) via the `parameters` block so startup can apply consensus knobs from on-chain state; the signed block carries the generated `SetParameter` instructions.
 - Native Instructions: Register/Unregister Domain, Account, Asset Definition; Mint/Burn/Transfer assets; Transfer domain and asset definition ownership; Modify metadata; Grant permissions and roles.
 - IVM Triggers: Register triggers that execute IVM bytecode (see `ivm_triggers`). Triggers’ executables resolve relative to `ivm_dir`.
 - Topology: Provide the initial set of peers via the `topology` array inside any transaction (commonly the first or last one). Each entry is `{ "peer": "<public_key>", "pop_hex": "<hex>" }`; `pop_hex` may be omitted while composing but must be present before signing.

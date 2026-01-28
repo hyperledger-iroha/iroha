@@ -1106,35 +1106,8 @@ mod tests {
                         .collect(),
                 },
                 npos: iroha_config::parameters::actual::SumeragiNpos {
-                    block_time: std::time::Duration::from_millis(
-                        iroha_config::parameters::defaults::sumeragi::npos::BLOCK_TIME_MS,
-                    ),
-                    timeouts: iroha_config::parameters::actual::SumeragiNposTimeouts {
-                        propose: std::time::Duration::from_millis(
-                            iroha_config::parameters::defaults::sumeragi::npos::TIMEOUT_PROPOSE_MS,
-                        ),
-                        prevote: std::time::Duration::from_millis(
-                            iroha_config::parameters::defaults::sumeragi::npos::TIMEOUT_PREVOTE_MS,
-                        ),
-                        precommit: std::time::Duration::from_millis(
-                            iroha_config::parameters::defaults::sumeragi::npos::TIMEOUT_PRECOMMIT_MS,
-                        ),
-                        exec: std::time::Duration::from_millis(
-                            iroha_config::parameters::defaults::sumeragi::npos::TIMEOUT_EXEC_MS,
-                        ),
-                        witness: std::time::Duration::from_millis(
-                            iroha_config::parameters::defaults::sumeragi::npos::TIMEOUT_WITNESS_MS,
-                        ),
-                        commit: std::time::Duration::from_millis(
-                            iroha_config::parameters::defaults::sumeragi::npos::TIMEOUT_COMMIT_MS,
-                        ),
-                        da: std::time::Duration::from_millis(
-                            iroha_config::parameters::defaults::sumeragi::npos::TIMEOUT_DA_MS,
-                        ),
-                        aggregator: std::time::Duration::from_millis(
-                            iroha_config::parameters::defaults::sumeragi::npos::TIMEOUT_AGG_MS,
-                        ),
-                    },
+                    timeouts_overrides:
+                        iroha_config::parameters::actual::SumeragiNposTimeoutOverrides::default(),
                     vrf: iroha_config::parameters::actual::SumeragiNposVrf {
                         commit_window_blocks: iroha_config::parameters::defaults::sumeragi::npos::VRF_COMMIT_WINDOW_BLOCKS,
                         reveal_window_blocks: iroha_config::parameters::defaults::sumeragi::npos::VRF_REVEAL_WINDOW_BLOCKS,

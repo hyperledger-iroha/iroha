@@ -1215,21 +1215,11 @@ impl Executor {
                 host.set_chain_id(&state_transaction.chain_id);
                 #[cfg(feature = "telemetry")]
                 host.set_telemetry(state_transaction.telemetry.clone());
-                // Thread shielded ledger roots snapshot for ZK read syscalls (e.g., ZK_ROOTS_GET)
-                // and enforce the configured cap deterministically.
-                {
-                    use std::collections::BTreeMap;
-                    host.set_zk_root_history_cap(state_transaction.zk.root_history_cap);
-                    host.set_zk_empty_root_policy(
-                        state_transaction.zk.empty_root_on_empty,
-                        state_transaction.zk.merkle_depth,
-                    );
-                    let mut snap: BTreeMap<AssetDefinitionId, Vec<[u8; 32]>> = BTreeMap::new();
-                    for (ad, st) in state_transaction.world.zk_assets.iter() {
-                        snap.insert(ad.clone(), st.root_history.clone());
-                    }
-                    host.set_zk_roots_snapshot(snap);
-                }
+                // Thread ZK snapshots (roots, elections, verifying keys) for read/verify syscalls.
+                host.set_zk_snapshots_from_world(&state_transaction.world, &state_transaction.zk)
+                    .map_err(|err| {
+                        ValidationFail::InternalError(format!("invalid ZK snapshot state: {err}"))
+                    })?;
                 runtime.vm.set_gas_limit(effective_limit);
                 if let Err(err) = runtime.vm.run_with_host(&mut host) {
                     return Err(crate::smartcontracts::ivm::map_vm_error_to_validation(&err));

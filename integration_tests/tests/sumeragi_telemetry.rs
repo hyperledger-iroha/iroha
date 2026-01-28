@@ -63,12 +63,6 @@ async fn npos_telemetry_soak_matches_metrics_under_adversarial_collectors() -> R
     let npos_params = SumeragiNposParameters {
         k_aggregators: COLLECTORS_K,
         redundant_send_r: REDUNDANT_SEND_R,
-        block_time_ms: 900,
-        timeout_propose_ms: 900,
-        timeout_da_ms: 900,
-        timeout_prevote_ms: 900,
-        timeout_precommit_ms: 900,
-        timeout_commit_ms: 900,
         epoch_length_blocks: EPOCH_LENGTH_BLOCKS,
         ..SumeragiNposParameters::default()
     };
@@ -115,6 +109,9 @@ async fn npos_telemetry_soak_matches_metrics_under_adversarial_collectors() -> R
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::BlockTimeMs(900),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(900),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::DaEnabled(true),

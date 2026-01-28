@@ -185,23 +185,24 @@ pub fn compute_consensus_handshake_caps_from_view(
         ),
     };
     let (npos_params, epoch_length_blocks) = if matches!(effective_mode, ConsensusMode::Npos) {
+        let npos_timeouts = super::resolve_npos_timeouts(view, &sumeragi_config.npos);
+        let duration_ms = |d: Duration| -> u64 {
+            let ms = d.as_millis();
+            u64::try_from(ms).expect("NPoS timeout exceeds supported millisecond range")
+        };
         view.world().sumeragi_npos_parameters().map_or_else(
             || {
                 let npos_cfg = &sumeragi_config.npos;
                 let collectors_cfg = &sumeragi_config.collectors;
-                let duration_ms = |d: Duration| -> u64 {
-                    let ms = d.as_millis();
-                    u64::try_from(ms).expect("NPoS timeout exceeds supported millisecond range")
-                };
                 (
                     Some(NposGenesisParams {
                         block_time_ms: sumeragi.block_time_ms,
-                        timeout_propose_ms: duration_ms(npos_cfg.timeouts.propose),
-                        timeout_prevote_ms: duration_ms(npos_cfg.timeouts.prevote),
-                        timeout_precommit_ms: duration_ms(npos_cfg.timeouts.precommit),
-                        timeout_commit_ms: duration_ms(npos_cfg.timeouts.commit),
-                        timeout_da_ms: duration_ms(npos_cfg.timeouts.da),
-                        timeout_aggregator_ms: duration_ms(npos_cfg.timeouts.aggregator),
+                        timeout_propose_ms: duration_ms(npos_timeouts.propose),
+                        timeout_prevote_ms: duration_ms(npos_timeouts.prevote),
+                        timeout_precommit_ms: duration_ms(npos_timeouts.precommit),
+                        timeout_commit_ms: duration_ms(npos_timeouts.commit),
+                        timeout_da_ms: duration_ms(npos_timeouts.da),
+                        timeout_aggregator_ms: duration_ms(npos_timeouts.aggregator),
                         k_aggregators: u16::try_from(collectors_cfg.k)
                             .expect("sumeragi.collectors.k must fit into u16"),
                         redundant_send_r: collectors_cfg.redundant_send_r,
@@ -228,12 +229,12 @@ pub fn compute_consensus_handshake_caps_from_view(
                 (
                     Some(NposGenesisParams {
                         block_time_ms: sumeragi.block_time_ms,
-                        timeout_propose_ms: npos.timeout_propose_ms(),
-                        timeout_prevote_ms: npos.timeout_prevote_ms(),
-                        timeout_precommit_ms: npos.timeout_precommit_ms(),
-                        timeout_commit_ms: npos.timeout_commit_ms(),
-                        timeout_da_ms: npos.timeout_da_ms(),
-                        timeout_aggregator_ms: npos.timeout_aggregator_ms(),
+                        timeout_propose_ms: duration_ms(npos_timeouts.propose),
+                        timeout_prevote_ms: duration_ms(npos_timeouts.prevote),
+                        timeout_precommit_ms: duration_ms(npos_timeouts.precommit),
+                        timeout_commit_ms: duration_ms(npos_timeouts.commit),
+                        timeout_da_ms: duration_ms(npos_timeouts.da),
+                        timeout_aggregator_ms: duration_ms(npos_timeouts.aggregator),
                         k_aggregators: npos.k_aggregators(),
                         redundant_send_r: npos.redundant_send_r(),
                         epoch_seed: npos.epoch_seed(),

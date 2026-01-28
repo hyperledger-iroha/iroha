@@ -195,7 +195,7 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             });
         }
     }
-    // NPoS timing parameters live on-chain; inject Izanami overrides into genesis.
+    // Inject Izanami timing into on-chain Sumeragi parameters.
     let npos_timing = derive_npos_timing(config);
     if config.nexus.is_some() {
         let mut injected = Vec::new();
@@ -205,16 +205,8 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
         injected.push(InstructionBox::from(SetParameter::new(
             Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(npos_timing.block_ms)),
         )));
-        let mut npos_params = SumeragiNposParameters::default();
-        npos_params.block_time_ms = npos_timing.block_ms;
-        npos_params.timeout_propose_ms = npos_timing.propose_ms;
-        npos_params.timeout_prevote_ms = npos_timing.prevote_ms;
-        npos_params.timeout_precommit_ms = npos_timing.precommit_ms;
-        npos_params.timeout_commit_ms = npos_timing.commit_timeout_ms;
-        npos_params.timeout_da_ms = npos_timing.da_ms;
-        npos_params.timeout_aggregator_ms = npos_timing.aggregator_ms;
         injected.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
-            npos_params.into_custom_parameter(),
+            SumeragiNposParameters::default().into_custom_parameter(),
         ))));
         if !injected.is_empty() {
             if let Some(last_tx) = genesis.last_mut() {
@@ -352,27 +344,27 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
                 as_i64(npos_timing.block_ms),
             )
             .write(
-                ["sumeragi", "npos", "timeouts", "propose_ms"],
+                ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
                 as_i64(npos_timing.propose_ms),
             )
             .write(
-                ["sumeragi", "npos", "timeouts", "prevote_ms"],
+                ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
                 as_i64(npos_timing.prevote_ms),
             )
             .write(
-                ["sumeragi", "npos", "timeouts", "precommit_ms"],
+                ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
                 as_i64(npos_timing.precommit_ms),
             )
             .write(
-                ["sumeragi", "npos", "timeouts", "commit_ms"],
+                ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
                 as_i64(npos_timing.commit_timeout_ms),
             )
             .write(
-                ["sumeragi", "npos", "timeouts", "da_ms"],
+                ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
                 as_i64(npos_timing.da_ms),
             )
             .write(
-                ["sumeragi", "npos", "timeouts", "aggregator_ms"],
+                ["sumeragi", "advanced", "npos", "timeouts", "aggregator_ms"],
                 as_i64(npos_timing.aggregator_ms),
             );
     });
@@ -1748,27 +1740,27 @@ mod tests {
             Some(npos_block_ms)
         );
         assert_eq!(
-            lookup(&["sumeragi", "npos", "timeouts", "propose_ms"]),
+            lookup(&["sumeragi", "advanced", "npos", "timeouts", "propose_ms"]),
             Some(npos_propose_ms)
         );
         assert_eq!(
-            lookup(&["sumeragi", "npos", "timeouts", "prevote_ms"]),
+            lookup(&["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"]),
             Some(npos_prevote_ms)
         );
         assert_eq!(
-            lookup(&["sumeragi", "npos", "timeouts", "precommit_ms"]),
+            lookup(&["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"]),
             Some(npos_precommit_ms)
         );
         assert_eq!(
-            lookup(&["sumeragi", "npos", "timeouts", "commit_ms"]),
+            lookup(&["sumeragi", "advanced", "npos", "timeouts", "commit_ms"]),
             Some(npos_commit_ms)
         );
         assert_eq!(
-            lookup(&["sumeragi", "npos", "timeouts", "da_ms"]),
+            lookup(&["sumeragi", "advanced", "npos", "timeouts", "da_ms"]),
             Some(npos_da_ms)
         );
         assert_eq!(
-            lookup(&["sumeragi", "npos", "timeouts", "aggregator_ms"]),
+            lookup(&["sumeragi", "advanced", "npos", "timeouts", "aggregator_ms"]),
             Some(npos_aggregator_ms)
         );
         Ok(())
@@ -1884,30 +1876,26 @@ mod tests {
             }
         };
 
-        let mut npos_params = None;
+        let mut params = Parameters::default();
         for tx in network.genesis_isi() {
             for isi in tx {
                 let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() else {
                     continue;
                 };
-                let Parameter::Custom(custom) = set_param.inner() else {
-                    continue;
-                };
-                if let Some(params) = SumeragiNposParameters::from_custom_parameter(custom) {
-                    npos_params = Some(params);
-                }
+                params.set_parameter(set_param.inner().clone());
             }
         }
 
-        let npos_params = npos_params.expect("npos parameters should be injected for nexus runs");
         let expected = derive_npos_timing(&config);
-        assert_eq!(npos_params.block_time_ms(), expected.block_ms);
-        assert_eq!(npos_params.timeout_propose_ms(), expected.propose_ms);
-        assert_eq!(npos_params.timeout_prevote_ms(), expected.prevote_ms);
-        assert_eq!(npos_params.timeout_precommit_ms(), expected.precommit_ms);
-        assert_eq!(npos_params.timeout_commit_ms(), expected.commit_timeout_ms);
-        assert_eq!(npos_params.timeout_da_ms(), expected.da_ms);
-        assert_eq!(npos_params.timeout_aggregator_ms(), expected.aggregator_ms);
+        assert_eq!(params.sumeragi().block_time_ms(), expected.block_ms);
+        assert_eq!(params.sumeragi().commit_time_ms(), expected.commit_time_ms);
+        assert!(
+            params
+                .custom()
+                .get(&SumeragiNposParameters::parameter_id())
+                .and_then(SumeragiNposParameters::from_custom_parameter)
+                .is_some()
+        );
         Ok(())
     }
 

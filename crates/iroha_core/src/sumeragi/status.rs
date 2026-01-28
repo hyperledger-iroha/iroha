@@ -303,6 +303,23 @@ static STAGED_MODE_TAG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static STAGED_MODE_ACTIVATION_HEIGHT: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
 static MODE_ACTIVATION_LAG_BLOCKS: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
 static CONSENSUS_CAPS: OnceLock<Mutex<Option<iroha_p2p::ConsensusConfigCaps>>> = OnceLock::new();
+static EFFECTIVE_MIN_FINALITY_MS: AtomicU64 = AtomicU64::new(0);
+static EFFECTIVE_BLOCK_TIME_MS: AtomicU64 = AtomicU64::new(0);
+static EFFECTIVE_COMMIT_TIME_MS: AtomicU64 = AtomicU64::new(0);
+static EFFECTIVE_COMMIT_QUORUM_TIMEOUT_MS: AtomicU64 = AtomicU64::new(0);
+static EFFECTIVE_AVAILABILITY_TIMEOUT_MS: AtomicU64 = AtomicU64::new(0);
+static EFFECTIVE_PACEMAKER_INTERVAL_MS: AtomicU64 = AtomicU64::new(0);
+static EFFECTIVE_COLLECTORS_K: AtomicU64 = AtomicU64::new(0);
+static EFFECTIVE_REDUNDANT_SEND_R: AtomicU64 = AtomicU64::new(0);
+static EFFECTIVE_NPOS_TIMEOUTS_ACTIVE: AtomicBool = AtomicBool::new(false);
+static EFFECTIVE_NPOS_TIMEOUTS_PROPOSE_MS: AtomicU64 = AtomicU64::new(0);
+static EFFECTIVE_NPOS_TIMEOUTS_PREVOTE_MS: AtomicU64 = AtomicU64::new(0);
+static EFFECTIVE_NPOS_TIMEOUTS_PRECOMMIT_MS: AtomicU64 = AtomicU64::new(0);
+static EFFECTIVE_NPOS_TIMEOUTS_COMMIT_MS: AtomicU64 = AtomicU64::new(0);
+static EFFECTIVE_NPOS_TIMEOUTS_DA_MS: AtomicU64 = AtomicU64::new(0);
+static EFFECTIVE_NPOS_TIMEOUTS_AGGREGATOR_MS: AtomicU64 = AtomicU64::new(0);
+static EFFECTIVE_NPOS_TIMEOUTS_EXEC_MS: AtomicU64 = AtomicU64::new(0);
+static EFFECTIVE_NPOS_TIMEOUTS_WITNESS_MS: AtomicU64 = AtomicU64::new(0);
 #[allow(dead_code)]
 static MODE_FLIP_KILL_SWITCH: AtomicBool = AtomicBool::new(true);
 #[allow(dead_code)]
@@ -1828,6 +1845,65 @@ pub fn consensus_caps() -> Option<iroha_p2p::ConsensusConfigCaps> {
         .and_then(|slot| slot.lock().ok().and_then(|caps| *caps))
 }
 
+/// Store the latest effective consensus timing values (best-effort).
+pub fn set_effective_timing(
+    min_finality_ms: u64,
+    block_time_ms: u64,
+    commit_time_ms: u64,
+    commit_quorum_timeout_ms: u64,
+    availability_timeout_ms: u64,
+    pacemaker_interval_ms: u64,
+    collectors_k: u64,
+    redundant_send_r: u64,
+    npos_timeouts: Option<NposTimeoutsSnapshot>,
+) {
+    EFFECTIVE_MIN_FINALITY_MS.store(min_finality_ms, Ordering::Relaxed);
+    EFFECTIVE_BLOCK_TIME_MS.store(block_time_ms, Ordering::Relaxed);
+    EFFECTIVE_COMMIT_TIME_MS.store(commit_time_ms, Ordering::Relaxed);
+    EFFECTIVE_COMMIT_QUORUM_TIMEOUT_MS.store(commit_quorum_timeout_ms, Ordering::Relaxed);
+    EFFECTIVE_AVAILABILITY_TIMEOUT_MS.store(availability_timeout_ms, Ordering::Relaxed);
+    EFFECTIVE_PACEMAKER_INTERVAL_MS.store(pacemaker_interval_ms, Ordering::Relaxed);
+    EFFECTIVE_COLLECTORS_K.store(collectors_k, Ordering::Relaxed);
+    EFFECTIVE_REDUNDANT_SEND_R.store(redundant_send_r, Ordering::Relaxed);
+    if let Some(npos) = npos_timeouts {
+        EFFECTIVE_NPOS_TIMEOUTS_ACTIVE.store(true, Ordering::Relaxed);
+        EFFECTIVE_NPOS_TIMEOUTS_PROPOSE_MS.store(npos.propose_ms, Ordering::Relaxed);
+        EFFECTIVE_NPOS_TIMEOUTS_PREVOTE_MS.store(npos.prevote_ms, Ordering::Relaxed);
+        EFFECTIVE_NPOS_TIMEOUTS_PRECOMMIT_MS.store(npos.precommit_ms, Ordering::Relaxed);
+        EFFECTIVE_NPOS_TIMEOUTS_COMMIT_MS.store(npos.commit_ms, Ordering::Relaxed);
+        EFFECTIVE_NPOS_TIMEOUTS_DA_MS.store(npos.da_ms, Ordering::Relaxed);
+        EFFECTIVE_NPOS_TIMEOUTS_AGGREGATOR_MS.store(npos.aggregator_ms, Ordering::Relaxed);
+        EFFECTIVE_NPOS_TIMEOUTS_EXEC_MS.store(npos.exec_ms, Ordering::Relaxed);
+        EFFECTIVE_NPOS_TIMEOUTS_WITNESS_MS.store(npos.witness_ms, Ordering::Relaxed);
+    } else {
+        EFFECTIVE_NPOS_TIMEOUTS_ACTIVE.store(false, Ordering::Relaxed);
+        EFFECTIVE_NPOS_TIMEOUTS_PROPOSE_MS.store(0, Ordering::Relaxed);
+        EFFECTIVE_NPOS_TIMEOUTS_PREVOTE_MS.store(0, Ordering::Relaxed);
+        EFFECTIVE_NPOS_TIMEOUTS_PRECOMMIT_MS.store(0, Ordering::Relaxed);
+        EFFECTIVE_NPOS_TIMEOUTS_COMMIT_MS.store(0, Ordering::Relaxed);
+        EFFECTIVE_NPOS_TIMEOUTS_DA_MS.store(0, Ordering::Relaxed);
+        EFFECTIVE_NPOS_TIMEOUTS_AGGREGATOR_MS.store(0, Ordering::Relaxed);
+        EFFECTIVE_NPOS_TIMEOUTS_EXEC_MS.store(0, Ordering::Relaxed);
+        EFFECTIVE_NPOS_TIMEOUTS_WITNESS_MS.store(0, Ordering::Relaxed);
+    }
+}
+
+fn effective_npos_timeouts_snapshot() -> Option<NposTimeoutsSnapshot> {
+    if !EFFECTIVE_NPOS_TIMEOUTS_ACTIVE.load(Ordering::Relaxed) {
+        return None;
+    }
+    Some(NposTimeoutsSnapshot {
+        propose_ms: EFFECTIVE_NPOS_TIMEOUTS_PROPOSE_MS.load(Ordering::Relaxed),
+        prevote_ms: EFFECTIVE_NPOS_TIMEOUTS_PREVOTE_MS.load(Ordering::Relaxed),
+        precommit_ms: EFFECTIVE_NPOS_TIMEOUTS_PRECOMMIT_MS.load(Ordering::Relaxed),
+        commit_ms: EFFECTIVE_NPOS_TIMEOUTS_COMMIT_MS.load(Ordering::Relaxed),
+        da_ms: EFFECTIVE_NPOS_TIMEOUTS_DA_MS.load(Ordering::Relaxed),
+        aggregator_ms: EFFECTIVE_NPOS_TIMEOUTS_AGGREGATOR_MS.load(Ordering::Relaxed),
+        exec_ms: EFFECTIVE_NPOS_TIMEOUTS_EXEC_MS.load(Ordering::Relaxed),
+        witness_ms: EFFECTIVE_NPOS_TIMEOUTS_WITNESS_MS.load(Ordering::Relaxed),
+    })
+}
+
 /// Record the latest deterministic membership view hash snapshot.
 pub fn set_membership_view_hash(hash: [u8; 32], height: u64, view: u64, epoch: u64) {
     MEMBERSHIP_HEIGHT.store(height, Ordering::Relaxed);
@@ -2991,6 +3067,27 @@ pub struct CommitQuorumSnapshot {
     pub last_updated_ms: u64,
 }
 
+/// Snapshot of effective NPoS timeout values (ms) for status reporting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NposTimeoutsSnapshot {
+    /// Proposal timeout (ms).
+    pub propose_ms: u64,
+    /// Prevote aggregation timeout (ms).
+    pub prevote_ms: u64,
+    /// Precommit aggregation timeout (ms).
+    pub precommit_ms: u64,
+    /// Commit finalization timeout (ms).
+    pub commit_ms: u64,
+    /// Data-availability timeout (ms).
+    pub da_ms: u64,
+    /// Aggregator fallback timeout (ms).
+    pub aggregator_ms: u64,
+    /// Execution timeout (ms).
+    pub exec_ms: u64,
+    /// Witness collection timeout (ms).
+    pub witness_ms: u64,
+}
+
 /// Snapshot of the most recent commit certificate (summary only).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QcSnapshot {
@@ -3062,6 +3159,24 @@ pub struct StatusSnapshot {
     pub staged_mode_activation_height: Option<u64>,
     /// Consensus handshake configuration caps derived from runtime parameters (if computed).
     pub consensus_caps: Option<iroha_p2p::ConsensusConfigCaps>,
+    /// Effective minimum finality floor (ms).
+    pub effective_min_finality_ms: u64,
+    /// Effective block time for the active mode (ms).
+    pub effective_block_time_ms: u64,
+    /// Effective commit time for the active mode (ms).
+    pub effective_commit_time_ms: u64,
+    /// Effective commit quorum timeout (ms).
+    pub effective_commit_quorum_timeout_ms: u64,
+    /// Effective availability timeout (ms).
+    pub effective_availability_timeout_ms: u64,
+    /// Effective pacemaker interval (ms).
+    pub effective_pacemaker_interval_ms: u64,
+    /// Effective NPoS timeouts for the active mode (ms).
+    pub effective_npos_timeouts: Option<NposTimeoutsSnapshot>,
+    /// Effective collector count (K) for the active mode.
+    pub effective_collectors_k: u64,
+    /// Effective redundant send fanout (r) for the active mode.
+    pub effective_redundant_send_r: u64,
     /// Blocks elapsed since activation height passed without applying the staged mode (if any).
     pub mode_activation_lag_blocks: Option<u64>,
     /// Whether runtime mode flips are currently allowed by configuration.
@@ -3887,6 +4002,17 @@ pub fn snapshot() -> StatusSnapshot {
         staged_mode_tag,
         staged_mode_activation_height,
         consensus_caps,
+        effective_min_finality_ms: EFFECTIVE_MIN_FINALITY_MS.load(Ordering::Relaxed),
+        effective_block_time_ms: EFFECTIVE_BLOCK_TIME_MS.load(Ordering::Relaxed),
+        effective_commit_time_ms: EFFECTIVE_COMMIT_TIME_MS.load(Ordering::Relaxed),
+        effective_commit_quorum_timeout_ms: EFFECTIVE_COMMIT_QUORUM_TIMEOUT_MS
+            .load(Ordering::Relaxed),
+        effective_availability_timeout_ms: EFFECTIVE_AVAILABILITY_TIMEOUT_MS
+            .load(Ordering::Relaxed),
+        effective_pacemaker_interval_ms: EFFECTIVE_PACEMAKER_INTERVAL_MS.load(Ordering::Relaxed),
+        effective_npos_timeouts: effective_npos_timeouts_snapshot(),
+        effective_collectors_k: EFFECTIVE_COLLECTORS_K.load(Ordering::Relaxed),
+        effective_redundant_send_r: EFFECTIVE_REDUNDANT_SEND_R.load(Ordering::Relaxed),
         mode_activation_lag_blocks,
         mode_flip_kill_switch,
         mode_flip_blocked,
@@ -6584,6 +6710,46 @@ mod tests {
         assert_eq!(snap.pipeline_conflict_rate_bps, 250);
 
         super::reset_rbc_backlog_stats_for_tests();
+    }
+
+    #[test]
+    fn effective_timing_snapshot_tracks_values() {
+        super::set_effective_timing(
+            150,
+            1_000,
+            1_500,
+            3_000,
+            2_500,
+            750,
+            4,
+            2,
+            Some(super::NposTimeoutsSnapshot {
+                propose_ms: 200,
+                prevote_ms: 210,
+                precommit_ms: 220,
+                commit_ms: 230,
+                da_ms: 240,
+                aggregator_ms: 250,
+                exec_ms: 260,
+                witness_ms: 270,
+            }),
+        );
+
+        let snap = super::snapshot();
+        assert_eq!(snap.effective_min_finality_ms, 150);
+        assert_eq!(snap.effective_block_time_ms, 1_000);
+        assert_eq!(snap.effective_commit_time_ms, 1_500);
+        assert_eq!(snap.effective_commit_quorum_timeout_ms, 3_000);
+        assert_eq!(snap.effective_availability_timeout_ms, 2_500);
+        assert_eq!(snap.effective_pacemaker_interval_ms, 750);
+        assert_eq!(snap.effective_collectors_k, 4);
+        assert_eq!(snap.effective_redundant_send_r, 2);
+        let npos = snap.effective_npos_timeouts.expect("npos timeouts");
+        assert_eq!(npos.propose_ms, 200);
+        assert_eq!(npos.witness_ms, 270);
+
+        super::set_effective_timing(0, 0, 0, 0, 0, 0, 0, 0, None);
+        assert!(super::snapshot().effective_npos_timeouts.is_none());
     }
 
     #[test]

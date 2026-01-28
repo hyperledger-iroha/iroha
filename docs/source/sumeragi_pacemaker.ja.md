@@ -14,13 +14,13 @@ translator: manual
 
 本ノートは Sumeragi のペースメーカー（タイマー）方針を概説し、オペレーター向けのガイダンスと具体例を提供します。ペースメーカーはリーダーが提案を行うタイミングと、非アクティブ時にバリデータが新しいビューを提案／移行するタイミングを制御します。
 
-実装状況: EMA による基準ウィンドウ、バックオフ、RTT フロア、および設定可能なジッタ帯（`sumeragi.pacemaker.jitter_frac_permille`）が導入済み。ジッタはノードと `(height, view)` ごとに決定的に適用されます。
+実装状況: EMA による基準ウィンドウ、バックオフ、RTT フロア、および設定可能なジッタ帯（`sumeragi.advanced.pacemaker.jitter_frac_permille`）が導入済み。ジッタはノードと `(height, view)` ごとに決定的に適用されます。
 
 ## 概念
-- **基準ウィンドウ**: 観測したコンセンサスフェーズ（`propose`, `collect_da`, `collect_prevote`, `collect_precommit`, `commit`）の指数移動平均。EMA は `sumeragi.npos.timeouts.*_ms` からシードされ、十分なサンプルが集まるまでは設定値とほぼ一致します。`collect_aggregator` の EMA は可観測性のため公開されていますが、ペースメーカーウィンドウには含まれません。平滑値は `sumeragi_phase_latency_ema_ms{phase=…}` で確認できます。
-- **バックオフ乗数**: `sumeragi.pacemaker.backoff_multiplier`（既定 1）。タイムアウトが発生するたびに `window += base * multiplier`。
-- **RTT フロア**: `avg_rtt_ms * sumeragi.pacemaker.rtt_floor_multiplier`（既定 2）。高レイテンシリンクでタイムアウトが攻撃的になりすぎるのを防ぎます。
-- **上限**: `sumeragi.pacemaker.max_backoff_ms`（既定 60,000 ms）。ウィンドウのハード上限。
+- **基準ウィンドウ**: 観測したコンセンサスフェーズ（`propose`, `collect_da`, `collect_prevote`, `collect_precommit`, `commit`）の指数移動平均。EMA は `sumeragi.advanced.npos.timeouts.*_ms` からシードされ、十分なサンプルが集まるまでは設定値とほぼ一致します。`collect_aggregator` の EMA は可観測性のため公開されていますが、ペースメーカーウィンドウには含まれません。平滑値は `sumeragi_phase_latency_ema_ms{phase=…}` で確認できます。
+- **バックオフ乗数**: `sumeragi.advanced.pacemaker.backoff_multiplier`（既定 1）。タイムアウトが発生するたびに `window += base * multiplier`。
+- **RTT フロア**: `avg_rtt_ms * sumeragi.advanced.pacemaker.rtt_floor_multiplier`（既定 2）。高レイテンシリンクでタイムアウトが攻撃的になりすぎるのを防ぎます。
+- **上限**: `sumeragi.advanced.pacemaker.max_backoff_ms`（既定 60,000 ms）。ウィンドウのハード上限。
 
 タイムアウト時の有効ウィンドウ更新:
 ```
@@ -31,7 +31,7 @@ RTT サンプルが無い場合、RTT フロアは 0 とみなします。
 公開テレメトリ（詳細は telemetry.md）:
 - ランタイム: `sumeragi_pacemaker_backoff_ms`, `sumeragi_pacemaker_rtt_floor_ms`, `sumeragi_phase_latency_ema_ms{phase=…}`
 - REST スナップショット: `/v1/sumeragi/phases` は各フェーズの最新レイテンシとともに `ema_ms` を含み、Prometheus を直接スクレイプしなくてもトレンドを可視化可能。
-- 設定: `sumeragi.pacemaker.backoff_multiplier`, `sumeragi.pacemaker.rtt_floor_multiplier`, `sumeragi.pacemaker.max_backoff_ms`
+- 設定: `sumeragi.advanced.pacemaker.backoff_multiplier`, `sumeragi.advanced.pacemaker.rtt_floor_multiplier`, `sumeragi.advanced.pacemaker.max_backoff_ms`
 
 ## ジッタ方針
 ハードウェアの群集行動（同時タイムアウト）を避けるため、ペースメーカーはウィンドウ周辺に小さなノード固有ジッタを導入できます。
@@ -100,7 +100,7 @@ window_jittered_ms = clamp(window + jitter, 0, cap)
 - バックオフトレンド: `avg_over_time(sumeragi_pacemaker_backoff_ms[5m])`
 - RTT フロア確認: `avg_over_time(sumeragi_pacemaker_rtt_floor_ms[5m])`
 - EMA と分布比較: `sumeragi_phase_latency_ema_ms{phase=…}` と `sumeragi_phase_latency_ms{phase=…}` のパーセンタイルを並べて観測
-- 設定の検証: `max(sumeragi.pacemaker.backoff_multiplier)`, `max(sumeragi.pacemaker.rtt_floor_multiplier)`, `max(sumeragi.pacemaker.max_backoff_ms)`
+- 設定の検証: `max(sumeragi.advanced.pacemaker.backoff_multiplier)`, `max(sumeragi.advanced.pacemaker.rtt_floor_multiplier)`, `max(sumeragi.advanced.pacemaker.max_backoff_ms)`
 
 ## 決定性と安全性
 - タイマー／バックオフ／ジッタは提案やビュー変更のトリガ時刻にのみ影響し、署名検証や commit certificate ルールには影響しません。
