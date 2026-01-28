@@ -357,12 +357,22 @@ pub(crate) fn load_npos_epoch_params(
 
 /// Resolve the pacemaker block time from on-chain Sumeragi parameters, falling back to config.
 pub(crate) fn resolve_npos_block_time(view: &StateView<'_>, fallback: &SumeragiNpos) -> Duration {
-    let block_time = view.world.parameters().sumeragi().block_time();
-    if block_time == Duration::ZERO {
+    let params = view.world.parameters().sumeragi();
+    let min_finality_ms = if params.min_finality_ms() == 0 {
+        iroha_data_model::parameter::system::SumeragiParameters::default().min_finality_ms()
+    } else {
+        params.min_finality_ms()
+    };
+    let min_finality = Duration::from_millis(min_finality_ms.max(1));
+    let mut block_time = if params.block_time() == Duration::ZERO {
         fallback.block_time.max(Duration::from_millis(1))
     } else {
-        block_time
+        params.block_time()
+    };
+    if block_time < min_finality {
+        block_time = min_finality;
     }
+    block_time
 }
 
 /// Resolve `NPoS` pacemaker timeouts from on-chain parameters, falling back to config values.
@@ -372,8 +382,33 @@ pub(crate) fn resolve_npos_timeouts(
 ) -> SumeragiNposTimeouts {
     let block_time = resolve_npos_block_time(view, fallback);
     let derived = SumeragiNposTimeouts::from_block_time(block_time);
+    let min_finality_ms = {
+        let params = view.world.parameters().sumeragi();
+        if params.min_finality_ms() == 0 {
+            iroha_data_model::parameter::system::SumeragiParameters::default().min_finality_ms()
+        } else {
+            params.min_finality_ms()
+        }
+    };
+    let min_finality = Duration::from_millis(min_finality_ms.max(1));
+    let clamp = |value: Duration| {
+        if value < min_finality {
+            min_finality
+        } else {
+            value
+        }
+    };
     let Some(params) = view.world.sumeragi_npos_parameters() else {
-        return fallback.timeouts;
+        let mut out = fallback.timeouts;
+        out.propose = clamp(out.propose);
+        out.prevote = clamp(out.prevote);
+        out.precommit = clamp(out.precommit);
+        out.exec = clamp(out.exec);
+        out.witness = clamp(out.witness);
+        out.commit = clamp(out.commit);
+        out.da = clamp(out.da);
+        out.aggregator = clamp(out.aggregator);
+        return out;
     };
     let on_chain_block_ms = view.world.parameters().sumeragi().block_time_ms();
     if params.block_time_ms() > 0 && params.block_time_ms() != on_chain_block_ms {
@@ -386,11 +421,12 @@ pub(crate) fn resolve_npos_timeouts(
         }
     }
     let resolve = |value_ms: u64, fallback: Duration| {
-        if value_ms == 0 {
+        let value = if value_ms == 0 {
             fallback
         } else {
             Duration::from_millis(value_ms)
-        }
+        };
+        clamp(value)
     };
     let mut out = derived;
     out.propose = resolve(params.timeout_propose_ms(), derived.propose);
@@ -399,6 +435,8 @@ pub(crate) fn resolve_npos_timeouts(
     out.commit = resolve(params.timeout_commit_ms(), derived.commit);
     out.da = resolve(params.timeout_da_ms(), derived.da);
     out.aggregator = resolve(params.timeout_aggregator_ms(), derived.aggregator);
+    out.exec = clamp(out.exec);
+    out.witness = clamp(out.witness);
     out
 }
 
@@ -1321,12 +1359,14 @@ mod tests {
 
     #[test]
     fn resolve_sumeragi_timeouts_prefers_on_chain_values() {
-        let (block_time, commit_time) = resolve_sumeragi_timeouts(
-            Duration::from_millis(900),
-            Duration::from_millis(1_100),
-            Duration::from_secs(2),
-            Duration::from_secs(4),
-        );
+        let params = iroha_data_model::parameter::system::SumeragiParameters {
+            block_time_ms: 900,
+            commit_time_ms: 1_100,
+            min_finality_ms: 100,
+            ..iroha_data_model::parameter::system::SumeragiParameters::default()
+        };
+        let fallback = iroha_data_model::parameter::system::SumeragiParameters::default();
+        let (block_time, commit_time) = resolve_sumeragi_timeouts(&params, &fallback);
 
         assert_eq!(block_time, Duration::from_millis(900));
         assert_eq!(commit_time, Duration::from_millis(1_100));
@@ -1334,15 +1374,36 @@ mod tests {
 
     #[test]
     fn resolve_sumeragi_timeouts_uses_fallback_for_zero() {
-        let (block_time, commit_time) = resolve_sumeragi_timeouts(
-            Duration::ZERO,
-            Duration::ZERO,
-            Duration::from_secs(2),
-            Duration::from_secs(4),
-        );
+        let params = iroha_data_model::parameter::system::SumeragiParameters {
+            block_time_ms: 0,
+            commit_time_ms: 0,
+            min_finality_ms: 0,
+            ..iroha_data_model::parameter::system::SumeragiParameters::default()
+        };
+        let fallback = iroha_data_model::parameter::system::SumeragiParameters {
+            block_time_ms: 2_000,
+            commit_time_ms: 4_000,
+            min_finality_ms: 100,
+            ..iroha_data_model::parameter::system::SumeragiParameters::default()
+        };
+        let (block_time, commit_time) = resolve_sumeragi_timeouts(&params, &fallback);
 
         assert_eq!(block_time, Duration::from_secs(2));
         assert_eq!(commit_time, Duration::from_secs(4));
+    }
+
+    #[test]
+    fn resolve_sumeragi_timeouts_clamps_to_min_finality() {
+        let params = iroha_data_model::parameter::system::SumeragiParameters {
+            block_time_ms: 50,
+            commit_time_ms: 60,
+            min_finality_ms: 100,
+            ..iroha_data_model::parameter::system::SumeragiParameters::default()
+        };
+        let fallback = iroha_data_model::parameter::system::SumeragiParameters::default();
+        let (block_time, commit_time) = resolve_sumeragi_timeouts(&params, &fallback);
+        assert_eq!(block_time, Duration::from_millis(100));
+        assert_eq!(commit_time, Duration::from_millis(100));
     }
 
     #[test]
@@ -9080,22 +9141,33 @@ fn idle_wait_duration(
 }
 
 fn resolve_sumeragi_timeouts(
-    on_chain_block_time: Duration,
-    on_chain_commit_time: Duration,
-    fallback_block_time: Duration,
-    fallback_commit_time: Duration,
+    params: &iroha_data_model::parameter::system::SumeragiParameters,
+    fallback: &iroha_data_model::parameter::system::SumeragiParameters,
 ) -> (Duration, Duration) {
-    let block_time = if on_chain_block_time == Duration::ZERO {
-        fallback_block_time
+    let min_finality_ms = if params.min_finality_ms() == 0 {
+        fallback.min_finality_ms().max(1)
     } else {
-        on_chain_block_time
+        params.min_finality_ms().max(1)
     };
-    let commit_time = if on_chain_commit_time == Duration::ZERO {
-        fallback_commit_time
+
+    let block_time_ms = if params.block_time_ms() == 0 {
+        fallback.block_time_ms()
     } else {
-        on_chain_commit_time
-    };
-    (block_time, commit_time)
+        params.block_time_ms()
+    }
+    .max(min_finality_ms);
+
+    let commit_time_ms = if params.commit_time_ms() == 0 {
+        fallback.commit_time_ms()
+    } else {
+        params.commit_time_ms()
+    }
+    .max(block_time_ms);
+
+    (
+        Duration::from_millis(block_time_ms),
+        Duration::from_millis(commit_time_ms),
+    )
 }
 
 fn worker_time_budget(
@@ -10322,8 +10394,6 @@ impl SumeragiWorker {
             block_payload_dedup,
         } = self;
         let fallback_params = iroha_data_model::parameter::system::SumeragiParameters::default();
-        let fallback_block_time = fallback_params.block_time();
-        let fallback_commit_time = fallback_params.commit_time();
         let msg_channel_cap_block_payload = config.queues.block_payload;
         let msg_channel_cap_votes = config.queues.votes;
         let msg_channel_cap_blocks = config.queues.blocks;
@@ -10337,12 +10407,7 @@ impl SumeragiWorker {
             let params = view.world.parameters().sumeragi();
             let mode = effective_consensus_mode(&view, config.consensus_mode);
             let (block_time, commit_time) = match mode {
-                ConsensusMode::Permissioned => resolve_sumeragi_timeouts(
-                    params.block_time(),
-                    params.commit_time(),
-                    fallback_block_time,
-                    fallback_commit_time,
-                ),
+                ConsensusMode::Permissioned => resolve_sumeragi_timeouts(params, &fallback_params),
                 ConsensusMode::Npos => {
                     let block_time = resolve_npos_block_time(&view, &config.npos);
                     let commit_time = resolve_npos_timeouts(&view, &config.npos).commit;

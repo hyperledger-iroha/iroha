@@ -40,9 +40,7 @@
               },
               "id": "rose#wonderland",
               "logo": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
@@ -55,9 +53,7 @@
             "Domain": {
               "id": "garden_of_live_flowers",
               "logo": null,
-              "metadata": {
-                
-              }
+              "metadata": {}
             }
           }
         },
@@ -66,9 +62,7 @@
             "Account": {
               "id": "34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD",
               "label": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "uaid": null
             }
           }
@@ -85,9 +79,7 @@
               },
               "id": "cabbage#garden_of_live_flowers",
               "logo": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
@@ -96,13 +88,11 @@
           }
         }
       ],
-      "ivm_triggers": [
-        
-      ],
+      "ivm_triggers": [],
       "parameters": {
         "sumeragi": {
-          "block_time_ms": 2000,
-          "commit_time_ms": 4000,
+          "block_time_ms": 100,
+          "commit_time_ms": 100,
           "max_clock_drift_ms": 1000,
           "collectors_k": 3,
           "collectors_redundant_send_r": 3,
@@ -118,7 +108,8 @@
             "pkcs11",
             "yubihsm",
             "softkey"
-          ]
+          ],
+          "min_finality_ms": 100
         },
         "block": {
           "max_transactions": 512
@@ -153,7 +144,7 @@
             "payload": {
               "activation_lag_blocks": 1,
               "slashing_delay_blocks": 259200,
-              "block_time_ms": 1000,
+              "block_time_ms": 100,
               "epoch_length_blocks": 3600,
               "epoch_seed": "8BBF8F12EC79F8D85D18E2CE7A84B66C53E9CD4D4EBA357CD33CF28F0D65720B",
               "evidence_horizon_blocks": 7200,
@@ -175,9 +166,7 @@
           }
         }
       },
-      "topology": [
-        
-      ]
+      "topology": []
     },
     {
       "instructions": [
@@ -247,9 +236,7 @@
           }
         }
       ],
-      "ivm_triggers": [
-        
-      ],
+      "ivm_triggers": [],
       "topology": [
         {
           "peer": "ea0130A71AAB00BE72C1BDF6B6A7F5D107E9D224DE900C3DDF6C84C1F17B0BB31E59A1403C9028320058E08D6659E0E7F92F0F",

@@ -10455,14 +10455,18 @@ impl Actor {
 
     fn block_time_for_mode(&self, view: &StateView<'_>, mode: ConsensusMode) -> Duration {
         match mode {
-            ConsensusMode::Permissioned => view.world.parameters().sumeragi().block_time(),
+            ConsensusMode::Permissioned => {
+                view.world.parameters().sumeragi().effective_block_time()
+            }
             ConsensusMode::Npos => super::resolve_npos_block_time(view, &self.config.npos),
         }
     }
 
     fn commit_timeout_for_mode(&self, view: &StateView<'_>, mode: ConsensusMode) -> Duration {
         match mode {
-            ConsensusMode::Permissioned => view.world.parameters().sumeragi().commit_time(),
+            ConsensusMode::Permissioned => {
+                view.world.parameters().sumeragi().effective_commit_time()
+            }
             ConsensusMode::Npos => super::resolve_npos_timeouts(view, &self.config.npos).commit,
         }
     }
@@ -13042,8 +13046,8 @@ fn commit_quorum_timeout_for_params(
     params: &iroha_data_model::parameter::system::SumeragiParameters,
 ) -> Duration {
     commit_quorum_timeout_from_durations(
-        params.block_time(),
-        params.commit_time(),
+        params.effective_block_time(),
+        params.effective_commit_time(),
         params.da_enabled(),
         iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
     )

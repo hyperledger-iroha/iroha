@@ -237,7 +237,7 @@ Commit rule (commit certificate)
 - Commit QCs always bind `parent_state_root` and `post_state_root`; there is no separate execution QC gate. When `sumeragi.da.enabled=true`, availability evidence is tracked but does not gate commit.
 
 Pacemaker (view changes)
-- View‑0 voting follows the same rules for Set A and Set B validators. On local timeout in view 0, nodes suggest a view change (no widen‑before‑rotate). Timing is driven by on‑chain parameters: `SumeragiParameters` (`BlockTimeMs`/`CommitTimeMs`) set the base for both modes, and NPoS additionally consumes `sumeragi_npos_parameters` per‑phase timeouts (not `block_time_ms`, which is deprecated). Leader proposal is roughly at 1/3 and expected commit at 2/3 of the pipeline time.
+- View‑0 voting follows the same rules for Set A and Set B validators. On local timeout in view 0, nodes suggest a view change (no widen‑before‑rotate). Timing is driven by on‑chain parameters: `SumeragiParameters` (`BlockTimeMs`/`CommitTimeMs`/`MinFinalityMs`) set the base for both modes, and NPoS additionally consumes `sumeragi_npos_parameters` per‑phase timeouts (not `block_time_ms`, which is deprecated). Leader proposal is roughly at 1/3 and expected commit at 2/3 of the pipeline time.
 - View-change proofs advance once `f+1` validators raise suspicion (commit failure or quorum timeout); a full commit quorum is not required for a view change.
 
 K / r Parameters

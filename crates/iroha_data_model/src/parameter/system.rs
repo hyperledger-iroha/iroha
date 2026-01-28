@@ -161,7 +161,7 @@ mod model {
 
     /// Limits that govern consensus operation
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[display("{block_time_ms},{commit_time_ms},{max_clock_drift_ms}_SL")]
+    #[display("{block_time_ms},{commit_time_ms},{min_finality_ms},{max_clock_drift_ms}_SL")]
     pub struct SumeragiParameters {
         /// Maximal amount of time (in milliseconds) a peer will wait before forcing creation of a new block.
         ///
@@ -175,6 +175,11 @@ mod model {
         /// If this period expires the block will request a view change
         #[norito(default = "defaults::sumeragi::commit_time_ms")]
         pub commit_time_ms: u64,
+        /// Minimum finality floor (in milliseconds) for consensus timing.
+        ///
+        /// All derived timeouts are clamped to be at least this value.
+        #[norito(default = "defaults::sumeragi::min_finality_ms")]
+        pub min_finality_ms: u64,
         /// Maximal allowed random deviation from the nominal rate
         ///
         /// # Warning
@@ -517,6 +522,7 @@ mod model {
     pub enum SumeragiParameter {
         BlockTimeMs(u64),
         CommitTimeMs(u64),
+        MinFinalityMs(u64),
         MaxClockDriftMs(u64),
         /// Number of collectors per height (K). Must be >= 1.
         CollectorsK(u16),
@@ -849,6 +855,12 @@ impl SumeragiParameters {
         self.commit_time_ms
     }
 
+    /// Raw minimum finality floor in milliseconds.
+    #[must_use]
+    pub fn min_finality_ms(&self) -> u64 {
+        self.min_finality_ms
+    }
+
     /// Raw clock drift bound in milliseconds.
     #[must_use]
     pub fn max_clock_drift_ms(&self) -> u64 {
@@ -885,6 +897,12 @@ impl SumeragiParameters {
         self.mode_activation_height
     }
 
+    /// Effective minimum finality floor in milliseconds (clamped to at least 1ms).
+    #[must_use]
+    pub fn effective_min_finality_ms(&self) -> u64 {
+        self.min_finality_ms.max(1)
+    }
+
     /// Maximal allowed random deviation from the nominal rate
     ///
     /// # Warning
@@ -892,6 +910,12 @@ impl SumeragiParameters {
     /// This value should be kept as low as possible to not affect soundness of the consensus
     pub fn max_clock_drift(&self) -> Duration {
         Duration::from_millis(self.max_clock_drift_ms)
+    }
+
+    /// Effective minimum finality floor duration.
+    #[must_use]
+    pub fn min_finality(&self) -> Duration {
+        Duration::from_millis(self.effective_min_finality_ms())
     }
 
     /// Maximal amount of time (in milliseconds) a peer will wait before forcing creation of a new block.
@@ -903,11 +927,49 @@ impl SumeragiParameters {
         Duration::from_millis(self.block_time_ms)
     }
 
+    /// Effective block time duration clamped to `min_finality_ms`.
+    #[must_use]
+    pub fn effective_block_time(&self) -> Duration {
+        Duration::from_millis(self.effective_block_time_ms())
+    }
+
     /// Time (in milliseconds) a peer will wait for a block to be committed.
     ///
     /// If this period expires the block will request a view change
     pub fn commit_time(&self) -> Duration {
         Duration::from_millis(self.commit_time_ms)
+    }
+
+    /// Effective commit time duration clamped to `block_time_ms`.
+    #[must_use]
+    pub fn effective_commit_time(&self) -> Duration {
+        Duration::from_millis(self.effective_commit_time_ms())
+    }
+
+    /// Effective block time in milliseconds (clamped to `min_finality_ms`).
+    #[must_use]
+    pub fn effective_block_time_ms(&self) -> u64 {
+        self.block_time_ms.max(self.effective_min_finality_ms())
+    }
+
+    /// Effective commit time in milliseconds (clamped to `block_time_ms`).
+    #[must_use]
+    pub fn effective_commit_time_ms(&self) -> u64 {
+        self.commit_time_ms.max(self.effective_block_time_ms())
+    }
+
+    /// Validate timing constraints for this parameter set.
+    pub fn validate_timing(&self) -> Result<(), &'static str> {
+        if self.min_finality_ms == 0 {
+            return Err("min_finality_ms must be greater than zero");
+        }
+        if self.block_time_ms < self.min_finality_ms {
+            return Err("block_time_ms must be greater than or equal to min_finality_ms");
+        }
+        if self.commit_time_ms < self.block_time_ms {
+            return Err("commit_time_ms must be greater than or equal to block_time_ms");
+        }
+        Ok(())
     }
 
     /// Maximal amount of time it takes to commit a block
@@ -937,6 +999,11 @@ impl JsonSerialize for SumeragiParameter {
             }
             SumeragiParameter::CommitTimeMs(v) => {
                 json::write_json_string("CommitTimeMs", out);
+                out.push(':');
+                v.json_serialize(out);
+            }
+            SumeragiParameter::MinFinalityMs(v) => {
+                json::write_json_string("MinFinalityMs", out);
                 out.push(':');
                 v.json_serialize(out);
             }
@@ -997,6 +1064,10 @@ impl JsonDeserialize for SumeragiParameter {
                 &payload,
                 "CommitTimeMs",
             )?)),
+            "MinFinalityMs" => Ok(Self::MinFinalityMs(json_support::expect_u64(
+                &payload,
+                "MinFinalityMs",
+            )?)),
             "MaxClockDriftMs" => Ok(Self::MaxClockDriftMs(json_support::expect_u64(
                 &payload,
                 "MaxClockDriftMs",
@@ -1034,6 +1105,7 @@ impl JsonSerialize for SumeragiParameters {
         let mut first = true;
         json_support::write_field(out, &mut first, "block_time_ms", &self.block_time_ms);
         json_support::write_field(out, &mut first, "commit_time_ms", &self.commit_time_ms);
+        json_support::write_field(out, &mut first, "min_finality_ms", &self.min_finality_ms);
         json_support::write_field(
             out,
             &mut first,
@@ -1105,6 +1177,11 @@ impl JsonDeserialize for SumeragiParameters {
             .map(|value| json_support::expect_u64(&value, "commit_time_ms"))
             .transpose()?
             .unwrap_or_else(defaults::sumeragi::commit_time_ms);
+        let min_finality_ms = map
+            .remove("min_finality_ms")
+            .map(|value| json_support::expect_u64(&value, "min_finality_ms"))
+            .transpose()?
+            .unwrap_or_else(defaults::sumeragi::min_finality_ms);
         let max_clock_drift_ms = map
             .remove("max_clock_drift_ms")
             .map(|value| json_support::expect_u64(&value, "max_clock_drift_ms"))
@@ -1166,9 +1243,10 @@ impl JsonDeserialize for SumeragiParameters {
 
         json_support::ensure_no_extra(map)?;
 
-        Ok(Self {
+        let params = Self {
             block_time_ms,
             commit_time_ms,
+            min_finality_ms,
             max_clock_drift_ms,
             collectors_k,
             collectors_redundant_send_r,
@@ -1181,7 +1259,16 @@ impl JsonDeserialize for SumeragiParameters {
             key_require_hsm,
             key_allowed_algorithms,
             key_allowed_hsm_providers,
-        })
+        };
+
+        params
+            .validate_timing()
+            .map_err(|message| json::Error::InvalidField {
+                field: "SumeragiParameters".to_owned(),
+                message: message.to_owned(),
+            })?;
+
+        Ok(params)
     }
 }
 
@@ -1189,11 +1276,14 @@ mod defaults {
     pub mod sumeragi {
         use iroha_crypto::Algorithm;
 
+        pub const fn min_finality_ms() -> u64 {
+            100
+        }
         pub const fn block_time_ms() -> u64 {
-            2_000
+            100
         }
         pub const fn commit_time_ms() -> u64 {
-            4_000
+            100
         }
         pub const fn max_clock_drift_ms() -> u64 {
             1_000
@@ -1228,7 +1318,7 @@ mod defaults {
 
         pub mod npos {
             pub const fn block_time_ms() -> u64 {
-                1_000
+                100
             }
             pub const fn timeout_propose_ms() -> u64 {
                 300
@@ -1359,6 +1449,7 @@ impl Default for SumeragiParameters {
         Self {
             block_time_ms: block_time_ms(),
             commit_time_ms: commit_time_ms(),
+            min_finality_ms: min_finality_ms(),
             max_clock_drift_ms: max_clock_drift_ms(),
             collectors_k: collectors_k(),
             collectors_redundant_send_r: redundant_send_r(),
@@ -1484,6 +1575,7 @@ impl Parameters {
             Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
             Sumeragi(sumeragi.block_time_ms) => SumeragiParameter::BlockTimeMs,
             Sumeragi(sumeragi.commit_time_ms) => SumeragiParameter::CommitTimeMs,
+            Sumeragi(sumeragi.min_finality_ms) => SumeragiParameter::MinFinalityMs,
             Sumeragi(sumeragi.collectors_k) => SumeragiParameter::CollectorsK,
             Sumeragi(sumeragi.collectors_redundant_send_r) => SumeragiParameter::RedundantSendR,
             Sumeragi(sumeragi.da_enabled) => SumeragiParameter::DaEnabled,
@@ -1655,15 +1747,17 @@ impl JsonDeserialize for Parameters {
 impl SumeragiParameters {
     /// Construct [`Self`]
     pub fn new(block_time: Duration, commit_time: Duration, max_clock_drift: Duration) -> Self {
+        let block_time_ms = block_time
+            .as_millis()
+            .try_into()
+            .expect("INTERNAL BUG: Time should fit into u64");
         Self {
-            block_time_ms: block_time
-                .as_millis()
-                .try_into()
-                .expect("INTERNAL BUG: Time should fit into u64"),
+            block_time_ms,
             commit_time_ms: commit_time
                 .as_millis()
                 .try_into()
                 .expect("INTERNAL BUG: Time should fit into u64"),
+            min_finality_ms: block_time_ms,
             max_clock_drift_ms: max_clock_drift
                 .as_millis()
                 .try_into()
@@ -1687,6 +1781,7 @@ impl SumeragiParameters {
         [
             SumeragiParameter::BlockTimeMs(self.block_time_ms),
             SumeragiParameter::CommitTimeMs(self.commit_time_ms),
+            SumeragiParameter::MinFinalityMs(self.min_finality_ms),
             SumeragiParameter::MaxClockDriftMs(self.max_clock_drift_ms),
             SumeragiParameter::CollectorsK(self.collectors_k),
             SumeragiParameter::RedundantSendR(self.collectors_redundant_send_r),
@@ -2185,6 +2280,7 @@ mod tests {
         let vals = [
             SumeragiParameter::BlockTimeMs(2000),
             SumeragiParameter::CommitTimeMs(4000),
+            SumeragiParameter::MinFinalityMs(100),
             SumeragiParameter::MaxClockDriftMs(1000),
             SumeragiParameter::CollectorsK(2),
             SumeragiParameter::RedundantSendR(2),
@@ -2199,6 +2295,7 @@ mod tests {
                 SumeragiParameter::CollectorsK(x) => (3, u64::from(x)),
                 SumeragiParameter::RedundantSendR(x) => (4, u64::from(x)),
                 SumeragiParameter::DaEnabled(x) => (5, u64::from(x)),
+                SumeragiParameter::MinFinalityMs(x) => (6, x),
                 // Scheduling parameters are intentionally excluded from this stability test
                 // since they are optional and not part of steady-state runtime behavior.
                 // These arms satisfy exhaustiveness; they won’t be reached because
@@ -2220,6 +2317,7 @@ mod tests {
                 3 => SumeragiParameter::CollectorsK(u16::try_from(val).expect("fits in u16")),
                 4 => SumeragiParameter::RedundantSendR(u8::try_from(val).expect("fits in u8")),
                 5 => SumeragiParameter::DaEnabled(val != 0),
+                6 => SumeragiParameter::MinFinalityMs(val),
                 _ => unreachable!(),
             };
             assert_eq!(v, dec);
@@ -2244,6 +2342,33 @@ mod tests {
             let j = norito::json::to_json(&params).expect("json ser");
             let parsed: SumeragiParameters = norito::json::from_str(&j).expect("json de");
             assert_eq!(params, parsed);
+        }
+    }
+
+    #[test]
+    fn sumeragi_parameters_effective_timing_clamps_to_min_finality() {
+        let params = SumeragiParameters {
+            block_time_ms: 50,
+            commit_time_ms: 40,
+            min_finality_ms: 100,
+            ..SumeragiParameters::default()
+        };
+        assert_eq!(params.effective_min_finality_ms(), 100);
+        assert_eq!(params.effective_block_time_ms(), 100);
+        assert_eq!(params.effective_commit_time_ms(), 100);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn sumeragi_parameters_json_rejects_invalid_timing() {
+        let json = r#"{"block_time_ms":200,"commit_time_ms":100,"min_finality_ms":50}"#;
+        let err = norito::json::from_str::<SumeragiParameters>(json)
+            .expect_err("invalid timing should fail");
+        match err {
+            norito::json::Error::InvalidField { field, .. } => {
+                assert_eq!(field, "SumeragiParameters");
+            }
+            other => panic!("unexpected error: {other:?}"),
         }
     }
 }
