@@ -603,7 +603,7 @@ mod tools {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// Account address helpers (IH58 (preferred)/snx1 (second-best) conversions)
+        /// Account address helpers (IH58 (preferred)/sora (second-best) conversions)
         #[command(subcommand)]
         Address(crate::address::Command),
         /// Cryptography helpers (SM2/SM3/SM4)
@@ -1606,10 +1606,10 @@ mod domain {
         /// Domain name
         #[arg(short, long)]
         pub id: DomainId,
-        /// Source account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Source account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         pub from: String,
-        /// Destination account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Destination account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         pub to: String,
     }
@@ -1873,14 +1873,14 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         id: String,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct RoleList {
-        /// Account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         id: String,
         /// Maximum number of items to return (server-side limit)
@@ -1896,7 +1896,7 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct PermissionList {
-        /// Account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         id: String,
         /// Maximum number of items to return (server-side limit)
@@ -1912,7 +1912,7 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct IdRole {
-        /// Account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         pub id: String,
         /// Role name
@@ -2271,10 +2271,10 @@ mod asset {
             /// Asset definition in the format "asset#domain"
             #[arg(short, long)]
             pub id: AssetDefinitionId,
-            /// Source account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+            /// Source account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
             #[arg(short, long)]
             pub from: String,
-            /// Destination account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+            /// Destination account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
             #[arg(short, long)]
             pub to: String,
         }
@@ -2455,7 +2455,7 @@ mod asset {
         /// Asset in the format `asset#domain#account` or `asset##account`
         #[arg(short, long)]
         pub id: AssetId,
-        /// Destination account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Destination account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         pub to: String,
         /// Transfer amount (integer or decimal)
@@ -2709,10 +2709,10 @@ mod nft {
         /// NFT in the format "name$domain"
         #[arg(short, long)]
         pub id: NftId,
-        /// Source account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Source account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         pub from: String,
-        /// Destination account identifier (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Destination account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long)]
         pub to: String,
     }
@@ -2974,7 +2974,7 @@ mod multisig {
     }
     #[derive(clap::Args, Debug)]
     pub struct Register {
-        /// List of signatories for the multisig account (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// List of signatories for the multisig account (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(short, long, num_args(2..))]
         pub signatories: Vec<String>,
         /// Relative weights of signatories' responsibilities
@@ -4560,7 +4560,7 @@ mod trigger {
         /// Number of permitted executions (default: indefinitely)
         #[arg(short, long)]
         pub repeats: Option<u32>,
-        /// Account executing the trigger (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Account executing the trigger (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(long)]
         pub authority: Option<String>,
         /// Filter type for the trigger
@@ -4578,7 +4578,7 @@ mod trigger {
         /// Data filter preset: events within a domain
         #[arg(long)]
         pub data_domain: Option<DomainId>,
-        /// Data filter preset: events for an account (IH58 (preferred)/snx1 (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
+        /// Data filter preset: events for an account (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
         #[arg(long)]
         pub data_account: Option<String>,
         /// Data filter preset: events for an asset

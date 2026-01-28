@@ -839,13 +839,13 @@ All GET surfaces accept the compact `ListFilterParams` struct via query paramete
 - `limit` / `offset` — pagination knobs (default `offset = 0`; `limit` falls back to the handler cap).
 - `sort` — comma-separated `field[:asc|:desc]` entries (default `registered_at_ms:desc` for
   allowances and `bundle_id_hex:asc` for transfers).
-- `address_format` — `ih58` (preferred/default) or `compressed` (`snx1`, second-best, Sora-only); Torii rewrites controller/receiver IDs in the
+- `address_format` — `ih58` (preferred/default) or `compressed` (`sora`, second-best, Sora-only); Torii rewrites controller/receiver IDs in the
   response accordingly.
 
 `/v1/offline/allowances` additionally exposes roadmap-driven convenience filters so dashboards and
 SDKs can avoid building JSON predicates for the common expiry/verdict workflows:
 
-- `controller_id` — filter allowances by controller account. Torii accepts IH58 (preferred), compressed (`snx1`, second-best), or
+- `controller_id` — filter allowances by controller account. Torii accepts IH58 (preferred), compressed (`sora`, second-best), or
   raw public-key literals and canonicalises them to the Global form before evaluating the query, so
   operators can feed whichever encoding their tooling surfaces.
 - `certificate_expires_before_ms` / `certificate_expires_after_ms` — constrain the certificate
@@ -865,7 +865,7 @@ SDKs can avoid building JSON predicates for the common expiry/verdict workflows:
 the same certificate metadata without composing JSON:
 
 - `controller_id` / `receiver_id` / `deposit_account_id` — filter bundles by the originating
-  controller, receiver, or deposit account. Each parameter accepts IH58 (preferred), compressed (`snx1`, second-best), or raw
+  controller, receiver, or deposit account. Each parameter accepts IH58 (preferred), compressed (`sora`, second-best), or raw
   public-key literals and Torii normalises the value to the canonical on-ledger form before matching.
 - `certificate_id_hex` — case-insensitive certificate identifier match.
 - `certificate_expires_before_ms` / `certificate_expires_after_ms` — filter by the underlying

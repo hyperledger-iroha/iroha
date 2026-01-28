@@ -1483,7 +1483,7 @@ fn offline_allowance_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter allowances by controller account (accepts IH58 (preferred)/snx1 (second-best)/public-key literals).",
+            "Filter allowances by controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
         ),
         integer_query_param(
             "certificate_expires_before_ms",
@@ -1542,15 +1542,15 @@ fn offline_transfer_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter bundles by originating controller account (accepts IH58 (preferred)/snx1 (second-best)/public-key literals).",
+            "Filter bundles by originating controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
         ),
         string_query_param(
             "receiver_id",
-            "Filter bundles by receiver account (accepts IH58 (preferred)/snx1 (second-best)/public-key literals).",
+            "Filter bundles by receiver account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
         ),
         string_query_param(
             "deposit_account_id",
-            "Filter bundles by deposit account (accepts IH58 (preferred)/snx1 (second-best)/public-key literals).",
+            "Filter bundles by deposit account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
         ),
         string_query_param(
             "certificate_id_hex",
@@ -1613,11 +1613,11 @@ fn offline_receipt_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter receipts by sender/controller account (accepts IH58 (preferred)/snx1 (second-best)/public-key literals).",
+            "Filter receipts by sender/controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
         ),
         string_query_param(
             "receiver_id",
-            "Filter receipts by receiver account (accepts IH58 (preferred)/snx1 (second-best)/public-key literals).",
+            "Filter receipts by receiver account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
         ),
         string_query_param(
             "bundle_id_hex",
@@ -5791,7 +5791,7 @@ fn nexus_public_lane_stake_operation() -> Map {
             address_format_query_param(),
             string_query_param(
                 "validator",
-                "Optional validator account literal to filter stake entries (IH58 (preferred)/snx1 (second-best)).",
+                "Optional validator account literal to filter stake entries (IH58 (preferred)/sora (second-best)).",
             ),
         ]),
     );
@@ -5837,7 +5837,7 @@ fn nexus_public_lane_rewards_operation() -> Map {
         "description".into(),
         Value::String(
             "Returns the unclaimed reward amount per asset for the requested account in the \
-             given public lane. Requires an `account` query parameter (IH58 (preferred)/snx1 (second-best)) and \
+             given public lane. Requires an `account` query parameter (IH58 (preferred)/sora (second-best)) and \
              accepts an optional `upto_epoch` upper bound."
                 .to_owned(),
         ),
@@ -5865,7 +5865,7 @@ fn nexus_public_lane_rewards_operation() -> Map {
             address_format_query_param(),
             string_query_param(
                 "account",
-                "Account literal to evaluate pending rewards for (IH58 (preferred)/snx1 (second-best)).",
+                "Account literal to evaluate pending rewards for (IH58 (preferred)/sora (second-best)).",
             ),
             Value::Object(upto_epoch_param),
         ]),

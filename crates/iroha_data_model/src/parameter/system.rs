@@ -111,6 +111,14 @@ mod json_support {
         })
     }
 
+    pub(super) fn expect_u32(value: &json::Value, field: &str) -> Result<u32, json::Error> {
+        let raw = expect_u64(value, field)?;
+        u32::try_from(raw).map_err(|_| json::Error::InvalidField {
+            field: field.to_owned(),
+            message: String::from("value out of range for u32"),
+        })
+    }
+
     pub(super) fn parse_value_as<T>(value: &json::Value) -> Result<T, json::Error>
     where
         T: JsonDeserialize,
@@ -119,6 +127,27 @@ mod json_support {
             norito::json::to_json(value).map_err(|err| json::Error::Message(err.to_string()))?;
         let mut parser = norito::json::Parser::new(&json);
         T::json_deserialize(&mut parser)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use norito::json::{Number, Value};
+
+    #[test]
+    fn expect_u32_accepts_valid_range() {
+        let value = Value::Number(Number::from(u32::MAX));
+        let parsed = super::json_support::expect_u32(&value, "value")
+            .expect("u32 should parse from JSON number");
+        assert_eq!(parsed, u32::MAX);
+    }
+
+    #[test]
+    fn expect_u32_rejects_out_of_range() {
+        let value = Value::Number(Number::from(u64::from(u32::MAX) + 1));
+        let err = super::json_support::expect_u32(&value, "value")
+            .expect_err("out-of-range u32 should fail");
+        assert!(err.to_string().contains("out of range"));
     }
 }
 
@@ -161,7 +190,9 @@ mod model {
 
     /// Limits that govern consensus operation
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[display("{block_time_ms},{commit_time_ms},{min_finality_ms},{max_clock_drift_ms}_SL")]
+    #[display(
+        "{block_time_ms},{commit_time_ms},{min_finality_ms},{pacing_factor_bps},{max_clock_drift_ms}_SL"
+    )]
     pub struct SumeragiParameters {
         /// Maximal amount of time (in milliseconds) a peer will wait before forcing creation of a new block.
         ///
@@ -180,6 +211,9 @@ mod model {
         /// All derived timeouts are clamped to be at least this value.
         #[norito(default = "defaults::sumeragi::min_finality_ms")]
         pub min_finality_ms: u64,
+        /// Pacing factor applied to block/commit timing (basis points, 10_000 = 1.0x).
+        #[norito(default = "defaults::sumeragi::pacing_factor_bps")]
+        pub pacing_factor_bps: u32,
         /// Maximal allowed random deviation from the nominal rate
         ///
         /// # Warning
@@ -450,6 +484,8 @@ mod model {
         BlockTimeMs(u64),
         CommitTimeMs(u64),
         MinFinalityMs(u64),
+        /// Pacing factor (basis points, 10_000 = 1.0x).
+        PacingFactorBps(u32),
         MaxClockDriftMs(u64),
         /// Number of collectors per height (K). Must be >= 1.
         CollectorsK(u16),
@@ -788,6 +824,12 @@ impl SumeragiParameters {
         self.min_finality_ms
     }
 
+    /// Raw pacing factor in basis points (10_000 = 1.0x).
+    #[must_use]
+    pub fn pacing_factor_bps(&self) -> u32 {
+        self.pacing_factor_bps
+    }
+
     /// Raw clock drift bound in milliseconds.
     #[must_use]
     pub fn max_clock_drift_ms(&self) -> u64 {
@@ -828,6 +870,12 @@ impl SumeragiParameters {
     #[must_use]
     pub fn effective_min_finality_ms(&self) -> u64 {
         self.min_finality_ms.max(1)
+    }
+
+    /// Effective pacing factor (basis points, clamped to >= 10_000).
+    #[must_use]
+    pub fn effective_pacing_factor_bps(&self) -> u32 {
+        self.pacing_factor_bps.max(10_000)
     }
 
     /// Maximal allowed random deviation from the nominal rate
@@ -876,19 +924,27 @@ impl SumeragiParameters {
     /// Effective block time in milliseconds (clamped to `min_finality_ms`).
     #[must_use]
     pub fn effective_block_time_ms(&self) -> u64 {
-        self.block_time_ms.max(self.effective_min_finality_ms())
+        let floor = self.effective_min_finality_ms();
+        let base_ms = self.block_time_ms.max(floor);
+        let scaled = Self::apply_pacing_factor_ms(base_ms, self.effective_pacing_factor_bps());
+        scaled.max(floor)
     }
 
     /// Effective commit time in milliseconds (clamped to `block_time_ms`).
     #[must_use]
     pub fn effective_commit_time_ms(&self) -> u64 {
-        self.commit_time_ms.max(self.effective_block_time_ms())
+        let base_ms = self.commit_time_ms.max(self.block_time_ms);
+        let scaled = Self::apply_pacing_factor_ms(base_ms, self.effective_pacing_factor_bps());
+        scaled.max(self.effective_block_time_ms())
     }
 
     /// Validate timing constraints for this parameter set.
     pub fn validate_timing(&self) -> Result<(), &'static str> {
         if self.min_finality_ms == 0 {
             return Err("min_finality_ms must be greater than zero");
+        }
+        if self.pacing_factor_bps < 10_000 {
+            return Err("pacing_factor_bps must be greater than or equal to 10_000");
         }
         if self.block_time_ms < self.min_finality_ms {
             return Err("block_time_ms must be greater than or equal to min_finality_ms");
@@ -897,6 +953,13 @@ impl SumeragiParameters {
             return Err("commit_time_ms must be greater than or equal to block_time_ms");
         }
         Ok(())
+    }
+
+    fn apply_pacing_factor_ms(base_ms: u64, factor_bps: u32) -> u64 {
+        let scaled = u128::from(base_ms)
+            .saturating_mul(u128::from(factor_bps))
+            .saturating_div(10_000);
+        u64::try_from(scaled).unwrap_or(u64::MAX)
     }
 
     /// Maximal amount of time it takes to commit a block
@@ -931,6 +994,11 @@ impl JsonSerialize for SumeragiParameter {
             }
             SumeragiParameter::MinFinalityMs(v) => {
                 json::write_json_string("MinFinalityMs", out);
+                out.push(':');
+                v.json_serialize(out);
+            }
+            SumeragiParameter::PacingFactorBps(v) => {
+                json::write_json_string("PacingFactorBps", out);
                 out.push(':');
                 v.json_serialize(out);
             }
@@ -995,6 +1063,10 @@ impl JsonDeserialize for SumeragiParameter {
                 &payload,
                 "MinFinalityMs",
             )?)),
+            "PacingFactorBps" => Ok(Self::PacingFactorBps(json_support::expect_u32(
+                &payload,
+                "PacingFactorBps",
+            )?)),
             "MaxClockDriftMs" => Ok(Self::MaxClockDriftMs(json_support::expect_u64(
                 &payload,
                 "MaxClockDriftMs",
@@ -1033,6 +1105,12 @@ impl JsonSerialize for SumeragiParameters {
         json_support::write_field(out, &mut first, "block_time_ms", &self.block_time_ms);
         json_support::write_field(out, &mut first, "commit_time_ms", &self.commit_time_ms);
         json_support::write_field(out, &mut first, "min_finality_ms", &self.min_finality_ms);
+        json_support::write_field(
+            out,
+            &mut first,
+            "pacing_factor_bps",
+            &self.pacing_factor_bps,
+        );
         json_support::write_field(
             out,
             &mut first,
@@ -1109,6 +1187,11 @@ impl JsonDeserialize for SumeragiParameters {
             .map(|value| json_support::expect_u64(&value, "min_finality_ms"))
             .transpose()?
             .unwrap_or_else(defaults::sumeragi::min_finality_ms);
+        let pacing_factor_bps = map
+            .remove("pacing_factor_bps")
+            .map(|value| json_support::expect_u32(&value, "pacing_factor_bps"))
+            .transpose()?
+            .unwrap_or_else(defaults::sumeragi::pacing_factor_bps);
         let max_clock_drift_ms = map
             .remove("max_clock_drift_ms")
             .map(|value| json_support::expect_u64(&value, "max_clock_drift_ms"))
@@ -1174,6 +1257,7 @@ impl JsonDeserialize for SumeragiParameters {
             block_time_ms,
             commit_time_ms,
             min_finality_ms,
+            pacing_factor_bps,
             max_clock_drift_ms,
             collectors_k,
             collectors_redundant_send_r,
@@ -1205,6 +1289,9 @@ mod defaults {
 
         pub const fn min_finality_ms() -> u64 {
             100
+        }
+        pub const fn pacing_factor_bps() -> u32 {
+            10_000
         }
         pub const fn block_time_ms() -> u64 {
             100
@@ -1356,6 +1443,7 @@ impl Default for SumeragiParameters {
             block_time_ms: block_time_ms(),
             commit_time_ms: commit_time_ms(),
             min_finality_ms: min_finality_ms(),
+            pacing_factor_bps: pacing_factor_bps(),
             max_clock_drift_ms: max_clock_drift_ms(),
             collectors_k: collectors_k(),
             collectors_redundant_send_r: redundant_send_r(),
@@ -1482,6 +1570,7 @@ impl Parameters {
             Sumeragi(sumeragi.block_time_ms) => SumeragiParameter::BlockTimeMs,
             Sumeragi(sumeragi.commit_time_ms) => SumeragiParameter::CommitTimeMs,
             Sumeragi(sumeragi.min_finality_ms) => SumeragiParameter::MinFinalityMs,
+            Sumeragi(sumeragi.pacing_factor_bps) => SumeragiParameter::PacingFactorBps,
             Sumeragi(sumeragi.collectors_k) => SumeragiParameter::CollectorsK,
             Sumeragi(sumeragi.collectors_redundant_send_r) => SumeragiParameter::RedundantSendR,
             Sumeragi(sumeragi.da_enabled) => SumeragiParameter::DaEnabled,
@@ -1664,6 +1753,7 @@ impl SumeragiParameters {
                 .try_into()
                 .expect("INTERNAL BUG: Time should fit into u64"),
             min_finality_ms: block_time_ms,
+            pacing_factor_bps: defaults::sumeragi::pacing_factor_bps(),
             max_clock_drift_ms: max_clock_drift
                 .as_millis()
                 .try_into()
@@ -1688,6 +1778,7 @@ impl SumeragiParameters {
             SumeragiParameter::BlockTimeMs(self.block_time_ms),
             SumeragiParameter::CommitTimeMs(self.commit_time_ms),
             SumeragiParameter::MinFinalityMs(self.min_finality_ms),
+            SumeragiParameter::PacingFactorBps(self.pacing_factor_bps),
             SumeragiParameter::MaxClockDriftMs(self.max_clock_drift_ms),
             SumeragiParameter::CollectorsK(self.collectors_k),
             SumeragiParameter::RedundantSendR(self.collectors_redundant_send_r),
@@ -2187,6 +2278,7 @@ mod tests {
             SumeragiParameter::BlockTimeMs(2000),
             SumeragiParameter::CommitTimeMs(4000),
             SumeragiParameter::MinFinalityMs(100),
+            SumeragiParameter::PacingFactorBps(12_000),
             SumeragiParameter::MaxClockDriftMs(1000),
             SumeragiParameter::CollectorsK(2),
             SumeragiParameter::RedundantSendR(2),
@@ -2202,6 +2294,7 @@ mod tests {
                 SumeragiParameter::RedundantSendR(x) => (4, u64::from(x)),
                 SumeragiParameter::DaEnabled(x) => (5, u64::from(x)),
                 SumeragiParameter::MinFinalityMs(x) => (6, x),
+                SumeragiParameter::PacingFactorBps(x) => (7, u64::from(x)),
                 // Scheduling parameters are intentionally excluded from this stability test
                 // since they are optional and not part of steady-state runtime behavior.
                 // These arms satisfy exhaustiveness; they won’t be reached because
@@ -2224,6 +2317,7 @@ mod tests {
                 4 => SumeragiParameter::RedundantSendR(u8::try_from(val).expect("fits in u8")),
                 5 => SumeragiParameter::DaEnabled(val != 0),
                 6 => SumeragiParameter::MinFinalityMs(val),
+                7 => SumeragiParameter::PacingFactorBps(u32::try_from(val).expect("fits in u32")),
                 _ => unreachable!(),
             };
             assert_eq!(v, dec);
@@ -2264,6 +2358,20 @@ mod tests {
         assert_eq!(params.effective_commit_time_ms(), 100);
     }
 
+    #[test]
+    fn sumeragi_parameters_effective_timing_applies_pacing_factor() {
+        let params = SumeragiParameters {
+            block_time_ms: 200,
+            commit_time_ms: 400,
+            min_finality_ms: 100,
+            pacing_factor_bps: 12_500,
+            ..SumeragiParameters::default()
+        };
+        assert_eq!(params.effective_pacing_factor_bps(), 12_500);
+        assert_eq!(params.effective_block_time_ms(), 250);
+        assert_eq!(params.effective_commit_time_ms(), 500);
+    }
+
     #[cfg(feature = "json")]
     #[test]
     fn sumeragi_parameters_json_rejects_invalid_timing() {
@@ -2273,6 +2381,40 @@ mod tests {
         match err {
             norito::json::Error::InvalidField { field, .. } => {
                 assert_eq!(field, "SumeragiParameters");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn sumeragi_parameters_json_rejects_low_pacing_factor() {
+        let json = r#"{"block_time_ms":200,"commit_time_ms":200,"min_finality_ms":100,"pacing_factor_bps":9000}"#;
+        let err = norito::json::from_str::<SumeragiParameters>(json)
+            .expect_err("low pacing factor should fail");
+        match err {
+            norito::json::Error::InvalidField { field, .. } => {
+                assert_eq!(field, "SumeragiParameters");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn json_support_expect_u32_handles_range() {
+        let ok = json::Value::from(12u32);
+        assert_eq!(
+            json_support::expect_u32(&ok, "pacing_factor_bps").expect("valid u32"),
+            12
+        );
+
+        let overflow = json::Value::from(u64::from(u32::MAX) + 1);
+        let err = json_support::expect_u32(&overflow, "pacing_factor_bps")
+            .expect_err("out of range should fail");
+        match err {
+            norito::json::Error::InvalidField { field, .. } => {
+                assert_eq!(field, "pacing_factor_bps");
             }
             other => panic!("unexpected error: {other:?}"),
         }

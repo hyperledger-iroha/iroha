@@ -252,7 +252,7 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation
       epoch/height, release timers, bonded stake, last reward epoch.
       Optional `address_format=ih58|compressed` controls the literal rendering
-      (IH58 preferred; compressed (`snx1`) is second-best Sora-only).
+      (IH58 preferred; compressed (`sora`) is second-best Sora-only).
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
       `staker`, bonded amount) plus pending unbond timers. Optional
       `?validator=ih58...` filters the response for dashboards that focus

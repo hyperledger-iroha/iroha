@@ -206,8 +206,8 @@ const LOCAL_DOMAIN_KEY: &[u8] = b"SORA-LOCAL-K:v1";
 const IH58_CHECKSUM_PREFIX: &[u8] = b"IH58PRE";
 const HEADER_VERSION_V1: u8 = 0;
 const HEADER_NORM_VERSION_V1: u8 = 1;
-const COMPRESSED_SENTINEL: &str = "snx1";
-const COMPRESSED_SENTINEL_FULLWIDTH: &str = "ｓｎｘ１";
+const COMPRESSED_SENTINEL: &str = "sora";
+const COMPRESSED_SENTINEL_FULLWIDTH: &str = "ｓｏｒａ";
 const COMPRESSED_CHECKSUM_LEN: usize = 6;
 const BECH32M_CONST: u32 = 0x2bc8_30a3;
 
@@ -258,7 +258,7 @@ pub enum AccountAddressFormat {
         #[doc = "Network prefix encoded in the IH58 string."]
         network_prefix: u16,
     },
-    /// Sora-only compressed alphabet using the `snx1` (ASCII) or `ｓｎｘ１` (full-width) sentinel.
+    /// Sora-only compressed alphabet using the `sora` (ASCII) or `ｓｏｒａ` (full-width) sentinel.
     Compressed,
     /// Canonical hexadecimal encoding prefixed with `0x`.
     CanonicalHex,
@@ -1258,7 +1258,7 @@ pub enum AccountAddressErrorCode {
     UnexpectedTrailingBytes,
     /// IH58 prefix encoding was malformed.
     InvalidIh58PrefixEncoding,
-    /// Compressed form missing `snx1` or `ｓｎｘ１` sentinel.
+    /// Compressed form missing `sora` or `ｓｏｒａ` sentinel.
     MissingCompressedSentinel,
     /// Compressed form shorter than minimal payload.
     CompressedTooShort,
@@ -1387,7 +1387,7 @@ pub enum AccountAddressError {
     /// IH58 prefix encoding was malformed.
     #[error("invalid IH58 prefix encoding: {0}")]
     InvalidIh58PrefixEncoding(u8),
-    /// Compressed form is missing the required `snx1` sentinel prefix.
+    /// Compressed form is missing the required `sora` sentinel prefix.
     #[error(
         "compressed Sora address must start with \"{COMPRESSED_SENTINEL}\" or \"{COMPRESSED_SENTINEL_FULLWIDTH}\""
     )]
@@ -1951,73 +1951,73 @@ mod tests {
                 "default",
                 0,
                 "0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
-                "snx12QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8",
+                "sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8",
             ),
             (
                 "treasury",
                 1,
                 "0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
-                "snx15ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU",
+                "sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU",
             ),
             (
                 "wonderland",
                 2,
                 "0x0201b8ae571b79c5a80f5834da2b0001208139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
-                "snx15ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS",
+                "sora5ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS",
             ),
             (
                 "iroha",
                 3,
                 "0x0201de8b36819700c807083608e2000120ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
-                "snx15ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L",
+                "sora5ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L",
             ),
             (
                 "alpha",
                 4,
                 "0x020146be2154ae86826a3fef0ec0000120ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c",
-                "snx15ｻ9JヱﾈｿuwU6ｴpﾔﾂﾈRqRTds1HﾃﾐｶLVﾍｳ9ﾔhｾNｵVｷyucEﾒGﾈﾏﾍ9sKeﾉDzrｷﾆ742WG1",
+                "sora5ｻ9JヱﾈｿuwU6ｴpﾔﾂﾈRqRTds1HﾃﾐｶLVﾍｳ9ﾔhｾNｵVｷyucEﾒGﾈﾏﾍ9sKeﾉDzrｷﾆ742WG1",
             ),
             (
                 "omega",
                 5,
                 "0x0201390d946885bc8416b3d30c9d0001206e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1",
-                "snx15ｻ3zrﾌuﾚﾄJﾑXQhｸTyN8pzwRkWxmjVﾗbﾚﾕヰﾈoｽｦｶtEEﾊﾐ6GPｿﾓﾊｾEhvPｾｻ3XAJ73F",
+                "sora5ｻ3zrﾌuﾚﾄJﾑXQhｸTyN8pzwRkWxmjVﾗbﾚﾕヰﾈoｽｦｶtEEﾊﾐ6GPｿﾓﾊｾEhvPｾｻ3XAJ73F",
             ),
             (
                 "governance",
                 6,
                 "0x0201989eb45a80940d187e2c908f0001208a875fff1eb38451577acd5afee405456568dd7c89e090863a0557bc7af49f17",
-                "snx15ｻiｵﾁyVﾕｽbFpDHHuﾇﾉdﾗｲﾓﾄRﾋAW3frUCｾ5ｷﾘTwdﾚnｽtQiLﾏｼｶﾅXgｾZmﾒヱH58H4KP",
+                "sora5ｻiｵﾁyVﾕｽbFpDHHuﾇﾉdﾗｲﾓﾄRﾋAW3frUCｾ5ｷﾘTwdﾚnｽtQiLﾏｼｶﾅXgｾZmﾒヱH58H4KP",
             ),
             (
                 "validators",
                 7,
                 "0x0201e4ffa58704c69afaeb7cc2d7000120ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
-                "snx15ｻﾀLDH6VYﾑNAｾgﾉVﾜtxﾊRXLｹﾍﾔﾌLd93GﾔGeｴﾄYrs1ﾂHｸkYxｹwｿyZﾗxyﾎZoXT1S4N",
+                "sora5ｻﾀLDH6VYﾑNAｾgﾉVﾜtxﾊRXLｹﾍﾔﾌLd93GﾔGeｴﾄYrs1ﾂHｸkYxｹwｿyZﾗxyﾎZoXT1S4N",
             ),
             (
                 "explorer",
                 8,
                 "0x02013b35422c65c2a83c99c523ad0001201398f62c6d1a457c51ba6a4b5f3dbd2f69fca93216218dc8997e416bd17d93ca",
-                "snx15ｻ4nmｻaﾚﾚPvNLgｿｱv6MHDeEyﾀovﾉJcpvrﾖ6ﾈCQcCNﾇﾜhﾚﾖyFdTwｸｶHEｱ9rWU8FMB",
+                "sora5ｻ4nmｻaﾚﾚPvNLgｿｱv6MHDeEyﾀovﾉJcpvrﾖ6ﾈCQcCNﾇﾜhﾚﾖyFdTwｸｶHEｱ9rWU8FMB",
             ),
             (
                 "soranet",
                 9,
                 "0x0201047d9ea7f5d5dbec3f7bfc58000120fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618",
-                "snx15ｱｸヱVQﾂcﾁヱRﾓcApｲﾁﾅﾒvﾌﾏfｾNnﾛRJsｿDhﾙuHaﾚｺｦﾌﾍﾈeﾆﾎｺN1UUDｶ6ﾎﾄﾛoRH8JUL",
+                "sora5ｱｸヱVQﾂcﾁヱRﾓcApｲﾁﾅﾒvﾌﾏfｾNnﾛRJsｿDhﾙuHaﾚｺｦﾌﾍﾈeﾆﾎｺN1UUDｶ6ﾎﾄﾛoRH8JUL",
             ),
             (
                 "kitsune",
                 10,
                 "0x0201e91933de397fd7723dc9a76c00012043a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-                "snx15ｻﾚｺヱkfFJfSﾁｼJwﾉLvbpSｷﾔMWFMrbｳｸｲｲyヰKGJﾉｻ4ｹﾕrｽhｺｽzSDヰXAN62AD7RGNS",
+                "sora5ｻﾚｺヱkfFJfSﾁｼJwﾉLvbpSｷﾔMWFMrbｳｸｲｲyヰKGJﾉｻ4ｹﾕrｽhｺｽzSDヰXAN62AD7RGNS",
             ),
             (
                 "da",
                 11,
                 "0x02016838cf5bb0ce0f3d4f380e1c00012066be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a",
-                "snx15ｻNﾒ5SﾐRﾉﾐﾃ62ｿ1ｶｷWFKyF1BcAﾔvｼﾐHqﾙﾐPﾏｴヰ5tｲﾕvnﾙT6ﾀW7mﾔ7ﾇﾗﾂｳ25CXS93",
+                "sora5ｻNﾒ5SﾐRﾉﾐﾃ62ｿ1ｶｷWFKyF1BcAﾔvｼﾐHqﾙﾐPﾏｴヰ5tｲﾕvnﾙT6ﾀW7mﾔ7ﾇﾗﾂｳ25CXS93",
             ),
         ];
 
@@ -2289,7 +2289,7 @@ mod tests {
         let address = account_address_for_seed(0);
         let compressed = address.to_compressed_sora().expect("compressed encode");
         let payload = &compressed[COMPRESSED_SENTINEL.len()..];
-        let tampered = format!("SNX1{payload}");
+        let tampered = format!("SORA{payload}");
         let err = AccountAddress::from_compressed_sora(&tampered)
             .expect_err("uppercase sentinel rejected");
         assert!(matches!(
@@ -2416,7 +2416,7 @@ mod tests {
         );
         assert_eq!(
             compressed,
-            "snx12QGﾈkﾀqｴeｺﾏQD31PZｾgｷﾁzﾗﾔｿ4ｺQbｳﾍｽkogﾙﾏmpGZEhﾊ3BMK8R"
+            "sora2QGﾈkﾀqｴeｺﾏQD31PZｾgｷﾁzﾗﾔｿ4ｺQbｳﾍｽkogﾙﾏmpGZEhﾊ3BMK8R"
         );
 
         let (decoded_ih58, fmt_ih58) =

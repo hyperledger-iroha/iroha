@@ -232,7 +232,7 @@ ISI זה idempotent לכל `(lane_id, epoch)` ומהווה בסיס לחשבונ
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height,
       release timers, bonded stake, last reward epoch.
-      `address_format=ih58|compressed` שולט בהצגת literals (IH58 מועדף; compressed (`snx1`) הוא אפשרות שנייה ל-Sora בלבד).
+      `address_format=ih58|compressed` שולט בהצגת literals (IH58 מועדף; compressed (`sora`) הוא אפשרות שנייה ל-Sora בלבד).
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
       `staker`, bonded amount) בתוספת pending unbond timers. `?validator=ih58...`
       מסנן את התגובה ל‑dashboards שממוקדים במאמת יחיד; `address_format` חל על כל literals.

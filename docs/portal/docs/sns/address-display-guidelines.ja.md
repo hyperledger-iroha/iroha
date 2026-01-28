@@ -22,7 +22,7 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 あるAndroidの小売ウォレットサンプルは、必要なUXパターンを示します:
 
 - **二つのコピー先。** 明示的なコピー按钮を二つ用意します: IH58
-  (推奨) とSora専用の圧縮形式(`snx1...`、次善)。IH58は常に外部共有に安全で、
+  (推奨) とSora専用の圧縮形式(`sora...`、次善)。IH58は常に外部共有に安全で、
   QRのペイロードになります。圧縮形式はSora対応アプリ内でしか動かない
   ため、インライン警告を必ず付けます。AndroidサンプルはMaterialの
   両ボタンとツールチップを
@@ -68,7 +68,7 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
 - JavaScript inspector: `inspectAccountId(...)` は圧縮警告文字列を返し、
-  呼び出し側が `snx1...` リテラルを渡した場合に `warnings` に追加します。
+  呼び出し側が `sora...` リテラルを渡した場合に `warnings` に追加します。
   これにより、エクスプローラ/ウォレットダッシュボードは貼り付けや
   検証フローでSora専用の注意を表示でき、圧縮形式を自前生成する時だけ
   の警告にしません。
@@ -179,7 +179,7 @@ UIとSDKはセレクタ種別の表示に備えるべきです:
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("snx1...");
+   const summary = inspectAccountId("sora...");
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }

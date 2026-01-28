@@ -238,7 +238,7 @@ Enum RegistryEventKind {
 Gateways подписываются на `RegistryEventV1` и синхронизируют DNS/SoraFS, выполняя:
 
 1. Загрузка последнего `NameRecordV1`, на который указывает последовательность событий.
-2. Перегенерация resolver templates (IH58 предпочтительно + compressed (`snx1`) как второй выбор, text records).
+2. Перегенерация resolver templates (IH58 предпочтительно + compressed (`sora`) как второй выбор, text records).
 3. Pin обновленных данных зоны через SoraDNS workflow из [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Гарантии доставки событий:

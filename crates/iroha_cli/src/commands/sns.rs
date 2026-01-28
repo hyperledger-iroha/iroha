@@ -515,7 +515,7 @@ impl Run for UnfreezeArgs {
 
 #[derive(Args, Debug)]
 pub struct GetRegistrationArgs {
-    /// Selector literal (`label.suffix`). IH58 (preferred)/snx1 (second-best) inputs are accepted.
+    /// Selector literal (`label.suffix`). IH58 (preferred)/sora (second-best) inputs are accepted.
     #[arg(long, value_name = "SELECTOR")]
     pub selector: String,
 }

@@ -668,7 +668,7 @@ impl ErrorHarness {
     }
 
     fn compressed_too_short() -> ErrorVector {
-        let too_short = String::from("snx1");
+        let too_short = String::from("sora");
         let err = AccountAddress::from_compressed_sora(&too_short)
             .expect_err("too short compressed form must fail");
 
@@ -1036,7 +1036,7 @@ mod tests {
         );
         assert_eq!(
             default_vector.compressed_halfwidth,
-            "snx12QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8"
+            "sora2QGﾈkﾀﾍrNﾒBﾎwﾍwﾙwﾗXHwﾜCﾘﾂY8ryGUﾈﾎyQｲHyヰD8ｲﾁYVY9VF8"
         );
         assert!(matches!(
             default_vector.domain_selector,

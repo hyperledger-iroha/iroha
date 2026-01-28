@@ -2744,6 +2744,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("effective_block_time_ms", snap.effective_block_time_ms),
         json_entry("effective_commit_time_ms", snap.effective_commit_time_ms),
         json_entry(
+            "effective_pacing_factor_bps",
+            snap.effective_pacing_factor_bps,
+        ),
+        json_entry(
             "effective_commit_quorum_timeout_ms",
             snap.effective_commit_quorum_timeout_ms,
         ),
@@ -2909,6 +2913,7 @@ mod status_tests {
             effective_min_finality_ms: 150,
             effective_block_time_ms: 1_000,
             effective_commit_time_ms: 1_500,
+            effective_pacing_factor_bps: 12_500,
             effective_commit_quorum_timeout_ms: 3_000,
             effective_availability_timeout_ms: 2_500,
             effective_pacemaker_interval_ms: 750,
@@ -3802,6 +3807,7 @@ pub async fn handle_v1_sumeragi_status(
             effective_min_finality_ms: snap.effective_min_finality_ms,
             effective_block_time_ms: snap.effective_block_time_ms,
             effective_commit_time_ms: snap.effective_commit_time_ms,
+            effective_pacing_factor_bps: snap.effective_pacing_factor_bps,
             effective_commit_quorum_timeout_ms: snap.effective_commit_quorum_timeout_ms,
             effective_availability_timeout_ms: snap.effective_availability_timeout_ms,
             effective_pacemaker_interval_ms: snap.effective_pacemaker_interval_ms,

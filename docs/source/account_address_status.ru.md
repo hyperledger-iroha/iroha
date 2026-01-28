@@ -17,7 +17,7 @@ translation_last_reviewed: 2026-01-01
 
 ### 1. Обзор
 
-- Фикстура: `fixtures/account/address_vectors.json` (IH58 (preferred) + compressed (`snx1`, second-best) + multisig: позитивные/негативные кейсы).
+- Фикстура: `fixtures/account/address_vectors.json` (IH58 (preferred) + compressed (`sora`, second-best) + multisig: позитивные/негативные кейсы).
 - Область: детерминированные V1 payloads, покрывающие implicit-default, Local-12, Global registry и multisig controllers с полной таксономией ошибок.
 - Распространение: используется в Rust data-model, Torii, JS/TS, Swift и Android SDK; CI падает, если любой потребитель отклоняется.
 - Источник истины: генератор находится в `crates/iroha_data_model/src/account/address/compliance_vectors.rs` и доступен через `cargo xtask address-vectors`.
@@ -42,10 +42,10 @@ cargo xtask address-vectors --verify
 
 | Поверхность | Контроль | Примечания |
 |---------|-------------|-------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | Парсит JSON, восстанавливает канонические payloads и проверяет конверсии IH58 (preferred)/snx1 (second-best)/canonical + структурированные ошибки. |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Проверяет серверные codecs, чтобы Torii детерминированно отклонял некорректные IH58 (preferred)/snx1 (second-best) payloads. |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Зеркалирует V1 fixtures (IH58 (preferred)/snx1 (second-best)/fullwidth) и проверяет коды ошибок в стиле Norito для каждого негативного кейса. |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Проверяет декодирование IH58 (preferred)/snx1 (second-best), multisig payloads и выдачу ошибок на платформах Apple. |
+| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | Парсит JSON, восстанавливает канонические payloads и проверяет конверсии IH58 (preferred)/sora (second-best)/canonical + структурированные ошибки. |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Проверяет серверные codecs, чтобы Torii детерминированно отклонял некорректные IH58 (preferred)/sora (second-best) payloads. |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Зеркалирует V1 fixtures (IH58 (preferred)/sora (second-best)/fullwidth) и проверяет коды ошибок в стиле Norito для каждого негативного кейса. |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Проверяет декодирование IH58 (preferred)/sora (second-best), multisig payloads и выдачу ошибок на платформах Apple. |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | Гарантирует, что Kotlin/Java биндинги остаются согласованными с канонической фикстурой. |
 
 ### 4. Мониторинг и незавершенная работа

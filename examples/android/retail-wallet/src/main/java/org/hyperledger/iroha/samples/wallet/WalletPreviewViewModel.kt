@@ -225,7 +225,7 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
         } catch (ex: AccountAddressException) {
             AddressDisplay(
                 ih58 = "address-unavailable",
-                compressed = "snx1-unavailable",
+                compressed = "sora-unavailable",
                 compressedWarning = AccountAddress.compressedWarningMessage(),
                 defaultDomain = AccountAddress.DEFAULT_DOMAIN_NAME,
                 implicitDefault = true,

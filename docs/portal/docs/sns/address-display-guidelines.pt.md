@@ -22,7 +22,7 @@ payloads imutaveis. O exemplo da carteira retail Android em
 `examples/android/retail-wallet` agora demonstra o padrao de UX exigido:
 
 - **Dois alvos de copia.** Envie dois botoes de copia explicitos: IH58
-  (preferido) e a forma comprimida somente Sora (`snx1...`, segunda melhor opcao). IH58 e sempre seguro para
+  (preferido) e a forma comprimida somente Sora (`sora...`, segunda melhor opcao). IH58 e sempre seguro para
   compartilhar externamente e alimenta o payload do QR. A variante comprimida
   deve incluir um aviso inline porque so funciona dentro de apps compatveis com
   Sora. O exemplo de carteira retail Android liga ambos os botoes Material e seus
@@ -69,7 +69,7 @@ junto com a string de aviso para que as camadas UI fiquem consistentes:
   (`javascript/iroha_js/src/address.js`)
 - JavaScript inspector: `inspectAccountId(...)` retorna a string de aviso
   comprimida e a anexa a `warnings` quando chamadores fornecem um literal
-  `snx1...`, para que dashboards de carteira/explorador possam exibir o aviso
+  `sora...`, para que dashboards de carteira/explorador possam exibir o aviso
   somente Sora durante fluxos de colagem/validacao em vez de apenas quando geram
   a forma comprimida por conta propria.
 - Python: `AccountAddress.display_formats(network_prefix: int = 753)`
@@ -184,7 +184,7 @@ strings comprimidas devem seguir o workflow CLI documentado em ADDR-5:
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("snx1...");
+   const summary = inspectAccountId("sora...");
    if (summary.domain.warning) {
      console.warn(summary.domain.warning);
    }

@@ -677,7 +677,7 @@ pub struct UaidBindingsResponse {
 pub enum AddressFormat {
     /// IH58 literal (`ih…`).
     Ih58,
-    /// Compressed literal (`snx1…`).
+    /// Compressed literal (`sora…`).
     Compressed,
 }
 
@@ -2325,6 +2325,10 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     root.insert(
         "effective_commit_time_ms".into(),
         Value::from(wire.effective_commit_time_ms),
+    );
+    root.insert(
+        "effective_pacing_factor_bps".into(),
+        Value::from(wire.effective_pacing_factor_bps),
     );
     root.insert(
         "effective_commit_quorum_timeout_ms".into(),
@@ -10816,6 +10820,7 @@ mod tests {
             effective_min_finality_ms: 0,
             effective_block_time_ms: 0,
             effective_commit_time_ms: 0,
+            effective_pacing_factor_bps: 0,
             effective_commit_quorum_timeout_ms: 0,
             effective_availability_timeout_ms: 0,
             effective_pacemaker_interval_ms: 0,
@@ -12808,6 +12813,7 @@ mod tests {
             effective_min_finality_ms: 0,
             effective_block_time_ms: 0,
             effective_commit_time_ms: 0,
+            effective_pacing_factor_bps: 0,
             effective_commit_quorum_timeout_ms: 0,
             effective_availability_timeout_ms: 0,
             effective_pacemaker_interval_ms: 0,
@@ -13099,6 +13105,7 @@ mod tests {
             effective_min_finality_ms: 250,
             effective_block_time_ms: 1_000,
             effective_commit_time_ms: 1_800,
+            effective_pacing_factor_bps: 12_500,
             effective_commit_quorum_timeout_ms: 5_000,
             effective_availability_timeout_ms: 4_000,
             effective_pacemaker_interval_ms: 900,
@@ -13272,6 +13279,7 @@ mod tests {
             ("effective_min_finality_ms", 250),
             ("effective_block_time_ms", 1_000),
             ("effective_commit_time_ms", 1_800),
+            ("effective_pacing_factor_bps", 12_500),
             ("effective_commit_quorum_timeout_ms", 5_000),
             ("effective_availability_timeout_ms", 4_000),
             ("effective_pacemaker_interval_ms", 900),

@@ -147,7 +147,7 @@ async fn offline_revocations_query_respects_address_format_and_sort() {
         assert_eq!(
             item["issuer_display"].as_str(),
             Some(fixture.issuer_compressed.as_str()),
-            "compressed address_format should emit snx1 literal"
+            "compressed address_format should emit sora literal"
         );
         let metadata_present = item
             .as_object()

@@ -358,17 +358,20 @@ pub(crate) fn resolve_npos_block_time(view: &StateView<'_>) -> Duration {
         params.min_finality_ms()
     };
     let min_finality = Duration::from_millis(min_finality_ms.max(1));
-    let mut block_time = if params.block_time() == Duration::ZERO {
-        Duration::from_millis(
-            iroha_data_model::parameter::system::SumeragiParameters::default().block_time_ms(),
-        )
+    let base_block_time_ms = if params.block_time_ms() == 0 {
+        iroha_data_model::parameter::system::SumeragiParameters::default().block_time_ms()
     } else {
-        params.block_time()
-    };
-    if block_time < min_finality {
-        block_time = min_finality;
+        params.block_time_ms()
     }
-    block_time
+    .max(min_finality_ms.max(1));
+    let pacing_factor_bps = params.effective_pacing_factor_bps();
+    let scaled_block_time_ms = u64::try_from(
+        u128::from(base_block_time_ms)
+            .saturating_mul(u128::from(pacing_factor_bps))
+            .saturating_div(10_000),
+    )
+    .unwrap_or(u64::MAX);
+    Duration::from_millis(scaled_block_time_ms.max(min_finality_ms.max(1)))
 }
 
 /// Resolve `NPoS` pacemaker timeouts from on-chain parameters, falling back to config values.
@@ -669,6 +672,29 @@ mod tests {
             let params = block.parameters.get_mut();
             params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(
                 block_time_ms,
+            )));
+            block.commit();
+        }
+        State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        )
+    }
+
+    fn state_with_sumeragi_block_time_and_factor(
+        block_time_ms: u64,
+        pacing_factor_bps: u32,
+    ) -> State {
+        let world = World::new();
+        {
+            let mut block = world.block();
+            let params = block.parameters.get_mut();
+            params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(
+                block_time_ms,
+            )));
+            params.set_parameter(Parameter::Sumeragi(SumeragiParameter::PacingFactorBps(
+                pacing_factor_bps,
             )));
             block.commit();
         }
@@ -1372,6 +1398,21 @@ mod tests {
     }
 
     #[test]
+    fn resolve_sumeragi_timeouts_applies_pacing_factor() {
+        let params = iroha_data_model::parameter::system::SumeragiParameters {
+            block_time_ms: 1_000,
+            commit_time_ms: 1_500,
+            min_finality_ms: 100,
+            pacing_factor_bps: 12_500,
+            ..iroha_data_model::parameter::system::SumeragiParameters::default()
+        };
+        let fallback = iroha_data_model::parameter::system::SumeragiParameters::default();
+        let (block_time, commit_time) = resolve_sumeragi_timeouts(&params, &fallback);
+        assert_eq!(block_time, Duration::from_millis(1_250));
+        assert_eq!(commit_time, Duration::from_millis(1_875));
+    }
+
+    #[test]
     fn vote_rx_drain_budget_caps_at_time_budget() {
         let budget = vote_rx_drain_budget(
             Duration::from_secs(1),
@@ -1803,6 +1844,13 @@ mod tests {
             iroha_data_model::parameter::system::SumeragiParameters::default().block_time_ms(),
         );
         assert_eq!(resolve_npos_block_time(&view), default_block_time);
+    }
+
+    #[test]
+    fn resolve_npos_block_time_applies_pacing_factor() {
+        let state = state_with_sumeragi_block_time_and_factor(1_000, 12_000);
+        let view = state.view();
+        assert_eq!(resolve_npos_block_time(&view), Duration::from_millis(1_200));
     }
 
     #[test]
@@ -9097,19 +9145,31 @@ fn resolve_sumeragi_timeouts(
         params.min_finality_ms().max(1)
     };
 
-    let block_time_ms = if params.block_time_ms() == 0 {
+    let base_block_time_ms = if params.block_time_ms() == 0 {
         fallback.block_time_ms()
     } else {
         params.block_time_ms()
     }
     .max(min_finality_ms);
 
-    let commit_time_ms = if params.commit_time_ms() == 0 {
+    let base_commit_time_ms = if params.commit_time_ms() == 0 {
         fallback.commit_time_ms()
     } else {
         params.commit_time_ms()
     }
-    .max(block_time_ms);
+    .max(base_block_time_ms);
+
+    let pacing_factor_bps = params.effective_pacing_factor_bps();
+    let scale_ms = |value: u64| {
+        u64::try_from(
+            u128::from(value)
+                .saturating_mul(u128::from(pacing_factor_bps))
+                .saturating_div(10_000),
+        )
+        .unwrap_or(u64::MAX)
+    };
+    let block_time_ms = scale_ms(base_block_time_ms).max(min_finality_ms);
+    let commit_time_ms = scale_ms(base_commit_time_ms).max(block_time_ms);
 
     (
         Duration::from_millis(block_time_ms),

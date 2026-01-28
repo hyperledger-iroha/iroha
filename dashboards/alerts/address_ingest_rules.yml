@@ -22,7 +22,7 @@ groups:
           summary: "Local-12 selectors observed in production"
           description: |
             Torii still receives Local-12 selectors (context={{ $labels.context }}). Block production
-            rollouts and work with the offending client to migrate to IH58 (preferred)/snx1 (second-best) or global
+            rollouts and work with the offending client to migrate to IH58 (preferred)/sora (second-best) or global
             selectors before re-attempting the retirement gate.
       - alert: AddressInvalidRatioSlo
         expr: |
@@ -36,6 +36,6 @@ groups:
         annotations:
           summary: "Address ingest invalid ratio exceeds 0.1% SLO"
           description: |
-            Invalid IH58 (preferred)/snx1 (second-best) submissions are above the 0.1% error budget. Inspect
+            Invalid IH58 (preferred)/sora (second-best) submissions are above the 0.1% error budget. Inspect
             `torii_address_invalid_total` by context/reason on `address_ingest.json` and coordinate with
             the owning SDK before declaring the incident resolved.

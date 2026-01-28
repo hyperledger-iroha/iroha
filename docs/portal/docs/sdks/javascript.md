@@ -223,7 +223,7 @@ Explorer telemetry provides typed helpers for the `/v1/explorer/metrics` and
 `/v1/explorer/accounts/{account_id}/qr` endpoints so dashboards can replay the
 same snapshots that power the portal. `getExplorerMetrics()` normalises the
 payload and returns `null` when the route is disabled. Pair it with
-`getExplorerAccountQr()` whenever you need IH58 (preferred)/snx1 (second-best) literals plus inline
+`getExplorerAccountQr()` whenever you need IH58 (preferred)/sora (second-best) literals plus inline
 SVG for share buttons.
 
 ```ts
@@ -467,7 +467,7 @@ canonicalise them before submitting requests:
 - `getUaidPortfolio(uaid)` aggregates balances per dataspace, grouping asset
   holdings by canonical account IDs.
 - `getUaidBindings(uaid, { addressFormat })` enumerates every dataspace ↔ account
-  binding (`addressFormat: "compressed"` returns the `snx1…` literals).
+  binding (`addressFormat: "compressed"` returns the `sora…` literals).
 - `getUaidManifests(uaid, { dataspaceId })` returns each capability manifest,
   lifecycle status, and bound accounts for auditing.
 

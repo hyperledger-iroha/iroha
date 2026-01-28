@@ -8686,6 +8686,7 @@ impl Actor {
         let min_finality_ms = params.effective_min_finality_ms();
         let block_time = self.block_time_for_mode(view, consensus_mode);
         let commit_time = self.commit_timeout_for_mode(view, consensus_mode);
+        let pacing_factor_bps = u64::from(params.effective_pacing_factor_bps());
         let da_enabled = params.da_enabled();
         let commit_quorum_timeout = commit_quorum_timeout_from_durations(
             block_time,
@@ -8722,6 +8723,7 @@ impl Actor {
             min_finality_ms,
             duration_ms_u64(block_time),
             duration_ms_u64(commit_time),
+            pacing_factor_bps,
             duration_ms_u64(commit_quorum_timeout),
             duration_ms_u64(availability_timeout),
             duration_ms_u64(pacemaker_interval),

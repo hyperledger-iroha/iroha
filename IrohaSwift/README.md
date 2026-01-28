@@ -200,7 +200,7 @@ headers.forEach { key, value in
 }
 ```
 
-> **Roadmap ADDR-5a:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and the matching `IrohaSDK` shortcuts) now accept canonical, IH58 (preferred), or compressed (`snx1`, second-best) literals and percent-encode the `/v1/accounts/{account_id}/…` segments automatically, so wallets can forward whatever selector they surface without manually escaping `@` or trimming input.
+> **Roadmap ADDR-5a:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and the matching `IrohaSDK` shortcuts) now accept canonical, IH58 (preferred), or compressed (`sora`, second-best) literals and percent-encode the `/v1/accounts/{account_id}/…` segments automatically, so wallets can forward whatever selector they surface without manually escaping `@` or trimming input.
 
 ### Account addresses
 

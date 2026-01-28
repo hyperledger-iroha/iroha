@@ -32,6 +32,7 @@ These are the only parameters operators are expected to set:
 - `SumeragiParameters.block_time_ms`
 - `SumeragiParameters.commit_time_ms`
 - `SumeragiParameters.min_finality_ms` (new; genesis must set a floor)
+- `SumeragiParameters.pacing_factor_bps`
 - `SumeragiParameters.max_clock_drift_ms`
 - `SumeragiParameters.collectors_k`
 - `SumeragiParameters.collectors_redundant_send_r`
@@ -56,9 +57,13 @@ When advanced overrides are unset (0/None), derive values deterministically:
 - Enforce `commit_time_ms >= block_time_ms >= min_finality_ms`.
 - Genesis starts with `block_time_ms = min_finality_ms`,
   `commit_time_ms = min_finality_ms` unless overridden by genesis configuration.
+- Apply `pacing_factor_bps` (basis points, 10_000 = 1.0x) after the base clamps,
+  then re-clamp `effective_block_time_ms >= min_finality_ms` and
+  `effective_commit_time_ms >= effective_block_time_ms`.
 
 ### NPoS timeouts
-- Default: derive all NPoS timeouts from `block_time_ms`.
+- Default: derive all NPoS timeouts from the effective block time
+  (`block_time_ms` scaled by `pacing_factor_bps`).
 - If explicit NPoS timeout overrides exist, they must be moved to advanced-only
   configuration. When unset, derive from `block_time_ms`.
  - Derivation uses the baseline 1s ratios from the current defaults:
@@ -92,6 +97,7 @@ When advanced overrides are unset (0/None), derive values deterministically:
 - `min_finality_ms`: 100
 - `block_time_ms`: 100 (starts at the floor unless genesis overrides)
 - `commit_time_ms`: 100 (must satisfy `commit_time_ms >= block_time_ms`)
+- `pacing_factor_bps`: 10_000
 - `max_clock_drift_ms`: 1_000
 - `collectors_k`: 1
 - `collectors_redundant_send_r`: 3

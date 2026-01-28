@@ -261,7 +261,7 @@ test("normalizeAccountId exported canonicalizes multihash identifier", () => {
   assert.equal(canonical, ACCOUNT_ID_CANONICAL);
 });
 
-test("normalizeAccountId canonicalizes IH58 and compressed (`snx1`) encodings", () => {
+test("normalizeAccountId canonicalizes IH58 and compressed (`sora`) encodings", () => {
   const canonicalIh58 = exportedNormalizeAccountId(SAMPLE_ACCOUNT_IH58_LITERAL);
   assert.equal(canonicalIh58, SAMPLE_ACCOUNT_CANONICAL);
   const canonicalCompressed = exportedNormalizeAccountId(SAMPLE_ACCOUNT_COMPRESSED_LITERAL);

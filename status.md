@@ -2,6 +2,12 @@
 
 Last update: 2026-01-28
 
+- iroha_data_model JSON parsing: add `expect_u32` helper for `pacing_factor_bps` and unit coverage for range handling.
+- Tests: not run (not requested).
+
+- Address literal refactor: moved the Sora compressed account-address sentinel to `sora` (full-width `ｓｏｒａ`), refreshed fixtures/docs/SDKs/clients, and tightened the Torii test resolver bootstrap so address-format round trips stay stable when other tests clear the domain-selector resolver.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config). `cargo run -p iroha_data_model --example address_vectors` (ok; regenerated fixtures). `cargo test -p iroha_torii address_format::tests::display_literal_and_from_literal_round_trip -- --nocapture` (failed: `crates/iroha_data_model/src/parameter/system.rs` missing `pacing_factor_bps` handling; unrelated build error in `iroha_data_model`).
+
 - Torii UAID portfolio fixtures: align UAID portfolio tests/fixtures with the one-to-one UAID binding invariant (single UAID-bound account, two asset positions).
 - Tests: `cargo test -p iroha_torii --test accounts_portfolio --features app_api` (ok).
 
@@ -990,7 +996,8 @@ Last update: 2026-01-28
 - Localnet throughput (7 peers, debug): `scripts/run_localnet_throughput.sh` failed with submit queue stuck above 20k for 180s; no artifacts were written before this change.
 - Tests: not run (throughput artifact/timeout updates).
 
-- Sumeragi tick scheduling: `next_tick_deadline` now triggers immediate ticks when the tx queue is non-empty even with pending blocks, plus `actor_next_tick_deadline_prioritizes_queue_with_pending_block` coverage (tests not run).
+- Sumeragi tick scheduling: `next_tick_deadline` now triggers immediate ticks when the tx queue is non-empty even with pending blocks, plus `actor_next_tick_deadline_prioritizes_queue_with_pending_block` coverage.
+- Tests: `cargo test -p iroha_core actor_next_tick_deadline_prioritizes_queue_with_pending_block -- --nocapture` (ok).
 - Localnet (NPoS, 7 peers, 753ms block/commit, DA timeout multipliers 1/1, k/r 4/3): `/private/tmp/iroha-localnet-7peer-run127` (24980/25900). 50 tx/s for 100 blocks (8k submit) → avg block interval 4.7s (p50 3.9s, p90 7.5s, p99 8.8s), admitted 13.5 tx/s over 471s, view_changes=0; queue drained by height 256.
 - Merge: resolved conflict markers across status, account literal messaging, SoraFS GC audit metadata, storage refcount updates, and Torii onboarding test height handling.
 - Tests: not run (merge conflict resolution).
@@ -1003,7 +1010,7 @@ Last update: 2026-01-28
 - Android SDK signing: prehashing moved into `Signer` implementations (Ed25519) while `TransactionBuilder` now forwards raw payload bytes; `SignedTransactionHasher` remains aligned.
 - Account parsing: removed the global domain-selector cache and allow explicit `encoded@domain` literals to parse without a resolver; implicit encoded literals still require a resolver or default domain.
 - Tests: `cargo test -p iroha_data_model account_id_parsing_tests::encoded_literals_with_domain_parse_without_resolver -- --nocapture` (timed out after 300s while compiling dependencies).
-- Torii tests: compressed literal expectations now use the raw `snx1` form (no `@domain`); SoraFS helpers build `AccountId` values from public keys + domains.
+- Torii tests: compressed literal expectations now use the raw `sora` form (no `@domain`); SoraFS helpers build `AccountId` values from public keys + domains.
 - Tests: `cargo test -p iroha_torii address_format::tests::display_literal_and_from_literal_round_trip -- --nocapture` (ok).
 - Tests: `cargo test -p iroha_torii iso20022_bridge::tests::runtime_accepts_raw_signer_account_literal -- --nocapture` (ok).
 - Tests: `cargo test -p iroha_torii sorafs::api::advert_tests::pin_registry_metrics_summary_tracks_counts -- --nocapture` (ok).
@@ -1174,7 +1181,7 @@ Last update: 2026-01-28
 - Tests: not run (SDK updates only).
 - Tests: `npm test` (failed; multiple JS test failures including `address_inspect`, `isoBridge`, `toriiClient`, `validationError`, and `transactionFixturesParity` suites).
 - Tests: `swift test` (failed; 45 failures/35 unexpected, first failure `TransactionEncoderValidationTests.testCastZkBallotAcceptsCanonicalHints` with `nativeBridgeError(.authority)`).
-- Docs/UX strings: clarified IH58 as the preferred account format and `snx1` as the second-best option across the Account Structure RFC, data-model specs, SDK/CLI help text, Torii/OpenAPI docs, portal docs/images, and translations.
+- Docs/UX strings: clarified IH58 as the preferred account format and `sora` as the second-best option across the Account Structure RFC, data-model specs, SDK/CLI help text, Torii/OpenAPI docs, portal docs/images, and translations.
 - Sumeragi worker loop now refreshes drain budgets and tick gaps each iteration from current on-chain timing to avoid stale startup timeouts; added `run_worker_loop_refreshes_config_each_iteration`.
 - Tests: `cargo test -p iroha_core run_worker_loop_refreshes_config_each_iteration` (ok).
 - Sumeragi quorum timeout now uses pending-block progress age (touched by RBC chunk/READY/DELIVER + votes) so healthy consensus activity does not trigger view changes; pending blocks track progress timestamps and tests/docs updated.
@@ -1185,7 +1192,7 @@ Last update: 2026-01-28
 - SoraFS CLI: added help smoke coverage for `iroha sorafs repair` and `iroha sorafs gc`.
 - SoraFS incentives state: embed domain hints so IH58 account IDs roundtrip, and install a domain-selector resolver while parsing JSON snapshots and CLI tests.
 - Accounts/UAID: enforce UAID→account 1:1 index, reject duplicate UAIDs on registration, and switch UAID portfolio/reward selection to the index with new unit coverage.
-- Account address parsing: accept full-width `ｓｎｘ１` sentinel for compressed Sora literals alongside ASCII `snx1`.
+- Account address parsing: accept full-width `ｓｏｒａ` sentinel for compressed Sora literals alongside ASCII `sora`.
 - Tests: `cargo test -p iroha_data_model compressed_fullwidth_sentinel_accepts` (ok; waited for build dir lock).
 - CLI account literals: resolve account identifiers through `/v1/accounts/resolve` across commands (contracts, DA/SoraFS ledgers, Kaigi, staking, ZK, subscriptions, offline filters, multisig/trigger inputs) and refresh CLI harness tests to use canonical account IDs.
 - CLI SNS/SoraFS: catalog policy verification and gateway denylist validation now resolve account literals via `/v1/accounts/resolve`; vote CLI tests use canonical fixtures.
@@ -1240,8 +1247,10 @@ Last update: 2026-01-28
 - Tests: `cargo test -p iroha_core consensus_queue_backpressure -- --nocapture` (ok).
 - DA/RBC: default RBC chunk fanout now targets the full roster (minus local) so READY quorum can form even with f faulty peers; unit coverage updated.
 - DA/RBC: unresolved backlog detection now gates on incomplete READY quorum/chunk coverage (even when payload is local) and pending RBC stashes; idle view changes stay suppressed while RBC backlog or relay backpressure is active; tests added/updated (not run).
-- DA/RBC: treat blocks present in Kura as committed only when their stored height is <= committed height, and keep accepting RBC messages for committed heights when payload is missing; added `rbc_message_stale_ignores_uncommitted_kura_blocks` + `rbc_message_stale_allows_missing_payload_for_committed_height_with_da` (not run).
-- DA/RBC: pending RBC stashes at the tip height now gate view changes (alongside tip+1) to prevent premature leader rotation; added `rbc_backlog_counts_pending_stash_for_tip_height` (not run).
+- DA/RBC: treat blocks present in Kura as committed only when their stored height is <= committed height, and keep accepting RBC messages for committed heights when payload is missing; added `rbc_message_stale_ignores_uncommitted_kura_blocks` + `rbc_message_stale_allows_missing_payload_for_committed_height_with_da`.
+- Tests: `cargo test -p iroha_core rbc_message_stale -- --nocapture` (ok).
+- DA/RBC: pending RBC stashes at the tip height now gate view changes (alongside tip+1) to prevent premature leader rotation; added `rbc_backlog_counts_pending_stash_for_tip_height`.
+- Tests: `cargo test -p iroha_core rbc_backlog_counts_pending_stash_for_tip_height -- --nocapture` (ok).
 - Format: `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Sumeragi pacemaker: rebroadcast cached proposals + BlockCreated payloads when the local leader already has the proposal cached, avoiding stalls when proposal messages are dropped; added `pacemaker_rebroadcasts_cached_proposal_when_leader` coverage.
 - Tests: `cargo test -p iroha_core pacemaker_rebroadcasts_cached_proposal_when_leader -- --nocapture` (ok).
@@ -1257,8 +1266,10 @@ Last update: 2026-01-28
 - Config: fixed `connect_startup_delay` initialization in torii test utils and p2p start wiring.
 - Tests: `cargo test -p integration_tests genesis_asset_minted_across_peers -- --nocapture` (ok).
 - Tests: `cargo test -p integration_tests genesis_norito_bytes_roundtrip_network -- --nocapture` (ok).
-- NPoS bootstrap: RBC roster derivation now falls back to the active topology near the tip to avoid empty-session snapshots; added `rbc_roster_for_session_uses_active_topology_in_npos_bootstrap` (tests not run).
-- RBC ingress/backlog: treat RbcInit as blocking ingress to avoid non-blocking drops under load, and count pending RBC stashes for the next height as unresolved backlog so pacemaker won’t trigger view changes while BlockCreated/INIT is missing; added `rbc_backlog_counts_pending_stash_for_next_height` + updated relay blocking-variant test (tests not run).
+- NPoS bootstrap: RBC roster derivation now falls back to the active topology near the tip to avoid empty-session snapshots; added `rbc_roster_for_session_uses_active_topology_in_npos_bootstrap`.
+- Tests: `cargo test -p iroha_core rbc_roster_for_session_uses_active_topology_in_npos_bootstrap -- --nocapture` (ok).
+- RBC ingress/backlog: treat RbcInit as blocking ingress to avoid non-blocking drops under load, and count pending RBC stashes for the next height as unresolved backlog so pacemaker won’t trigger view changes while BlockCreated/INIT is missing; added `rbc_backlog_counts_pending_stash_for_next_height` + updated relay blocking-variant test (relay blocking-variant test not run).
+- Tests: `cargo test -p iroha_core rbc_backlog_counts_pending_stash_for_next_height -- --nocapture` (ok).
 - Lint: not run
 - Build: not run
 - Tests: `cargo test -p ivm` (timed out after 20m while running `kotodama_foreach_reads_durable_state_map_entries`)
