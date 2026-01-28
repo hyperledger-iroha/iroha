@@ -48,12 +48,55 @@ impl Actor {
         self.enqueue_fetch_pending_block_response(peer, msg);
     }
 
+    fn fetch_response_priority_for_highest_qc(
+        &self,
+        msg: &BlockMessage,
+        priority: FetchPendingBlockPriority,
+    ) -> FetchPendingBlockPriority {
+        if matches!(priority, FetchPendingBlockPriority::Consensus) {
+            return priority;
+        }
+        let Some(highest) = self.highest_qc else {
+            return priority;
+        };
+        let (block_hash, height, view) = match msg {
+            BlockMessage::BlockSyncUpdate(update) => {
+                let header = update.block.header();
+                (
+                    update.block.hash(),
+                    header.height().get(),
+                    header.view_change_index(),
+                )
+            }
+            BlockMessage::BlockCreated(created) => {
+                let header = created.block.header();
+                (
+                    created.block.hash(),
+                    header.height().get(),
+                    header.view_change_index(),
+                )
+            }
+            BlockMessage::RbcInit(init) => (init.block_hash, init.height, init.view),
+            BlockMessage::RbcChunk(chunk) => (chunk.block_hash, chunk.height, chunk.view),
+            _ => return priority,
+        };
+        if highest.subject_block_hash == block_hash
+            && highest.height == height
+            && highest.view == view
+        {
+            FetchPendingBlockPriority::Consensus
+        } else {
+            priority
+        }
+    }
+
     fn send_fetch_pending_block_response(
         &mut self,
         peer: PeerId,
         mut msg: BlockMessage,
         priority: FetchPendingBlockPriority,
     ) {
+        let priority = self.fetch_response_priority_for_highest_qc(&msg, priority);
         if let BlockMessage::BlockSyncUpdate(update) = &mut msg {
             let block_hash = update.block.hash();
             let height = update.block.header().height().get();

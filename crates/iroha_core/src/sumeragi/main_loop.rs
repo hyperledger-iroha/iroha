@@ -89,7 +89,7 @@ use super::{
 use crate::telemetry::Telemetry;
 use crate::{
     EventsSender, IrohaNetwork, NetworkMessage,
-    block::{BlockBuilder, BlockValidationError, ValidBlock},
+    block::{BlockBuilder, BlockValidationError, ValidBlock, valid::ValidationTimings},
     kura::{BlockCount, Kura},
     nexus::lane_relay::LaneRelayBroadcaster,
     peers_gossiper::PeersGossiperHandle,
@@ -2292,11 +2292,35 @@ fn validate_block_for_voting(
     state: &State,
     voting_block: &mut Option<VotingBlock>,
 ) -> Result<Option<StateRoots>, BlockValidationError> {
+    let (result, _timings) = validate_block_for_voting_with_timings(
+        block,
+        topology,
+        chain_id,
+        genesis_account,
+        state,
+        voting_block,
+    );
+    result
+}
+
+/// Run stateless and stateful validation for a block before emitting votes, returning timings.
+fn validate_block_for_voting_with_timings(
+    block: SignedBlock,
+    topology: &mut super::network_topology::Topology,
+    chain_id: &ChainId,
+    genesis_account: &AccountId,
+    state: &State,
+    voting_block: &mut Option<VotingBlock>,
+) -> (
+    Result<Option<StateRoots>, BlockValidationError>,
+    ValidationTimings,
+) {
     let block_hash = block.hash();
     let height = block.header().height().get();
     let view = block.header().view_change_index();
     let time_source = TimeSource::new_system();
-    let validation = ValidBlock::validate_keep_voting_block(
+    let mut timings = ValidationTimings::new();
+    let validation = ValidBlock::validate_keep_voting_block_with_timing(
         block,
         topology,
         chain_id,
@@ -2305,17 +2329,29 @@ fn validate_block_for_voting(
         state,
         voting_block,
         false,
+        &mut timings,
     )
     .unpack(|_| {});
 
-    match validation {
+    let result = match validation {
         Ok((_validated, mut state_block)) => {
             let roots = exec_roots_for_state_block(&mut state_block, block_hash, height, view);
             drop(state_block);
             Ok(roots)
         }
         Err((_block, err)) => Err(*err),
-    }
+    };
+    debug!(
+        height,
+        view,
+        block = %block_hash,
+        ok = result.is_ok(),
+        stateless_ms = timings.stateless_ms,
+        execution_ms = timings.execution_ms,
+        total_ms = timings.total_ms,
+        "block validation timings"
+    );
+    (result, timings)
 }
 
 const VALIDATION_REASON_STATELESS: &str = "stateless";
@@ -4058,6 +4094,7 @@ pub(super) struct Actor {
 struct BackgroundRequestLogEntry {
     kind: BackgroundRequestLogKind,
     msg_kind: Option<&'static str>,
+    peer: Option<PeerId>,
 }
 
 #[cfg(test)]
@@ -10206,6 +10243,9 @@ impl Actor {
                 msg: BlockMessage::BlockCreated(_),
                 ..
             } | BackgroundRequest::Post {
+                msg: BlockMessage::QcVote(_),
+                ..
+            } | BackgroundRequest::Post {
                 msg: BlockMessage::RbcInit(_),
                 ..
             } | BackgroundRequest::Post {
@@ -10250,21 +10290,25 @@ impl Actor {
             return;
         };
         let entry = match request {
-            BackgroundRequest::Post { msg, .. } => BackgroundRequestLogEntry {
+            BackgroundRequest::Post { peer, msg } => BackgroundRequestLogEntry {
                 kind: BackgroundRequestLogKind::Post,
                 msg_kind: Some(Self::block_message_kind(msg)),
+                peer: Some(peer.clone()),
             },
             BackgroundRequest::Broadcast { msg } => BackgroundRequestLogEntry {
                 kind: BackgroundRequestLogKind::Broadcast,
                 msg_kind: Some(Self::block_message_kind(msg)),
+                peer: None,
             },
-            BackgroundRequest::PostControlFlow { .. } => BackgroundRequestLogEntry {
+            BackgroundRequest::PostControlFlow { peer, .. } => BackgroundRequestLogEntry {
                 kind: BackgroundRequestLogKind::PostControlFlow,
                 msg_kind: None,
+                peer: Some(peer.clone()),
             },
             BackgroundRequest::BroadcastControlFlow { .. } => BackgroundRequestLogEntry {
                 kind: BackgroundRequestLogKind::BroadcastControlFlow,
                 msg_kind: None,
+                peer: None,
             },
         };
         log.lock()

@@ -2376,6 +2376,8 @@ mod new {
 }
 
 pub(crate) mod valid {
+    use std::time::Instant;
+
     use commit::CommittedBlock;
     use iroha_data_model::{
         ChainId,
@@ -2402,6 +2404,24 @@ pub(crate) mod valid {
     #[derive(Debug, Clone)]
     #[repr(transparent)]
     pub struct ValidBlock(pub(super) SignedBlock);
+
+    /// Timing breakdown for block validation stages.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub(crate) struct ValidationTimings {
+        /// Elapsed milliseconds for stateless checks.
+        pub(crate) stateless_ms: u64,
+        /// Elapsed milliseconds for execution/stateful checks.
+        pub(crate) execution_ms: u64,
+        /// Total elapsed milliseconds for validation.
+        pub(crate) total_ms: u64,
+    }
+
+    impl ValidationTimings {
+        /// Create an empty timing snapshot.
+        pub(crate) fn new() -> Self {
+            Self::default()
+        }
+    }
 
     type Error = (Box<SignedBlock>, Box<BlockValidationError>);
 
@@ -3578,7 +3598,7 @@ pub(crate) mod valid {
         ///   and transactions will be validated (executed) with write state
         #[allow(clippy::too_many_arguments)]
         pub fn validate_keep_voting_block<'state>(
-            mut block: SignedBlock,
+            block: SignedBlock,
             topology: &Topology,
             expected_chain_id: &ChainId,
             genesis_account: &AccountId,
@@ -3587,6 +3607,74 @@ pub(crate) mod valid {
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
+            Self::validate_keep_voting_block_inner(
+                block,
+                topology,
+                expected_chain_id,
+                genesis_account,
+                time_source,
+                state,
+                voting_block,
+                soft_fork,
+                None,
+            )
+        }
+
+        /// Same as [`Self::validate_keep_voting_block`], but records timing breakdowns.
+        #[allow(clippy::too_many_arguments)]
+        pub(crate) fn validate_keep_voting_block_with_timing<'state>(
+            block: SignedBlock,
+            topology: &Topology,
+            expected_chain_id: &ChainId,
+            genesis_account: &AccountId,
+            time_source: &TimeSource,
+            state: &'state State,
+            voting_block: &mut Option<VotingBlock>,
+            soft_fork: bool,
+            timings: &mut ValidationTimings,
+        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
+            Self::validate_keep_voting_block_inner(
+                block,
+                topology,
+                expected_chain_id,
+                genesis_account,
+                time_source,
+                state,
+                voting_block,
+                soft_fork,
+                Some(timings),
+            )
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn validate_keep_voting_block_inner<'state>(
+            mut block: SignedBlock,
+            topology: &Topology,
+            expected_chain_id: &ChainId,
+            genesis_account: &AccountId,
+            time_source: &TimeSource,
+            state: &'state State,
+            voting_block: &mut Option<VotingBlock>,
+            soft_fork: bool,
+            timings: Option<&mut ValidationTimings>,
+        ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
+            let total_start = Instant::now();
+            let stateless_start = Instant::now();
+            let to_ms = |duration: Duration| -> u64 {
+                u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+            };
+            let record_timings =
+                |timings: Option<&mut ValidationTimings>,
+                 stateless_elapsed: Duration,
+                 execution_start: Option<Instant>| {
+                    if let Some(timings) = timings {
+                        timings.stateless_ms = to_ms(stateless_elapsed);
+                        timings.execution_ms = execution_start
+                            .map(|start| to_ms(start.elapsed()))
+                            .unwrap_or(0);
+                        timings.total_ms = to_ms(total_start.elapsed());
+                    }
+                };
             let (static_data, transactions_view) = {
                 let view = state.view();
                 let static_data = match Self::validate_static_state_dependent(
@@ -3600,6 +3688,8 @@ pub(crate) mod valid {
                 ) {
                     Ok(data) => data,
                     Err(error) => {
+                        let stateless_elapsed = stateless_start.elapsed();
+                        record_timings(timings, stateless_elapsed, None);
                         let ev = PipelineEventBox::from(BlockEvent {
                             header: block.header(),
                             status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
@@ -3625,6 +3715,8 @@ pub(crate) mod valid {
                 &transactions_view,
                 metrics,
             ) {
+                let stateless_elapsed = stateless_start.elapsed();
+                record_timings(timings, stateless_elapsed, None);
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
                     status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
@@ -3634,9 +3726,12 @@ pub(crate) mod valid {
                 let _ = ev; // avoid unused warning if optimized out
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
+            let stateless_elapsed = stateless_start.elapsed();
+            let execution_start = Instant::now();
             // Release block writer before creating new one
             let _ = voting_block.take();
             if let Err(error) = state.ensure_da_indexes_hydrated() {
+                record_timings(timings, stateless_elapsed, Some(execution_start));
                 let error = BlockValidationError::DaShardCursor(error);
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
@@ -3654,10 +3749,12 @@ pub(crate) mod valid {
             Self::validate_and_record_transactions(&mut block, &mut state_block);
             if let Err(error) = validate_axt_envelopes(&block, &state_block) {
                 drop(state_block);
+                record_timings(timings, stateless_elapsed, Some(execution_start));
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Err(error) = state_block.validate_da_shard_cursors(&block) {
                 drop(state_block);
+                record_timings(timings, stateless_elapsed, Some(execution_start));
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             state_block.capture_exec_witness();
@@ -3665,14 +3762,17 @@ pub(crate) mod valid {
             if block.is_empty() {
                 let error = BlockValidationError::EmptyBlock;
                 drop(state_block);
+                record_timings(timings, stateless_elapsed, Some(execution_start));
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Err(error) =
                 Self::ensure_genesis_transactions_clean(&block, genesis_account, expected_chain_id)
             {
                 drop(state_block);
+                record_timings(timings, stateless_elapsed, Some(execution_start));
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
+            record_timings(timings, stateless_elapsed, Some(execution_start));
             WithEvents::new(Ok((ValidBlock(block), state_block)))
         }
 

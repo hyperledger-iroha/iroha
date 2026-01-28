@@ -26,7 +26,7 @@ impl iroha_p2p::network::message::ClassifyTopic for Dummy {}
 fn sample_consensus_config_caps() -> ConsensusConfigCaps {
     ConsensusConfigCaps {
         collectors_k: 1,
-        redundant_send_r: 1,
+        redundant_send_r: iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
         da_enabled: true,
         rbc_chunk_max_bytes: 65_536,
         rbc_session_ttl_ms: 120_000,

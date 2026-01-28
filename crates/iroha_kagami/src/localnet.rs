@@ -2689,12 +2689,18 @@ mod tests {
             "localnet should lower tx gossip resend ticks for 1s pipelines"
         );
         assert_eq!(
-            parsed.transaction_gossiper.dataspace.public_target_reshuffle,
+            parsed
+                .transaction_gossiper
+                .dataspace
+                .public_target_reshuffle,
             Duration::from_millis(LOCALNET_TX_GOSSIP_PERIOD_FAST_MS),
             "localnet should reshuffle public tx gossip targets quickly"
         );
         assert_eq!(
-            parsed.transaction_gossiper.dataspace.restricted_target_reshuffle,
+            parsed
+                .transaction_gossiper
+                .dataspace
+                .restricted_target_reshuffle,
             Duration::from_millis(LOCALNET_TX_GOSSIP_PERIOD_FAST_MS),
             "localnet should reshuffle restricted tx gossip targets quickly"
         );
@@ -2750,10 +2756,7 @@ mod tests {
         let overrides =
             localnet_tx_gossip_overrides(LOCALNET_PIPELINE_TIME_MS).expect("fast pipeline");
         assert_eq!(overrides.period_ms, LOCALNET_TX_GOSSIP_PERIOD_FAST_MS);
-        assert_eq!(
-            overrides.resend_ticks,
-            LOCALNET_TX_GOSSIP_RESEND_TICKS_FAST
-        );
+        assert_eq!(overrides.resend_ticks, LOCALNET_TX_GOSSIP_RESEND_TICKS_FAST);
         assert!(
             localnet_tx_gossip_overrides(LOCALNET_PIPELINE_TIME_MS + 1).is_none(),
             "slow pipelines should keep default tx gossip cadence"

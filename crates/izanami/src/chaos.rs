@@ -11,6 +11,7 @@ use std::{
 
 use color_eyre::{Result, eyre::eyre};
 use futures::FutureExt;
+use iroha_config::parameters::actual::SumeragiNposTimeouts;
 use iroha_data_model::{
     parameter::SumeragiParameter, parameter::system::SumeragiNposParameters, prelude::*,
 };
@@ -54,20 +55,20 @@ const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 2;
 const IZANAMI_FUTURE_HEIGHT_WINDOW: i64 = 2;
 const IZANAMI_FUTURE_VIEW_WINDOW: i64 = 2;
 const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 1_500;
-const IZANAMI_NPOS_TIMEOUT_COMMIT_MS: i64 = 2_000;
-const IZANAMI_NPOS_TIMEOUT_DA_MS: i64 = 2_000;
+const IZANAMI_NPOS_COMMIT_TIME_MS: i64 = 2_000;
 const IZANAMI_PIPELINE_DYNAMIC_PREPASS: bool = true;
 const IZANAMI_PIPELINE_ACCESS_SET_CACHE_ENABLED: bool = true;
 const IZANAMI_PIPELINE_PARALLEL_OVERLAY: bool = true;
 const IZANAMI_PIPELINE_PARALLEL_APPLY: bool = true;
-const IZANAMI_PIPELINE_WORKERS: i64 = 8;
-const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_ED25519: i64 = 64;
-const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_SECP256K1: i64 = 64;
-const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_PQC: i64 = 32;
-const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_BLS: i64 = 16;
-const IZANAMI_VALIDATION_WORKER_THREADS: i64 = 8;
-const IZANAMI_VALIDATION_WORK_QUEUE_CAP: i64 = 64;
-const IZANAMI_VALIDATION_RESULT_QUEUE_CAP: i64 = 256;
+const IZANAMI_PIPELINE_WORKERS: i64 = 0;
+const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_ED25519: i64 = 128;
+const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_SECP256K1: i64 = 128;
+const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_PQC: i64 = 64;
+const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_BLS: i64 = 32;
+const IZANAMI_PIPELINE_STATELESS_CACHE_CAP: i64 = 16_384;
+const IZANAMI_VALIDATION_WORKER_THREADS: i64 = 0;
+const IZANAMI_VALIDATION_WORK_QUEUE_CAP: i64 = 0;
+const IZANAMI_VALIDATION_RESULT_QUEUE_CAP: i64 = 0;
 const IZANAMI_VALIDATION_PENDING_CAP: i64 = 8_192;
 
 #[derive(Clone, Copy, Debug)]
@@ -76,13 +77,20 @@ struct NposTiming {
     propose_ms: u64,
     prevote_ms: u64,
     precommit_ms: u64,
-    commit_ms: u64,
+    commit_timeout_ms: u64,
+    commit_time_ms: u64,
     da_ms: u64,
     aggregator_ms: u64,
 }
 
 fn clamp_nonzero_ms(value: u64) -> u64 {
     value.max(1)
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis())
+        .unwrap_or(u64::MAX)
+        .max(1)
 }
 
 fn split_pipeline_time(duration: Duration) -> (u64, u64) {
@@ -105,38 +113,33 @@ fn split_pipeline_time(duration: Duration) -> (u64, u64) {
     (block_ms, commit_ms)
 }
 
-fn derive_npos_phase_timeouts(block_ms: u64, commit_ms: u64) -> (u64, u64, u64, u64) {
-    let propose_ms = clamp_nonzero_ms(block_ms / 2);
-    let prevote_ms = clamp_nonzero_ms(commit_ms / 2);
-    let precommit_ms = clamp_nonzero_ms(commit_ms / 2);
-    let aggregator_ms = clamp_nonzero_ms(block_ms / 4);
-    (propose_ms, prevote_ms, precommit_ms, aggregator_ms)
-}
-
 fn derive_npos_timing(config: &ChaosConfig) -> NposTiming {
-    let (block_ms, commit_ms, da_ms) = if let Some(duration) = config.pipeline_time {
+    let (block_ms, commit_time_ms) = if let Some(duration) = config.pipeline_time {
         let (block_ms, commit_ms) = split_pipeline_time(duration);
-        (block_ms, commit_ms, commit_ms)
+        (block_ms, commit_ms)
     } else {
         let block_ms = u64::try_from(IZANAMI_NPOS_BLOCK_TIME_MS)
             .expect("izanami block time must be non-negative");
-        let commit_ms = u64::try_from(IZANAMI_NPOS_TIMEOUT_COMMIT_MS)
-            .expect("izanami commit timeout must be non-negative");
-        let da_ms = u64::try_from(IZANAMI_NPOS_TIMEOUT_DA_MS)
-            .expect("izanami DA timeout must be non-negative");
-        (block_ms, commit_ms, da_ms)
+        let commit_ms = u64::try_from(IZANAMI_NPOS_COMMIT_TIME_MS)
+            .expect("izanami commit time must be non-negative");
+        (block_ms, commit_ms)
     };
     let block_ms = clamp_nonzero_ms(block_ms);
-    let commit_ms = clamp_nonzero_ms(commit_ms);
-    let da_ms = clamp_nonzero_ms(da_ms);
-    let (propose_ms, prevote_ms, precommit_ms, aggregator_ms) =
-        derive_npos_phase_timeouts(block_ms, commit_ms);
+    let commit_time_ms = clamp_nonzero_ms(commit_time_ms);
+    let timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(block_ms));
+    let propose_ms = clamp_nonzero_ms(duration_ms(timeouts.propose));
+    let prevote_ms = clamp_nonzero_ms(duration_ms(timeouts.prevote));
+    let precommit_ms = clamp_nonzero_ms(duration_ms(timeouts.precommit));
+    let commit_timeout_ms = clamp_nonzero_ms(duration_ms(timeouts.commit));
+    let da_ms = clamp_nonzero_ms(duration_ms(timeouts.da));
+    let aggregator_ms = clamp_nonzero_ms(duration_ms(timeouts.aggregator));
     NposTiming {
         block_ms,
         propose_ms,
         prevote_ms,
         precommit_ms,
-        commit_ms,
+        commit_timeout_ms,
+        commit_time_ms,
         da_ms,
         aggregator_ms,
     }
@@ -170,62 +173,26 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
     let npos_timing = derive_npos_timing(config);
     if config.nexus.is_some() {
         let mut injected = Vec::new();
-        if config.pipeline_time.is_none() {
-            let has_block_time = genesis.iter().flat_map(|tx| tx.iter()).any(|isi| {
-                let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() else {
-                    return false;
-                };
-                matches!(
-                    set_param.inner(),
-                    Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(_))
-                )
-            });
-            let has_commit_time = genesis.iter().flat_map(|tx| tx.iter()).any(|isi| {
-                let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() else {
-                    return false;
-                };
-                matches!(
-                    set_param.inner(),
-                    Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(_))
-                )
-            });
-            if !has_block_time {
-                injected.push(InstructionBox::from(SetParameter::new(
-                    Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(npos_timing.block_ms)),
-                )));
-            }
-            if !has_commit_time {
-                injected.push(InstructionBox::from(SetParameter::new(
-                    Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(npos_timing.commit_ms)),
-                )));
-            }
-        }
-        let has_npos_params = genesis.iter().flat_map(|tx| tx.iter()).any(|isi| {
-            let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() else {
-                return false;
-            };
-            matches!(
-                set_param.inner(),
-                Parameter::Custom(custom)
-                    if custom.id == SumeragiNposParameters::parameter_id()
-            )
-        });
-        if !has_npos_params {
-            let mut npos_params = SumeragiNposParameters::default();
-            npos_params.block_time_ms = npos_timing.block_ms;
-            npos_params.timeout_propose_ms = npos_timing.propose_ms;
-            npos_params.timeout_prevote_ms = npos_timing.prevote_ms;
-            npos_params.timeout_precommit_ms = npos_timing.precommit_ms;
-            npos_params.timeout_commit_ms = npos_timing.commit_ms;
-            npos_params.timeout_da_ms = npos_timing.da_ms;
-            npos_params.timeout_aggregator_ms = npos_timing.aggregator_ms;
-            injected.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
-                npos_params.into_custom_parameter(),
-            ))));
-        }
+        injected.push(InstructionBox::from(SetParameter::new(
+            Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(npos_timing.block_ms)),
+        )));
+        injected.push(InstructionBox::from(SetParameter::new(
+            Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(npos_timing.commit_time_ms)),
+        )));
+        let mut npos_params = SumeragiNposParameters::default();
+        npos_params.block_time_ms = npos_timing.block_ms;
+        npos_params.timeout_propose_ms = npos_timing.propose_ms;
+        npos_params.timeout_prevote_ms = npos_timing.prevote_ms;
+        npos_params.timeout_precommit_ms = npos_timing.precommit_ms;
+        npos_params.timeout_commit_ms = npos_timing.commit_timeout_ms;
+        npos_params.timeout_da_ms = npos_timing.da_ms;
+        npos_params.timeout_aggregator_ms = npos_timing.aggregator_ms;
+        injected.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
+            npos_params.into_custom_parameter(),
+        ))));
         if !injected.is_empty() {
-            if let Some(first_tx) = genesis.first_mut() {
-                first_tx.splice(0..0, injected);
+            if let Some(last_tx) = genesis.last_mut() {
+                last_tx.extend(injected);
             } else {
                 genesis.push(injected);
             }
@@ -269,6 +236,10 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             .write(
                 ["pipeline", "signature_batch_max_bls"],
                 IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_BLS,
+            )
+            .write(
+                ["pipeline", "stateless_cache_cap"],
+                IZANAMI_PIPELINE_STATELESS_CACHE_CAP,
             )
             .write(
                 ["sumeragi", "queues", "block_payload"],
@@ -368,7 +339,7 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             )
             .write(
                 ["sumeragi", "npos", "timeouts", "commit_ms"],
-                as_i64(npos_timing.commit_ms),
+                as_i64(npos_timing.commit_timeout_ms),
             )
             .write(
                 ["sumeragi", "npos", "timeouts", "da_ms"],
@@ -1097,10 +1068,38 @@ mod tests {
         );
         assert_eq!(
             commit_time,
-            Some(timing.commit_ms),
+            Some(timing.commit_time_ms),
             "genesis should set sumeragi commit_time_ms for NPoS"
         );
         Ok(())
+    }
+
+    #[test]
+    fn derive_npos_timing_uses_block_time_for_timeouts() {
+        let config = ChaosConfig {
+            allow_net: false,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: Some(Duration::from_millis(3_000)),
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: Some(7),
+            tps: 1.0,
+            max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: None,
+        };
+
+        let timing = derive_npos_timing(&config);
+        let expected =
+            SumeragiNposTimeouts::from_block_time(Duration::from_millis(timing.block_ms));
+        assert_eq!(timing.commit_timeout_ms, duration_ms(expected.commit));
+        assert_ne!(timing.commit_timeout_ms, timing.commit_time_ms);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1525,8 +1524,8 @@ mod tests {
             i64::try_from(npos_timing.prevote_ms).expect("npos prevote timeout fits into i64");
         let npos_precommit_ms =
             i64::try_from(npos_timing.precommit_ms).expect("npos precommit timeout fits into i64");
-        let npos_commit_ms =
-            i64::try_from(npos_timing.commit_ms).expect("npos commit timeout fits into i64");
+        let npos_commit_ms = i64::try_from(npos_timing.commit_timeout_ms)
+            .expect("npos commit timeout fits into i64");
         let npos_da_ms = i64::try_from(npos_timing.da_ms).expect("npos DA timeout fits into i64");
         let npos_aggregator_ms = i64::try_from(npos_timing.aggregator_ms)
             .expect("npos aggregator timeout fits into i64");
@@ -1565,6 +1564,10 @@ mod tests {
         assert_eq!(
             lookup(&["pipeline", "signature_batch_max_bls"]),
             Some(IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_BLS)
+        );
+        assert_eq!(
+            lookup(&["pipeline", "stateless_cache_cap"]),
+            Some(IZANAMI_PIPELINE_STATELESS_CACHE_CAP)
         );
         assert_eq!(
             lookup(&["sumeragi", "queues", "block_payload"]),
@@ -1808,7 +1811,7 @@ mod tests {
         assert_eq!(npos_params.timeout_propose_ms(), expected.propose_ms);
         assert_eq!(npos_params.timeout_prevote_ms(), expected.prevote_ms);
         assert_eq!(npos_params.timeout_precommit_ms(), expected.precommit_ms);
-        assert_eq!(npos_params.timeout_commit_ms(), expected.commit_ms);
+        assert_eq!(npos_params.timeout_commit_ms(), expected.commit_timeout_ms);
         assert_eq!(npos_params.timeout_da_ms(), expected.da_ms);
         assert_eq!(npos_params.timeout_aggregator_ms(), expected.aggregator_ms);
         Ok(())

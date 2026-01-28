@@ -7363,9 +7363,7 @@ mod tests {
 
         let (durable_before, index_before) = {
             let mut store = kura.block_store.lock();
-            let durable = store
-                .read_durable_index_count()
-                .expect("durable count");
+            let durable = store.read_durable_index_count().expect("durable count");
             let index = store.read_index_count().expect("index count");
             (durable, index)
         };

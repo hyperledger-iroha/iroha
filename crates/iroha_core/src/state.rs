@@ -178,6 +178,7 @@ use crate::{
     settlement::SettlementEngine,
     smartcontracts::{
         isi::{triggers::trigger_is_enabled, world::isi::apply_policy_if_due},
+        ivm::cache::IvmCache,
         triggers::{
             set::{
                 ExecutableRef, Set as TriggerSet, SetBlock as TriggerSetBlock,
@@ -4361,6 +4362,8 @@ pub struct State {
     pipeline_parallelism: PipelineParallelism,
     /// Stateless validation cache shared across blocks.
     stateless_validation_cache: parking_lot::Mutex<StatelessValidationCache>,
+    /// Cache for IVM trigger program summaries and runtime templates.
+    trigger_ivm_cache: parking_lot::Mutex<IvmCache>,
     /// Oracle aggregation configuration.
     pub oracle: iroha_config::parameters::actual::Oracle,
     /// Streaming configuration snapshot (spool paths, codec defaults).
@@ -4753,6 +4756,8 @@ pub struct StateTransaction<'block, 'state> {
     pub prev_commit_topology: CellTransaction<'block, 'state, Vec<PeerId>>,
     /// Runtime handle for the IVM to execute triggers.
     pub ivm: &'state IVM,
+    /// Shared IVM cache for trigger execution.
+    pub(crate) ivm_cache: &'state parking_lot::Mutex<IvmCache>,
 
     /// Reference to Kura subsystem.
     kura: &'state Kura,
@@ -12259,6 +12264,7 @@ impl State {
         };
         let pipeline_parallelism = PipelineParallelism::new(&pipeline);
         let stateless_cache_cap = pipeline.stateless_cache_cap;
+        let pipeline_cache_size = pipeline.cache_size;
         let mut s = Self {
             world,
             block_hashes: BlockHashes::default(),
@@ -12287,6 +12293,9 @@ impl State {
             pipeline_parallelism,
             stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
                 stateless_cache_cap,
+            )),
+            trigger_ivm_cache: parking_lot::Mutex::new(IvmCache::with_capacity(
+                pipeline_cache_size,
             )),
             oracle: default_oracle(),
             streaming,
@@ -14089,6 +14098,7 @@ impl State {
         self.stateless_validation_cache
             .lock()
             .set_cap(self.pipeline.stateless_cache_cap);
+        *self.trigger_ivm_cache.lock() = IvmCache::with_capacity(self.pipeline.cache_size);
         // Configure the IVM global pre-decode cache from pipeline settings.
         ivm::ivm_cache::configure_limits(ivm::ivm_cache::CacheLimits {
             capacity: self.pipeline.cache_size,
@@ -15885,6 +15895,7 @@ impl<'state> StateBlock<'state> {
             commit_topology: self.commit_topology.transaction(),
             prev_commit_topology: self.prev_commit_topology.transaction(),
             ivm: self.ivm,
+            ivm_cache: &self.state_ref.trigger_ivm_cache,
             kura: self.kura,
             query_handle: self.query_handle,
             #[cfg(feature = "telemetry")]
@@ -19746,9 +19757,13 @@ impl StateTransaction<'_, '_> {
                         _ => iroha_primitives::json::Json::default(),
                     };
                     let bytecode = bytecode.clone();
-                    let parsed = ivm::ProgramMetadata::parse(bytecode.as_ref())
-                        .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
-                    let meta = parsed.metadata;
+                    let summary = {
+                        let mut cache = self.ivm_cache.lock();
+                        cache
+                            .summarize_program(bytecode.as_ref())
+                            .map_err(|e| ValidationFail::InternalError(e.to_string()))?
+                    };
+                    let meta = summary.metadata.clone();
                     let pipeline_cap = self.pipeline.ivm_max_cycles_upper_bound;
                     let mut eff_cycles = meta.max_cycles;
                     if eff_cycles == 0 {
@@ -19776,7 +19791,13 @@ impl StateTransaction<'_, '_> {
                     if gas_limit == u64::MAX {
                         gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
                     }
-                    let mut vm = ivm::IVM::new(gas_limit);
+                    let mut cached_runtime = {
+                        let mut cache = self.ivm_cache.lock();
+                        cache
+                            .take_or_create_cached_runtime(bytecode.as_ref(), gas_limit)
+                            .map_err(|e| ValidationFail::InternalError(e.to_string()))?
+                    };
+                    let mut vm = cached_runtime.vm;
                     // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
                     // which we collect after `vm.run()` and return as the trigger step.
                     let accounts = self.trigger_accounts_snapshot();
@@ -19802,14 +19823,17 @@ impl StateTransaction<'_, '_> {
                     host.set_durable_state_snapshot_from_world(&self.world);
                     host.set_public_inputs_from_parameters(self.world.parameters.get());
                     host.set_query_state(self);
-                    if let Err(e) = vm.load_program(bytecode.as_ref()) {
-                        return Err(ValidationFail::InternalError(e.to_string()).into());
-                    }
                     if eff_cycles > 0 {
                         vm.set_max_cycles(eff_cycles);
                     }
                     vm.set_gas_limit(gas_limit);
-                    if let Err(e) = vm.run_with_host(&mut host) {
+                    let run_result = vm.run_with_host(&mut host);
+                    cached_runtime.vm = vm;
+                    {
+                        let mut cache = self.ivm_cache.lock();
+                        cache.put_cached_runtime(&cached_runtime);
+                    }
+                    if let Err(e) = run_result {
                         return Err(
                             crate::smartcontracts::ivm::map_vm_error_to_validation(&e).into()
                         );
@@ -20852,6 +20876,7 @@ pub(crate) mod deserialize {
         let pipeline = default_pipeline();
         let pipeline_parallelism = PipelineParallelism::new(&pipeline);
         let stateless_cache_cap = pipeline.stateless_cache_cap;
+        let pipeline_cache_size = pipeline.cache_size;
         let state = State {
             world,
             block_hashes,
@@ -20876,6 +20901,9 @@ pub(crate) mod deserialize {
             pipeline_parallelism,
             stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
                 stateless_cache_cap,
+            )),
+            trigger_ivm_cache: parking_lot::Mutex::new(IvmCache::with_capacity(
+                pipeline_cache_size,
             )),
             streaming,
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
@@ -30486,6 +30514,77 @@ mod tests {
             }
             other => panic!("unexpected rejection: {other:?}"),
         }
+    }
+
+    #[test]
+    fn ivm_time_trigger_reuses_cache_across_blocks() {
+        use iroha_data_model::{
+            events::time::{ExecutionTime, TimeEventFilter},
+            transaction::{Executable, IvmBytecode},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let block1 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(1).unwrap());
+            h.creation_time_ms = 1;
+        });
+        let mut state_block = state.block(block1.as_ref().header());
+        let mut stx = state_block.transaction();
+        Register::domain(Domain::new("wonderland".parse().unwrap()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let trigger_id: TriggerId = "ivm_time_cache".parse().unwrap();
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+        let bytecode = IvmBytecode::from_compiled(assemble_ivm_header(&raw));
+        let trigger = Trigger::new(
+            trigger_id,
+            Action::new(
+                Executable::Ivm(bytecode),
+                Repeats::Exactly(2),
+                ALICE_ID.clone(),
+                TimeEventFilter::new(ExecutionTime::PreCommit),
+            ),
+        );
+        Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        stx.apply();
+        let _ = state_block.apply_without_execution(&block1, Vec::new());
+        state_block.commit().unwrap();
+
+        let block2 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(2).unwrap());
+            h.creation_time_ms = 2;
+        });
+        let mut state_block2 = state.block(block2.as_ref().header());
+        state_block2.execute_time_triggers(&block2.as_ref().header());
+        let _ = state_block2.apply_without_execution(&block2, Vec::new());
+        state_block2.commit().unwrap();
+
+        let block3 = new_dummy_block_with_payload(|h| {
+            h.set_height(NonZeroU64::new(3).unwrap());
+            h.creation_time_ms = 3;
+        });
+        let mut state_block3 = state.block(block3.as_ref().header());
+        state_block3.execute_time_triggers(&block3.as_ref().header());
+        let _ = state_block3.apply_without_execution(&block3, Vec::new());
+        state_block3.commit().unwrap();
+
+        let stats = state.trigger_ivm_cache.lock().stats();
+        assert!(stats.metadata_hits > 0, "expected metadata cache hits");
+        assert!(stats.runtime_hits > 0, "expected runtime cache hits");
     }
 
     #[test]

@@ -151,6 +151,7 @@ pub(super) fn execute_commit_work(
 ) -> (CommitOutcome, CommitStageTimings) {
     let CommitWork {
         block,
+        id,
         commit_topology,
         signature_topology,
         qc_signers: _qc_signers,
@@ -165,7 +166,43 @@ pub(super) fn execute_commit_work(
     let time_source = TimeSource::new_system();
     let mut voting_block = None;
     let topology = super::network_topology::Topology::new(signature_topology);
+    let block_hash = block.hash();
+    let header = block.header();
+    let block_height = header.height().get();
+    let block_view = header.view_change_index();
+    let to_ms =
+        |duration: std::time::Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+    let log_stage_start = |stage: &'static str| {
+        debug!(
+            commit_id = id,
+            height = block_height,
+            view = block_view,
+            block = %block_hash,
+            stage,
+            "commit stage start"
+        );
+    };
+    let log_stage_end = |stage: &'static str, start: Instant| {
+        debug!(
+            commit_id = id,
+            height = block_height,
+            view = block_view,
+            block = %block_hash,
+            stage,
+            elapsed_ms = to_ms(start.elapsed()),
+            "commit stage end"
+        );
+    };
+    debug!(
+        commit_id = id,
+        height = block_height,
+        view = block_view,
+        block = %block_hash,
+        persist_required,
+        "commit work start"
+    );
     let qc_start = Instant::now();
+    log_stage_start("validate_block");
     let result = ValidBlock::validate_keep_voting_block_with_events(
         block,
         &topology,
@@ -177,17 +214,19 @@ pub(super) fn execute_commit_work(
         false,
         |event| pipeline_events.push(event),
     )
-    .unpack(|event| pipeline_events.push(event))
-    .and_then(|(valid_block, state_block)| {
+    .unpack(|event| pipeline_events.push(event));
+    log_stage_end("validate_block", qc_start);
+    let result = result.and_then(|(valid_block, state_block)| {
+        log_stage_start("commit_with_certificate");
+        let commit_start = Instant::now();
         let commit_result = valid_block.commit_with_certificate();
-        commit_result
+        let commit_result = commit_result
             .unpack(|event| pipeline_events.push(event))
             .map(|committed_block| (committed_block, state_block))
-            .map_err(|(failed_block, err)| (Box::new((*failed_block).into()), err))
+            .map_err(|(failed_block, err)| (Box::new((*failed_block).into()), err));
+        log_stage_end("commit_with_certificate", commit_start);
+        commit_result
     });
-
-    let to_ms =
-        |duration: std::time::Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
     timings.qc_verify_ms = Some(to_ms(qc_start.elapsed()));
     match result {
         Ok((committed_block, mut state_block)) => {
@@ -196,7 +235,10 @@ pub(super) fn execute_commit_work(
             let mut pipeline_events = pipeline_events;
             if persist_required {
                 let committed_block_for_kura = committed_block.clone();
+                log_stage_start("kura_store");
+                let kura_start = Instant::now();
                 if let Err(err) = kura.store_block(committed_block_for_kura) {
+                    log_stage_end("kura_store", kura_start);
                     timings.persist_ms = Some(to_ms(persist_start.elapsed()));
                     return (
                         CommitOutcome::KuraStoreFailed {
@@ -206,9 +248,13 @@ pub(super) fn execute_commit_work(
                         timings,
                     );
                 }
+                log_stage_end("kura_store", kura_start);
             }
+            log_stage_start("emit_pipeline_events");
+            let emit_start = Instant::now();
             // Emit pipeline events once durability is confirmed, before state apply.
             emit_pipeline_events(&events_sender, std::mem::take(&mut pipeline_events));
+            log_stage_end("emit_pipeline_events", emit_start);
             if let Some(qc) = commit_qc.as_ref() {
                 let header = committed_block.as_ref().header();
                 if qc.phase == crate::sumeragi::consensus::Phase::Commit
@@ -230,9 +276,15 @@ pub(super) fn execute_commit_work(
                     );
                 }
             }
+            log_stage_start("state_apply");
+            let apply_start = Instant::now();
             let state_events =
                 state_block.apply_without_execution(&committed_block, commit_topology);
+            log_stage_end("state_apply", apply_start);
+            log_stage_start("state_commit");
+            let state_commit_start = Instant::now();
             if let Err(err) = state_block.commit() {
+                log_stage_end("state_commit", state_commit_start);
                 timings.persist_ms = Some(to_ms(persist_start.elapsed()));
                 return (
                     CommitOutcome::StateCommitFailed {
@@ -242,6 +294,7 @@ pub(super) fn execute_commit_work(
                     timings,
                 );
             }
+            log_stage_end("state_commit", state_commit_start);
             timings.persist_ms = Some(to_ms(persist_start.elapsed()));
             (
                 CommitOutcome::Success {
