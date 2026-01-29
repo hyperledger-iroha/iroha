@@ -884,8 +884,14 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                     400_i64,
                 )
                 // Give DA quorum extra breathing room under sustained load.
-                .write(["sumeragi", "da", "quorum_timeout_multiplier"], 7_i64)
-                .write(["sumeragi", "da", "availability_timeout_multiplier"], 3_i64)
+                .write(
+                    ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
+                    7_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "da", "availability_timeout_multiplier"],
+                    3_i64,
+                )
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
                     5_000_i64,
@@ -1482,8 +1488,14 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                     "forward",
                 )
                 // Give DA quorum extra breathing room under sustained load.
-                .write(["sumeragi", "da", "quorum_timeout_multiplier"], 7_i64)
-                .write(["sumeragi", "da", "availability_timeout_multiplier"], 3_i64)
+                .write(
+                    ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
+                    7_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "da", "availability_timeout_multiplier"],
+                    3_i64,
+                )
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
                     5_000_i64,

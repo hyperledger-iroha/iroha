@@ -1145,22 +1145,26 @@ fn render_peer_config(
     // manually if desired).
     let mut da = Table::new();
     da.insert("enabled".into(), Value::Boolean(da_rbc_enabled));
-    da.insert(
+    sumeragi.insert("da".into(), Value::Table(da));
+
+    let mut advanced = Table::new();
+    let mut da_advanced = Table::new();
+    da_advanced.insert(
         "quorum_timeout_multiplier".into(),
         Value::Integer(i64::from(LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER)),
     );
-    da.insert(
+    da_advanced.insert(
         "availability_timeout_multiplier".into(),
         Value::Integer(i64::from(LOCALNET_DA_AVAILABILITY_TIMEOUT_MULTIPLIER)),
     );
-    da.insert(
+    da_advanced.insert(
         "availability_timeout_floor_ms".into(),
         Value::Integer(
             i64::try_from(LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS)
                 .expect("LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS fits i64"),
         ),
     );
-    sumeragi.insert("da".into(), Value::Table(da));
+    advanced.insert("da".into(), Value::Table(da_advanced));
 
     let mut rbc = Table::new();
     rbc.insert(
@@ -1177,7 +1181,8 @@ fn render_peer_config(
                 .expect("LOCALNET_RBC_PAYLOAD_CHUNKS_PER_TICK fits i64"),
         ),
     );
-    sumeragi.insert("rbc".into(), Value::Table(rbc));
+    advanced.insert("rbc".into(), Value::Table(rbc));
+    sumeragi.insert("advanced".into(), Value::Table(advanced));
 
     let mut persistence = Table::new();
     persistence.insert(
