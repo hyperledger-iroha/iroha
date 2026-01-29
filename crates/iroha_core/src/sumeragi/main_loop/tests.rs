@@ -52602,6 +52602,71 @@ async fn block_sync_update_accepts_stale_view_when_missing_block_requested() {
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_drops_stale_view_without_missing_request() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let height = 6;
+    let local_view = 2;
+    let stale_view = 1;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, local_view, now);
+
+    let topology_peers = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(topology_peers);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, stale_view, mode_tag, prf_seed);
+    let mut block = nonempty_block_for_actor(actor, &harness.key_pairs, height, stale_view, None);
+    let required = signature_topology.min_votes_for_commit().max(1);
+    let mut present = BTreeSet::new();
+    for sig in block.signatures() {
+        if let Ok(idx) = usize::try_from(sig.index()) {
+            present.insert(idx);
+        }
+    }
+    for (idx, peer) in signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .take(required)
+    {
+        if present.contains(&idx) {
+            continue;
+        }
+        let kp = harness
+            .key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("signer keypair");
+        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        block
+            .add_signature(BlockSignature::new(
+                u64::try_from(idx).expect("signer index fits"),
+                sig,
+            ))
+            .expect("signature added");
+    }
+    let block_hash = block.hash();
+
+    let update = super::message::BlockSyncUpdate::from(&block);
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+    assert!(!actor.block_known_locally(block_hash));
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash)
+    );
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn allow_stale_block_created_accepts_missing_request() {
     assert!(super::proposal_handlers::allow_stale_block_created(

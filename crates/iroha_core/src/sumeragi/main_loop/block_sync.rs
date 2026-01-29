@@ -513,14 +513,13 @@ impl Actor {
             return Ok(());
         }
         if let Some(local_view) = self.stale_view(block_height, block_view) {
-            let da_enabled = self.runtime_da_enabled();
-            if !da_enabled && !requested_missing_block {
+            if !requested_missing_block {
                 debug!(
                     height = block_height,
                     view = block_view,
                     local_view,
                     kind = "BlockSyncUpdate",
-                    "dropping consensus message for stale view"
+                    "dropping consensus message for stale view without missing request"
                 );
                 self.record_consensus_message_handling(
                     super::status::ConsensusMessageKind::BlockSyncUpdate,
@@ -529,6 +528,7 @@ impl Actor {
                 );
                 return Ok(());
             }
+            let da_enabled = self.runtime_da_enabled();
             debug!(
                 height = block_height,
                 view = block_view,
