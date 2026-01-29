@@ -1653,6 +1653,7 @@ mod domain {
             Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema,
         )]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[norito(reuse_archived, decode_from_slice)]
         #[getset(get = "pub")]
         pub struct StreamingTicketRecord {
             /// Capability ticket identifier.

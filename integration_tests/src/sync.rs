@@ -306,7 +306,9 @@ mod tests {
     #[test]
     fn best_effort_status_is_none_without_storage_heights() {
         init_instruction_registry();
-        let network = NetworkBuilder::new().build();
+        let network = NetworkBuilder::new()
+            .with_auto_populated_trusted_peers()
+            .build();
         assert!(best_effort_status_from_network(&network).is_none());
     }
 
@@ -317,7 +319,9 @@ mod tests {
         set_env_var("IROHA_TEST_STATUS_RETRY_BUDGET_MS", "5ms");
 
         init_instruction_registry();
-        let network = NetworkBuilder::new().build();
+        let network = NetworkBuilder::new()
+            .with_auto_populated_trusted_peers()
+            .build();
         let client = dummy_client();
         let err = get_status_with_retry_or_storage(&network, &client, "status test")
             .expect_err("should fail without storage snapshot");

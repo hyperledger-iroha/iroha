@@ -12668,11 +12668,7 @@ impl Actor {
             now.saturating_duration_since(queue_since.unwrap_or(now))
         };
         let timed_out = idle_round_timed_out(true, age, timeout);
-        if rbc_backlog
-            || relay_backpressure
-            || consensus_queue_backpressure
-            || consensus_queue_backlog
-        {
+        if rbc_backlog || relay_backpressure || consensus_queue_backpressure {
             if timed_out {
                 debug!(
                     rbc_backlog,
@@ -12694,9 +12690,6 @@ impl Actor {
                 }
                 if consensus_queue_backpressure {
                     trace!("skipping idle view-change due to consensus queue backpressure");
-                }
-                if consensus_queue_backlog {
-                    trace!("skipping idle view-change due to consensus queue backlog");
                 }
             }
             return false;

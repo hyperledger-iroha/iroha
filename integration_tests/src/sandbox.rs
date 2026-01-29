@@ -353,7 +353,9 @@ pub fn start_network_blocking_or_skip(
     context: &str,
 ) -> Result<Option<(SerializedNetwork, Runtime)>> {
     let guard = serial_guard();
-    let builder = builder.with_min_peers(MIN_NETWORK_PEERS);
+    let builder = builder
+        .with_auto_populated_trusted_peers()
+        .with_min_peers(MIN_NETWORK_PEERS);
     let (network, runtime) = match panic::catch_unwind(AssertUnwindSafe(|| {
         builder.build_blocking()
     })) {
@@ -393,7 +395,9 @@ pub fn build_network_blocking_or_skip(
     context: &str,
 ) -> Option<(SerializedNetwork, Runtime)> {
     let guard = serial_guard();
-    let builder = builder.with_min_peers(MIN_NETWORK_PEERS);
+    let builder = builder
+        .with_auto_populated_trusted_peers()
+        .with_min_peers(MIN_NETWORK_PEERS);
     let (network, runtime) = match panic::catch_unwind(AssertUnwindSafe(|| {
         builder.build_blocking()
     })) {
@@ -427,7 +431,9 @@ pub async fn start_network_async_or_skip(
     context: &str,
 ) -> Result<Option<SerializedNetwork>> {
     let guard = serial_guard_async().await;
-    let builder = builder.with_min_peers(MIN_NETWORK_PEERS);
+    let builder = builder
+        .with_auto_populated_trusted_peers()
+        .with_min_peers(MIN_NETWORK_PEERS);
     let network = match panic::catch_unwind(AssertUnwindSafe(|| builder.build())) {
         Ok(network) => network,
         Err(panic) => {
@@ -464,7 +470,9 @@ pub async fn start_network_async_or_skip(
 #[allow(dead_code)] // Shared helper: not every integration binary uses it.
 pub fn build_network_or_skip(builder: NetworkBuilder, context: &str) -> Option<SerializedNetwork> {
     let guard = serial_guard();
-    let builder = builder.with_min_peers(MIN_NETWORK_PEERS);
+    let builder = builder
+        .with_auto_populated_trusted_peers()
+        .with_min_peers(MIN_NETWORK_PEERS);
     let network = match panic::catch_unwind(AssertUnwindSafe(|| builder.build())) {
         Ok(network) => network,
         Err(panic) => {
@@ -544,6 +552,7 @@ mod tests {
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
     use super::*;
+    use toml::Value as TomlValue;
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -685,7 +694,9 @@ mod tests {
         let _env_guard = lock_env_guard();
         let _override_guard = override_network_parallelism(Some(true), None);
         let guard = serial_guard();
-        let network = NetworkBuilder::new().build();
+        let network = NetworkBuilder::new()
+            .with_auto_populated_trusted_peers()
+            .build();
         let serialized = SerializedNetwork::new(network, guard);
 
         let (limit, in_use) = network_permit_snapshot();
@@ -718,7 +729,9 @@ mod tests {
         let _env_guard = lock_env_guard();
         let _override_guard = override_network_parallelism(Some(true), None);
         let guard = serial_guard();
-        let network = NetworkBuilder::new().build();
+        let network = NetworkBuilder::new()
+            .with_auto_populated_trusted_peers()
+            .build();
         let serialized = SerializedNetwork::new(network, guard);
 
         let (limit, in_use) = network_permit_snapshot();
@@ -738,7 +751,9 @@ mod tests {
         let _env_guard = lock_env_guard();
         let _override_guard = override_network_parallelism(Some(true), None);
         let guard = serial_guard();
-        let network = NetworkBuilder::new().build();
+        let network = NetworkBuilder::new()
+            .with_auto_populated_trusted_peers()
+            .build();
         let rt = Runtime::new().expect("runtime");
         let serialized = SerializedNetwork::new_with_handle(network, guard, rt.handle().clone());
 
@@ -753,6 +768,7 @@ mod tests {
         let _env_guard = lock_env_guard();
         let guard = serial_guard();
         let network = NetworkBuilder::new()
+            .with_auto_populated_trusted_peers()
             .with_min_peers(MIN_NETWORK_PEERS)
             .build();
         let runtime = Runtime::new().expect("runtime");
@@ -838,7 +854,23 @@ mod tests {
             NetworkBuilder::new(),
             "build_network_or_skip_returns_network",
         );
-        assert!(result.is_some(), "expected a network to be built");
+        let Some(network) = result else {
+            panic!("expected a network to be built");
+        };
+        let mut layers = network.config_layers();
+        let trusted = layers
+            .next()
+            .expect("trusted peers layer must be present")
+            .into_owned();
+        assert!(trusted.contains_key("trusted_peers"));
+        let pops = trusted
+            .get("trusted_peers_pop")
+            .and_then(TomlValue::as_array)
+            .expect("trusted_peers_pop array must be present");
+        assert!(
+            !pops.is_empty(),
+            "trusted_peers_pop should include at least one entry"
+        );
     }
 
     #[test]
@@ -851,7 +883,85 @@ mod tests {
             NetworkBuilder::new(),
             "build_network_blocking_or_skip_returns_network",
         );
-        assert!(result.is_some(), "expected a network to be built");
+        let Some((network, _rt)) = result else {
+            panic!("expected a network to be built");
+        };
+        let mut layers = network.config_layers();
+        let trusted = layers
+            .next()
+            .expect("trusted peers layer must be present")
+            .into_owned();
+        assert!(trusted.contains_key("trusted_peers"));
+        let pops = trusted
+            .get("trusted_peers_pop")
+            .and_then(TomlValue::as_array)
+            .expect("trusted_peers_pop array must be present");
+        assert!(
+            !pops.is_empty(),
+            "trusted_peers_pop should include at least one entry"
+        );
+    }
+
+    #[test]
+    fn start_network_blocking_or_skip_includes_trusted_peer_pops() -> Result<()> {
+        if skip_if_sandboxed("start_network_blocking_or_skip_includes_trusted_peer_pops") {
+            return Ok(());
+        }
+        let _env_guard = lock_env_guard();
+        let result = start_network_blocking_or_skip(
+            NetworkBuilder::new(),
+            "start_network_blocking_or_skip_includes_trusted_peer_pops",
+        )?;
+        let Some((network, _rt)) = result else {
+            return Ok(());
+        };
+        let mut layers = network.config_layers();
+        let trusted = layers
+            .next()
+            .expect("trusted peers layer must be present")
+            .into_owned();
+        assert!(trusted.contains_key("trusted_peers"));
+        let pops = trusted
+            .get("trusted_peers_pop")
+            .and_then(TomlValue::as_array)
+            .expect("trusted_peers_pop array must be present");
+        assert!(
+            !pops.is_empty(),
+            "trusted_peers_pop should include at least one entry"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn start_network_async_or_skip_includes_trusted_peer_pops() -> Result<()> {
+        if skip_if_sandboxed("start_network_async_or_skip_includes_trusted_peer_pops") {
+            return Ok(());
+        }
+        let _env_guard = lock_env_guard();
+        let result = start_network_async_or_skip(
+            NetworkBuilder::new(),
+            "start_network_async_or_skip_includes_trusted_peer_pops",
+        )
+        .await?;
+        let Some(network) = result else {
+            return Ok(());
+        };
+        let mut layers = network.config_layers();
+        let trusted = layers
+            .next()
+            .expect("trusted peers layer must be present")
+            .into_owned();
+        assert!(trusted.contains_key("trusted_peers"));
+        let pops = trusted
+            .get("trusted_peers_pop")
+            .and_then(TomlValue::as_array)
+            .expect("trusted_peers_pop array must be present");
+        assert!(
+            !pops.is_empty(),
+            "trusted_peers_pop should include at least one entry"
+        );
+        network.shutdown().await;
+        Ok(())
     }
 
     #[test]

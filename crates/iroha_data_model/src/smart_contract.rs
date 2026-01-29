@@ -3,12 +3,16 @@
 pub mod payloads {
     //! Contexts with function arguments for different entrypoints
 
-    use norito::codec::{Decode, Encode};
+    use norito::{
+        codec::{Decode, Encode},
+        core::DecodeFromSlice,
+    };
 
     use crate::{block::BlockHeader, prelude::*};
 
     /// Context for smart contract entrypoint
     #[derive(Debug, Clone, Encode, Decode)]
+    #[norito(decode_from_slice)]
     pub struct SmartContractContext {
         /// Account that submitted the transaction containing the smart contract
         pub authority: AccountId,
@@ -18,6 +22,7 @@ pub mod payloads {
 
     /// Context for trigger entrypoint
     #[derive(Encode, Decode)]
+    #[norito(decode_from_slice)]
     #[cfg_attr(not(feature = "fast_dsl"), derive(Debug, Clone))]
     pub struct TriggerContext {
         /// Id of this trigger
@@ -32,6 +37,7 @@ pub mod payloads {
 
     /// Context for migrate entrypoint
     #[derive(Debug, Clone, Encode, Decode)]
+    #[norito(decode_from_slice)]
     pub struct ExecutorContext {
         /// Account that is executing the operation
         pub authority: AccountId,
@@ -46,6 +52,69 @@ pub mod payloads {
         pub context: ExecutorContext,
         /// Operation to be validated
         pub target: T,
+    }
+
+    impl<'a, T> DecodeFromSlice<'a> for Validate<T>
+    where
+        T: for<'de> norito::NoritoDeserialize<'de> + norito::NoritoSerialize,
+    {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+            norito::core::decode_field_canonical::<Self>(bytes)
+        }
+    }
+
+    #[cfg(test)]
+    mod payloads_tests {
+        use core::num::NonZeroU64;
+        use std::str::FromStr;
+
+        use iroha_crypto::KeyPair;
+        use norito::core::DecodeFromSlice;
+
+        use super::*;
+
+        #[test]
+        fn validate_decode_from_slice_roundtrips_any_query() {
+            let authority = AccountId::new(
+                DomainId::from_str("domain").expect("valid domain"),
+                KeyPair::random().public_key().clone(),
+            );
+            let header = BlockHeader {
+                height: NonZeroU64::new(1).expect("nonzero height"),
+                prev_block_hash: None,
+                merkle_root: None,
+                result_merkle_root: None,
+                da_proof_policies_hash: None,
+                da_commitments_hash: None,
+                da_pin_intents_hash: None,
+                creation_time_ms: 0,
+                view_change_index: 0,
+                confidential_features: None,
+            };
+            let context = ExecutorContext {
+                authority: authority.clone(),
+                curr_block: header,
+            };
+            let target = crate::query::AnyQueryBox::Singular(
+                crate::query::SingularQueryBox::FindExecutorDataModel(
+                    crate::query::executor::prelude::FindExecutorDataModel,
+                ),
+            );
+            let validate = Validate { context, target };
+            let bytes = validate.encode();
+
+            let (decoded, used) = Validate::<crate::query::AnyQueryBox>::decode_from_slice(&bytes)
+                .expect("decode validate");
+            assert_eq!(used, bytes.len());
+            assert_eq!(decoded.context.authority, authority);
+            assert_eq!(decoded.context.curr_block, header);
+            assert!(matches!(
+                decoded.target,
+                crate::query::AnyQueryBox::Singular(
+                    crate::query::SingularQueryBox::FindExecutorDataModel(_)
+                )
+            ));
+        }
     }
 }
 

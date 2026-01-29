@@ -72,6 +72,7 @@ mod tests {
     use super::*;
 
     #[derive(Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+    #[norito(decode_from_slice)]
     struct Dummy {
         a: u32,
         b: bool,
