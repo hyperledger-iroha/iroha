@@ -133,13 +133,26 @@ impl Actor {
                         );
                         continue;
                     }
-                    if let Err(err) = self.handle_qc_with_aggregate(inflight.qc, Some(aggregate_ok))
-                    {
-                        warn!(
-                            ?err,
-                            ?key,
-                            "failed to apply QC after aggregate verification"
-                        );
+                    match inflight.target {
+                        super::QcVerifyTarget::Consensus(qc) => {
+                            if let Err(err) = self.handle_qc_with_aggregate(qc, Some(aggregate_ok))
+                            {
+                                warn!(
+                                    ?err,
+                                    ?key,
+                                    "failed to apply QC after aggregate verification"
+                                );
+                            }
+                        }
+                        super::QcVerifyTarget::KnownBlock(mut work) => {
+                            work.aggregate_ok = Some(aggregate_ok);
+                            if !self.apply_known_block_qc_work(work) {
+                                debug!(
+                                    ?key,
+                                    "known-block QC verify result did not apply"
+                                );
+                            }
+                        }
                     }
                     progress = true;
                 }

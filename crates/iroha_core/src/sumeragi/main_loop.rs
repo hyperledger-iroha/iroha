@@ -1912,6 +1912,7 @@ fn tally_qc_against_block_signers(
     stake_snapshot: Option<&CommitStakeSnapshot>,
     mode_tag: &str,
     prf_seed: Option<[u8; 32]>,
+    aggregate_ok: Option<bool>,
 ) -> Result<QcSignerTally, QcValidationError> {
     let _ = validate_block_sync_qc(
         qc,
@@ -1925,7 +1926,7 @@ fn tally_qc_against_block_signers(
         stake_snapshot,
         mode_tag,
         prf_seed,
-        None,
+        aggregate_ok,
     )?;
     // Keep bitmap indices as-is so cached signers reproduce the QC bitmap correctly.
     let roster_len = topology.as_ref().len();
@@ -3954,6 +3955,7 @@ struct KnownBlockQcWork {
     mode_tag: &'static str,
     prf_seed: Option<[u8; 32]>,
     commit_qc_match: bool,
+    aggregate_ok: Option<bool>,
 }
 
 struct QcBuildContext {
@@ -4845,9 +4847,14 @@ impl ValidationState {
     }
 }
 
+enum QcVerifyTarget {
+    Consensus(crate::sumeragi::consensus::Qc),
+    KnownBlock(KnownBlockQcWork),
+}
+
 struct QcVerifyInFlight {
     id: u64,
-    qc: crate::sumeragi::consensus::Qc,
+    target: QcVerifyTarget,
 }
 
 struct QcVerifyState {
@@ -7041,6 +7048,7 @@ impl Actor {
                     stake_snapshot.as_ref(),
                     mode_tag,
                     prf_seed,
+                    None,
                 ) {
                     Ok(tally) => fallback_tally = Some(tally),
                     Err(err) => {

@@ -1656,6 +1656,7 @@ impl Actor {
                         stake_snapshot.as_ref(),
                         mode_tag,
                         prf_seed,
+                        None,
                     )
                 };
                 qc_apply_tally_ms =
@@ -1925,6 +1926,7 @@ impl Actor {
                 stake_snapshot.as_ref(),
                 mode_tag,
                 prf_seed,
+                None,
             )
         };
         match tally_result {
@@ -2232,6 +2234,7 @@ impl Actor {
             mode_tag,
             prf_seed,
             commit_qc_match,
+            aggregate_ok: None,
         })
     }
 
@@ -2297,7 +2300,137 @@ impl Actor {
         progress
     }
 
-    fn apply_known_block_qc_work(&mut self, work: KnownBlockQcWork) -> bool {
+    fn dispatch_known_block_qc_verify(
+        &mut self,
+        work: KnownBlockQcWork,
+    ) -> Option<KnownBlockQcWork> {
+        if self.subsystems.qc_verify.work_txs.is_empty() {
+            return Some(work);
+        }
+        let canonical_roster = super::roster::canonicalize_roster(work.topology.as_ref().to_vec());
+        let canonical_topology = super::network_topology::Topology::new(canonical_roster);
+        let Some(inputs) = super::qc_aggregate_inputs(
+            &work.qc,
+            &canonical_topology,
+            &self.roster_validation_cache.pops,
+            &self.common_config.chain,
+            work.mode_tag,
+        ) else {
+            return Some(work);
+        };
+        let key = super::QcVerifyKey::from_qc(&work.qc);
+        if self.subsystems.qc_verify.inflight.contains_key(&key) {
+            debug!(
+                height = work.qc.height,
+                view = work.qc.view,
+                phase = ?work.qc.phase,
+                block = %work.qc.subject_block_hash,
+                "known-block QC verify already in flight"
+            );
+            return None;
+        }
+        let id = self.subsystems.qc_verify.next_id();
+        let mut verify_work = super::qc_verify::QcVerifyWork {
+            id,
+            key: key.clone(),
+            inputs,
+        };
+        let mut dispatched = false;
+        let mut disconnected = Vec::new();
+        let total = self.subsystems.qc_verify.work_txs.len();
+        for _ in 0..total {
+            let idx = self.subsystems.qc_verify.next_worker % total;
+            self.subsystems.qc_verify.next_worker =
+                self.subsystems.qc_verify.next_worker.saturating_add(1);
+            let work_tx = &self.subsystems.qc_verify.work_txs[idx];
+            match work_tx.try_send(verify_work) {
+                Ok(()) => {
+                    dispatched = true;
+                    break;
+                }
+                Err(std::sync::mpsc::TrySendError::Full(returned)) => {
+                    verify_work = returned;
+                }
+                Err(std::sync::mpsc::TrySendError::Disconnected(returned)) => {
+                    verify_work = returned;
+                    disconnected.push(idx);
+                }
+            }
+        }
+        if !disconnected.is_empty() {
+            disconnected.sort_unstable();
+            disconnected.dedup();
+            for idx in disconnected.into_iter().rev() {
+                if idx < self.subsystems.qc_verify.work_txs.len() {
+                    self.subsystems.qc_verify.work_txs.swap_remove(idx);
+                }
+            }
+            if self.subsystems.qc_verify.next_worker >= self.subsystems.qc_verify.work_txs.len() {
+                self.subsystems.qc_verify.next_worker = 0;
+            }
+        }
+        if dispatched {
+            self.subsystems.qc_verify.inflight.insert(
+                key,
+                super::QcVerifyInFlight {
+                    id,
+                    target: super::QcVerifyTarget::KnownBlock(work),
+                },
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Qc,
+                super::status::ConsensusMessageOutcome::Deferred,
+                super::status::ConsensusMessageReason::AggregateVerifyDeferred,
+            );
+            return None;
+        }
+        if self.subsystems.qc_verify.work_txs.is_empty() {
+            warn!(
+                height = work.qc.height,
+                view = work.qc.view,
+                phase = ?work.qc.phase,
+                block = %work.qc.subject_block_hash,
+                "QC verify workers unavailable for known-block QC; running aggregate verification inline"
+            );
+            self.subsystems.qc_verify.result_rx = None;
+            self.subsystems.qc_verify.inflight.clear();
+        } else {
+            warn!(
+                height = work.qc.height,
+                view = work.qc.view,
+                phase = ?work.qc.phase,
+                block = %work.qc.subject_block_hash,
+                "QC verify worker queue full for known-block QC; running aggregate verification inline"
+            );
+        }
+        Some(work)
+    }
+
+    pub(super) fn apply_known_block_qc_work(&mut self, work: KnownBlockQcWork) -> bool {
+        let cached_qc_match = cached_qc_for(
+            &self.qc_cache,
+            work.qc.phase,
+            work.qc.subject_block_hash,
+            work.qc.height,
+            work.qc.view,
+            work.qc.epoch,
+        )
+        .filter(|cached| HashOf::new(cached) == HashOf::new(&work.qc));
+        let cached_tally = if cached_qc_match.is_some() || work.commit_qc_match {
+            self.qc_signer_tally
+                .get(&Self::qc_tally_key(&work.qc))
+                .cloned()
+        } else {
+            None
+        };
+        let mut work = work;
+        if cached_tally.is_none() && work.aggregate_ok.is_none() {
+            if let Some(pending) = self.dispatch_known_block_qc_verify(work) {
+                work = pending;
+            } else {
+                return false;
+            }
+        }
         let KnownBlockQcWork {
             qc,
             block,
@@ -2306,25 +2439,12 @@ impl Actor {
             consensus_mode,
             mode_tag,
             prf_seed,
-            commit_qc_match,
+            commit_qc_match: _,
+            aggregate_ok,
         } = work;
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
-        let cached_qc_match = cached_qc_for(
-            &self.qc_cache,
-            qc.phase,
-            qc.subject_block_hash,
-            qc.height,
-            qc.view,
-            qc.epoch,
-        )
-        .filter(|cached| HashOf::new(cached) == HashOf::new(&qc));
-        let cached_tally = if cached_qc_match.is_some() || commit_qc_match {
-            self.qc_signer_tally.get(&Self::qc_tally_key(&qc)).cloned()
-        } else {
-            None
-        };
         let qc_signers = qc_signer_count(&qc);
         let qc_ref = Self::qc_to_header_ref(&qc);
         let extends_locked = qc_extends_locked_if_present(
@@ -2381,6 +2501,7 @@ impl Actor {
                 stake_snapshot.as_ref(),
                 mode_tag,
                 prf_seed,
+                aggregate_ok,
             )
         };
         let tally = match tally {
