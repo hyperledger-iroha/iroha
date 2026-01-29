@@ -304,10 +304,15 @@ impl Actor {
             compute_pricing,
         } = dto;
 
+        // Stage updates on a clone to keep the config update atomic.
+        let mut next = self.state.clone();
+        let mut notify_network_acl = false;
+        let mut notify_soranet_handshake = false;
+        let mut notify_confidential_gas = false;
+
         let Logger { level, filter } = logger;
-        self.state.logger.level = level;
-        self.state.logger.filter = filter;
-        let _ = self.logger_update.send_replace(self.state.logger.clone());
+        next.logger.level = level;
+        next.logger.filter = filter;
 
         if let Some(acl) = network_acl {
             let iroha_config::client_api::NetworkAcl {
@@ -319,72 +324,65 @@ impl Actor {
             } = acl;
 
             if let Some(b) = allowlist_only {
-                self.state.network.allowlist_only = b;
+                next.network.allowlist_only = b;
             }
             if let Some(keys) = allow_keys {
-                self.state.network.allow_keys = keys;
+                next.network.allow_keys = keys;
             }
             if let Some(keys) = deny_keys {
-                self.state.network.deny_keys = keys;
+                next.network.deny_keys = keys;
             }
             if let Some(cidrs) = allow_cidrs {
-                self.state.network.allow_cidrs = cidrs;
+                next.network.allow_cidrs = cidrs;
             }
             if let Some(cidrs) = deny_cidrs {
-                self.state.network.deny_cidrs = cidrs;
+                next.network.deny_cidrs = cidrs;
             }
-
-            let snapshot = Self::snapshot_network_acl(&self.state);
-            let _ = self.network_acl_update.send_replace(snapshot);
+            notify_network_acl = true;
         }
 
         if let Some(network) = network {
             if let Some(value) = network.require_sm_handshake_match {
-                self.state.network.require_sm_handshake_match = value;
+                next.network.require_sm_handshake_match = value;
             }
             if let Some(value) = network.require_sm_openssl_preview_match {
-                self.state.network.require_sm_openssl_preview_match = value;
+                next.network.require_sm_openssl_preview_match = value;
             }
             if let Some(profile) = network.lane_profile {
-                self.state.network.lane_profile = profile;
+                next.network.lane_profile = profile;
                 let limits = profile.derived_limits();
-                self.state.network.max_incoming = limits.max_incoming;
-                self.state.network.max_total_connections = limits.max_total_connections;
-                self.state.network.low_priority_bytes_per_sec = limits.low_priority_bytes_per_sec;
-                self.state.network.low_priority_rate_per_sec = limits.low_priority_rate_per_sec;
+                next.network.max_incoming = limits.max_incoming;
+                next.network.max_total_connections = limits.max_total_connections;
+                next.network.low_priority_bytes_per_sec = limits.low_priority_bytes_per_sec;
+                next.network.low_priority_rate_per_sec = limits.low_priority_rate_per_sec;
             }
         }
 
         if let Some(gas) = confidential_gas {
-            self.state.confidential.gas.proof_base = gas.proof_base;
-            self.state.confidential.gas.per_public_input = gas.per_public_input;
-            self.state.confidential.gas.per_proof_byte = gas.per_proof_byte;
-            self.state.confidential.gas.per_nullifier = gas.per_nullifier;
-            self.state.confidential.gas.per_commitment = gas.per_commitment;
-            crate::gas::configure_confidential_gas(self.state.confidential.gas.into());
-            let _ = self
-                .confidential_gas_update
-                .send_replace(self.state.confidential.gas);
+            next.confidential.gas.proof_base = gas.proof_base;
+            next.confidential.gas.per_public_input = gas.per_public_input;
+            next.confidential.gas.per_proof_byte = gas.per_proof_byte;
+            next.confidential.gas.per_nullifier = gas.per_nullifier;
+            next.confidential.gas.per_commitment = gas.per_commitment;
+            notify_confidential_gas = true;
         }
 
         if let Some(handshake_update) = soranet_handshake {
             Self::apply_soranet_handshake_update(
-                &mut self.state.network.soranet_handshake,
+                &mut next.network.soranet_handshake,
                 handshake_update,
             )
             .map_err(Error::Validation)?;
-            let _ = self
-                .soranet_handshake_update
-                .send_replace(self.state.network.soranet_handshake.clone());
+            notify_soranet_handshake = true;
         }
 
         if let Some(transport_update) = transport {
-            Self::apply_transport_update(&mut self.state.torii.transport, transport_update)
+            Self::apply_transport_update(&mut next.torii.transport, transport_update)
                 .map_err(Error::Validation)?;
         }
 
         if let Some(pricing_update) = compute_pricing {
-            let mut compute = self.state.compute.clone();
+            let mut compute = next.compute.clone();
             for (family, weights) in pricing_update.price_families {
                 compute
                     .apply_price_update(&family, weights)
@@ -398,7 +396,25 @@ impl Actor {
                 }
                 compute.default_price_family = default_family;
             }
-            self.state.compute = compute;
+            next.compute = compute;
+        }
+
+        self.state = next;
+        let _ = self.logger_update.send_replace(self.state.logger.clone());
+        if notify_network_acl {
+            let snapshot = Self::snapshot_network_acl(&self.state);
+            let _ = self.network_acl_update.send_replace(snapshot);
+        }
+        if notify_confidential_gas {
+            crate::gas::configure_confidential_gas(self.state.confidential.gas.into());
+            let _ = self
+                .confidential_gas_update
+                .send_replace(self.state.confidential.gas);
+        }
+        if notify_soranet_handshake {
+            let _ = self
+                .soranet_handshake_update
+                .send_replace(self.state.network.soranet_handshake.clone());
         }
 
         Ok(())
@@ -2204,6 +2220,278 @@ mod tests {
         let dto = kiso.get_dto().await.expect("fetch updated dto");
         assert!(!dto.network.require_sm_handshake_match);
         assert!(!dto.network.require_sm_openssl_preview_match);
+    }
+
+    #[test]
+    fn config_update_is_atomic_on_handshake_error() {
+        let config = test_config();
+        let (logger_tx, logger_rx) = watch::channel(config.logger.clone());
+        let (network_acl_tx, network_acl_rx) = watch::channel(Actor::snapshot_network_acl(&config));
+        let (handshake_tx, handshake_rx) = watch::channel(config.network.soranet_handshake.clone());
+        let (confidential_gas_tx, confidential_gas_rx) = watch::channel(config.confidential.gas);
+        let (_, handle_rx) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
+        let mut actor = Actor {
+            handle: handle_rx,
+            state: config,
+            logger_update: logger_tx,
+            network_acl_update: network_acl_tx,
+            soranet_handshake_update: handshake_tx,
+            confidential_gas_update: confidential_gas_tx,
+        };
+
+        let initial_logger_level = actor.state.logger.level;
+        let initial_allowlist_only = actor.state.network.allowlist_only;
+        let initial_allow_keys = actor.state.network.allow_keys.clone();
+        let initial_deny_keys = actor.state.network.deny_keys.clone();
+        let initial_allow_cidrs = actor.state.network.allow_cidrs.clone();
+        let initial_deny_cidrs = actor.state.network.deny_cidrs.clone();
+        let initial_gas = actor.state.confidential.gas;
+        let initial_descriptor = actor
+            .state
+            .network
+            .soranet_handshake
+            .descriptor_commit
+            .value()
+            .to_vec();
+        let initial_kem_id = actor.state.network.soranet_handshake.kem_id;
+        let initial_sig_id = actor.state.network.soranet_handshake.sig_id;
+
+        let replacement_key = KeyPair::random().public_key().clone();
+        let err = actor
+            .apply_config_update(ConfigUpdateDTO {
+                logger: LoggerDTO {
+                    level: Level::DEBUG,
+                    filter: None,
+                },
+                network_acl: Some(NetworkAcl {
+                    allowlist_only: Some(!initial_allowlist_only),
+                    allow_keys: Some(vec![replacement_key]),
+                    deny_keys: None,
+                    allow_cidrs: None,
+                    deny_cidrs: None,
+                }),
+                network: None,
+                confidential_gas: Some(ConfidentialGasDTO {
+                    proof_base: initial_gas.proof_base.saturating_add(1),
+                    per_public_input: initial_gas.per_public_input.saturating_add(1),
+                    per_proof_byte: initial_gas.per_proof_byte.saturating_add(1),
+                    per_nullifier: initial_gas.per_nullifier.saturating_add(1),
+                    per_commitment: initial_gas.per_commitment.saturating_add(1),
+                }),
+                soranet_handshake: Some(SoranetHandshakeUpdate {
+                    descriptor_commit_hex: Some("0102".to_string()),
+                    client_capabilities_hex: Some("zz".to_string()),
+                    relay_capabilities_hex: None,
+                    kem_id: Some(initial_kem_id.saturating_add(1)),
+                    sig_id: Some(initial_sig_id.saturating_add(1)),
+                    resume_hash_hex: None,
+                    pow: None,
+                }),
+                transport: None,
+                compute_pricing: None,
+            })
+            .expect_err("handshake validation should fail");
+        assert!(
+            matches!(err, Error::Validation(msg) if msg.contains("invalid hex in client_capabilities_hex"))
+        );
+
+        assert_eq!(actor.state.logger.level, initial_logger_level);
+        assert_eq!(actor.state.network.allowlist_only, initial_allowlist_only);
+        assert_eq!(actor.state.network.allow_keys, initial_allow_keys);
+        assert_eq!(actor.state.network.deny_keys, initial_deny_keys);
+        assert_eq!(actor.state.network.allow_cidrs, initial_allow_cidrs);
+        assert_eq!(actor.state.network.deny_cidrs, initial_deny_cidrs);
+        assert_eq!(
+            actor.state.confidential.gas.proof_base,
+            initial_gas.proof_base
+        );
+        assert_eq!(
+            actor.state.confidential.gas.per_public_input,
+            initial_gas.per_public_input
+        );
+        assert_eq!(
+            actor.state.confidential.gas.per_proof_byte,
+            initial_gas.per_proof_byte
+        );
+        assert_eq!(
+            actor.state.confidential.gas.per_nullifier,
+            initial_gas.per_nullifier
+        );
+        assert_eq!(
+            actor.state.confidential.gas.per_commitment,
+            initial_gas.per_commitment
+        );
+        assert_eq!(
+            actor
+                .state
+                .network
+                .soranet_handshake
+                .descriptor_commit
+                .value(),
+            initial_descriptor.as_slice()
+        );
+        assert_eq!(actor.state.network.soranet_handshake.kem_id, initial_kem_id);
+        assert_eq!(actor.state.network.soranet_handshake.sig_id, initial_sig_id);
+
+        assert_eq!(logger_rx.borrow().level, initial_logger_level);
+        assert!(logger_rx.borrow().filter.is_none());
+        let acl_snapshot = network_acl_rx.borrow();
+        assert_eq!(acl_snapshot.allowlist_only, Some(initial_allowlist_only));
+        assert_eq!(
+            acl_snapshot.allow_keys.as_ref().unwrap(),
+            &initial_allow_keys
+        );
+        assert_eq!(acl_snapshot.deny_keys.as_ref().unwrap(), &initial_deny_keys);
+        assert_eq!(
+            acl_snapshot.allow_cidrs.as_ref().unwrap(),
+            &initial_allow_cidrs
+        );
+        assert_eq!(
+            acl_snapshot.deny_cidrs.as_ref().unwrap(),
+            &initial_deny_cidrs
+        );
+        let handshake_snapshot = handshake_rx.borrow();
+        assert_eq!(
+            handshake_snapshot.descriptor_commit.value(),
+            initial_descriptor.as_slice()
+        );
+        assert_eq!(handshake_snapshot.kem_id, initial_kem_id);
+        assert_eq!(handshake_snapshot.sig_id, initial_sig_id);
+        let gas_snapshot = confidential_gas_rx.borrow();
+        assert_eq!(gas_snapshot.proof_base, initial_gas.proof_base);
+        assert_eq!(gas_snapshot.per_public_input, initial_gas.per_public_input);
+        assert_eq!(gas_snapshot.per_proof_byte, initial_gas.per_proof_byte);
+        assert_eq!(gas_snapshot.per_nullifier, initial_gas.per_nullifier);
+        assert_eq!(gas_snapshot.per_commitment, initial_gas.per_commitment);
+    }
+
+    #[test]
+    fn config_update_is_atomic_on_transport_error() {
+        let config = test_config();
+        let (logger_tx, logger_rx) = watch::channel(config.logger.clone());
+        let (network_acl_tx, network_acl_rx) = watch::channel(Actor::snapshot_network_acl(&config));
+        let (handshake_tx, handshake_rx) = watch::channel(config.network.soranet_handshake.clone());
+        let (confidential_gas_tx, confidential_gas_rx) = watch::channel(config.confidential.gas);
+        let (_, handle_rx) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
+        let mut actor = Actor {
+            handle: handle_rx,
+            state: config,
+            logger_update: logger_tx,
+            network_acl_update: network_acl_tx,
+            soranet_handshake_update: handshake_tx,
+            confidential_gas_update: confidential_gas_tx,
+        };
+
+        let initial_logger_level = actor.state.logger.level;
+        let initial_allowlist_only = actor.state.network.allowlist_only;
+        let initial_allow_keys = actor.state.network.allow_keys.clone();
+        let initial_gas = actor.state.confidential.gas;
+        let initial_transport_enabled = actor.state.torii.transport.norito_rpc.enabled;
+        let initial_transport_require_mtls = actor.state.torii.transport.norito_rpc.require_mtls;
+        let initial_transport_allowed = actor
+            .state
+            .torii
+            .transport
+            .norito_rpc
+            .allowed_clients
+            .clone();
+        let initial_transport_stage = actor.state.torii.transport.norito_rpc.stage;
+
+        let err = actor
+            .apply_config_update(ConfigUpdateDTO {
+                logger: LoggerDTO {
+                    level: Level::WARN,
+                    filter: None,
+                },
+                network_acl: Some(NetworkAcl {
+                    allowlist_only: Some(!initial_allowlist_only),
+                    allow_keys: Some(vec![KeyPair::random().public_key().clone()]),
+                    deny_keys: None,
+                    allow_cidrs: None,
+                    deny_cidrs: None,
+                }),
+                network: None,
+                confidential_gas: Some(ConfidentialGasDTO {
+                    proof_base: initial_gas.proof_base.saturating_add(5),
+                    per_public_input: initial_gas.per_public_input.saturating_add(5),
+                    per_proof_byte: initial_gas.per_proof_byte.saturating_add(5),
+                    per_nullifier: initial_gas.per_nullifier.saturating_add(5),
+                    per_commitment: initial_gas.per_commitment.saturating_add(5),
+                }),
+                soranet_handshake: None,
+                transport: Some(TransportUpdate {
+                    norito_rpc: Some(iroha_config::client_api::NoritoRpcUpdate {
+                        enabled: Some(!initial_transport_enabled),
+                        require_mtls: Some(!initial_transport_require_mtls),
+                        allowed_clients: Some(vec!["canary".to_string()]),
+                        stage: Some("not-a-stage".to_string()),
+                    }),
+                }),
+                compute_pricing: None,
+            })
+            .expect_err("transport validation should fail");
+        assert!(
+            matches!(err, Error::Validation(msg) if msg.contains("invalid transport.norito_rpc.stage"))
+        );
+
+        assert_eq!(actor.state.logger.level, initial_logger_level);
+        assert_eq!(actor.state.network.allowlist_only, initial_allowlist_only);
+        assert_eq!(actor.state.network.allow_keys, initial_allow_keys);
+        assert_eq!(
+            actor.state.confidential.gas.proof_base,
+            initial_gas.proof_base
+        );
+        assert_eq!(
+            actor.state.confidential.gas.per_public_input,
+            initial_gas.per_public_input
+        );
+        assert_eq!(
+            actor.state.confidential.gas.per_proof_byte,
+            initial_gas.per_proof_byte
+        );
+        assert_eq!(
+            actor.state.confidential.gas.per_nullifier,
+            initial_gas.per_nullifier
+        );
+        assert_eq!(
+            actor.state.confidential.gas.per_commitment,
+            initial_gas.per_commitment
+        );
+        assert_eq!(
+            actor.state.torii.transport.norito_rpc.enabled,
+            initial_transport_enabled
+        );
+        assert_eq!(
+            actor.state.torii.transport.norito_rpc.require_mtls,
+            initial_transport_require_mtls
+        );
+        assert_eq!(
+            actor.state.torii.transport.norito_rpc.allowed_clients,
+            initial_transport_allowed
+        );
+        assert_eq!(
+            actor.state.torii.transport.norito_rpc.stage,
+            initial_transport_stage
+        );
+
+        assert_eq!(logger_rx.borrow().level, initial_logger_level);
+        let acl_snapshot = network_acl_rx.borrow();
+        assert_eq!(acl_snapshot.allowlist_only, Some(initial_allowlist_only));
+        assert_eq!(
+            acl_snapshot.allow_keys.as_ref().unwrap(),
+            &initial_allow_keys
+        );
+        let handshake_snapshot = handshake_rx.borrow();
+        assert_eq!(
+            handshake_snapshot.kem_id,
+            actor.state.network.soranet_handshake.kem_id
+        );
+        let gas_snapshot = confidential_gas_rx.borrow();
+        assert_eq!(gas_snapshot.proof_base, initial_gas.proof_base);
+        assert_eq!(gas_snapshot.per_public_input, initial_gas.per_public_input);
+        assert_eq!(gas_snapshot.per_proof_byte, initial_gas.per_proof_byte);
+        assert_eq!(gas_snapshot.per_nullifier, initial_gas.per_nullifier);
+        assert_eq!(gas_snapshot.per_commitment, initial_gas.per_commitment);
     }
 
     #[test]

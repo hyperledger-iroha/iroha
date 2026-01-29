@@ -31779,7 +31779,7 @@ async fn force_view_change_if_idle_skips_when_consensus_queue_backpressure() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn force_view_change_if_idle_skips_when_consensus_queue_backlog() {
+async fn force_view_change_if_idle_ignores_consensus_queue_backlog() {
     use std::borrow::Cow;
 
     let mut harness = test_actor_harness(4).await;
@@ -31824,18 +31824,26 @@ async fn force_view_change_if_idle_skips_when_consensus_queue_backlog() {
         view: current_view,
         since: start,
     });
+    actor
+        .subsystems
+        .propose
+        .proposals_seen
+        .insert((height, current_view));
 
     super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
 
     assert!(
-        !actor.force_view_change_if_idle(now),
-        "idle view change should not trigger while consensus queue backlog is present"
+        actor.force_view_change_if_idle(now),
+        "idle view change should ignore consensus queue backlog"
     );
-    assert_eq!(actor.phase_tracker.current_view(height), Some(current_view));
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1))
+    );
 
     let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_qc_total, 0);
-    assert!(snapshot.last_cause.is_none());
+    assert_eq!(snapshot.missing_qc_total, 1);
+    assert_eq!(snapshot.last_cause.as_deref(), Some("missing_qc"));
 
     super::status::reset_worker_loop_snapshot_for_tests();
     super::status::reset_view_change_cause_counters_for_tests();
@@ -37609,7 +37617,11 @@ async fn proposal_gas_budget_limits_fetch() {
             .expect("requeue deferred tx");
     }
 
-    assert_eq!(actor.queue.queued_len(), 1, "deferred tx should remain queued");
+    assert_eq!(
+        actor.queue.queued_len(),
+        1,
+        "deferred tx should remain queued"
+    );
 
     harness.shutdown.send();
 }
