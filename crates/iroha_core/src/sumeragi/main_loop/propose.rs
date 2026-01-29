@@ -2,9 +2,9 @@
 
 use super::proposals::block_payload_bytes;
 use super::*;
-use crate::state::StateReadOnlyWithTransactions;
 use crate::smartcontracts::isi::triggers::set::SetReadOnly;
 use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait;
+use crate::state::StateReadOnlyWithTransactions;
 use core::num::NonZeroU64;
 use iroha_data_model::events::EventFilter;
 use iroha_data_model::prelude::Repeats;

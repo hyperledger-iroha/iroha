@@ -1017,7 +1017,8 @@ impl Actor {
         source: &'static str,
         force_fetch: bool,
     ) {
-        let payload_available = self.block_payload_available_for_progress(highest.subject_block_hash);
+        let payload_available =
+            self.block_payload_available_for_progress(highest.subject_block_hash);
         let local_known = self
             .local_block_height_view(highest.subject_block_hash)
             .is_some();

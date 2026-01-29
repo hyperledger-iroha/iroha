@@ -594,7 +594,10 @@ async fn network_starts_with_relay() -> Result<()> {
     let Some((network, mut relay)) =
         run_or_skip_on_sandbox_panic(stringify!(network_starts_with_relay), || {
             let guard = sandbox::serial_guard();
-            let network = NetworkBuilder::new().with_peers(4).build();
+            let network = NetworkBuilder::new()
+                .with_auto_populated_trusted_peers()
+                .with_peers(4)
+                .build();
             let network = sandbox::SerializedNetwork::new(network, guard);
             let relay = P2pRelay::for_network(&network);
             (network, relay)
@@ -639,7 +642,10 @@ async fn network_doesnt_start_without_relay_being_started() -> Result<()> {
         stringify!(network_doesnt_start_without_relay_being_started),
         || {
             let guard = sandbox::serial_guard();
-            let network = NetworkBuilder::new().with_peers(4).build();
+            let network = NetworkBuilder::new()
+                .with_auto_populated_trusted_peers()
+                .with_peers(4)
+                .build();
             let network = sandbox::SerializedNetwork::new(network, guard);
             let relay = P2pRelay::for_network(&network);
             (network, relay)
@@ -682,7 +688,10 @@ async fn suspending_works() -> Result<()> {
     let Some((network, mut relay)) =
         run_or_skip_on_sandbox_panic(stringify!(suspending_works), || {
             let guard = sandbox::serial_guard();
-            let network = NetworkBuilder::new().with_peers(N_PEERS).build();
+            let network = NetworkBuilder::new()
+                .with_auto_populated_trusted_peers()
+                .with_peers(N_PEERS)
+                .build();
             let network = sandbox::SerializedNetwork::new(network, guard);
             let relay = P2pRelay::for_network(&network);
             (network, relay)
@@ -961,6 +970,7 @@ impl UnstableNetwork {
 
     fn build_network(&self) -> Network {
         let mut builder = NetworkBuilder::new()
+            .with_auto_populated_trusted_peers()
             .with_peers(self.n_peers)
             .with_data_availability_enabled(true)
             .with_default_pipeline_time()

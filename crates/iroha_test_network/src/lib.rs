@@ -2827,6 +2827,51 @@ fn merge_tables(dst: &mut Table, src: &Table) {
     }
 }
 
+fn trusted_peers_layer_for_parse(
+    peers: &[NetworkPeer],
+    auto_populate_trusted_peer_pops: bool,
+) -> Table {
+    let trusted_peers: Vec<String> = peers
+        .iter()
+        .map(|peer| {
+            format!(
+                "{}@{}",
+                peer.network_peer_id(),
+                peer.p2p_address().to_literal()
+            )
+        })
+        .collect();
+    let mut base_layer = Table::new().write(["trusted_peers"], trusted_peers);
+
+    if auto_populate_trusted_peer_pops {
+        let mut trusted_peers_pop: Vec<Value> = Vec::new();
+        let mut seen = HashSet::new();
+
+        for peer in peers {
+            let (Some(bls_pk), Some(pop_bytes)) = (peer.bls_public_key(), peer.bls_pop()) else {
+                continue;
+            };
+            if !seen.insert(bls_pk.clone()) {
+                continue;
+            }
+
+            let mut pop_entry = Table::new();
+            pop_entry.insert("public_key".into(), Value::String(bls_pk.to_string()));
+            pop_entry.insert(
+                "pop_hex".into(),
+                Value::String(format!("0x{}", hex_lower(pop_bytes))),
+            );
+            trusted_peers_pop.push(Value::Table(pop_entry));
+        }
+
+        if !trusted_peers_pop.is_empty() {
+            base_layer = base_layer.write(["trusted_peers_pop"], Value::Array(trusted_peers_pop));
+        }
+    }
+
+    base_layer
+}
+
 // Deterministic BLS keypair/PoP so consensus validation doesn't reject profile detection defaults.
 const SORA_PROFILE_BLS_PUBLIC_KEY: &str = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2";
 const SORA_PROFILE_BLS_PRIVATE_KEY: &str =
@@ -2974,12 +3019,11 @@ fn raw_nexus_overrides(table: &Table) -> bool {
         let Some(policy) = policy.as_table() else {
             return true;
         };
-        let default_lane = i64::from(iroha_config::parameters::defaults::nexus::DEFAULT_ROUTING_LANE_INDEX);
+        let default_lane =
+            i64::from(iroha_config::parameters::defaults::nexus::DEFAULT_ROUTING_LANE_INDEX);
         let default_lane_override = match policy.get("default_lane") {
             None => false,
-            Some(value) => value
-                .as_integer()
-                .map_or(true, |lane| lane != default_lane),
+            Some(value) => value.as_integer().map_or(true, |lane| lane != default_lane),
         };
         let default_dataspace_override = match policy.get("default_dataspace") {
             None => false,
@@ -3004,6 +3048,20 @@ fn raw_nexus_overrides(table: &Table) -> bool {
 fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
     // Inject required fields so profile detection can parse without the base layer.
     let merged = merged_sora_profile_detection_config(config_layers);
+    let raw_sorafs_storage = read_bool(&merged, &["torii", "sorafs", "storage", "enabled"])
+        .unwrap_or(false)
+        || read_bool(&merged, &["sorafs", "storage", "enabled"]).unwrap_or(false);
+    let raw_sorafs_discovery = read_bool(
+        &merged,
+        &["torii", "sorafs", "discovery", "discovery_enabled"],
+    )
+    .unwrap_or(false)
+        || read_bool(&merged, &["sorafs", "discovery", "discovery_enabled"]).unwrap_or(false);
+    let raw_sorafs_repair = read_bool(&merged, &["torii", "sorafs", "repair", "enabled"])
+        .unwrap_or(false)
+        || read_bool(&merged, &["sorafs", "repair", "enabled"]).unwrap_or(false);
+    let raw_sorafs_gc = read_bool(&merged, &["torii", "sorafs", "gc", "enabled"]).unwrap_or(false)
+        || read_bool(&merged, &["sorafs", "gc", "enabled"]).unwrap_or(false);
     let config = match ConfigReader::new()
         .with_env(MockEnv::default())
         .with_toml_source(TomlSource::inline(merged.clone()))
@@ -3028,10 +3086,11 @@ fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
         }
     };
     if let Some(config) = config {
-        let sorafs_storage = config.torii.sorafs_storage.enabled;
-        let sorafs_discovery = config.torii.sorafs_discovery.discovery_enabled;
-        let sorafs_repair = config.torii.sorafs_repair.enabled;
-        let sorafs_gc = config.torii.sorafs_gc.enabled;
+        let sorafs_storage = config.torii.sorafs_storage.enabled || raw_sorafs_storage;
+        let sorafs_discovery =
+            config.torii.sorafs_discovery.discovery_enabled || raw_sorafs_discovery;
+        let sorafs_repair = config.torii.sorafs_repair.enabled || raw_sorafs_repair;
+        let sorafs_gc = config.torii.sorafs_gc.enabled || raw_sorafs_gc;
         let nexus_requires_router = config.nexus.uses_multilane_catalogs();
         let nexus_lane_overrides = config.nexus.has_lane_overrides();
         sorafs_storage
@@ -3041,18 +3100,10 @@ fn config_requires_sora_profile(config_layers: &[Table]) -> bool {
             || nexus_requires_router
             || nexus_lane_overrides
     } else {
-        let sorafs_storage =
-            read_bool(&merged, &["torii", "sorafs_storage", "enabled"]).unwrap_or(false);
-        let sorafs_discovery =
-            read_bool(&merged, &["torii", "sorafs_discovery", "discovery_enabled"])
-                .unwrap_or(false);
-        let sorafs_repair =
-            read_bool(&merged, &["torii", "sorafs_repair", "enabled"]).unwrap_or(false);
-        let sorafs_gc = read_bool(&merged, &["torii", "sorafs_gc", "enabled"]).unwrap_or(false);
-        sorafs_storage
-            || sorafs_discovery
-            || sorafs_repair
-            || sorafs_gc
+        raw_sorafs_storage
+            || raw_sorafs_discovery
+            || raw_sorafs_repair
+            || raw_sorafs_gc
             || raw_nexus_overrides(&merged)
     }
 }
@@ -4004,7 +4055,7 @@ impl NetworkBuilder {
                 }
             }
         }
-        let mut config_layers_for_parse = Vec::with_capacity(config_layers.len() + 1);
+        let mut config_layers_for_parse = Vec::with_capacity(config_layers.len() + 2);
         config_layers_for_parse.push(
             Table::new()
                 .write("chain", config::chain_id().to_string())
@@ -4013,6 +4064,10 @@ impl NetworkBuilder {
                     genesis_key_pair.public_key().to_string(),
                 ),
         );
+        config_layers_for_parse.push(trusted_peers_layer_for_parse(
+            &peers,
+            auto_populate_trusted_peer_pops,
+        ));
         config_layers_for_parse.extend(config_layers.iter().cloned());
 
         let npos_timeout_overrides = peers
@@ -6263,11 +6318,15 @@ mod sora_profile_tests {
         let mut policy = toml::map::Map::new();
         policy.insert(
             "default_lane".into(),
-            toml::Value::Integer(i64::from(defaults::nexus::DEFAULT_ROUTING_LANE_INDEX)),
+            toml::Value::Integer(i64::from(
+                iroha_config::parameters::defaults::nexus::DEFAULT_ROUTING_LANE_INDEX,
+            )),
         );
         policy.insert(
             "default_dataspace".into(),
-            toml::Value::String(defaults::nexus::DEFAULT_DATASPACE_ALIAS.to_string()),
+            toml::Value::String(
+                iroha_config::parameters::defaults::nexus::DEFAULT_DATASPACE_ALIAS.to_string(),
+            ),
         );
 
         let mut nexus = toml::map::Map::new();
@@ -6845,7 +6904,7 @@ mod tests {
         );
         let _private_key_guard = EnvRestore::clear("PRIVATE_KEY");
 
-        let layer = Table::new().write(["torii", "sorafs_storage", "enabled"], true);
+        let layer = Table::new().write(["torii", "sorafs", "storage", "enabled"], true);
         assert!(
             config_requires_sora_profile(&[layer]),
             "profile detection should not be influenced by host env overrides"
@@ -8301,6 +8360,50 @@ exit 0
     }
 
     #[test]
+    fn trusted_peers_layer_for_parse_includes_pop_entries() {
+        let env = Environment::new();
+        let peers = vec![
+            NetworkPeerBuilder::new().build(&env),
+            NetworkPeerBuilder::new().build(&env),
+        ];
+
+        let layer = trusted_peers_layer_for_parse(&peers, true);
+        let trusted_entries = layer
+            .get("trusted_peers")
+            .and_then(toml::Value::as_array)
+            .expect("trusted_peers array");
+        assert_eq!(trusted_entries.len(), peers.len());
+
+        let pop_entries = layer
+            .get("trusted_peers_pop")
+            .and_then(toml::Value::as_array)
+            .expect("trusted_peers_pop array");
+        assert_eq!(pop_entries.len(), peers.len());
+
+        for peer in &peers {
+            let pk = peer
+                .bls_public_key()
+                .expect("peer should have BLS key")
+                .to_string();
+            assert!(
+                pop_entries.iter().any(|entry| {
+                    entry
+                        .get("public_key")
+                        .and_then(toml::Value::as_str)
+                        .is_some_and(|value| value == pk)
+                }),
+                "trusted_peers_pop should include {pk}"
+            );
+        }
+
+        let layer_without_pop = trusted_peers_layer_for_parse(&peers, false);
+        assert!(
+            layer_without_pop.get("trusted_peers_pop").is_none(),
+            "trusted_peers_pop should be omitted when auto-populate is disabled"
+        );
+    }
+
+    #[test]
     fn config_layers_allow_local_preauth_bypass() {
         let network = NetworkBuilder::new().build();
         let layers: Vec<_> = network.config_layers().collect();
@@ -8393,7 +8496,10 @@ exit 0
             .expect("test peer should have BLS key");
         let bls_pop = peer.bls_pop().expect("test peer should have BLS PoP");
         let mut pop_entry = Table::new();
-        pop_entry.insert("public_key".into(), Value::String(bls_public_key.to_string()));
+        pop_entry.insert(
+            "public_key".into(),
+            Value::String(bls_public_key.to_string()),
+        );
         pop_entry.insert(
             "pop_hex".into(),
             Value::String(format!("0x{}", hex_lower(bls_pop))),

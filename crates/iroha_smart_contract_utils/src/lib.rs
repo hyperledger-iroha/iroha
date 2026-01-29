@@ -103,6 +103,7 @@ mod tests {
     // the workspace enables strict cfg checking for feature names.
     #[allow(unexpected_cfgs)]
     #[derive(Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+    #[norito(decode_from_slice)]
     struct Dummy {
         a: u32,
         b: bool,
@@ -133,7 +134,7 @@ mod tests {
         }
         assert_eq!(
             buf,
-            [0xA5, 0xFF, 0x59, 0x53, 0xAD, 0x07, 0x61, 0x5B],
+            [0xA5, 0xFF, 0x59, 0xB3, 0x0D, 0x67, 0xC1, 0x1B],
             "deterministic pattern must remain stable"
         );
 

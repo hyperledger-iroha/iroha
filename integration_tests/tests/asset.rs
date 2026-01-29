@@ -412,7 +412,10 @@ fn start_test_network_with_builder(
         return None;
     }
 
-    let (network, runtime) = builder.with_min_peers(4).build_blocking();
+    let (network, runtime) = builder
+        .with_auto_populated_trusted_peers()
+        .with_min_peers(4)
+        .build_blocking();
 
     // Preflight binding check to avoid long hangs when the sandbox forbids sockets.
     if let Err(err) = network

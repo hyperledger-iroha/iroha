@@ -16008,7 +16008,6 @@ impl<'state> StateBlock<'state> {
                 zk_dedup: _,
             ..
         } = self;
-        let mut backend_guard = tiered_backend.lock();
         {
             let view_lock_wait_start = Instant::now();
             let _view_lock = view_lock.write();
@@ -16083,8 +16082,12 @@ impl<'state> StateBlock<'state> {
                 return Err(err);
             }
         }
-        let snapshot_err = backend_guard.record_world_snapshot(&state_ref.world).err();
-        drop(backend_guard);
+        // Snapshot after releasing the view lock to avoid lock-order inversion
+        // between `view_lock` and `tiered_backend`.
+        let snapshot_err = {
+            let mut backend_guard = tiered_backend.lock();
+            backend_guard.record_world_snapshot(&state_ref.world).err()
+        };
         if let Some(err) = snapshot_err {
             warn!(?err, "tiered-state: failed to record snapshot");
         }
@@ -16857,6 +16860,118 @@ mod state_view_lock_tests {
             view.world().peers().is_empty(),
             "state view should be available even when view_lock is held"
         );
+    }
+}
+
+#[cfg(test)]
+mod state_commit_lock_order_tests {
+    use std::{
+        sync::{Arc, Barrier, mpsc},
+        thread,
+        time::{Duration, Instant},
+    };
+
+    use iroha_data_model::{block::BlockHeader, nexus::LaneConfig as LaneConfigModel};
+    use nonzero_ext::nonzero;
+
+    use super::*;
+    use crate::kura::Kura;
+
+    #[test]
+    fn state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::default(), kura, query));
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let _view_guard = state.view_lock.write();
+        let barrier = Arc::new(Barrier::new(2));
+        let commit_state = Arc::clone(&state);
+        let commit_barrier = Arc::clone(&barrier);
+        let handle = thread::spawn(move || {
+            commit_barrier.wait();
+            let block = commit_state.block(header);
+            block.commit().expect("commit should succeed");
+        });
+        barrier.wait();
+
+        let start = Instant::now();
+        let mut locked_while_waiting = false;
+        while start.elapsed() < Duration::from_millis(200) {
+            if handle.is_finished() {
+                break;
+            }
+            if state.tiered_backend.try_lock().is_none() {
+                locked_while_waiting = true;
+                break;
+            }
+            thread::yield_now();
+        }
+
+        assert!(
+            !locked_while_waiting,
+            "tiered backend locked while commit waits for view_lock"
+        );
+
+        drop(_view_guard);
+        handle.join().expect("commit thread");
+    }
+
+    #[test]
+    fn lane_lifecycle_and_commit_do_not_deadlock_on_lock_order() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(World::default(), kura, query));
+        state.nexus.write().enabled = true;
+
+        let plan = iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: vec![LaneConfigModel {
+                id: LaneId::new(1),
+                alias: "beta".to_string(),
+                ..LaneConfigModel::default()
+            }],
+            retire: Vec::new(),
+        };
+
+        let backend_guard = state.tiered_backend.lock();
+        let (done_tx, done_rx) = mpsc::channel();
+        let lane_state = Arc::clone(&state);
+        let lane_done = done_tx.clone();
+        let lane_handle = thread::spawn(move || {
+            lane_state
+                .apply_lane_lifecycle(&plan)
+                .expect("lane lifecycle");
+            let _ = lane_done.send(());
+        });
+
+        let wait_start = Instant::now();
+        while state.view_lock.try_read().is_some() {
+            if wait_start.elapsed() > Duration::from_millis(200) {
+                break;
+            }
+            thread::yield_now();
+        }
+
+        let commit_state = Arc::clone(&state);
+        let commit_done = done_tx.clone();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let commit_handle = thread::spawn(move || {
+            let block = commit_state.block(header);
+            block.commit().expect("commit");
+            let _ = commit_done.send(());
+        });
+
+        drop(backend_guard);
+
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("lane lifecycle completion");
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("commit completion");
+
+        lane_handle.join().expect("lane lifecycle thread");
+        commit_handle.join().expect("commit thread");
     }
 }
 
