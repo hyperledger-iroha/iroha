@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_at": "2026-01-22T12:48:45.100498Z",
+  "generated_at": "2026-01-29T18:40:24.162937Z",
   "entries": [
     {
       "type_name": "iroha_data_model::sns::FreezeNameRequestV1",

@@ -147,10 +147,7 @@ impl Actor {
                         super::QcVerifyTarget::KnownBlock(mut work) => {
                             work.aggregate_ok = Some(aggregate_ok);
                             if !self.apply_known_block_qc_work(work) {
-                                debug!(
-                                    ?key,
-                                    "known-block QC verify result did not apply"
-                                );
+                                debug!(?key, "known-block QC verify result did not apply");
                             }
                         }
                     }
