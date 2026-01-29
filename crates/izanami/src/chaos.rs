@@ -1195,7 +1195,8 @@ mod tests {
         };
 
         let timing = derive_npos_timing(&config);
-        let expected = SumeragiNposTimeouts::from_block_time(Duration::from_millis(timing.block_ms));
+        let expected =
+            SumeragiNposTimeouts::from_block_time(Duration::from_millis(timing.block_ms));
         assert_eq!(timing.commit_timeout_ms, duration_ms(expected.commit));
         assert_ne!(timing.commit_timeout_ms, timing.commit_time_ms);
     }
