@@ -13439,6 +13439,16 @@ impl Default for Metrics {
             sumeragi_pacemaker_backpressure_deferral_age_ms,
             sumeragi_pacemaker_eval_ms,
             sumeragi_pacemaker_propose_ms,
+            sumeragi_pacemaker_backoff_ms,
+            sumeragi_pacemaker_rtt_floor_ms,
+            sumeragi_pacemaker_backoff_multiplier,
+            sumeragi_pacemaker_rtt_floor_multiplier,
+            sumeragi_pacemaker_max_backoff_ms,
+            sumeragi_pacemaker_jitter_ms,
+            sumeragi_pacemaker_jitter_frac_permille,
+            sumeragi_pacemaker_round_elapsed_ms,
+            sumeragi_pacemaker_view_timeout_target_ms,
+            sumeragi_pacemaker_view_timeout_remaining_ms,
             sumeragi_commit_stage_ms,
             sumeragi_commit_pipeline_tick_total,
             sumeragi_prevote_timeout_total,
@@ -16500,6 +16510,16 @@ mod test {
         );
         println!("{:?}", Status::from(&metrics));
         println!("{:?}", Status::default());
+    }
+
+    #[test]
+    fn pacemaker_metrics_are_exported() {
+        let metrics = Metrics::default();
+        let dump = metrics.try_to_string().expect("metrics text");
+        assert!(
+            dump.contains("sumeragi_pacemaker_view_timeout_target_ms"),
+            "metrics export missing pacemaker view timeout target"
+        );
     }
 
     #[test]
