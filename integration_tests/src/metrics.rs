@@ -59,6 +59,18 @@ impl MetricsReader {
             .filter_map(|(key, value)| key.starts_with(prefix).then_some(*value))
             .reduce(f64::max)
     }
+
+    /// Return the maximum value among metrics sharing a prefix and a label pair.
+    #[must_use]
+    pub fn max_with_prefix_and_label(&self, prefix: &str, label: &str, value: &str) -> Option<f64> {
+        let needle = format!("{label}=\"{value}\"");
+        self.map
+            .iter()
+            .filter_map(|(key, metric_value)| {
+                (key.starts_with(prefix) && key.contains(&needle)).then_some(*metric_value)
+            })
+            .reduce(f64::max)
+    }
 }
 
 #[cfg(test)]
@@ -77,5 +89,25 @@ mod tests {
     fn get_panics_for_missing_metric() {
         let reader = MetricsReader::new("metric_present 1.0\n");
         let _ = reader.get("metric_missing");
+    }
+
+    #[test]
+    fn max_with_prefix_and_label_selects_matching_metric() {
+        let reader = MetricsReader::new(
+            "metric{phase=\"propose\",peer=\"a\"} 1.0\nmetric{phase=\"propose\",peer=\"b\"} 2.0\nmetric{phase=\"commit\"} 3.0\n",
+        );
+        assert_eq!(
+            reader.max_with_prefix_and_label("metric{", "phase", "propose"),
+            Some(2.0)
+        );
+    }
+
+    #[test]
+    fn max_with_prefix_and_label_returns_none_for_missing_label() {
+        let reader = MetricsReader::new("metric{phase=\"commit\"} 1.0\n");
+        assert_eq!(
+            reader.max_with_prefix_and_label("metric{", "phase", "propose"),
+            None
+        );
     }
 }

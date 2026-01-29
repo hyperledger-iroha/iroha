@@ -532,7 +532,7 @@ static IROHAD_BIN: OnceLock<PathBuf> = OnceLock::new();
 static IROHA_BIN: OnceLock<PathBuf> = OnceLock::new();
 
 const BUILD_CACHE_DIR: &str = ".iroha_test_network";
-const BUILD_STAMP_VERSION: u32 = 2;
+const BUILD_STAMP_VERSION: u32 = 3;
 const IROHA_TEST_TARGET_DIR_ENV: &str = "IROHA_TEST_TARGET_DIR";
 const IROHA_TEST_TARGET_SUBDIR: &str = "iroha-test-network";
 
@@ -1051,6 +1051,15 @@ fn workspace_fingerprint(root: &Path) -> color_eyre::Result<u64> {
     Ok(hasher.finish())
 }
 
+fn fingerprint_with_build_args(base: u64, build_args: &[OsString]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    base.hash(&mut hasher);
+    for arg in build_args {
+        arg.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 fn build_env_overrides() -> [(&'static str, &'static str); 2] {
     // Streaming runtime requires bundled rANS tables; compile test binaries with bundles enabled.
     // Developers may work with unsynced Norito bindings locally; skip the workspace-level
@@ -1083,6 +1092,7 @@ fn ensure_binary_fresh(
         .wrap_err_with(|| eyre!("Failed to acquire build lock for {pkg}"))?;
 
     let mut fingerprint = workspace_fingerprint(repo)?;
+    fingerprint = fingerprint_with_build_args(fingerprint, build_args);
     let stamp = read_build_stamp(&stamp_path)?;
 
     let mut needs_build = !binary_path.exists();
@@ -3850,11 +3860,12 @@ impl NetworkBuilder {
         }
 
         if let Some((block_time_ms, commit_time_ms)) = pipeline_time_ms {
-            parameter_prefix.push(InstructionBox::from(SetParameter::new(
-                Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(block_time_ms)),
-            )));
+            // Set commit_time first so the intermediate parameter state remains valid.
             parameter_prefix.push(InstructionBox::from(SetParameter::new(
                 Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(commit_time_ms)),
+            )));
+            parameter_prefix.push(InstructionBox::from(SetParameter::new(
+                Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(block_time_ms)),
             )));
         }
 
@@ -3970,9 +3981,20 @@ impl NetworkBuilder {
                 }
             }
         }
+        let mut config_layers_for_parse = Vec::with_capacity(config_layers.len() + 1);
+        config_layers_for_parse.push(
+            Table::new()
+                .write("chain", config::chain_id().to_string())
+                .write(
+                    ["genesis", "public_key"],
+                    genesis_key_pair.public_key().to_string(),
+                ),
+        );
+        config_layers_for_parse.extend(config_layers.iter().cloned());
+
         let npos_timeout_overrides = peers
             .first()
-            .and_then(|peer| resolve_actual_config(peer, &config_layers))
+            .and_then(|peer| resolve_actual_config(peer, &config_layers_for_parse))
             .map(|config| config.sumeragi.npos.timeouts_overrides)
             .or_else(|| npos_timeout_overrides_from_table(&merged_sumeragi));
         let min_finality =
@@ -7404,6 +7426,18 @@ mod tests {
     }
 
     #[test]
+    fn fingerprint_with_build_args_changes_on_arg_differences() {
+        let base = 42_u64;
+        let args_a = vec![OsString::from("--features"), OsString::from("expensive-telemetry")];
+        let args_b = vec![OsString::from("--features"), OsString::from("other-feature")];
+
+        let fingerprint_a = fingerprint_with_build_args(base, &args_a);
+        let fingerprint_b = fingerprint_with_build_args(base, &args_b);
+        assert_ne!(fingerprint_a, fingerprint_b);
+        assert_eq!(fingerprint_a, fingerprint_with_build_args(base, &args_a));
+    }
+
+    #[test]
     fn workspace_fingerprint_ignores_custom_target_dir_env() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let temp = tempdir().expect("temporary workspace");
@@ -8292,6 +8326,33 @@ exit 0
         assert_eq!(
             pipeline.get("workers").and_then(toml::Value::as_integer),
             Some(expected)
+        );
+    }
+
+    #[test]
+    fn builder_config_layers_parse_with_required_genesis_fields() {
+        let env = Environment::new();
+        let peer = NetworkPeerBuilder::new().build(&env);
+        let NetworkBuilder {
+            config_layers,
+            genesis_key_pair,
+            ..
+        } = NetworkBuilder::new();
+        let mut layers = Vec::with_capacity(config_layers.len() + 1);
+        layers.push(
+            Table::new()
+                .write("chain", config::chain_id().to_string())
+                .write(
+                    ["genesis", "public_key"],
+                    genesis_key_pair.public_key().to_string(),
+                ),
+        );
+        layers.extend(config_layers);
+
+        let actual = resolve_actual_config(&peer, &layers);
+        assert!(
+            actual.is_some(),
+            "builder config layers should parse once chain/genesis are provided"
         );
     }
 
