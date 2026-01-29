@@ -2,8 +2,14 @@
 
 Last update: 2026-01-29
 
-- Sumeragi localnet smoke: extend test client TTL for `permissioned_localnet_reaches_100_blocks` and move soak DA timeout multipliers to `sumeragi.advanced.da.*` so the tests match the streamlined config surface.
-- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-smoke IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (ok). `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-smoke IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) IROHA_SOAK_TARGET_BLOCKS=100 cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --ignored --nocapture` (ok).
+- Sumeragi pacemaker latency: register missing pacemaker gauges in Prometheus output, wire per-phase EMA telemetry updates, align phase labels to docs, tolerate missing per-phase EMA series (require at least one), widen block-spacing budget to 2.5× commit quorum, and hash test-network build args in the build stamp to avoid stale feature builds; added metrics-reader label scanning and pacemaker metrics export/unit coverage.
+- Tests: `cargo test -p integration_tests --test sumeragi_npos_pacemaker_latency -- --nocapture` (ok; norito warnings about unused `padded`). Not run: `cargo test -p iroha_telemetry pacemaker_metrics_are_exported`, `cargo test -p iroha_test_network fingerprint_with_build_args_changes_on_arg_differences`, `cargo test -p integration_tests` (full).
+
+- Test network config parsing: include chain/genesis public key when resolving builder config layers for NPoS timeout overrides to avoid missing-parameter warnings; added unit coverage for parsing builder layers.
+- Tests: not run (not requested).
+
+- Sumeragi localnet smoke: extend test client TTL for `permissioned_localnet_reaches_100_blocks`, restore the TTL env even when a network run is skipped, and move soak DA timeout multipliers to `sumeragi.advanced.da.*` so the tests match the streamlined config surface.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-smoke IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo test -p integration_tests --test sumeragi_localnet_smoke -- --nocapture` (ok). `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-smoke IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) IROHA_SOAK_TARGET_BLOCKS=100 cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --ignored --nocapture` (ok). `CARGO_TARGET_DIR=/tmp/iroha-codex-sumeragi-smoke IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --ignored --nocapture` (timed out after 20m; progress continued with min_non_empty ~146 and queue_size hovering ~205–225; network dir `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_eFE2vf`).
 
 - Torii VK POST integration: encode `authority` via `AccountId` JSON (IH58 + domain suffix) and pass `ExposedPrivateKey` directly so zk vk register/update tests don't depend on domain-selector resolution; fixes `vk_register_update_return_202` returning 400.
 - Tests: not run (user-reported failure only).
