@@ -1538,7 +1538,7 @@ impl Actor {
     }
 
     fn qc_for_committed_height(
-        &self,
+        &mut self,
         qc: &crate::sumeragi::consensus::Qc,
         committed_height: u64,
         consensus_mode: ConsensusMode,
