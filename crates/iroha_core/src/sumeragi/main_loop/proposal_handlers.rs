@@ -58,6 +58,15 @@ impl Actor {
         )
     }
 
+    fn should_force_missing_highest_fetch(&self, hash: HashOf<BlockHeader>) -> bool {
+        self.pending
+            .pending_blocks
+            .get(&hash)
+            .is_some_and(|pending| {
+                pending.aborted && !matches!(pending.validation_status, ValidationStatus::Invalid)
+            })
+    }
+
     #[allow(clippy::unnecessary_wraps)]
     pub(super) fn handle_consensus_params(
         &self,
@@ -275,7 +284,11 @@ impl Actor {
                 block = %highest_qc.subject_block_hash,
                 "caching proposal hint without local highest QC block; awaiting sync"
             );
-            self.request_missing_block_for_highest_qc(highest_qc, "proposal_hint");
+            if self.should_force_missing_highest_fetch(highest_qc.subject_block_hash) {
+                self.request_missing_block_for_highest_qc_force(highest_qc, "proposal_hint");
+            } else {
+                self.request_missing_block_for_highest_qc(highest_qc, "proposal_hint");
+            }
         }
         if let Some((local_height, local_view)) =
             self.local_block_height_view(highest_qc.subject_block_hash)
@@ -608,6 +621,9 @@ impl Actor {
                 "caching proposal without local highest QC block; awaiting sync"
             );
             self.observe_new_view_highest_qc(highest_qc);
+            if self.should_force_missing_highest_fetch(highest_qc.subject_block_hash) {
+                self.request_missing_block_for_highest_qc_force(highest_qc, "proposal");
+            }
         }
         if let Some((local_height, local_view)) =
             self.local_block_height_view(highest_qc.subject_block_hash)

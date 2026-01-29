@@ -1564,14 +1564,18 @@ impl Kura {
                 in_memory_len,
                 "kura writer processing block batch"
             );
+            let lock_start = Instant::now();
             let mut block_store_guard = kura.block_store.lock();
+            let lock_ms = u64::try_from(lock_start.elapsed().as_millis()).unwrap_or(u64::MAX);
             debug!(
                 start_height,
                 batch_len = blocks_to_be_written.len(),
+                lock_ms,
                 "kura writer acquired block_store for batch"
             );
             let end_height = start_height + blocks_to_be_written.len();
             let start_height_u64 = u64::try_from(start_height).expect("start height fits in u64");
+            let append_start = Instant::now();
             if let Err(error) = block_store_guard.append_block_batch_at(
                 start_height_u64,
                 &blocks_to_be_written,
@@ -1580,6 +1584,8 @@ impl Kura {
                 error!(?error, "Failed to store block batch");
                 panic!("Kura has encountered a fatal IO error.");
             }
+            let append_ms = u64::try_from(append_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let index_start = Instant::now();
             if let Err(error) = block_store_guard.write_index_count(end_height as u64) {
                 error!(
                     ?error,
@@ -1587,14 +1593,21 @@ impl Kura {
                 );
                 panic!("Kura has encountered a fatal IO error.");
             }
+            let index_ms = u64::try_from(index_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let fsync_start = Instant::now();
             if let Err(error) = block_store_guard.flush_pending_fsync(false) {
                 error!(?error, "Failed to fsync persisted block batch");
                 panic!("Kura has encountered a fatal IO error.");
             }
+            let fsync_ms = u64::try_from(fsync_start.elapsed().as_millis()).unwrap_or(u64::MAX);
             debug!(
                 start_height,
                 end_height,
                 batch_len = blocks_to_be_written.len(),
+                lock_ms,
+                append_ms,
+                index_ms,
+                fsync_ms,
                 "persisted block batch to disk"
             );
             latest_written_block_hash = blocks_to_be_written.last().map(|block| block.hash());

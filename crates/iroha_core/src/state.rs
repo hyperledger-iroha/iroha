@@ -14832,7 +14832,8 @@ fn sumeragi_npos_parameters_from_parameters(params: &Parameters) -> Option<Sumer
     }
 }
 
-fn gas_limit_from_parameters(params: &Parameters) -> u64 {
+/// Read the per-block gas limit from on-chain parameters, falling back to defaults on errors.
+pub(crate) fn gas_limit_from_parameters(params: &Parameters) -> u64 {
     use core::str::FromStr;
 
     let name = match iroha_data_model::name::Name::from_str("ivm_gas_limit_per_block") {

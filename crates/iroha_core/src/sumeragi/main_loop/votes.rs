@@ -51,6 +51,30 @@ pub(super) fn record_vote_drop_without_roster(
     });
 }
 
+fn log_vote_validation_drop(
+    vote: &crate::sumeragi::consensus::Vote,
+    reason: super::status::VoteValidationDropReason,
+    peer_id: Option<&PeerId>,
+    roster_hash: &HashOf<Vec<PeerId>>,
+    roster_len: u32,
+    mode_tag: &str,
+) {
+    debug!(
+        reason = reason.as_str(),
+        phase = ?vote.phase,
+        height = vote.height,
+        view = vote.view,
+        epoch = vote.epoch,
+        signer = vote.signer,
+        block_hash = %vote.block_hash,
+        peer = ?peer_id,
+        roster_len,
+        roster_hash = %roster_hash,
+        mode_tag,
+        "dropping vote during validation"
+    );
+}
+
 const VOTE_VERIFY_DEFERRED_DISPATCH_MAX: usize = 32;
 const VOTE_VERIFY_POP_CACHE_MAX: usize = 64;
 const VOTE_VERIFY_TOPOLOGY_CACHE_MAX: usize = 64;
@@ -970,13 +994,30 @@ impl Actor {
         false
     }
 
-    #[allow(clippy::too_many_lines)]
     pub(super) fn request_missing_block_for_highest_qc(
         &mut self,
         highest: crate::sumeragi::consensus::QcHeaderRef,
         source: &'static str,
     ) {
-        if self.block_payload_available_for_progress(highest.subject_block_hash) {
+        self.request_missing_block_for_highest_qc_inner(highest, source, false);
+    }
+
+    pub(super) fn request_missing_block_for_highest_qc_force(
+        &mut self,
+        highest: crate::sumeragi::consensus::QcHeaderRef,
+        source: &'static str,
+    ) {
+        self.request_missing_block_for_highest_qc_inner(highest, source, true);
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn request_missing_block_for_highest_qc_inner(
+        &mut self,
+        highest: crate::sumeragi::consensus::QcHeaderRef,
+        source: &'static str,
+        force_fetch: bool,
+    ) {
+        if self.block_payload_available_for_progress(highest.subject_block_hash) && !force_fetch {
             self.clear_missing_block_request(
                 &highest.subject_block_hash,
                 MissingBlockClearReason::PayloadAvailable,
@@ -1334,6 +1375,14 @@ impl Actor {
                 roster_len,
                 block_hash: vote.block_hash,
             });
+            log_vote_validation_drop(
+                vote,
+                reason,
+                peer_id.as_ref(),
+                &roster_hash,
+                roster_len,
+                mode_tag,
+            );
         };
         if vote_duplicate(&self.vote_log, vote) {
             iroha_logger::debug!(

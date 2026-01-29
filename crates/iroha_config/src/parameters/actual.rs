@@ -3553,6 +3553,8 @@ pub struct SumeragiCollectors {
 pub struct SumeragiBlock {
     /// Optional cap on transactions included in a single block (None = unlimited).
     pub max_transactions: Option<NonZeroUsize>,
+    /// Optional cap on block gas limit when commit time is fast (None = disabled).
+    pub fast_gas_limit_per_block: Option<NonZeroU64>,
     /// Optional cap on block payload bytes when RBC is disabled (None = unlimited).
     pub max_payload_bytes: Option<NonZeroUsize>,
     /// Multiplier applied to the proposal queue scan budget (relative to max tx per block).

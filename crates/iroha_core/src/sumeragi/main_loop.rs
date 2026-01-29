@@ -3942,6 +3942,20 @@ type QcVoteKey = (
     u64,
 );
 
+const KNOWN_BLOCK_QC_WORK_PER_TICK: usize = 2;
+
+#[derive(Debug)]
+struct KnownBlockQcWork {
+    qc: crate::sumeragi::consensus::Qc,
+    block: Arc<SignedBlock>,
+    topology: super::network_topology::Topology,
+    stake_snapshot: Option<CommitStakeSnapshot>,
+    consensus_mode: ConsensusMode,
+    mode_tag: &'static str,
+    prf_seed: Option<[u8; 32]>,
+    commit_qc_match: bool,
+}
+
 struct QcBuildContext {
     phase: crate::sumeragi::consensus::Phase,
     block_hash: HashOf<BlockHeader>,
@@ -4089,6 +4103,7 @@ pub(super) struct Actor {
         BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
     >,
     deferred_qcs: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
+    known_block_qc_work: BTreeMap<QcVoteKey, KnownBlockQcWork>,
     deferred_block_sync_updates: BTreeMap<DeferredBlockSyncKey, DeferredBlockSyncUpdate>,
     vote_roster_cache: BTreeMap<HashOf<BlockHeader>, VoteRosterCacheEntry>,
     block_sync_roster_cache: BlockSyncRosterSelectionCache,
@@ -8330,6 +8345,7 @@ impl Actor {
             vote_validation_cache: BTreeMap::new(),
             deferred_votes: BTreeMap::new(),
             deferred_qcs: BTreeMap::new(),
+            known_block_qc_work: BTreeMap::new(),
             deferred_block_sync_updates: BTreeMap::new(),
             vote_roster_cache: BTreeMap::new(),
             block_sync_roster_cache: BlockSyncRosterSelectionCache::new(
@@ -9304,6 +9320,10 @@ impl Actor {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.replay_deferred_block_sync");
             self.try_replay_deferred_block_sync_updates()
         };
+        let known_block_qc_progress = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.known_block_qc_work");
+            self.drain_known_block_qc_work(tick_deadline)
+        };
         let (missing_block_progress, missing_block_cost) = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.retry_missing_block");
             let step_start = Instant::now();
@@ -9335,6 +9355,7 @@ impl Actor {
             || deferred_qc_progress
             || deferred_vote_progress
             || deferred_block_sync_progress
+            || known_block_qc_progress
             || missing_block_progress
             || reschedule_progress
             || idle_view_progress

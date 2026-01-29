@@ -461,6 +461,10 @@ fn sign_vote_for_canonical_signer(
     );
 }
 
+fn drain_known_block_qc_work(actor: &mut super::Actor) {
+    while actor.drain_known_block_qc_work(None) {}
+}
+
 fn default_missing_block_signer_fallback_attempts() -> u32 {
     iroha_config::parameters::defaults::sumeragi::MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS
 }
@@ -1120,6 +1124,8 @@ fn test_sumeragi_config() -> SumeragiConfig {
         },
         block: SumeragiBlock {
             max_transactions: None,
+            fast_gas_limit_per_block:
+                iroha_config::parameters::defaults::sumeragi::FAST_FINALITY_GAS_LIMIT_PER_BLOCK,
             max_payload_bytes: None,
             proposal_queue_scan_multiplier:
                 iroha_config::parameters::defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
@@ -3599,6 +3605,53 @@ async fn vote_inbound_drops_when_pending_validation_full() {
             .iter()
             .any(|entry| { entry.reason == super::status::VoteValidationDropReason::Backpressure }),
         "backpressure drop should be recorded"
+    );
+
+    harness.shutdown.send();
+    drop(harness);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vote_validation_drop_records_roster_hash_for_signature_rejection() {
+    let _guard = super::status::vote_validation_drops_test_guard();
+    super::status::reset_vote_validation_drops_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or_default()
+        .saturating_add(1)
+        .max(1);
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let vote = actor.local_precommit_vote_for(height, view, epoch, &topology);
+
+    let evidence_context = crate::sumeragi::EvidenceValidationContext {
+        topology: &topology,
+        chain_id: &actor.common_config.chain,
+        mode_tag: super::PERMISSIONED_TAG,
+        prf_seed: Some(super::prf_seed_for_height(&actor.state.view(), height)),
+    };
+
+    let accepted = actor.validate_and_record_vote_with_signature_result(
+        &vote,
+        &topology,
+        &evidence_context,
+        super::PERMISSIONED_TAG,
+        Some(Err(super::VoteSignatureError::SignatureInvalid)),
+    );
+    assert!(!accepted, "vote should be rejected on signature error");
+
+    let drops = super::status::snapshot().vote_validation_drops.entries;
+    let entry = drops.first().expect("vote drop entry");
+    assert_eq!(entry.signer_index, vote.signer);
+    assert_eq!(entry.block_hash, vote.block_hash);
+    assert_eq!(entry.roster_hash, Some(HashOf::new(&roster)));
+    assert_eq!(
+        entry.roster_len,
+        u32::try_from(roster.len()).unwrap_or(u32::MAX)
     );
 
     harness.shutdown.send();
@@ -6140,6 +6193,7 @@ async fn block_sync_update_known_block_records_commit_qc() {
     actor
         .handle_block_sync_update(update, None)
         .expect("block sync update");
+    drain_known_block_qc_work(actor);
 
     let view = actor.state.view();
     let stored = view.world().commit_qcs().get(&block_hash);
@@ -6332,6 +6386,7 @@ async fn block_sync_update_known_block_revalidates_qc_on_hash_mismatch() {
     actor
         .handle_block_sync_update(update, None)
         .expect("block sync update");
+    drain_known_block_qc_work(actor);
 
     let cached = actor
         .qc_cache
@@ -6474,6 +6529,7 @@ async fn block_sync_update_known_block_accepts_quorum_qc_on_hash_mismatch() {
     actor
         .handle_block_sync_update(update, None)
         .expect("block sync update");
+    drain_known_block_qc_work(actor);
 
     let view = actor.state.view();
     let stored = view
@@ -6622,6 +6678,7 @@ async fn block_sync_update_known_block_reuses_cached_block_signers() {
     actor
         .handle_block_sync_update(update, None)
         .expect("block sync update");
+    drain_known_block_qc_work(actor);
     assert!(
         actor.qc_cache.get(&qc_key).is_none(),
         "QC should be rejected without cached block signers"
@@ -6659,6 +6716,7 @@ async fn block_sync_update_known_block_reuses_cached_block_signers() {
     actor
         .handle_block_sync_update(update, None)
         .expect("block sync update");
+    drain_known_block_qc_work(actor);
     assert!(
         actor.qc_cache.get(&qc_key).is_some(),
         "QC should be accepted once cached block signers are used"
@@ -6737,6 +6795,7 @@ async fn block_sync_update_known_block_applies_commit_qc_to_pending() {
     actor
         .handle_block_sync_update(update, None)
         .expect("block sync update");
+    drain_known_block_qc_work(actor);
 
     let inflight = actor.subsystems.commit.inflight.as_ref();
     let pending_present = actor.pending.pending_blocks.contains_key(&block_hash);
@@ -35436,6 +35495,43 @@ async fn new_view_highest_qc_skips_missing_fetch_for_aborted_payload() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn proposal_missing_highest_qc_fetches_aborted_payload() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let committed_qc_height = actor.latest_committed_qc().map_or(0, |qc| qc.height);
+    let base_height = committed_height.max(committed_qc_height);
+    let highest_height = base_height.saturating_add(1);
+    let height = highest_height.saturating_add(1);
+    let view = 0_u64;
+
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(highest_height, view, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, highest_height, view);
+    pending.mark_aborted();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let mut proposal = sample_proposal(block_hash, height, view);
+    proposal.header.epoch = actor.epoch_for_height(height);
+    proposal.header.highest_qc.epoch = actor.epoch_for_height(highest_height);
+
+    actor.handle_proposal(proposal).expect("handle proposal");
+
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "aborted pending payload for highest QC should still trigger missing-block fetch"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn new_view_tracker_corrects_highest_view_after_parent_arrives() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -37195,6 +37291,7 @@ async fn proposal_queue_scan_budget_limits_fetch() {
         &state_view,
         nonzero!(5_usize),
         2,
+        None,
         &mut tx_guards,
         1,
         0,
@@ -37207,6 +37304,158 @@ async fn proposal_queue_scan_budget_limits_fetch() {
     drop(tx_guards);
 
     assert_eq!(actor.queue.queued_len(), 3, "remaining txs stay queued");
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_filter_drops_committed_transactions_after_queue_scan() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_tx = sample_transaction();
+    let live_tx = sample_transaction();
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(committed_tx.clone())),
+            actor.state.view(),
+        )
+        .expect("push committed tx");
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(live_tx.clone())),
+            actor.state.view(),
+        )
+        .expect("push live tx");
+
+    let height = 1u64;
+    let view = 0u64;
+    let state_view = actor.state.view();
+    let mut tx_guards = Vec::new();
+    let _ = actor.pull_transactions_for_proposal(
+        &state_view,
+        nonzero!(2_usize),
+        2,
+        None,
+        &mut tx_guards,
+        height,
+        view,
+    );
+    drop(state_view);
+
+    assert_eq!(tx_guards.len(), 2, "queue should return both transactions");
+
+    let transactions: Vec<_> = tx_guards
+        .iter()
+        .map(crate::queue::TransactionGuard::clone_accepted)
+        .collect();
+    let routing: Vec<_> = tx_guards
+        .iter()
+        .map(crate::queue::TransactionGuard::routing)
+        .collect();
+
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut tx_block = state.transactions.block();
+        let next_height = state
+            .transactions_latest_height_for_testing()
+            .saturating_add(1);
+        let next_height =
+            NonZeroUsize::new(next_height).expect("transaction height must be non-zero");
+        tx_block.insert_block_with_single_tx(committed_tx.hash(), next_height);
+        tx_block.commit().expect("commit transactions block");
+    }
+
+    let (filtered_guards, filtered_transactions, _filtered_routing, dropped) =
+        Actor::filter_committed_transactions_for_proposal(
+            &actor.state,
+            tx_guards,
+            transactions,
+            routing,
+            height,
+            view,
+        );
+
+    assert_eq!(dropped, 1, "one committed transaction should be dropped");
+    assert_eq!(
+        filtered_transactions.len(),
+        1,
+        "only the live transaction should remain"
+    );
+    assert_eq!(
+        filtered_transactions[0].hash(),
+        live_tx.hash(),
+        "live transaction should remain in proposal batch"
+    );
+
+    drop(filtered_guards);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_gas_budget_limits_fetch() {
+    use iroha_data_model::transaction::Executable;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    let instructions = match tx.instructions() {
+        Executable::Instructions(batch) => batch.iter().map(Clone::clone).collect::<Vec<_>>(),
+        Executable::Ivm(_) => panic!("sample transaction should be ISI-based"),
+    };
+    let gas_cost = crate::gas::meter_instructions(&instructions);
+    assert!(gas_cost > 0, "expected non-zero ISI gas cost");
+    let gas_cap = NonZeroU64::new(gas_cost).expect("non-zero gas cap");
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let state_view = actor.state.view();
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        &state_view,
+        nonzero!(5_usize),
+        5,
+        Some(gas_cap),
+        &mut tx_guards,
+        1,
+        0,
+    );
+
+    assert_eq!(tx_guards.len(), 1, "gas cap should allow one tx");
+    assert_eq!(deferred.len(), 1, "second tx should be deferred");
+
+    drop(state_view);
+    drop(tx_guards);
+
+    for tx in deferred {
+        actor
+            .queue
+            .push(tx, actor.state.view())
+            .expect("requeue deferred tx");
+    }
+
+    assert_eq!(actor.queue.queued_len(), 1, "deferred tx should remain queued");
 
     harness.shutdown.send();
 }
@@ -48329,6 +48578,47 @@ fn max_tx_budget_handles_overflow_and_empty_queue() {
     let (target, max_in_block) = Actor::max_tx_budget(0, u64::MAX, None);
     assert_eq!(target, usize::MAX);
     assert_eq!(max_in_block.get(), 1);
+}
+
+#[test]
+fn fast_commit_gas_cap_applies_under_fast_finality() {
+    let base = NonZeroU64::new(10_000).expect("non-zero");
+    let cap = NonZeroU64::new(2_000).expect("non-zero");
+    let capped = super::propose::cap_gas_limit_for_fast_commit(
+        Some(base),
+        iroha_config::parameters::defaults::sumeragi::FAST_FINALITY_COMMIT_TIME_MS,
+        Some(cap),
+    );
+    assert_eq!(capped.expect("cap").get(), 2_000);
+}
+
+#[test]
+fn fast_commit_gas_cap_skips_when_commit_time_is_high() {
+    let base = NonZeroU64::new(10_000).expect("non-zero");
+    let cap = NonZeroU64::new(2_000).expect("non-zero");
+    let capped = super::propose::cap_gas_limit_for_fast_commit(
+        Some(base),
+        iroha_config::parameters::defaults::sumeragi::FAST_FINALITY_COMMIT_TIME_MS + 1,
+        Some(cap),
+    );
+    assert_eq!(capped.expect("cap").get(), 10_000);
+}
+
+#[test]
+fn proposal_gas_cost_matches_isi_metering() {
+    use iroha_data_model::transaction::Executable;
+
+    let tx = sample_transaction();
+    let instructions = match tx.instructions() {
+        Executable::Instructions(batch) => batch.iter().map(Clone::clone).collect::<Vec<_>>(),
+        Executable::Ivm(_) => panic!("sample transaction should be ISI-based"),
+    };
+    let expected = crate::gas::meter_instructions(&instructions);
+    assert!(expected > 0, "expected non-zero ISI gas cost");
+
+    let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+    let measured = super::propose::proposal_gas_cost(&accepted);
+    assert_eq!(measured, expected);
 }
 
 #[test]

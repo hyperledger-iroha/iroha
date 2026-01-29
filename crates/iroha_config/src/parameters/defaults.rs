@@ -2304,7 +2304,7 @@ pub mod zk {
 
 /// Sumeragi (consensus) defaults
 pub mod sumeragi {
-    use std::num::NonZeroUsize;
+    use std::num::{NonZeroU64, NonZeroUsize};
 
     use iroha_crypto::Algorithm;
     use nonzero_ext::nonzero;
@@ -2316,6 +2316,10 @@ pub mod sumeragi {
     pub const COLLECTORS_REDUNDANT_SEND_R: u8 = 3;
     /// Optional cap on transactions per block (None = unlimited).
     pub const BLOCK_MAX_TRANSACTIONS: Option<NonZeroUsize> = None;
+    /// Commit-time threshold (ms) for applying fast-finality proposal caps.
+    pub const FAST_FINALITY_COMMIT_TIME_MS: u64 = 1_000;
+    /// Optional cap on block gas limit when commit time is <= fast-finality threshold.
+    pub const FAST_FINALITY_GAS_LIMIT_PER_BLOCK: Option<NonZeroU64> = None;
     /// Optional cap on payload bytes per block when RBC is disabled (None = unlimited).
     pub const BLOCK_MAX_PAYLOAD_BYTES: Option<NonZeroUsize> = None;
     /// Multiplier applied to the proposal queue scan budget (relative to max tx per block).
