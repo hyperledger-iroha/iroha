@@ -398,7 +398,8 @@ impl CommitRosterJournal {
     /// persistence fails.
     pub fn truncate_to_height(&mut self, height: u64) -> Result<(), CommitRosterJournalError> {
         let before = self.entries.len();
-        self.entries.retain(|(entry_height, _)| *entry_height <= height);
+        self.entries
+            .retain(|entry_height, _| *entry_height <= height);
         if self.entries.len() == before {
             return Ok(());
         }
