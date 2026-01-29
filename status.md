@@ -1,6 +1,10 @@
 # Status
 
 Last update: 2026-01-29
+- Sumeragi commit-conflict recovery: validate conflicting commit QCs at committed heights, choose a deterministic winner (higher view then lower hash), request missing blocks with conflict priority, prune Kura to the winning chain (restart required until in-process state replay lands), and add telemetry + unit coverage.
+- Tests: not run (not requested).
+- Sumeragi RBC store pressure logging: formalized rate-limited transition logs (warn on elevated pressure, info on recovery) and removed the temporary TODO note.
+- Tests: not run (not requested).
 - Block sync: drop stale-view BlockSyncUpdate unless the block was explicitly requested, to prevent late-view payloads from reintroducing conflicting commits; added `block_sync_update_drops_stale_view_without_missing_request` coverage.
 - Tests: `cargo test -p iroha_core block_sync_update_drops_stale_view_without_missing_request -- --nocapture` (ok; norito `padded` warnings persist).
 - Kagami codec: drop the `DecodeFromSlice` bound on `ConverterImpl` so converter registration works for data-model types like `NewAccount` (fixes E0599 in `iroha_kagami`).

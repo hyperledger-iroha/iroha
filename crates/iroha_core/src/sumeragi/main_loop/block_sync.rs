@@ -466,6 +466,64 @@ impl Actor {
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
         let parent_hash = block.header().prev_block_hash();
+        if self.commit_conflict.is_some() {
+            let requires_restart = self
+                .commit_conflict
+                .as_ref()
+                .is_some_and(|conflict| conflict.requires_restart);
+            if requires_restart {
+                let conflict_height = self
+                    .commit_conflict
+                    .as_ref()
+                    .map(|conflict| conflict.height)
+                    .unwrap_or_default();
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    conflict_height,
+                    "commit-conflict recovery requires restart; dropping block sync update"
+                );
+                return Ok(());
+            }
+            let should_recover = self.commit_conflict.as_ref().is_some_and(|conflict| {
+                conflict.awaiting_block
+                    && conflict.height == block_height
+                    && conflict.incoming.hash == block_hash
+            });
+            if should_recover {
+                let conflict = self
+                    .commit_conflict
+                    .take()
+                    .expect("conflict already checked");
+                let recovered = self.recover_commit_conflict_with_block(
+                    block,
+                    conflict.incoming_qc.clone(),
+                    conflict.stake_snapshot.clone(),
+                )?;
+                if !recovered {
+                    self.commit_conflict = Some(CommitConflictRecovery {
+                        awaiting_block: false,
+                        requires_restart: true,
+                        ..conflict
+                    });
+                }
+                return Ok(());
+            }
+            let conflict_height = self
+                .commit_conflict
+                .as_ref()
+                .map(|conflict| conflict.height)
+                .unwrap_or_default();
+            debug!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                conflict_height,
+                "commit-conflict recovery active; ignoring block sync update"
+            );
+            return Ok(());
+        }
         let mut requested_missing_block = self
             .pending
             .missing_block_requests
@@ -538,6 +596,22 @@ impl Actor {
                 "accepting BlockSyncUpdate for stale view"
             );
         }
+        let (consensus_mode, mode_tag, prf_seed, local_height) = {
+            let view = self.state.view();
+            let consensus_mode = super::effective_consensus_mode_for_height(
+                &view,
+                block_height,
+                self.config.consensus_mode,
+            );
+            let mode_tag = match consensus_mode {
+                ConsensusMode::Permissioned => PERMISSIONED_TAG,
+                ConsensusMode::Npos => NPOS_TAG,
+            };
+            let prf_seed = Some(super::prf_seed_for_height(&view, block_height));
+            let local_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+            (consensus_mode, mode_tag, prf_seed, local_height)
+        };
+        let expected_epoch = self.epoch_for_height(block_height);
         let kura_committed_start = Instant::now();
         if let Ok(height_usize) = usize::try_from(block_height)
             && let Some(nz_height) = NonZeroUsize::new(height_usize)
@@ -545,21 +619,77 @@ impl Actor {
             if let Some(committed) = self.kura.get_block(nz_height) {
                 let committed_hash = committed.hash();
                 if committed_hash != block_hash {
-                    info!(
-                        committed_height = height_usize,
-                        committed_hash = %committed_hash,
-                        incoming_hash = %block_hash,
-                        "dropping block sync update that conflicts with committed block"
+                    let local = CommitConflictCandidate {
+                        view: committed.header().view_change_index(),
+                        hash: committed_hash,
+                    };
+                    let incoming = CommitConflictCandidate {
+                        view: block_view,
+                        hash: block_hash,
+                    };
+                    let Some(commit_qc) = incoming_qc.take() else {
+                        info!(
+                            committed_height = height_usize,
+                            committed_hash = %committed_hash,
+                            incoming_hash = %block_hash,
+                            "dropping block sync update that conflicts with committed block without commit QC"
+                        );
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::BlockSyncUpdate,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::CommitConflict,
+                        );
+                        self.clear_missing_block_request(
+                            &block_hash,
+                            MissingBlockClearReason::Obsolete,
+                        );
+                        return Ok(());
+                    };
+                    let inputs = self.roster_validation_cache.inputs_for_roster(
+                        &commit_qc.validator_set,
+                        consensus_mode,
+                        stake_snapshot.as_ref(),
                     );
-                    self.record_consensus_message_handling(
-                        super::status::ConsensusMessageKind::BlockSyncUpdate,
-                        super::status::ConsensusMessageOutcome::Dropped,
-                        super::status::ConsensusMessageReason::CommitConflict,
-                    );
-                    self.clear_missing_block_request(
-                        &block_hash,
-                        MissingBlockClearReason::Obsolete,
-                    );
+                    let allow_genesis_stub = block_height == 1 && block_view == 0;
+                    if let Err(err) = validate_commit_qc_roster(
+                        &commit_qc,
+                        block_hash,
+                        block_height,
+                        Some(block_view),
+                        consensus_mode,
+                        expected_epoch,
+                        &self.common_config.chain,
+                        mode_tag,
+                        allow_genesis_stub,
+                        &inputs,
+                    ) {
+                        warn!(
+                            ?err,
+                            committed_height = height_usize,
+                            committed_hash = %committed_hash,
+                            incoming_hash = %block_hash,
+                            "dropping commit-conflict block sync update with invalid commit QC"
+                        );
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::BlockSyncUpdate,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::CommitConflict,
+                        );
+                        self.clear_missing_block_request(
+                            &block_hash,
+                            MissingBlockClearReason::Obsolete,
+                        );
+                        return Ok(());
+                    }
+                    self.handle_commit_conflict_with_block(
+                        CommitConflictSource::BlockSyncUpdate,
+                        block_height,
+                        local,
+                        incoming,
+                        commit_qc,
+                        stake_snapshot.clone(),
+                        block,
+                    )?;
                     return Ok(());
                 }
             }
@@ -586,21 +716,6 @@ impl Actor {
             );
             return Ok(());
         }
-        let (consensus_mode, mode_tag, prf_seed, local_height) = {
-            let view = self.state.view();
-            let consensus_mode = super::effective_consensus_mode_for_height(
-                &view,
-                block_height,
-                self.config.consensus_mode,
-            );
-            let mode_tag = match consensus_mode {
-                ConsensusMode::Permissioned => PERMISSIONED_TAG,
-                ConsensusMode::Npos => NPOS_TAG,
-            };
-            let prf_seed = Some(super::prf_seed_for_height(&view, block_height));
-            let local_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
-            (consensus_mode, mode_tag, prf_seed, local_height)
-        };
         if self.runtime_da_enabled()
             && !requested_missing_block
             && !self.block_payload_available_locally(block_hash)
@@ -608,7 +723,6 @@ impl Actor {
         {
             requested_missing_block = true;
         }
-        let expected_epoch = self.epoch_for_height(block_height);
         let has_commit_votes = !commit_votes.is_empty();
         let mut commit_votes = Some(commit_votes);
         let mut process_commit_votes = |actor: &mut Actor| {

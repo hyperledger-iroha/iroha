@@ -5595,7 +5595,7 @@ fn should_log_rbc_store_pressure(
 }
 
 fn maybe_log_rbc_store_pressure(sessions: u64, bytes: u64, level: u8) {
-    // TODO: Temporary logging for soak diagnostics; remove or formalize once stable.
+    // Log pressure transitions and rate-limit repeats while elevated.
     let prev_level = RBC_STORE_PRESSURE_LOG_LEVEL.load(Ordering::Relaxed);
     let last_log_secs = RBC_STORE_PRESSURE_LOG_LAST_SECS.load(Ordering::Relaxed);
     let now_secs = SystemTime::now()

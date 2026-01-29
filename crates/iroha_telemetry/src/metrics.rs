@@ -6453,6 +6453,8 @@ pub struct Metrics {
     pub sumeragi_block_sync_share_blocks_unsolicited_total: IntCounter,
     /// Sumeragi: consensus message drops/deferrals grouped by kind, outcome, and reason.
     pub sumeragi_consensus_message_handling_total: IntCounterVec,
+    /// Sumeragi: commit-conflict detections (cumulative).
+    pub sumeragi_commit_conflict_detected_total: IntCounter,
     /// Sumeragi: view-change triggers grouped by cause.
     pub sumeragi_view_change_cause_total: IntCounterVec,
     /// Sumeragi: unix timestamp (ms) of the last view-change trigger grouped by cause.
@@ -9571,6 +9573,11 @@ impl Default for Metrics {
         let sumeragi_new_view_dropped_by_lock_total = IntCounter::new(
             "sumeragi_new_view_dropped_by_lock_total",
             "Sumeragi NEW_VIEW messages rejected because HighestQC is behind the locked QC",
+        )
+        .expect("Infallible");
+        let sumeragi_commit_conflict_detected_total = IntCounter::new(
+            "sumeragi_commit_conflict_detected_total",
+            "Sumeragi commit-conflict detections (cumulative)",
         )
         .expect("Infallible");
         let sumeragi_missing_block_fetch_total = IntCounterVec::new(
@@ -13256,6 +13263,7 @@ impl Default for Metrics {
             sumeragi_new_view_publish_total,
             sumeragi_new_view_recv_total,
             sumeragi_new_view_dropped_by_lock_total,
+            sumeragi_commit_conflict_detected_total,
             sumeragi_missing_block_fetch_total,
             sumeragi_missing_block_fetch_target_total,
             sumeragi_missing_block_fetch_dwell_ms,
@@ -13864,6 +13872,7 @@ impl Default for Metrics {
             sumeragi_new_view_publish_total,
             sumeragi_new_view_recv_total,
             sumeragi_new_view_dropped_by_lock_total,
+            sumeragi_commit_conflict_detected_total,
             sumeragi_missing_block_fetch_total,
             sumeragi_missing_block_fetch_target_total,
             sumeragi_missing_block_fetch_dwell_ms,

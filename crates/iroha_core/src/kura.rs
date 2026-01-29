@@ -1468,13 +1468,27 @@ impl Kura {
             let block_data = kura.block_data.lock();
             let in_memory_len = block_data.len();
 
-            let new_latest_written_block_hash = written_block_count
-                .checked_sub(1)
-                .map(|idx| block_data[idx].0);
-            if new_latest_written_block_hash != latest_written_block_hash {
-                written_block_count -= 1; // There has been a soft-fork and we need to rewrite the top block.
+            if written_block_count > in_memory_len {
+                warn!(
+                    written_block_count,
+                    in_memory_len,
+                    "kura writer detected in-memory chain shrink; rewinding write cursor"
+                );
+                written_block_count = in_memory_len;
+                latest_written_block_hash = written_block_count
+                    .checked_sub(1)
+                    .and_then(|idx| block_data.get(idx).map(|entry| entry.0));
+            } else {
+                let new_latest_written_block_hash = written_block_count
+                    .checked_sub(1)
+                    .and_then(|idx| block_data.get(idx).map(|entry| entry.0));
+                if new_latest_written_block_hash != latest_written_block_hash {
+                    written_block_count = written_block_count.saturating_sub(1); // soft-fork rewrite
+                }
+                latest_written_block_hash = written_block_count
+                    .checked_sub(1)
+                    .and_then(|idx| block_data.get(idx).map(|entry| entry.0));
             }
-            latest_written_block_hash = new_latest_written_block_hash;
 
             if written_block_count >= block_data.len() {
                 if should_exit {
@@ -2322,6 +2336,37 @@ impl Kura {
             }
             return Err(Error::BlockWriterUnavailable);
         }
+        Ok(())
+    }
+
+    /// Truncate the canonical chain to the provided height (inclusive).
+    ///
+    /// This updates the in-memory block list and prunes persisted storage when available.
+    /// Heights are 1-based (genesis is height 1).
+    pub fn prune_to_height(&self, height: u64) -> Result<()> {
+        let keep = usize::try_from(height)?;
+        {
+            let mut data = self.block_data.lock();
+            if keep >= data.len() {
+                return Ok(());
+            }
+            data.truncate(keep);
+        }
+
+        if !self.store_root.as_os_str().is_empty() {
+            let mut store = self.block_store.lock();
+            store.prune(height)?;
+        }
+
+        self.merge_log.lock().truncate_to_len(keep)?;
+        if let Err(err) = self.roster_log.lock().truncate_to_height(height) {
+            warn!(
+                ?err,
+                height,
+                "failed to truncate commit roster journal after Kura prune"
+            );
+        }
+
         Ok(())
     }
 
@@ -9521,6 +9566,26 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn kura_prune_to_height_truncates_in_memory_chain() {
+        let kura = Kura::blank_kura_for_testing();
+        let mut blocks = DummyBlocks::new();
+        let b1 = blocks.next();
+        let b2 = blocks.next();
+        let b3 = blocks.next();
+        kura.store_block(b1).expect("store block");
+        kura.store_block(b2).expect("store block");
+        kura.store_block(b3).expect("store block");
+
+        assert_eq!(kura.blocks_count(), 3);
+        kura.prune_to_height(2).expect("prune to height");
+        assert_eq!(kura.blocks_count(), 2);
+
+        let b4 = blocks.next();
+        kura.store_block(b4).expect("store block after prune");
+        assert_eq!(kura.blocks_count(), 3);
     }
 
     #[test]

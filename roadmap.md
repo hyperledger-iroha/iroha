@@ -46,6 +46,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 - Izanami perf: re-run 1 TPS after scaling NPoS timeout derivation to align the timeout budget with `block_time_ms`; confirm block height progress and whether remaining execution DAG spikes still gate consensus.
 - Localnet 1 Hz: re-run the NPoS 1 Hz soak with the fast-finality gas cap enabled (`sumeragi.block.fast_gas_limit_per_block`) and confirm block spacing falls under 1s on localhost.
 - Izanami perf: re-run 1 TPS after the proposal committed-tx filter (fix for `HasCommittedTransactions` invalid blocks) to confirm height progress and no repeated view-change loops around stale proposal batches.
+- Commit-conflict recovery: implement in-process state replay + auto-resume after pruning and add an integration test for deterministic fork-choice recovery (current recovery requires restart).
 
 0. **KOTODAMA-LANG-PARITY — Close remaining Kotodama gaps** (IVM/Kotodama, Line: Shared, Owner: IVM WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
  - [x] Add access-list attributes and wire permission/read/write hints into entrypoint manifests.
