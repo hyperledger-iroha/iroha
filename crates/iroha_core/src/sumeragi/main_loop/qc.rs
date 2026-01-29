@@ -1606,29 +1606,38 @@ impl Actor {
                     );
                     return CommittedQcDecision::Drop;
                 }
-                let local = super::CommitConflictCandidate {
-                    view: committed.header().view_change_index(),
-                    hash: committed_hash,
+                info!(
+                    height = qc.height,
+                    view = qc.view,
+                    committed_height,
+                    committed_hash = %committed_hash,
+                    incoming_hash = %qc.subject_block_hash,
+                    "rejecting conflicting commit QC at committed height; enforcing finality"
+                );
+                #[cfg(feature = "telemetry")]
+                {
+                    self.telemetry.inc_commit_conflict_detected();
+                }
+                let evidence = crate::sumeragi::consensus::Evidence {
+                    kind: crate::sumeragi::consensus::EvidenceKind::InvalidQc,
+                    payload: crate::sumeragi::consensus::EvidencePayload::InvalidQc {
+                        certificate: qc.clone(),
+                        reason: "commit_conflict_finality".to_owned(),
+                    },
                 };
-                let incoming = super::CommitConflictCandidate {
-                    view: qc.view,
-                    hash: qc.subject_block_hash,
-                };
-                if let Err(err) = self.handle_commit_conflict_with_qc(
-                    super::CommitConflictSource::CommitQc,
-                    qc.height,
-                    local,
-                    incoming,
-                    qc.clone(),
-                    stake_snapshot.cloned(),
-                ) {
+                if let Err(err) = self.record_and_broadcast_evidence(evidence) {
                     warn!(
                         ?err,
                         height = qc.height,
                         view = qc.view,
-                        "failed to handle commit-conflict QC"
+                        "failed to record commit-conflict evidence"
                     );
                 }
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::Qc,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::CommitConflict,
+                );
                 return CommittedQcDecision::Drop;
             }
             return CommittedQcDecision::RecordOnly;

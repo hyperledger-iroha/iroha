@@ -573,37 +573,6 @@ impl Actor {
     }
 
     fn drain_commit_results(&mut self) -> bool {
-        if self.commit_conflict_active() {
-            let mut dropped = 0usize;
-            while let Some(recv_result) = self
-                .subsystems
-                .commit
-                .result_rx
-                .as_ref()
-                .map(mpsc::Receiver::try_recv)
-            {
-                match recv_result {
-                    Ok(_result) => {
-                        dropped = dropped.saturating_add(1);
-                    }
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        warn!(
-                            dropped,
-                            "commit worker result channel closed during commit-conflict pause"
-                        );
-                        self.subsystems.commit.result_rx = None;
-                        self.subsystems.commit.work_tx = None;
-                        break;
-                    }
-                }
-            }
-            if self.subsystems.commit.inflight.take().is_some() {
-                warn!("dropping inflight commit due to commit-conflict recovery");
-            }
-            return dropped > 0;
-        }
-
         let mut progress = false;
         while let Some(recv_result) = self
             .subsystems

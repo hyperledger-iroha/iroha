@@ -1,7 +1,19 @@
 # Status
 
 Last update: 2026-01-29
-- Sumeragi commit-conflict recovery: validate conflicting commit QCs at committed heights, choose a deterministic winner (higher view then lower hash), request missing blocks with conflict priority, prune Kura to the winning chain (restart required until in-process state replay lands), and add telemetry + unit coverage.
+- Swift Connect keystore: make file-backed HMAC computation deterministic, accept legacy key-order permutations during verification, and add regression coverage for legacy ordering acceptance.
+- Tests: `swift test` (ok; 1 test skipped).
+- Swift offline allowances: added top-up helpers (issue+register and renewal), added Torii renewal endpoint, and documented the new flow in Swift docs/README with unit coverage.
+- Tests: `swift test` (timed out; failures in `AccountAddressTests testBridgeCodecMatchesFixtures` due to `snx` vs `sora` prefix mismatch, before completion).
+- Swift Connect: add `iconHash` to `ConnectAppMetadata` and encode/decode `icon_hash` in the Connect JSON codec with unit coverage.
+- Tests: not run (not requested).
+- Swift Connect: encode `description` in app metadata JSON and add unit coverage.
+- Tests: not run (not requested).
+- Telemetry: wire `sumeragi_rbc_rebroadcast_skipped_total` increments in `inc_rbc_rebroadcast_skipped`, and formalize the P2P queue depth cache comment now that the metric is exported; refreshed telemetry docs and unit coverage.
+- Tests: not run (not requested).
+- Roadmap: added a TODO inventory appendix tracking open TODO markers (code/tests/docs/translation) and listing non-actionable references for audit.
+- Tests: not run (not requested).
+- Sumeragi commit-conflict handling: enforce strict finality by rejecting conflicting commit QCs at already-committed heights, recording/gossiping `InvalidQc` evidence (`commit_conflict_finality`), and keeping the local committed block; added unit coverage for block-sync and QC paths.
 - Tests: not run (not requested).
 - Sumeragi RBC store pressure logging: formalized rate-limited transition logs (warn on elevated pressure, info on recovery) and removed the temporary TODO note.
 - Tests: not run (not requested).

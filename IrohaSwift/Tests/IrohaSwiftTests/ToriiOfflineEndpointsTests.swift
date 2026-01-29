@@ -324,4 +324,182 @@ final class ToriiOfflineEndpointsTests: XCTestCase {
 
         XCTAssertTrue(queue.isEmpty)
     }
+
+    func testOfflineTopUpRequests() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let assetId = "rose#wonderland#\(accountId)"
+        let issuePayload = """
+        {
+          "certificate_id_hex": "cafe",
+          "certificate": {
+            "controller": "\(accountId)",
+            "allowance": {
+              "asset": "\(assetId)",
+              "amount": "25",
+              "commitment": [1, 2, 3]
+            },
+            "spend_public_key": "ed0120deadbeef",
+            "attestation_report": [4, 5, 6],
+            "issued_at_ms": 100,
+            "expires_at_ms": 200,
+            "policy": {
+              "max_balance": "25",
+              "max_tx_value": "5",
+              "expires_at_ms": 200
+            },
+            "operator_signature": "AA",
+            "metadata": {},
+            "verdict_id_hex": null,
+            "attestation_nonce_hex": null,
+            "refresh_at_ms": null
+          }
+        }
+        """.data(using: .utf8)!
+        let registerPayload = """
+        {"certificate_id_hex": "cafe"}
+        """.data(using: .utf8)!
+
+        let draft = OfflineWalletCertificateDraft(
+            controller: accountId,
+            allowance: OfflineAllowanceCommitment(assetId: assetId,
+                                                  amount: "25",
+                                                  commitment: Data([0x01, 0x02])),
+            spendPublicKey: "ed0120deadbeef",
+            attestationReport: Data([0xAA, 0xBB]),
+            issuedAtMs: 100,
+            expiresAtMs: 200,
+            policy: OfflineWalletPolicy(maxBalance: "25", maxTxValue: "5", expiresAtMs: 200)
+        )
+
+        var queue: [ExpectedRequest] = [
+            ExpectedRequest(method: "POST", path: "/v1/offline/certificates/issue", responseBody: issuePayload, assertBody: { data in
+                let body = try XCTUnwrap(data)
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                let certificate = try XCTUnwrap(json["certificate"] as? [String: Any])
+                XCTAssertNil(certificate["operator_signature"])
+                XCTAssertNotNil(certificate["allowance"] as? [String: Any])
+            }),
+            ExpectedRequest(method: "POST", path: "/v1/offline/allowances", responseBody: registerPayload, assertBody: { data in
+                let body = try XCTUnwrap(data)
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(json["authority"] as? String, accountId)
+                XCTAssertNotNil(json["private_key"] as? String)
+                let certificate = try XCTUnwrap(json["certificate"] as? [String: Any])
+                XCTAssertNotNil(certificate["operator_signature"] as? String)
+            })
+        ]
+
+        OfflineStubURLProtocol.handler = { request in
+            guard !queue.isEmpty else {
+                throw URLError(.badServerResponse)
+            }
+            let expected = queue.removeFirst()
+            XCTAssertEqual(request.httpMethod, expected.method)
+            XCTAssertEqual(request.url?.path, expected.path)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            let body = try self.requestBody(from: request)
+            try expected.assertBody?(body)
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, expected.responseBody)
+        }
+
+        let client = makeClient()
+        let result = try await client.topUpOfflineAllowance(draft: draft,
+                                                            authority: accountId,
+                                                            privateKey: "ed0120deadbeef")
+        XCTAssertEqual(result.certificate.certificateIdHex, "cafe")
+        XCTAssertEqual(result.registration.certificateIdHex, "cafe")
+        XCTAssertTrue(queue.isEmpty)
+    }
+
+    func testOfflineTopUpRenewalRequests() async throws {
+        let accountId = "34mSYnDgbaJM58rbLoif4Tkp7G7pptR1KNF52GyuvUNd2XGP5NJ7ERtfk7Pbj5Fhtv2BW74vs"
+        let assetId = "rose#wonderland#\(accountId)"
+        let issuePayload = """
+        {
+          "certificate_id_hex": "beadfeed",
+          "certificate": {
+            "controller": "\(accountId)",
+            "allowance": {
+              "asset": "\(assetId)",
+              "amount": "30",
+              "commitment": [7, 8, 9]
+            },
+            "spend_public_key": "ed0120cafebabe",
+            "attestation_report": [9, 9, 9],
+            "issued_at_ms": 300,
+            "expires_at_ms": 400,
+            "policy": {
+              "max_balance": "30",
+              "max_tx_value": "6",
+              "expires_at_ms": 400
+            },
+            "operator_signature": "BB",
+            "metadata": {},
+            "verdict_id_hex": null,
+            "attestation_nonce_hex": null,
+            "refresh_at_ms": null
+          }
+        }
+        """.data(using: .utf8)!
+        let renewPayload = """
+        {"certificate_id_hex": "beadfeed"}
+        """.data(using: .utf8)!
+
+        let draft = OfflineWalletCertificateDraft(
+            controller: accountId,
+            allowance: OfflineAllowanceCommitment(assetId: assetId,
+                                                  amount: "30",
+                                                  commitment: Data([0x07, 0x08])),
+            spendPublicKey: "ed0120cafebabe",
+            attestationReport: Data([0xCC, 0xDD]),
+            issuedAtMs: 300,
+            expiresAtMs: 400,
+            policy: OfflineWalletPolicy(maxBalance: "30", maxTxValue: "6", expiresAtMs: 400)
+        )
+
+        var queue: [ExpectedRequest] = [
+            ExpectedRequest(method: "POST", path: "/v1/offline/certificates/deadbeef/renew/issue", responseBody: issuePayload, assertBody: { data in
+                let body = try XCTUnwrap(data)
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertNotNil(json["certificate"] as? [String: Any])
+            }),
+            ExpectedRequest(method: "POST", path: "/v1/offline/allowances/deadbeef/renew", responseBody: renewPayload, assertBody: { data in
+                let body = try XCTUnwrap(data)
+                let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                XCTAssertEqual(json["authority"] as? String, accountId)
+                let certificate = try XCTUnwrap(json["certificate"] as? [String: Any])
+                XCTAssertNotNil(certificate["operator_signature"] as? String)
+            })
+        ]
+
+        OfflineStubURLProtocol.handler = { request in
+            guard !queue.isEmpty else {
+                throw URLError(.badServerResponse)
+            }
+            let expected = queue.removeFirst()
+            XCTAssertEqual(request.httpMethod, expected.method)
+            XCTAssertEqual(request.url?.path, expected.path)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            let body = try self.requestBody(from: request)
+            try expected.assertBody?(body)
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, expected.responseBody)
+        }
+
+        let client = makeClient()
+        let result = try await client.topUpOfflineAllowanceRenewal(certificateIdHex: "deadbeef",
+                                                                   draft: draft,
+                                                                   authority: accountId,
+                                                                   privateKey: "ed0120cafebabe")
+        XCTAssertEqual(result.certificate.certificateIdHex, "beadfeed")
+        XCTAssertEqual(result.registration.certificateIdHex, "beadfeed")
+        XCTAssertTrue(queue.isEmpty)
+    }
 }

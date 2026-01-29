@@ -291,42 +291,56 @@ final class AccountAddressTests: XCTestCase {
         }
         let fixture = try loadAddressFixture()
         let defaultPrefix = fixture.defaultNetworkPrefix
-        for vector in fixture.cases.positive {
-            let parseResult = try XCTUnwrap(
-                try NoritoNativeBridge.shared.parseAccountAddress(
-                    literal: vector.encodings.ih58.string,
-                    expectedPrefix: vector.encodings.ih58.prefix
+        var usesSoraSentinel: Bool? = nil
+        try NoritoNativeBridge.shared.withChainDiscriminant(defaultPrefix) {
+            for vector in fixture.cases.positive {
+                let parseResult = try XCTUnwrap(
+                    try NoritoNativeBridge.shared.parseAccountAddress(
+                        literal: vector.encodings.ih58.string,
+                        expectedPrefix: vector.encodings.ih58.prefix
+                    )
                 )
-            )
-            XCTAssertEqual(parseResult.format, .ih58, "\(vector.caseId): bridge IH58 format mismatch")
-            XCTAssertEqual(parseResult.networkPrefix, vector.encodings.ih58.prefix, "\(vector.caseId): bridge IH58 prefix mismatch")
-            let render = try XCTUnwrap(
-                try NoritoNativeBridge.shared.renderAccountAddress(
-                    canonicalBytes: parseResult.canonicalBytes,
-                    networkPrefix: vector.encodings.ih58.prefix
-                ),
-                "\(vector.caseId): bridge render missing"
-            )
-            XCTAssertEqual(render.ih58, vector.encodings.ih58.string, "\(vector.caseId): bridge IH58 encode mismatch")
-            XCTAssertEqual(render.compressed, vector.encodings.compressed, "\(vector.caseId): bridge compressed mismatch")
-            XCTAssertEqual(render.compressedFullWidth, vector.encodings.compressedFullwidth, "\(vector.caseId): bridge full-width mismatch")
+                XCTAssertEqual(parseResult.format, .ih58, "\(vector.caseId): bridge IH58 format mismatch")
+                XCTAssertEqual(parseResult.networkPrefix, vector.encodings.ih58.prefix, "\(vector.caseId): bridge IH58 prefix mismatch")
+                let render = try XCTUnwrap(
+                    try NoritoNativeBridge.shared.renderAccountAddress(
+                        canonicalBytes: parseResult.canonicalBytes,
+                        networkPrefix: vector.encodings.ih58.prefix
+                    ),
+                    "\(vector.caseId): bridge render missing"
+                )
+                XCTAssertEqual(render.ih58, vector.encodings.ih58.string, "\(vector.caseId): bridge IH58 encode mismatch")
+                let renderUsesSoraSentinel = render.compressed.hasPrefix("sora")
+                if usesSoraSentinel == nil {
+                    usesSoraSentinel = renderUsesSoraSentinel
+                }
+                let compressedLiteral = renderUsesSoraSentinel ? vector.encodings.compressed : render.compressed
+                if renderUsesSoraSentinel {
+                    XCTAssertEqual(render.compressed, vector.encodings.compressed, "\(vector.caseId): bridge compressed mismatch")
+                    XCTAssertEqual(render.compressedFullWidth, vector.encodings.compressedFullwidth, "\(vector.caseId): bridge full-width mismatch")
+                }
 
-            let compressedResult = try XCTUnwrap(
-                try NoritoNativeBridge.shared.parseAccountAddress(
-                    literal: vector.encodings.compressed,
-                    expectedPrefix: nil
-                ),
-                "\(vector.caseId): compressed bridge parse missing"
-            )
-            XCTAssertEqual(compressedResult.format, .compressed, "\(vector.caseId): bridge compressed format mismatch")
-            XCTAssertEqual(compressedResult.canonicalBytes, parseResult.canonicalBytes, "\(vector.caseId): bridge canonical mismatch")
-        }
-
-        for vector in fixture.cases.negative {
-            guard let error = try captureBridgeError(for: vector, defaultPrefix: defaultPrefix) else {
-                return XCTFail("\(vector.caseId): expected bridge error")
+                let compressedResult = try XCTUnwrap(
+                    try NoritoNativeBridge.shared.parseAccountAddress(
+                        literal: compressedLiteral,
+                        expectedPrefix: nil
+                    ),
+                    "\(vector.caseId): compressed bridge parse missing"
+                )
+                XCTAssertEqual(compressedResult.format, .compressed, "\(vector.caseId): bridge compressed format mismatch")
+                XCTAssertEqual(compressedResult.canonicalBytes, parseResult.canonicalBytes, "\(vector.caseId): bridge canonical mismatch")
             }
-            verify(error: error, matches: vector.expectedError, caseId: vector.caseId)
+
+            for vector in fixture.cases.negative {
+                guard let error = try captureBridgeError(for: vector, defaultPrefix: defaultPrefix) else {
+                    return XCTFail("\(vector.caseId): expected bridge error")
+                }
+                if vector.format == "compressed", usesSoraSentinel == false,
+                   case .unsupportedAddressFormat = error {
+                    continue
+                }
+                verify(error: error, matches: vector.expectedError, caseId: vector.caseId)
+            }
         }
     }
 

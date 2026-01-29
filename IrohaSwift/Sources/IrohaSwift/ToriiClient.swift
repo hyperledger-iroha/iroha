@@ -1827,6 +1827,18 @@ public struct ToriiOfflineAllowanceRegisterResponse: Decodable, Sendable, Equata
     }
 }
 
+/// Aggregated result for the offline top-up helper (issue + register/renew).
+public struct ToriiOfflineTopUpResponse: Sendable, Equatable {
+    public let certificate: ToriiOfflineCertificateIssueResponse
+    public let registration: ToriiOfflineAllowanceRegisterResponse
+
+    public init(certificate: ToriiOfflineCertificateIssueResponse,
+                registration: ToriiOfflineAllowanceRegisterResponse) {
+        self.certificate = certificate
+        self.registration = registration
+    }
+}
+
 public struct ToriiOfflineSpendReceiptsSubmitRequest: Encodable, Sendable {
     public let receipts: [ToriiJSONValue]
 
@@ -7109,11 +7121,41 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     @discardableResult
+    public func renewOfflineAllowance(certificateIdHex: String,
+                                      requestBody: ToriiOfflineAllowanceRegisterRequest,
+                                      completion: @escaping (Result<ToriiOfflineAllowanceRegisterResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.renewOfflineAllowance(certificateIdHex: certificateIdHex,
+                                                                   requestBody: requestBody) }
+    }
+
+    @discardableResult
     public func issueOfflineCertificateRenewal(certificateIdHex: String,
                                                requestBody: ToriiOfflineCertificateIssueRequest,
                                                completion: @escaping (Result<ToriiOfflineCertificateIssueResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.issueOfflineCertificateRenewal(certificateIdHex: certificateIdHex,
                                                                             requestBody: requestBody) }
+    }
+
+    @discardableResult
+    public func topUpOfflineAllowance(draft: OfflineWalletCertificateDraft,
+                                      authority: String,
+                                      privateKey: String,
+                                      completion: @escaping (Result<ToriiOfflineTopUpResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.topUpOfflineAllowance(draft: draft,
+                                                                   authority: authority,
+                                                                   privateKey: privateKey) }
+    }
+
+    @discardableResult
+    public func topUpOfflineAllowanceRenewal(certificateIdHex: String,
+                                             draft: OfflineWalletCertificateDraft,
+                                             authority: String,
+                                             privateKey: String,
+                                             completion: @escaping (Result<ToriiOfflineTopUpResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.topUpOfflineAllowanceRenewal(certificateIdHex: certificateIdHex,
+                                                                          draft: draft,
+                                                                          authority: authority,
+                                                                          privateKey: privateKey) }
     }
 
     @discardableResult
@@ -7831,6 +7873,19 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiOfflineAllowanceRegisterResponse.self, from: data)
     }
 
+    public func renewOfflineAllowance(certificateIdHex: String,
+                                      requestBody: ToriiOfflineAllowanceRegisterRequest) async throws -> ToriiOfflineAllowanceRegisterResponse {
+        let encoder = JSONEncoder()
+        let body = try encoder.encode(requestBody)
+        let encodedId = encodePathComponent(certificateIdHex)
+        let request = try makeRequest(path: "/v1/offline/allowances/\(encodedId)/renew",
+                                      method: .post,
+                                      body: body,
+                                      headers: ["Content-Type": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiOfflineAllowanceRegisterResponse.self, from: data)
+    }
+
     public func issueOfflineCertificateRenewal(certificateIdHex: String,
                                                requestBody: ToriiOfflineCertificateIssueRequest) async throws -> ToriiOfflineCertificateIssueResponse {
         let encoder = JSONEncoder()
@@ -7842,6 +7897,35 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       headers: ["Content-Type": "application/json"])
         let data = try await data(for: request)
         return try decodeJSON(ToriiOfflineCertificateIssueResponse.self, from: data)
+    }
+
+    public func topUpOfflineAllowance(draft: OfflineWalletCertificateDraft,
+                                      authority: String,
+                                      privateKey: String) async throws -> ToriiOfflineTopUpResponse {
+        let issueRequest = try ToriiOfflineCertificateIssueRequest(certificate: draft)
+        let issued = try await issueOfflineCertificate(issueRequest)
+        let registerRequest = ToriiOfflineAllowanceRegisterRequest(authority: authority,
+                                                                   privateKey: privateKey,
+                                                                   certificate: issued.certificate)
+        let registered = try await registerOfflineAllowance(registerRequest)
+        try ensureTopUpCertificateIdsMatch(issued: issued, registered: registered)
+        return ToriiOfflineTopUpResponse(certificate: issued, registration: registered)
+    }
+
+    public func topUpOfflineAllowanceRenewal(certificateIdHex: String,
+                                             draft: OfflineWalletCertificateDraft,
+                                             authority: String,
+                                             privateKey: String) async throws -> ToriiOfflineTopUpResponse {
+        let issueRequest = try ToriiOfflineCertificateIssueRequest(certificate: draft)
+        let issued = try await issueOfflineCertificateRenewal(certificateIdHex: certificateIdHex,
+                                                              requestBody: issueRequest)
+        let renewRequest = ToriiOfflineAllowanceRegisterRequest(authority: authority,
+                                                                privateKey: privateKey,
+                                                                certificate: issued.certificate)
+        let registered = try await renewOfflineAllowance(certificateIdHex: certificateIdHex,
+                                                         requestBody: renewRequest)
+        try ensureTopUpCertificateIdsMatch(issued: issued, registered: registered)
+        return ToriiOfflineTopUpResponse(certificate: issued, registration: registered)
     }
 
     public func submitOfflineSpendReceipts(_ requestBody: ToriiOfflineSpendReceiptsSubmitRequest) async throws -> ToriiOfflineSpendReceiptsSubmitResponse {
@@ -8871,6 +8955,17 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         dataModelLock.lock()
         dataModelCompatibility = .compatible(version: expected)
         dataModelLock.unlock()
+    }
+
+    private func ensureTopUpCertificateIdsMatch(issued: ToriiOfflineCertificateIssueResponse,
+                                                registered: ToriiOfflineAllowanceRegisterResponse) throws {
+        let issuedId = issued.certificateIdHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let registeredId = registered.certificateIdHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if issuedId != registeredId {
+            throw ToriiClientError.invalidPayload(
+                "Offline top-up certificate mismatch (issued \(issued.certificateIdHex), registered \(registered.certificateIdHex))."
+            )
+        }
     }
 
     public func submitTransaction(data: Data,

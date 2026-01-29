@@ -102,4 +102,97 @@ final class ConnectKeyStoreTests: XCTestCase {
         }
     }
 
+    func testLegacyHmacOrderingAccepted() throws {
+        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCryptoAvailable,
+                      "NoritoBridge connect crypto symbols not linked")
+        let dir = try temporaryDirectory()
+        let store = ConnectKeyStore(directory: dir, configuration: .init(preferKeychain: false))
+        let label = "wallet"
+
+        _ = try store.generateOrLoad(label: label)
+
+        let path = dir.appendingPathComponent("\(label).json")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let envelope = try decoder.decode(TestEnvelope.self, from: Data(contentsOf: path))
+
+        let integrityKey = try Data(contentsOf: dir.appendingPathComponent(".integrity.key"))
+        let legacyHmac = try makeLegacyHmac(label: label, key: integrityKey, payload: envelope.payload)
+        let rewritten = TestEnvelope(version: envelope.version, payload: envelope.payload, hmac: legacyHmac)
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(rewritten).write(to: path)
+
+        let (pair, attestation) = try store.generateOrLoad(label: label)
+        XCTAssertEqual(pair.publicKey, envelope.payload.keyPair.publicKey)
+        XCTAssertEqual(pair.privateKey, envelope.payload.keyPair.privateKey)
+        XCTAssertEqual(attestation, envelope.payload.attestation)
+    }
+
+}
+
+private struct TestEnvelope: Codable {
+    let version: Int
+    let payload: TestStoredKey
+    let hmac: String
+}
+
+private struct TestStoredKey: Codable {
+    let keyPair: ConnectKeyPair
+    let attestation: ConnectKeyStore.Attestation
+}
+
+private func makeLegacyHmac(label: String, key: Data, payload: TestStoredKey) throws -> String {
+    let publicKey = try encodeJSONString(payload.keyPair.publicKey.base64EncodedString())
+    let privateKey = try encodeJSONString(payload.keyPair.privateKey.base64EncodedString())
+    let publicKeyDigest = try encodeJSONString(payload.attestation.publicKeyDigest.base64EncodedString())
+    let deviceLabel = try encodeJSONString(payload.attestation.deviceLabel)
+    let createdAt = try encodeDateJSONString(payload.attestation.createdAt)
+
+    let keyPair = jsonObject(keys: ["publicKey", "privateKey"], values: [
+        "publicKey": publicKey,
+        "privateKey": privateKey,
+    ])
+    let attestation = jsonObject(keys: ["deviceLabel", "createdAt", "publicKeyDigest"], values: [
+        "deviceLabel": deviceLabel,
+        "createdAt": createdAt,
+        "publicKeyDigest": publicKeyDigest,
+    ])
+    let payloadJSON = jsonObject(keys: ["keyPair", "attestation"], values: [
+        "keyPair": keyPair,
+        "attestation": attestation,
+    ])
+
+    let symmetricKey = SymmetricKey(data: key)
+    var hmac = HMAC<SHA256>(key: symmetricKey)
+    hmac.update(data: Data(label.utf8))
+    hmac.update(data: Data(payloadJSON.utf8))
+    return Data(hmac.finalize()).base64EncodedString()
+}
+
+private func jsonObject(keys: [String], values: [String: String]) -> String {
+    let parts = keys.map { key in
+        "\"\(key)\":\(values[key] ?? "null")"
+    }
+    return "{\(parts.joined(separator: ","))}"
+}
+
+private func encodeJSONString(_ value: String) throws -> String {
+    let encoder = JSONEncoder()
+    let data = try encoder.encode(value)
+    guard let string = String(data: data, encoding: .utf8) else {
+        throw CocoaError(.fileWriteUnknown)
+    }
+    return string
+}
+
+private func encodeDateJSONString(_ date: Date) throws -> String {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let data = try encoder.encode(date)
+    guard let string = String(data: data, encoding: .utf8) else {
+        throw CocoaError(.fileWriteUnknown)
+    }
+    return string
 }

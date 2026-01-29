@@ -2481,63 +2481,6 @@ impl MissingBlockRequest {
 enum MissingBlockPriority {
     Background,
     Consensus,
-    Conflict,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CommitConflictCandidate {
-    view: u64,
-    hash: HashOf<BlockHeader>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CommitConflictWinner {
-    Local,
-    Incoming,
-}
-
-fn commit_conflict_winner(
-    local: CommitConflictCandidate,
-    incoming: CommitConflictCandidate,
-) -> CommitConflictWinner {
-    match local.view.cmp(&incoming.view) {
-        std::cmp::Ordering::Greater => CommitConflictWinner::Local,
-        std::cmp::Ordering::Less => CommitConflictWinner::Incoming,
-        std::cmp::Ordering::Equal => {
-            if local.hash <= incoming.hash {
-                CommitConflictWinner::Local
-            } else {
-                CommitConflictWinner::Incoming
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct CommitConflictRecovery {
-    height: u64,
-    local: CommitConflictCandidate,
-    incoming: CommitConflictCandidate,
-    incoming_qc: crate::sumeragi::consensus::Qc,
-    stake_snapshot: Option<crate::sumeragi::stake_snapshot::CommitStakeSnapshot>,
-    detected_at: Instant,
-    awaiting_block: bool,
-    requires_restart: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CommitConflictSource {
-    BlockSyncUpdate,
-    CommitQc,
-}
-
-impl CommitConflictSource {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::BlockSyncUpdate => "block_sync_update",
-            Self::CommitQc => "commit_qc",
-        }
-    }
 }
 
 fn phase_rank(phase: crate::sumeragi::consensus::Phase) -> u8 {
@@ -2762,7 +2705,7 @@ fn send_missing_block_request(
     }
 
     let priority = match priority {
-        MissingBlockPriority::Consensus | MissingBlockPriority::Conflict => {
+        MissingBlockPriority::Consensus => {
             Some(super::message::FetchPendingBlockPriority::Consensus)
         }
         MissingBlockPriority::Background => None,
@@ -4172,7 +4115,6 @@ pub(super) struct Actor {
     epoch_manager: Option<EpochManager>,
     npos_collectors: Option<NposCollectorConfig>,
     pending: PendingBlockState,
-    commit_conflict: Option<CommitConflictRecovery>,
     voting_block: Option<VotingBlock>,
     pending_roster_activation: Option<(u64, Vec<PeerId>)>,
     /// Staged runtime consensus mode awaiting a live flip.
@@ -7539,307 +7481,6 @@ impl Actor {
         self.kura.block_payload_available_by_hash(hash)
     }
 
-    fn commit_conflict_active(&self) -> bool {
-        self.commit_conflict.is_some()
-    }
-
-    fn handle_commit_conflict_with_block(
-        &mut self,
-        source: CommitConflictSource,
-        height: u64,
-        local: CommitConflictCandidate,
-        incoming: CommitConflictCandidate,
-        incoming_qc: crate::sumeragi::consensus::Qc,
-        stake_snapshot: Option<crate::sumeragi::stake_snapshot::CommitStakeSnapshot>,
-        block: SignedBlock,
-    ) -> Result<()> {
-        self.handle_commit_conflict_internal(
-            source,
-            height,
-            local,
-            incoming,
-            incoming_qc,
-            stake_snapshot,
-            Some(block),
-        )
-    }
-
-    fn handle_commit_conflict_with_qc(
-        &mut self,
-        source: CommitConflictSource,
-        height: u64,
-        local: CommitConflictCandidate,
-        incoming: CommitConflictCandidate,
-        incoming_qc: crate::sumeragi::consensus::Qc,
-        stake_snapshot: Option<crate::sumeragi::stake_snapshot::CommitStakeSnapshot>,
-    ) -> Result<()> {
-        self.handle_commit_conflict_internal(
-            source,
-            height,
-            local,
-            incoming,
-            incoming_qc,
-            stake_snapshot,
-            None,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn handle_commit_conflict_internal(
-        &mut self,
-        source: CommitConflictSource,
-        height: u64,
-        local: CommitConflictCandidate,
-        incoming: CommitConflictCandidate,
-        incoming_qc: crate::sumeragi::consensus::Qc,
-        stake_snapshot: Option<crate::sumeragi::stake_snapshot::CommitStakeSnapshot>,
-        incoming_block: Option<SignedBlock>,
-    ) -> Result<()> {
-        if let Some(existing) = self.commit_conflict.as_ref() {
-            warn!(
-                height,
-                existing_height = existing.height,
-                existing_hash = %existing.incoming.hash,
-                source = source.as_str(),
-                "commit conflict already in progress; ignoring"
-            );
-            return Ok(());
-        }
-
-        let expected_epoch = self.epoch_for_height(height);
-        let winner = commit_conflict_winner(local, incoming);
-        let chosen = match winner {
-            CommitConflictWinner::Local => local,
-            CommitConflictWinner::Incoming => incoming,
-        };
-        info!(
-            height,
-            local_hash = %local.hash,
-            incoming_hash = %incoming.hash,
-            chosen_hash = %chosen.hash,
-            local_view = local.view,
-            incoming_view = incoming.view,
-            chosen_view = chosen.view,
-            epoch = expected_epoch,
-            source = source.as_str(),
-            "detected commit conflict at committed height"
-        );
-        if let Some(telemetry) = self.telemetry_handle() {
-            telemetry.inc_commit_conflict_detected();
-        }
-
-        match winner {
-            CommitConflictWinner::Local => {
-                self.broadcast_local_commit_qc(height, local.hash);
-                Ok(())
-            }
-            CommitConflictWinner::Incoming => {
-                let mut conflict = CommitConflictRecovery {
-                    height,
-                    local,
-                    incoming,
-                    incoming_qc: incoming_qc.clone(),
-                    stake_snapshot: stake_snapshot.clone(),
-                    detected_at: Instant::now(),
-                    awaiting_block: incoming_block.is_none(),
-                    requires_restart: false,
-                };
-                if let Some(block) = incoming_block {
-                    let recovered = self.recover_commit_conflict_with_block(
-                        block,
-                        incoming_qc,
-                        stake_snapshot,
-                    )?;
-                    if recovered {
-                        return Ok(());
-                    }
-                    conflict.requires_restart = true;
-                    conflict.awaiting_block = false;
-                } else {
-                    self.request_missing_block_for_commit_conflict(&incoming_qc);
-                }
-                self.commit_conflict = Some(conflict);
-                Ok(())
-            }
-        }
-    }
-
-    fn broadcast_local_commit_qc(&mut self, height: u64, hash: HashOf<BlockHeader>) {
-        let Some(qc) = self.local_commit_qc_for_block(height, hash) else {
-            warn!(
-                height,
-                block = %hash,
-                "missing local commit QC when broadcasting conflict winner"
-            );
-            return;
-        };
-        self.broadcast_commit_qc_to_roster(&qc);
-    }
-
-    fn local_commit_qc_for_block(
-        &self,
-        height: u64,
-        hash: HashOf<BlockHeader>,
-    ) -> Option<crate::sumeragi::consensus::Qc> {
-        self.state
-            .commit_roster_snapshot_for_block(height, hash)
-            .map(|snapshot| snapshot.commit_qc)
-            .or_else(|| {
-                super::status::commit_qc_history()
-                    .into_iter()
-                    .filter(|qc| qc.height == height && qc.subject_block_hash == hash)
-                    .max_by_key(|qc| qc.view)
-            })
-    }
-
-    fn broadcast_commit_qc_to_roster(&mut self, qc: &crate::sumeragi::consensus::Qc) {
-        if qc.validator_set.is_empty() {
-            return;
-        }
-        let msg = BlockMessage::Qc(qc.clone());
-        let local_peer_id = self.common_config.peer.id().clone();
-        for peer in &qc.validator_set {
-            if peer == &local_peer_id {
-                continue;
-            }
-            self.schedule_background(BackgroundRequest::Post {
-                peer: peer.clone(),
-                msg: msg.clone(),
-            });
-        }
-    }
-
-    fn request_missing_block_for_commit_conflict(
-        &mut self,
-        qc: &crate::sumeragi::consensus::Qc,
-    ) {
-        let now = Instant::now();
-        let da_enabled = self.runtime_da_enabled();
-        let retry_window = self.quorum_timeout(da_enabled);
-        let topology = super::network_topology::Topology::new(qc.validator_set.clone());
-        let signers = BTreeSet::new();
-        let decision = plan_missing_block_fetch(
-            &mut self.pending.missing_block_requests,
-            qc.subject_block_hash,
-            qc.height,
-            qc.view,
-            qc.phase,
-            MissingBlockPriority::Conflict,
-            &signers,
-            &topology,
-            now,
-            retry_window,
-            Some(retry_window),
-            self.config.recovery.missing_block_signer_fallback_attempts,
-        );
-        let dwell = self
-            .pending
-            .missing_block_requests
-            .get(&qc.subject_block_hash)
-            .map(|stats| now.saturating_duration_since(stats.first_seen))
-            .unwrap_or_default();
-        let dwell_ms = dwell.as_millis();
-        let targets_len = match &decision {
-            MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
-            _ => 0,
-        };
-        self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
-        match decision {
-            MissingBlockFetchDecision::Requested {
-                targets,
-                target_kind,
-            } => {
-                self.request_missing_block(
-                    qc.subject_block_hash,
-                    qc.height,
-                    qc.view,
-                    MissingBlockPriority::Conflict,
-                    &targets,
-                );
-                iroha_logger::info!(
-                    height = qc.height,
-                    view = qc.view,
-                    phase = ?qc.phase,
-                    block = ?qc.subject_block_hash,
-                    targets = ?targets,
-                    target_kind = target_kind.label(),
-                    retry_window_ms = retry_window.as_millis(),
-                    dwell_ms,
-                    "requested missing block payload for commit-conflict recovery"
-                );
-            }
-            MissingBlockFetchDecision::NoTargets => {
-                iroha_logger::warn!(
-                    height = qc.height,
-                    view = qc.view,
-                    phase = ?qc.phase,
-                    block = ?qc.subject_block_hash,
-                    retry_window_ms = retry_window.as_millis(),
-                    dwell_ms,
-                    "commit-conflict recovery cannot request missing block; no targets"
-                );
-            }
-            MissingBlockFetchDecision::Backoff => {
-                iroha_logger::info!(
-                    height = qc.height,
-                    view = qc.view,
-                    phase = ?qc.phase,
-                    block = ?qc.subject_block_hash,
-                    retry_window_ms = retry_window.as_millis(),
-                    dwell_ms,
-                    "commit-conflict recovery missing-block request backoff"
-                );
-            }
-        }
-    }
-
-    fn recover_commit_conflict_with_block(
-        &mut self,
-        block: SignedBlock,
-        commit_qc: crate::sumeragi::consensus::Qc,
-        stake_snapshot: Option<crate::sumeragi::stake_snapshot::CommitStakeSnapshot>,
-    ) -> Result<bool> {
-        let height = block.header().height().get();
-        let retain_height = height.saturating_sub(1);
-        if retain_height == 0 {
-            warn!(
-                height,
-                "commit conflict recovery refused to prune genesis height"
-            );
-            return Ok(false);
-        }
-        self.kura.prune_to_height(retain_height)?;
-        let block_hash = block.hash();
-        self.kura
-            .store_block(Arc::new(block))
-            .map_err(|err| eyre!(err))?;
-        self.clear_missing_block_request(&block_hash, MissingBlockClearReason::PayloadAvailable);
-
-        let checkpoint = ValidatorSetCheckpoint::new(
-            commit_qc.height,
-            commit_qc.view,
-            commit_qc.subject_block_hash,
-            commit_qc.parent_state_root,
-            commit_qc.post_state_root,
-            commit_qc.validator_set.clone(),
-            commit_qc.aggregate.signers_bitmap.clone(),
-            commit_qc.aggregate.bls_aggregate_signature.clone(),
-            commit_qc.validator_set_hash_version,
-            None,
-        );
-        let _ = self
-            .state
-            .record_commit_roster(&commit_qc, &checkpoint, stake_snapshot);
-
-        // TODO: rebuild in-memory state from Kura after pruning for commit-conflict recovery.
-        warn!(
-            height,
-            block = %block_hash,
-            "commit conflict recovery pruned Kura but state replay is not implemented; restart required"
-        );
-        Ok(false)
-    }
-
     fn block_known_locally(&self, hash: HashOf<BlockHeader>) -> bool {
         self.pending
             .pending_blocks
@@ -8732,7 +8373,6 @@ impl Actor {
                 last_commit_pipeline_run: initial_commit_pipeline_run,
                 commit_pipeline_wakeup: false,
             },
-            commit_conflict: None,
             voting_block: None,
             pending_roster_activation,
             pending_mode_flip: None,
@@ -9731,12 +9371,10 @@ impl Actor {
             || rbc_rebroadcast_progress
             || rbc_outbound_progress
             || rbc_session_ttl_progress;
-        let conflict_active = self.commit_conflict_active();
         let commit_wakeup = self.pending.commit_pipeline_wakeup;
-        if !conflict_active
-            && (should_run_commit_pipeline_on_tick(self.active_pending_blocks_len())
-                || self.subsystems.commit.inflight.is_some()
-                || commit_wakeup)
+        if should_run_commit_pipeline_on_tick(self.active_pending_blocks_len())
+            || self.subsystems.commit.inflight.is_some()
+            || commit_wakeup
         {
             self.pending.commit_pipeline_wakeup = false;
             let pipeline_start = Instant::now();
@@ -9764,11 +9402,10 @@ impl Actor {
             );
         }
         let queue_ready = queue_len > 0 && !proposal_backpressure.active_pending;
-        if queue_ready && !conflict_active {
+        if queue_ready {
             self.subsystems.propose.pacemaker.next_deadline = now;
         }
         if queue_ready
-            && !conflict_active
             && !proposal_backpressure.should_defer()
             && self.subsystems.commit.inflight.is_none()
         {
@@ -9802,8 +9439,7 @@ impl Actor {
         if log_initial_deferral || log_fire_deferral {
             self.on_pacemaker_backpressure_deferral(now, state);
         }
-        if !conflict_active && should_attempt_proposal && self.subsystems.commit.inflight.is_none()
-        {
+        if should_attempt_proposal && self.subsystems.commit.inflight.is_none() {
             let propose_start = Instant::now();
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.pacemaker_attempt");
             if Self::tick_budget_exhausted(tick_deadline, propose_start) {

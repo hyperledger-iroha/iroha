@@ -3967,7 +3967,7 @@ async fn block_sync_update_drops_conflicting_committed_block_without_roster_coun
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn block_sync_update_commit_conflict_with_valid_qc_sets_restart_required() {
+async fn block_sync_update_rejects_conflicting_commit_qc_and_keeps_local_block() {
     super::status::reset_block_sync_counters_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -3977,6 +3977,7 @@ async fn block_sync_update_commit_conflict_with_valid_qc_sets_restart_required()
 
     let block1 = sample_block(1, 0, None);
     let block2 = sample_block(2, 0, Some(block1.hash()));
+    let block2_hash = block2.hash();
     actor.kura.store_block(block1.clone()).expect("store block 1");
     actor.kura.store_block(block2).expect("store block 2");
 
@@ -4004,24 +4005,35 @@ async fn block_sync_update_commit_conflict_with_valid_qc_sets_restart_required()
         .handle_block_sync_update(update, None)
         .expect("block sync update");
 
-    let conflict = actor
-        .commit_conflict
-        .as_ref()
-        .expect("commit conflict recorded");
-    assert_eq!(conflict.height, 2);
-    assert!(conflict.requires_restart);
-    assert!(!conflict.awaiting_block);
     let kura_block = actor
         .kura
         .get_block(NonZeroUsize::new(2).expect("height is non-zero"))
         .expect("kura block");
-    assert_eq!(kura_block.hash(), conflicting.hash());
+    assert_eq!(kura_block.hash(), block2_hash);
+
+    let evidence_view = actor.state.world.consensus_evidence.view();
+    let mut found = false;
+    for (_, record) in evidence_view.iter() {
+        if let crate::sumeragi::consensus::EvidencePayload::InvalidQc {
+            certificate,
+            reason,
+        } = &record.evidence.payload
+        {
+            if certificate.subject_block_hash == conflicting.hash()
+                && reason == "commit_conflict_finality"
+            {
+                found = true;
+                break;
+            }
+        }
+    }
+    assert!(found, "commit-conflict evidence should be recorded");
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn handle_qc_conflicting_committed_height_requests_commit_conflict_recovery() {
+async fn handle_qc_rejects_conflicting_commit_qc_and_keeps_local_block() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -4030,6 +4042,7 @@ async fn handle_qc_conflicting_committed_height_requests_commit_conflict_recover
 
     let block1 = sample_block(1, 0, None);
     let block2 = sample_block(2, 0, Some(block1.hash()));
+    let block2_hash = block2.hash();
     actor.kura.store_block(block1.clone()).expect("store block 1");
     actor.kura.store_block(block2).expect("store block 2");
 
@@ -4053,52 +4066,39 @@ async fn handle_qc_conflicting_committed_height_requests_commit_conflict_recover
 
     actor.handle_qc(qc).expect("handle QC");
 
-    let conflict = actor
-        .commit_conflict
-        .as_ref()
-        .expect("commit conflict recorded");
-    assert_eq!(conflict.height, 2);
-    assert!(conflict.awaiting_block);
-    assert!(!conflict.requires_restart);
-    assert_eq!(conflict.incoming.hash, conflicting.hash());
+    let kura_block = actor
+        .kura
+        .get_block(NonZeroUsize::new(2).expect("height is non-zero"))
+        .expect("kura block");
+    assert_eq!(kura_block.hash(), block2_hash);
+
     assert!(
-        actor
+        !actor
             .pending
             .missing_block_requests
             .contains_key(&conflicting.hash()),
-        "missing-block request should be tracked"
+        "conflicting commit QC should not trigger missing-block requests"
     );
+
+    let evidence_view = actor.state.world.consensus_evidence.view();
+    let mut found = false;
+    for (_, record) in evidence_view.iter() {
+        if let crate::sumeragi::consensus::EvidencePayload::InvalidQc {
+            certificate,
+            reason,
+        } = &record.evidence.payload
+        {
+            if certificate.subject_block_hash == conflicting.hash()
+                && reason == "commit_conflict_finality"
+            {
+                found = true;
+                break;
+            }
+        }
+    }
+    assert!(found, "commit-conflict evidence should be recorded");
 
     harness.shutdown.send();
-}
-
-#[test]
-fn commit_conflict_winner_prefers_view_then_hash() {
-    let hash_low =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x10; Hash::LENGTH]));
-    let hash_high =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x20; Hash::LENGTH]));
-    let local = super::CommitConflictCandidate {
-        view: 3,
-        hash: hash_low,
-    };
-    let incoming_higher_view = super::CommitConflictCandidate {
-        view: 4,
-        hash: hash_high,
-    };
-    assert_eq!(
-        super::commit_conflict_winner(local, incoming_higher_view),
-        super::CommitConflictWinner::Incoming
-    );
-
-    let incoming_same_view = super::CommitConflictCandidate {
-        view: 3,
-        hash: hash_high,
-    };
-    assert_eq!(
-        super::commit_conflict_winner(local, incoming_same_view),
-        super::CommitConflictWinner::Local
-    );
 }
 
 #[test]

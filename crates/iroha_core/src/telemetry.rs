@@ -6581,9 +6581,11 @@ impl Telemetry {
 
     /// Increment RBC rebroadcast skip counter labeled by kind (payload|ready).
     pub fn inc_rbc_rebroadcast_skipped(&self, kind: &'static str) {
-        let _ = kind;
         if self.enabled.load(Ordering::Relaxed) {
-            // TODO: wire to telemetry metric once registry exposes rebroadcast skips.
+            self.metrics
+                .sumeragi_rbc_rebroadcast_skipped_total
+                .with_label_values(&[kind])
+                .inc();
         }
     }
 
@@ -12753,16 +12755,25 @@ mod tests {
     async fn rbc_rebroadcast_skipped_counter_tracks_kinds() {
         let sut = SystemUnderTest::new();
 
+        let metrics = sut.telemetry.metrics().await;
+        let payload_base = metrics
+            .sumeragi_rbc_rebroadcast_skipped_total
+            .with_label_values(&["payload"])
+            .get();
+        let ready_base = metrics
+            .sumeragi_rbc_rebroadcast_skipped_total
+            .with_label_values(&["ready"])
+            .get();
+
         sut.telemetry.inc_rbc_rebroadcast_skipped("payload");
         sut.telemetry.inc_rbc_rebroadcast_skipped("ready");
 
-        let metrics = sut.telemetry.metrics().await;
         assert_eq!(
             metrics
                 .sumeragi_rbc_rebroadcast_skipped_total
                 .with_label_values(&["payload"])
                 .get(),
-            1,
+            payload_base + 1,
             "payload rebroadcast skip counter should increment"
         );
         assert_eq!(
@@ -12770,7 +12781,7 @@ mod tests {
                 .sumeragi_rbc_rebroadcast_skipped_total
                 .with_label_values(&["ready"])
                 .get(),
-            1,
+            ready_base + 1,
             "READY rebroadcast skip counter should increment"
         );
     }

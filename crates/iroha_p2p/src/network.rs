@@ -634,7 +634,7 @@ pub fn network_queue_depth_low() -> u64 {
     NETWORK_QUEUE_DEPTH_LOW.load(Ordering::Relaxed)
 }
 
-// TODO: Temporary queue-depth instrumentation for soak diagnostics; remove or formalize later.
+// Update cached queue depths for telemetry metrics.
 fn update_network_queue_depth_high(len: usize) {
     NETWORK_QUEUE_DEPTH_HIGH.store(len as u64, Ordering::Relaxed);
 }
