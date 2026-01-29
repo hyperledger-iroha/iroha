@@ -2449,6 +2449,26 @@ pub mod sumeragi {
     pub const ADAPTIVE_COLLECTOR_REDUNDANT_R: u8 = 3;
     /// Cooldown (ms) before adaptive mitigation may re-apply or reset after a trigger.
     pub const ADAPTIVE_COOLDOWN_MS: u64 = 5_000;
+    /// Enable deterministic pacing governor by default.
+    pub const PACING_GOVERNOR_ENABLED: bool = false;
+    /// Number of recent blocks to sample for the pacing governor window.
+    pub const PACING_GOVERNOR_WINDOW_BLOCKS: usize = 20;
+    /// View-change pressure threshold (permille of view-change increments per block).
+    pub const PACING_GOVERNOR_VIEW_CHANGE_PRESSURE_PERMILLE: u32 = 200;
+    /// View-change pressure clear threshold (permille of view-change increments per block).
+    pub const PACING_GOVERNOR_VIEW_CHANGE_CLEAR_PERMILLE: u32 = 50;
+    /// Commit spacing pressure threshold (permille of target block time).
+    pub const PACING_GOVERNOR_COMMIT_SPACING_PRESSURE_PERMILLE: u32 = 1_300;
+    /// Commit spacing clear threshold (permille of target block time).
+    pub const PACING_GOVERNOR_COMMIT_SPACING_CLEAR_PERMILLE: u32 = 1_100;
+    /// Pacing factor step-up (basis points).
+    pub const PACING_GOVERNOR_STEP_UP_BPS: u32 = 1_000;
+    /// Pacing factor step-down (basis points).
+    pub const PACING_GOVERNOR_STEP_DOWN_BPS: u32 = 100;
+    /// Minimum pacing factor (basis points).
+    pub const PACING_GOVERNOR_MIN_FACTOR_BPS: u32 = 10_000;
+    /// Maximum pacing factor (basis points).
+    pub const PACING_GOVERNOR_MAX_FACTOR_BPS: u32 = 20_000;
     /// Pacemaker backoff multiplier for view-change time increments (>=1).
     pub const PACEMAKER_BACKOFF_MULTIPLIER: u32 = 1;
     /// Pacemaker RTT floor multiplier applied to avg RTT (>=1).

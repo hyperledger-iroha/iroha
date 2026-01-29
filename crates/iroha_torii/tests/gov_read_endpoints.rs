@@ -236,7 +236,7 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
         amount: 10_000u128,
         slashed: 0,
         expiry_height: 1_000,
-        direction: 0,         // approve
+        direction: 0, // approve
         duration_blocks,
     };
     locks.locks.insert(owner, rec);

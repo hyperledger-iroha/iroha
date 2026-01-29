@@ -874,6 +874,38 @@ impl PayloadCtxGuard {
         PayloadCtxGuard { prev, flags_guard }
     }
 
+    /// Install a payload context with an explicit logical length while preserving
+    /// any active schema/flag state from the current decode context.
+    pub fn enter_with_len(bytes: &[u8], logical_len: usize) -> Self {
+        let prev = payload_ctx_state();
+        let schema = prev.as_ref().and_then(|state| state.schema);
+        let (flags_opt, hint_opt) = if let Some(ref state) = prev {
+            if state.flags_active {
+                (Some(state.flags), Some(state.flags_hint))
+            } else if let Some(effective) = current_decode_flags_effective() {
+                (Some(effective), Some(effective))
+            } else {
+                (None, None)
+            }
+        } else if let Some(effective) = current_decode_flags_effective() {
+            (Some(effective), Some(effective))
+        } else {
+            (None, None)
+        };
+        set_payload_ctx_state_with_len(bytes, logical_len, schema, flags_opt, hint_opt);
+        let flags_guard = if !decode_flags_active() {
+            match (flags_opt, hint_opt) {
+                (Some(flags), Some(hint)) => Some(DecodeFlagsGuard::enter_with_hint(flags, hint)),
+                (Some(flags), None) => Some(DecodeFlagsGuard::enter_with_hint(flags, flags)),
+                (None, Some(hint)) => Some(DecodeFlagsGuard::enter_with_hint(hint, hint)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        PayloadCtxGuard { prev, flags_guard }
+    }
+
     pub fn enter_with_schema(bytes: &[u8], schema: [u8; 16]) -> Self {
         let prev = payload_ctx_state();
         set_payload_ctx_with_schema(bytes, schema);
@@ -959,6 +991,27 @@ impl PayloadCtxGuard {
         let needs_guard = !prev_active || prev_flags != flags || prev_hint != flags;
         let flags_guard = if needs_guard {
             Some(DecodeFlagsGuard::enter_with_hint(flags, flags))
+        } else {
+            None
+        };
+        PayloadCtxGuard { prev, flags_guard }
+    }
+
+    /// Install a payload context using `logical_len` bytes and explicit flags + hint.
+    pub fn enter_with_flags_hint_len(
+        bytes: &[u8],
+        logical_len: usize,
+        flags: u8,
+        hint: u8,
+    ) -> Self {
+        let prev = payload_ctx_state();
+        let prev_active = decode_flags_active();
+        let prev_flags = get_decode_flags();
+        let prev_hint = DECODE_FLAGS_HINT.with(|c| c.get());
+        set_payload_ctx_state_with_len(bytes, logical_len, None, Some(flags), Some(hint));
+        let needs_guard = !prev_active || prev_flags != flags || prev_hint != hint;
+        let flags_guard = if needs_guard {
+            Some(DecodeFlagsGuard::enter_with_hint(flags, hint))
         } else {
             None
         };
@@ -4615,6 +4668,25 @@ pub mod stream {
     }
 
     impl SeqLenDecoder {
+        #[inline]
+        fn read_u64_len<R: Read>(reader: &mut DigestingReader<R>) -> Result<u64, Error> {
+            reader.read_u64().map_err(|err| {
+                if err.kind() == io::ErrorKind::UnexpectedEof {
+                    Error::LengthMismatch
+                } else {
+                    Error::Io(err)
+                }
+            })
+        }
+
+        #[inline]
+        fn map_unexpected_eof(err: Error) -> Error {
+            match err {
+                Error::Io(e) if e.kind() == io::ErrorKind::UnexpectedEof => Error::LengthMismatch,
+                other => other,
+            }
+        }
+
         pub(crate) fn new<R: Read>(
             reader: &mut DigestingReader<R>,
             flags: u8,
@@ -4629,14 +4701,14 @@ pub mod stream {
             }
 
             let packed = (flags & header_flags::PACKED_SEQ) != 0;
-            let len = reader.read_u64()?;
+            let len = Self::read_u64_len(reader)?;
             let total = u64_to_usize(len)?;
 
             let mode = if packed {
                 let entries = total.checked_add(1).ok_or(Error::LengthMismatch)?;
                 let mut offsets = Vec::with_capacity(entries);
                 for _ in 0..entries {
-                    let raw = reader.read_u64()?;
+                    let raw = Self::read_u64_len(reader)?;
                     offsets.push(u64_to_usize(raw)?);
                 }
                 if offsets.first().copied().unwrap_or(0) != 0 {
@@ -4667,9 +4739,9 @@ pub mod stream {
                         return Ok(None);
                     }
                     let len = if (self.flags & header_flags::COMPACT_LEN) != 0 {
-                        reader.read_varint_len()?
+                        reader.read_varint_len().map_err(Self::map_unexpected_eof)?
                     } else {
-                        let raw = reader.read_u64()?;
+                        let raw = Self::read_u64_len(reader)?;
                         u64_to_usize(raw)?
                     };
                     *remaining -= 1;
@@ -5784,7 +5856,7 @@ pub fn from_bytes_view<'a>(bytes: &'a [u8]) -> Result<ArchiveView<'a>, Error> {
 /// Convenience: decode a value of `T` directly from bytes via archive view.
 pub fn decode_from_bytes<'a, T>(bytes: &'a [u8]) -> Result<T, Error>
 where
-    T: crate::NoritoDeserialize<'a> + 'a,
+    T: crate::NoritoDeserialize<'a> + DecodeFromSlice<'a> + 'a,
 {
     let view = from_bytes_view(bytes)?;
     if view.schema() != T::schema_hash() {
@@ -5800,34 +5872,24 @@ where
     let header_len = core::mem::size_of::<Archived<T>>();
     let ptr_us = payload_src.as_ptr() as usize;
     let needs_realign = align > 1 && !ptr_us.is_multiple_of(align);
+    let needs_slice = needs_realign || (header_len > 0 && payload_src.len() < header_len);
 
-    let mut _header_owner: Option<Vec<u8>> = None;
-    let mut payload_for_ctx: &[u8] = payload_src;
-    let archived_ptr: *const Archived<T> = if needs_realign && header_len > 0 {
-        if payload_src.len() < header_len {
-            return Err(Error::LengthMismatch);
-        }
-        let mut buffer = vec![0u8; payload_src.len() + align];
-        let base = buffer.as_ptr() as usize;
-        let offset = (align - (base % align)) % align;
-        let aligned_ptr = unsafe { buffer.as_mut_ptr().add(offset) };
-        unsafe {
-            core::ptr::copy_nonoverlapping(payload_src.as_ptr(), aligned_ptr, payload_src.len());
-        }
-        let aligned_slice =
-            unsafe { core::slice::from_raw_parts(aligned_ptr as *const u8, payload_src.len()) };
-        payload_for_ctx = aligned_slice;
-        let ptr = aligned_slice.as_ptr() as *const Archived<T>;
-        _header_owner = Some(buffer);
-        ptr
-    } else if header_len == 0 {
+    if needs_slice {
+        return crate::guarded_try_deserialize(|| {
+            let _guard = PayloadCtxGuard::enter_with_flags_hint(payload_src, flags, flags_hint);
+            let (value, _used) = <T as DecodeFromSlice>::decode_from_slice(payload_src)?;
+            Ok(value)
+        });
+    }
+
+    let archived_ptr: *const Archived<T> = if header_len == 0 {
         core::ptr::NonNull::<Archived<T>>::dangling().as_ptr()
     } else {
         payload_src.as_ptr() as *const Archived<T>
     };
 
     crate::guarded_try_deserialize(|| {
-        let _guard = PayloadCtxGuard::enter_with_flags_hint(payload_for_ctx, flags, flags_hint);
+        let _guard = PayloadCtxGuard::enter_with_flags_hint(payload_src, flags, flags_hint);
         let archived = unsafe { &*archived_ptr };
         T::try_deserialize(archived)
     })
@@ -6518,6 +6580,16 @@ mod tests {
         let mut cursor = std::io::Cursor::new(&framed);
         let header = Header::read(&mut cursor).expect("read header");
         assert_eq!(header.flags, flags);
+    }
+
+    #[test]
+    fn encode_with_header_flags_respects_decode_guard() {
+        reset_decode_state();
+        let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
+        let value = vec![1u32, 2, 3, 4];
+        let (_payload, flags) = crate::codec::encode_with_header_flags(&value);
+        assert_ne!(flags & header_flags::PACKED_SEQ, 0);
+        reset_decode_state();
     }
 
     #[test]

@@ -246,6 +246,7 @@ pub fn proof_matches_manifest(
 
 /// Norito envelope used to bind dataspace proofs to manifest roots and DA state.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[norito(decode_from_slice)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)

@@ -137,6 +137,18 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # max_backoff_ms = 10000             # max pacemaker backoff window
 # jitter_frac_per_mille = 0          # jitter band size as permille of backoff window (0 disables)
 
+[sumeragi.advanced.pacing_governor]
+# enabled = false
+# window_blocks = 20
+# view_change_pressure_permille = 200   # view-change increments per block (permille)
+# view_change_clear_permille = 50
+# commit_spacing_pressure_permille = 1300 # avg commit spacing vs target (permille)
+# commit_spacing_clear_permille = 1100
+# step_up_bps = 1000
+# step_down_bps = 100
+# min_factor_bps = 10000
+# max_factor_bps = 20000
+
 [sumeragi.persistence]
 # commit_inflight_timeout_ms = 30000
 # commit_work_queue_cap = 1            # commit worker queue capacity

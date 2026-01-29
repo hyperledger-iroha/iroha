@@ -64,7 +64,11 @@ impl WebSocketNorito {
     }
 
     /// Recv message and try to decode it
-    pub async fn recv<M: for<'a> NoritoDeserialize<'a> + Send>(&mut self) -> Result<M, Error> {
+    pub async fn recv<M>(&mut self) -> Result<M, Error>
+    where
+        for<'a> M: NoritoDeserialize<'a>,
+        M: Send,
+    {
         // NOTE: ignore non binary messages
         loop {
             let message = tokio::time::timeout(self.timeout, self.ws.next())
@@ -90,10 +94,11 @@ impl WebSocketNorito {
     }
 
     /// Recv with a custom timeout duration, returning Err(ReadTimeout) on expiry.
-    pub async fn recv_with_timeout<M: for<'a> NoritoDeserialize<'a> + Send>(
-        &mut self,
-        dur: Duration,
-    ) -> Result<M, Error> {
+    pub async fn recv_with_timeout<M>(&mut self, dur: Duration) -> Result<M, Error>
+    where
+        for<'a> M: NoritoDeserialize<'a>,
+        M: Send,
+    {
         loop {
             let message = tokio::time::timeout(dur, self.ws.next())
                 .await

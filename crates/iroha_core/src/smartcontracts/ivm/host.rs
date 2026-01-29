@@ -2249,7 +2249,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn decode_name_payload(payload: &[u8]) -> Result<Name, ivm::VMError> {
-        decode_from_bytes(payload).map_err(|_| ivm::VMError::DecodeError)
+        match decode_from_bytes(payload) {
+            Ok(name) => Ok(name),
+            Err(_) => {
+                // Some Norito decoders depend on aligned/owned buffers; fall back to a copy.
+                let owned = payload.to_vec();
+                decode_from_bytes(&owned).map_err(|_| ivm::VMError::DecodeError)
+            }
+        }
     }
 
     fn load_state_value(vm: &mut IVM, stored: &[u8]) -> Result<(), ivm::VMError> {
@@ -2299,7 +2306,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 type_id: expected as u16,
             });
         }
-        decode_from_bytes(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
+        match decode_from_bytes(tlv.payload) {
+            Ok(value) => Ok(value),
+            Err(_) => {
+                // Fall back to decoding from an owned buffer to avoid alignment quirks.
+                let owned = tlv.payload.to_vec();
+                decode_from_bytes(&owned).map_err(|_| ivm::VMError::DecodeError)
+            }
+        }
     }
 
     /// Decode a JSON pointer-ABI TLV containing Norito-framed JSON.
@@ -2318,7 +2332,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             });
         }
 
-        decode_from_bytes(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
+        match decode_from_bytes(tlv.payload) {
+            Ok(value) => Ok(value),
+            Err(_) => {
+                // Some payloads decode successfully only after re-buffering.
+                let owned = tlv.payload.to_vec();
+                decode_from_bytes(&owned).map_err(|_| ivm::VMError::DecodeError)
+            }
+        }
     }
 
     fn permission_from_name(name: &Name) -> Permission {
@@ -7350,14 +7371,7 @@ mod pointer_abi_tests {
         let mut host = CoreHost::new(authority.clone());
 
         let role_name: Name = "auditor".parse().unwrap();
-        let mut perms_map = BTreeMap::new();
-        perms_map.insert(
-            "permissions".to_string(),
-            norito::json::Value::Array(vec![norito::json::Value::String(
-                "read_assets".to_string(),
-            )]),
-        );
-        let perms_json = Json::from(&norito::json::Value::Object(perms_map));
+        let perms_json = Json::new(vec!["read_assets".to_string()]);
 
         let name_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&role_name));
         let perms_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&perms_json));

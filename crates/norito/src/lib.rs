@@ -421,9 +421,9 @@ pub mod codec {
     /// Encode `value` and return both the bare payload and the exact header flags required
     /// to frame it for header-based decoding.
     pub fn encode_with_header_flags<T: NoritoSerialize>(value: &T) -> (Vec<u8>, u8) {
-        let payload = encode_adaptive(value);
-        let flags = take_last_encode_flags()
-            .expect("encode_adaptive should stash layout flags for the caller");
+        let (payload, flags) =
+            core::encode_bare_with_flags(value).expect("encode_with_header_flags should succeed");
+        store_last_encode_flags(flags);
         (payload, flags)
     }
 
@@ -8506,17 +8506,19 @@ pub fn serialize_into<W: Write, T: NoritoSerialize>(
 }
 
 /// Deserialize an object from the provided reader.
-pub fn deserialize_from<R: Read, T: for<'de> NoritoDeserialize<'de>>(
-    reader: R,
-) -> Result<T, Error> {
+pub fn deserialize_from<R: Read, T>(reader: R) -> Result<T, Error>
+where
+    for<'de> T: NoritoDeserialize<'de>,
+{
     deserialize_stream(reader)
 }
 
 /// Deserialize an object from a stream, validating header and checksum without
 /// buffering the entire input.
-pub fn deserialize_stream<R: Read, T: for<'de> NoritoDeserialize<'de>>(
-    mut reader: R,
-) -> Result<T, Error> {
+pub fn deserialize_stream<R: Read, T>(mut reader: R) -> Result<T, Error>
+where
+    for<'de> T: NoritoDeserialize<'de>,
+{
     use core::Header;
 
     let header = Header::read(&mut reader)?;
@@ -8579,19 +8581,80 @@ pub fn deserialize_stream<R: Read, T: for<'de> NoritoDeserialize<'de>>(
         return Err(Error::ChecksumMismatch);
     }
 
-    const MAX_ARCHIVE_REALIGN: usize = 64;
-    let align = std::mem::align_of::<core::Archived<T>>()
-        .max(std::mem::align_of::<u128>())
-        .max(MAX_ARCHIVE_REALIGN);
-    let aligned = ArchiveSlice::new(&payload, align)?;
+    let min_size = ::core::mem::size_of::<core::Archived<T>>();
+    let logical_len = payload.len();
+    let mut padded: Option<Vec<u8>> = None;
+    let backing: &[u8] = if min_size > 0 && logical_len < min_size {
+        let mut buf = Vec::with_capacity(min_size);
+        buf.extend_from_slice(&payload);
+        buf.resize(min_size, 0);
+        padded = Some(buf);
+        padded.as_deref().expect("pad present")
+    } else {
+        payload.as_slice()
+    };
 
-    {
-        let slice = aligned.as_slice();
-        let _payload_guard = core::PayloadCtxGuard::enter(slice);
-        let archived = unsafe { &*(slice.as_ptr() as *const Archived<T>) };
+    let archived = core::archived_from_slice::<T>(backing)?;
+    let _payload_guard = if min_size > 0 && logical_len < min_size {
+        core::PayloadCtxGuard::enter_with_len(archived.bytes(), logical_len)
+    } else {
+        core::PayloadCtxGuard::enter(archived.bytes())
+    };
+    guarded_try_deserialize(|| <T as NoritoDeserialize>::try_deserialize(archived.archived()))
+}
 
-        guarded_try_deserialize(|| <T as NoritoDeserialize>::try_deserialize(archived))
+fn decode_from_uncompressed_bytes<T>(bytes: &[u8], header: core::Header) -> Result<T, Error>
+where
+    for<'de> T: NoritoDeserialize<'de>,
+{
+    core::prepare_header_decode(header.flags, header.minor, false)?;
+    if header.compression != Compression::None {
+        return Err(Error::unsupported_compression_with(
+            header.compression as u8,
+            &[Compression::None],
+        ));
     }
+    if header.schema != T::schema_hash() {
+        return Err(Error::SchemaMismatch);
+    }
+    let payload_len = core::payload_len_to_usize(header.length)?;
+    let padding = core::payload_alignment_padding_for::<T>();
+    let slice = bytes
+        .get(core::Header::SIZE..)
+        .ok_or(Error::LengthMismatch)?;
+    let payload = core::payload_without_leading_padding_exact(slice, payload_len, padding)?;
+    if core::hardware_crc64(payload) != header.checksum {
+        return Err(Error::ChecksumMismatch);
+    }
+
+    let flags = header.flags;
+    let flags_hint = header.minor;
+    let min_size = ::core::mem::size_of::<core::Archived<T>>();
+    let logical_len = payload.len();
+    let mut padded: Option<Vec<u8>> = None;
+    let backing: &[u8] = if min_size > 0 && logical_len < min_size {
+        let mut buf = Vec::with_capacity(min_size);
+        buf.extend_from_slice(payload);
+        buf.resize(min_size, 0);
+        padded = Some(buf);
+        padded.as_deref().expect("pad present")
+    } else {
+        payload
+    };
+    let archived = core::archived_from_slice::<T>(backing)?;
+    guarded_try_deserialize(|| {
+        let _guard = if min_size > 0 && logical_len < min_size {
+            core::PayloadCtxGuard::enter_with_flags_hint_len(
+                archived.bytes(),
+                logical_len,
+                flags,
+                flags_hint,
+            )
+        } else {
+            core::PayloadCtxGuard::enter_with_flags_hint(archived.bytes(), flags, flags_hint)
+        };
+        <T as NoritoDeserialize>::try_deserialize(archived.archived())
+    })
 }
 
 /// Prelude with commonly used items.
@@ -8605,8 +8668,16 @@ pub mod prelude {
 
 /// Decode an object from Norito-encoded bytes (compressed or not),
 /// scoping decode layout flags to this call.
-pub fn decode_from_bytes<T: for<'de> NoritoDeserialize<'de>>(bytes: &[u8]) -> Result<T, Error> {
+pub fn decode_from_bytes<T>(bytes: &[u8]) -> Result<T, Error>
+where
+    for<'de> T: NoritoDeserialize<'de>,
+{
     use std::io::Cursor;
+    let mut cursor = Cursor::new(bytes);
+    let header = core::Header::read(&mut cursor)?;
+    if header.compression == Compression::None {
+        return decode_from_uncompressed_bytes::<T>(bytes, header);
+    }
     let mut cursor = Cursor::new(bytes);
     let value = deserialize_stream(&mut cursor)?;
     if cursor.position() != bytes.len() as u64 {
@@ -8617,17 +8688,19 @@ pub fn decode_from_bytes<T: for<'de> NoritoDeserialize<'de>>(bytes: &[u8]) -> Re
 
 /// Convenience helper identical to `decode_from_bytes`.
 /// Accepts either compressed or uncompressed Norito payloads and returns `T`.
-pub fn decode_from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
-    bytes: &[u8],
-) -> Result<T, Error> {
+pub fn decode_from_compressed_bytes<T>(bytes: &[u8]) -> Result<T, Error>
+where
+    for<'de> T: NoritoDeserialize<'de>,
+{
     decode_from_bytes(bytes)
 }
 
 /// Decode from any `Read` implementor, validating header and checksum.
 /// This is a thin wrapper over `deserialize_stream` for convenience.
-pub fn decode_from_reader<R: Read, T: for<'de> NoritoDeserialize<'de>>(
-    reader: R,
-) -> Result<T, Error> {
+pub fn decode_from_reader<R: Read, T>(reader: R) -> Result<T, Error>
+where
+    for<'de> T: NoritoDeserialize<'de>,
+{
     deserialize_stream(reader)
 }
 
