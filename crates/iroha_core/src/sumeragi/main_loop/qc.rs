@@ -2133,10 +2133,13 @@ impl Actor {
                     }
                 }
                 if dispatched {
-                    self.subsystems
-                        .qc_verify
-                        .inflight
-                        .insert(key, super::QcVerifyInFlight { id, qc: qc.clone() });
+                    self.subsystems.qc_verify.inflight.insert(
+                        key,
+                        super::QcVerifyInFlight {
+                            id,
+                            target: super::QcVerifyTarget::Consensus(qc.clone()),
+                        },
+                    );
                     self.record_consensus_message_handling(
                         super::status::ConsensusMessageKind::Qc,
                         super::status::ConsensusMessageOutcome::Deferred,

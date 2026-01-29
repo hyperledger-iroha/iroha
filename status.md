@@ -1,6 +1,8 @@
 # Status
 
 Last update: 2026-01-29
+- Known‑block QC aggregate verification now dispatches to QC verify workers (with inline fallback), and `tally_qc_against_block_signers` accepts a verified aggregate override; added `tally_qc_against_block_signers_accepts_aggregate_override` coverage.
+- Tests: `cargo test -p iroha_core tally_qc_against_block_signers_accepts_aggregate_override -- --nocapture` (ok; norito warnings about unused `padded` assignments persist).
 - Highest‑QC missing fetch: only skip missing‑block requests when the highest‑QC block is actually known locally (height/view resolved), even if a payload is pending/processing/aborted; extended proposal fast‑path gating to force fetch when the block is in pending processing, and added `new_view_highest_qc_fetches_missing_for_aborted_payload` + `new_view_highest_qc_fetches_missing_for_processing_payload` coverage. Also added `DecodeFromSlice` support for `PeerTrustGossip` and fixed a test borrow to unblock compilation.
 - Tests: `cargo test -p iroha_core --lib sumeragi::main_loop::tests::proposal_missing_highest_qc_fetches_aborted_payload -- --nocapture` (ok; warnings about unused `padded` assignments in `crates/norito/src/lib.rs:8586`/`:8634`).
 

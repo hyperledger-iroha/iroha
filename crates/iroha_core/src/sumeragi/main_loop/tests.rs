@@ -45264,11 +45264,82 @@ fn tally_qc_against_block_signers_accepts_without_votes() {
         None,
         super::PERMISSIONED_TAG,
         None,
+        None,
     )
     .expect("block-signers tally should succeed");
 
     assert_eq!(tally.voting_len(), 2);
     assert_eq!(tally.present_signers, 2);
+}
+
+#[test]
+fn tally_qc_against_block_signers_accepts_aggregate_override() {
+    let chain: ChainId = "qc-tally-aggregate-override"
+        .parse()
+        .expect("chain id parses");
+    let (keypairs, topology) = sample_bls_topology(1);
+    let world = world_with_consensus_keys(topology.as_ref(), &keypairs);
+    let world_view = world.view();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x79; Hash::LENGTH]));
+    let signers_bitmap = vec![0b0000_0001];
+    let aggregate_signature = aggregate_signature_for_bitmap(
+        &chain,
+        super::PERMISSIONED_TAG,
+        crate::sumeragi::consensus::Phase::Commit,
+        block_hash,
+        2,
+        1,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
+    let validator_set = topology.as_ref().to_vec();
+    let qc = crate::sumeragi::consensus::Qc {
+        phase: crate::sumeragi::consensus::Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 3,
+        view: 1,
+        epoch: 0,
+        mode_tag: super::PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set,
+        aggregate: crate::sumeragi::consensus::QcAggregate {
+            signers_bitmap: signers_bitmap.clone(),
+            bls_aggregate_signature: aggregate_signature,
+        },
+    };
+    let block_signers: BTreeSet<_> = [0_u32].into_iter().collect();
+
+    let inputs = roster_validation_inputs_for_view(
+        &world_view,
+        topology.as_ref(),
+        ConsensusMode::Permissioned,
+        None,
+    );
+    let tally = super::tally_qc_against_block_signers(
+        &qc,
+        &topology,
+        &world_view,
+        &block_signers,
+        qc.view,
+        &inputs.pops,
+        &chain,
+        ConsensusMode::Permissioned,
+        None,
+        super::PERMISSIONED_TAG,
+        None,
+        Some(true),
+    )
+    .expect("block-signers tally should accept verified aggregate override");
+
+    assert_eq!(tally.voting_len(), 1);
+    assert_eq!(tally.present_signers, 1);
 }
 
 #[test]
@@ -45309,6 +45380,7 @@ fn tally_qc_against_block_signers_preserves_bitmap_indices() {
         ConsensusMode::Permissioned,
         None,
         super::PERMISSIONED_TAG,
+        None,
         None,
     )
     .expect("block-signers tally should preserve QC bitmap indices");
