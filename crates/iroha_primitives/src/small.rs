@@ -115,9 +115,9 @@ mod tests {
     use std::io::Write;
 
     use norito::{
-        NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes,
+        NoritoDeserialize, NoritoSerialize,
         codec::{Decode, Encode},
-        core as ncore, json,
+        core as ncore, decode_from_bytes, json, to_bytes,
     };
 
     use super::*;
@@ -481,8 +481,11 @@ mod small_vector {
             for _ in 0..len {
                 let (elem_len, used_len) =
                     <u64 as ncore::DecodeFromSlice>::decode_from_slice(&bytes[offset..])?;
-                offset = offset.checked_add(used_len).ok_or(ncore::Error::LengthMismatch)?;
-                let elem_len = usize::try_from(elem_len).map_err(|_| ncore::Error::LengthMismatch)?;
+                offset = offset
+                    .checked_add(used_len)
+                    .ok_or(ncore::Error::LengthMismatch)?;
+                let elem_len =
+                    usize::try_from(elem_len).map_err(|_| ncore::Error::LengthMismatch)?;
 
                 if elem_len == 0 {
                     if core::mem::size_of::<ncore::Archived<A::Item>>() != 0 {
@@ -497,10 +500,11 @@ mod small_vector {
                     continue;
                 }
 
-                let end = offset.checked_add(elem_len).ok_or(ncore::Error::LengthMismatch)?;
+                let end = offset
+                    .checked_add(elem_len)
+                    .ok_or(ncore::Error::LengthMismatch)?;
                 let slice = bytes.get(offset..end).ok_or(ncore::Error::LengthMismatch)?;
-                let (value, used) =
-                    <A::Item as ncore::DecodeFromSlice>::decode_from_slice(slice)?;
+                let (value, used) = <A::Item as ncore::DecodeFromSlice>::decode_from_slice(slice)?;
                 if used != elem_len {
                     return Err(ncore::Error::LengthMismatch);
                 }

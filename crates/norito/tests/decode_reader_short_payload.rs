@@ -26,13 +26,12 @@ fn decode_from_reader_handles_short_payload() {
     let length_bytes: [u8; 8] = bytes[length_offset..length_offset + 8]
         .try_into()
         .expect("header length bytes");
-    let payload_len = usize::try_from(u64::from_le_bytes(length_bytes))
-        .expect("payload length fits usize");
+    let payload_len =
+        usize::try_from(u64::from_le_bytes(length_bytes)).expect("payload length fits usize");
     assert!(
         payload_len < archived_size,
         "expected payload shorter than archived size (payload_len={payload_len}, archived_size={archived_size})"
     );
-    let decoded: ShortPayloadEnum =
-        norito::decode_from_reader(Cursor::new(bytes)).expect("decode");
+    let decoded: ShortPayloadEnum = norito::decode_from_reader(Cursor::new(bytes)).expect("decode");
     assert_eq!(decoded, value);
 }
