@@ -5319,6 +5319,13 @@ impl Telemetry {
         }
     }
 
+    /// Record commit-conflict detection (safety recovery).
+    pub fn inc_commit_conflict_detected(&self) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.sumeragi_commit_conflict_detected_total.inc();
+        }
+    }
+
     /// Record the outcome of planning a missing-block fetch on QC-first arrival.
     #[allow(clippy::cast_precision_loss)]
     pub fn note_missing_block_fetch(

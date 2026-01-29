@@ -3966,6 +3966,141 @@ async fn block_sync_update_drops_conflicting_committed_block_without_roster_coun
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_commit_conflict_with_valid_qc_sets_restart_required() {
+    super::status::reset_block_sync_counters_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 2).await;
+    let actor = &mut harness.actor;
+
+    let block1 = sample_block(1, 0, None);
+    let block2 = sample_block(2, 0, Some(block1.hash()));
+    actor.kura.store_block(block1.clone()).expect("store block 1");
+    actor.kura.store_block(block2).expect("store block 2");
+
+    let conflicting = sample_block(2, 1, Some(block1.hash()));
+    let topology = actor.effective_commit_topology();
+    let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        conflicting.hash(),
+        2,
+        1,
+        0,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let mut update = super::message::BlockSyncUpdate::from(&conflicting);
+    update.commit_qc = Some(qc);
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+
+    let conflict = actor
+        .commit_conflict
+        .as_ref()
+        .expect("commit conflict recorded");
+    assert_eq!(conflict.height, 2);
+    assert!(conflict.requires_restart);
+    assert!(!conflict.awaiting_block);
+    let kura_block = actor
+        .kura
+        .get_block(NonZeroUsize::new(2).expect("height is non-zero"))
+        .expect("kura block");
+    assert_eq!(kura_block.hash(), conflicting.hash());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_qc_conflicting_committed_height_requests_commit_conflict_recovery() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 2).await;
+    let actor = &mut harness.actor;
+
+    let block1 = sample_block(1, 0, None);
+    let block2 = sample_block(2, 0, Some(block1.hash()));
+    actor.kura.store_block(block1.clone()).expect("store block 1");
+    actor.kura.store_block(block2).expect("store block 2");
+
+    let conflicting = sample_block(2, 1, Some(block1.hash()));
+    let topology = actor.effective_commit_topology();
+    let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        conflicting.hash(),
+        2,
+        1,
+        0,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    actor.handle_qc(qc).expect("handle QC");
+
+    let conflict = actor
+        .commit_conflict
+        .as_ref()
+        .expect("commit conflict recorded");
+    assert_eq!(conflict.height, 2);
+    assert!(conflict.awaiting_block);
+    assert!(!conflict.requires_restart);
+    assert_eq!(conflict.incoming.hash, conflicting.hash());
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&conflicting.hash()),
+        "missing-block request should be tracked"
+    );
+
+    harness.shutdown.send();
+}
+
+#[test]
+fn commit_conflict_winner_prefers_view_then_hash() {
+    let hash_low =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x10; Hash::LENGTH]));
+    let hash_high =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x20; Hash::LENGTH]));
+    let local = super::CommitConflictCandidate {
+        view: 3,
+        hash: hash_low,
+    };
+    let incoming_higher_view = super::CommitConflictCandidate {
+        view: 4,
+        hash: hash_high,
+    };
+    assert_eq!(
+        super::commit_conflict_winner(local, incoming_higher_view),
+        super::CommitConflictWinner::Incoming
+    );
+
+    let incoming_same_view = super::CommitConflictCandidate {
+        view: 3,
+        hash: hash_high,
+    };
+    assert_eq!(
+        super::commit_conflict_winner(local, incoming_same_view),
+        super::CommitConflictWinner::Local
+    );
+}
+
 #[test]
 fn block_sync_roster_cache_hits_and_evicts() {
     let roster = vec![
@@ -27058,6 +27193,17 @@ fn record_da_gate_telemetry_tracks_reason_and_satisfaction() {
         metrics.sumeragi_da_gate_last_satisfied.get(),
         MISSING_DATA_RECOVERED_CODE
     );
+}
+
+#[cfg(feature = "telemetry")]
+#[test]
+fn commit_conflict_detected_increments_telemetry() {
+    let metrics = Arc::new(Metrics::default());
+    let telemetry = Telemetry::new(metrics.clone(), true);
+
+    telemetry.inc_commit_conflict_detected();
+
+    assert_eq!(metrics.sumeragi_commit_conflict_detected_total.get(), 1);
 }
 
 #[cfg(feature = "telemetry")]

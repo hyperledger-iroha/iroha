@@ -1541,6 +1541,9 @@ impl Actor {
         &self,
         qc: &crate::sumeragi::consensus::Qc,
         committed_height: u64,
+        consensus_mode: ConsensusMode,
+        mode_tag: &'static str,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
     ) -> CommittedQcDecision {
         if qc.height > committed_height {
             return CommittedQcDecision::Continue;
@@ -1551,19 +1554,81 @@ impl Actor {
         {
             let committed_hash = committed.hash();
             if committed_hash != qc.subject_block_hash {
-                info!(
-                    height = qc.height,
-                    view = qc.view,
-                    committed_height,
-                    committed_hash = %committed_hash,
-                    incoming_hash = %qc.subject_block_hash,
-                    "dropping QC for already committed height with divergent hash"
+                if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+                    info!(
+                        height = qc.height,
+                        view = qc.view,
+                        committed_height,
+                        committed_hash = %committed_hash,
+                        incoming_hash = %qc.subject_block_hash,
+                        phase = ?qc.phase,
+                        "dropping QC for committed height with divergent hash (non-commit)"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::Qc,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::CommitConflict,
+                    );
+                    return CommittedQcDecision::Drop;
+                }
+                let expected_epoch = self.epoch_for_height(qc.height);
+                let inputs = self.roster_validation_cache.inputs_for_roster(
+                    &qc.validator_set,
+                    consensus_mode,
+                    stake_snapshot,
                 );
-                self.record_consensus_message_handling(
-                    super::status::ConsensusMessageKind::Qc,
-                    super::status::ConsensusMessageOutcome::Dropped,
-                    super::status::ConsensusMessageReason::CommitConflict,
-                );
+                let allow_genesis_stub = qc.height == 1 && qc.view == 0;
+                if let Err(err) = super::validate_commit_qc_roster(
+                    qc,
+                    qc.subject_block_hash,
+                    qc.height,
+                    Some(qc.view),
+                    consensus_mode,
+                    expected_epoch,
+                    &self.common_config.chain,
+                    mode_tag,
+                    allow_genesis_stub,
+                    &inputs,
+                ) {
+                    info!(
+                        height = qc.height,
+                        view = qc.view,
+                        committed_height,
+                        committed_hash = %committed_hash,
+                        incoming_hash = %qc.subject_block_hash,
+                        ?err,
+                        "dropping QC for committed height with divergent hash (invalid commit QC)"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::Qc,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::CommitConflict,
+                    );
+                    return CommittedQcDecision::Drop;
+                }
+                let local = super::CommitConflictCandidate {
+                    view: committed.header().view_change_index(),
+                    hash: committed_hash,
+                };
+                let incoming = super::CommitConflictCandidate {
+                    view: qc.view,
+                    hash: qc.subject_block_hash,
+                };
+                if let Err(err) = self.handle_commit_conflict_with_qc(
+                    super::CommitConflictSource::CommitQc,
+                    qc.height,
+                    local,
+                    incoming,
+                    qc.clone(),
+                    stake_snapshot.cloned(),
+                ) {
+                    warn!(
+                        ?err,
+                        height = qc.height,
+                        view = qc.view,
+                        "failed to handle commit-conflict QC"
+                    );
+                }
                 return CommittedQcDecision::Drop;
             }
             return CommittedQcDecision::RecordOnly;
@@ -2292,7 +2357,13 @@ impl Actor {
         let committed_height = self.state.view().height();
         let committed_height_u64 = u64::try_from(committed_height).unwrap_or(u64::MAX);
         self.drop_missing_lock_if_unknown(&qc);
-        match self.qc_for_committed_height(&qc, committed_height_u64) {
+        match self.qc_for_committed_height(
+            &qc,
+            committed_height_u64,
+            consensus_mode,
+            mode_tag,
+            stake_snapshot.as_ref(),
+        ) {
             CommittedQcDecision::Continue => {}
             CommittedQcDecision::RecordOnly => {
                 if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {

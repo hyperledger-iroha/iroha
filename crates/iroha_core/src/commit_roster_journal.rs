@@ -390,6 +390,21 @@ impl CommitRosterJournal {
         Ok(())
     }
 
+    /// Drop entries above `height` and persist the updated journal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommitRosterJournalError::Write`] or [`CommitRosterJournalError::Encode`] when
+    /// persistence fails.
+    pub fn truncate_to_height(&mut self, height: u64) -> Result<(), CommitRosterJournalError> {
+        let before = self.entries.len();
+        self.entries.retain(|(entry_height, _)| *entry_height <= height);
+        if self.entries.len() == before {
+            return Ok(());
+        }
+        self.persist()
+    }
+
     /// Retrieve the snapshot for `height`/`block_hash` if present.
     #[must_use]
     pub fn get(
@@ -528,6 +543,28 @@ mod tests {
                 stake_snapshot: None,
             }
         );
+    }
+
+    #[test]
+    fn journal_truncate_to_height_drops_future_entries() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (cert1, checkpoint1) = cert_with_height(1, 0);
+        let (cert2, checkpoint2) = cert_with_height(2, 0);
+        let mut journal = CommitRosterJournal::new(path, retention(4));
+        journal.upsert(cert1.clone(), checkpoint1, None);
+        journal.upsert(cert2.clone(), checkpoint2, None);
+
+        journal
+            .truncate_to_height(1)
+            .expect("truncate to height");
+
+        assert!(journal
+            .get(cert1.height, cert1.subject_block_hash)
+            .is_some());
+        assert!(journal
+            .get(cert2.height, cert2.subject_block_hash)
+            .is_none());
     }
 
     #[test]
