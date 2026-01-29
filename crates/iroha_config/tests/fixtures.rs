@@ -1010,6 +1010,18 @@ fn minimal_config_snapshot() {
                     rbc_backlog_session_soft_limit: 2,
                     rbc_backlog_chunk_soft_limit: 16,
                 },
+                pacing_governor: SumeragiPacingGovernor {
+                    enabled: false,
+                    window_blocks: 20,
+                    view_change_pressure_permille: 200,
+                    view_change_clear_permille: 50,
+                    commit_spacing_pressure_permille: 1300,
+                    commit_spacing_clear_permille: 1100,
+                    step_up_bps: 1000,
+                    step_down_bps: 100,
+                    min_factor_bps: 10000,
+                    max_factor_bps: 20000,
+                },
                 da: SumeragiDa {
                     enabled: true,
                     quorum_timeout_multiplier: 3,

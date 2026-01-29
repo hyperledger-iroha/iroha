@@ -99,14 +99,14 @@ async fn vk_register_update_return_202() {
 
     // Prepare a keypair whose public key matches the authority account id.
     let kp = iroha_crypto::KeyPair::random();
-    let exposed = iroha_crypto::ExposedPrivateKey(kp.private_key().clone()).to_string();
+    let exposed = iroha_crypto::ExposedPrivateKey(kp.private_key().clone());
     let authority: AccountId = format!("{}@wonderland", kp.public_key())
         .parse()
         .expect("valid account id");
 
     // 1) Register (vk_bytes omitted; provide commitment_hex only)
     let body_reg_value = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", authority.clone().to_string()),
+        iroha_torii::json_entry("authority", authority.clone()),
         iroha_torii::json_entry("private_key", exposed.clone()),
         iroha_torii::json_entry("backend", "halo2/ipa"),
         iroha_torii::json_entry("name", "vk_add"),
@@ -135,7 +135,7 @@ async fn vk_register_update_return_202() {
 
     // 2) Update (version increments)
     let body_upd_value = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("authority", authority.clone().to_string()),
+        iroha_torii::json_entry("authority", authority.clone()),
         iroha_torii::json_entry("private_key", exposed.clone()),
         iroha_torii::json_entry("backend", "halo2/ipa"),
         iroha_torii::json_entry("name", "vk_add"),

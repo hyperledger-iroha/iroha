@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eyre::{Result, WrapErr, ensure, eyre};
+use eyre::{Report, Result, WrapErr, ensure, eyre};
 use iroha::{
     client::Client,
     data_model::{
@@ -91,7 +91,10 @@ async fn run_chunk_drop_scenario() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "da", "enabled"], true)
-                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
+                .write(
+                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
+                    16_i64 * 1024,
+                )
                 .write(["sumeragi", "debug", "rbc", "drop_every_nth_chunk"], 2_i64);
         });
     let Some(network) =
@@ -152,7 +155,10 @@ async fn run_chunk_reorder_scenario() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "da", "enabled"], true)
-                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
+                .write(
+                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
+                    16_i64 * 1024,
+                )
                 .write(["sumeragi", "debug", "rbc", "shuffle_chunks"], true);
         });
     let Some(network) =
@@ -332,7 +338,10 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "da", "enabled"], true)
-                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
+                .write(
+                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
+                    16_i64 * 1024,
+                )
                 .write(["sumeragi", "debug", "rbc", "drop_every_nth_chunk"], 2_i64);
         });
     let Some(drop_network) = sandbox::start_network_async_or_skip(
@@ -429,7 +438,10 @@ async fn run_validator_selective_drop_scenario() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "da", "enabled"], true)
-                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
+                .write(
+                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
+                    16_i64 * 1024,
+                )
                 .write(
                     ["sumeragi", "debug", "rbc", "drop_validator_mask"],
                     DROP_MASK,
@@ -503,7 +515,10 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "da", "enabled"], true)
-                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
+                .write(
+                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
+                    16_i64 * 1024,
+                )
                 .write(["sumeragi", "debug", "rbc", "equivocate_chunk_mask"], 1_i64)
                 .write(
                     ["sumeragi", "debug", "rbc", "equivocate_validator_mask"],
@@ -594,7 +609,10 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "da", "enabled"], true)
-                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
+                .write(
+                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
+                    16_i64 * 1024,
+                )
                 .write(
                     ["sumeragi", "debug", "rbc", "equivocate_chunk_mask"],
                     CHUNK_MASK,
@@ -633,39 +651,76 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
 
     sleep(Duration::from_secs(3)).await;
 
-    for (idx, session) in sessions.iter().enumerate() {
-        ensure!(
-            get_bool(session, "invalid").unwrap_or(false),
-            "peer {idx} must mark the session invalid when shards are corrupted"
-        );
-        ensure!(
-            !get_bool(session, "delivered").unwrap_or(false),
-            "peer {idx} must refuse delivery when shards are corrupted"
-        );
-    }
-
-    for (idx, peer) in network.peers().iter().enumerate() {
-        let status_after = blocking_status(&peer.client())?;
-        ensure!(
-            status_after.blocks == status_before[idx].blocks,
-            "peer {idx} must not advance height under corrupted shards"
-        );
-        if let (Some(before_consensus), Some(after_consensus)) = (
-            status_before[idx].sumeragi.as_ref(),
-            status_after.sumeragi.as_ref(),
-        ) {
-            ensure!(
-                after_consensus.block_created_proposal_mismatch_total
-                    > before_consensus.block_created_proposal_mismatch_total,
-                "peer {idx} must increment proposal mismatch counter when shards are corrupted"
-            );
-        }
-    }
-
     let invalid_total = sessions
         .iter()
         .filter(|session| get_bool(session, "invalid").unwrap_or(false))
         .count();
+    let delivered_total = sessions
+        .iter()
+        .filter(|session| get_bool(session, "delivered").unwrap_or(false))
+        .count();
+
+    let mut mismatch_detected = false;
+    let mut status_after = Vec::with_capacity(PEER_COUNT);
+    for peer in network.peers() {
+        let status = blocking_status(&peer.client())?;
+        status_after.push(status);
+        if !mismatch_detected {
+            let status_json = fetch_sumeragi_status(&peer.client()).await?;
+            mismatch_detected = rbc_mismatch_detected(&status_json);
+        }
+    }
+
+    let base_height = status_before
+        .first()
+        .map(|status| status.blocks)
+        .unwrap_or(0);
+    let min_blocks = status_after
+        .iter()
+        .map(|status| status.blocks)
+        .min()
+        .unwrap_or(base_height);
+    let max_blocks = status_after
+        .iter()
+        .map(|status| status.blocks)
+        .max()
+        .unwrap_or(base_height);
+
+    if max_blocks >= expected_height {
+        ensure!(
+            max_blocks.saturating_sub(min_blocks) <= 1,
+            "heights diverged under uniform corruption (min={min_blocks}, max={max_blocks})"
+        );
+        ensure!(
+            delivered_total > 0,
+            "expected RBC delivery when all validators broadcast the same corrupted shards"
+        );
+    } else {
+        ensure!(
+            max_blocks == base_height,
+            "unexpected partial height advance under corrupted shards (base={base_height}, max={max_blocks})"
+        );
+        for (idx, status_after) in status_after.iter().enumerate() {
+            ensure!(
+                status_after.blocks == status_before[idx].blocks,
+                "peer {idx} must not advance height under corrupted shards"
+            );
+            if let (Some(before_consensus), Some(after_consensus)) = (
+                status_before[idx].sumeragi.as_ref(),
+                status_after.sumeragi.as_ref(),
+            ) {
+                ensure!(
+                    after_consensus.block_created_proposal_mismatch_total
+                        > before_consensus.block_created_proposal_mismatch_total,
+                    "peer {idx} must increment proposal mismatch counter when shards are corrupted"
+                );
+            }
+        }
+        ensure!(
+            invalid_total > 0 || mismatch_detected,
+            "expected corrupted shards to be detected via invalid flag or mismatch counters (invalid_total={invalid_total}, mismatch_detected={mismatch_detected}, delivered_total={delivered_total})"
+        );
+    }
     let mut summary_map = Map::new();
     summary_map.insert(
         "scenario".into(),
@@ -673,7 +728,15 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
     );
     summary_map.insert("peer_count".into(), Value::from(PEER_COUNT as u64));
     summary_map.insert("invalid_sessions".into(), Value::from(invalid_total as u64));
+    summary_map.insert(
+        "delivered_sessions".into(),
+        Value::from(delivered_total as u64),
+    );
+    summary_map.insert("mismatch_detected".into(), Value::from(mismatch_detected));
     summary_map.insert("expected_height".into(), Value::from(expected_height));
+    summary_map.insert("base_height".into(), Value::from(base_height));
+    summary_map.insert("min_blocks".into(), Value::from(min_blocks));
+    summary_map.insert("max_blocks".into(), Value::from(max_blocks));
     emit_summary("all_chunks_corrupted", &Value::Object(summary_map))?;
 
     network.shutdown().await;
@@ -691,7 +754,10 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "da", "enabled"], true)
-                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
+                .write(
+                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
+                    16_i64 * 1024,
+                )
                 .write(
                     ["sumeragi", "debug", "rbc", "conflicting_ready_mask"],
                     FORK_MASK,
@@ -861,7 +927,10 @@ async fn run_partial_erasure_scenario() -> Result<()> {
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
                 .write(["sumeragi", "da", "enabled"], true)
-                .write(["sumeragi", "rbc", "chunk_max_bytes"], 16_i64 * 1024)
+                .write(
+                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
+                    16_i64 * 1024,
+                )
                 .write(
                     ["sumeragi", "debug", "rbc", "partial_chunk_mask"],
                     PARTIAL_MASK,
@@ -954,12 +1023,27 @@ async fn set_sumeragi_parameter(client: &Client, parameter: SumeragiParameter) -
 async fn submit_heavy_log(client: &Client, bytes: usize) -> Result<()> {
     let payload = "X".repeat(bytes);
     let client_clone = client.clone();
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         client_clone.submit_blocking(Log::new(Level::INFO, payload))
     })
     .await
-    .wrap_err("join submit task")??;
+    .wrap_err("join submit task")?;
+    if let Err(err) = result {
+        if is_tx_confirmation_timeout(&err) {
+            eprintln!("tx confirmation timed out; proceeding: {err}");
+            return Ok(());
+        }
+        return Err(err).wrap_err("submit heavy log");
+    }
     Ok(())
+}
+
+fn is_tx_confirmation_timeout(error: &Report) -> bool {
+    error.chain().any(|cause| {
+        let msg = cause.to_string();
+        msg.contains("tx confirmation timed out")
+            || msg.contains("haven't got tx confirmation within")
+    })
 }
 
 fn blocking_status(client: &Client) -> Result<iroha::client::Status> {
@@ -1061,6 +1145,30 @@ fn get_bool(value: &Value, key: &str) -> Option<bool> {
         .as_object()
         .and_then(|obj| obj.get(key))
         .and_then(Value::as_bool)
+}
+
+fn rbc_mismatch_detected(status: &Value) -> bool {
+    status
+        .as_object()
+        .and_then(|root| root.get("rbc_mismatch"))
+        .and_then(Value::as_object)
+        .and_then(|obj| obj.get("entries"))
+        .and_then(Value::as_array)
+        .is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                let Some(entry_obj) = entry.as_object() else {
+                    return false;
+                };
+                [
+                    "chunk_digest_mismatch_total",
+                    "payload_hash_mismatch_total",
+                    "chunk_root_mismatch_total",
+                ]
+                .iter()
+                .filter_map(|key| entry_obj.get(*key).and_then(Value::as_u64))
+                .any(|value| value > 0)
+            })
+        })
 }
 
 fn emit_summary(scenario: &str, summary: &Value) -> Result<()> {

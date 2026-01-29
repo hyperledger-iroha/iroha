@@ -150,7 +150,7 @@ use crate::{
         pin_store::DaPinStore,
         receipts::{DaReceiptCursorError, DaReceiptCursorIndex},
     },
-    sumeragi::{stake_snapshot::CommitStakeSnapshot, status},
+    sumeragi::{pacing_governor, stake_snapshot::CommitStakeSnapshot, status},
 };
 
 mod tiered;
@@ -4366,6 +4366,8 @@ pub struct State {
     trigger_ivm_cache: parking_lot::Mutex<IvmCache>,
     /// Oracle aggregation configuration.
     pub oracle: iroha_config::parameters::actual::Oracle,
+    /// Deterministic pacing governor configuration snapshot.
+    pub pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor,
     /// Streaming configuration snapshot (spool paths, codec defaults).
     streaming: iroha_config::parameters::actual::Streaming,
     /// Cryptography configuration (enabled algorithms, defaults).
@@ -4427,6 +4429,8 @@ pub struct StateBlock<'state> {
     pub pipeline: iroha_config::parameters::actual::Pipeline,
     /// Oracle configuration snapshot for this block.
     pub oracle: iroha_config::parameters::actual::Oracle,
+    /// Deterministic pacing governor configuration snapshot for this block.
+    pub pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor,
     /// Cryptography configuration snapshot for this block.
     pub crypto: Arc<iroha_config::parameters::actual::Crypto>,
     /// Nexus configuration snapshot for this block.
@@ -12312,6 +12316,7 @@ impl State {
                 pipeline_cache_size,
             )),
             oracle: default_oracle(),
+            pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor::default(),
             streaming,
             nexus: parking_lot::RwLock::new(nexus),
             tiered_backend: parking_lot::Mutex::new(TieredStateBackend::default()),
@@ -12831,6 +12836,7 @@ impl State {
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
             oracle: self.oracle.clone(),
+            pacing_governor: self.pacing_governor,
             crypto: self.crypto(),
             nexus: self.nexus_snapshot(),
             fraud_monitoring: self.fraud_monitoring.clone(),
@@ -13220,6 +13226,7 @@ impl State {
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
             oracle: self.oracle.clone(),
+            pacing_governor: self.pacing_governor,
             crypto: self.crypto(),
             nexus: self.nexus_snapshot(),
             fraud_monitoring: self.fraud_monitoring.clone(),
@@ -14103,6 +14110,14 @@ impl State {
         sys.key_allowed_hsm_providers = policy.key_allowed_hsm_providers.iter().cloned().collect();
         params_block.sumeragi = sys;
         params_block.commit();
+    }
+
+    /// Update deterministic pacing governor configuration from runtime config.
+    pub fn set_sumeragi_pacing_governor(
+        &mut self,
+        pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor,
+    ) {
+        self.pacing_governor = pacing_governor;
     }
 
     /// Update pipeline preferences using a loaded configuration.
@@ -16316,7 +16331,12 @@ impl<'state> StateBlock<'state> {
             }
         }
 
+        let pacing_event = self.apply_pacing_governor(block);
+
         self.world.external_event_buf.mutate_vec(|events| {
+            if let Some(event) = pacing_event {
+                events.push(event);
+            }
             events.push(
                 BlockEvent {
                     header: block.as_ref().header(),
@@ -16326,6 +16346,119 @@ impl<'state> StateBlock<'state> {
             );
         });
         self.world.external_event_buf.take_vec()
+    }
+
+    fn apply_pacing_governor(&mut self, block: &CommittedBlock) -> Option<EventBox> {
+        let cfg = self.pacing_governor;
+        if !cfg.enabled {
+            return None;
+        }
+
+        let prev_factor = self
+            .state_ref
+            .world
+            .parameters
+            .view()
+            .get()
+            .sumeragi()
+            .pacing_factor_bps();
+        let (current_factor, target_block_time_ms) = {
+            let params = self.world.parameters.get();
+            (
+                params.sumeragi.pacing_factor_bps,
+                params.sumeragi.effective_block_time_ms(),
+            )
+        };
+        if current_factor != prev_factor {
+            debug!(
+                current_factor,
+                prev_factor, "pacing governor skipping: pacing_factor_bps updated in block"
+            );
+            return None;
+        }
+
+        let samples = self.collect_pacing_samples(block, cfg.window_blocks);
+        let decision = pacing_governor::evaluate_pacing_governor(
+            cfg,
+            &samples,
+            current_factor,
+            target_block_time_ms,
+        )?;
+
+        let old_value = iroha_data_model::parameter::Parameter::Sumeragi(
+            iroha_data_model::parameter::SumeragiParameter::PacingFactorBps(current_factor),
+        );
+        let new_value = iroha_data_model::parameter::Parameter::Sumeragi(
+            iroha_data_model::parameter::SumeragiParameter::PacingFactorBps(
+                decision.new_factor_bps,
+            ),
+        );
+        {
+            let params = self.world.parameters.get_mut();
+            params.set_parameter(new_value.clone());
+        }
+
+        let header = block.as_ref().header();
+        info!(
+            height = header.height().get(),
+            view = header.view_change_index(),
+            action = ?decision.action,
+            current_factor_bps = current_factor,
+            new_factor_bps = decision.new_factor_bps,
+            view_change_ratio_permille = decision.view_change_ratio_permille,
+            commit_spacing_ratio_permille = decision.commit_spacing_ratio_permille,
+            avg_spacing_ms = decision.avg_spacing_ms,
+            target_block_time_ms = decision.target_block_time_ms,
+            sample_count = decision.sample_count,
+            "pacing governor adjusted pacing_factor_bps"
+        );
+
+        let data_event: data_pre::DataEvent =
+            data_pre::ConfigurationEvent::Changed(data_pre::ParameterChanged {
+                old_value,
+                new_value,
+            })
+            .into();
+        Some(EventBox::Data(SharedDataEvent::from(data_event)))
+    }
+
+    fn collect_pacing_samples(
+        &self,
+        block: &CommittedBlock,
+        window_blocks: usize,
+    ) -> Vec<pacing_governor::PacingSample> {
+        let header = block.as_ref().header();
+        let height = header.height().get();
+        let window_blocks = window_blocks.max(2);
+        let start_height = height
+            .saturating_sub(window_blocks.saturating_sub(1) as u64)
+            .max(1);
+        let mut samples = Vec::with_capacity(window_blocks);
+
+        for h in start_height..height {
+            let height_usize = match usize::try_from(h) {
+                Ok(value) => value,
+                Err(_) => {
+                    debug!(
+                        height = h,
+                        "pacing governor skipping: block height exceeds usize"
+                    );
+                    return Vec::new();
+                }
+            };
+            let Some(height_nz) = NonZeroUsize::new(height_usize) else {
+                continue;
+            };
+            let Some(block) = self.kura.get_block(height_nz) else {
+                debug!(height = h, "pacing governor missing block in kura");
+                return Vec::new();
+            };
+            let block_header = block.header();
+            samples.push(pacing_governor::PacingSample::from(&block_header));
+        }
+
+        samples.push(pacing_governor::PacingSample::from(&header));
+        samples
     }
 
     fn apply_replayed_axt_envelopes(&mut self, envelopes: &[AxtEnvelopeRecord], current_slot: u64) {
@@ -20918,6 +21051,7 @@ pub(crate) mod deserialize {
             kura,
             query_handle,
             oracle: default_oracle(),
+            pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor::default(),
             pipeline,
             pipeline_parallelism,
             stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
@@ -29613,6 +29747,77 @@ mod tests {
         assert_eq!(actual, expected);
         let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
         assert_eq!(prev, base_topology);
+    }
+
+    #[test]
+    fn apply_without_execution_updates_pacing_factor_with_governor() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+
+        state.set_sumeragi_pacing_governor(
+            iroha_config::parameters::actual::SumeragiPacingGovernor {
+                enabled: true,
+                window_blocks: 3,
+                view_change_pressure_permille: 100,
+                view_change_clear_permille: 10,
+                commit_spacing_pressure_permille: 2_000,
+                commit_spacing_clear_permille: 1_100,
+                step_up_bps: 1_000,
+                step_down_bps: 100,
+                min_factor_bps: 10_000,
+                max_factor_bps: 20_000,
+            },
+        );
+
+        {
+            let mut params_block = state.world.parameters.block();
+            params_block.sumeragi.block_time_ms = 1_000;
+            params_block.sumeragi.commit_time_ms = 1_000;
+            params_block.sumeragi.pacing_factor_bps = 10_000;
+            params_block.commit();
+        }
+
+        let block1 = new_dummy_block_with_payload(|header| {
+            header.set_height(nonzero!(1_u64));
+            header.creation_time_ms = 1_000;
+            header.set_view_change_index(0);
+        });
+        kura.store_block(block1.clone()).expect("store block1");
+        let block2 = new_dummy_block_with_payload(|header| {
+            header.set_height(nonzero!(2_u64));
+            header.creation_time_ms = 2_000;
+            header.set_view_change_index(0);
+        });
+        kura.store_block(block2.clone()).expect("store block2");
+
+        let block3 = new_dummy_block_with_payload(|header| {
+            header.set_height(nonzero!(3_u64));
+            header.creation_time_ms = 3_000;
+            header.set_view_change_index(2);
+        });
+        {
+            let mut state_block = state.block(block1.as_ref().header().clone());
+            let _ = state_block.apply_without_execution(&block1, Vec::new());
+            state_block.commit().expect("commit state block1");
+        }
+        {
+            let mut state_block = state.block(block2.as_ref().header().clone());
+            let _ = state_block.apply_without_execution(&block2, Vec::new());
+            state_block.commit().expect("commit state block2");
+        }
+        let mut state_block = state.block(block3.as_ref().header().clone());
+        let _ = state_block.apply_without_execution(&block3, Vec::new());
+        state_block.commit().expect("commit state block");
+
+        let updated = state
+            .world
+            .parameters
+            .view()
+            .get()
+            .sumeragi()
+            .pacing_factor_bps();
+        assert_eq!(updated, 11_000);
     }
 
     #[test]

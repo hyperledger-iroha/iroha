@@ -917,6 +917,18 @@ impl<'a> NoritoDeserialize<'a> for PeersGossip {
     }
 }
 
+impl<'a> ncore::DecodeFromSlice<'a> for PeersGossip {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        let (peers, used) = <Vec<Peer> as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
+        Ok((
+            Self {
+                peers: UniqueVec::from_iter(peers),
+            },
+            used,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{

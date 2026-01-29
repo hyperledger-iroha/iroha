@@ -313,6 +313,7 @@ struct RevokedTicketRecord {
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+#[norito(decode_from_slice)]
 struct TicketRevocationSnapshot {
     entries: Vec<TicketRevocationSnapshotEntry>,
 }

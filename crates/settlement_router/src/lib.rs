@@ -35,7 +35,7 @@ use std::{
 };
 
 use norito::{
-    Archived, Error, NoritoDeserialize, NoritoSerialize,
+    Archived, Error, NoritoDeserialize, NoritoSerialize, core::DecodeFromSlice,
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize, Parser},
 };
 use rust_decimal::Decimal;
@@ -147,6 +147,15 @@ impl<'a> NoritoDeserialize<'a> for MicroXor {
     }
 }
 
+impl<'a> DecodeFromSlice<'a> for MicroXor {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
+        let (raw, used) = <&str as DecodeFromSlice>::decode_from_slice(bytes)?;
+        let value = Decimal::from_str(raw)
+            .map_err(|err| Error::Message(format!("invalid decimal: {err}")))?;
+        Ok((Self(value), used))
+    }
+}
+
 impl FastJsonWrite for MicroXor {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.0.to_string(), out);
@@ -236,6 +245,15 @@ impl<'a> NoritoDeserialize<'a> for TimestampMs {
     }
 }
 
+impl<'a> DecodeFromSlice<'a> for TimestampMs {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
+        let (millis, used) = <u64 as DecodeFromSlice>::decode_from_slice(bytes)?;
+        let timestamp = Self::from_unix_millis(millis)
+            .map_err(|err| Error::Message(format!("invalid timestamp: {err}")))?;
+        Ok((timestamp, used))
+    }
+}
+
 impl FastJsonWrite for TimestampMs {
     fn write_json(&self, out: &mut String) {
         self.as_unix_millis().json_serialize(out);
@@ -296,6 +314,13 @@ impl<'a> NoritoDeserialize<'a> for DurationSeconds {
         let seconds_arch: &Archived<i64> = archived.cast();
         let seconds = i64::deserialize(seconds_arch);
         Self(Duration::seconds(seconds))
+    }
+}
+
+impl<'a> DecodeFromSlice<'a> for DurationSeconds {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
+        let (seconds, used) = <i64 as DecodeFromSlice>::decode_from_slice(bytes)?;
+        Ok((Self(Duration::seconds(seconds)), used))
     }
 }
 

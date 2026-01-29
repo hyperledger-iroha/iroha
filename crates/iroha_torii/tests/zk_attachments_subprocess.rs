@@ -16,6 +16,8 @@ use iroha_torii::MaybeTelemetry;
 async fn attachments_sanitize_via_subprocess() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let sanitizer_path = PathBuf::from(env!("CARGO_BIN_EXE_attachment_sanitizer"));
+    let sanitize_timeout_ms =
+        iroha_config::parameters::defaults::torii::ATTACHMENTS_SANITIZE_TIMEOUT_MS.max(5_000);
     iroha_torii::zk_attachments::configure(
         iroha_config::parameters::defaults::torii::ATTACHMENTS_TTL_SECS,
         iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_BYTES,
@@ -25,7 +27,7 @@ async fn attachments_sanitize_via_subprocess() {
         iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_EXPANDED_BYTES,
         iroha_config::parameters::defaults::torii::ATTACHMENTS_MAX_ARCHIVE_DEPTH,
         AttachmentSanitizerMode::Subprocess,
-        iroha_config::parameters::defaults::torii::ATTACHMENTS_SANITIZE_TIMEOUT_MS,
+        sanitize_timeout_ms,
         Some(sanitizer_path),
         MaybeTelemetry::disabled(),
     );

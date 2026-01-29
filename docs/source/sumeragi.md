@@ -240,6 +240,20 @@ Pacemaker (view changes)
 - View‑0 voting follows the same rules for Set A and Set B validators. On local timeout in view 0, nodes suggest a view change (no widen‑before‑rotate). Timing is driven by on‑chain parameters: `SumeragiParameters` (`BlockTimeMs`/`CommitTimeMs`/`MinFinalityMs`/`PacingFactorBps`) set the base for both modes; the pacing factor scales the block/commit targets (basis points, >= 10_000), and NPoS derives per‑phase timeouts from the scaled block time with optional `sumeragi.advanced.npos.timeouts` overrides. Leader proposal is roughly at 1/3 and expected commit at 2/3 of the pipeline time.
 - View-change proofs advance once `f+1` validators raise suspicion (commit failure or quorum timeout); a full commit quorum is not required for a view change.
 
+Deterministic pacing governor (optional)
+- Config keys live under `sumeragi.advanced.pacing_governor` (disabled by default).
+- Each block evaluates the last `window_blocks` headers and computes view-change pressure
+  (average view-change index delta per block, permille) plus commit spacing pressure
+  (average inter-block spacing vs target block time, permille).
+- If either pressure exceeds its threshold, increase `SumeragiParameters.pacing_factor_bps`
+  by `step_up_bps`. If both pressures fall below their clear thresholds, decrease
+  by `step_down_bps`.
+- Clamp `pacing_factor_bps` to `[min_factor_bps, max_factor_bps]` (min >= 10_000). If a
+  block explicitly sets `pacing_factor_bps`, the governor skips that height.
+- Updates apply only at block boundaries and emit configuration events; the result is
+  deterministic because it is derived solely from committed headers. Monitor
+  `effective_pacing_factor_bps` via `/v1/sumeragi/status`.
+
 K / r Parameters
 - Config keys: `sumeragi.collectors.k: usize` (collectors per height; default 1 in config) and `sumeragi.collectors.redundant_send_r: u8` (redundant send fanout; tooling may seed on-chain defaults as `2f+1` from the validator count, and the config fallback is 3 (2f+1 for 4 validators) when parameters are absent).
 - On-chain: K and r live in `SumeragiParameters` and are authoritative for collector planning and `ConsensusParams` adverts; config values seed the genesis defaults. When peers advertise different K/r, the node logs a mismatch but keeps the on-chain values.

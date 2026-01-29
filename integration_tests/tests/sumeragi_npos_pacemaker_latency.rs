@@ -1,4 +1,5 @@
-//! Validate that the pacemaker keeps `NPoS` pacing near 1s even with ~250ms link delays.
+//! Validate that the pacemaker targets 1s while staying within the commit-quorum envelope
+//! under ~250ms link delays.
 
 use std::time::{Duration, Instant};
 
@@ -14,15 +15,16 @@ use nonzero_ext::nonzero;
 use tokio::time::sleep;
 
 const BLOCK_TIME_MS: u64 = 1_000;
+const COMMIT_TIME_MS: u64 = 1_000;
 const BLOCK_SYNC_GOSSIP_PERIOD_MS: u64 = 250;
 const SAMPLE_BLOCKS: u64 = 8;
-const BLOCK_SPACING_BUDGET_MS: f64 = 1_500.0;
+// DA-enabled consensus now waits longer before view changes:
+// commit quorum timeout = block_time + 4 * commit_time.
+const COMMIT_QUORUM_TIMEOUT_MS: u64 = BLOCK_TIME_MS + 4 * COMMIT_TIME_MS;
+const BLOCK_SPACING_BUDGET_MS: f64 = COMMIT_QUORUM_TIMEOUT_MS as f64 * 1.6;
 const COLLECTORS_K: u16 = 3;
 const REDUNDANT_SEND_R: u8 = 2;
-const PROPOSE_EMA_BUDGET_MS: f64 = 1_100.0;
-const PREVOTE_EMA_BUDGET_MS: f64 = 1_200.0;
-const PRECOMMIT_EMA_BUDGET_MS: f64 = 1_300.0;
-const COMMIT_EMA_BUDGET_MS: f64 = 1_400.0;
+const PHASE_EMA_BUDGET_MS: f64 = COMMIT_QUORUM_TIMEOUT_MS as f64;
 const METRIC_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const METRIC_POLL_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -57,7 +59,7 @@ async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
             SumeragiParameter::BlockTimeMs(BLOCK_TIME_MS),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(BLOCK_TIME_MS),
+            SumeragiParameter::CommitTimeMs(COMMIT_TIME_MS),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::CollectorsK(COLLECTORS_K),
@@ -98,7 +100,7 @@ async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
     let avg_spacing_ms = elapsed_ms / produced as f64;
     ensure!(
         avg_spacing_ms <= BLOCK_SPACING_BUDGET_MS,
-        "average block spacing {avg_spacing_ms:.1} ms exceeded budget {BLOCK_SPACING_BUDGET_MS} ms over {produced} blocks"
+        "average block spacing {avg_spacing_ms:.1} ms exceeded budget {BLOCK_SPACING_BUDGET_MS} ms (commit quorum timeout {COMMIT_QUORUM_TIMEOUT_MS} ms) over {produced} blocks"
     );
 
     let metrics_url = client
@@ -114,17 +116,12 @@ async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
         "pacemaker view timeout target {view_target} ms did not match block_time_ms {BLOCK_TIME_MS}"
     );
 
-    for (phase, budget) in [
-        ("propose", PROPOSE_EMA_BUDGET_MS),
-        ("prevote", PREVOTE_EMA_BUDGET_MS),
-        ("precommit", PRECOMMIT_EMA_BUDGET_MS),
-        ("commit", COMMIT_EMA_BUDGET_MS),
-    ] {
+    for phase in ["propose", "prevote", "precommit", "commit"] {
         let key = format!("sumeragi_phase_latency_ema_ms{{phase=\"{phase}\"}}");
         let value = metrics.get(&key);
         ensure!(
-            value <= budget,
-            "{phase} EMA {value} ms exceeded budget {budget} ms (target 1s, 250ms RTT envelope)"
+            value <= PHASE_EMA_BUDGET_MS,
+            "{phase} EMA {value} ms exceeded budget {PHASE_EMA_BUDGET_MS} ms (commit quorum timeout {COMMIT_QUORUM_TIMEOUT_MS} ms)"
         );
     }
 

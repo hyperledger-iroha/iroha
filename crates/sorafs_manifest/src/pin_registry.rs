@@ -198,6 +198,7 @@ pub enum AliasBindingValidationError {
 
 /// Alias proof bundle propagated alongside SoraFS responses.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+#[norito(decode_from_slice)]
 pub struct AliasProofBundleV1 {
     /// Alias binding being attested.
     pub binding: AliasBindingV1,

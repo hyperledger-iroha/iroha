@@ -66,6 +66,7 @@ struct ConverterImpl<T>(PhantomData<T>);
 impl<T> ConverterImpl<T>
 where
     T: Debug + Encode + DecodeAll + JsonSerialize + JsonDeserializeOwned,
+    for<'a> T: norito::core::DecodeFromSlice<'a>,
     T: Send + Sync + 'static,
 {
     fn boxed() -> Arc<dyn Converter> {
@@ -82,6 +83,7 @@ trait Converter: Send + Sync {
 impl<T> Converter for ConverterImpl<T>
 where
     T: Debug + Encode + DecodeAll + JsonSerialize + JsonDeserializeOwned,
+    for<'a> T: norito::core::DecodeFromSlice<'a>,
     T: Send + Sync + 'static,
 {
     fn norito_to_rust(&self, mut input: &[u8]) -> Result<String> {

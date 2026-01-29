@@ -7373,6 +7373,7 @@ pub mod main_loop;
 pub mod message;
 pub mod network_topology;
 pub(crate) mod new_view_stats;
+pub(crate) mod pacing_governor;
 pub(crate) mod penalties;
 pub mod rbc_sampling;
 pub mod rbc_status;

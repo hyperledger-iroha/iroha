@@ -3532,6 +3532,52 @@ impl Default for AdaptiveObservability {
     }
 }
 
+/// Deterministic pacing governor configuration.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiPacingGovernor {
+    /// Enable adaptive pacing-factor adjustments.
+    pub enabled: bool,
+    /// Number of recent blocks to sample when evaluating pressure.
+    pub window_blocks: usize,
+    /// View-change pressure threshold (permille of view-change increments per block).
+    pub view_change_pressure_permille: u32,
+    /// View-change clear threshold (permille of view-change increments per block).
+    pub view_change_clear_permille: u32,
+    /// Commit spacing pressure threshold (permille of target block time).
+    pub commit_spacing_pressure_permille: u32,
+    /// Commit spacing clear threshold (permille of target block time).
+    pub commit_spacing_clear_permille: u32,
+    /// Pacing-factor increase step (basis points).
+    pub step_up_bps: u32,
+    /// Pacing-factor decrease step (basis points).
+    pub step_down_bps: u32,
+    /// Minimum pacing-factor bound (basis points).
+    pub min_factor_bps: u32,
+    /// Maximum pacing-factor bound (basis points).
+    pub max_factor_bps: u32,
+}
+
+impl Default for SumeragiPacingGovernor {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sumeragi::PACING_GOVERNOR_ENABLED,
+            window_blocks: defaults::sumeragi::PACING_GOVERNOR_WINDOW_BLOCKS,
+            view_change_pressure_permille:
+                defaults::sumeragi::PACING_GOVERNOR_VIEW_CHANGE_PRESSURE_PERMILLE,
+            view_change_clear_permille:
+                defaults::sumeragi::PACING_GOVERNOR_VIEW_CHANGE_CLEAR_PERMILLE,
+            commit_spacing_pressure_permille:
+                defaults::sumeragi::PACING_GOVERNOR_COMMIT_SPACING_PRESSURE_PERMILLE,
+            commit_spacing_clear_permille:
+                defaults::sumeragi::PACING_GOVERNOR_COMMIT_SPACING_CLEAR_PERMILLE,
+            step_up_bps: defaults::sumeragi::PACING_GOVERNOR_STEP_UP_BPS,
+            step_down_bps: defaults::sumeragi::PACING_GOVERNOR_STEP_DOWN_BPS,
+            min_factor_bps: defaults::sumeragi::PACING_GOVERNOR_MIN_FACTOR_BPS,
+            max_factor_bps: defaults::sumeragi::PACING_GOVERNOR_MAX_FACTOR_BPS,
+        }
+    }
+}
+
 /// Mode flip gating configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiModeFlip {
@@ -3799,6 +3845,8 @@ pub struct Sumeragi {
     pub worker: SumeragiWorker,
     /// Pacemaker configuration.
     pub pacemaker: SumeragiPacemaker,
+    /// Deterministic pacing governor configuration.
+    pub pacing_governor: SumeragiPacingGovernor,
     /// DA (data-availability) configuration.
     pub da: SumeragiDa,
     /// Persistence/retry configuration.
