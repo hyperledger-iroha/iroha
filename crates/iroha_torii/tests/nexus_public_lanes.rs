@@ -178,8 +178,7 @@ async fn nexus_public_lane_endpoints_reject_when_nexus_disabled() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let payload =
-        norito::decode_from_bytes::<ErrorEnvelope>(&body).expect("decode error payload");
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&body).expect("decode error payload");
     assert_eq!(payload.code, "nexus_disabled");
     assert!(
         payload.message.contains("nexus.enabled=true"),
@@ -210,8 +209,7 @@ async fn da_commitments_reject_when_nexus_disabled() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let payload =
-        norito::decode_from_bytes::<ErrorEnvelope>(&body).expect("decode error payload");
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&body).expect("decode error payload");
     assert_eq!(payload.code, "nexus_disabled");
     assert!(
         payload.message.contains("nexus.enabled=true"),

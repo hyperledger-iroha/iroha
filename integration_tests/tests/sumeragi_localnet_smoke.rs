@@ -682,7 +682,12 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                     7_i64,
                 )
                 .write(
-                    ["sumeragi", "advanced", "da", "availability_timeout_multiplier"],
+                    [
+                        "sumeragi",
+                        "advanced",
+                        "da",
+                        "availability_timeout_multiplier",
+                    ],
                     3_i64,
                 )
                 .write(

@@ -1,5 +1,7 @@
 //! Observer/sync-only node catches up behind a small validator swarm.
 
+use std::collections::{HashMap, HashSet};
+
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
@@ -30,30 +32,11 @@ fn observer_node_catches_up() -> Result<()> {
         .with_seed(Some(b"observer"))
         .build(network.env());
 
-    // Start validators with observer in the trusted peers for networking, but filter it out of PoPs.
-    let mut validator_layers: Vec<_> = network
+    // Start validators with the observer in trusted peers so permissioned networking accepts it.
+    // Keep PoP entries aligned with trusted_peers to satisfy config validation.
+    let validator_layers: Vec<_> = network
         .config_layers_with_additional_peers([&observer])
         .collect();
-    if let Some(observer_bls) = observer.bls_public_key().map(ToString::to_string)
-        && let Some(base_pops) = validator_layers
-            .first()
-            .and_then(|layer| layer.get("trusted_peers_pop"))
-            .and_then(TomlValue::as_array)
-    {
-        let filtered_pops: Vec<_> = base_pops
-            .iter()
-            .filter(|entry| {
-                entry
-                    .as_table()
-                    .and_then(|t| t.get("public_key").and_then(TomlValue::as_str))
-                    .is_none_or(|pk| pk != observer_bls)
-            })
-            .cloned()
-            .collect();
-        validator_layers.push(std::borrow::Cow::Owned(
-            Table::new().write(["trusted_peers_pop"], filtered_pops),
-        ));
-    }
     let genesis = network.genesis();
     for peer in network.peers() {
         sandbox::handle_result(
@@ -74,9 +57,41 @@ fn observer_node_catches_up() -> Result<()> {
     // Add observer itself to trusted peers; ignore duplicates
     let _ = tp.push(Peer::new(observer.p2p_address(), observer.id()));
 
-    let trusted_peers: Vec<String> = tp.into_iter().map(|peer| peer.to_string()).collect();
+    let mut pops_by_peer_id = HashMap::new();
+    for peer in network.peers() {
+        let pop = peer.bls_pop().expect("network peers should have BLS PoPs");
+        pops_by_peer_id.insert(peer.id(), pop.to_vec());
+    }
+    if let Some(pop) = observer.bls_pop() {
+        pops_by_peer_id.insert(observer.id(), pop.to_vec());
+    }
+
+    let trusted_peers: Vec<String> = tp.iter().map(|peer| peer.to_string()).collect();
+    let mut trusted_peers_pop = Vec::new();
+    let mut seen = HashSet::new();
+    for trusted in tp.iter() {
+        let peer_id = trusted.id();
+        if !seen.insert(peer_id.clone()) {
+            continue;
+        }
+        let pop = pops_by_peer_id
+            .get(peer_id)
+            .unwrap_or_else(|| panic!("missing PoP for trusted peer {}", peer_id.public_key()));
+        let mut pop_entry = Table::new();
+        pop_entry.insert(
+            "public_key".into(),
+            TomlValue::String(peer_id.public_key().to_string()),
+        );
+        pop_entry.insert(
+            "pop_hex".into(),
+            TomlValue::String(format!("0x{}", hex::encode(pop))),
+        );
+        trusted_peers_pop.push(TomlValue::Table(pop_entry));
+    }
+
     let override_layer = Table::new()
         .write(["trusted_peers"], trusted_peers)
+        .write(["trusted_peers_pop"], TomlValue::Array(trusted_peers_pop))
         .write(["sumeragi", "role"], "observer")
         .write(["logger", "level"], "INFO");
 

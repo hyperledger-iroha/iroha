@@ -11,7 +11,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     io,
     num::NonZeroUsize,
-    sync::mpsc,
+    sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -70,8 +70,9 @@ pub(super) struct RbcPlan {
 
 const RBC_PERSIST_WORK_QUEUE_CAP: usize = 8;
 const RBC_PERSIST_RESULT_QUEUE_CAP: usize = 8;
-const RBC_SEED_WORK_QUEUE_CAP: usize = 4;
-const RBC_SEED_RESULT_QUEUE_CAP: usize = 4;
+const RBC_SEED_WORKER_THREADS: usize = 2;
+const RBC_SEED_WORK_QUEUE_CAP: usize = 4 * RBC_SEED_WORKER_THREADS;
+const RBC_SEED_RESULT_QUEUE_CAP: usize = 4 * RBC_SEED_WORKER_THREADS;
 
 pub(super) fn rbc_roster_hash(roster: &[PeerId]) -> Hash {
     Hash::new(roster.to_vec().encode())
@@ -230,31 +231,60 @@ fn spawn_rbc_persist_worker(
 fn spawn_rbc_seed_worker(wake_tx: Option<mpsc::SyncSender<()>>) -> io::Result<RbcSeedWorkerHandle> {
     let (work_tx, work_rx) = mpsc::sync_channel::<RbcSeedWork>(RBC_SEED_WORK_QUEUE_CAP);
     let (result_tx, result_rx) = mpsc::sync_channel::<RbcSeedResult>(RBC_SEED_RESULT_QUEUE_CAP);
-    let join_handle = std::thread::Builder::new()
-        .name("sumeragi-rbc-seed".to_owned())
-        .spawn(move || {
-            while let Ok(work) = work_rx.recv() {
-                let key = work.key;
-                let payload_hash = work.payload_hash;
-                let outcome = Actor::build_rbc_session_from_payload(
-                    &work.payload_bytes,
-                    payload_hash,
-                    work.chunk_size,
-                    work.epoch,
-                )
-                .map_err(eyre::Report::from);
-                if result_tx
-                    .send(RbcSeedResult {
-                        key,
+    let work_rx = Arc::new(Mutex::new(work_rx));
+    let mut worker_handles = Vec::with_capacity(RBC_SEED_WORKER_THREADS);
+    for idx in 0..RBC_SEED_WORKER_THREADS {
+        let work_rx = Arc::clone(&work_rx);
+        let result_tx = result_tx.clone();
+        let wake_tx = wake_tx.clone();
+        let thread_name = format!("sumeragi-rbc-seed-{idx}");
+        let handle = std::thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || {
+                loop {
+                    let work = {
+                        let guard = match work_rx.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        guard.recv()
+                    };
+                    let Ok(work) = work else {
+                        break;
+                    };
+                    let key = work.key;
+                    let payload_hash = work.payload_hash;
+                    let outcome = Actor::build_rbc_session_from_payload(
+                        &work.payload_bytes,
                         payload_hash,
-                        outcome,
-                    })
-                    .is_err()
-                {
-                    break;
+                        work.chunk_size,
+                        work.epoch,
+                    )
+                    .map_err(eyre::Report::from);
+                    if result_tx
+                        .send(RbcSeedResult {
+                            key,
+                            payload_hash,
+                            outcome,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                    if let Some(wake) = wake_tx.as_ref() {
+                        let _ = wake.try_send(());
+                    }
                 }
-                if let Some(wake) = wake_tx.as_ref() {
-                    let _ = wake.try_send(());
+            })?;
+        worker_handles.push(handle);
+    }
+    drop(result_tx);
+    let join_handle = std::thread::Builder::new()
+        .name("sumeragi-rbc-seed-supervisor".to_owned())
+        .spawn(move || {
+            for handle in worker_handles {
+                if handle.join().is_err() {
+                    warn!("RBC seed worker thread panicked");
                 }
             }
         })?;
@@ -737,6 +767,17 @@ mod tests {
             rendered.contains("RBC session init failed"),
             "unexpected error message: {rendered}"
         );
+    }
+
+    #[test]
+    fn rbc_seed_worker_exits_on_channel_close() {
+        let RbcSeedWorkerHandle {
+            work_tx,
+            result_rx: _result_rx,
+            join_handle,
+        } = spawn_rbc_seed_worker(None).expect("spawn rbc seed worker");
+        drop(work_tx);
+        assert!(join_handle.join().is_ok());
     }
 }
 

@@ -35,7 +35,8 @@ use std::{
 };
 
 use norito::{
-    Archived, Error, NoritoDeserialize, NoritoSerialize, core::DecodeFromSlice,
+    Archived, Error, NoritoDeserialize, NoritoSerialize,
+    core::DecodeFromSlice,
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize, Parser},
 };
 use rust_decimal::Decimal;
