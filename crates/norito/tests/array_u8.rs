@@ -1,6 +1,6 @@
 #![allow(clippy::manual_div_ceil)]
 //! Ensure [u8; N] fields in packed-structs roundtrip and avoid per-element overhead.
-use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
+use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, decode_from_reader, to_bytes};
 
 #[derive(Debug, Clone, PartialEq, iroha_schema::IntoSchema, NoritoSerialize, NoritoDeserialize)]
 struct BlobPair {
@@ -38,6 +38,10 @@ fn option_array_u8_roundtrip() {
     let none_bytes = to_bytes(&Option::<[u8; 12]>::None).expect("encode none");
     let decoded_none: Option<[u8; 12]> = decode_from_bytes(&none_bytes).expect("decode none");
     assert_eq!(decoded_none, None);
+
+    let decoded_none_reader: Option<[u8; 12]> =
+        decode_from_reader(std::io::Cursor::new(&none_bytes)).expect("decode none reader");
+    assert_eq!(decoded_none_reader, None);
 }
 
 #[test]

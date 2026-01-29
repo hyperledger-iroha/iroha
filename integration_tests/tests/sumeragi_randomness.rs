@@ -375,9 +375,18 @@ fn randomness_network_builder() -> NetworkBuilder {
                 .write(["sumeragi", "collectors", "k"], 1_i64)
                 .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
                 .write(["sumeragi", "da", "enabled"], true)
-                .write(["sumeragi", "pacemaker", "backoff_multiplier"], 1_i64)
-                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 1_i64)
-                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 1_000_i64);
+                .write(
+                    ["sumeragi", "advanced", "pacemaker", "backoff_multiplier"],
+                    1_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
+                    1_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
+                    1_000_i64,
+                );
         })
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::CollectorsK(1),

@@ -3709,6 +3709,7 @@ impl Iroha {
         state.set_tiered_backend(&tiered_state_cfg);
         state.set_pipeline(pipeline_cfg);
         state.set_sumeragi_parameters(&sumeragi_cfg);
+        state.set_sumeragi_pacing_governor(sumeragi_cfg.pacing_governor);
         state.set_oracle(oracle_cfg);
         state.set_streaming(streaming_cfg);
         state.set_fraud_monitoring(fraud_cfg);

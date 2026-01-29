@@ -171,6 +171,14 @@ fn build_transfer(counter: u64) -> OfflineToOnlineTransfer {
         refresh_at_ms: None,
     };
 
+    let mut device_manifest = iroha_data_model::metadata::Metadata::default();
+    device_manifest.insert(
+        "android.provisioned.device_id"
+            .parse::<Name>()
+            .expect("metadata key"),
+        "device-1",
+    );
+
     let receipt = OfflineSpendReceipt {
         tx_id: Hash::new(b"tx-1"),
         from: controller.clone(),
@@ -185,7 +193,7 @@ fn build_transfer(counter: u64) -> OfflineToOnlineTransfer {
             manifest_issued_at_ms: 1_700_000_000,
             challenge_hash: Hash::new(b"challenge"),
             counter,
-            device_manifest: iroha_data_model::metadata::Metadata::default(),
+            device_manifest,
             inspector_signature: Signature::from_bytes(&[0; 64]),
         }),
         platform_snapshot: None,

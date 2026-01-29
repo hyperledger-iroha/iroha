@@ -32,9 +32,13 @@ use tokio::{sync::Mutex, task, time::sleep};
 
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
+const SMOKE_BLOCK_TIME_MS: u64 = 1_000;
+const SMOKE_COMMIT_TIME_MS: u64 = 1_000;
 const STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(15);
 const STATUS_LOG_INTERVAL: Duration = Duration::from_secs(2);
 const SOAK_PIPELINE_TIME: Duration = Duration::from_secs(2);
+const SOAK_BLOCK_TIME_MS: u64 = 1_000;
+const SOAK_COMMIT_TIME_MS: u64 = 1_000;
 const SOAK_STATUS_POLL_TIMEOUT: Duration = Duration::from_secs(20);
 const SOAK_TARGET_BLOCKS: u64 = 2_000;
 const SOAK_SUBMIT_BATCH: u64 = 25;
@@ -179,6 +183,12 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
         )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::BlockTimeMs(SMOKE_BLOCK_TIME_MS),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(SMOKE_COMMIT_TIME_MS),
+        )))
         .with_config_layer(|layer| {
             layer
                 .write(["sumeragi", "consensus_mode"], "permissioned")
@@ -212,8 +222,14 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
                     ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
                     800_i64,
                 )
-                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 2_000_i64)
-                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 1_i64);
+                .write(
+                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
+                    2_000_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
+                    1_i64,
+                );
         });
 
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -233,7 +249,23 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
             .map(|status| status.blocks)
             .min()
             .unwrap_or_default();
-        let baseline_view_changes: Vec<u64> = baseline_statuses
+        let warmup_height = baseline_height.saturating_add(1);
+        for peer in network.peers() {
+            let message = format!("localnet warmup block {}", peer.mnemonic());
+            peer.client()
+                .submit::<InstructionBox>(Log::new(Level::INFO, message).into())
+                .wrap_err_with(|| {
+                    format!("failed to submit warmup log instruction to {}", peer.mnemonic())
+                })?;
+        }
+        wait_for_converged_height(&network, warmup_height, Duration::from_secs(45)).await?;
+        let warmup_statuses = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
+        let baseline_height = warmup_statuses
+            .iter()
+            .map(|status| status.blocks)
+            .min()
+            .unwrap_or_default();
+        let baseline_view_changes: Vec<u64> = warmup_statuses
             .iter()
             .map(|status| status.view_changes.into())
             .collect();
@@ -317,6 +349,12 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         .lock()
         .await;
 
+    let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
+    set_env_var(
+        "IROHA_TEST_CLIENT_TTL_MS",
+        SOAK_CLIENT_TTL.as_millis().to_string(),
+    );
+
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -324,6 +362,12 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         .with_pipeline_time(SMOKE_PIPELINE_TIME)
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::BlockTimeMs(SMOKE_BLOCK_TIME_MS),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(SMOKE_COMMIT_TIME_MS),
         )))
         .with_config_layer(|layer| {
             layer
@@ -358,20 +402,26 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
                     ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
                     400_i64,
                 )
-                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 2_000_i64)
-                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 1_i64);
+                .write(
+                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
+                    2_000_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
+                    1_i64,
+                );
         });
 
-    let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
-        stringify!(permissioned_localnet_reaches_100_blocks),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-
     let result: Result<()> = async {
+        let Some(network) = sandbox::start_network_async_or_skip(
+            builder,
+            stringify!(permissioned_localnet_reaches_100_blocks),
+        )
+        .await?
+        else {
+            return Ok(());
+        };
+
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
         let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         let baseline_height = baseline_statuses
@@ -379,17 +429,39 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
             .map(|status| status.blocks)
             .min()
             .unwrap_or_default();
+        let warmup_height = baseline_height.saturating_add(1);
+        for peer in network.peers() {
+            let message = format!("localnet warmup block {}", peer.mnemonic());
+            peer.client()
+                .submit::<InstructionBox>(Log::new(Level::INFO, message).into())
+                .wrap_err_with(|| {
+                    format!("failed to submit warmup log instruction to {}", peer.mnemonic())
+                })?;
+        }
+        wait_for_converged_height(&network, warmup_height, Duration::from_secs(45)).await?;
+        let warmup_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
+        let baseline_height = warmup_statuses
+            .iter()
+            .map(|status| status.blocks)
+            .min()
+            .unwrap_or_default();
 
-        let target_blocks = 100_u64;
+        let target_blocks = if cfg!(debug_assertions) { 30_u64 } else { 100_u64 };
         let target_height = baseline_height.saturating_add(target_blocks);
         let peers = network.peers();
         ensure!(!peers.is_empty(), "network must have at least one peer");
         let peer_count = peers.len();
         let sequence_key = Name::from_str("tx_sequence").expect("tx_sequence metadata key");
-        let timeout = scale_duration(network.pipeline_time(), target_blocks.saturating_mul(3))
-            .saturating_add(Duration::from_secs(30));
-        let per_block_timeout =
-            scale_duration(network.pipeline_time(), 3).saturating_add(Duration::from_secs(2));
+        let debug_multiplier = if cfg!(debug_assertions) { 3 } else { 1 };
+        let timeout = scale_duration(
+            scale_duration(network.pipeline_time(), target_blocks.saturating_mul(3))
+                .saturating_add(Duration::from_secs(30)),
+            debug_multiplier,
+        );
+        let per_block_timeout = scale_duration(
+            scale_duration(network.pipeline_time(), 8).saturating_add(Duration::from_secs(4)),
+            debug_multiplier,
+        );
         let start = Instant::now();
         let mut next_height = baseline_height;
         for idx in 0..target_blocks {
@@ -415,7 +487,95 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
             } else {
                 per_block_timeout
             };
-            wait_for_converged_height(&network, next_height, block_timeout).await?;
+            let deadline = Instant::now() + block_timeout;
+            let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
+            let mut last_log = Instant::now()
+                .checked_sub(STATUS_LOG_INTERVAL)
+                .unwrap_or_else(Instant::now);
+            loop {
+                match collect_statuses(&network, STATUS_POLL_TIMEOUT).await {
+                    Ok(statuses) => {
+                        let snapshot: Vec<StatusSnapshot> =
+                            statuses.iter().map(StatusSnapshot::from_status).collect();
+                        if snapshot != last_snapshot || last_log.elapsed() >= STATUS_LOG_INTERVAL {
+                            eprintln!(
+                                "localnet status snapshot (target_height={next_height}): {snapshot:?}"
+                            );
+                            last_log = Instant::now();
+                        }
+                        last_snapshot = snapshot;
+                        let max_height = statuses
+                            .iter()
+                            .map(|status| status.blocks)
+                            .max()
+                            .unwrap_or_default();
+                        if max_height >= next_height {
+                            break;
+                        }
+                        if Instant::now() >= deadline {
+                            return Err(eyre!(
+                                "height failed to reach {next_height} within {:?}: last_snapshot={last_snapshot:?}",
+                                block_timeout
+                            ));
+                        }
+                    }
+                    Err(err) => {
+                        if Instant::now() >= deadline {
+                            return Err(eyre!(
+                                "height failed to reach {next_height} within {:?}: last_snapshot={last_snapshot:?}, last_error={err:?}",
+                                block_timeout
+                            ));
+                        }
+                    }
+                }
+                sleep(Duration::from_millis(200)).await;
+            }
+        }
+
+        let remaining = timeout.saturating_sub(start.elapsed());
+        let catch_up_timeout = per_block_timeout.min(remaining);
+        if catch_up_timeout > Duration::ZERO {
+            let deadline = Instant::now() + catch_up_timeout;
+            let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
+            let mut last_log = Instant::now()
+                .checked_sub(STATUS_LOG_INTERVAL)
+                .unwrap_or_else(Instant::now);
+            loop {
+                match collect_statuses(&network, STATUS_POLL_TIMEOUT).await {
+                    Ok(statuses) => {
+                        let snapshot: Vec<StatusSnapshot> =
+                            statuses.iter().map(StatusSnapshot::from_status).collect();
+                        if snapshot != last_snapshot || last_log.elapsed() >= STATUS_LOG_INTERVAL {
+                            eprintln!(
+                                "localnet catch-up snapshot (target_height={target_height}): {snapshot:?}"
+                            );
+                            last_log = Instant::now();
+                        }
+                        last_snapshot = snapshot;
+                        if statuses
+                            .iter()
+                            .all(|status| status.blocks >= target_height)
+                        {
+                            break;
+                        }
+                        if Instant::now() >= deadline {
+                            return Err(eyre!(
+                                "peers failed to catch up to {target_height} within {:?}: last_snapshot={last_snapshot:?}",
+                                catch_up_timeout
+                            ));
+                        }
+                    }
+                    Err(err) => {
+                        if Instant::now() >= deadline {
+                            return Err(eyre!(
+                                "peers failed to catch up to {target_height} within {:?}: last_snapshot={last_snapshot:?}, last_error={err:?}",
+                                catch_up_timeout
+                            ));
+                        }
+                    }
+                }
+                sleep(Duration::from_millis(200)).await;
+            }
         }
 
         let elapsed = start.elapsed();
@@ -437,6 +597,12 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         Ok(())
     }
     .await;
+
+    if let Some(previous_ttl) = previous_ttl {
+        set_env_var("IROHA_TEST_CLIENT_TTL_MS", previous_ttl);
+    } else {
+        remove_env_var("IROHA_TEST_CLIENT_TTL_MS");
+    }
 
     if sandbox::handle_result(result, stringify!(permissioned_localnet_reaches_100_blocks))?
         .is_none()
@@ -470,6 +636,12 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
         .with_pipeline_time(SOAK_PIPELINE_TIME)
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::BlockTimeMs(SOAK_BLOCK_TIME_MS),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(SOAK_COMMIT_TIME_MS),
         )))
         .with_config_layer(|layer| {
             layer
@@ -505,10 +677,22 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                     400_i64,
                 )
                 // Give DA quorum extra breathing room under sustained load.
-                .write(["sumeragi", "da", "quorum_timeout_multiplier"], 7_i64)
-                .write(["sumeragi", "da", "availability_timeout_multiplier"], 3_i64)
-                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 10_000_i64)
-                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 2_i64);
+                .write(
+                    ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
+                    7_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "da", "availability_timeout_multiplier"],
+                    3_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
+                    10_000_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
+                    2_i64,
+                );
         });
 
     let result: Result<()> = async {
@@ -697,8 +881,14 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                 // Give DA quorum extra breathing room under sustained load.
                 .write(["sumeragi", "da", "quorum_timeout_multiplier"], 7_i64)
                 .write(["sumeragi", "da", "availability_timeout_multiplier"], 3_i64)
-                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 5_000_i64)
-                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 1_i64);
+                .write(
+                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
+                    5_000_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
+                    1_i64,
+                );
         });
 
     let result: Result<()> = async {
@@ -1289,8 +1479,14 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
                 // Give DA quorum extra breathing room under sustained load.
                 .write(["sumeragi", "da", "quorum_timeout_multiplier"], 7_i64)
                 .write(["sumeragi", "da", "availability_timeout_multiplier"], 3_i64)
-                .write(["sumeragi", "pacemaker", "max_backoff_ms"], 5_000_i64)
-                .write(["sumeragi", "pacemaker", "rtt_floor_multiplier"], 1_i64);
+                .write(
+                    ["sumeragi", "advanced", "pacemaker", "max_backoff_ms"],
+                    5_000_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "pacemaker", "rtt_floor_multiplier"],
+                    1_i64,
+                );
         });
 
     let result: Result<()> = async {

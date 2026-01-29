@@ -39,6 +39,7 @@ use sorafs_manifest::repair::{
     RepairTaskStateV1, RepairTaskStatusV1, RepairTicketId, RepairWorkerActionV1,
     RepairWorkerSignaturePayloadV1,
 };
+use tempfile::tempdir;
 use tower::ServiceExt as _;
 
 fn repair_report(
@@ -267,6 +268,9 @@ async fn sorafs_repair_worker_endpoints_drive_state() {
 
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_repair.enabled = true;
+    let temp_dir = tempdir().expect("sorafs temp dir");
+    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+    cfg.torii.sorafs_repair.state_dir = Some(temp_dir.path().join("repair"));
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -473,6 +477,7 @@ async fn sorafs_repair_worker_endpoints_drive_state() {
             RepairTaskStatusV1::Failed,
         ],
     );
+    drop(temp_dir);
 }
 
 #[tokio::test]
@@ -488,6 +493,9 @@ async fn sorafs_repair_worker_rejects_invalid_signature() {
 
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_repair.enabled = true;
+    let temp_dir = tempdir().expect("sorafs temp dir");
+    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+    cfg.torii.sorafs_repair.state_dir = Some(temp_dir.path().join("repair"));
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -547,4 +555,5 @@ async fn sorafs_repair_worker_rejects_invalid_signature() {
     let body = json::to_vec(&claim_req).expect("encode request");
     let (status, _body) = post_json_with_status(&app, "/v1/sorafs/audit/repair/claim", body).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+    drop(temp_dir);
 }

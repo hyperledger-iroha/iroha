@@ -101,6 +101,13 @@ mod small_string {
             Self::from_str(&string)
         }
     }
+
+    impl<'a> ncore::DecodeFromSlice<'a> for SmallStr {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+            let (value, used) = <&str as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
+            Ok((Self::from_str(value), used))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -108,7 +115,7 @@ mod tests {
     use std::io::Write;
 
     use norito::{
-        NoritoDeserialize, NoritoSerialize,
+        NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes,
         codec::{Decode, Encode},
         core as ncore, json,
     };
@@ -155,6 +162,22 @@ mod tests {
     }
 
     #[test]
+    fn smallstr_norito_roundtrip() {
+        let value = SmallStr::from_str("tiny");
+        let bytes = to_bytes(&value).expect("encode SmallStr");
+        let decoded: SmallStr = decode_from_bytes(&bytes).expect("decode SmallStr");
+        assert_eq!(decoded, value);
+    }
+
+    #[test]
+    fn smallvec_norito_roundtrip() {
+        let value: SmallVec<[u32; 4]> = SmallVec(smallvec![4, 3, 2, 1]);
+        let bytes = to_bytes(&value).expect("encode SmallVec");
+        let decoded: SmallVec<[u32; 4]> = decode_from_bytes(&bytes).expect("decode SmallVec");
+        assert_eq!(decoded, value);
+    }
+
+    #[test]
     fn smallvec_zero_sized_round_trip() {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         struct Zst;
@@ -168,6 +191,15 @@ mod tests {
         impl<'a> NoritoDeserialize<'a> for Zst {
             fn deserialize(_: &'a ncore::Archived<Self>) -> Self {
                 Self
+            }
+        }
+
+        impl<'a> ncore::DecodeFromSlice<'a> for Zst {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+                if !bytes.is_empty() {
+                    return Err(ncore::Error::LengthMismatch);
+                }
+                Ok((Self, 0))
             }
         }
 
@@ -409,62 +441,74 @@ mod small_vector {
 
     impl<'a, A: Array> NoritoDeserialize<'a> for SmallVec<A>
     where
-        A::Item: NoritoDeserialize<'a>,
+        A::Item: NoritoDeserialize<'a> + for<'slice> ncore::DecodeFromSlice<'slice>,
     {
-        #[allow(unsafe_code)]
         fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
-            use std::alloc::{Layout, alloc, dealloc};
+            Self::try_deserialize(archived).unwrap_or_else(|err| {
+                panic!(
+                    "SmallVec<{}> decode failed: {err:?}",
+                    core::any::type_name::<A::Item>()
+                )
+            })
+        }
 
-            let ptr = core::ptr::from_ref(archived).cast::<u8>();
-            let mut len_bytes = [0u8; 8];
-            unsafe {
-                len_bytes.copy_from_slice(core::slice::from_raw_parts(ptr, 8));
+        fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
+            if let Some((_, len)) = ncore::payload_ctx()
+                && len == 0
+            {
+                return Ok(Self::new());
             }
-            let len = usize::try_from(u64::from_le_bytes(len_bytes))
-                .expect("length doesn't fit in usize");
-            let mut offset = 8usize;
+            let ptr = core::ptr::from_ref(archived).cast::<u8>();
+            let ctx_len = ncore::payload_ctx().map(|(_, len)| len);
+            let bytes_full = ncore::payload_slice_from_ptr(ptr)?;
+            let bytes = ctx_len
+                .and_then(|len| bytes_full.get(..len))
+                .unwrap_or(bytes_full);
+            let (value, _used) = <Self as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
+            Ok(value)
+        }
+    }
+
+    impl<'a, A: Array> ncore::DecodeFromSlice<'a> for SmallVec<A>
+    where
+        A::Item: ncore::DecodeFromSlice<'a>,
+    {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+            let (len, mut offset) = <u64 as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
+            let len = usize::try_from(len).map_err(|_| ncore::Error::LengthMismatch)?;
             let mut out = smallvec::SmallVec::<A>::with_capacity(len);
 
             for _ in 0..len {
-                let mut elem_len_bytes = [0u8; 8];
-                unsafe {
-                    elem_len_bytes.copy_from_slice(core::slice::from_raw_parts(ptr.add(offset), 8));
-                }
-                let elem_len = usize::try_from(u64::from_le_bytes(elem_len_bytes))
-                    .expect("element length doesn't fit in usize");
-                offset += 8;
+                let (elem_len, used_len) =
+                    <u64 as ncore::DecodeFromSlice>::decode_from_slice(&bytes[offset..])?;
+                offset = offset.checked_add(used_len).ok_or(ncore::Error::LengthMismatch)?;
+                let elem_len = usize::try_from(elem_len).map_err(|_| ncore::Error::LengthMismatch)?;
 
-                let value = if elem_len == 0 {
-                    assert_eq!(
-                        core::mem::size_of::<ncore::Archived<A::Item>>(),
-                        0,
-                        "Serialized SmallVec element reported zero length but archived type is not zero-sized"
-                    );
-                    let tmp = core::mem::MaybeUninit::<ncore::Archived<A::Item>>::uninit();
-                    unsafe { A::Item::deserialize(&*tmp.as_ptr()) }
-                } else {
-                    unsafe {
-                        let layout = Layout::from_size_align(
-                            elem_len,
-                            core::mem::align_of::<ncore::Archived<A::Item>>(),
-                        )
-                        .unwrap();
-                        let tmp_ptr = alloc(layout);
-                        if tmp_ptr.is_null() {
-                            std::alloc::handle_alloc_error(layout);
-                        }
-                        core::ptr::copy_nonoverlapping(ptr.add(offset), tmp_ptr, elem_len);
-                        let value =
-                            A::Item::deserialize(&*(tmp_ptr as *const ncore::Archived<A::Item>));
-                        dealloc(tmp_ptr, layout);
-                        value
+                if elem_len == 0 {
+                    if core::mem::size_of::<ncore::Archived<A::Item>>() != 0 {
+                        return Err(ncore::Error::LengthMismatch);
                     }
-                };
+                    let (value, used) =
+                        <A::Item as ncore::DecodeFromSlice>::decode_from_slice(&[])?;
+                    if used != 0 {
+                        return Err(ncore::Error::LengthMismatch);
+                    }
+                    out.push(value);
+                    continue;
+                }
+
+                let end = offset.checked_add(elem_len).ok_or(ncore::Error::LengthMismatch)?;
+                let slice = bytes.get(offset..end).ok_or(ncore::Error::LengthMismatch)?;
+                let (value, used) =
+                    <A::Item as ncore::DecodeFromSlice>::decode_from_slice(slice)?;
+                if used != elem_len {
+                    return Err(ncore::Error::LengthMismatch);
+                }
                 out.push(value);
-                offset += elem_len;
+                offset = end;
             }
 
-            Self(out)
+            Ok((Self(out), offset))
         }
     }
 }

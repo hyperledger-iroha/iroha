@@ -719,14 +719,10 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
 
 impl<'a> norito::core::DecodeFromSlice<'a> for InstructionBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let ((name, payload), used) =
-            norito::core::decode_field_canonical::<(String, Vec<u8>)>(bytes).map_err(|err| {
-                norito::core::Error::Message(format!(
-                    "instruction payload must use canonical Norito framing: {err}"
-                ))
-            })?;
-        let inst = decode_instruction_from_pair(&name, &payload)?;
-        Ok((inst, used))
+        let archived = norito::core::archived_from_slice::<InstructionBox>(bytes)?;
+        let _guard = norito::core::PayloadCtxGuard::enter(archived.bytes());
+        let inst = norito::core::NoritoDeserialize::try_deserialize(archived.archived())?;
+        Ok((inst, archived.bytes().len()))
     }
 }
 
@@ -836,17 +832,29 @@ impl InstructionRegistry {
     #[must_use]
     pub fn register<T>(mut self) -> Self
     where
-        T: Instruction + Decode + 'static + norito::NoritoSerialize,
+        T: Instruction
+            + Decode
+            + 'static
+            + norito::NoritoSerialize
+            + for<'a> norito::NoritoDeserialize<'a>,
     {
         fn ctor<T>(header_flags: u8, input: &[u8]) -> Result<InstructionBox, norito::Error>
         where
-            T: Instruction + Decode + 'static + norito::NoritoSerialize,
+            T: Instruction
+                + Decode
+                + 'static
+                + norito::NoritoSerialize
+                + for<'a> norito::NoritoDeserialize<'a>,
         {
             decode_instruction_payload::<T>(input, header_flags)
         }
         fn frame<T>(payload: &[u8]) -> Result<Vec<u8>, norito::core::Error>
         where
-            T: Instruction + Decode + 'static + norito::NoritoSerialize,
+            T: Instruction
+                + Decode
+                + 'static
+                + norito::NoritoSerialize
+                + for<'a> norito::NoritoDeserialize<'a>,
         {
             norito::core::frame_bare_with_header_flags::<T>(
                 payload,
@@ -869,17 +877,29 @@ impl InstructionRegistry {
     #[must_use]
     pub fn register_with_id<T>(mut self, wire_id: &'static str) -> Self
     where
-        T: Instruction + Decode + 'static + norito::NoritoSerialize,
+        T: Instruction
+            + Decode
+            + 'static
+            + norito::NoritoSerialize
+            + for<'a> norito::NoritoDeserialize<'a>,
     {
         fn ctor<T>(header_flags: u8, input: &[u8]) -> Result<InstructionBox, norito::Error>
         where
-            T: Instruction + Decode + 'static + norito::NoritoSerialize,
+            T: Instruction
+                + Decode
+                + 'static
+                + norito::NoritoSerialize
+                + for<'a> norito::NoritoDeserialize<'a>,
         {
             decode_instruction_payload::<T>(input, header_flags)
         }
         fn frame<T>(payload: &[u8]) -> Result<Vec<u8>, norito::core::Error>
         where
-            T: Instruction + Decode + 'static + norito::NoritoSerialize,
+            T: Instruction
+                + Decode
+                + 'static
+                + norito::NoritoSerialize
+                + for<'a> norito::NoritoDeserialize<'a>,
         {
             norito::core::frame_bare_with_header_flags::<T>(
                 payload,
@@ -981,6 +1001,7 @@ fn decode_instruction_payload<T>(
 ) -> Result<InstructionBox, norito::Error>
 where
     T: Instruction + Decode + 'static + norito::NoritoSerialize,
+    for<'a> T: norito::NoritoDeserialize<'a>,
 {
     let _ = header_flags;
     let instruction = norito::decode_from_bytes::<T>(input)?;

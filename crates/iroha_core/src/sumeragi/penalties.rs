@@ -638,8 +638,8 @@ mod tests {
         SumeragiBlock, SumeragiCollectors, SumeragiDa, SumeragiDebug, SumeragiDebugRbc,
         SumeragiFinality, SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNpos,
         SumeragiNposElection, SumeragiNposReconfig, SumeragiNposTimeoutOverrides, SumeragiNposVrf,
-        SumeragiPacemaker, SumeragiPersistence, SumeragiQueues, SumeragiRbc, SumeragiRecovery,
-        SumeragiWorker,
+        SumeragiPacemaker, SumeragiPacingGovernor, SumeragiPersistence, SumeragiQueues,
+        SumeragiRbc, SumeragiRecovery, SumeragiWorker,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -735,6 +735,7 @@ mod tests {
                 rbc_backlog_chunk_soft_limit: iroha_config::parameters::defaults::sumeragi::
                     PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
             },
+            pacing_governor: SumeragiPacingGovernor::default(),
             da: SumeragiDa {
                 enabled: false,
                 quorum_timeout_multiplier:

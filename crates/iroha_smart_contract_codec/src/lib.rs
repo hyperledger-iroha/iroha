@@ -35,9 +35,10 @@ pub fn encode_with_length_prefix<T: NoritoSerialize>(value: &T) -> Box<[u8]> {
 ///
 /// - `ptr` must point to a heap allocation created by [`encode_with_length_prefix`].
 /// - The caller must not use `ptr` after calling this function.
-pub unsafe fn decode_with_length_prefix_from_raw<T: for<'de> NoritoDeserialize<'de>>(
-    ptr: *const u8,
-) -> T {
+pub unsafe fn decode_with_length_prefix_from_raw<T>(ptr: *const u8) -> T
+where
+    for<'de> T: NoritoDeserialize<'de> + norito::core::DecodeFromSlice<'de>,
+{
     let len_size_bytes = mem::size_of::<usize>();
     let len_bytes = unsafe { core::slice::from_raw_parts(ptr, len_size_bytes) };
     let len = usize::from_le_bytes(
@@ -49,11 +50,10 @@ pub unsafe fn decode_with_length_prefix_from_raw<T: for<'de> NoritoDeserialize<'
     unsafe { decode_from_raw_in_range(ptr, len, len_size_bytes..) }
 }
 
-unsafe fn decode_from_raw_in_range<T: for<'de> NoritoDeserialize<'de>>(
-    ptr: *const u8,
-    len: usize,
-    range: RangeFrom<usize>,
-) -> T {
+unsafe fn decode_from_raw_in_range<T>(ptr: *const u8, len: usize, range: RangeFrom<usize>) -> T
+where
+    for<'de> T: NoritoDeserialize<'de> + norito::core::DecodeFromSlice<'de>,
+{
     let bytes = unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr.cast_mut(), len)) };
     let payload = &bytes[range];
 

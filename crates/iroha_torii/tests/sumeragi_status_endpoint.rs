@@ -99,6 +99,7 @@ async fn sumeragi_status_endpoint_shape() {
         150,
         1_000,
         1_500,
+        10_000,
         3_000,
         2_500,
         750,
@@ -274,7 +275,7 @@ async fn sumeragi_status_endpoint_shape() {
             .and_then(norito::json::Value::as_u64)
             .is_some()
     );
-    iroha_core::sumeragi::status::set_effective_timing(0, 0, 0, 0, 0, 0, 0, 0, None);
+    iroha_core::sumeragi::status::set_effective_timing(0, 0, 0, 0, 0, 0, 0, 0, 0, None);
 }
 
 #[allow(clippy::await_holding_lock)]
@@ -516,6 +517,7 @@ async fn sumeragi_status_endpoint_supports_norito_payload() {
         120,
         900,
         1_300,
+        10_000,
         2_600,
         2_100,
         700,
@@ -596,5 +598,5 @@ async fn sumeragi_status_endpoint_supports_norito_payload() {
         .expect("effective_npos_timeouts");
     assert_eq!(npos_timeouts.propose_ms, 210);
     assert_eq!(npos_timeouts.witness_ms, 280);
-    iroha_core::sumeragi::status::set_effective_timing(0, 0, 0, 0, 0, 0, 0, 0, None);
+    iroha_core::sumeragi::status::set_effective_timing(0, 0, 0, 0, 0, 0, 0, 0, 0, None);
 }
