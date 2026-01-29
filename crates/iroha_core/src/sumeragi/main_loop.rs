@@ -8369,6 +8369,7 @@ impl Actor {
             #[cfg(test)]
             background_request_log: None,
         };
+        actor.seed_phase_ema_metrics();
         actor.refresh_p2p_topology();
         if let Some(roster) = roster_to_install_now {
             if let Err(err) = actor.install_elected_roster(&roster) {
@@ -9620,6 +9621,41 @@ impl Actor {
             .set_phase_latency_total_ema_ms(total_ema_ms as f64);
 
         super::status::set_phase_pipeline_total_ema_ms(total_ema_ms);
+    }
+
+    fn seed_phase_ema_metrics(&self) {
+        let propose_ema_ms = round_duration_ms(self.phase_ema.current(PipelinePhase::Propose));
+        let collect_da_ema_ms = round_duration_ms(self.phase_ema.current(PipelinePhase::CollectDa));
+        let collect_prevote_ema_ms =
+            round_duration_ms(self.phase_ema.current(PipelinePhase::CollectPrepare));
+        let collect_precommit_ema_ms =
+            round_duration_ms(self.phase_ema.current(PipelinePhase::CollectCommit));
+        let commit_ema_ms = round_duration_ms(self.phase_ema.current(PipelinePhase::Commit));
+        let total_ema_ms = duration_ms_u64(self.phase_ema.total_duration());
+
+        super::status::set_phase_propose_ema_ms(propose_ema_ms);
+        super::status::set_phase_collect_da_ema_ms(collect_da_ema_ms);
+        super::status::set_phase_collect_prevote_ema_ms(collect_prevote_ema_ms);
+        super::status::set_phase_collect_precommit_ema_ms(collect_precommit_ema_ms);
+        super::status::set_phase_commit_ema_ms(commit_ema_ms);
+        super::status::set_phase_pipeline_total_ema_ms(total_ema_ms);
+
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            let phases = [
+                (PipelinePhase::Propose, propose_ema_ms),
+                (PipelinePhase::CollectDa, collect_da_ema_ms),
+                (PipelinePhase::CollectPrepare, collect_prevote_ema_ms),
+                (PipelinePhase::CollectCommit, collect_precommit_ema_ms),
+                (PipelinePhase::Commit, commit_ema_ms),
+            ];
+            for (phase, ms) in phases {
+                #[allow(clippy::cast_precision_loss)]
+                telemetry.set_phase_latency_ema_ms(phase.telemetry_label(), ms as f64);
+            }
+            #[allow(clippy::cast_precision_loss)]
+            telemetry.set_phase_latency_total_ema_ms(total_ema_ms as f64);
+        }
     }
 
     #[cfg(feature = "telemetry")]

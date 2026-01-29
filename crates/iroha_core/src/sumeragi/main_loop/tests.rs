@@ -30680,6 +30680,76 @@ async fn record_phase_sample_updates_view_change_index_and_install() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn phase_ema_seeded_on_startup() {
+    super::status::set_phase_propose_ema_ms(0);
+    super::status::set_phase_collect_da_ema_ms(0);
+    super::status::set_phase_collect_prevote_ema_ms(0);
+    super::status::set_phase_collect_precommit_ema_ms(0);
+    super::status::set_phase_commit_ema_ms(0);
+    super::status::set_phase_pipeline_total_ema_ms(0);
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let expected_propose = round_duration_ms(actor.phase_ema.current(PipelinePhase::Propose));
+    let expected_collect_da = round_duration_ms(actor.phase_ema.current(PipelinePhase::CollectDa));
+    let expected_collect_prevote =
+        round_duration_ms(actor.phase_ema.current(PipelinePhase::CollectPrepare));
+    let expected_collect_precommit =
+        round_duration_ms(actor.phase_ema.current(PipelinePhase::CollectCommit));
+    let expected_commit = round_duration_ms(actor.phase_ema.current(PipelinePhase::Commit));
+    let expected_total = duration_ms_u64(actor.phase_ema.total_duration());
+
+    let snapshot = super::status::phase_latencies_snapshot();
+    assert_eq!(snapshot.propose_ema_ms, expected_propose);
+    assert_eq!(snapshot.collect_da_ema_ms, expected_collect_da);
+    assert_eq!(snapshot.collect_prevote_ema_ms, expected_collect_prevote);
+    assert_eq!(
+        snapshot.collect_precommit_ema_ms,
+        expected_collect_precommit
+    );
+    assert_eq!(snapshot.commit_ema_ms, expected_commit);
+    assert_eq!(snapshot.pipeline_total_ema_ms, expected_total);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn phase_ema_seeded_on_mode_flip() {
+    super::status::set_phase_propose_ema_ms(0);
+    super::status::set_phase_collect_da_ema_ms(0);
+    super::status::set_phase_collect_prevote_ema_ms(0);
+    super::status::set_phase_collect_precommit_ema_ms(0);
+    super::status::set_phase_commit_ema_ms(0);
+    super::status::set_phase_pipeline_total_ema_ms(0);
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.reset_mode_flip_state();
+
+    let expected_propose = round_duration_ms(actor.phase_ema.current(PipelinePhase::Propose));
+    let expected_collect_da = round_duration_ms(actor.phase_ema.current(PipelinePhase::CollectDa));
+    let expected_collect_prevote =
+        round_duration_ms(actor.phase_ema.current(PipelinePhase::CollectPrepare));
+    let expected_collect_precommit =
+        round_duration_ms(actor.phase_ema.current(PipelinePhase::CollectCommit));
+    let expected_commit = round_duration_ms(actor.phase_ema.current(PipelinePhase::Commit));
+    let expected_total = duration_ms_u64(actor.phase_ema.total_duration());
+
+    let snapshot = super::status::phase_latencies_snapshot();
+    assert_eq!(snapshot.propose_ema_ms, expected_propose);
+    assert_eq!(snapshot.collect_da_ema_ms, expected_collect_da);
+    assert_eq!(snapshot.collect_prevote_ema_ms, expected_collect_prevote);
+    assert_eq!(
+        snapshot.collect_precommit_ema_ms,
+        expected_collect_precommit
+    );
+    assert_eq!(snapshot.commit_ema_ms, expected_commit);
+    assert_eq!(snapshot.pipeline_total_ema_ms, expected_total);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn note_view_change_from_block_updates_view_change_install() {
     let mut harness = test_actor_harness(4).await;
     let _guard = super::status::view_change_proof_test_guard();
@@ -30703,6 +30773,33 @@ async fn note_view_change_from_block_updates_view_change_install() {
     let snapshot = super::status::snapshot();
     assert_eq!(snapshot.view_change_index, view);
     assert_eq!(snapshot.view_change_install_total, 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_created_records_collect_da_phase() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0u64;
+    let parent = actor.state.view().latest_block_hash();
+
+    actor.record_phase_sample(PipelinePhase::Propose, height, view);
+    let block = sample_block(height, view, parent);
+    actor
+        .handle_block_created(super::message::BlockCreated { block }, None)
+        .expect("handle BlockCreated");
+
+    assert!(
+        actor
+            .phase_tracker
+            .recorded
+            .is_recorded(PipelinePhase::CollectDa),
+        "collect_da phase should be recorded after BlockCreated"
+    );
 
     harness.shutdown.send();
 }

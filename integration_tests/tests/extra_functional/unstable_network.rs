@@ -3,7 +3,7 @@
 use std::{
     any::Any,
     borrow::Cow,
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     panic::{self, AssertUnwindSafe},
     sync::Arc,
     time::{Duration, Instant},
@@ -37,7 +37,7 @@ use tokio::{
     task::spawn_blocking,
     time::{sleep, timeout},
 };
-use toml::Table;
+use toml::{Table, Value as TomlValue};
 
 mod relay {
     //! Utilities to build a peer-to-peer network relay using TCP proxies with ability to targetly
@@ -460,6 +460,12 @@ async fn start_network_under_relay(
             .collect(),
         network.topology_entries().to_vec(),
     );
+    let mut pops_by_peer_id = HashMap::new();
+    for peer in network.peers() {
+        let pop = peer.bls_pop().expect("network peers should have BLS PoPs");
+        pops_by_peer_id.insert(peer.id(), pop.to_vec());
+    }
+
     let startup_timeout = scaled_timeout(network.peer_startup_timeout(), network.peers().len());
     let results = timeout(
         startup_timeout,
@@ -472,16 +478,37 @@ async fn start_network_under_relay(
                     GenesisPeer::Whichever => i == 0,
                     GenesisPeer::Nth(n) => i == n,
                 };
+                let trusted_peers = relay.trusted_peers_for(&peer.id());
+                let trusted_peers_list = trusted_peers
+                    .iter()
+                    .map(|peer| peer.to_string())
+                    .collect::<Vec<_>>();
+                let mut trusted_peers_pop = Vec::new();
+                let mut seen = HashSet::new();
+                for trusted in trusted_peers.iter() {
+                    let peer_id = trusted.id();
+                    if !seen.insert(peer_id.clone()) {
+                        continue;
+                    }
+                    let pop = pops_by_peer_id.get(peer_id).unwrap_or_else(|| {
+                        panic!("missing PoP for trusted peer {}", peer_id.public_key())
+                    });
+                    let mut pop_entry = Table::new();
+                    pop_entry.insert(
+                        "public_key".into(),
+                        TomlValue::String(peer_id.public_key().to_string()),
+                    );
+                    pop_entry.insert(
+                        "pop_hex".into(),
+                        TomlValue::String(format!("0x{}", hex::encode(pop))),
+                    );
+                    trusted_peers_pop.push(TomlValue::Table(pop_entry));
+                }
+
                 let config = network.config_layers().chain(Some(Cow::Owned(
                     Table::new()
-                        .write(
-                            ["trusted_peers"],
-                            relay
-                                .trusted_peers_for(&peer.id())
-                                .into_iter()
-                                .map(|peer| peer.to_string())
-                                .collect::<Vec<_>>(),
-                        )
+                        .write(["trusted_peers"], trusted_peers_list)
+                        .write(["trusted_peers_pop"], TomlValue::Array(trusted_peers_pop))
                         // We don't want peers to gossip any actual addresses, because each peer has
                         // its own set of incoming and outgoing proxies with every other peer.
                         // Thus, we are giving this addr which should always reject connections and

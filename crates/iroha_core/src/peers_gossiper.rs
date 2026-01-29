@@ -929,6 +929,12 @@ impl<'a> ncore::DecodeFromSlice<'a> for PeersGossip {
     }
 }
 
+impl<'a> ncore::DecodeFromSlice<'a> for PeerTrustGossip {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        ncore::decode_field_canonical(bytes)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -961,7 +967,7 @@ mod tests {
             peers: UniqueVec::from_iter(vec![peer1.clone(), peer2.clone()]),
         };
         let bytes = ncore::to_bytes(&gossip).expect("serialize gossip");
-        let decoded: PeersGossip = ncore::decode_from_bytes(&bytes).expect("decode gossip");
+        let decoded: PeersGossip = norito::decode_from_bytes(&bytes).expect("decode gossip");
 
         let decoded_peers: Vec<_> = decoded.peers.into_iter().collect();
         assert_eq!(decoded_peers, vec![peer1.clone(), peer2.clone()]);
@@ -987,7 +993,7 @@ mod tests {
         };
         let bytes = ncore::to_bytes(&gossip).expect("serialize trust gossip");
         let decoded: PeerTrustGossip =
-            ncore::decode_from_bytes(&bytes).expect("decode trust gossip");
+            norito::decode_from_bytes(&bytes).expect("decode trust gossip");
 
         assert_eq!(decoded.trust.len(), 1);
         assert_eq!(decoded.trust[0].info.peer_id, info.peer_id);

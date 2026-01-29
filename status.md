@@ -2,6 +2,23 @@
 
 Last update: 2026-01-29
 
+- Test network Sora profile detection: ignore default routing policy in raw Nexus override scans so default routing config doesn't force the Sora profile; added raw-nexus override coverage.
+- Tests: not run (`cargo test -p iroha_test_network sora_profile_detection_ignores_default_routing_policy -- --nocapture` timed out waiting for a build lock).
+
+- Integration test configs: add `trusted_peers_pop` alongside trusted peer overrides in relay and observer sync tests so PoP validation passes with BLS peer IDs.
+- Tests: not run (config-only change).
+
+- Sumeragi RBC seed worker: parallelize seed work across multiple threads, scale queue caps with worker count, and add a shutdown regression test to reduce BlockCreated seeding latency under load.
+- Tests: not run (previous `rbc_seed_worker_exits_on_channel_close` failure due to `PeerTrustGossip: DecodeFromSlice` was fixed; test not rerun yet).
+
+- Peers gossiper: add `DecodeFromSlice` for `PeerTrustGossip` via Norito `decode_field_canonical` so `decode_from_bytes` works in unit tests.
+- Tests: not run (not requested).
+
+- Izanami NPoS 1 TPS run (300s, `--nexus`, `--tps 1`, `--target-blocks 200`, `--faulty 0`, `RUST_LOG=iroha_core::sumeragi::main_loop=debug`): failed with no block height progress for 120s (min height 7, target 200). Logs: `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_74fz62`.
+
+- Sumeragi phase EMA telemetry: seed per-phase EMA gauges on startup and on consensus mode flips, and record `collect_da` on `BlockCreated` so DA availability is tracked; added unit coverage for seeded EMA (startup + mode flip) and `collect_da` recording. Updated peers gossiper tests to use `norito::decode_from_bytes` and avoid the `DecodeFromSlice` bound.
+- Tests: `cargo test -p iroha_core phase_ema_seeded_on_startup -- --nocapture` (ok; norito warnings about unused `padded`). `cargo test -p iroha_core block_created_records_collect_da_phase -- --nocapture` (ok; norito warnings about unused `padded`). `cargo test -p iroha_core phase_ema_seeded_on_mode_flip -- --nocapture` (ok; norito warnings about unused `padded`). `cargo fmt --all` (warns about nightly-only rustfmt options).
+
 - Sumeragi pacemaker latency: register missing pacemaker gauges in Prometheus output, wire per-phase EMA telemetry updates, align phase labels to docs, tolerate missing per-phase EMA series (require at least one), widen block-spacing budget to 2.5× commit quorum, and hash test-network build args in the build stamp to avoid stale feature builds; added metrics-reader label scanning and pacemaker metrics export/unit coverage.
 - Tests: `cargo test -p integration_tests --test sumeragi_npos_pacemaker_latency -- --nocapture` (ok; norito warnings about unused `padded`). Not run: `cargo test -p iroha_telemetry pacemaker_metrics_are_exported`, `cargo test -p iroha_test_network fingerprint_with_build_args_changes_on_arg_differences`, `cargo test -p integration_tests` (full).
 
@@ -1386,3 +1403,4 @@ Last update: 2026-01-29
 - Generated: `demo/*.to` and manifests recompiled via `koto_compile`; `demo/prediction_market.deploy.manifest.json` rebuilt via `iroha_cli app contracts manifest build`.
 - Builds: `cargo build -p ivm --features kotodama_dynamic_bounds --bin koto_compile`, `cargo build -p iroha_cli` (ok).
 - Checks: compiled 51 Kotodama example `.ko` files with `koto_compile --abi 1` (dynamic bounds enabled).
+- Integration tests: keep `trusted_peers_pop` aligned with `trusted_peers` in `observer_sync` to satisfy config validation; tests not run.

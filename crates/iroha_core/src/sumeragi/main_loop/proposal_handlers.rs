@@ -1750,6 +1750,7 @@ impl Actor {
         if is_active_height {
             self.note_view_change_from_block(height, view);
         }
+        self.record_phase_sample(PipelinePhase::CollectDa, height, view);
         if let Some(qc) = qc_cache_for_subject(&self.qc_cache, block_hash)
             .filter(|qc| {
                 qc.phase == crate::sumeragi::consensus::Phase::Commit && qc.height == height

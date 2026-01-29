@@ -1152,6 +1152,7 @@ fn ensure_binary_fresh(
         }
         // Refresh fingerprint after the successful build to capture generated files.
         fingerprint = workspace_fingerprint(repo)?;
+        fingerprint = fingerprint_with_build_args(fingerprint, build_args);
     }
 
     if binary_path.exists() {
@@ -2966,11 +2967,33 @@ fn raw_nexus_overrides(table: &Table) -> bool {
     let Some(nexus) = table.get("nexus").and_then(Value::as_table) else {
         return false;
     };
-    if nexus.contains_key("lane_catalog")
-        || nexus.contains_key("dataspace_catalog")
-        || nexus.contains_key("routing_policy")
-    {
+    if nexus.contains_key("lane_catalog") || nexus.contains_key("dataspace_catalog") {
         return true;
+    }
+    if let Some(policy) = nexus.get("routing_policy") {
+        let Some(policy) = policy.as_table() else {
+            return true;
+        };
+        let default_lane = i64::from(iroha_config::parameters::defaults::nexus::DEFAULT_ROUTING_LANE_INDEX);
+        let default_lane_override = match policy.get("default_lane") {
+            None => false,
+            Some(value) => value
+                .as_integer()
+                .map_or(true, |lane| lane != default_lane),
+        };
+        let default_dataspace_override = match policy.get("default_dataspace") {
+            None => false,
+            Some(value) => value.as_str().map_or(true, |alias| {
+                alias != iroha_config::parameters::defaults::nexus::DEFAULT_DATASPACE_ALIAS
+            }),
+        };
+        let rules_override = match policy.get("rules") {
+            None => false,
+            Some(value) => value.as_array().map_or(true, |rules| !rules.is_empty()),
+        };
+        if default_lane_override || default_dataspace_override || rules_override {
+            return true;
+        }
     }
     nexus
         .get("lane_count")
@@ -6234,6 +6257,27 @@ mod sora_profile_tests {
 
         assert!(!config_requires_sora_profile(&[table]));
     }
+
+    #[test]
+    fn raw_nexus_overrides_ignores_default_routing_policy() {
+        let mut policy = toml::map::Map::new();
+        policy.insert(
+            "default_lane".into(),
+            toml::Value::Integer(i64::from(defaults::nexus::DEFAULT_ROUTING_LANE_INDEX)),
+        );
+        policy.insert(
+            "default_dataspace".into(),
+            toml::Value::String(defaults::nexus::DEFAULT_DATASPACE_ALIAS.to_string()),
+        );
+
+        let mut nexus = toml::map::Map::new();
+        nexus.insert("routing_policy".into(), toml::Value::Table(policy));
+
+        let mut table = Table::new();
+        table.insert("nexus".into(), toml::Value::Table(nexus));
+
+        assert!(!raw_nexus_overrides(&table));
+    }
 }
 
 #[cfg(test)]
@@ -7428,8 +7472,14 @@ mod tests {
     #[test]
     fn fingerprint_with_build_args_changes_on_arg_differences() {
         let base = 42_u64;
-        let args_a = vec![OsString::from("--features"), OsString::from("expensive-telemetry")];
-        let args_b = vec![OsString::from("--features"), OsString::from("other-feature")];
+        let args_a = vec![
+            OsString::from("--features"),
+            OsString::from("expensive-telemetry"),
+        ];
+        let args_b = vec![
+            OsString::from("--features"),
+            OsString::from("other-feature"),
+        ];
 
         let fingerprint_a = fingerprint_with_build_args(base, &args_a);
         let fingerprint_b = fingerprint_with_build_args(base, &args_b);
@@ -8338,6 +8388,17 @@ exit 0
             genesis_key_pair,
             ..
         } = NetworkBuilder::new();
+        let bls_public_key = peer
+            .bls_public_key()
+            .expect("test peer should have BLS key");
+        let bls_pop = peer.bls_pop().expect("test peer should have BLS PoP");
+        let mut pop_entry = Table::new();
+        pop_entry.insert("public_key".into(), Value::String(bls_public_key.to_string()));
+        pop_entry.insert(
+            "pop_hex".into(),
+            Value::String(format!("0x{}", hex_lower(bls_pop))),
+        );
+        let trusted_peers_pop = Value::Array(vec![Value::Table(pop_entry)]);
         let mut layers = Vec::with_capacity(config_layers.len() + 1);
         layers.push(
             Table::new()
@@ -8345,7 +8406,8 @@ exit 0
                 .write(
                     ["genesis", "public_key"],
                     genesis_key_pair.public_key().to_string(),
-                ),
+                )
+                .write(["trusted_peers_pop"], trusted_peers_pop),
         );
         layers.extend(config_layers);
 
@@ -9085,9 +9147,14 @@ exit 0
             .peers()
             .first()
             .expect("network has peers")
-            .torii_url();
+            .api_address();
         let client = network.client();
-        assert_eq!(client.torii_url.as_str(), expected);
+        let expected_host = expected.host_str();
+        assert_eq!(client.torii_url.host_str(), Some(expected_host.as_ref()));
+        assert_eq!(
+            client.torii_url.port_or_known_default(),
+            Some(expected.port())
+        );
     }
 
     #[test]
