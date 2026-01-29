@@ -1,6 +1,10 @@
 # Status
 
 Last update: 2026-01-29
+- Kagami codec: drop the `DecodeFromSlice` bound on `ConverterImpl` so converter registration works for data-model types like `NewAccount` (fixes E0599 in `iroha_kagami`).
+- Tests: not run (not requested).
+- Integration tests (notifications): add a pipeline-event handshake to ensure the TriggerCompleted subscription is live before executing the trigger, reducing WS subscription races in `trigger_completion_event_scenarios`.
+- Tests: `cargo test -p integration_tests trigger_completion_event_scenarios -- --nocapture` (ok; norito warnings about unused `padded` assignments persist). `cargo fmt --all` (warns about nightly-only rustfmt options in config).
 - Izanami NPoS timing: drop the extra timeout compression so per-phase timeouts scale directly with the target block time (avoids sub-400ms commit timeouts at 1.5s block time); updated the timing test name/expectations accordingly.
 - Tests: `cargo test -p izanami derive_npos_timing_uses_block_time_for_timeouts -- --nocapture` (timed out after 120s during compilation; norito `padded` warnings persist).
 - Izanami 1 TPS rerun after offloading known‑block QC aggregate verification: command hit 20‑minute timeout but ran; all four peers committed height 15 (split view0 hash `4cba…` vs view1 hash `1c93…`), then stalled at height 16 with repeated “not enough stake collected for QC” and repeated “requested missing block payload from highest QC” for the view‑1 block. Run dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_00i7UP`. Drain stats from slow‑iteration logs: `vote_drain_ms` mean ~28.8ms p95 ~274ms max 835ms; `block_payload_drain_ms` mean ~38.9ms p95 ~325ms max 2065ms.

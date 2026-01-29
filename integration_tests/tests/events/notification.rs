@@ -5,7 +5,9 @@ use std::time::Duration;
 use eyre::Result;
 use futures_util::StreamExt;
 use integration_tests::sandbox;
-use iroha::data_model::{ValidationFail, prelude::*, query::error::FindError};
+use iroha::data_model::{
+    ValidationFail, events::pipeline::TransactionEventFilter, prelude::*, query::error::FindError,
+};
 use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
@@ -38,11 +40,24 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
     network.ensure_blocks(2).await?;
 
     let event_timeout = network.sync_timeout();
+    let ready_tx = network.client().build_transaction(
+        [Log::new(
+            Level::INFO,
+            "trigger_completion_event_stream_ready".to_string(),
+        )],
+        Metadata::default(),
+    );
+    let ready_hash = ready_tx.hash();
     let mut events = tokio::time::timeout(
         event_timeout,
-        network.client().listen_for_events_async([TriggerCompletedEventFilter::new()
-            .for_trigger(trigger_id.clone())
-            .for_outcome(TriggerCompletedOutcomeType::Success)]),
+        network.client().listen_for_events_async(vec![
+            EventFilterBox::from(
+                TriggerCompletedEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .for_outcome(TriggerCompletedOutcomeType::Success),
+            ),
+            EventFilterBox::from(TransactionEventFilter::default().for_hash(ready_hash)),
+        ]),
     )
     .await
     .map_err(|_| {
@@ -51,7 +66,36 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
         )
     })??;
 
-    let call_trigger = ExecuteTrigger::new(trigger_id);
+    let ready_client = network.client();
+    spawn_blocking(move || ready_client.submit_transaction(&ready_tx)).await??;
+    timeout(event_timeout, async {
+        loop {
+            match events.next().await {
+                Some(Ok(EventBox::Pipeline(PipelineEventBox::Transaction(event))))
+                    if event.hash() == &ready_hash =>
+                {
+                    match event.status() {
+                        TransactionStatus::Approved => break Ok(()),
+                        TransactionStatus::Rejected(reason) => {
+                            break Err(eyre::eyre!(
+                                "handshake transaction rejected: {reason:?}"
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+                Some(Ok(_)) => {}
+                Some(Err(err)) => break Err(err),
+                None => break Err(eyre::eyre!("event stream ended unexpectedly")),
+            }
+        }
+    })
+    .await
+    .map_err(|_| {
+        eyre::eyre!("trigger_completion_success_should_produce_event: timed out waiting for event stream handshake")
+    })??;
+
+    let call_trigger = ExecuteTrigger::new(trigger_id.clone());
     let client = network.client();
     let trigger_tx = client.build_transaction(
         [Instruction::into_instruction_box(Box::new(call_trigger))],
@@ -62,19 +106,32 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
         Ok::<(), eyre::Report>(())
     };
     let wait_event = async {
-        match timeout(event_timeout, events.next()).await {
-            Ok(Some(_)) => Ok(()),
-            Ok(None) => Err(eyre::eyre!("event stream ended unexpectedly")),
-            Err(err) => sandbox::sandbox_reason(&eyre::eyre!(err.to_string())).map_or_else(
-                || Err(err.into()),
+        timeout(event_timeout, async {
+            loop {
+                match events.next().await {
+                    Some(Ok(EventBox::TriggerCompleted(event)))
+                        if event.trigger_id() == &trigger_id =>
+                    {
+                        break Ok(());
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(err)) => break Err(err),
+                    None => break Err(eyre::eyre!("event stream ended unexpectedly")),
+                }
+            }
+        })
+        .await
+        .map_err(|err| {
+            sandbox::sandbox_reason(&eyre::eyre!(err.to_string())).map_or_else(
+                || eyre::eyre!(err),
                 |reason| {
-                    Err(eyre::eyre!(
+                    eyre::eyre!(
                         "sandboxed network restriction detected during {}: {reason}",
                         stringify!(trigger_completion_success_should_produce_event)
-                    ))
+                    )
                 },
-            ),
-        }
+            )
+        })?
     };
     let event_result = tokio::try_join!(submit_trigger, wait_event);
     events.close().await;
