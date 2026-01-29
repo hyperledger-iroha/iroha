@@ -247,10 +247,11 @@ fn quiet_network_builder() -> NetworkBuilder {
     collectors.insert("redundant_send_r".into(), TomlValue::Integer(3));
     sumeragi.insert("collectors".into(), TomlValue::Table(collectors));
 
+    let mut advanced = toml::Table::new();
     let mut rbc = toml::Table::new();
     rbc.insert("pending_ttl_ms".into(), TomlValue::Integer(120_000));
     rbc.insert("session_ttl_ms".into(), TomlValue::Integer(240_000));
-    sumeragi.insert("rbc".into(), TomlValue::Table(rbc));
+    advanced.insert("rbc".into(), TomlValue::Table(rbc));
 
     // Increase DA quorum/availability timeouts to tolerate slower CI and local hosts.
     let mut da = toml::Table::new();
@@ -259,7 +260,8 @@ fn quiet_network_builder() -> NetworkBuilder {
         "availability_timeout_multiplier".into(),
         TomlValue::Integer(3),
     );
-    sumeragi.insert("da".into(), TomlValue::Table(da));
+    advanced.insert("da".into(), TomlValue::Table(da));
+    sumeragi.insert("advanced".into(), TomlValue::Table(advanced));
     let mut nexus = toml::Table::new();
     nexus.insert("enabled".into(), TomlValue::Boolean(false));
     let mut layer = toml::Table::new();

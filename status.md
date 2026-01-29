@@ -7,6 +7,8 @@ Last update: 2026-01-29
 - Tests: not run (not requested).
 - Block sync: drop stale-view BlockSyncUpdate unless the block was explicitly requested, to prevent late-view payloads from reintroducing conflicting commits; added `block_sync_update_drops_stale_view_without_missing_request` coverage.
 - Tests: `cargo test -p iroha_core block_sync_update_drops_stale_view_without_missing_request -- --nocapture` (ok; norito `padded` warnings persist).
+- Integration tests/localnet configs: move DA/RBC timeout overrides to `sumeragi.advanced` (asset + localnet smoke) and update Kagami localnet generator to emit `sumeragi.advanced.da`/`sumeragi.advanced.rbc` so config parsing no longer rejects unknown keys.
+- Tests: `cargo test -p integration_tests client_add_asset_quantities_should_increase_asset_amounts -- --nocapture` (ok; norito warnings about unused `padded` assignments persist).
 - Kagami codec: drop the `DecodeFromSlice` bound on `ConverterImpl` so converter registration works for data-model types like `NewAccount` (fixes E0599 in `iroha_kagami`).
 - Tests: not run (not requested).
 - Integration tests (notifications): add a pipeline-event handshake to ensure the TriggerCompleted subscription is live before executing the trigger, reducing WS subscription races in `trigger_completion_event_scenarios`.
