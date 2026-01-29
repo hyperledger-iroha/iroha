@@ -95,6 +95,7 @@ impl_decode_from_slice_via_archived! {
     crate::query::parameters::FetchSize,
     crate::parameter::Parameters,
     crate::query::proof::FindProofRecordById,
+    crate::query::AnyQueryBox,
     crate::query::QueryResponse,
 }
 

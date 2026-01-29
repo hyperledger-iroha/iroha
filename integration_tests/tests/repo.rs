@@ -40,7 +40,9 @@ fn ivm_build_profile_exists() -> bool {
 fn quiet_network_builder() -> NetworkBuilder {
     install_quiet_tracing();
     init_instruction_registry();
-    NetworkBuilder::new().with_peers(4)
+    NetworkBuilder::new()
+        .with_auto_populated_trusted_peers()
+        .with_peers(4)
 }
 
 fn loopback_bind_allowed() -> bool {
