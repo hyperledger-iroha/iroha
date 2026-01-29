@@ -1017,7 +1017,11 @@ impl Actor {
         source: &'static str,
         force_fetch: bool,
     ) {
-        if self.block_payload_available_for_progress(highest.subject_block_hash) && !force_fetch {
+        let payload_available = self.block_payload_available_for_progress(highest.subject_block_hash);
+        let local_known = self
+            .local_block_height_view(highest.subject_block_hash)
+            .is_some();
+        if payload_available && !force_fetch && local_known {
             self.clear_missing_block_request(
                 &highest.subject_block_hash,
                 MissingBlockClearReason::PayloadAvailable,

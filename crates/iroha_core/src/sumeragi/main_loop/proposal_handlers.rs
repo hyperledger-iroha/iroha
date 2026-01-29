@@ -65,6 +65,11 @@ impl Actor {
             .is_some_and(|pending| {
                 pending.aborted && !matches!(pending.validation_status, ValidationStatus::Invalid)
             })
+            || self
+                .pending
+                .pending_processing
+                .get()
+                .is_some_and(|pending| pending == hash)
     }
 
     #[allow(clippy::unnecessary_wraps)]
