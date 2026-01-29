@@ -1,6 +1,7 @@
 //! Block sync and missing-block request handlers.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use iroha_logger::prelude::*;
 
@@ -937,263 +938,22 @@ impl Actor {
             process_commit_votes(self);
             // Known blocks may still be waiting on a commit QC (e.g., persisted before QC arrival).
             if let Some(qc) = incoming_qc.take().or_else(|| selection.commit_qc.clone()) {
-                if topology.as_ref().is_empty() {
-                    warn!(
-                        height = block_height,
-                        view = block_view,
-                        "dropping block sync QC: empty commit topology"
-                    );
-                } else if qc.subject_block_hash != block_hash {
-                    warn!(
-                        incoming_hash = %block_hash,
-                        qc_hash = %qc.subject_block_hash,
-                        "ignoring block sync QC that does not match block hash"
-                    );
-                } else if qc.height != block_height {
-                    warn!(
-                        incoming_hash = %block_hash,
-                        height = block_height,
-                        qc_height = qc.height,
-                        "ignoring block sync QC that does not match block height"
-                    );
-                } else {
-                    let expected_epoch = self.epoch_for_height(block_height);
-                    if qc.epoch != expected_epoch {
-                        warn!(
-                            incoming_hash = %block_hash,
-                            height = block_height,
-                            expected_epoch,
-                            qc_epoch = qc.epoch,
-                            "ignoring block sync QC with mismatched epoch"
-                        );
-                    } else if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
-                        warn!(
-                            incoming_hash = %block_hash,
-                            phase = ?qc.phase,
-                            "ignoring block sync QC with non-precommit phase"
-                        );
-                    } else {
-                        if let Some(lock) = self.locked_qc {
-                            if qc.height == lock.height
-                                && qc.subject_block_hash != lock.subject_block_hash
-                            {
-                                info!(
-                                    height = qc.height,
-                                    view = qc.view,
-                                    locked_height = lock.height,
-                                    locked_hash = %lock.subject_block_hash,
-                                    incoming_hash = %qc.subject_block_hash,
-                                    "dropping block sync QC that conflicts with locked chain"
-                                );
-                                self.record_consensus_message_handling(
-                                    super::status::ConsensusMessageKind::Qc,
-                                    super::status::ConsensusMessageOutcome::Dropped,
-                                    super::status::ConsensusMessageReason::LockedQc,
-                                );
-                                self.clear_missing_block_request(
-                                    &block_hash,
-                                    MissingBlockClearReason::PayloadAvailable,
-                                );
-                                return Ok(());
-                            }
-                        }
-                        let cached_qc_match = cached_qc_for(
-                            &self.qc_cache,
-                            qc.phase,
-                            qc.subject_block_hash,
-                            qc.height,
-                            qc.view,
-                            qc.epoch,
-                        )
-                        .filter(|cached| HashOf::new(cached) == HashOf::new(&qc));
-                        let commit_qc_match = selection
-                            .commit_qc
-                            .as_ref()
-                            .is_some_and(|cert| HashOf::new(cert) == HashOf::new(&qc));
-                        let cached_tally = if cached_qc_match.is_some() || commit_qc_match {
-                            self.qc_signer_tally.get(&Self::qc_tally_key(&qc)).cloned()
-                        } else {
-                            None
-                        };
-                        let qc_signers = qc_signer_count(&qc);
-                        let qc_ref = Self::qc_to_header_ref(&qc);
-                        let extends_locked = qc_extends_locked_if_present(
-                            self.locked_qc,
-                            qc_ref,
-                            |hash, height| self.parent_hash_for(hash, height),
-                            |hash| self.block_known_for_lock(hash),
-                        );
-                        let tally = if let Some(tally) = cached_tally {
-                            Ok(tally)
-                        } else {
-                            let signer_cache_key = BlockSignerCacheKey::new(
-                                block_hash,
-                                selection.roster.as_slice(),
-                                consensus_mode,
-                                prf_seed,
-                            );
-                            let cached_block_signers = signer_cache_key
-                                .as_ref()
-                                .and_then(|key| self.block_signer_cache.get(key));
-                            let block_signers = if let Some(signers) = cached_block_signers {
-                                signers
-                            } else {
-                                let block_signers = {
-                                    let state_view = self.state.view();
-                                    validated_block_signers(
-                                        &block,
-                                        &topology,
-                                        &state_view,
-                                        mode_tag,
-                                        prf_seed,
-                                    )
-                                };
-                                match block_signers {
-                                    Ok(signers) => {
-                                        if let Some(key) = signer_cache_key {
-                                            self.block_signer_cache.insert(key, signers.clone());
-                                        }
-                                        signers
-                                    }
-                                    Err(err) => {
-                                        warn!(
-                                            ?err,
-                                            height = block_height,
-                                            view = block_view,
-                                            block = %block_hash,
-                                            "block sync QC received for known block with invalid signatures; proceeding without signer subset check"
-                                        );
-                                        BTreeSet::new()
-                                    }
-                                }
-                            };
-                            let state_view = self.state.view();
-                            let world = state_view.world();
-                            tally_qc_against_block_signers(
-                                &qc,
-                                &topology,
-                                world,
-                                &block_signers,
-                                block_view,
-                                &self.roster_validation_cache.pops,
-                                &self.common_config.chain,
-                                consensus_mode,
-                                stake_snapshot.as_ref(),
-                                mode_tag,
-                                prf_seed,
-                            )
-                        };
-                        let tally = match tally {
-                            Ok(tally) => tally,
-                            Err(err) => {
-                                warn!(
-                                    ?err,
-                                    height = block_height,
-                                    view = block_view,
-                                    block = %block_hash,
-                                    qc_signers,
-                                    "dropping block sync QC: tally validation failed"
-                                );
-                                self.clear_missing_block_request(
-                                    &block_hash,
-                                    MissingBlockClearReason::PayloadAvailable,
-                                );
-                                return Ok(());
-                            }
-                        };
-                        crate::sumeragi::status::record_precommit_signers(
-                            crate::sumeragi::status::PrecommitSignerRecord {
-                                block_hash,
-                                height: qc.height,
-                                view: qc.view,
-                                epoch: qc.epoch,
-                                parent_state_root: qc.parent_state_root,
-                                post_state_root: qc.post_state_root,
-                                signers: tally.voting_signers.clone(),
-                                bls_aggregate_signature: qc
-                                    .aggregate
-                                    .bls_aggregate_signature
-                                    .clone(),
-                                roster_len: topology.as_ref().len(),
-                                mode_tag: mode_tag.to_string(),
-                                validator_set: topology.as_ref().to_vec(),
-                                stake_snapshot: stake_snapshot.clone(),
-                            },
-                        );
-                        self.note_validated_qc_tally(&qc, tally.clone());
-                        let block_known_for_commit = self.block_known_for_lock(block_hash)
-                            || self.kura.get_block_height_by_hash(block_hash).is_some();
-                        let process_ok = self.process_precommit_qc(&qc, true, true);
-                        if !process_ok {
-                            info!(
-                                incoming_hash = %block_hash,
-                                height = block_height,
-                                view = block_view,
-                                "dropping block sync QC that conflicts with locked chain"
-                            );
-                        } else {
-                            let checkpoint = ValidatorSetCheckpoint::new(
-                                qc.height,
-                                qc.view,
-                                qc.subject_block_hash,
-                                qc.parent_state_root,
-                                qc.post_state_root,
-                                qc.validator_set.clone(),
-                                qc.aggregate.signers_bitmap.clone(),
-                                qc.aggregate.bls_aggregate_signature.clone(),
-                                qc.validator_set_hash_version,
-                                None,
-                            );
-                            if self.state.record_commit_roster(
-                                &qc,
-                                &checkpoint,
-                                stake_snapshot.clone(),
-                            ) {
-                                debug!(
-                                    incoming_hash = %block_hash,
-                                    height = block_height,
-                                    view = block_view,
-                                    "recorded commit roster from block sync QC"
-                                );
-                            }
-                            super::status::record_commit_qc(qc.clone());
-                            self.qc_cache.insert(
-                                (
-                                    qc.phase,
-                                    qc.subject_block_hash,
-                                    qc.height,
-                                    qc.view,
-                                    qc.epoch,
-                                ),
-                                qc.clone(),
-                            );
-                            debug!(
-                                incoming_hash = %block_hash,
-                                signers = tally.voting_signers.len(),
-                                qc_signers,
-                                "applied block sync QC for known block"
-                            );
-                            if extends_locked {
-                                if block_known_for_commit {
-                                    self.apply_commit_qc(
-                                        &qc,
-                                        topology.as_ref(),
-                                        block_hash,
-                                        block_height,
-                                        block_view,
-                                    );
-                                    self.request_commit_pipeline();
-                                } else {
-                                    debug!(
-                                        incoming_hash = %block_hash,
-                                        height = block_height,
-                                        view = block_view,
-                                        "deferring commit apply for block sync QC until block is validated"
-                                    );
-                                }
-                            }
-                        }
-                    }
+                let commit_qc_match = selection
+                    .commit_qc
+                    .as_ref()
+                    .is_some_and(|cert| HashOf::new(cert) == HashOf::new(&qc));
+                let work = self.prepare_known_block_qc_work(
+                    qc,
+                    Arc::new(block),
+                    topology.clone(),
+                    stake_snapshot.clone(),
+                    consensus_mode,
+                    mode_tag,
+                    prf_seed,
+                    commit_qc_match,
+                );
+                if let Some(work) = work {
+                    self.enqueue_known_block_qc_work(work);
                 }
             }
             self.clear_missing_block_request(
@@ -2385,5 +2145,340 @@ impl Actor {
             );
         }
         Ok(())
+    }
+
+    fn prepare_known_block_qc_work(
+        &mut self,
+        qc: crate::sumeragi::consensus::Qc,
+        block: Arc<SignedBlock>,
+        topology: super::network_topology::Topology,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+        consensus_mode: ConsensusMode,
+        mode_tag: &'static str,
+        prf_seed: Option<[u8; 32]>,
+        commit_qc_match: bool,
+    ) -> Option<KnownBlockQcWork> {
+        let block_hash = block.hash();
+        let block_height = block.header().height().get();
+        let block_view = block.header().view_change_index();
+        if topology.as_ref().is_empty() {
+            warn!(
+                height = block_height,
+                view = block_view,
+                "dropping block sync QC: empty commit topology"
+            );
+            return None;
+        }
+        if qc.subject_block_hash != block_hash {
+            warn!(
+                incoming_hash = %block_hash,
+                qc_hash = %qc.subject_block_hash,
+                "ignoring block sync QC that does not match block hash"
+            );
+            return None;
+        }
+        if qc.height != block_height {
+            warn!(
+                incoming_hash = %block_hash,
+                height = block_height,
+                qc_height = qc.height,
+                "ignoring block sync QC that does not match block height"
+            );
+            return None;
+        }
+        let expected_epoch = self.epoch_for_height(block_height);
+        if qc.epoch != expected_epoch {
+            warn!(
+                incoming_hash = %block_hash,
+                height = block_height,
+                expected_epoch,
+                qc_epoch = qc.epoch,
+                "ignoring block sync QC with mismatched epoch"
+            );
+            return None;
+        }
+        if !matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            warn!(
+                incoming_hash = %block_hash,
+                phase = ?qc.phase,
+                "ignoring block sync QC with non-commit phase"
+            );
+            return None;
+        }
+        if let Some(lock) = self.locked_qc {
+            if qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash {
+                info!(
+                    height = qc.height,
+                    view = qc.view,
+                    locked_height = lock.height,
+                    locked_hash = %lock.subject_block_hash,
+                    incoming_hash = %qc.subject_block_hash,
+                    "dropping block sync QC that conflicts with locked chain"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::Qc,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::LockedQc,
+                );
+                return None;
+            }
+        }
+        Some(KnownBlockQcWork {
+            qc,
+            block,
+            topology,
+            stake_snapshot,
+            consensus_mode,
+            mode_tag,
+            prf_seed,
+            commit_qc_match,
+        })
+    }
+
+    fn enqueue_known_block_qc_work(&mut self, work: KnownBlockQcWork) {
+        let key = Self::qc_tally_key(&work.qc);
+        if self.known_block_qc_work.contains_key(&key) {
+            debug!(
+                phase = ?work.qc.phase,
+                height = work.qc.height,
+                view = work.qc.view,
+                block = %work.qc.subject_block_hash,
+                "dropping duplicate known-block QC work item"
+            );
+            return;
+        }
+        self.known_block_qc_work.insert(key, work);
+        self.record_consensus_message_handling(
+            super::status::ConsensusMessageKind::Qc,
+            super::status::ConsensusMessageOutcome::Deferred,
+            super::status::ConsensusMessageReason::AggregateVerifyDeferred,
+        );
+        debug!(
+            height = key.2,
+            view = key.3,
+            block = %key.1,
+            queued = self.known_block_qc_work.len(),
+            "deferred known-block QC processing off payload queue"
+        );
+        if let Some(wake) = self.wake_tx.as_ref() {
+            let _ = wake.try_send(());
+        }
+    }
+
+    pub(super) fn drain_known_block_qc_work(&mut self, tick_deadline: Option<Instant>) -> bool {
+        if self.known_block_qc_work.is_empty() {
+            return false;
+        }
+        let mut progress = false;
+        let mut processed = 0usize;
+        while processed < KNOWN_BLOCK_QC_WORK_PER_TICK {
+            if Self::tick_budget_exhausted(tick_deadline, Instant::now()) {
+                break;
+            }
+            let key = match self.known_block_qc_work.keys().next().cloned() {
+                Some(key) => key,
+                None => break,
+            };
+            let Some(work) = self.known_block_qc_work.remove(&key) else {
+                continue;
+            };
+            if self.apply_known_block_qc_work(work) {
+                progress = true;
+            }
+            processed = processed.saturating_add(1);
+        }
+        if processed > 0 {
+            debug!(
+                processed,
+                remaining = self.known_block_qc_work.len(),
+                "drained known-block QC work items"
+            );
+        }
+        progress
+    }
+
+    fn apply_known_block_qc_work(&mut self, work: KnownBlockQcWork) -> bool {
+        let KnownBlockQcWork {
+            qc,
+            block,
+            topology,
+            stake_snapshot,
+            consensus_mode,
+            mode_tag,
+            prf_seed,
+            commit_qc_match,
+        } = work;
+        let block_hash = block.hash();
+        let block_height = block.header().height().get();
+        let block_view = block.header().view_change_index();
+        let cached_qc_match = cached_qc_for(
+            &self.qc_cache,
+            qc.phase,
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            qc.epoch,
+        )
+        .filter(|cached| HashOf::new(cached) == HashOf::new(&qc));
+        let cached_tally = if cached_qc_match.is_some() || commit_qc_match {
+            self.qc_signer_tally.get(&Self::qc_tally_key(&qc)).cloned()
+        } else {
+            None
+        };
+        let qc_signers = qc_signer_count(&qc);
+        let qc_ref = Self::qc_to_header_ref(&qc);
+        let extends_locked = qc_extends_locked_if_present(
+            self.locked_qc,
+            qc_ref,
+            |hash, height| self.parent_hash_for(hash, height),
+            |hash| self.block_known_for_lock(hash),
+        );
+        let tally = if let Some(tally) = cached_tally {
+            Ok(tally)
+        } else {
+            let signer_cache_key =
+                BlockSignerCacheKey::new(block_hash, topology.as_ref(), consensus_mode, prf_seed);
+            let cached_block_signers = signer_cache_key
+                .as_ref()
+                .and_then(|key| self.block_signer_cache.get(key));
+            let block_signers = if let Some(signers) = cached_block_signers {
+                signers
+            } else {
+                let block_signers = {
+                    let state_view = self.state.view();
+                    validated_block_signers(&block, &topology, &state_view, mode_tag, prf_seed)
+                };
+                match block_signers {
+                    Ok(signers) => {
+                        if let Some(key) = signer_cache_key {
+                            self.block_signer_cache.insert(key, signers.clone());
+                        }
+                        signers
+                    }
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            height = block_height,
+                            view = block_view,
+                            block = %block_hash,
+                            "block sync QC received for known block with invalid signatures; proceeding without signer subset check"
+                        );
+                        BTreeSet::new()
+                    }
+                }
+            };
+            let state_view = self.state.view();
+            let world = state_view.world();
+            tally_qc_against_block_signers(
+                &qc,
+                &topology,
+                world,
+                &block_signers,
+                block_view,
+                &self.roster_validation_cache.pops,
+                &self.common_config.chain,
+                consensus_mode,
+                stake_snapshot.as_ref(),
+                mode_tag,
+                prf_seed,
+            )
+        };
+        let tally = match tally {
+            Ok(tally) => tally,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    qc_signers,
+                    "dropping block sync QC: tally validation failed"
+                );
+                return false;
+            }
+        };
+        crate::sumeragi::status::record_precommit_signers(
+            crate::sumeragi::status::PrecommitSignerRecord {
+                block_hash,
+                height: qc.height,
+                view: qc.view,
+                epoch: qc.epoch,
+                parent_state_root: qc.parent_state_root,
+                post_state_root: qc.post_state_root,
+                signers: tally.voting_signers.clone(),
+                bls_aggregate_signature: qc.aggregate.bls_aggregate_signature.clone(),
+                roster_len: topology.as_ref().len(),
+                mode_tag: mode_tag.to_string(),
+                validator_set: topology.as_ref().to_vec(),
+                stake_snapshot: stake_snapshot.clone(),
+            },
+        );
+        self.note_validated_qc_tally(&qc, tally.clone());
+        let block_known_for_commit = self.block_known_for_lock(block_hash)
+            || self.kura.get_block_height_by_hash(block_hash).is_some();
+        let process_ok = self.process_precommit_qc(&qc, true, true);
+        if !process_ok {
+            info!(
+                incoming_hash = %block_hash,
+                height = block_height,
+                view = block_view,
+                "dropping block sync QC that conflicts with locked chain"
+            );
+            return true;
+        }
+        let checkpoint = ValidatorSetCheckpoint::new(
+            qc.height,
+            qc.view,
+            qc.subject_block_hash,
+            qc.parent_state_root,
+            qc.post_state_root,
+            qc.validator_set.clone(),
+            qc.aggregate.signers_bitmap.clone(),
+            qc.aggregate.bls_aggregate_signature.clone(),
+            qc.validator_set_hash_version,
+            None,
+        );
+        if self
+            .state
+            .record_commit_roster(&qc, &checkpoint, stake_snapshot.clone())
+        {
+            debug!(
+                incoming_hash = %block_hash,
+                height = block_height,
+                view = block_view,
+                "recorded commit roster from block sync QC"
+            );
+        }
+        super::status::record_commit_qc(qc.clone());
+        self.qc_cache.insert(
+            (
+                qc.phase,
+                qc.subject_block_hash,
+                qc.height,
+                qc.view,
+                qc.epoch,
+            ),
+            qc.clone(),
+        );
+        debug!(
+            incoming_hash = %block_hash,
+            signers = tally.voting_signers.len(),
+            qc_signers,
+            "applied block sync QC for known block"
+        );
+        if extends_locked {
+            if block_known_for_commit {
+                self.apply_commit_qc(&qc, topology.as_ref(), block_hash, block_height, block_view);
+                self.request_commit_pipeline();
+            } else {
+                debug!(
+                    incoming_hash = %block_hash,
+                    height = block_height,
+                    view = block_view,
+                    "deferring commit apply for block sync QC until block is validated"
+                );
+            }
+        }
+        true
     }
 }

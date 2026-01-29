@@ -1,6 +1,15 @@
 # Status
 
-Last update: 2026-01-28
+Last update: 2026-01-29
+
+- Sumeragi proposal handling: force missing-block fetch for the highest QC when the only local payload is an aborted pending block; added `proposal_missing_highest_qc_fetches_aborted_payload` coverage.
+- Tests: `cargo test -p iroha_core proposal_missing_highest_qc_fetches_aborted_payload -- --nocapture` (failed: existing compile errors in `crates/iroha_core/src/sumeragi/main_loop/tests.rs` for missing `cap_gas_limit_for_fast_commit`/`proposal_gas_cost` and `QcVote` Option mismatches; initial parent-hash type error in the new test fixed afterward, not re-run).
+
+- Sumeragi proposal assembly: drop already-committed transactions from the proposal batch after queue scan so stale queue snapshots do not broadcast blocks that will fail `HasCommittedTransactions`; added `proposal_filter_drops_committed_transactions_after_queue_scan` coverage.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config). `cargo test -p iroha_core proposal_filter_drops_committed_transactions_after_queue_scan -- --nocapture` (failed: `iroha_config` build error — `fast_gas_limit_per_block` `Option` conflicts with `config(default)` in `crates/iroha_config/src/parameters/user.rs:5221`, plus missing `NonZeroU64` import in `crates/iroha_config/src/parameters/defaults.rs:2322`).
+
+- Sumeragi proposal assembly: clamp per-block gas budget when `effective_commit_time_ms <= 1000` (optional via `sumeragi.block.fast_gas_limit_per_block`, applied as `min(ivm_gas_limit_per_block, fast_gas_limit_per_block)`) and select transactions by gas to keep validation within 1s finality budget; added unit coverage and docs.
+- Tests: not run (not requested).
 
 - Izanami run (tps=1, 300s, 4 peers): stopped before target blocks; max committed height 16 on all peers; no `proposal mismatch` logs; `vote_drain_ms` max 829ms vs `block_payload_drain_ms` max 3871ms; repeated `not enough stake collected for QC` lines persisted; network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_ntHOWR`.
 - Tests: `cargo build -p izanami --release --locked` (warning: unused `min_finality` in `crates/iroha_core/src/sumeragi/mod.rs:360`). `RUST_LOG=izanami::summary=info,izanami::workload=warn,iroha_core::sumeragi::main_loop=debug,iroha_core::sumeragi=info,iroha_p2p=info IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo run -p izanami --release --locked -- --allow-net --nexus --peers 4 --faulty 0 --duration 300s --target-blocks 200 --progress-interval 10s --progress-timeout 180s --tps 1 --max-inflight 8 --workload-profile stable` (stopped before target blocks reached).

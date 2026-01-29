@@ -38,6 +38,8 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 ## Current Open Work
 
 - Izanami perf: re-run 1 TPS after scaling NPoS timeout derivation to align the timeout budget with `block_time_ms`; confirm block height progress and whether remaining execution DAG spikes still gate consensus.
+- Localnet 1 Hz: re-run the NPoS 1 Hz soak with the fast-finality gas cap enabled (`sumeragi.block.fast_gas_limit_per_block`) and confirm block spacing falls under 1s on localhost.
+- Izanami perf: re-run 1 TPS after the proposal committed-tx filter (fix for `HasCommittedTransactions` invalid blocks) to confirm height progress and no repeated view-change loops around stale proposal batches.
 
 0. **KOTODAMA-LANG-PARITY — Close remaining Kotodama gaps** (IVM/Kotodama, Line: Shared, Owner: IVM WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
  - [x] Add access-list attributes and wire permission/read/write hints into entrypoint manifests.
@@ -147,6 +149,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 - [x] Re-run Izanami 1 TPS with expanded block-validation sub-stage timings (stateless vs execution breakdown); execution is dominated by `execution_tx_ms` (mean ~740ms, p95 ~4011ms, max ~5313ms) while other sub-stages are ~0ms (run 2026-01-28, logs in `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_mwreSi`).
 - [x] Re-run Izanami 1 TPS with tx sub-stage timings; `execution_tx_apply_ms` dominates (mean ~508ms, p95 ~3875ms, max ~5862ms) with occasional DAG spikes (max 1803ms) in `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_FE6T7a`.
 - [x] Split `execution_tx_apply_ms` into apply sub-stages (detached exec vs merge vs sequential fallback vs trigger execution vs finalization) to pinpoint the dominant apply hot spot before optimizing.
+- [ ] Re-run Izanami 1 TPS after forcing missing highest-QC fetch when the only local payload is an aborted pending block (proposal/proposal-hint paths) to confirm height progress and clear missing-highest stalls.
 - [ ] Use roster-validation micro-timers to reduce commit-QC/checkpoint validation + QC-tally costs (BLS verify hotspots); consider memoizing verified roster artifacts/QC tallies and re-run the Izanami 1 TPS profile to confirm further queue-latency reduction.
 - [x] Reduce vote-drain hotspots now that vote-verify offload + batching still leave `vote_drain_ms` dominant (latest 1 TPS run: mean 432–490ms, p95 2182–2344ms, 49–50 blocks in 300s; 2026-01-27 run after SumeragiParameters timing injection: p50 0, p90 734, max 3242, height 41/300s, logs in `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_wWvhSZ`; 2026-01-27 run after vote-inbound deferral: p50 0, p90 778, max 3485, height 44/300s, logs in `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_p4poFN`); vote/QC verify workers now auto-size threads/queue caps when config values are 0, buffering more work before synchronous fallback.
 - [ ] Investigate Izanami 1 TPS QC fast-path run `irohad_test_network_bLPG1H`: peer exit status 3 and Torii connection refusals; stabilize startup and re-run the profile.

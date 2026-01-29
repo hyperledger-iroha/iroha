@@ -2,8 +2,10 @@
 
 use super::proposals::block_payload_bytes;
 use super::*;
+use crate::state::StateReadOnlyWithTransactions;
 use crate::smartcontracts::isi::triggers::set::SetReadOnly;
 use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait;
+use core::num::NonZeroU64;
 use iroha_data_model::events::EventFilter;
 use iroha_data_model::prelude::Repeats;
 pub(super) fn resolve_prev_block_for_proposal(
@@ -305,11 +307,61 @@ impl Actor {
         (max_tx_target, max_in_block)
     }
 
+    pub(super) fn cap_gas_limit_for_fast_commit(
+        gas_limit_per_block: Option<NonZeroU64>,
+        effective_commit_time_ms: u64,
+        fast_gas_limit_per_block: Option<NonZeroU64>,
+    ) -> Option<NonZeroU64> {
+        let Some(base_limit) = gas_limit_per_block else {
+            return None;
+        };
+        let Some(cap) = fast_gas_limit_per_block else {
+            return Some(base_limit);
+        };
+        if effective_commit_time_ms
+            > iroha_config::parameters::defaults::sumeragi::FAST_FINALITY_COMMIT_TIME_MS
+        {
+            return Some(base_limit);
+        }
+        let capped = base_limit.get().min(cap.get());
+        Some(NonZeroU64::new(capped).expect("non-zero by construction"))
+    }
+
+    pub(super) fn proposal_gas_cost(tx: &AcceptedTransaction<'_>) -> u64 {
+        use iroha_data_model::transaction::Executable;
+
+        match tx.as_ref().instructions() {
+            Executable::Instructions(batch) => {
+                let instructions: Vec<_> = batch.iter().map(Clone::clone).collect();
+                crate::gas::meter_instructions(&instructions)
+            }
+            Executable::Ivm(_) => match crate::executor::parse_gas_limit(tx.as_ref().metadata()) {
+                Ok(Some(limit)) => limit,
+                Ok(None) => {
+                    warn!(
+                        tx = %tx.as_ref().hash(),
+                        "missing gas_limit metadata while deriving proposal gas cost"
+                    );
+                    0
+                }
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        tx = %tx.as_ref().hash(),
+                        "invalid gas_limit metadata while deriving proposal gas cost"
+                    );
+                    0
+                }
+            },
+        }
+    }
+
     pub(super) fn pull_transactions_for_proposal(
         &self,
         state_view: &StateView,
         max_in_block: NonZeroUsize,
         scan_budget: usize,
+        gas_limit_per_block: Option<NonZeroU64>,
         tx_guards: &mut Vec<crate::queue::TransactionGuard>,
         height: u64,
         view: u64,
@@ -317,6 +369,8 @@ impl Actor {
         let mut lane_consumption: BTreeMap<LaneId, u64> = BTreeMap::new();
         let mut deferred_accumulator: Vec<AcceptedTransaction<'static>> = Vec::new();
         let mut fetched_total = 0usize;
+        let mut gas_used_in_block = 0u64;
+        let gas_limit_per_block = gas_limit_per_block.map(NonZeroU64::get);
         let scan_budget = scan_budget.max(1);
 
         loop {
@@ -328,21 +382,78 @@ impl Actor {
                 );
                 break;
             }
-            let fetch_cap = NonZeroUsize::new(remaining_budget.min(max_in_block.get()))
-                .expect("non-zero by construction");
-            let before_fetch = tx_guards.len();
-            self.queue
-                .get_transactions_for_block(state_view, fetch_cap, tx_guards);
-            let fetched = tx_guards.len().saturating_sub(before_fetch);
-            if fetched == 0 {
+            let remaining_slots = max_in_block.get().saturating_sub(tx_guards.len());
+            if remaining_slots == 0 {
                 break;
             }
-            fetched_total = fetched_total.saturating_add(fetched);
+            if let Some(limit) = gas_limit_per_block {
+                let remaining_gas = limit.saturating_sub(gas_used_in_block);
+                if remaining_gas == 0 {
+                    debug!(
+                        height,
+                        view,
+                        gas_limit = limit,
+                        gas_used = gas_used_in_block,
+                        "proposal gas budget reached"
+                    );
+                    break;
+                }
+            }
+            let fetch_cap = NonZeroUsize::new(remaining_budget.min(remaining_slots))
+                .expect("non-zero by construction");
+            let mut fetched = Vec::new();
+            self.queue
+                .get_transactions_for_block(state_view, fetch_cap, &mut fetched);
+            if fetched.is_empty() {
+                break;
+            }
+            fetched_total = fetched_total.saturating_add(fetched.len());
             let deferred = self
                 .queue
-                .enforce_lane_teu_limits_with_consumption(tx_guards, &mut lane_consumption);
+                .enforce_lane_teu_limits_with_consumption(&mut fetched, &mut lane_consumption);
             if !deferred.is_empty() {
                 deferred_accumulator.extend(deferred);
+            }
+
+            if let Some(limit) = gas_limit_per_block {
+                let mut accepted = Vec::with_capacity(fetched.len());
+                for guard in fetched {
+                    let gas_cost = Self::proposal_gas_cost(guard.as_ref());
+                    let remaining_gas = limit.saturating_sub(gas_used_in_block);
+                    let would_exceed = gas_cost > remaining_gas && gas_cost > 0;
+                    let allow_oversized = gas_used_in_block == 0 && accepted.is_empty();
+
+                    if would_exceed && !allow_oversized {
+                        let lane_id = guard.routing().lane_id;
+                        let teu = guard.teu_weight();
+                        if let Some(used) = lane_consumption.get_mut(&lane_id) {
+                            *used = used.saturating_sub(teu);
+                        }
+                        deferred_accumulator.push(guard.clone_accepted());
+                        continue;
+                    }
+
+                    if would_exceed {
+                        debug!(
+                            height,
+                            view,
+                            gas_cost,
+                            gas_limit = limit,
+                            "proposal gas cap exceeded by single tx; admitting to avoid stall"
+                        );
+                    }
+                    gas_used_in_block = gas_used_in_block.saturating_add(gas_cost);
+                    accepted.push(guard);
+                }
+                tx_guards.extend(accepted);
+            } else {
+                tx_guards.extend(fetched);
+            }
+
+            if let Some(limit) = gas_limit_per_block {
+                if gas_used_in_block >= limit {
+                    break;
+                }
             }
         }
 
@@ -463,6 +574,21 @@ impl Actor {
                 block_max_param.get(),
                 self.config.block.max_transactions,
             );
+            let effective_commit_time_ms = state_view
+                .world()
+                .parameters()
+                .sumeragi()
+                .effective_commit_time_ms();
+            let base_gas_limit = NonZeroU64::new(crate::state::gas_limit_from_parameters(
+                state_view.world().parameters(),
+            ));
+            let fast_gas_limit_per_block = self.config.block.fast_gas_limit_per_block;
+            let proposal_gas_limit = Self::cap_gas_limit_for_fast_commit(
+                base_gas_limit,
+                effective_commit_time_ms,
+                fast_gas_limit_per_block,
+            );
+            let fast_gas_capped = proposal_gas_limit != base_gas_limit;
             let scan_budget = self.proposal_scan_budget(max_in_block);
             debug!(
                 height,
@@ -473,6 +599,11 @@ impl Actor {
                 max_in_block = max_in_block.get(),
                 scan_budget,
                 scan_multiplier = self.config.block.proposal_queue_scan_multiplier.get(),
+                effective_commit_time_ms,
+                gas_limit_per_block = base_gas_limit.map(NonZeroU64::get),
+                fast_gas_limit_per_block = fast_gas_limit_per_block.map(NonZeroU64::get),
+                proposal_gas_limit = proposal_gas_limit.map(NonZeroU64::get),
+                fast_gas_capped,
                 "proposal assembly budget"
             );
             // Bound queue scanning to keep proposal assembly from stalling under sustained load.
@@ -480,6 +611,7 @@ impl Actor {
                 &state_view,
                 max_in_block,
                 scan_budget,
+                proposal_gas_limit,
                 &mut tx_guards,
                 height,
                 view,
@@ -515,6 +647,19 @@ impl Actor {
                 deferred_accumulator,
             )
         };
+
+        let (filtered_guards, filtered_transactions, filtered_routing, _dropped_committed) =
+            Self::filter_committed_transactions_for_proposal(
+                &self.state,
+                tx_guards,
+                transactions,
+                routing_decisions,
+                height,
+                view,
+            );
+        tx_guards = filtered_guards;
+        transactions = filtered_transactions;
+        routing_decisions = filtered_routing;
 
         if transactions.len() > 1 {
             let order = interleave_lane_indices(&routing_decisions);
@@ -1349,6 +1494,54 @@ impl Actor {
         max_in_block
             .get()
             .saturating_mul(self.config.block.proposal_queue_scan_multiplier.get())
+    }
+
+    pub(super) fn filter_committed_transactions_for_proposal(
+        state: &State,
+        tx_guards: Vec<crate::queue::TransactionGuard>,
+        transactions: Vec<AcceptedTransaction<'static>>,
+        routing_decisions: Vec<RoutingDecision>,
+        height: u64,
+        view: u64,
+    ) -> (
+        Vec<crate::queue::TransactionGuard>,
+        Vec<AcceptedTransaction<'static>>,
+        Vec<RoutingDecision>,
+        usize,
+    ) {
+        let state_view = state.view();
+        let mut retained_guards = Vec::with_capacity(tx_guards.len());
+        let mut retained_transactions = Vec::with_capacity(transactions.len());
+        let mut retained_routing = Vec::with_capacity(routing_decisions.len());
+        let mut dropped = 0usize;
+
+        for ((guard, tx), routing) in tx_guards
+            .into_iter()
+            .zip(transactions.into_iter())
+            .zip(routing_decisions.into_iter())
+        {
+            if state_view.has_transaction(tx.hash()) {
+                dropped = dropped.saturating_add(1);
+                continue;
+            }
+            retained_guards.push(guard);
+            retained_transactions.push(tx);
+            retained_routing.push(routing);
+        }
+
+        if dropped > 0 {
+            debug!(
+                height,
+                view, dropped, "dropping committed transactions from proposal batch"
+            );
+        }
+
+        (
+            retained_guards,
+            retained_transactions,
+            retained_routing,
+            dropped,
+        )
     }
 
     fn maybe_rebroadcast_cached_proposal(

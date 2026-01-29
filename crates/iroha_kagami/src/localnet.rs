@@ -376,7 +376,7 @@ const LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MAX_MS: u64 = 10_000;
 /// Default localnet telemetry toggle (mirrors config defaults).
 const LOCALNET_TELEMETRY_ENABLED: bool = true;
 /// Default localnet telemetry profile (mirrors config defaults).
-const LOCALNET_TELEMETRY_PROFILE: &str = "operator";
+const LOCALNET_TELEMETRY_PROFILE: &str = "extended";
 /// Minimum peer count for Sora profile localnets (multi-lane/dataspace defaults).
 const LOCALNET_SORA_MIN_PEERS: u16 = 4;
 /// Divisor applied to derive the localnet NPoS aggregator fallback timeout.

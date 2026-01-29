@@ -352,6 +352,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             },
             block: A::SumeragiBlock {
                 max_transactions: iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
+                fast_gas_limit_per_block:
+                    iroha_config::parameters::defaults::sumeragi::FAST_FINALITY_GAS_LIMIT_PER_BLOCK,
                 max_payload_bytes: iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES,
                 proposal_queue_scan_multiplier:
                     iroha_config::parameters::defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,

@@ -979,6 +979,8 @@ fn minimal_config_snapshot() {
                 },
                 block: SumeragiBlock {
                     max_transactions: None,
+                    fast_gas_limit_per_block:
+                        iroha_config::parameters::defaults::sumeragi::FAST_FINALITY_GAS_LIMIT_PER_BLOCK,
                     max_payload_bytes: None,
                     proposal_queue_scan_multiplier: 4,
                 },

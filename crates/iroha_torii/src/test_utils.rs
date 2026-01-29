@@ -624,6 +624,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             },
             block: A::SumeragiBlock {
                 max_transactions: defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
+                fast_gas_limit_per_block: defaults::sumeragi::FAST_FINALITY_GAS_LIMIT_PER_BLOCK,
                 max_payload_bytes: defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES,
                 proposal_queue_scan_multiplier: defaults::sumeragi::PROPOSAL_QUEUE_SCAN_MULTIPLIER,
             },
