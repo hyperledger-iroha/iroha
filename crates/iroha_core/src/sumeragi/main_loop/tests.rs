@@ -3981,7 +3981,7 @@ async fn block_sync_update_commit_conflict_with_valid_qc_sets_restart_required()
     actor.kura.store_block(block2).expect("store block 2");
 
     let conflicting = sample_block(2, 1, Some(block1.hash()));
-    let topology = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
@@ -4034,7 +4034,7 @@ async fn handle_qc_conflicting_committed_height_requests_commit_conflict_recover
     actor.kura.store_block(block2).expect("store block 2");
 
     let conflicting = sample_block(2, 1, Some(block1.hash()));
-    let topology = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
