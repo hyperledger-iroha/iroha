@@ -16,6 +16,7 @@ pub const GUARD_DIRECTORY_VERSION_V2: u8 = 2;
 
 /// Norito-encoded guard directory snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[norito(decode_from_slice)]
 pub struct GuardDirectorySnapshotV2 {
     /// Snapshot schema version (`2`).
     pub version: u8,

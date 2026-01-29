@@ -1003,6 +1003,7 @@ mod tests {
                     rbc_backlog_chunk_soft_limit:
                         iroha_config::parameters::defaults::sumeragi::PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
                 },
+                pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor::default(),
                 da: iroha_config::parameters::actual::SumeragiDa {
                     enabled: iroha_config::parameters::defaults::sumeragi::DA_ENABLED,
                     quorum_timeout_multiplier:

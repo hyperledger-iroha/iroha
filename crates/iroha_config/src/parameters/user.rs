@@ -5177,6 +5177,71 @@ pub struct AdaptiveObservability {
     pub cooldown_ms: u64,
 }
 
+/// User-level configuration for deterministic pacing governor.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiPacingGovernor {
+    /// Enable adaptive pacing-factor adjustments.
+    #[config(
+        env = "SUMERAGI_PACING_GOVERNOR_ENABLED",
+        default = "defaults::sumeragi::PACING_GOVERNOR_ENABLED"
+    )]
+    pub enabled: bool,
+    /// Number of recent blocks to sample for pressure evaluation.
+    #[config(
+        env = "SUMERAGI_PACING_GOVERNOR_WINDOW_BLOCKS",
+        default = "defaults::sumeragi::PACING_GOVERNOR_WINDOW_BLOCKS"
+    )]
+    pub window_blocks: usize,
+    /// View-change pressure threshold (permille of view-change increments per block).
+    #[config(
+        env = "SUMERAGI_PACING_GOVERNOR_VIEW_CHANGE_PRESSURE_PERMILLE",
+        default = "defaults::sumeragi::PACING_GOVERNOR_VIEW_CHANGE_PRESSURE_PERMILLE"
+    )]
+    pub view_change_pressure_permille: u32,
+    /// View-change clear threshold (permille of view-change increments per block).
+    #[config(
+        env = "SUMERAGI_PACING_GOVERNOR_VIEW_CHANGE_CLEAR_PERMILLE",
+        default = "defaults::sumeragi::PACING_GOVERNOR_VIEW_CHANGE_CLEAR_PERMILLE"
+    )]
+    pub view_change_clear_permille: u32,
+    /// Commit spacing pressure threshold (permille of target block time).
+    #[config(
+        env = "SUMERAGI_PACING_GOVERNOR_COMMIT_SPACING_PRESSURE_PERMILLE",
+        default = "defaults::sumeragi::PACING_GOVERNOR_COMMIT_SPACING_PRESSURE_PERMILLE"
+    )]
+    pub commit_spacing_pressure_permille: u32,
+    /// Commit spacing clear threshold (permille of target block time).
+    #[config(
+        env = "SUMERAGI_PACING_GOVERNOR_COMMIT_SPACING_CLEAR_PERMILLE",
+        default = "defaults::sumeragi::PACING_GOVERNOR_COMMIT_SPACING_CLEAR_PERMILLE"
+    )]
+    pub commit_spacing_clear_permille: u32,
+    /// Pacing-factor increase step (basis points).
+    #[config(
+        env = "SUMERAGI_PACING_GOVERNOR_STEP_UP_BPS",
+        default = "defaults::sumeragi::PACING_GOVERNOR_STEP_UP_BPS"
+    )]
+    pub step_up_bps: u32,
+    /// Pacing-factor decrease step (basis points).
+    #[config(
+        env = "SUMERAGI_PACING_GOVERNOR_STEP_DOWN_BPS",
+        default = "defaults::sumeragi::PACING_GOVERNOR_STEP_DOWN_BPS"
+    )]
+    pub step_down_bps: u32,
+    /// Minimum pacing-factor bound (basis points).
+    #[config(
+        env = "SUMERAGI_PACING_GOVERNOR_MIN_FACTOR_BPS",
+        default = "defaults::sumeragi::PACING_GOVERNOR_MIN_FACTOR_BPS"
+    )]
+    pub min_factor_bps: u32,
+    /// Maximum pacing-factor bound (basis points).
+    #[config(
+        env = "SUMERAGI_PACING_GOVERNOR_MAX_FACTOR_BPS",
+        default = "defaults::sumeragi::PACING_GOVERNOR_MAX_FACTOR_BPS"
+    )]
+    pub max_factor_bps: u32,
+}
+
 /// User-level configuration container for `SumeragiModeFlip`.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct SumeragiModeFlip {
@@ -5242,6 +5307,9 @@ pub struct SumeragiAdvanced {
     /// Pacemaker tuning (override-only).
     #[config(nested)]
     pub pacemaker: SumeragiPacemaker,
+    /// Deterministic pacing governor overrides.
+    #[config(nested)]
+    pub pacing_governor: SumeragiPacingGovernor,
     /// DA timeout multipliers/floor overrides.
     #[config(nested)]
     pub da: SumeragiDaAdvanced,
@@ -6060,6 +6128,116 @@ impl From<actual::AdaptiveObservability> for AdaptiveObservability {
     }
 }
 
+impl SumeragiPacingGovernor {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::SumeragiPacingGovernor> {
+        let Self {
+            enabled,
+            window_blocks,
+            view_change_pressure_permille,
+            view_change_clear_permille,
+            commit_spacing_pressure_permille,
+            commit_spacing_clear_permille,
+            step_up_bps,
+            step_down_bps,
+            min_factor_bps,
+            max_factor_bps,
+        } = self;
+
+        let mut ok = true;
+        if window_blocks < 2 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("sumeragi.advanced.pacing_governor.window_blocks must be at least 2"),
+            );
+            ok = false;
+        }
+        if step_up_bps == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.advanced.pacing_governor.step_up_bps must be greater than zero",
+                ),
+            );
+            ok = false;
+        }
+        if step_down_bps == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.pacing_governor.step_down_bps must be greater than zero",
+            ));
+            ok = false;
+        }
+        if min_factor_bps < 10_000 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.pacing_governor.min_factor_bps must be at least 10_000",
+            ));
+            ok = false;
+        }
+        if max_factor_bps < min_factor_bps {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.pacing_governor.max_factor_bps must be >= min_factor_bps",
+            ));
+            ok = false;
+        }
+        if view_change_pressure_permille == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.pacing_governor.view_change_pressure_permille must be greater than zero",
+            ));
+            ok = false;
+        }
+        if view_change_clear_permille > view_change_pressure_permille {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.pacing_governor.view_change_clear_permille must be <= view_change_pressure_permille",
+            ));
+            ok = false;
+        }
+        if commit_spacing_pressure_permille == 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.pacing_governor.commit_spacing_pressure_permille must be greater than zero",
+            ));
+            ok = false;
+        }
+        if commit_spacing_clear_permille > commit_spacing_pressure_permille {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.pacing_governor.commit_spacing_clear_permille must be <= commit_spacing_pressure_permille",
+            ));
+            ok = false;
+        }
+
+        if !ok {
+            return None;
+        }
+
+        Some(actual::SumeragiPacingGovernor {
+            enabled,
+            window_blocks,
+            view_change_pressure_permille,
+            view_change_clear_permille,
+            commit_spacing_pressure_permille,
+            commit_spacing_clear_permille,
+            step_up_bps,
+            step_down_bps,
+            min_factor_bps,
+            max_factor_bps,
+        })
+    }
+}
+
+impl From<actual::SumeragiPacingGovernor> for SumeragiPacingGovernor {
+    fn from(value: actual::SumeragiPacingGovernor) -> Self {
+        Self {
+            enabled: value.enabled,
+            window_blocks: value.window_blocks,
+            view_change_pressure_permille: value.view_change_pressure_permille,
+            view_change_clear_permille: value.view_change_clear_permille,
+            commit_spacing_pressure_permille: value.commit_spacing_pressure_permille,
+            commit_spacing_clear_permille: value.commit_spacing_clear_permille,
+            step_up_bps: value.step_up_bps,
+            step_down_bps: value.step_down_bps,
+            min_factor_bps: value.min_factor_bps,
+            max_factor_bps: value.max_factor_bps,
+        }
+    }
+}
+
 impl Sumeragi {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Sumeragi> {
         let Self {
@@ -6083,6 +6261,7 @@ impl Sumeragi {
             queues,
             worker,
             pacemaker,
+            pacing_governor,
             da: da_advanced,
             rbc,
             npos: npos_advanced,
@@ -6306,6 +6485,7 @@ impl Sumeragi {
             };
 
         let adaptive_observability = adaptive_observability.parse(emitter)?;
+        let pacing_governor = pacing_governor.parse(emitter)?;
         let npos = npos.parse(npos_advanced.timeouts, emitter)?;
 
         if !(collectors_ok
@@ -6430,6 +6610,7 @@ impl Sumeragi {
                 rbc_backlog_session_soft_limit: pacemaker.rbc_backlog_session_soft_limit,
                 rbc_backlog_chunk_soft_limit: pacemaker.rbc_backlog_chunk_soft_limit,
             },
+            pacing_governor,
             da: actual::SumeragiDa {
                 enabled: da.enabled,
                 quorum_timeout_multiplier: da_advanced.quorum_timeout_multiplier,
@@ -15648,6 +15829,30 @@ mod adaptive_observability_tests {
             pacemaker_extra_ms: 10,
             collector_redundant_r: 0,
             cooldown_ms: 0,
+        };
+        let mut emitter = Emitter::new();
+        assert!(user.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+}
+
+#[cfg(test)]
+mod pacing_governor_tests {
+    use super::*;
+
+    #[test]
+    fn pacing_governor_rejects_invalid_bounds() {
+        let user = SumeragiPacingGovernor {
+            enabled: true,
+            window_blocks: 1,
+            view_change_pressure_permille: 0,
+            view_change_clear_permille: 10,
+            commit_spacing_pressure_permille: 0,
+            commit_spacing_clear_permille: 500,
+            step_up_bps: 0,
+            step_down_bps: 0,
+            min_factor_bps: 9_000,
+            max_factor_bps: 8_000,
         };
         let mut emitter = Emitter::new();
         assert!(user.parse(&mut emitter).is_none());

@@ -42,6 +42,7 @@ These are the only parameters operators are expected to set:
 These remain configurable but are grouped under an explicit advanced section and
 default to "derive/auto":
 - Pacemaker: `rtt_floor_multiplier`, `max_backoff`, optional jitter.
+- Pacing governor: `sumeragi.advanced.pacing_governor` (window, thresholds, step size, bounds).
 - DA: `quorum_timeout_multiplier`, `availability_timeout_multiplier`,
   `availability_timeout_floor`.
 - RBC: TTLs, storage caps, chunk fanout caps, pending stash limits.
@@ -65,8 +66,8 @@ When advanced overrides are unset (0/None), derive values deterministically:
 - Default: derive all NPoS timeouts from the effective block time
   (`block_time_ms` scaled by `pacing_factor_bps`).
 - If explicit NPoS timeout overrides exist, they must be moved to advanced-only
-  configuration. When unset, derive from `block_time_ms`.
- - Derivation uses the baseline 1s ratios from the current defaults:
+  configuration. When unset, derive from the effective block time.
+- Derivation uses the baseline 1s ratios from the current defaults:
    - `propose`: 0.35 * block_time
    - `prevote`: 0.45 * block_time
    - `precommit`: 0.55 * block_time
@@ -75,7 +76,7 @@ When advanced overrides are unset (0/None), derive values deterministically:
    - `commit`: 0.75 * block_time
    - `da`: 0.65 * block_time
    - `aggregator`: 0.12 * block_time
- - Clamp each derived timeout to at least 1ms.
+- Clamp each derived timeout to at least 1ms.
 
 ### Commit quorum timeout
 - Use the canonical function:
@@ -87,6 +88,17 @@ When advanced overrides are unset (0/None), derive values deterministically:
 
 ### Pacemaker base interval
 - `max(block_time, propose_timeout * rtt_floor_multiplier)` capped by `max_backoff`.
+
+### Deterministic pacing governor (optional)
+- Enable with `sumeragi.advanced.pacing_governor.enabled` to adjust
+  `SumeragiParameters.pacing_factor_bps` deterministically at block boundaries.
+- Evaluate the last `window_blocks` committed headers and compute:
+  - View-change pressure = average view-change index delta per block (permille).
+  - Commit spacing pressure = average inter-block spacing vs target block time (permille).
+- If either ratio exceeds its pressure threshold, increase by `step_up_bps`.
+- If both ratios fall below their clear thresholds, decrease by `step_down_bps`.
+- Clamp the factor to `[min_factor_bps, max_factor_bps]` (min >= 10_000).
+- Skip adjustments when the current block already sets `pacing_factor_bps` explicitly.
 
 ### Rebroadcast and idle thresholds
 - Keep derived from `block_time_ms` using existing helper functions.
@@ -126,6 +138,17 @@ set (non-zero/non-null). Values below reference `iroha_config` defaults:
   - `payload_chunks_per_tick`: 64
   - `store_max_sessions`: 1_024
   - `store_max_bytes`: 512 MiB
+- Pacing governor (off by default):
+  - `enabled`: false
+  - `window_blocks`: 20
+  - `view_change_pressure_permille`: 200
+  - `view_change_clear_permille`: 50
+  - `commit_spacing_pressure_permille`: 1_300
+  - `commit_spacing_clear_permille`: 1_100
+  - `step_up_bps`: 1_000
+  - `step_down_bps`: 100
+  - `min_factor_bps`: 10_000
+  - `max_factor_bps`: 20_000
 
 ### Adaptive observability defaults
 Adaptive observability remains off by default:
@@ -149,6 +172,7 @@ Expose effective values in `/v1/sumeragi/status`:
 - `effective_collectors_k` and `effective_redundant_send_r`
 
 These fields must reflect the derived runtime values, not raw config input.
+Configuration events emit `pacing_factor_bps` changes when the governor adjusts it.
 
 ## Validation rules
 - `min_finality_ms > 0`
@@ -164,3 +188,4 @@ These fields must reflect the derived runtime values, not raw config input.
 4. Ensure all derived timeouts clamp to `min_finality_ms`.
 5. Surface effective values in telemetry/status.
 6. Update docs and config templates to reflect the streamlined surface.
+7. Add the deterministic pacing governor (windowed pressure + bounded hysteresis).

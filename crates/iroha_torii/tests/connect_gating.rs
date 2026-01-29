@@ -405,6 +405,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 rbc_backlog_chunk_soft_limit:
                     iroha_config::parameters::defaults::sumeragi::PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
             },
+            pacing_governor: A::SumeragiPacingGovernor::default(),
             da: A::SumeragiDa {
                 enabled: iroha_config::parameters::defaults::sumeragi::DA_ENABLED,
                 quorum_timeout_multiplier:

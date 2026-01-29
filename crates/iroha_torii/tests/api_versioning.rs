@@ -92,7 +92,7 @@ async fn rejecting_unsupported_api_version() {
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = response.into_body().collect().await.unwrap().to_bytes();
-    let payload = norito::core::decode_from_bytes::<ErrorEnvelope>(&body).unwrap();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&body).unwrap();
     assert_eq!(payload.code, "torii_api_version_unsupported");
     assert!(
         !payload.message.is_empty(),
@@ -148,7 +148,7 @@ async fn proof_endpoints_reject_old_api_version() {
 
     assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
     let body = response.into_body().collect().await.unwrap().to_bytes();
-    let payload = norito::core::decode_from_bytes::<ErrorEnvelope>(&body).unwrap();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&body).unwrap();
     assert_eq!(payload.code, "torii_api_version_too_old");
     assert!(
         payload.message.contains("minimum `1.1`"),

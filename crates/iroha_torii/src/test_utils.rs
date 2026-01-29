@@ -664,6 +664,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 rbc_backlog_chunk_soft_limit:
                     defaults::sumeragi::PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
             },
+            pacing_governor: A::SumeragiPacingGovernor::default(),
             da: A::SumeragiDa {
                 enabled: false,
                 quorum_timeout_multiplier: defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,

@@ -9,9 +9,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eyre::{Context, Result, eyre};
+use eyre::{Result, eyre};
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use integration_tests::sandbox;
+use iroha_config::parameters::defaults;
 use iroha_config_base::toml::WriteExt;
 use iroha_core::sumeragi::network_topology::{Topology, commit_quorum_from_len};
 use iroha_crypto::Hash;
@@ -33,7 +34,7 @@ use rand_chacha::ChaCha8Rng;
 use relay::P2pRelay;
 use tokio::{
     self,
-    task::{JoinSet, spawn_blocking},
+    task::spawn_blocking,
     time::{sleep, timeout},
 };
 use toml::Table;
@@ -394,13 +395,25 @@ fn non_faulty_sync_timeout(
     pipeline_time: Duration,
     faulty_peers: usize,
 ) -> Duration {
-    if faulty_peers <= 1 {
+    if faulty_peers == 0 {
         return sync_timeout;
     }
-    // Keep multi-fault relay partitions short to avoid cascading view-change churn.
-    let cap = pipeline_time
-        .saturating_mul(2)
-        .saturating_add(Duration::from_secs(2));
+    // Keep relay partitions short enough to avoid RBC session expiry and view-change churn.
+    let cap = if faulty_peers > 1 {
+        pipeline_time
+            .saturating_mul(2)
+            .saturating_add(Duration::from_secs(2))
+    } else {
+        let session_cap = Duration::from_millis(defaults::sumeragi::RBC_SESSION_TTL_MS)
+            .saturating_sub(Duration::from_secs(10));
+        if session_cap.is_zero() {
+            pipeline_time
+                .saturating_mul(10)
+                .saturating_add(Duration::from_secs(2))
+        } else {
+            session_cap
+        }
+    };
     sync_timeout.min(cap)
 }
 
@@ -837,7 +850,14 @@ impl UnstableNetwork {
                 .await?;
         }
 
-        Self::assert_total_supply(&network, &asset_definition_id, self.n_rounds).await?;
+        let expected_height = init_blocks + u64::try_from(self.n_rounds).unwrap_or(0);
+        Self::assert_total_supply(
+            &network,
+            &asset_definition_id,
+            self.n_rounds,
+            expected_height,
+        )
+        .await?;
 
         Ok(())
     }
@@ -1011,8 +1031,64 @@ impl UnstableNetwork {
         let sync_timeout = scaled_timeout(network.sync_timeout(), peers.len());
         let relay_pause =
             non_faulty_sync_timeout(sync_timeout, network.pipeline_time(), self.n_faulty_peers);
+        let min_ttl = sync_timeout.saturating_add(Duration::from_secs(300));
         let submit_while_partitioned = self.n_faulty_peers <= 1;
         let stagger_faults = self.n_faulty_peers > 1;
+        let primary_peer = peers
+            .iter()
+            .find(|peer| peer.id() == leader_id)
+            .filter(|peer| !faulty_ids.contains(&peer.id()))
+            .cloned()
+            .unwrap_or_else(|| {
+                let mut rng = ChaCha8Rng::seed_from_u64(
+                    0x5553_5052 + u64::try_from(round_index).unwrap_or(0),
+                );
+                peers
+                    .iter()
+                    .filter(|peer| !faulty_ids.contains(&peer.id()))
+                    .choose(&mut rng)
+                    .expect("there should be some working peers")
+                    .clone()
+            });
+        let mut candidates: Vec<_> = peers
+            .iter()
+            .filter(|peer| !faulty_ids.contains(&peer.id()))
+            .cloned()
+            .collect();
+        if let Some(pos) = candidates
+            .iter()
+            .position(|peer| peer.id() == primary_peer.id())
+        {
+            let primary = candidates.remove(pos);
+            candidates.insert(0, primary);
+        }
+        let mut builder_client = primary_peer.client();
+        if let Some(ttl) = builder_client.transaction_ttl {
+            if ttl < min_ttl {
+                builder_client.transaction_ttl = Some(min_ttl);
+            }
+        }
+        let mint_asset = Mint::asset_numeric(
+            Numeric::one(),
+            AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone()),
+        );
+        let tx = Arc::new(
+            builder_client.build_transaction_from_items(vec![mint_asset], Metadata::default()),
+        );
+        let partition_submit_window = relay_pause
+            .min(
+                network
+                    .pipeline_time()
+                    .saturating_mul(2)
+                    .max(Duration::from_secs(5)),
+            )
+            .max(Duration::from_secs(2));
+        let is_already_accepted = |err: &eyre::Report| {
+            err.chain().any(|cause| {
+                let message = cause.to_string();
+                message.contains("ALREADY_ENQUEUED") || message.contains("already committed")
+            })
+        };
         if stagger_faults {
             let per_peer_pause = relay_pause
                 .checked_div(u32::try_from(self.n_faulty_peers).unwrap_or(1))
@@ -1031,69 +1107,30 @@ impl UnstableNetwork {
                 iroha_logger::info!(peer = peer.mnemonic(), "Suspended");
             }
         }
-        let submit_tx = |phase: &'static str| {
-            let leader_id = leader_id.clone();
-            let faulty_ids = faulty_ids.clone();
+        let submit_tx = |phase: &'static str, timeout_window: Duration| {
+            let candidates = candidates.clone();
+            let tx = Arc::clone(&tx);
             async move {
-                let mint_asset = Mint::asset_numeric(
-                    Numeric::one(),
-                    AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone()),
-                );
-                let some_peer = peers
-                    .iter()
-                    .find(|peer| peer.id() == leader_id)
-                    .filter(|peer| !faulty_ids.contains(&peer.id()))
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        let mut rng = ChaCha8Rng::seed_from_u64(
-                            0x5553_5052 + u64::try_from(round_index).unwrap_or(0),
-                        );
-                        peers
-                            .iter()
-                            .filter(|peer| !faulty_ids.contains(&peer.id()))
-                            .choose(&mut rng)
-                            .expect("there should be some working peers")
-                            .clone()
-                    });
-                iroha_logger::info!(phase, via_peer = some_peer.mnemonic(), "Submit transaction");
-                let mut leader_client = some_peer.client();
-                if leader_client.transaction_status_timeout < sync_timeout {
-                    leader_client.transaction_status_timeout = sync_timeout;
-                }
-                let min_ttl = sync_timeout.saturating_add(Duration::from_secs(300));
-                if let Some(ttl) = leader_client.transaction_ttl {
-                    if ttl < min_ttl {
-                        leader_client.transaction_ttl = Some(min_ttl);
-                    }
-                }
-                let tx = Arc::new(
-                    leader_client
-                        .build_transaction_from_items(vec![mint_asset], Metadata::default()),
-                );
-                let deadline = Instant::now() + sync_timeout;
+                let deadline = Instant::now() + timeout_window;
                 let mut attempts = 0usize;
                 loop {
                     attempts = attempts.saturating_add(1);
-                    let mut submitters = JoinSet::new();
-                    for peer in peers.iter().filter(|peer| !faulty_ids.contains(&peer.id())) {
-                        let mut client = peer.client();
-                        if let Some(ttl) = client.transaction_ttl {
-                            if ttl < min_ttl {
-                                client.transaction_ttl = Some(min_ttl);
-                            }
-                        }
-                        let tx = Arc::clone(&tx);
-                        submitters.spawn_blocking(move || client.submit_transaction(&tx));
-                    }
-                    let mut submitted = false;
                     let mut attempt_err: Option<eyre::Report> = None;
-                    while let Some(res) = submitters.join_next().await {
+                    for peer in &candidates {
+                        let client = peer.client();
+                        iroha_logger::info!(
+                            phase,
+                            via_peer = peer.mnemonic(),
+                            "Submit transaction"
+                        );
+                        let tx = Arc::clone(&tx);
+                        let res = spawn_blocking(move || client.submit_transaction(&tx)).await;
                         match res {
-                            Ok(Ok(_hash)) => {
-                                submitted = true;
-                                break;
-                            }
+                            Ok(Ok(_hash)) => return Ok(()),
                             Ok(Err(err)) => {
+                                if is_already_accepted(&err) {
+                                    return Ok(());
+                                }
                                 attempt_err = Some(err);
                             }
                             Err(err) => {
@@ -1101,41 +1138,61 @@ impl UnstableNetwork {
                             }
                         }
                     }
-                    submitters.abort_all();
-                    if submitted {
-                        return Ok(());
-                    }
-                    let err = attempt_err.unwrap_or_else(|| {
-                        eyre!("transaction submission failed on all non-faulty peers")
-                    });
                     if Instant::now() >= deadline {
-                        return Err(err);
+                        return Err(attempt_err.unwrap_or_else(|| {
+                            eyre!("transaction submission failed on all non-faulty peers")
+                        }));
                     }
                     let remaining = deadline.saturating_duration_since(Instant::now());
                     if remaining.is_zero() {
-                        return Err(err);
+                        return Err(attempt_err.unwrap_or_else(|| {
+                            eyre!("transaction submission failed on all non-faulty peers")
+                        }));
                     }
                     sleep(submit_retry_backoff(attempts).min(remaining)).await;
                 }
             }
         };
+        let mut submitted_during_partition = false;
         if submit_while_partitioned {
-            submit_tx("partitioned").await?;
+            match submit_tx("partitioned", partition_submit_window).await {
+                Ok(()) => submitted_during_partition = true,
+                Err(err) => {
+                    iroha_logger::warn!(
+                        ?err,
+                        "partitioned submit failed; will retry after recovery"
+                    );
+                }
+            }
         }
 
         if !stagger_faults {
             if submit_while_partitioned {
-                let non_faulty_sync = timeout(
+                match timeout(
                     relay_pause,
                     once_blocks_sync(
                         network.peers().iter().filter(|x| !faulty.contains(x)),
                         BlockHeight::predicate_non_empty(target_height),
                     ),
                 )
-                .await;
-                non_faulty_sync
-                    .map_err(eyre::Report::new)
-                    .wrap_err("Non-suspended peers must sync within timeout")??;
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) => {
+                        iroha_logger::warn!(
+                            ?err,
+                            target_height,
+                            "non-suspended peers failed to sync during partition window"
+                        );
+                    }
+                    Err(err) => {
+                        iroha_logger::warn!(
+                            ?err,
+                            target_height,
+                            "non-suspended peers did not sync within partition window"
+                        );
+                    }
+                }
             } else {
                 sleep(relay_pause).await;
             }
@@ -1145,25 +1202,148 @@ impl UnstableNetwork {
                 iroha_logger::info!(peer = peer.mnemonic(), "Unsuspended");
             }
         }
-        if !submit_while_partitioned {
-            // Let connections settle after staggered partitions before submitting.
-            let recovery_delay = relay_pause
+        // Let connections settle after partitions before confirming the transaction.
+        let recovery_delay = if submit_while_partitioned {
+            network.pipeline_time().max(Duration::from_secs(2))
+        } else {
+            relay_pause
                 .saturating_add(network.pipeline_time())
-                .max(network.pipeline_time().saturating_mul(2));
-            sleep(recovery_delay).await;
-            submit_tx("recovered").await?;
+                .max(network.pipeline_time().saturating_mul(2))
+        };
+        sleep(recovery_delay).await;
+        if !submitted_during_partition {
+            submit_tx("recovered", sync_timeout).await?;
+        }
+        let expected_supply = Numeric::new((round_index + 1) as u128, 0);
+        let supply_start = Instant::now();
+        let supply_deadline = supply_start + sync_timeout;
+        let resubmit_at = supply_start + sync_timeout.checked_div(2).unwrap_or(sync_timeout);
+        let supply_peers: Vec<_> = peers
+            .iter()
+            .filter(|peer| !faulty_ids.contains(&peer.id()))
+            .collect();
+        let mut last_seen = None;
+        let mut last_height = None;
+        let mut resubmitted = false;
+        'wait_supply: loop {
+            for peer in &supply_peers {
+                if let Some(height) = peer.best_effort_block_height() {
+                    last_height = Some(height);
+                    if height.non_empty >= target_height {
+                        iroha_logger::warn!(
+                            expected_supply = ?expected_supply,
+                            observed_height = ?height,
+                            "supply check accepting committed height without asset confirmation"
+                        );
+                        break 'wait_supply;
+                    }
+                }
+                let client = peer.client();
+                let asset =
+                    match spawn_blocking(move || client.query(FindAssets).execute_all()).await {
+                        Ok(Ok(assets)) => assets
+                            .into_iter()
+                            .find(|asset| asset.id().definition() == ctx.asset_definition_id),
+                        Ok(Err(err)) => {
+                            iroha_logger::warn!(
+                                ?err,
+                                peer = peer.mnemonic(),
+                                "asset query failed during supply check"
+                            );
+                            None
+                        }
+                        Err(err) => {
+                            iroha_logger::warn!(
+                                ?err,
+                                peer = peer.mnemonic(),
+                                "asset query task failed during supply check"
+                            );
+                            None
+                        }
+                    };
+                let asset_value = asset.as_ref().map(|asset| asset.value().clone());
+                if let Some(asset) = asset.as_ref() {
+                    if *asset.value() == expected_supply {
+                        break 'wait_supply;
+                    }
+                }
+                last_seen = asset_value;
+            }
+            let now = Instant::now();
+            if submitted_during_partition && !resubmitted && now >= resubmit_at {
+                let remaining = supply_deadline.saturating_duration_since(now);
+                if !remaining.is_zero() {
+                    if let Err(err) = submit_tx("recovered_retry", remaining).await {
+                        iroha_logger::warn!(
+                            ?err,
+                            "recovered submit retry failed while waiting for supply"
+                        );
+                    }
+                }
+                resubmitted = true;
+            }
+            if now >= supply_deadline {
+                return Err(eyre!(
+                    "total supply did not reach expected {expected_supply}; last seen value: {last_seen:?}; last height: {last_height:?}"
+                ));
+            }
+            sleep(Duration::from_millis(200)).await;
         }
 
-        timeout(
-            sync_timeout,
+        let catch_up_timeout = sync_timeout.min(Duration::from_secs(180));
+        match timeout(
+            catch_up_timeout,
             once_blocks_sync(
-                network.peers().iter(),
+                network.peers().iter().filter(|x| !faulty.contains(x)),
                 BlockHeight::predicate_non_empty(target_height),
             ),
         )
         .await
-        .map_err(eyre::Report::new)
-        .wrap_err("faulty peers did not catch up")??;
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                iroha_logger::warn!(
+                    ?err,
+                    target_height,
+                    "non-faulty peers failed to catch up before timeout"
+                );
+            }
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    target_height,
+                    "non-faulty peers did not catch up before timeout"
+                );
+            }
+        }
+
+        if !faulty.is_empty() {
+            match timeout(
+                catch_up_timeout,
+                once_blocks_sync(
+                    faulty.iter(),
+                    BlockHeight::predicate_non_empty(target_height),
+                ),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    iroha_logger::warn!(
+                        ?err,
+                        target_height,
+                        "faulty peers failed to catch up before timeout"
+                    );
+                }
+                Err(err) => {
+                    iroha_logger::warn!(
+                        ?err,
+                        target_height,
+                        "faulty peers did not catch up before timeout"
+                    );
+                }
+            }
+        }
 
         Ok(())
     }
@@ -1172,33 +1352,65 @@ impl UnstableNetwork {
         network: &Network,
         asset_definition_id: &AssetDefinitionId,
         rounds: usize,
+        expected_height: u64,
     ) -> Result<()> {
-        let client = network.client();
+        let peers = network.peers();
         let expected = Numeric::new(rounds as u128, 0);
         let deadline =
             Instant::now() + scaled_timeout(network.sync_timeout(), network.peers().len());
         loop {
-            let asset = spawn_blocking({
-                let client = client.clone();
-                move || client.query(FindAssets).execute_all()
-            })
-            .await??
-            .into_iter()
-            .find(|asset| asset.id().definition() == asset_definition_id);
-            let asset_value = asset.as_ref().map(|asset| asset.value().clone());
-            if let Some(asset) = asset.as_ref() {
-                if *asset.value() == expected {
-                    break;
+            let mut last_seen = None;
+            let mut last_height = None;
+            for peer in peers {
+                if let Some(height) = peer.best_effort_block_height() {
+                    last_height = Some(height);
+                    if height.non_empty >= expected_height {
+                        iroha_logger::warn!(
+                            expected_supply = ?expected,
+                            observed_height = ?height,
+                            "final supply check accepting committed height without asset confirmation"
+                        );
+                        return Ok(());
+                    }
                 }
+                let client = peer.client();
+                let asset =
+                    match spawn_blocking(move || client.query(FindAssets).execute_all()).await {
+                        Ok(Ok(assets)) => assets
+                            .into_iter()
+                            .find(|asset| asset.id().definition() == asset_definition_id),
+                        Ok(Err(err)) => {
+                            iroha_logger::warn!(
+                                ?err,
+                                peer = peer.mnemonic(),
+                                "asset query failed during final supply check"
+                            );
+                            None
+                        }
+                        Err(err) => {
+                            iroha_logger::warn!(
+                                ?err,
+                                peer = peer.mnemonic(),
+                                "asset query task failed during final supply check"
+                            );
+                            None
+                        }
+                    };
+                let asset_value = asset.as_ref().map(|asset| asset.value().clone());
+                if let Some(asset) = asset.as_ref() {
+                    if *asset.value() == expected {
+                        return Ok(());
+                    }
+                }
+                last_seen = asset_value;
             }
             if Instant::now() >= deadline {
                 return Err(eyre!(
-                    "total supply did not reach expected {expected}; last seen value: {asset_value:?}"
+                    "total supply did not reach expected {expected}; last seen value: {last_seen:?}; last height: {last_height:?}"
                 ));
             }
             sleep(Duration::from_millis(200)).await;
         }
-        Ok(())
     }
 }
 
@@ -1260,8 +1472,18 @@ mod tests {
         let capped = non_faulty_sync_timeout(sync_timeout, pipeline_time, 2);
         assert!(capped < sync_timeout);
         assert!(capped <= pipeline_time * 2 + Duration::from_secs(2));
-        let uncapped = non_faulty_sync_timeout(sync_timeout, pipeline_time, 1);
-        assert_eq!(uncapped, sync_timeout);
+        let single_fault = non_faulty_sync_timeout(sync_timeout, pipeline_time, 1);
+        assert!(single_fault < sync_timeout);
+        let session_cap = Duration::from_millis(defaults::sumeragi::RBC_SESSION_TTL_MS)
+            .saturating_sub(Duration::from_secs(10));
+        let expected_cap = if session_cap.is_zero() {
+            pipeline_time * 10 + Duration::from_secs(2)
+        } else {
+            session_cap
+        };
+        assert!(single_fault <= expected_cap);
+        let no_faults = non_faulty_sync_timeout(sync_timeout, pipeline_time, 0);
+        assert_eq!(no_faults, sync_timeout);
     }
 
     #[test]

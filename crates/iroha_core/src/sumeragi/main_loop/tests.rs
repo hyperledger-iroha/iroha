@@ -27,7 +27,8 @@ use iroha_config::parameters::actual::{
     SumeragiCollectors, SumeragiDa, SumeragiDebug, SumeragiDebugRbc, SumeragiFinality,
     SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNpos, SumeragiNposElection,
     SumeragiNposReconfig, SumeragiNposTimeoutOverrides, SumeragiNposVrf, SumeragiPacemaker,
-    SumeragiPersistence, SumeragiQueues, SumeragiRbc, SumeragiRecovery, SumeragiWorker,
+    SumeragiPacingGovernor, SumeragiPersistence, SumeragiQueues, SumeragiRbc, SumeragiRecovery,
+    SumeragiWorker,
 };
 use iroha_crypto::{
     Algorithm, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature, SignatureOf,
@@ -1171,6 +1172,7 @@ fn test_sumeragi_config() -> SumeragiConfig {
             rbc_backlog_chunk_soft_limit: iroha_config::parameters::defaults::sumeragi::
                 PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
         },
+        pacing_governor: SumeragiPacingGovernor::default(),
         da: SumeragiDa {
             enabled: true,
             quorum_timeout_multiplier:
@@ -16120,6 +16122,7 @@ async fn rbc_chunk_commit_pipeline_runs_on_completion() {
     let last_qc_rebuild = now - cooldown - Duration::from_millis(1);
     harness.actor.last_qc_rebuild = last_qc_rebuild;
     harness.actor.pending.last_commit_pipeline_run = last_qc_rebuild;
+    harness.actor.pending.commit_pipeline_wakeup = false;
 
     let chunk = crate::sumeragi::consensus::RbcChunk {
         block_hash,
@@ -16134,6 +16137,10 @@ async fn rbc_chunk_commit_pipeline_runs_on_completion() {
         .handle_rbc_chunk(chunk, None)
         .expect("first chunk");
     assert_eq!(harness.actor.last_qc_rebuild, last_qc_rebuild);
+    assert!(
+        !harness.actor.pending.commit_pipeline_wakeup,
+        "commit pipeline should not be requested before payload completion"
+    );
 
     let chunk = crate::sumeragi::consensus::RbcChunk {
         block_hash,
@@ -16147,6 +16154,11 @@ async fn rbc_chunk_commit_pipeline_runs_on_completion() {
         .actor
         .handle_rbc_chunk(chunk, None)
         .expect("second chunk");
+    assert!(
+        harness.actor.pending.commit_pipeline_wakeup,
+        "commit pipeline should be requested once payload completes"
+    );
+    harness.actor.tick();
     assert!(harness.actor.last_qc_rebuild > last_qc_rebuild);
 
     harness.shutdown.send();
@@ -49770,6 +49782,7 @@ async fn da_gate_context_does_not_block_quorum_reschedule() {
             kind: ManifestGateKind::Missing,
         });
         pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+        pending.touch_progress(pending.inserted_at);
     }
 
     assert!(
@@ -49955,6 +49968,7 @@ async fn reschedule_defers_missing_local_data_until_availability_timeout() {
             .get_mut(&block_hash)
             .expect("pending block");
         pending.inserted_at = Instant::now() - availability_timeout - Duration::from_millis(1);
+        pending.touch_progress(pending.inserted_at);
     }
 
     assert!(

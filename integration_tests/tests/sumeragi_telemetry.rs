@@ -81,21 +81,30 @@ async fn npos_telemetry_soak_matches_metrics_under_adversarial_collectors() -> R
                     i64::from(REDUNDANT_SEND_R),
                 )
                 .write(["sumeragi", "da", "enabled"], true)
-                .write(["sumeragi", "rbc", "chunk_max_bytes"], RBC_CHUNK_MAX_BYTES)
                 .write(
-                    ["sumeragi", "rbc", "store_soft_sessions"],
+                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
+                    RBC_CHUNK_MAX_BYTES,
+                )
+                .write(
+                    ["sumeragi", "advanced", "rbc", "store_soft_sessions"],
                     RBC_STORE_SOFT_SESSIONS,
                 )
                 .write(
-                    ["sumeragi", "rbc", "store_max_sessions"],
+                    ["sumeragi", "advanced", "rbc", "store_max_sessions"],
                     RBC_STORE_MAX_SESSIONS,
                 )
                 .write(
-                    ["sumeragi", "rbc", "store_soft_bytes"],
+                    ["sumeragi", "advanced", "rbc", "store_soft_bytes"],
                     RBC_STORE_SOFT_BYTES,
                 )
-                .write(["sumeragi", "rbc", "store_max_bytes"], RBC_STORE_MAX_BYTES)
-                .write(["sumeragi", "rbc", "session_ttl_ms"], 900_000i64)
+                .write(
+                    ["sumeragi", "advanced", "rbc", "store_max_bytes"],
+                    RBC_STORE_MAX_BYTES,
+                )
+                .write(
+                    ["sumeragi", "advanced", "rbc", "session_ttl_ms"],
+                    900_000i64,
+                )
                 .write(
                     ["sumeragi", "debug", "rbc", "drop_every_nth_chunk"],
                     DROP_EVERY_NTH_CHUNK,
