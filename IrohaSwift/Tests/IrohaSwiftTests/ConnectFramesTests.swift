@@ -162,6 +162,30 @@ final class ConnectFramesTests: XCTestCase {
         let decoded = try ConnectCodec.decodeAppMetadataJSON(data)
         XCTAssertEqual(decoded?.name, "Demo")
         XCTAssertNil(decoded?.iconURL)
+        XCTAssertEqual(decoded?.iconHash, "abc123")
+    }
+
+    func testAppMetadataJSONEncodesDescription() throws {
+        let metadata = ConnectAppMetadata(name: nil, iconURL: nil, description: "Hello")
+        let data = ConnectCodec.encodeAppMetadataJSON(metadata)
+        let payload = try XCTUnwrap(data)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        XCTAssertEqual(json["description"] as? String, "Hello")
+        XCTAssertNil(json["name"])
+        XCTAssertNil(json["url"])
+    }
+
+    func testAppMetadataJSONEncodesIconHash() throws {
+        let metadata = ConnectAppMetadata(name: "Demo",
+                                          iconURL: nil,
+                                          description: nil,
+                                          iconHash: "abc123")
+        let data = ConnectCodec.encodeAppMetadataJSON(metadata)
+        let payload = try XCTUnwrap(data)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+        XCTAssertEqual(json["name"] as? String, "Demo")
+        XCTAssertEqual(json["icon_hash"] as? String, "abc123")
+        XCTAssertNil(json["url"])
     }
 
     func testProofJSONRejectsNonStringValue() throws {

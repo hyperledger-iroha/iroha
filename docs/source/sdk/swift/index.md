@@ -403,6 +403,47 @@ schema documented in `offline_allowance.md`.【IrohaSwift/Sources/IrohaSwift/And
 Use the `.notice` payload to surface disclosures/localised copy and fall back to the default handler
 when no custom UI is supplied. Additional risk guidance lives in `docs/source/offline_bearer_mode.md`.
 
+### Offline allowance top-up
+
+Use `ToriiClient.topUpOfflineAllowance` to issue a certificate and register it on-ledger in one call.
+The helper performs `/v1/offline/certificates/issue` followed by `/v1/offline/allowances` and
+verifies that both responses reference the same certificate id:
+
+```swift
+let draft = OfflineWalletCertificateDraft(
+    controller: controllerId,
+    allowance: allowanceCommitment,
+    spendPublicKey: spendPublicKey,
+    attestationReport: attestationReport,
+    issuedAtMs: issuedAtMs,
+    expiresAtMs: expiresAtMs,
+    policy: policy,
+    metadata: metadata
+)
+
+let topUp = try await torii.topUpOfflineAllowance(
+    draft: draft,
+    authority: controllerId,
+    privateKey: controllerPrivateKey
+)
+
+let certificate = try topUp.certificate.decodeCertificate()
+print("Issued certificate", try certificate.certificateIdHex())
+```
+
+For renewals, call `topUpOfflineAllowanceRenewal`, which targets
+`/v1/offline/certificates/{certificate_id_hex}/renew/issue` and
+`/v1/offline/allowances/{certificate_id_hex}/renew`:
+
+```swift
+let renewal = try await torii.topUpOfflineAllowanceRenewal(
+    certificateIdHex: existingCertificateId,
+    draft: draft,
+    authority: controllerId,
+    privateKey: controllerPrivateKey
+)
+```
+
 ### Offline audit logging
 
 When `auditLoggingEnabled` is `true`, `OfflineWallet` writes `{sender, receiver, asset, amount, timestamp}` entries to

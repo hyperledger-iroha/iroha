@@ -463,10 +463,65 @@ private struct StoredEnvelope: Codable, Equatable {
     let hmac: String
 }
 
+private func permutations<T>(_ items: [T]) -> [[T]] {
+    guard items.count > 1 else {
+        return [items]
+    }
+    var result: [[T]] = []
+    for index in items.indices {
+        var remaining = items
+        let head = remaining.remove(at: index)
+        for tail in permutations(remaining) {
+            result.append([head] + tail)
+        }
+    }
+    return result
+}
+
 private struct FileBacking: Backing {
     private let baseDirectory: URL
     private let integrity: IntegrityKeyProvider
     private let queue = DispatchQueue(label: "org.hyperledger.iroha.connect-keystore")
+
+    private enum PayloadKey: String {
+        case attestation
+        case keyPair
+    }
+
+    private enum KeyPairKey: String {
+        case publicKey
+        case privateKey
+    }
+
+    private enum AttestationKey: String {
+        case publicKeyDigest
+        case deviceLabel
+        case createdAt
+    }
+
+    private struct HmacPayloadValues {
+        let publicKey: String
+        let privateKey: String
+        let publicKeyDigest: String
+        let deviceLabel: String
+        let createdAt: String
+
+        init(stored: ConnectKeyStore.StoredKey) throws {
+            publicKey = try FileBacking.encodeJSONString(stored.keyPair.publicKey.base64EncodedString())
+            privateKey = try FileBacking.encodeJSONString(stored.keyPair.privateKey.base64EncodedString())
+            publicKeyDigest = try FileBacking.encodeJSONString(stored.attestation.publicKeyDigest.base64EncodedString())
+            deviceLabel = try FileBacking.encodeJSONString(stored.attestation.deviceLabel)
+            createdAt = try FileBacking.encodeDateJSONString(stored.attestation.createdAt)
+        }
+    }
+
+    private static let canonicalPayloadOrder: [PayloadKey] = [.attestation, .keyPair]
+    private static let canonicalKeyPairOrder: [KeyPairKey] = [.privateKey, .publicKey]
+    private static let canonicalAttestationOrder: [AttestationKey] = [.createdAt, .deviceLabel, .publicKeyDigest]
+
+    private static let legacyPayloadOrders = permutations([PayloadKey.attestation, .keyPair])
+    private static let legacyKeyPairOrders = permutations([KeyPairKey.publicKey, .privateKey])
+    private static let legacyAttestationOrders = permutations([AttestationKey.publicKeyDigest, .deviceLabel, .createdAt])
 
     init(baseDirectory: URL, integrity: IntegrityKeyProvider) {
         self.baseDirectory = baseDirectory
@@ -521,29 +576,35 @@ private struct FileBacking: Backing {
     }
 
     private func verifyEnvelope(_ envelope: StoredEnvelope, label: String) throws {
-        let payloadData = try encoder().encode(envelope.payload)
         let key = try integrity.key()
-        var hmac = HMAC<SHA256>(key: key)
-        hmac.update(data: Data(label.utf8))
-        hmac.update(data: payloadData)
-        let expected = Data(hmac.finalize())
-
         guard let decoded = Data(base64Encoded: envelope.hmac) else {
             throw ConnectKeyStoreError.corrupt("stored hmac is not valid base64")
         }
-        guard decoded == expected else {
-            throw ConnectKeyStoreError.integrityMismatch
+        let values = try HmacPayloadValues(stored: envelope.payload)
+        let canonicalPayload = payloadData(values: values,
+                                           payloadOrder: Self.canonicalPayloadOrder,
+                                           keyPairOrder: Self.canonicalKeyPairOrder,
+                                           attestationOrder: Self.canonicalAttestationOrder)
+        let expected = computeHmac(label: label, key: key, payload: canonicalPayload)
+        if decoded == expected {
+            try validateAttestation(for: envelope.payload)
+            return
         }
-        try validateAttestation(for: envelope.payload)
+        if matchesLegacyHmac(decoded: decoded, label: label, key: key, values: values) {
+            try validateAttestation(for: envelope.payload)
+            return
+        }
+        throw ConnectKeyStoreError.integrityMismatch
     }
 
     private func envelopeForSave(stored: ConnectKeyStore.StoredKey, label: String) throws -> StoredEnvelope {
-        let payloadData = try encoder().encode(stored)
+        let values = try HmacPayloadValues(stored: stored)
+        let payload = payloadData(values: values,
+                                  payloadOrder: Self.canonicalPayloadOrder,
+                                  keyPairOrder: Self.canonicalKeyPairOrder,
+                                  attestationOrder: Self.canonicalAttestationOrder)
         let key = try integrity.key()
-        var hmac = HMAC<SHA256>(key: key)
-        hmac.update(data: Data(label.utf8))
-        hmac.update(data: payloadData)
-        let digest = Data(hmac.finalize()).base64EncodedString()
+        let digest = computeHmac(label: label, key: key, payload: payload).base64EncodedString()
         return StoredEnvelope(version: 1, payload: stored, hmac: digest)
     }
 
@@ -562,6 +623,94 @@ private struct FileBacking: Backing {
 
     private func path(for label: String) -> URL {
         baseDirectory.appendingPathComponent("\(label).json", isDirectory: false)
+    }
+
+    private func matchesLegacyHmac(decoded: Data,
+                                   label: String,
+                                   key: SymmetricKey,
+                                   values: HmacPayloadValues) -> Bool {
+        for payloadOrder in Self.legacyPayloadOrders {
+            for keyPairOrder in Self.legacyKeyPairOrders {
+                for attestationOrder in Self.legacyAttestationOrders {
+                    let payload = payloadData(values: values,
+                                              payloadOrder: payloadOrder,
+                                              keyPairOrder: keyPairOrder,
+                                              attestationOrder: attestationOrder)
+                    let candidate = computeHmac(label: label, key: key, payload: payload)
+                    if candidate == decoded {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    private func payloadData(values: HmacPayloadValues,
+                             payloadOrder: [PayloadKey],
+                             keyPairOrder: [KeyPairKey],
+                             attestationOrder: [AttestationKey]) -> Data {
+        let keyPair = jsonObject(keys: keyPairOrder) { key in
+            switch key {
+            case .publicKey:
+                values.publicKey
+            case .privateKey:
+                values.privateKey
+            }
+        }
+        let attestation = jsonObject(keys: attestationOrder) { key in
+            switch key {
+            case .publicKeyDigest:
+                values.publicKeyDigest
+            case .deviceLabel:
+                values.deviceLabel
+            case .createdAt:
+                values.createdAt
+            }
+        }
+        let payload = jsonObject(keys: payloadOrder) { key in
+            switch key {
+            case .attestation:
+                attestation
+            case .keyPair:
+                keyPair
+            }
+        }
+        return Data(payload.utf8)
+    }
+
+    private func jsonObject<Key>(keys: [Key], value: (Key) -> String) -> String
+        where Key: RawRepresentable, Key.RawValue == String {
+        let parts = keys.map { key in
+            "\"\(key.rawValue)\":\(value(key))"
+        }
+        return "{\(parts.joined(separator: ","))}"
+    }
+
+    private func computeHmac(label: String, key: SymmetricKey, payload: Data) -> Data {
+        var hmac = HMAC<SHA256>(key: key)
+        hmac.update(data: Data(label.utf8))
+        hmac.update(data: payload)
+        return Data(hmac.finalize())
+    }
+
+    private static func encodeJSONString(_ value: String) throws -> String {
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(value)
+        guard let string = String(data: data, encoding: .utf8) else {
+            throw ConnectKeyStoreError.corrupt("failed to encode hmac payload")
+        }
+        return string
+    }
+
+    private static func encodeDateJSONString(_ date: Date) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(date)
+        guard let string = String(data: data, encoding: .utf8) else {
+            throw ConnectKeyStoreError.corrupt("failed to encode hmac payload")
+        }
+        return string
     }
 
     private func encoder() -> JSONEncoder {

@@ -235,11 +235,16 @@ public struct ConnectAppMetadata: Codable, Equatable, Sendable {
     public var name: String?
     public var iconURL: String?
     public var description: String?
+    public var iconHash: String?
 
-    public init(name: String?, iconURL: String?, description: String?) {
+    public init(name: String?,
+                iconURL: String?,
+                description: String?,
+                iconHash: String? = nil) {
         self.name = name
         self.iconURL = iconURL
         self.description = description
+        self.iconHash = iconHash
     }
 }
 

@@ -46,7 +46,6 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 - Izanami perf: re-run 1 TPS after scaling NPoS timeout derivation to align the timeout budget with `block_time_ms`; confirm block height progress and whether remaining execution DAG spikes still gate consensus.
 - Localnet 1 Hz: re-run the NPoS 1 Hz soak with the fast-finality gas cap enabled (`sumeragi.block.fast_gas_limit_per_block`) and confirm block spacing falls under 1s on localhost.
 - Izanami perf: re-run 1 TPS after the proposal committed-tx filter (fix for `HasCommittedTransactions` invalid blocks) to confirm height progress and no repeated view-change loops around stale proposal batches.
-- Commit-conflict recovery: implement in-process state replay + auto-resume after pruning and add an integration test for deterministic fork-choice recovery (current recovery requires restart).
 
 0. **KOTODAMA-LANG-PARITY — Close remaining Kotodama gaps** (IVM/Kotodama, Line: Shared, Owner: IVM WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
  - [x] Add access-list attributes and wire permission/read/write hints into entrypoint manifests.
@@ -1463,3 +1462,51 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Normalize output formats and error handling across `iroha_cli` subcommands (JSON vs text summaries).
  - [x] Align flag naming to avoid collisions with `--output-format` (handshake token `--token-encoding`).
  - [x] Capture CLI output normalization status in `status.md`.
+
+## TODO Inventory (Repo Scan 2026-01-29)
+
+This appendix tracks open TODO markers discovered in the repository. Items are grouped by area. Reference-only TODO mentions are called out separately so they do not get mistaken for active work items.
+
+### Code / Runtime TODOs
+- [ ] Trigger DSL: support data/pipeline trigger filters and explicit authorities (`crates/kotodama_lang/src/parser.rs:618`).
+- [ ] Izanami stable recipes: re-enable trigger repetition recipes (`crates/izanami/src/instructions.rs:491`).
+- [ ] Izanami stable recipes: re-enable DeployIvmContract in stable profile (`crates/izanami/src/instructions.rs:492`).
+- [ ] Izanami stable recipes: re-enable DeployKotodamaContract in stable profile (`crates/izanami/src/instructions.rs:493`).
+- [ ] Izanami chaos genesis: provision Nexus staking assets/escrow/sink/validator accounts so `nexus_staking_expect_success` can flip true (`crates/izanami/src/instructions.rs:686`).
+- [ ] SoraFS repair: propagate PoR store errors once ingestion can fail hard (`crates/sorafs_node/src/repair.rs:730`).
+- [ ] SoraFS repair: integrate orchestrator repair pipeline to rehydrate missing chunks (`crates/sorafs_node/src/lib.rs:950`).
+- [ ] Erasure coding SIMD: vectorize `gf_mul` in AVX2 backend (`crates/iroha_primitives/src/erasure/rs16.rs:381`).
+- [ ] Erasure coding SIMD: vectorize `gf_mul` in NEON backend (`crates/iroha_primitives/src/erasure/rs16.rs:439`).
+- [ ] Multisig rekeying: update account controller when rekeying is wired (Add/RemoveSignatory, SetAccountQuorum) (`crates/iroha_core/src/smartcontracts/isi/multisig.rs:63,93,148`).
+- [ ] FASTPQ: wire real permission epochs once role permission metadata includes them (`crates/iroha_core/src/fastpq/mod.rs:30`).
+
+### SDK TODOs
+- [ ] Swift OfflineNorito: support UAID/opaque account resolution once Swift resolvers are available (`IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift:306`).
+
+### Test TODOs
+- [ ] Unstable network suite: restore higher `n_rounds` once relay stability improves (5/4/8/9-peer tests) (`integration_tests/tests/extra_functional/unstable_network.rs:1536,1549,1562,1575,1588`).
+- [ ] Unstable network suite: revisit 4-fault coverage once quorum budgets or peer counts change (`integration_tests/tests/extra_functional/unstable_network.rs:1589`).
+
+### Docs TODOs (feature gaps)
+- [ ] Nexus lifecycle: per-lane scheduler/DA/RBC rebalance, validator-set propagation, and storage teardown/cleanup (`docs/source/nexus*.md`).
+- [ ] Kotodama state: durable host-backed overlays and conflict tracking (`docs/source/kotodama_grammar*.md`).
+- [ ] Acceleration: add CUDA parity smoke on lab NV hardware (`docs/source/config/acceleration.md:193`).
+- [ ] Rust 1.92 adoption: review `Location::file_as_c_str` opportunities (`docs/source/rust_1_92_adoption.md`).
+
+### Docs TODOs (translation pending)
+- [ ] Account structure docs: `docs/account_structure.{ar,es,fr,he,ja,pt,ru,ur}.md`.
+- [ ] Account structure SDK alignment: `docs/account_structure_sdk_alignment.{ar,es,fr,he,ja,pt,ru,ur}.md`.
+- [ ] Address curve registry refs: `docs/source/references/address_curve_registry.{ar,es,fr,he,ja,pt,ru,ur}.md`.
+
+### TODO References (non-actionable / informational)
+- Documentation guidance that uses “TODO” as an instruction or historical note, not an open task:
+  - `docs/source/da/ingest_plan.md` and `docs/portal/docs/da/ingest-plan.md` (TODO Resolution Summary).
+  - `docs/source/dev_workflow.md` (guardrail guidance).
+  - `docs/source/agents/env_var_migration*.md` (policy note for temporary shims).
+  - `docs/source/sorafs_gateway_dns_design_runbook.md` (session notes instruction).
+  - `docs/source/soranet/pq_rollout_plan.md` plus portal/i18n copies (instruction to log TODOs in rollout tracker).
+  - `docs/source/sdk/android/security.md`, `docs/source/sdk/android/samples/operator_console.md`, `docs/source/sdk/android/manifest_codegen_parity.md`, `docs/source/sdk/swift/issues/IOS3-CONNECT-003.md` (references to already-closed TODOs).
+  - `docs/source/rust_1_91_adoption.md` (TODO labels in completed checklist).
+  - `crates/ivm/README.md` (section header “Status and TODOs”).
+  - `docs/source/fastpq_plan.md` (definition note explaining TODO markers).
+  - `docs/source/ivm_isi_kotodama_alignment.ja.md` (TODO tracking section already scoped in that document).

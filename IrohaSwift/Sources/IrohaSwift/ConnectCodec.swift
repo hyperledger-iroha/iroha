@@ -89,7 +89,14 @@ extension ConnectCodec {
         if let iconURL = metadata.iconURL?.trimmingCharacters(in: .whitespacesAndNewlines), !iconURL.isEmpty {
             json["url"] = iconURL
         }
-        // TODO: Map description/icon_hash once Connect metadata exposes a dedicated description field.
+        if let description = metadata.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !description.isEmpty {
+            json["description"] = description
+        }
+        if let iconHash = metadata.iconHash?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !iconHash.isEmpty {
+            json["icon_hash"] = iconHash
+        }
         guard !json.isEmpty else { return nil }
         return try? JSONSerialization.data(withJSONObject: json, options: [])
     }
@@ -107,9 +114,12 @@ extension ConnectCodec {
         let name = try decodeOptionalString(object["name"])
         let iconURL = try decodeOptionalString(object["url"]) ?? decodeOptionalString(object["icon_url"])
         let description = try decodeOptionalString(object["description"])
-        // TODO: Map icon_hash once ConnectAppMetadata exposes it.
-        guard name != nil || iconURL != nil || description != nil else { return nil }
-        return ConnectAppMetadata(name: name, iconURL: iconURL, description: description)
+        let iconHash = try decodeOptionalString(object["icon_hash"])
+        guard name != nil || iconURL != nil || description != nil || iconHash != nil else { return nil }
+        return ConnectAppMetadata(name: name,
+                                  iconURL: iconURL,
+                                  description: description,
+                                  iconHash: iconHash)
     }
 
     static func encodeProofJSON(_ proof: ConnectSignInProof?) -> Data? {
