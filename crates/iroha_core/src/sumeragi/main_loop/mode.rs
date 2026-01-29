@@ -233,6 +233,7 @@ impl Actor {
             base_pacemaker_interval,
             now,
         );
+        self.seed_phase_ema_metrics();
         let view = self.state.view();
         self.update_effective_timing_status(&view, effective_mode);
     }
