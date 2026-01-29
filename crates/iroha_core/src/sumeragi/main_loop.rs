@@ -9597,6 +9597,14 @@ impl Actor {
                 .update(phase, duration.as_secs_f64() * 1_000.0),
         );
 
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            let label = phase.telemetry_label();
+            telemetry.observe_phase_latency_ms(label, duration.as_secs_f64() * 1_000.0);
+            #[allow(clippy::cast_precision_loss)]
+            telemetry.set_phase_latency_ema_ms(label, ema_ms as f64);
+        }
+
         match phase {
             PipelinePhase::Propose => {
                 super::status::set_phase_propose_ms(ms);
@@ -13585,8 +13593,8 @@ impl PipelinePhase {
         match self {
             Self::Propose => "propose",
             Self::CollectDa => "collect_da",
-            Self::CollectPrepare => "collect_prepare",
-            Self::CollectCommit => "collect_commit",
+            Self::CollectPrepare => "collect_prevote",
+            Self::CollectCommit => "collect_precommit",
             Self::Commit => "commit",
         }
     }
