@@ -3628,11 +3628,14 @@ async fn vote_validation_drop_records_roster_hash_for_signature_rejection() {
     let epoch = actor.epoch_for_height(height);
     let roster = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(roster.clone());
-    let vote = actor.local_precommit_vote_for(height, view, epoch, &topology);
+    let vote = actor
+        .local_precommit_vote_for(height, view, epoch, &topology)
+        .expect("local precommit vote should be available for test");
 
+    let chain_id = actor.common_config.chain.clone();
     let evidence_context = crate::sumeragi::EvidenceValidationContext {
         topology: &topology,
-        chain_id: &actor.common_config.chain,
+        chain_id: &chain_id,
         mode_tag: super::PERMISSIONED_TAG,
         prf_seed: Some(super::prf_seed_for_height(&actor.state.view(), height)),
     };
@@ -35468,7 +35471,7 @@ async fn new_view_highest_qc_fetch_uses_commit_topology_snapshot_when_effective_
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn new_view_highest_qc_skips_missing_fetch_for_aborted_payload() {
+async fn new_view_highest_qc_fetches_missing_for_aborted_payload() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -35496,13 +35499,55 @@ async fn new_view_highest_qc_skips_missing_fetch_for_aborted_payload() {
     actor.observe_new_view_highest_qc(highest_qc);
 
     assert!(
-        !actor
+        actor
             .pending
             .missing_block_requests
             .contains_key(&block_hash),
-        "aborted pending payload should not trigger missing-block fetch"
+        "aborted pending payload should still trigger missing-block fetch"
     );
 
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn new_view_highest_qc_fetches_missing_for_processing_payload() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let view_snapshot = actor.state.view();
+    let height = u64::try_from(view_snapshot.height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let parent = view_snapshot.latest_block_hash();
+    drop(view_snapshot);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    actor.pending.pending_processing.set(Some(block_hash));
+    actor
+        .pending
+        .pending_processing_parent
+        .set(block.header().prev_block_hash());
+
+    let highest_qc = QcHeaderRef {
+        height,
+        view: 0,
+        epoch: actor.epoch_for_height(height),
+        subject_block_hash: block_hash,
+        phase: Phase::Commit,
+    };
+    actor.observe_new_view_highest_qc(highest_qc);
+
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "pending processing payload should still trigger missing-block fetch"
+    );
+
+    actor.pending.pending_processing.set(None);
+    actor.pending.pending_processing_parent.set(None);
     harness.shutdown.send();
 }
 
@@ -48596,7 +48641,7 @@ fn max_tx_budget_handles_overflow_and_empty_queue() {
 fn fast_commit_gas_cap_applies_under_fast_finality() {
     let base = NonZeroU64::new(10_000).expect("non-zero");
     let cap = NonZeroU64::new(2_000).expect("non-zero");
-    let capped = super::propose::cap_gas_limit_for_fast_commit(
+    let capped = Actor::cap_gas_limit_for_fast_commit(
         Some(base),
         iroha_config::parameters::defaults::sumeragi::FAST_FINALITY_COMMIT_TIME_MS,
         Some(cap),
@@ -48608,7 +48653,7 @@ fn fast_commit_gas_cap_applies_under_fast_finality() {
 fn fast_commit_gas_cap_skips_when_commit_time_is_high() {
     let base = NonZeroU64::new(10_000).expect("non-zero");
     let cap = NonZeroU64::new(2_000).expect("non-zero");
-    let capped = super::propose::cap_gas_limit_for_fast_commit(
+    let capped = Actor::cap_gas_limit_for_fast_commit(
         Some(base),
         iroha_config::parameters::defaults::sumeragi::FAST_FINALITY_COMMIT_TIME_MS + 1,
         Some(cap),
@@ -48629,7 +48674,7 @@ fn proposal_gas_cost_matches_isi_metering() {
     assert!(expected > 0, "expected non-zero ISI gas cost");
 
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let measured = super::propose::proposal_gas_cost(&accepted);
+    let measured = Actor::proposal_gas_cost(&accepted);
     assert_eq!(measured, expected);
 }
 

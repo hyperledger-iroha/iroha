@@ -929,6 +929,14 @@ impl<'a> ncore::DecodeFromSlice<'a> for PeersGossip {
     }
 }
 
+impl<'a> ncore::DecodeFromSlice<'a> for PeerTrustGossip {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        let (trust, used) =
+            <Vec<SignedPeerTrust> as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
+        Ok((Self { trust }, used))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
