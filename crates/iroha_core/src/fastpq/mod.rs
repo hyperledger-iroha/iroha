@@ -549,6 +549,7 @@ mod tests {
     use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr};
 
     use iroha_data_model::{
+        Registrable,
         block::{
             BlockHeader,
             consensus::{ExecKv, ExecWitness},
@@ -556,7 +557,6 @@ mod tests {
         fastpq::{TransferTranscript, TransferTranscriptBundle},
         permission::Permission,
         role::{Role, RoleId},
-        Registrable,
     };
     use iroha_primitives::{json::Json, numeric::Numeric};
     use iroha_test_samples::{ALICE_ID, BOB_ID};

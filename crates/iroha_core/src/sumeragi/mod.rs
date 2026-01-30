@@ -7903,7 +7903,7 @@ pub(crate) struct InboundBlockMessage {
 }
 
 impl InboundBlockMessage {
-    fn new(message: BlockMessage, sender: Option<PeerId>) -> Self {
+    pub(crate) fn new(message: BlockMessage, sender: Option<PeerId>) -> Self {
         Self {
             message,
             sender,

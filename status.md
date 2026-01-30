@@ -1,6 +1,8 @@
 # Status
 
 Last update: 2026-01-30
+- Sumeragi RBC: align RBC chunk fanout minimum with the full-roster commit quorum to avoid under-targeting when fanout is capped; updated `rbc_chunk_target_count` unit expectations.
+- Tests: `cargo test -p iroha_core rbc_chunk_target_count_defaults_to_full_roster -- --nocapture` (timed out after 300s; target test passed before timeout, cargo continued running filtered binaries).
 - Izanami: added `allow_contract_deploy_in_stable` flag to gate contract deployment recipes in stable runs, wired through config/persistence/recipe selection with new CLI override coverage.
 - Tests: not run (not requested).
 - Android SDK: added multisig signature bundle support for `SignedTransaction` encoding (new `MultisigSignature`/`MultisigSignatures` models, encoder updates, and Android SDK doc note).

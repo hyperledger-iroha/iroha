@@ -173,9 +173,7 @@ fn signature_sender_index(
     u32::try_from(idx).expect("signer index fits u32")
 }
 
-fn attach_background_log(
-    actor: &mut Actor,
-) -> Arc<Mutex<Vec<super::BackgroundRequestLogEntry>>> {
+fn attach_background_log(actor: &mut Actor) -> Arc<Mutex<Vec<super::BackgroundRequestLogEntry>>> {
     let log = Arc::new(Mutex::new(Vec::new()));
     actor.background_request_log = Some(Arc::clone(&log));
     log
@@ -11870,10 +11868,7 @@ async fn rbc_ready_rebroadcast_is_rate_limited_per_session() {
                 && entry.msg_kind == Some("RbcReady")
         })
         .count();
-    assert_eq!(
-        ready_posts,
-        expected_ready_posts
-    );
+    assert_eq!(ready_posts, expected_ready_posts);
 
     let readies = Actor::rbc_ready_bundle(key, &session, roster_hash).expect("readies");
     harness.actor.rebroadcast_rbc_ready_bundle(key, readies);
@@ -12040,8 +12035,7 @@ async fn rbc_ready_rebroadcasts_local_ready_after_quorum_when_not_rebroadcaster(
         })
         .count();
     assert_eq!(
-        ready_posts,
-        1,
+        ready_posts, 1,
         "expected local READY rebroadcast after quorum"
     );
 
@@ -16602,8 +16596,7 @@ async fn handle_rbc_ready_drops_on_roster_hash_mismatch() {
         .find(|peer| *peer != &local_peer)
         .expect("signer peer")
         .clone();
-    let signer_idx =
-        signature_sender_index(&harness.actor, &roster, key.1, key.2, &signer_peer);
+    let signer_idx = signature_sender_index(&harness.actor, &roster, key.1, key.2, &signer_peer);
     let signer_kp = harness
         .key_pairs
         .iter()
@@ -16836,8 +16829,7 @@ async fn handle_rbc_ready_requests_missing_block_when_init_missing() {
         .find(|peer| *peer != &local_peer)
         .expect("signer peer")
         .clone();
-    let signer_idx =
-        signature_sender_index(&harness.actor, &roster, key.1, key.2, &signer_peer);
+    let signer_idx = signature_sender_index(&harness.actor, &roster, key.1, key.2, &signer_peer);
     let signer_kp = harness
         .key_pairs
         .iter()
@@ -17275,8 +17267,7 @@ async fn handle_rbc_ready_drops_when_derived_roster_mismatches() {
         .find(|peer| *peer != &local_peer)
         .expect("signer peer")
         .clone();
-    let signer_idx =
-        signature_sender_index(&harness.actor, &roster, key.1, key.2, &signer_peer);
+    let signer_idx = signature_sender_index(&harness.actor, &roster, key.1, key.2, &signer_peer);
     let signer_kp = harness
         .key_pairs
         .iter()
@@ -17492,8 +17483,7 @@ async fn handle_rbc_deliver_drops_on_roster_hash_mismatch() {
         .find(|peer| *peer != &local_peer)
         .expect("signer peer")
         .clone();
-    let signer_idx =
-        signature_sender_index(&harness.actor, &roster, key.1, key.2, &signer_peer);
+    let signer_idx = signature_sender_index(&harness.actor, &roster, key.1, key.2, &signer_peer);
     let signer_kp = harness
         .key_pairs
         .iter()
@@ -17697,8 +17687,7 @@ async fn handle_rbc_deliver_drops_when_derived_roster_mismatches() {
         .find(|peer| *peer != &local_peer)
         .expect("signer peer")
         .clone();
-    let signer_idx =
-        signature_sender_index(&harness.actor, &roster, key.1, key.2, &signer_peer);
+    let signer_idx = signature_sender_index(&harness.actor, &roster, key.1, key.2, &signer_peer);
     let signer_kp = harness
         .key_pairs
         .iter()
@@ -18364,11 +18353,7 @@ async fn rebroadcast_stalled_rbc_payloads_rebroadcasts_ready_after_quorum_when_n
                 && entry.msg_kind == Some("RbcReady")
         })
         .count();
-    assert_eq!(
-        ready_posts,
-        1,
-        "expected local READY rebroadcast"
-    );
+    assert_eq!(ready_posts, 1, "expected local READY rebroadcast");
     let stored = harness
         .actor
         .subsystems
@@ -18564,6 +18549,95 @@ async fn rebroadcast_stalled_rbc_payloads_rebroadcasts_deliver_for_recent_commit
     assert_eq!(
         deliver_posts, 1,
         "expected deliver rebroadcast for recent committed block"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rebroadcast_stalled_rbc_payloads_rebroadcasts_payload_after_delivery() {
+    let mut harness = test_actor_harness(4).await;
+    let background_log = attach_background_log(&mut harness.actor);
+    let key = insert_active_pending_block(&mut harness.actor, 0);
+    let payload = vec![0xAB; 2048];
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0)
+        .expect("rbc session");
+    let pending_block = harness
+        .actor
+        .pending
+        .pending_blocks
+        .get(&key.0)
+        .expect("pending block")
+        .block
+        .clone();
+    session.test_set_block_header_and_signature(&pending_block);
+
+    let local_peer = harness.actor.common_config.peer.id().clone();
+    let roster = vec![local_peer.clone()];
+    let topology = super::network_topology::Topology::new(roster.clone());
+    assert!(harness.actor.should_rebroadcast_rbc_payload(&roster, key));
+    let (_, mode_tag, prf_seed) = harness.actor.consensus_context_for_height(key.1);
+    let signature_topology = super::topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+    let local_idx = harness
+        .actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local sender");
+    session.record_ready(local_idx, vec![0xAA]);
+    session.sent_ready = true;
+    assert!(session.record_deliver(local_idx, vec![0xD1, 0xD2]));
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session);
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+
+    let committed_block = pending_block.clone();
+    harness
+        .actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed block");
+    let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(committed_block.hash());
+    let next_block = sample_block(key.1.saturating_add(1), 0, Some(committed_block.hash()));
+    harness
+        .actor
+        .kura
+        .store_block(next_block.clone())
+        .expect("store committed block");
+    state.push_block_hash_for_testing(next_block.hash());
+    let next_next_block = sample_block(key.1.saturating_add(2), 0, Some(next_block.hash()));
+    harness
+        .actor
+        .kura
+        .store_block(next_next_block.clone())
+        .expect("store committed block");
+    state.push_block_hash_for_testing(next_next_block.hash());
+
+    let _ = take_background_log(&background_log);
+    let progress = harness
+        .actor
+        .rebroadcast_stalled_rbc_payloads(Instant::now());
+    assert!(
+        progress,
+        "expected payload rebroadcast progress for delivered session"
+    );
+    assert!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_rebroadcast_last_sent
+            .contains_key(&key),
+        "expected payload rebroadcast timestamp"
     );
 
     harness.shutdown.send();
@@ -21119,8 +21193,7 @@ async fn rbc_ready_gossips_to_sampled_peers() {
         .find(|peer| *peer != &local_peer)
         .expect("signer peer")
         .clone();
-    let signer_idx =
-        signature_sender_index(&harness.actor, &roster, key.1, key.2, &signer_peer);
+    let signer_idx = signature_sender_index(&harness.actor, &roster, key.1, key.2, &signer_peer);
     let signer_kp = harness
         .key_pairs
         .iter()
@@ -21177,11 +21250,7 @@ async fn rbc_ready_gossips_to_sampled_peers() {
         .actor
         .local_validator_index_for_topology(&signature_topology)
         .expect("local sender");
-    assert_eq!(
-        broadcast_ready,
-        1,
-        "expected local READY broadcast"
-    );
+    assert_eq!(broadcast_ready, 1, "expected local READY broadcast");
     let stored = harness
         .actor
         .subsystems
@@ -21197,10 +21266,7 @@ async fn rbc_ready_gossips_to_sampled_peers() {
             .any(|entry| entry.sender == local_idx),
         "expected local READY to be recorded"
     );
-    assert_eq!(
-        gossip_ready_posts,
-        expected_gossip_targets.len()
-    );
+    assert_eq!(gossip_ready_posts, expected_gossip_targets.len());
 
     harness.shutdown.send();
 }
@@ -21230,8 +21296,7 @@ async fn rbc_ready_uses_session_roster_after_topology_change() {
 
     let local_peer = harness.actor.common_config.peer.id().clone();
     let signer_peer = roster_a.last().expect("roster entry").clone();
-    let signer_idx =
-        signature_sender_index(&harness.actor, &roster_a, key.1, key.2, &signer_peer);
+    let signer_idx = signature_sender_index(&harness.actor, &roster_a, key.1, key.2, &signer_peer);
     let remove_peer = roster_a
         .iter()
         .find(|peer| **peer != local_peer && **peer != signer_peer)
@@ -30787,12 +30852,12 @@ async fn trigger_view_change_retains_aborted_pending_payloads_with_da() {
         "pending block for the new view should not be aborted"
     );
     assert!(
-        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_0),
-        "stale RBC session should be pruned once payload is retained locally"
+        actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_0),
+        "stale RBC session should remain until availability delivers"
     );
     assert!(
-        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_1),
-        "stale RBC session should be pruned once payload is retained locally"
+        actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_1),
+        "stale RBC session should remain until availability delivers"
     );
     assert!(
         actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_keep),
@@ -30824,7 +30889,7 @@ async fn trigger_view_change_retains_aborted_pending_payloads_with_da() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn prune_stale_view_state_prunes_rbc_and_missing_requests_when_payload_available() {
+async fn prune_stale_view_state_prunes_delivered_rbc_when_payload_available() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -30834,19 +30899,16 @@ async fn prune_stale_view_state_prunes_rbc_and_missing_requests_when_payload_ava
         .phase_tracker
         .on_view_change(height, current_view, Instant::now());
 
-    let leader_kp = &harness.key_pairs[0];
-    let make_block = |view| -> SignedBlock {
-        super::ValidBlock::new_dummy_and_modify_header(leader_kp.private_key(), |header| {
-            header.set_height(NonZeroU64::new(height).expect("height nonzero"));
-            header.set_view_change_index(view);
-        })
-        .into()
-    };
-
-    let stale_block = make_block(0);
+    let parent = actor.state.view().latest_block_hash();
+    let stale_block = sample_block(height, 0, parent);
+    actor
+        .kura
+        .store_block(stale_block.clone())
+        .expect("store block");
     let payload_hash = Hash::prehashed([0x30; Hash::LENGTH]);
     let chunk_root = Hash::prehashed([0x31; Hash::LENGTH]);
-    let session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
+    let mut session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
+    session.delivered = true;
     let key = (stale_block.hash(), height, 0);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
@@ -30877,7 +30939,7 @@ async fn prune_stale_view_state_prunes_rbc_and_missing_requests_when_payload_ava
 
     assert!(
         !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
-        "stale RBC session should be pruned once payload is available"
+        "stale delivered RBC session should be pruned once payload is available"
     );
     assert!(
         !actor
@@ -30885,6 +30947,46 @@ async fn prune_stale_view_state_prunes_rbc_and_missing_requests_when_payload_ava
             .missing_block_requests
             .contains_key(&stale_block.hash()),
         "stale missing-block request should be pruned once payload is available"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retain_rbc_sessions_after_commit_when_undelivered() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let key = Actor::session_key(&block_hash, height, view);
+
+    let payload_hash = Hash::prehashed([0x55; Hash::LENGTH]);
+    let chunk_root = Hash::prehashed([0x56; Hash::LENGTH]);
+    let session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    assert!(
+        actor.should_retain_rbc_sessions_after_commit(block_hash, height),
+        "undelivered RBC sessions should be retained after commit under DA"
+    );
+
+    if let Some(session) = actor.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
+        session.delivered = true;
+    }
+
+    assert!(
+        !actor.should_retain_rbc_sessions_after_commit(block_hash, height),
+        "delivered RBC sessions should not be retained after commit under DA"
     );
 
     harness.shutdown.send();
@@ -48496,6 +48598,123 @@ async fn future_consensus_view_window_skips_stale_round() {
         .start_new_round(base_height, stale_start);
 
     assert!(!actor.should_drop_future_consensus_message(base_height, 10, "QcVote"));
+    harness.shutdown.send();
+}
+
+#[tokio::test]
+async fn future_consensus_window_rbc_messages_request_missing_block() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.gating.future_height_window = 1;
+    consensus_cfg.gating.future_view_window = 0;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 5).await;
+    let actor = &mut harness.actor;
+    let base_height = actor.last_committed_height.saturating_add(1);
+    let height = base_height.saturating_add(2);
+    let view = 0;
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "roster should not be empty");
+    let (block_header, leader_signature) =
+        rbc_header_and_signature(actor, &roster, height, view, &harness.key_pairs);
+    let epoch = actor.epoch_for_height(height);
+
+    let init_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x21; 32]));
+    let init = crate::sumeragi::consensus::RbcInit {
+        block_hash: init_hash,
+        height,
+        view,
+        epoch,
+        roster: roster.clone(),
+        roster_hash: roster_hash(&roster),
+        total_chunks: 1,
+        chunk_digests: vec![[0x55; 32]],
+        payload_hash: Hash::prehashed([0x44; 32]),
+        chunk_root: Hash::prehashed([0x55; 32]),
+        block_header,
+        leader_signature,
+    };
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&init_hash),
+        "missing request should not be seeded for init hash"
+    );
+    actor
+        .on_block_message(crate::sumeragi::InboundBlockMessage::new(
+            BlockMessage::RbcInit(init),
+            None,
+        ))
+        .expect("rbc init handling");
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&init_hash),
+        "missing request should be scheduled for future RBC init"
+    );
+
+    let chunk_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; 32]));
+    let chunk = crate::sumeragi::consensus::RbcChunk {
+        block_hash: chunk_hash,
+        height,
+        view,
+        idx: 0,
+        epoch,
+        bytes: vec![0xAA; 4],
+    };
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&chunk_hash),
+        "missing request should not be seeded for chunk hash"
+    );
+    actor
+        .on_block_message(crate::sumeragi::InboundBlockMessage::new(
+            BlockMessage::RbcChunk(chunk),
+            None,
+        ))
+        .expect("rbc chunk handling");
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&chunk_hash),
+        "missing request should be scheduled for future RBC chunk"
+    );
+
+    let ready_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x23; 32]));
+    let ready = crate::sumeragi::consensus::RbcReady {
+        block_hash: ready_hash,
+        height,
+        view,
+        epoch,
+        roster_hash: roster_hash(&roster),
+        chunk_root: Hash::prehashed([0x55; 32]),
+        sender: ValidatorIndex::try_from(0).expect("valid sender index"),
+        signature: vec![0xAB; 4],
+    };
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&ready_hash),
+        "missing request should not be seeded for ready hash"
+    );
+    actor
+        .on_block_message(crate::sumeragi::InboundBlockMessage::new(
+            BlockMessage::RbcReady(ready),
+            None,
+        ))
+        .expect("rbc ready handling");
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&ready_hash),
+        "missing request should be scheduled for future RBC ready"
+    );
+
     harness.shutdown.send();
 }
 
