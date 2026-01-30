@@ -138,6 +138,16 @@ public final class AccountAddress {
     return extractSingleKeyPayload(canonicalBytes);
   }
 
+  /**
+   * Returns the multisig policy payload when this address encodes a multisig controller.
+   *
+   * <p>Single-key addresses return {@link Optional#empty()}.
+   */
+  public Optional<MultisigPolicyPayload> multisigPolicyPayload() throws AccountAddressException {
+    parseCanonical(canonicalBytes);
+    return extractMultisigPayload(canonicalBytes);
+  }
+
   public static String compressedWarningMessage() {
     return COMPRESSED_WARNING;
   }
@@ -167,6 +177,94 @@ public final class AccountAddress {
     out.write(curveIdForAlgorithm(algorithm));
     out.write(publicKey.length);
     out.write(publicKey, 0, publicKey.length);
+
+    return fromCanonicalBytes(out.toByteArray());
+  }
+
+  /**
+   * Constructs a multisig account address from the provided policy payload.
+   */
+  public static AccountAddress fromMultisigPolicy(
+      final String domain,
+      final MultisigPolicyPayload policy) throws AccountAddressException {
+    if (domain == null || domain.isBlank()) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "domain must not be blank");
+    }
+    if (policy == null) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "multisig policy must not be null");
+    }
+
+    final List<MultisigMemberPayload> members = policy.members();
+    if (members.isEmpty()) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "InvalidMultisigPolicy: zero members");
+    }
+    if (members.size() > 0xFF) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.MULTISIG_MEMBER_OVERFLOW,
+          "InvalidMultisigPolicy: too many members (" + members.size() + ")");
+    }
+
+    long totalWeight = 0L;
+    for (final MultisigMemberPayload member : members) {
+      if (member.weight() <= 0) {
+        throw new AccountAddressException(
+            AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "InvalidMultisigPolicy: non-positive weight");
+      }
+      if (member.weight() > 0xFFFF) {
+        throw new AccountAddressException(
+            AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "InvalidMultisigPolicy: weight too large");
+      }
+      ensureCurveEnabled(member.curveId(), "curve id " + member.curveId());
+      if (member.publicKey().length == 0) {
+        throw new AccountAddressException(
+            AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "InvalidMultisigPolicy: invalid key length");
+      }
+      if (member.publicKey().length > 0xFFFF) {
+        throw new AccountAddressException(
+            AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "InvalidMultisigPolicy: key too long");
+      }
+      totalWeight += member.weight();
+    }
+    if (policy.threshold() <= 0) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "InvalidMultisigPolicy: ZeroThreshold");
+    }
+    if (totalWeight < policy.threshold()) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.INVALID_MULTISIG_POLICY,
+          "InvalidMultisigPolicy: threshold exceeds total weight");
+    }
+
+    final byte header = encodeHeader((byte) 0, (byte) 0, (byte) 1);
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.write(header);
+
+    if (domain.equalsIgnoreCase(DEFAULT_DOMAIN_NAME)) {
+      out.write(0x00);
+    } else {
+      out.write(0x01);
+      final byte[] digest = computeLocalDigest(domain);
+      out.write(digest, 0, digest.length);
+    }
+
+    out.write(0x01); // multisig controller tag
+    out.write(policy.version() & 0xFF);
+    out.write((policy.threshold() >> 8) & 0xFF);
+    out.write(policy.threshold() & 0xFF);
+    out.write(members.size() & 0xFF);
+
+    for (final MultisigMemberPayload member : members) {
+      final int curveId = member.curveId() & 0xFF;
+      final int weight = member.weight();
+      final byte[] keyBytes = member.publicKey();
+      out.write(curveId);
+      out.write((weight >> 8) & 0xFF);
+      out.write(weight & 0xFF);
+      out.write((keyBytes.length >> 8) & 0xFF);
+      out.write(keyBytes.length & 0xFF);
+      out.write(keyBytes, 0, keyBytes.length);
+    }
 
     return fromCanonicalBytes(out.toByteArray());
   }
@@ -329,6 +427,77 @@ public final class AccountAddress {
 
     public int curveId() {
       return curveId;
+    }
+
+    public byte[] publicKey() {
+      return Arrays.copyOf(publicKey, publicKey.length);
+    }
+  }
+
+  public static final class MultisigPolicyPayload {
+    private final int version;
+    private final int threshold;
+    private final List<MultisigMemberPayload> members;
+
+    private MultisigPolicyPayload(
+        final int version,
+        final int threshold,
+        final List<MultisigMemberPayload> members) {
+      this.version = version;
+      this.threshold = threshold;
+      this.members = Collections.unmodifiableList(new ArrayList<>(members));
+    }
+
+    public static MultisigPolicyPayload of(
+        final int version,
+        final int threshold,
+        final List<MultisigMemberPayload> members) {
+      if (members == null) {
+        throw new IllegalArgumentException("members must not be null");
+      }
+      return new MultisigPolicyPayload(version, threshold, members);
+    }
+
+    public int version() {
+      return version;
+    }
+
+    public int threshold() {
+      return threshold;
+    }
+
+    public List<MultisigMemberPayload> members() {
+      return members;
+    }
+  }
+
+  public static final class MultisigMemberPayload {
+    private final int curveId;
+    private final int weight;
+    private final byte[] publicKey;
+
+    private MultisigMemberPayload(final int curveId, final int weight, final byte[] publicKey) {
+      this.curveId = curveId;
+      this.weight = weight;
+      this.publicKey = Arrays.copyOf(publicKey, publicKey.length);
+    }
+
+    public static MultisigMemberPayload of(
+        final int curveId,
+        final int weight,
+        final byte[] publicKey) {
+      if (publicKey == null) {
+        throw new IllegalArgumentException("publicKey must not be null");
+      }
+      return new MultisigMemberPayload(curveId, weight, publicKey);
+    }
+
+    public int curveId() {
+      return curveId;
+    }
+
+    public int weight() {
+      return weight;
     }
 
     public byte[] publicKey() {
@@ -524,6 +693,90 @@ public final class AccountAddress {
     }
     final byte[] key = Arrays.copyOfRange(canonical, cursor, end);
     return Optional.of(new SingleKeyPayload(curveId, key));
+  }
+
+  private static Optional<MultisigPolicyPayload> extractMultisigPayload(final byte[] canonical)
+      throws AccountAddressException {
+    if (canonical.length < 4) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+    }
+    int cursor = 0;
+    final byte header = canonical[cursor++];
+    decodeHeader(header);
+
+    final byte domainTag = canonical[cursor++];
+    switch (domainTag) {
+      case 0x00:
+        break;
+      case 0x01:
+        if (cursor + 12 > canonical.length) {
+          throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+        }
+        cursor += 12;
+        break;
+      case 0x02:
+        if (cursor + 4 > canonical.length) {
+          throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+        }
+        cursor += 4;
+        break;
+      default:
+        throw new AccountAddressException(
+            AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG, "unknown domain selector tag: " + domainTag);
+    }
+
+    if (cursor >= canonical.length) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+    }
+    final byte controllerTag = canonical[cursor++];
+    if (controllerTag != 0x01) {
+      return Optional.empty();
+    }
+    if (cursor + 4 > canonical.length) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+    }
+    final int version = canonical[cursor++] & 0xFF;
+    final int threshold =
+        ((canonical[cursor] & 0xFF) << 8) | (canonical[cursor + 1] & 0xFF);
+    cursor += 2;
+    final int memberCount = canonical[cursor++] & 0xFF;
+    if (memberCount == 0) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "InvalidMultisigPolicy: zero members");
+    }
+
+    final List<MultisigMemberPayload> members = new ArrayList<>(memberCount);
+    for (int i = 0; i < memberCount; i++) {
+      if (cursor + 5 > canonical.length) {
+        throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+      }
+      final int curveId = canonical[cursor++] & 0xFF;
+      ensureCurveEnabled(curveId, "curve id " + curveId);
+      final int weight =
+          ((canonical[cursor] & 0xFF) << 8) | (canonical[cursor + 1] & 0xFF);
+      cursor += 2;
+      final int keyLen =
+          ((canonical[cursor] & 0xFF) << 8) | (canonical[cursor + 1] & 0xFF);
+      cursor += 2;
+      if (keyLen <= 0) {
+        throw new AccountAddressException(
+            AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "InvalidMultisigPolicy: invalid key length");
+      }
+      if (cursor + keyLen > canonical.length) {
+        throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+      }
+      final byte[] key = Arrays.copyOfRange(canonical, cursor, cursor + keyLen);
+      cursor += keyLen;
+      members.add(new MultisigMemberPayload(curveId, weight, key));
+    }
+    if (cursor != canonical.length) {
+      if (cursor > canonical.length) {
+        throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+      }
+      throw new AccountAddressException(
+          AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES, "unexpected trailing bytes in canonical payload");
+    }
+    return Optional.of(new MultisigPolicyPayload(version, threshold, members));
   }
 
   private static byte encodeHeader(final byte version, final byte classId, final byte normVersion)

@@ -537,6 +537,7 @@ impl<'a> Parser<'a> {
         let mut call: Option<TriggerCall> = None;
         let mut filter: Option<TriggerFilter> = None;
         let mut repeats: Option<TriggerRepeats> = None;
+        let mut authority: Option<String> = None;
         let mut metadata: Vec<TriggerMetadataEntry> = Vec::new();
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
             let field_tok = self.bump();
@@ -569,6 +570,13 @@ impl<'a> Parser<'a> {
                     repeats = Some(self.parse_trigger_repeats()?);
                     self.expect(TokenKind::Semicolon)?;
                 }
+                "authority" => {
+                    if authority.is_some() {
+                        return Err(self.error(field_tok, "duplicate `authority` field"));
+                    }
+                    authority = Some(self.expect_ident_or_string()?);
+                    self.expect(TokenKind::Semicolon)?;
+                }
                 "metadata" => {
                     metadata = self.parse_trigger_metadata_block()?;
                     if self.peek(TokenKind::Semicolon) {
@@ -578,7 +586,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     return Err(self.error(
                         field_tok,
-                        "trigger field (`call`, `on`, `repeats`, `metadata`)",
+                        "trigger field (`call`, `on`, `repeats`, `authority`, `metadata`)",
                     ));
                 }
             }
@@ -591,6 +599,7 @@ impl<'a> Parser<'a> {
             call,
             filter,
             repeats,
+            authority,
             metadata,
         }))
     }
@@ -615,7 +624,6 @@ impl<'a> Parser<'a> {
 
     fn parse_trigger_filter(&mut self) -> ParseResult<TriggerFilter> {
         let kind = self.expect_ident()?;
-        // TODO: support data/pipeline trigger filters and explicit authorities in trigger DSL.
         match kind.as_str() {
             "time" => Ok(TriggerFilter::Time(self.parse_trigger_time_filter()?)),
             "execute" => {
@@ -629,9 +637,38 @@ impl<'a> Parser<'a> {
                 let trigger_id = self.expect_ident_or_string()?;
                 Ok(TriggerFilter::Execute { trigger_id })
             }
+            "data" => Ok(TriggerFilter::Data(self.parse_trigger_data_filter()?)),
+            "pipeline" => Ok(TriggerFilter::Pipeline(
+                self.parse_trigger_pipeline_filter()?,
+            )),
             _ => Err(self.error(
                 self.tokens[self.pos.saturating_sub(1)].clone(),
-                "trigger filter (`time` or `execute`)",
+                "trigger filter (`time`, `execute`, `data`, or `pipeline`)",
+            )),
+        }
+    }
+
+    fn parse_trigger_data_filter(&mut self) -> ParseResult<TriggerDataFilter> {
+        let kind = self.expect_ident()?;
+        match kind.as_str() {
+            "any" => Ok(TriggerDataFilter::Any),
+            _ => Err(self.error(
+                self.tokens[self.pos.saturating_sub(1)].clone(),
+                "data filter (`any`)",
+            )),
+        }
+    }
+
+    fn parse_trigger_pipeline_filter(&mut self) -> ParseResult<TriggerPipelineFilter> {
+        let kind = self.expect_ident()?;
+        match kind.as_str() {
+            "transaction" => Ok(TriggerPipelineFilter::Transaction),
+            "block" => Ok(TriggerPipelineFilter::Block),
+            "merge" => Ok(TriggerPipelineFilter::Merge),
+            "witness" => Ok(TriggerPipelineFilter::Witness),
+            _ => Err(self.error(
+                self.tokens[self.pos.saturating_sub(1)].clone(),
+                "pipeline filter (`transaction`, `block`, `merge`, or `witness`)",
             )),
         }
     }
@@ -2397,6 +2434,7 @@ mod tests {
                 call run;
                 on time pre_commit;
                 repeats 3;
+                authority "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland";
                 metadata { tag: "alpha"; count: 1; enabled: true; }
             }
         }
@@ -2413,6 +2451,58 @@ mod tests {
         assert_eq!(trigger.name, "wake");
         assert_eq!(trigger.call.entrypoint, "run");
         assert!(matches!(trigger.filter, TriggerFilter::Time(_)));
+        assert_eq!(
+            trigger.authority.as_deref(),
+            Some(
+                "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+            )
+        );
         assert_eq!(trigger.metadata.len(), 3);
+    }
+
+    #[test]
+    fn parse_trigger_decl_with_data_filter() {
+        let src = r#"
+        seiyaku C {
+            kotoage fn run() {}
+            register_trigger wake {
+                call run;
+                on data any;
+            }
+        }
+        "#;
+        let prog = parse(src).expect("parse trigger decl");
+        let trigger = prog
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Trigger(t) => Some(t),
+                _ => None,
+            })
+            .expect("trigger present");
+        assert!(matches!(trigger.filter, TriggerFilter::Data(_)));
+    }
+
+    #[test]
+    fn parse_trigger_decl_with_pipeline_filter() {
+        let src = r#"
+        seiyaku C {
+            kotoage fn run() {}
+            register_trigger wake {
+                call run;
+                on pipeline transaction;
+            }
+        }
+        "#;
+        let prog = parse(src).expect("parse trigger decl");
+        let trigger = prog
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Trigger(t) => Some(t),
+                _ => None,
+            })
+            .expect("trigger present");
+        assert!(matches!(trigger.filter, TriggerFilter::Pipeline(_)));
     }
 }

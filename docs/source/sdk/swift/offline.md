@@ -39,6 +39,7 @@ try journal.markCommitted(txId: txId)
 - Auth: `HMAC-SHA256(prev_chain || record_without_hmac)`.
 - Opening or appending beyond limits raises `OfflineJournalError.integrityViolation`; export and rotate the file before retrying.
 - Use `OfflineWallet.buildSignedReceipt(chainId: ..., journal: journal)` to sign receipts and append them to the journal in one call.
+- Account IDs: offline Norito encoding accepts IH58 / `<public_key>@<domain>`. For `uaid:` or `opaque:` literals, register `OfflineAccountResolvers.setAccountResolver` to map them to a canonical account ID before encoding.
 
 ## Pipeline retry queue
 ```swift

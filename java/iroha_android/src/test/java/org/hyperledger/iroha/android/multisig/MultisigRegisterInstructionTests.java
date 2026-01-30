@@ -1,6 +1,9 @@
 package org.hyperledger.iroha.android.multisig;
 
+import java.util.Arrays;
 import java.util.Map;
+import java.util.Optional;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.instructions.InstructionKind;
 import org.hyperledger.iroha.android.model.instructions.MultisigRegisterInstruction;
@@ -14,6 +17,7 @@ public final class MultisigRegisterInstructionTests {
     testRoundTripEncoding();
     testControllerDomainMustMatchSpec();
     testSignatoryDomainDriftIsRejected();
+    testDerivedControllerIsRejected();
   }
 
   private static void testRoundTripEncoding() {
@@ -91,5 +95,51 @@ public final class MultisigRegisterInstructionTests {
       threw = expected.getMessage().contains("domain");
     }
     assert threw : "expected mixed signatory domains to be rejected";
+  }
+
+  private static void testDerivedControllerIsRejected() {
+    final String domain = "derived";
+    final byte[] signerKey = new byte[32];
+    Arrays.fill(signerKey, (byte) 0x11);
+    final String signerId;
+    try {
+      signerId =
+          AccountAddress.fromAccount(domain, signerKey, "ed25519")
+              .toIH58(AccountAddress.DEFAULT_IH58_PREFIX)
+              + "@"
+              + domain;
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalStateException("Failed to build signatory id", ex);
+    }
+
+    final MultisigSpec spec =
+        MultisigSpec.builder()
+            .setQuorum(1)
+            .setTransactionTtlMs(10_000)
+            .addSignatory(signerId, 1)
+            .build();
+
+    final Optional<byte[]> derivedOpt =
+        MultisigSeedHelper.deriveDeterministicPublicKey(domain, spec);
+    final byte[] derivedKey =
+        derivedOpt.orElseThrow(() -> new IllegalStateException("Expected derived controller key"));
+    final String derivedId;
+    try {
+      derivedId =
+          AccountAddress.fromAccount(domain, derivedKey, "ed25519")
+              .toIH58(AccountAddress.DEFAULT_IH58_PREFIX)
+              + "@"
+              + domain;
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalStateException("Failed to build derived controller id", ex);
+    }
+
+    boolean threw = false;
+    try {
+      MultisigRegisterInstruction.builder().setAccountId(derivedId).setSpec(spec).build();
+    } catch (final IllegalArgumentException expected) {
+      threw = expected.getMessage().contains("derived");
+    }
+    assert threw : "expected derived controller id to be rejected";
   }
 }

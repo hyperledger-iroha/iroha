@@ -1,135 +1,144 @@
-<!-- TODO: Translation pending; content synced from English for technical accuracy. -->
-
 ---
-title: Account Curve Registry
-description: Canonical mapping between account controller curve identifiers and signing algorithms.
+title: Registro de curvas de cuenta
+description: Mapeo canónico entre identificadores de curva del controlador de cuenta y algoritmos de firma.
 ---
 
-# Account Curve Registry
+# Registro de curvas de cuenta
 
-Account addresses encode their controllers as a tagged payload that begins with
-an 8-bit curve identifier. Validators, SDKs, and tooling rely on a shared
-registry so that curve identifiers remain stable across releases and enable
-deterministic decoding across implementations.
+Las direcciones de cuenta codifican sus controladores como un payload etiquetado
+que comienza con un identificador de curva de 8 bits. Validadores, SDKs y
+herramientas dependen de un registro compartido para que los identificadores de
+curva se mantengan estables entre versiones y permitan una decodificación
+determinista entre implementaciones.
 
-The table below is the normative reference for every assigned `curve_id`. A
-machine-readable copy ships alongside this document at
-[`address_curve_registry.json`](address_curve_registry.json); automated tooling
-SHOULD consume the JSON version and pin its `version` field when generating
-fixtures.
+La tabla siguiente es la referencia normativa para cada `curve_id` asignado.
+Una copia legible por máquina se publica junto a este documento en
+[`address_curve_registry.json`](address_curve_registry.json); el tooling
+automatizado DEBERÍA consumir la versión JSON y fijar su campo `version` al
+generar fixtures.
 
-## Registered Curves
+## Curvas registradas
 
-| ID (`curve_id`) | Algorithm | Feature Gate | Status | Public Key Encoding | Notes |
-|-----------------|-----------|--------------|--------|---------------------|-------|
-| `0x01` (1) | `ed25519` | — | Production | 32-byte compressed Ed25519 key | Canonical curve for V1. All SDK builds MUST support this identifier. |
-| `0x02` (2) | `ml-dsa` | — | Production (config-gated) | Dilithium3 public key (1952 bytes) | Available in all builds. Enable in `crypto.allowed_signing` + `crypto.curves.allowed_curve_ids` before emitting controller payloads. |
-| `0x03` (3) | `bls_normal` | `bls` | Production (feature-gated) | 48-byte compressed G1 public key | Required for consensus validators. Admission allows BLS controllers even when `allowed_signing`/`allowed_curve_ids` omit them. |
-| `0x04` (4) | `secp256k1` | — | Production | 33-byte SEC1-compressed key | Deterministic ECDSA over SHA-256; signatures use the canonical 64-byte `r∥s` layout. |
-| `0x05` (5) | `bls_small` | `bls` | Production (feature-gated) | 96-byte compressed G2 public key | Compact-signature BLS profile (smaller signatures, larger public keys). |
-| `0x0A` (10) | `gost3410-2012-256-paramset-a` | `gost` | Reserved | 64-byte little-endian TC26 param set A point | Unlocks with the `gost` feature once governance approves the rollout. |
-| `0x0B` (11) | `gost3410-2012-256-paramset-b` | `gost` | Reserved | 64-byte little-endian TC26 param set B point | Mirrors the TC26 B parameter set; blocked behind the `gost` feature gate. |
-| `0x0C` (12) | `gost3410-2012-256-paramset-c` | `gost` | Reserved | 64-byte little-endian TC26 param set C point | Reserved for future governance approval. |
-| `0x0D` (13) | `gost3410-2012-512-paramset-a` | `gost` | Reserved | 128-byte little-endian TC26 param set A point | Reserved pending demand for 512-bit GOST curves. |
-| `0x0E` (14) | `gost3410-2012-512-paramset-b` | `gost` | Reserved | 128-byte little-endian TC26 param set B point | Reserved pending demand for 512-bit GOST curves. |
-| `0x0F` (15) | `sm2` | `sm` | Reserved | DistID length (u16 BE) + DistID bytes + 65-byte SEC1 uncompressed SM2 key | Becomes available when the `sm` feature graduates from preview. |
+| ID (`curve_id`) | Algoritmo | Gate de funcionalidad | Estado | Codificación de clave pública | Notas |
+|-----------------|-----------|------------------------|--------|-------------------------------|-------|
+| `0x01` (1) | `ed25519` | — | Producción | Clave Ed25519 comprimida de 32 bytes | Curva canónica para V1. Todas las compilaciones de SDK DEBEN admitir este identificador. |
+| `0x02` (2) | `ml-dsa` | — | Producción (controlado por configuración) | Clave pública Dilithium3 (1952 bytes) | Disponible en todas las compilaciones. Habilitar en `crypto.allowed_signing` + `crypto.curves.allowed_curve_ids` antes de emitir payloads de controlador. |
+| `0x03` (3) | `bls_normal` | `bls` | Producción (controlado por feature) | Clave pública G1 comprimida de 48 bytes | Requerida para validadores de consenso. La admisión permite controladores BLS incluso cuando `allowed_signing`/`allowed_curve_ids` los omiten. |
+| `0x04` (4) | `secp256k1` | — | Producción | Clave SEC1 comprimida de 33 bytes | ECDSA determinista sobre SHA-256; las firmas usan el diseño canónico de 64 bytes `r∥s`. |
+| `0x05` (5) | `bls_small` | `bls` | Producción (controlado por feature) | Clave pública G2 comprimida de 96 bytes | Perfil BLS de firma compacta (firmas más pequeñas, claves públicas más grandes). |
+| `0x0A` (10) | `gost3410-2012-256-paramset-a` | `gost` | Reservado | Punto TC26 param set A de 64 bytes little-endian | Se habilita con la feature `gost` cuando la gobernanza apruebe el despliegue. |
+| `0x0B` (11) | `gost3410-2012-256-paramset-b` | `gost` | Reservado | Punto TC26 param set B de 64 bytes little-endian | Refleja el conjunto de parámetros TC26 B; bloqueado tras la feature `gost`. |
+| `0x0C` (12) | `gost3410-2012-256-paramset-c` | `gost` | Reservado | Punto TC26 param set C de 64 bytes little-endian | Reservado para aprobación futura de gobernanza. |
+| `0x0D` (13) | `gost3410-2012-512-paramset-a` | `gost` | Reservado | Punto TC26 param set A de 128 bytes little-endian | Reservado en espera de demanda para curvas GOST de 512 bits. |
+| `0x0E` (14) | `gost3410-2012-512-paramset-b` | `gost` | Reservado | Punto TC26 param set B de 128 bytes little-endian | Reservado en espera de demanda para curvas GOST de 512 bits. |
+| `0x0F` (15) | `sm2` | `sm` | Reservado | Longitud DistID (u16 BE) + bytes DistID + clave SM2 SEC1 sin comprimir de 65 bytes | Estará disponible cuando la feature `sm` salga de preview. |
 
-### Usage Guidelines
+### Guía de uso
 
-- **Fail closed:** Encoders MUST reject unsupported algorithms with
-  `ERR_UNSUPPORTED_ALGORITHM`. Decoders MUST raise `ERR_UNKNOWN_CURVE` for any
-  identifier not listed in this registry.
-- **Feature gating:** BLS/GOST/SM2 remain behind the listed build-time feature
-  gates. Operators must enable matching `iroha_config.crypto.allowed_signing`
-  entries and build-time features before emitting addresses with those curves.
-- **Admission exceptions:** BLS controllers are allowed for consensus
-  validators even when `allowed_signing`/`allowed_curve_ids` do not list them.
-- **Config + manifest parity:** Use `iroha_config.crypto.allowed_curve_ids`
-  (and the matching `ManifestCrypto.allowed_curve_ids`) to publish which curve
-  identifiers the cluster accepts for controllers; admission now enforces this
-  list alongside `allowed_signing`.
-- **Deterministic encoding:** Public keys are encoded exactly as returned by
-  the signing implementation (Ed25519 compressed bytes, ML‑DSA public key
-  bytes, BLS compressed points, etc.). SDKs should surface validation errors
-  before submitting malformed payloads.
-- **Manifest parity:** Genesis manifests and controller manifests MUST use the
-  same identifiers so admission can reject controllers that exceed cluster
-  capabilities.
+- **Fail closed:** Los codificadores DEBEN rechazar algoritmos no soportados con
+  `ERR_UNSUPPORTED_ALGORITHM`. Los decodificadores DEBEN elevar `ERR_UNKNOWN_CURVE`
+  para cualquier identificador no listado en este registro.
+- **Feature gating:** BLS/GOST/SM2 siguen detrás de las features indicadas en
+  tiempo de compilación. Los operadores deben habilitar las entradas
+  correspondientes en `iroha_config.crypto.allowed_signing` y activar las
+  features de compilación antes de emitir direcciones con esas curvas.
+- **Excepciones de admisión:** Los controladores BLS están permitidos para
+  validadores de consenso incluso cuando `allowed_signing`/`allowed_curve_ids`
+  no los enumeran.
+- **Paridad de config + manifest:** Use `iroha_config.crypto.allowed_curve_ids`
+  (y el `ManifestCrypto.allowed_curve_ids` correspondiente) para publicar qué
+  identificadores de curva acepta el clúster para controladores; la admisión
+  ahora impone esta lista junto con `allowed_signing`.
+- **Codificación determinista:** Las claves públicas se codifican exactamente
+  como las entrega la implementación de firma (bytes comprimidos Ed25519,
+  claves públicas ML‑DSA, puntos BLS comprimidos, etc.). Los SDKs deben exponer
+  errores de validación antes de enviar payloads malformados.
+- **Paridad de manifest:** Los manifests de génesis y los manifests de
+  controladores DEBEN usar los mismos identificadores para que la admisión
+  pueda rechazar controladores que excedan las capacidades del clúster.
 
-## Capability Bitmask Advert
+## Anuncio de mapa de bits de capacidades
 
-`GET /v1/node/capabilities` now exposes both the `allowed_curve_ids` list and
-the packed `allowed_curve_bitmap` array under `crypto.curves`. The bitmap is
-little-endian across 64-bit lanes (up to four values to cover the 0–255 `u8`
-identifier space). Bit `i` being set means curve identifier `i` is permitted by
-the cluster’s admission policy.
+`GET /v1/node/capabilities` ahora expone la lista `allowed_curve_ids` y el
+arreglo empaquetado `allowed_curve_bitmap` bajo `crypto.curves`. El bitmap es
+little-endian a través de lanes de 64 bits (hasta cuatro valores para cubrir el
+espacio de identificadores `u8` 0–255). El bit `i` activado significa que el
+identificador de curva `i` está permitido por la política de admisión del
+clúster.
 
-- Example: `{ allowed_curve_ids: [1, 15] }` ⇒ `allowed_curve_bitmap: [32770]`
-  because `(1 << 1) | (1 << 15) = 32770`.
-- Curves above `63` set bits in later lanes. Trailing zero lanes are omitted to
-  keep payloads short, so a configuration that also enables `curve_id = 130`
-  would emit `allowed_curve_bitmap = [32768, 0, 4]` (bits 15 and 130 set).
+- Ejemplo: `{ allowed_curve_ids: [1, 15] }` ⇒ `allowed_curve_bitmap: [32770]`
+  porque `(1 << 1) | (1 << 15) = 32770`.
+- Las curvas por encima de `63` activan bits en lanes posteriores. Los lanes de
+  ceros al final se omiten para mantener los payloads cortos, así que una
+  configuración que también habilite `curve_id = 130` emitiría
+  `allowed_curve_bitmap = [32768, 0, 4]` (bits 15 y 130 activados).
 
-Prefer the bitmap for dashboards and health checks: a single bit test answers
-capability questions without scanning the full array, while tooling that needs
-ordered identifiers can continue using `allowed_curve_ids`. Surfacing both
-views satisfies roadmap item **ADDR-3**’s requirement to publish deterministic
-capability bitmasks for operators and SDKs.
+Prefiera el bitmap para dashboards y comprobaciones de salud: una sola prueba de
+bit responde preguntas de capacidad sin escanear el arreglo completo, mientras
+que el tooling que necesita identificadores ordenados puede seguir usando
+`allowed_curve_ids`. Exponer ambas vistas satisface el requisito del roadmap
+**ADDR-3** de publicar bitmasks deterministas de capacidades para operadores y
+SDKs.
 
-## Validation Checklist
+## Lista de verificación de validación
 
-Every component that ingests controllers (Torii, admission, SDK encoders,
-offline tooling) must apply the same deterministic checks before accepting a
-payload. The steps below should be treated as mandatory validation logic:
+Cada componente que ingiere controladores (Torii, admisión, codificadores de
+SDK, tooling offline) debe aplicar las mismas comprobaciones deterministas antes
+de aceptar un payload. Los pasos de abajo deben tratarse como lógica obligatoria
+de validación:
 
-1. **Resolve cluster policy:** Parse the leading `curve_id` byte from the
-   account payload and reject the controller if the identifier is not present
-   in `iroha_config.crypto.allowed_curve_ids` (and the mirrored
-   `ManifestCrypto.allowed_curve_ids`). BLS controllers are the exception: when
-   compiled in, admission allows them regardless of the allowlists so consensus
-   validator keys keep working. This prevents clusters from accepting preview
-   curves that operators have not explicitly enabled.
-2. **Enforce encoding length:** Compare the payload length against the
-   algorithm’s canonical size before attempting to decompress or expand the
-   key. Reject any value that fails the length check to eliminate malformed
-   inputs early.
-3. **Run algorithm-specific decoding:** Use the same canonical decoders as
-   `iroha_crypto` (`ed25519_dalek`, `pqcrypto_dilithium`, `w3f_bls`/`blstrs`,
-   `sm2`, the TC26 helpers, etc.) so all implementations share the exact
-   subgroup/point validation behaviour.
-4. **Verify signature sizes:** Admission and SDKs must enforce the signature
-   lengths listed below and reject any payload with a truncated or overlong
-   signature before running the verifier.
+1. **Resolver la política del clúster:** Analice el byte inicial `curve_id` del
+   payload de cuenta y rechace el controlador si el identificador no está en
+   `iroha_config.crypto.allowed_curve_ids` (y el espejo
+   `ManifestCrypto.allowed_curve_ids`). Los controladores BLS son la excepción:
+   cuando están compilados, la admisión los permite independientemente de las
+   allowlists para que las claves de validadores de consenso sigan funcionando.
+   Esto evita que los clústeres acepten curvas en preview que los operadores no
+   hayan habilitado explícitamente.
+2. **Forzar la longitud de codificación:** Compare la longitud del payload con
+   el tamaño canónico del algoritmo antes de intentar descomprimir o expandir la
+   clave. Rechace cualquier valor que falle la verificación de longitud para
+   eliminar entradas malformadas temprano.
+3. **Ejecutar la decodificación específica del algoritmo:** Use los mismos
+   decodificadores canónicos que `iroha_crypto` (`ed25519_dalek`,
+   `pqcrypto_dilithium`, `w3f_bls`/`blstrs`, `sm2`, los helpers TC26, etc.) para
+   que todas las implementaciones compartan el mismo comportamiento de
+   validación de subgrupos/puntos.
+4. **Verificar tamaños de firma:** La admisión y los SDKs deben imponer las
+   longitudes de firma listadas abajo y rechazar cualquier payload con una firma
+   truncada o demasiado larga antes de ejecutar el verificador.
 
-| Algorithm | `curve_id` | Public Key Bytes | Signature Bytes | Critical Checks |
-|-----------|------------|------------------|-----------------|-----------------|
-| `ed25519` | `0x01` | 32 | 64 | Reject non-canonical compressed points, enforce cofactor clearing (no small-order points), and ensure `s < L` when validating signatures. |
-| `ml-dsa` (Dilithium3) | `0x02` | 1952 | 3309 | Reject payloads that are not exactly 1952 bytes before decoding; parse the Dilithium3 public key and verify signatures using pqcrypto-dilithium with canonical byte lengths. |
-| `bls_normal` | `0x03` | 48 | 96 | Accept only canonical compressed G1 public keys and compressed G2 signatures; reject identity points and non-canonical encodings. |
-| `secp256k1` | `0x04` | 33 | 64 | Accept only SEC1-compressed points; decompress and reject non-canonical/invalid points, and verify signatures using the canonical 64-byte `r∥s` encoding (low-`s` normalisation enforced by the signer). |
-| `bls_small` | `0x05` | 96 | 48 | Accept only canonical compressed G2 public keys and compressed G1 signatures; reject identity points and non-canonical encodings. |
-| `gost3410-2012-256-paramset-a` | `0x0A` | 64 | 64 | Interpret the payload as `(x||y)` little-endian coordinates, ensure each coordinate `< p`, reject the identity point, and enforce canonical 32-byte `r`/`s` limbs when verifying signatures. |
-| `gost3410-2012-256-paramset-b` | `0x0B` | 64 | 64 | Same validation as param set A but using the TC26 B domain parameters. |
-| `gost3410-2012-256-paramset-c` | `0x0C` | 64 | 64 | Same validation as param set A but using the TC26 C domain parameters. |
-| `gost3410-2012-512-paramset-a` | `0x0D` | 128 | 128 | Interpret `(x||y)` as 64-byte limbs, ensure `< p`, reject the identity point, and require 64-byte `r`/`s` limbs for signatures. |
-| `gost3410-2012-512-paramset-b` | `0x0E` | 128 | 128 | Same validation as param set A but using the TC26 B 512-bit domain parameters. |
-| `sm2` | `0x0F` | 2 + distid + 65 | 64 | Decode distid length (u16 BE), validate the DistID bytes, parse the SEC1 uncompressed point, enforce GM/T 0003 subgroup rules, apply the configured DistID, and require canonical `(r, s)` limbs per SM2. |
+| Algoritmo | `curve_id` | Bytes de clave pública | Bytes de firma | Comprobaciones críticas |
+|-----------|------------|------------------------|---------------|-------------------------|
+| `ed25519` | `0x01` | 32 | 64 | Rechazar puntos comprimidos no canónicos, forzar limpieza de cofactor (sin puntos de orden pequeño) y asegurar `s < L` al validar firmas. |
+| `ml-dsa` (Dilithium3) | `0x02` | 1952 | 3309 | Rechazar payloads que no tengan exactamente 1952 bytes antes de decodificar; parsear la clave pública Dilithium3 y verificar firmas usando pqcrypto-dilithium con longitudes canónicas. |
+| `bls_normal` | `0x03` | 48 | 96 | Aceptar solo claves públicas G1 comprimidas canónicas y firmas G2 comprimidas; rechazar puntos identidad y codificaciones no canónicas. |
+| `secp256k1` | `0x04` | 33 | 64 | Aceptar solo puntos SEC1 comprimidos; descomprimir y rechazar puntos no canónicos/invalidos, y verificar firmas usando la codificación canónica de 64 bytes `r∥s` (normalización low-`s` aplicada por el firmante). |
+| `bls_small` | `0x05` | 96 | 48 | Aceptar solo claves públicas G2 comprimidas canónicas y firmas G1 comprimidas; rechazar puntos identidad y codificaciones no canónicas. |
+| `gost3410-2012-256-paramset-a` | `0x0A` | 64 | 64 | Interpretar el payload como coordenadas `(x||y)` little-endian, asegurar que cada coordenada `< p`, rechazar el punto identidad y forzar limbs `r`/`s` canónicos de 32 bytes al verificar firmas. |
+| `gost3410-2012-256-paramset-b` | `0x0B` | 64 | 64 | Igual validación que el conjunto A pero usando los parámetros de dominio TC26 B. |
+| `gost3410-2012-256-paramset-c` | `0x0C` | 64 | 64 | Igual validación que el conjunto A pero usando los parámetros de dominio TC26 C. |
+| `gost3410-2012-512-paramset-a` | `0x0D` | 128 | 128 | Interpretar `(x||y)` como limbs de 64 bytes, asegurar `< p`, rechazar el punto identidad y requerir limbs `r`/`s` de 64 bytes para firmas. |
+| `gost3410-2012-512-paramset-b` | `0x0E` | 128 | 128 | Igual validación que el conjunto A pero usando los parámetros de dominio TC26 B de 512 bits. |
+| `sm2` | `0x0F` | 2 + distid + 65 | 64 | Decodificar la longitud de distid (u16 BE), validar los bytes DistID, parsear el punto SEC1 sin comprimir, forzar reglas de subgrupo GM/T 0003, aplicar el DistID configurado y requerir limbs canónicos `(r, s)` según SM2. |
 
-Each row maps to the `validation` object inside
-[`address_curve_registry.json`](address_curve_registry.json). Tooling that
-consumes the JSON export can rely on the `public_key_bytes`,
-`signature_bytes`, and `checks` fields to automate the same validation steps
-described above; variable-length encodings (for example SM2) set
-`public_key_bytes` to null and document the length rule in `checks`.
+Cada fila se corresponde con el objeto `validation` dentro de
+[`address_curve_registry.json`](address_curve_registry.json). El tooling que
+consume la exportación JSON puede apoyarse en los campos `public_key_bytes`,
+`signature_bytes` y `checks` para automatizar los mismos pasos de validación
+descritos arriba; las codificaciones de longitud variable (por ejemplo SM2)
+configuran `public_key_bytes` en null y documentan la regla de longitud en
+`checks`.
 
-## Requesting a New Curve Identifier
+## Solicitar un nuevo identificador de curva
 
-1. Draft the algorithm specification (encoding, validation, error handling) and
-   secure governance approval for the rollout.
-2. Submit a pull request updating both this document and
-   `address_curve_registry.json`. New identifiers must be unique and fall within
-   the inclusive range `0x01..=0xFE`.
-3. Update SDKs, Norito fixtures, and operator documentation with the new
-   identifier before deploying to production networks.
-4. Coordinate with the security and observability leads to ensure telemetry,
-   runbooks, and admission policies reflect the new algorithm.
+1. Redacte la especificación del algoritmo (codificación, validación, manejo de
+   errores) y asegure la aprobación de gobernanza para el despliegue.
+2. Envíe un pull request actualizando este documento y
+   `address_curve_registry.json`. Los nuevos identificadores deben ser únicos y
+   caer dentro del rango inclusivo `0x01..=0xFE`.
+3. Actualice SDKs, fixtures de Norito y documentación de operadores con el
+   nuevo identificador antes de desplegar en redes de producción.
+4. Coordine con los responsables de seguridad y observabilidad para asegurar
+   que la telemetría, los runbooks y las políticas de admisión reflejen el
+   nuevo algoritmo.

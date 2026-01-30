@@ -330,11 +330,20 @@ for await (const perm of torii.iterateAccountPermissions("ih58...", {
 })) {
   console.log("iterated permission", perm.name);
 }
-const holdings = await torii.listAccountAssets("ih58...", { limit: 5 });
+const holdings = await torii.listAccountAssets("ih58...", {
+  limit: 5,
+  assetId: "rose#wonderland#ih58...",
+});
 console.log("asset holdings", holdings.items);
-const holders = await torii.listAssetHolders("rose#wonderland", { limit: 5 });
+const holders = await torii.listAssetHolders("rose#wonderland", {
+  limit: 5,
+  assetId: "rose#wonderland#ih58...",
+});
 console.log("top holders", holders.items.map((entry) => entry.account_id));
-const txs = await torii.listAccountTransactions("ih58...", { limit: 3 });
+const txs = await torii.listAccountTransactions("ih58...", {
+  limit: 3,
+  assetId: "rose#wonderland#ih58...",
+});
 console.log("recent hashes", txs.items.map((tx) => tx.entrypoint_hash));
 
 for await (const nft of torii.iterateNfts({
@@ -449,9 +458,40 @@ slug and, for Provisioned allowances, surfaces the inspector key, schema,
 version, TTL, and optional digest under `integrity_metadata.provisioned`.
 
 `listOfflineAllowances` accepts the same convenience filters exposed via
-`/v1/offline/allowances`: pass `certificateExpiresBeforeMs/AfterMs`,
+`/v1/offline/allowances`: pass `assetId`, `certificateExpiresBeforeMs/AfterMs`,
 `policyExpiresBeforeMs/AfterMs`, `verdictIdHex`, `requireVerdict`, or
 `onlyMissingVerdict` to avoid building JSON predicates for common reports.
+
+To top up an offline allowance, issue a certificate and register it on-ledger.
+`topUpOfflineAllowance` performs both steps in one call and returns the issued
+certificate plus registration response.
+
+```js
+const topUp = await torii.topUpOfflineAllowance({
+  authority: "ih58:...",
+  privateKey: "ed25519:...",
+  certificate: draft,
+});
+console.log("certificate id", topUp.registration.certificate_id_hex);
+```
+
+For renewals, call `topUpOfflineAllowanceRenewal` with the existing certificate id:
+
+```js
+const renewed = await torii.topUpOfflineAllowanceRenewal(
+  topUp.registration.certificate_id_hex,
+  {
+    authority: "ih58:...",
+    privateKey: "ed25519:...",
+    certificate: draft,
+  },
+);
+console.log("renewed id", renewed.registration.certificate_id_hex);
+```
+
+If you already have a signed certificate (for example, issued out-of-band),
+call `registerOfflineAllowance` or `renewOfflineAllowance` directly instead of
+the top-up helpers.
 
 ### Norito encoding and transaction helpers
 

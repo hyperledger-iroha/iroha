@@ -1,6 +1,51 @@
 {
   "components": {
     "schemas": {
+      "AccountResolveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "literal": {
+            "description": "Account literal to resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "literal"
+        ],
+        "type": "object"
+      },
+      "AccountResolveResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "description": "Canonical IH58 account identifier.",
+            "type": "string"
+          },
+          "domain": {
+            "description": "Resolved domain label.",
+            "type": "string"
+          },
+          "format": {
+            "description": "Address format when source is encoded.",
+            "enum": [
+              "ih58",
+              "compressed",
+              "canonical_hex"
+            ],
+            "type": "string"
+          },
+          "source": {
+            "description": "Resolution source (encoded, alias, public_key, uaid, opaque).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "domain",
+          "source"
+        ],
+        "type": "object"
+      },
       "AliasResolveIndexRequest": {
         "additionalProperties": false,
         "properties": {
@@ -843,7 +888,7 @@
             "type": "string"
           },
           "relay_id": {
-            "description": "Relay account identifier (IH58 preferred; optional `@domain` hint).",
+            "description": "Relay account identifier (IH58 or `<alias|public_key>@domain`).",
             "type": "string"
           },
           "reported_at_ms": {
@@ -3339,7 +3384,7 @@
     },
     "/v1/accounts/onboard": {
       "post": {
-        "description": "Register or onboard an account.",
+        "description": "Register or onboard an account; when the UAID is not bound to the global dataspace, Torii publishes a default manifest to bind it (requires CanPublishSpaceDirectoryManifest{dataspace=0}).",
         "requestBody": {
           "content": {
             "application/json": {
@@ -3399,15 +3444,75 @@
         ]
       }
     },
+    "/v1/accounts/resolve": {
+      "post": {
+        "description": "Resolve account literals into canonical IH58 identifiers.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountResolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResolveResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Resolve account literals.",
+        "tags": [
+          "Accounts"
+        ]
+      }
+    },
     "/v1/accounts/{account_id}/assets": {
       "get": {
-        "description": "List assets held by an account.",
+        "description": "List assets held by an account (supports pagination and optional asset_id filtering).",
         "parameters": [
           {
             "description": "Account identifier.",
             "in": "path",
             "name": "account_id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional page size limit.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional starting offset (default 0).",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Filter assets by asset identifier.",
+            "in": "query",
+            "name": "asset_id",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -3507,13 +3612,55 @@
     },
     "/v1/accounts/{account_id}/transactions": {
       "get": {
-        "description": "List transactions authored by an account.",
+        "description": "List transactions authored by an account (supports pagination, address_format, and optional asset_id filtering).",
         "parameters": [
           {
             "description": "Account identifier.",
             "in": "path",
             "name": "account_id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional page size limit.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional starting offset (default 0).",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Preferred address format (`ih58` or `compressed`).",
+            "in": "query",
+            "name": "address_format",
+            "required": false,
+            "schema": {
+              "enum": [
+                "ih58",
+                "compressed"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter transactions by asset identifier.",
+            "in": "query",
+            "name": "asset_id",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -3852,13 +3999,55 @@
     },
     "/v1/assets/{definition_id}/holders": {
       "get": {
-        "description": "List holders for an asset definition.",
+        "description": "List holders for an asset definition (supports pagination, address_format, and optional asset_id filtering).",
         "parameters": [
           {
             "description": "Asset definition identifier.",
             "in": "path",
             "name": "definition_id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional page size limit.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional starting offset (default 0).",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Preferred address format (`ih58` or `compressed`).",
+            "in": "query",
+            "name": "address_format",
+            "required": false,
+            "schema": {
+              "enum": [
+                "ih58",
+                "compressed"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter holders by asset identifier.",
+            "in": "query",
+            "name": "asset_id",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -4493,6 +4682,85 @@
         ]
       }
     },
+    "/v1/contracts/state": {
+      "get": {
+        "description": "Read smart contract state by exact path, path list, or prefix.",
+        "parameters": [
+          {
+            "description": "Exact state key path (Name).",
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated list of state key paths (Names).",
+            "in": "query",
+            "name": "paths",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Prefix for state key paths (Name).",
+            "in": "query",
+            "name": "prefix",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Include base64-encoded values (default true).",
+            "in": "query",
+            "name": "include_value",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Prefix query offset (default 0).",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Prefix query limit (default 1000, max 10_000).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Read smart contract state.",
+        "tags": [
+          "Contracts"
+        ]
+      }
+    },
     "/v1/da/commitments": {
       "post": {
         "description": "Returns DA commitments captured from recent blocks. Results can be filtered by manifest hash or lane/epoch/sequence and paginated.",
@@ -5052,7 +5320,69 @@
     },
     "/v1/explorer/assets": {
       "get": {
-        "description": "List assets for explorer usage.",
+        "description": "List assets for explorer usage (supports pagination and optional owned_by/definition/asset_id filtering).",
+        "parameters": [
+          {
+            "description": "Optional page number (default 1).",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional items per page (default 10).",
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Preferred address format (`ih58` or `compressed`).",
+            "in": "query",
+            "name": "address_format",
+            "required": false,
+            "schema": {
+              "enum": [
+                "ih58",
+                "compressed"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter assets by account owner (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "in": "query",
+            "name": "owned_by",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter assets by asset definition identifier.",
+            "in": "query",
+            "name": "definition",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter assets by asset identifier.",
+            "in": "query",
+            "name": "asset_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -5211,7 +5541,97 @@
     },
     "/v1/explorer/instructions": {
       "get": {
-        "description": "List instructions for explorer usage.",
+        "description": "List instructions for explorer usage (supports pagination and optional authority/transaction/block/kind/asset_id filtering).",
+        "parameters": [
+          {
+            "description": "Optional page number (default 1).",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional items per page (default 10).",
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Preferred address format (`ih58` or `compressed`).",
+            "in": "query",
+            "name": "address_format",
+            "required": false,
+            "schema": {
+              "enum": [
+                "ih58",
+                "compressed"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter instructions by authority account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "in": "query",
+            "name": "authority",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter instructions by transaction hash.",
+            "in": "query",
+            "name": "transaction_hash",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter instructions by transaction status (`committed` or `rejected`).",
+            "in": "query",
+            "name": "transaction_status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter instructions by block height.",
+            "in": "query",
+            "name": "block",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Filter instructions by instruction kind (e.g., `transfer`, `mint`, `burn`).",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter instructions by asset identifier.",
+            "in": "query",
+            "name": "asset_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -5369,7 +5789,79 @@
     },
     "/v1/explorer/transactions": {
       "get": {
-        "description": "List transactions for explorer usage.",
+        "description": "List transactions for explorer usage (supports pagination and optional authority/block/status/asset_id filtering).",
+        "parameters": [
+          {
+            "description": "Optional page number (default 1).",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional items per page (default 10).",
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Preferred address format (`ih58` or `compressed`).",
+            "in": "query",
+            "name": "address_format",
+            "required": false,
+            "schema": {
+              "enum": [
+                "ih58",
+                "compressed"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter transactions by authority account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+            "in": "query",
+            "name": "authority",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter transactions by block height.",
+            "in": "query",
+            "name": "block",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Filter transactions by status (`committed` or `rejected`).",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter transactions by asset identifier.",
+            "in": "query",
+            "name": "asset_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -6249,7 +6741,7 @@
         "operationId": "kaigiRelayDetail",
         "parameters": [
           {
-            "description": "Relay account identifier (IH58 preferred; `relay@kaigi` accepted as routing alias).",
+            "description": "Relay account identifier (e.g., `relay@kaigi`).",
             "in": "path",
             "name": "relay_id",
             "required": true,
@@ -6898,6 +7390,15 @@
             }
           },
           {
+            "description": "Filter allowances by asset identifier.",
+            "in": "query",
+            "name": "asset_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "description": "Only include allowances whose certificate expiry is at or before this unix timestamp (ms).",
             "in": "query",
             "name": "certificate_expires_before_ms",
@@ -7394,6 +7895,15 @@
             "description": "Filter allowances by controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
             "in": "query",
             "name": "controller_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter allowances by asset identifier.",
+            "in": "query",
+            "name": "asset_id",
             "required": false,
             "schema": {
               "type": "string"
@@ -8288,6 +8798,15 @@
             }
           },
           {
+            "description": "Filter bundles by asset identifier.",
+            "in": "query",
+            "name": "asset_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "description": "Match bundles whose originating certificate id (hex) equals the provided value (case-insensitive).",
             "in": "query",
             "name": "certificate_id_hex",
@@ -8892,6 +9411,15 @@
             "description": "Filter bundles by deposit account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
             "in": "query",
             "name": "deposit_account_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter bundles by asset identifier.",
+            "in": "query",
+            "name": "asset_id",
             "required": false,
             "schema": {
               "type": "string"
@@ -10359,6 +10887,130 @@
         ]
       }
     },
+    "/v1/sorafs/audit/repair/claim": {
+      "post": {
+        "description": "Claim a SoraFS repair ticket (requires manifest_digest_hex, idempotency key, and worker signature).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Claim repair ticket.",
+        "tags": [
+          "SoraFS"
+        ]
+      }
+    },
+    "/v1/sorafs/audit/repair/complete": {
+      "post": {
+        "description": "Complete a SoraFS repair ticket (requires manifest_digest_hex, idempotency key, and worker signature).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Complete repair ticket.",
+        "tags": [
+          "SoraFS"
+        ]
+      }
+    },
+    "/v1/sorafs/audit/repair/fail": {
+      "post": {
+        "description": "Fail a SoraFS repair ticket (requires manifest_digest_hex, idempotency key, and worker signature).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fail repair ticket.",
+        "tags": [
+          "SoraFS"
+        ]
+      }
+    },
+    "/v1/sorafs/audit/repair/heartbeat": {
+      "post": {
+        "description": "Record a SoraFS repair worker heartbeat (requires manifest_digest_hex, idempotency key, and worker signature).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Repair heartbeat.",
+        "tags": [
+          "SoraFS"
+        ]
+      }
+    },
     "/v1/sorafs/audit/repair/report": {
       "post": {
         "description": "Submit a SoraFS repair report.",
@@ -10421,15 +11073,74 @@
         ]
       }
     },
+    "/v1/sorafs/audit/repair/status": {
+      "get": {
+        "description": "List SoraFS repair status across manifests (each entry includes Norito base64 record + ordered event log).",
+        "parameters": [
+          {
+            "description": "Filter by repair status (queued, verifying, in_progress, completed, failed, escalated).",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by provider id (hex).",
+            "in": "query",
+            "name": "provider",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List repair status.",
+        "tags": [
+          "SoraFS"
+        ]
+      }
+    },
     "/v1/sorafs/audit/repair/status/{manifest_hex}": {
       "get": {
-        "description": "Fetch repair status for a manifest.",
+        "description": "Fetch repair status for a manifest (each entry includes Norito base64 record + ordered event log).",
         "parameters": [
           {
             "description": "Manifest hash (hex).",
             "in": "path",
             "name": "manifest_hex",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by repair status (queued, verifying, in_progress, completed, failed, escalated).",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by provider id (hex).",
+            "in": "query",
+            "name": "provider",
+            "required": false,
             "schema": {
               "type": "string"
             }

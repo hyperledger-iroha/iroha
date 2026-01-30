@@ -1,6 +1,168 @@
 # Status
 
-Last update: 2026-01-29
+Last update: 2026-01-30
+- Izanami: added `allow_contract_deploy_in_stable` flag to gate contract deployment recipes in stable runs, wired through config/persistence/recipe selection with new CLI override coverage.
+- Tests: not run (not requested).
+- Android SDK: added multisig signature bundle support for `SignedTransaction` encoding (new `MultisigSignature`/`MultisigSignatures` models, encoder updates, and Android SDK doc note).
+- Tests: not run (per request).
+- Java Norito: added baseline RLE decode parity (MissingEndOfBlock) plus KeyUpdate/ContentKey resume snapshots with unit coverage.
+- Tests: not run (not requested).
+- Java Norito: added enum/discriminant columnar helpers (NCB/AoS) and Maven/Gradle publishing coordinates for `org.hyperledger.iroha:norito-java`.
+- Tests: not run (not requested).
+- Android SDK: align deterministic multisig seed hashing with Norito-sized field encoding for domain/spec and AccountId controller payloads to mirror Rust.
+- Android SDK: add multisig derived-controller rejection coverage for multihash-literal account ids.
+- Tests: not run (not requested).
+- Android SDK: transaction payloads now encode/decode multisig account controllers, reuse PublicKeyCodec for controller parsing, and multisig seed hashing now uses canonical AccountId encodings; added multisig authority layout checks and derived-controller rejection coverage.
+- Tests: not run (per request).
+- Torii explorer assets/transactions/instructions: add optional `asset_id` query filtering for `/v1/explorer/assets`, `/v1/explorer/transactions`, and `/v1/explorer/instructions`, with unit coverage.
+- Torii OpenAPI snapshots: regenerated `docs/portal/static/openapi/torii.json` after adding explorer asset/transaction/instruction filters, refreshed `versions/current` artifacts, and updated `versions.json`.
+- Tests: not run (not requested).
+- Android SDK: multisig register builder now rejects deterministically derived controller IDs via a Norito-seeded hash, with helper + unit coverage.
+- Tests: not run (not requested).
+- Prediction market demo: added durable `state` guards for staking/resolution in `demo/prediction_market.ko` and a compile regression in `crates/ivm/tests/kotodama.rs`.
+- Tests: `cargo test -p ivm prediction_market_demo_compiles -- --nocapture` (timed out after 120s during compilation; norito `padded` warnings emitted).
+- Nexus docs: replaced the lane lifecycle TODO notes with concrete propagation/storage cleanup behavior across `docs/source/nexus*.md`; Kotodama grammar translations now describe durable state overlays + conflict tracking (`STATE_GET/SET/DEL`), and the completed docs TODOs were removed from `roadmap.md`.
+- Tests: not run (docs-only change).
+- FASTPQ permissions: roles now carry per-permission epochs, FASTPQ permission-table roots incorporate the epoch bytes, and role register/grant/revoke paths preserve epoch metadata with unit coverage.
+- Norito spec: documented packed-struct layouts, compression validation, and schema-hash computation details in `norito.md`.
+- Tests: not run (not requested).
+- Torii GET list filters: added `asset_id` query-param filtering for account assets, account transactions, and asset holders; updated JS/Swift SDKs (options + unit coverage), refreshed SDK docs, and updated OpenAPI params.
+- Tests: not run (not requested).
+- Torii OpenAPI snapshots: regenerated `docs/portal/static/openapi/torii.json` with a signed manifest, refreshed `versions/current` artifacts, and updated `versions.json`.
+- Tests: not run (OpenAPI generation only).
+- Python SDK: add optional `asset_id` filters to account assets/transactions + asset-holder list helpers, update README example, and add unit coverage.
+- Tests: not run (not requested).
+- Python SDK docs: add `asset_id` filter examples to `docs/source/sdk/python/index.md` and the portal quickstart.
+- Tests: not run (docs-only change).
+- JS portal docs: add `assetId` list-filter example for account assets/transactions/holders.
+- Tests: not run (docs-only change).
+- JS portal docs: document offline allowance top-up helpers (issue + register + renewal) in the JavaScript SDK guide.
+- Tests: not run (docs-only change).
+- JS SDK docs: add `topUpOfflineAllowanceRenewal` example to the JS quickstart.
+- Tests: not run (docs-only change).
+- Python portal docs: add offline allowance top-up renewal example to the SDK guide.
+- Tests: not run (docs-only change).
+- Android SDK docs: document offline top-up helpers (issue + register + renewal) in the README and offline signing guide.
+- Tests: not run (docs-only change).
+- Python SDK docs: add an offline top-up renewal example to `docs/source/sdk/python/index.md`.
+- Tests: not run (docs-only change).
+- JS SDK README: add an offline top-up renewal example.
+- Tests: not run (docs-only change).
+- Offline allowance spec: clarify that top-ups are a two-step issue + register flow and that SDK helpers just chain endpoints.
+- Tests: not run (docs-only change).
+- JS SDK docs: note that `registerOfflineAllowance` / `renewOfflineAllowance` can be used when you already have a signed certificate.
+- Tests: not run (docs-only change).
+- Python SDK README: add offline top-up renewal example + note about split issue/register flows.
+- Tests: not run (docs-only change).
+- Swift SDK README: list offline top-up renewal helpers in the feature summary.
+- Tests: not run (docs-only change).
+- JS SDK docs: use the registered certificate id in renewal examples for consistency.
+- Tests: not run (docs-only change).
+- JS portal docs: clarify that top-up helpers return both issue + registration payloads.
+- Tests: not run (docs-only change).
+- Python SDK docs: add a blank line after the renewal example to separate the split-flow guidance.
+- Tests: not run (docs-only change).
+- Torii app API parity audit: note optional `asset_id` filters on account asset/transaction + holder lists.
+- Tests: not run (docs-only change).
+- Android offline SDK: add top-up helpers (issue+register + renewal), parse register responses, and let OfflineWallet cache verdict metadata from issued certificates; docs + unit coverage updated.
+- Tests: not run (not requested).
+- JS SDK: add offline allowance register/renew endpoints plus top-up helpers (issue + register), with docs + unit coverage.
+- JS SDK: avoid unhandled rejections when data-model compatibility checks fail by swallowing the cleanup promise.
+- Tests: `node --test javascript/iroha_js/test/toriiClient.test.js` (ok; native binding tests skipped).
+- Python Torii client: add offline certificate issue/register/renew helpers plus top-up flows, re-export response types in `iroha_python`, and document the flow in the Python README + SDK docs; unit coverage added.
+- Tests: `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k "offline_allowance"` (ok).
+- Account structure docs: translated `docs/account_structure.es.md` and `docs/account_structure.fr.md` to replace the remaining stubs for those locales.
+- Tests: not run (docs-only change).
+- Account structure docs: translated remaining locales (`docs/account_structure.ar.md`, `docs/account_structure.he.md`, `docs/account_structure.ja.md`, `docs/account_structure.pt.md`, `docs/account_structure.ru.md`, `docs/account_structure.ur.md`) to remove the remaining stubs.
+- Tests: not run (docs-only change).
+- Address curve registry refs: translated `docs/source/references/address_curve_registry.*.md` (ar/es/fr/he/ja/pt/ru/ur) to replace the remaining stubs with localized guidance.
+- Acceleration docs: replaced the CUDA parity smoke TODO with a concrete lab checklist in `docs/source/config/acceleration.md`.
+- Tests: not run (docs-only change).
+- SDKs (JS/Swift/Android): add `asset_id` convenience filters for offline list params (allowances/transfers), update client query encoding + unit coverage, and refresh SDK docs.
+- Tests: not run (not requested).
+- Swift IrohaSDK: added explorer instructions convenience wrappers (async + completion) with unit coverage.
+- Tests: not run (not requested).
+- Swift explorer instructions: added transfer-details parsing helpers for asset and batch transfers with unit coverage.
+- Tests: not run (not requested).
+- Swift explorer transfers: add role/account/asset-definition match helpers for transfer details with unit coverage.
+- Tests: not run (not requested).
+- Swift explorer instructions: add transfer record extraction + account/asset filtering helpers with unit coverage.
+- Tests: not run (not requested).
+- Swift explorer transfers: add Torii/IrohaSDK `getExplorerTransfers` helpers (single-page transfer history) with unit coverage; README example added.
+- Tests: not run (not requested).
+- Swift explorer transactions: add list/detail endpoints + DTOs with Torii/IrohaSDK helpers, unit coverage, and README usage example.
+- Tests: not run (not requested).
+- Swift explorer streams: add SSE helpers for instructions/transactions with unit coverage and README/doc coverage.
+- Tests: not run (not requested).
+- Swift explorer streams: add Combine publishers and IrohaSDK stream wrappers with unit coverage.
+- Tests: not run (not requested).
+- Swift explorer streams: add transfer-only SSE helpers (records + summaries) with IrohaSDK wrappers and unit coverage.
+- Tests: not run (not requested).
+- Swift explorer streams: add Combine publishers for transfer records/summaries with unit coverage.
+- Tests: not run (not requested).
+- Swift explorer streams: add history+live helper for account transfers with unit coverage and SDK wrapper.
+- Tests: not run (not requested).
+- Swift explorer streams: add Combine history+live publisher for account transfers with unit coverage.
+- Tests: not run (not requested).
+- Swift explorer params: add `asset_id` filtering for explorer instructions/transactions with unit coverage and README/doc updates.
+- Tests: not run (not requested).
+- Swift explorer instructions: add instruction-detail endpoint (async + completion) with SDK wrappers and unit coverage.
+- Tests: not run (not requested).
+- Swift explorer transfers: add summary helpers (flattened direction-aware transfer history) with Torii/IrohaSDK wrappers, unit coverage, and README snippet.
+- Tests: not run (not requested).
+- Swift explorer transfers: add account-scoped history helper with query defaults and unit coverage; README example added.
+- Tests: not run (not requested).
+- Swift explorer transfers: add paged async iterator for account history with SDK wrapper, unit coverage, and README example.
+- Tests: not run (not requested).
+- Swift explorer endpoints: added completion-path coverage for transfer summaries/history and transaction list/detail helpers.
+- Tests: not run (not requested).
+- Swift explorer transfer summaries: add `isIncoming`/`isOutgoing` convenience flags with unit coverage and README tweak.
+- Tests: not run (not requested).
+- Swift Torii client: added explorer instructions list endpoint DTOs, query params, and request helpers with unit coverage in `ToriiClientTests`.
+- Tests: not run (not requested).
+- Swift OfflineWallet: add top-up helpers (issue+register) and a public verdict-cache helper for issue responses; Swift docs updated and unit coverage added.
+- Tests: `swift test --filter OfflineWalletTopUpTests` (ok).
+- Account structure SDK alignment docs: translated `docs/account_structure_sdk_alignment.*.md` (ar/es/fr/he/ja/pt/ru/ur) to remove the pending stubs and reflect the IH58 rollout guidance.
+- Tests: not run (docs-only change).
+- RS16 erasure coding: AVX2 path now uses vectorized log/exp table gathers for `gf_mul`, and NEON path uses a vectorized bit-serial `gf_mul` loop; added table/NEON coverage.
+- Tests: not run (not requested).
+- Unstable network integration tests: added a 12-peer/4-fault scenario (2 rounds) to cover the 4-fault budget once peer counts scale beyond 9.
+- Tests: not run (not requested).
+- SoraFS repair: worker attempts local rehydration and then invokes an optional repair orchestrator hook to fetch missing chunks from remote sources before escalating.
+- Tests: not run (not requested).
+- Izanami 1 Hz soak (tps=1, pipeline_time=3s, 4 peers, faulty=0): `--nexus` run failed at startup with `Invalid genesis block: Genesis transactions must not contain errors` (run dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_K3GMlK`). Non-nexus run advanced to min height 2 then stalled (`no block height progress for 180s`; workload warnings include `deploy_kotodama_contract` trigger execution failure and tx confirmation timeouts). Run dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_LS7VDG`.
+- Tests: `cargo build -p izanami --release --locked` (ok; norito `padded` warnings, izanami dead-code warning). `./target/release/izanami --allow-net --nexus --peers 4 --faulty 0 --duration 300s --target-blocks 300 --progress-interval 10s --progress-timeout 180s --tps 1 --max-inflight 8 --workload-profile stable --pipeline-time 3s` (failed: invalid genesis). `./target/release/izanami --allow-net --peers 4 --faulty 0 --duration 300s --target-blocks 300 --progress-interval 10s --progress-timeout 180s --tps 1 --max-inflight 8 --workload-profile stable --pipeline-time 3s` (failed: stalled at min height 2).
+- Torii offline list filters: add `asset_id` query-param filtering for offline allowances/transfers (GET) with matching logic + unit coverage; updated OpenAPI params.
+- Tests: not run (not requested).
+- Kotodama grammar translations: align non-English trigger-filter notes with `data any` + pipeline filters (`pipeline transaction|block|merge|witness`).
+- Unstable network integration tests: restore higher `n_rounds` (5/5/3/3/3) for 5/4/8/9-peer cases; 4-fault coverage TODO remains.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config). Full workspace tests not run (per request).
+- Kotodama trigger DSL: add data/pipeline trigger filters (`data any`, `pipeline transaction/block/merge/witness`) wired into semantic analysis and manifests, with unit coverage and updated grammar docs.
+- Tests: not run (not requested).
+- Torii app query: add `asset_id` filtering for asset holders query (derived from definition + account) with adapter/filter unit coverage.
+- Tests: not run (not requested).
+- SoraFS repair: `register_por_verdict` now propagates repair-store persistence errors instead of swallowing them; added coverage for store-error propagation and mapped PoR API responses to 500 on storage failure.
+- Tests: not run (not requested).
+- Sumeragi commit-conflict handling: enforce strict finality by rejecting conflicting commit QCs at committed heights, recording/gossiping `InvalidQc` evidence (`commit_conflict_finality`), and keeping the local committed block; added unit coverage for block-sync and QC paths.
+- Kotodama: import `std::str::FromStr` so `AccountId::from_str` compiles during semantic checks.
+- Tests: `cargo test -p iroha_core block_sync_update_rejects_conflicting_commit_qc_and_keeps_local_block -- --nocapture` (ok; norito `padded` warnings persist). `cargo test -p iroha_core handle_qc_rejects_conflicting_commit_qc_and_keeps_local_block -- --nocapture` (ok; norito `padded` warnings persist).
+- Torii app query: added `asset_id` filter support for account transactions query (instruction payload scanning), plus unit coverage for filter/adapter behavior.
+- Tests: not run (not requested).
+- Torii app query: fix `asset_id` filter compilation by using public ISI exports and a `OnceLock` cache for tx asset ids.
+- Tests: `cargo check -p iroha_torii` (ok; norito `padded` warnings persist). `cargo fmt --all` (warns about nightly-only rustfmt options in config). Full workspace tests not run (per request).
+- Izanami: re-enabled stable trigger repetition + IVM/Kotodama deploy recipes, deduped repeatable trigger tracking, and wired Nexus staking genesis (fee/stake assets + gas sink + peer-derived validators) with stake-share tracking plus fee-sink reward minting.
+- Kotodama: Izanami sample compiler now enforces ABI v1 metadata on compiled bytecode with unit coverage.
+- Tests: `cargo fmt --all` (warns about nightly-only rustfmt options in config). `cargo test --workspace` failed: `crates/kotodama_lang/src/semantic.rs:410` missing `use std::str::FromStr` for `AccountId::from_str` (norito `padded` unused-assignment warnings also emitted).
+- Kotodama trigger DSL: add explicit `authority` support in trigger declarations (validated as AccountId), wire it into manifest trigger descriptors, and update grammar docs + unit coverage.
+- Tests: not run (not requested).
+- Rust 1.92 rollout: marked `Location::file_as_c_str` checklist item as DONE with a note that no C-FFI call sites currently require it.
+- Tests: not run (not requested).
+- Swift OfflineNorito: add UAID/opaque resolver hooks for offline account encoding, unit coverage for resolver paths, and document the resolver hook in the Swift offline guide.
+- Tests: not run (not requested).
+- Swift Torii client: replace async-unsafe `NSLock` usage for data model compatibility caching with a serial queue to avoid Swift 6 warnings.
+- Tests: `swift test` (ok; 1 test skipped).
+- Swift concurrency: replace `NSLock` guards in offline account resolution, Connect flow-control, and Connect keystore caching with serial queues to stay Swift 6-safe.
+- Tests: `swift test` (ok; 1 test skipped).
 - Swift Connect keystore: make file-backed HMAC computation deterministic, accept legacy key-order permutations during verification, and add regression coverage for legacy ordering acceptance.
 - Tests: `swift test` (ok; 1 test skipped).
 - Swift offline allowances: added top-up helpers (issue+register and renewal), added Torii renewal endpoint, and documented the new flow in Swift docs/README with unit coverage.
@@ -12,8 +174,6 @@ Last update: 2026-01-29
 - Telemetry: wire `sumeragi_rbc_rebroadcast_skipped_total` increments in `inc_rbc_rebroadcast_skipped`, and formalize the P2P queue depth cache comment now that the metric is exported; refreshed telemetry docs and unit coverage.
 - Tests: not run (not requested).
 - Roadmap: added a TODO inventory appendix tracking open TODO markers (code/tests/docs/translation) and listing non-actionable references for audit.
-- Tests: not run (not requested).
-- Sumeragi commit-conflict handling: enforce strict finality by rejecting conflicting commit QCs at already-committed heights, recording/gossiping `InvalidQc` evidence (`commit_conflict_finality`), and keeping the local committed block; added unit coverage for block-sync and QC paths.
 - Tests: not run (not requested).
 - Sumeragi RBC store pressure logging: formalized rate-limited transition logs (warn on elevated pressure, info on recovery) and removed the temporary TODO note.
 - Tests: not run (not requested).

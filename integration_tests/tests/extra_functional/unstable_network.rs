@@ -1533,11 +1533,10 @@ mod tests {
 
 #[tokio::test]
 async fn unstable_network_5_peers_1_fault() -> Result<()> {
-    // TODO: Restore higher round counts once relay stability is improved.
     UnstableNetwork {
         n_peers: 5,
         n_faulty_peers: 1,
-        n_rounds: 3,
+        n_rounds: 5,
         force_soft_fork: false,
     }
     .run()
@@ -1546,11 +1545,10 @@ async fn unstable_network_5_peers_1_fault() -> Result<()> {
 
 #[tokio::test]
 async fn soft_fork() -> Result<()> {
-    // TODO: Restore higher round counts once relay stability is improved.
     UnstableNetwork {
         n_peers: 4,
         n_faulty_peers: 0,
-        n_rounds: 3,
+        n_rounds: 5,
         force_soft_fork: true,
     }
     .run()
@@ -1559,11 +1557,10 @@ async fn soft_fork() -> Result<()> {
 
 #[tokio::test]
 async fn unstable_network_8_peers_1_fault() -> Result<()> {
-    // TODO: Restore higher round counts once relay stability is improved.
     UnstableNetwork {
         n_peers: 8,
         n_faulty_peers: 1,
-        n_rounds: 1,
+        n_rounds: 3,
         force_soft_fork: false,
     }
     .run()
@@ -1572,11 +1569,10 @@ async fn unstable_network_8_peers_1_fault() -> Result<()> {
 
 #[tokio::test]
 async fn unstable_network_9_peers_2_faults() -> Result<()> {
-    // TODO: Restore higher round counts once relay stability is improved.
     UnstableNetwork {
         n_peers: 9,
         n_faulty_peers: 2,
-        n_rounds: 1,
+        n_rounds: 3,
         force_soft_fork: false,
     }
     .run()
@@ -1585,12 +1581,22 @@ async fn unstable_network_9_peers_2_faults() -> Result<()> {
 
 #[tokio::test]
 async fn unstable_network_9_peers_3_faults() -> Result<()> {
-    // TODO: Restore higher round counts once relay stability is improved.
-    // TODO: Revisit 4-fault coverage once quorum budgets or peer counts change.
     UnstableNetwork {
         n_peers: 9,
         n_faulty_peers: 3,
-        n_rounds: 1,
+        n_rounds: 3,
+        force_soft_fork: false,
+    }
+    .run()
+    .await
+}
+
+#[tokio::test]
+async fn unstable_network_12_peers_4_faults() -> Result<()> {
+    UnstableNetwork {
+        n_peers: 12,
+        n_faulty_peers: 4,
+        n_rounds: 2,
         force_soft_fork: false,
     }
     .run()

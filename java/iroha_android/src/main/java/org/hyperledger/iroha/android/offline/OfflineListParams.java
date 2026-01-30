@@ -13,6 +13,7 @@ public final class OfflineListParams {
   private final Long offset;
   private final String sort;
   private final String addressFormat;
+  private final String assetId;
   private final Long certificateExpiresBeforeMs;
   private final Long certificateExpiresAfterMs;
   private final Long policyExpiresBeforeMs;
@@ -28,6 +29,7 @@ public final class OfflineListParams {
     this.offset = builder.offset;
     this.sort = builder.sort;
     this.addressFormat = builder.addressFormat;
+    this.assetId = builder.assetId;
     this.certificateExpiresBeforeMs = builder.certificateExpiresBeforeMs;
     this.certificateExpiresAfterMs = builder.certificateExpiresAfterMs;
     this.policyExpiresBeforeMs = builder.policyExpiresBeforeMs;
@@ -68,6 +70,9 @@ public final class OfflineListParams {
     addressFormat()
         .filter(value -> !value.isBlank())
         .ifPresent(value -> params.put("address_format", value));
+    if (assetId != null && !assetId.isBlank()) {
+      params.put("asset_id", assetId.trim());
+    }
     if (certificateExpiresBeforeMs != null) {
       params.put("certificate_expires_before_ms", String.valueOf(certificateExpiresBeforeMs));
     }
@@ -105,6 +110,7 @@ public final class OfflineListParams {
     private Long offset;
     private String sort;
     private String addressFormat;
+    private String assetId;
     private Long certificateExpiresBeforeMs;
     private Long certificateExpiresAfterMs;
     private Long policyExpiresBeforeMs;
@@ -144,6 +150,11 @@ public final class OfflineListParams {
 
     public Builder addressFormat(final String addressFormat) {
       this.addressFormat = addressFormat;
+      return this;
+    }
+
+    public Builder assetId(final String assetId) {
+      this.assetId = assetId;
       return this;
     }
 

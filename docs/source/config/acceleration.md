@@ -190,6 +190,7 @@ canonical `Heuristics::canonical` implementation and `docs/source/benchmarks.md`
 - If a backend fails self-tests, keep the node online in CPU-only mode (`enable_metal =
   false`, `enable_cuda = false`) and open an incident with the captured parity output
   instead of forcing the backend on. Results must remain deterministic across modes.
-- TODO: add a CUDA parity smoke on lab NV hardware once sm_8x cycles reopen; use the
-  same poseidon parity harness with `ACCEL_ENABLE_CUDA=1` and attach the status snapshot
-  to the benchmark artefacts.
+- **CUDA parity smoke (lab NV hardware):** Run
+  `ACCEL_ENABLE_CUDA=1 cargo test -p ivm poseidon_instructions_match_across_acceleration_configs -- --nocapture`
+  on sm_8x hardware, capture `cargo xtask acceleration-state --format json`, and attach
+  the status snapshot (GPU model/driver included) to the benchmark artefacts.

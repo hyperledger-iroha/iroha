@@ -1,6 +1,6 @@
 //! Structures, traits and impls related to `Role`s.
 
-use std::{format, string::String, vec::Vec};
+use std::{collections::BTreeMap, format, string::String, vec::Vec};
 
 use iroha_data_model_derive::model;
 
@@ -10,6 +10,17 @@ use crate::{
     account::AccountId,
     permission::{Permission, Permissions},
 };
+
+fn permission_epochs_from_permissions(
+    permissions: &Permissions,
+    default_epoch: u64,
+) -> BTreeMap<Permission, u64> {
+    permissions
+        .iter()
+        .cloned()
+        .map(|perm| (perm, default_epoch))
+        .collect()
+}
 
 #[model]
 mod model {
@@ -56,6 +67,8 @@ mod model {
         pub id: RoleId,
         /// Permission tokens.
         pub permissions: Permissions,
+        /// Permission grant epochs (block heights), keyed by permission.
+        pub permission_epochs: BTreeMap<Permission, u64>,
     }
 
     /// Builder for [`Role`]
@@ -153,8 +166,14 @@ impl norito::json::JsonDeserialize for NewRole {
             permissions.ok_or_else(|| norito::json::Error::missing_field("permissions"))?;
         let grant_to = grant_to.ok_or_else(|| norito::json::Error::missing_field("grant_to"))?;
 
+        let permission_epochs = permission_epochs_from_permissions(&permissions, 0);
+
         Ok(Self {
-            inner: Role { id, permissions },
+            inner: Role {
+                id,
+                permissions,
+                permission_epochs,
+            },
             grant_to,
         })
     }
@@ -212,7 +231,13 @@ impl norito::json::JsonDeserialize for Role {
         let permissions =
             permissions.ok_or_else(|| norito::json::Error::missing_field("permissions"))?;
 
-        Ok(Self { id, permissions })
+        let permission_epochs = permission_epochs_from_permissions(&permissions, 0);
+
+        Ok(Self {
+            id,
+            permissions,
+            permission_epochs,
+        })
     }
 }
 
@@ -228,6 +253,31 @@ impl Role {
     pub fn permissions(&self) -> impl ExactSizeIterator<Item = &Permission> {
         self.permissions.iter()
     }
+
+    /// Return the recorded epoch for the provided permission.
+    #[inline]
+    #[must_use]
+    pub fn permission_epoch(&self, permission: &Permission) -> Option<u64> {
+        self.permission_epochs.get(permission).copied()
+    }
+
+    /// Borrow the permission epoch map.
+    #[inline]
+    #[must_use]
+    pub fn permission_epochs(&self) -> &BTreeMap<Permission, u64> {
+        &self.permission_epochs
+    }
+
+    /// Fill missing permission epoch entries and drop stale ones.
+    pub fn ensure_permission_epochs(&mut self, default_epoch: u64) {
+        self.permission_epochs
+            .retain(|perm, _| self.permissions.contains(perm));
+        for perm in &self.permissions {
+            self.permission_epochs
+                .entry(perm.clone())
+                .or_insert(default_epoch);
+        }
+    }
 }
 
 impl NewRole {
@@ -240,6 +290,7 @@ impl NewRole {
             inner: Role {
                 id,
                 permissions: Permissions::new(),
+                permission_epochs: BTreeMap::new(),
             },
         }
     }
@@ -248,7 +299,16 @@ impl NewRole {
     #[must_use]
     #[inline]
     pub fn add_permission(mut self, perm: impl Into<Permission>) -> Self {
-        self.inner.permissions.insert(perm.into());
+        self.add_permission_with_epoch(perm, 0)
+    }
+
+    /// Add permission to the [`Role`] with an explicit epoch.
+    #[must_use]
+    #[inline]
+    pub fn add_permission_with_epoch(mut self, perm: impl Into<Permission>, epoch: u64) -> Self {
+        let perm = perm.into();
+        self.inner.permissions.insert(perm.clone());
+        self.inner.permission_epochs.entry(perm).or_insert(epoch);
         self
     }
 }
@@ -282,12 +342,59 @@ mod tests {
             "can_audit".into(),
             Json::new(norito::json!({"level": "basic"})),
         ));
-        let role = Role { id, permissions };
+        let permission_epochs = permission_epochs_from_permissions(&permissions, 0);
+        let role = Role {
+            id,
+            permissions,
+            permission_epochs,
+        };
 
         let json = norito::json::to_json(&role).expect("serialize role");
         let decoded: Role = norito::json::from_json(&json).expect("deserialize role");
 
         assert_eq!(decoded, role);
+        assert_eq!(decoded.permission_epochs().len(), 1);
+        assert_eq!(
+            decoded.permission_epoch(decoded.permissions().next().expect("permission")),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn role_permission_epochs_capture_epoch() {
+        use iroha_crypto::{Algorithm, KeyPair};
+
+        let name: Name = "auditor".parse().expect("role name");
+        let id = RoleId::new(name);
+        let perm = Permission::new("can_audit".into(), Json::new(norito::json!({})));
+        let domain: crate::domain::DomainId = "wonderland".parse().unwrap();
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let account_id = AccountId::new(domain, keypair.public_key().clone());
+        let role = Role::new(id, account_id.clone())
+            .add_permission_with_epoch(perm.clone(), 42)
+            .build(&account_id);
+        assert_eq!(role.permission_epoch(&perm), Some(42));
+    }
+
+    #[test]
+    fn role_ensure_permission_epochs_fills_missing_and_prunes() {
+        let name: Name = "auditor".parse().expect("role name");
+        let id = RoleId::new(name);
+        let perm = Permission::new("can_audit".into(), Json::new(norito::json!({})));
+        let mut permissions = Permissions::new();
+        permissions.insert(perm.clone());
+        let mut role = Role {
+            id,
+            permissions,
+            permission_epochs: BTreeMap::new(),
+        };
+
+        role.ensure_permission_epochs(9);
+        assert_eq!(role.permission_epoch(&perm), Some(9));
+
+        role.permissions.clear();
+        role.ensure_permission_epochs(9);
+        assert!(role.permission_epochs.is_empty());
     }
 }
 

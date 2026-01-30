@@ -1,10 +1,14 @@
 package org.hyperledger.iroha.android.tx;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
-/** Holds a fully encoded and signed transaction ready for submission to an Iroha node. */
+/**
+ * Holds a fully encoded and signed transaction ready for submission to an Iroha node, including
+ * optional multisig signature bundles.
+ */
 public final class SignedTransaction {
   private final byte[] encodedPayload;
   private final byte[] signature;
@@ -13,13 +17,14 @@ public final class SignedTransaction {
   private final String schemaName;
   private final String keyAlias;
   private final byte[] exportedKeyBundle;
+  private final MultisigSignatures multisigSignatures;
 
   public SignedTransaction(
       final byte[] encodedPayload,
       final byte[] signature,
       final byte[] publicKey,
       final String schemaName) {
-    this(encodedPayload, signature, publicKey, schemaName, null, null, null);
+    this(encodedPayload, signature, publicKey, schemaName, null, null, null, null);
   }
 
   public SignedTransaction(
@@ -28,7 +33,7 @@ public final class SignedTransaction {
       final byte[] publicKey,
       final String schemaName,
       final String keyAlias) {
-    this(encodedPayload, signature, publicKey, schemaName, keyAlias, null, null);
+    this(encodedPayload, signature, publicKey, schemaName, keyAlias, null, null, null);
   }
 
   public SignedTransaction(
@@ -38,7 +43,15 @@ public final class SignedTransaction {
       final String schemaName,
       final String keyAlias,
       final byte[] exportedKeyBundle) {
-    this(encodedPayload, signature, publicKey, schemaName, keyAlias, exportedKeyBundle, null);
+    this(
+        encodedPayload,
+        signature,
+        publicKey,
+        schemaName,
+        keyAlias,
+        exportedKeyBundle,
+        null,
+        null);
   }
 
   private SignedTransaction(
@@ -48,7 +61,8 @@ public final class SignedTransaction {
       final String schemaName,
       final String keyAlias,
       final byte[] exportedKeyBundle,
-      final byte[] blsPublicKey) {
+      final byte[] blsPublicKey,
+      final MultisigSignatures multisigSignatures) {
     this.encodedPayload =
         Arrays.copyOf(Objects.requireNonNull(encodedPayload, "encodedPayload"), encodedPayload.length);
     this.signature = Arrays.copyOf(Objects.requireNonNull(signature, "signature"), signature.length);
@@ -59,6 +73,7 @@ public final class SignedTransaction {
         exportedKeyBundle == null ? null : Arrays.copyOf(exportedKeyBundle, exportedKeyBundle.length);
     this.blsPublicKey =
         blsPublicKey == null ? null : Arrays.copyOf(blsPublicKey, blsPublicKey.length);
+    this.multisigSignatures = multisigSignatures;
   }
 
   public byte[] encodedPayload() {
@@ -95,6 +110,10 @@ public final class SignedTransaction {
     return Optional.of(Arrays.copyOf(exportedKeyBundle, exportedKeyBundle.length));
   }
 
+  public Optional<MultisigSignatures> multisigSignatures() {
+    return Optional.ofNullable(multisigSignatures);
+  }
+
   public Builder toBuilder() {
     return builder()
         .setEncodedPayload(encodedPayload())
@@ -103,7 +122,8 @@ public final class SignedTransaction {
         .setSchemaName(schemaName)
         .setKeyAlias(keyAlias)
         .setExportedKeyBundle(exportedKeyBundle().orElse(null))
-        .setBlsPublicKey(blsPublicKey().orElse(null));
+        .setBlsPublicKey(blsPublicKey().orElse(null))
+        .setMultisigSignatures(multisigSignatures().orElse(null));
   }
 
   public static Builder builder() {
@@ -118,6 +138,7 @@ public final class SignedTransaction {
     private String keyAlias;
     private byte[] exportedKeyBundle;
     private byte[] blsPublicKey;
+    private MultisigSignatures multisigSignatures;
 
     private static byte[] cloneArray(final byte[] input) {
       return input == null ? null : input.clone();
@@ -158,6 +179,20 @@ public final class SignedTransaction {
       return this;
     }
 
+    public Builder setMultisigSignatures(final MultisigSignatures multisigSignatures) {
+      this.multisigSignatures = multisigSignatures;
+      return this;
+    }
+
+    public Builder setMultisigSignatures(final List<MultisigSignature> signatures) {
+      if (signatures == null) {
+        this.multisigSignatures = null;
+      } else {
+        this.multisigSignatures = MultisigSignatures.of(signatures);
+      }
+      return this;
+    }
+
     public SignedTransaction build() {
       if (encodedPayload == null || signature == null || publicKey == null || schemaName == null) {
         throw new IllegalStateException(
@@ -170,7 +205,8 @@ public final class SignedTransaction {
           schemaName,
           keyAlias,
           exportedKeyBundle,
-          blsPublicKey);
+          blsPublicKey,
+          multisigSignatures);
     }
   }
 }

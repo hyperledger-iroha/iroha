@@ -34,6 +34,15 @@ struct FieldTables {
     log: Vec<u16>,
 }
 
+#[cfg(all(
+    feature = "simd-accel",
+    any(target_arch = "x86", target_arch = "x86_64")
+))]
+struct FieldTablesU32 {
+    exp: Vec<u32>,
+    log: Vec<u32>,
+}
+
 static SIMD_ENABLED: AtomicBool = AtomicBool::new(true);
 
 /// Enable or disable SIMD acceleration for RS16 parity encoding.
@@ -70,6 +79,20 @@ fn tables() -> &'static FieldTables {
         upper.copy_from_slice(lower);
 
         FieldTables { exp, log }
+    })
+}
+
+#[cfg(all(
+    feature = "simd-accel",
+    any(target_arch = "x86", target_arch = "x86_64")
+))]
+fn tables_u32() -> &'static FieldTablesU32 {
+    static TABLES: OnceLock<FieldTablesU32> = OnceLock::new();
+    TABLES.get_or_init(|| {
+        let tables = tables();
+        let exp = tables.exp.iter().map(|value| u32::from(*value)).collect();
+        let log = tables.log.iter().map(|value| u32::from(*value)).collect();
+        FieldTablesU32 { exp, log }
     })
 }
 
@@ -375,10 +398,9 @@ mod avx2 {
     #[cfg(target_arch = "x86_64")]
     use std::arch::x86_64 as arch;
 
-    use super::gf_mul;
+    use super::{gf_mul, tables_u32};
 
-    /// AVX2 path that vectorizes the XOR accumulation; gf_mul remains scalar.
-    // TODO: Vectorize gf_mul to avoid per-symbol scalar multiplication.
+    /// AVX2 path that vectorizes the XOR accumulation and gf_mul table lookups.
     #[allow(unsafe_code)]
     #[target_feature(enable = "avx2")]
     pub(super) unsafe fn mul_add_row_avx2(coef: u16, data_row: &[u16], out: &mut [u16]) {
@@ -410,17 +432,28 @@ mod avx2 {
                 return;
             }
 
-            let mut terms = [0u16; 16];
-            while idx + 16 <= len {
-                for (offset, term) in terms.iter_mut().enumerate() {
-                    *term = gf_mul(coef, data_row[idx + offset]);
-                }
-                let term_vec = arch::_mm256_loadu_si256(terms.as_ptr() as *const arch::__m256i);
-                let out_vec =
-                    arch::_mm256_loadu_si256(out.as_ptr().add(idx) as *const arch::__m256i);
-                let merged = arch::_mm256_xor_si256(out_vec, term_vec);
-                arch::_mm256_storeu_si256(out.as_mut_ptr().add(idx) as *mut arch::__m256i, merged);
-                idx += 16;
+            let tables = tables_u32();
+            let log_table = tables.log.as_ptr() as *const i32;
+            let exp_table = tables.exp.as_ptr() as *const i32;
+            let log_coef = tables.log[coef as usize] as i32;
+            let log_coef_vec = arch::_mm256_set1_epi32(log_coef);
+            let zero = arch::_mm256_setzero_si256();
+            while idx + 8 <= len {
+                let data_vec =
+                    arch::_mm_loadu_si128(data_row.as_ptr().add(idx) as *const arch::__m128i);
+                let indices = arch::_mm256_cvtepu16_epi32(data_vec);
+                let zero_mask = arch::_mm256_cmpeq_epi32(indices, zero);
+                let log_vec = arch::_mm256_i32gather_epi32(log_table, indices, 4);
+                let exp_indices = arch::_mm256_add_epi32(log_vec, log_coef_vec);
+                let mut term_vec = arch::_mm256_i32gather_epi32(exp_table, exp_indices, 4);
+                term_vec = arch::_mm256_andnot_si256(zero_mask, term_vec);
+                let term_lo = arch::_mm256_castsi256_si128(term_vec);
+                let term_hi = arch::_mm256_extracti128_si256(term_vec, 1);
+                let packed = arch::_mm_packus_epi32(term_lo, term_hi);
+                let out_vec = arch::_mm_loadu_si128(out.as_ptr().add(idx) as *const arch::__m128i);
+                let merged = arch::_mm_xor_si128(out_vec, packed);
+                arch::_mm_storeu_si128(out.as_mut_ptr().add(idx) as *mut arch::__m128i, merged);
+                idx += 8;
             }
             for (slot, symbol) in out.iter_mut().zip(data_row.iter()).skip(idx) {
                 *slot ^= gf_mul(coef, *symbol);
@@ -435,8 +468,7 @@ mod neon {
 
     use super::gf_mul;
 
-    /// NEON path that vectorizes the XOR accumulation; `gf_mul` remains scalar.
-    // TODO: Vectorize gf_mul to avoid per-symbol scalar multiplication.
+    /// NEON path that vectorizes the XOR accumulation and gf_mul operations.
     #[allow(unsafe_code)]
     #[target_feature(enable = "neon")]
     pub(super) unsafe fn mul_add_row_neon(coef: u16, data_row: &[u16], out: &mut [u16]) {
@@ -462,12 +494,9 @@ mod neon {
                 return;
             }
 
-            let mut terms = [0u16; 8];
             while idx + 8 <= len {
-                for (offset, term) in terms.iter_mut().enumerate() {
-                    *term = gf_mul(coef, data_row[idx + offset]);
-                }
-                let term_vec = arch::vld1q_u16(terms.as_ptr());
+                let data_vec = arch::vld1q_u16(data_row.as_ptr().add(idx));
+                let term_vec = gf_mul_vec(coef, data_vec);
                 let out_vec = arch::vld1q_u16(out.as_ptr().add(idx));
                 let merged = arch::veorq_u16(out_vec, term_vec);
                 arch::vst1q_u16(out.as_mut_ptr().add(idx), merged);
@@ -475,6 +504,57 @@ mod neon {
             }
             for (slot, symbol) in out.iter_mut().zip(data_row.iter()).skip(idx) {
                 *slot ^= gf_mul(coef, *symbol);
+            }
+        }
+    }
+
+    #[allow(unsafe_code)]
+    #[inline]
+    unsafe fn gf_mul_vec(coef: u16, data: arch::uint16x8_t) -> arch::uint16x8_t {
+        // SAFETY: Caller ensures NEON is available.
+        unsafe {
+            let mut a = arch::vdupq_n_u16(coef);
+            let mut b = data;
+            let mut acc = arch::vdupq_n_u16(0);
+            let one = arch::vdupq_n_u16(1);
+            let poly = arch::vdupq_n_u16(0x100B);
+
+            for _ in 0..16 {
+                let lsb = arch::vandq_u16(b, one);
+                let mask = arch::vceqq_u16(lsb, one);
+                acc = arch::veorq_u16(acc, arch::vandq_u16(a, mask));
+                b = arch::vshrq_n_u16(b, 1);
+
+                let carry = arch::vshrq_n_u16(a, 15);
+                a = arch::vshlq_n_u16(a, 1);
+                let carry_mask = arch::vceqq_u16(carry, one);
+                a = arch::veorq_u16(a, arch::vandq_u16(poly, carry_mask));
+            }
+
+            acc
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{gf_mul, gf_mul_vec};
+        use std::arch::aarch64 as arch;
+
+        #[test]
+        fn neon_gf_mul_vec_matches_scalar() {
+            if !std::arch::is_aarch64_feature_detected!("neon") {
+                return;
+            }
+            let coef = 0x1234u16;
+            let data = [0u16, 1, 2, 3, 4, 5, 0x00FF, 0xFFFF];
+            let mut out = [0u16; 8];
+            unsafe {
+                let vec = arch::vld1q_u16(data.as_ptr());
+                let result = gf_mul_vec(coef, vec);
+                arch::vst1q_u16(out.as_mut_ptr(), result);
+            }
+            for idx in 0..8 {
+                assert_eq!(out[idx], gf_mul(coef, data[idx]));
             }
         }
     }
@@ -535,6 +615,32 @@ mod tests {
         if std::arch::is_aarch64_feature_detected!("neon") {
             let neon = encode_parity_with_backend(&data, 4, Backend::Neon).expect("neon");
             assert_eq!(scalar, neon);
+        }
+    }
+
+    #[test]
+    #[cfg(all(
+        feature = "simd-accel",
+        any(target_arch = "x86", target_arch = "x86_64")
+    ))]
+    fn tables_u32_matches_u16() {
+        let tables = tables();
+        let tables_u32 = tables_u32();
+        assert_eq!(tables.exp.len(), tables_u32.exp.len());
+        assert_eq!(tables.log.len(), tables_u32.log.len());
+
+        let mut exp_indices = vec![0usize, 1, 2, 17, 1024, tables.exp.len() - 1];
+        exp_indices.sort_unstable();
+        exp_indices.dedup();
+        for idx in exp_indices {
+            assert_eq!(tables.exp[idx], tables_u32.exp[idx] as u16);
+        }
+
+        let mut log_indices = vec![0usize, 1, 2, 17, 1024, tables.log.len() - 1];
+        log_indices.sort_unstable();
+        log_indices.dedup();
+        for idx in log_indices {
+            assert_eq!(tables.log[idx], tables_u32.log[idx] as u16);
         }
     }
 

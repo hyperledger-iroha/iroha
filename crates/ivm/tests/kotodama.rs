@@ -135,6 +135,15 @@ fn irohaswap_sample_compiles() {
 }
 
 #[test]
+fn prediction_market_demo_compiles() {
+    let src = include_str!("../../../demo/prediction_market.ko");
+    let code = Compiler::new()
+        .compile_source(src)
+        .expect("prediction market demo should compile");
+    assert!(!code.is_empty());
+}
+
+#[test]
 fn tuple_destructure_and_field_access() {
     // Destructure a tuple literal into (a,b) and sum; also exercise direct field access `(1,2).1`
     let src = "fn sum() -> int { let (a,b) = (3,4); let c = (1,2).1; return a + b + c; }";

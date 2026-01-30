@@ -776,6 +776,12 @@ CLI tools, and dashboards stay in sync with the roadmap requirements.
 | `GET`  | `/v1/offline/bundle/proof_status` | Lightweight proof status for a bundle. |
 | `GET`  | `/v1/offline/rejections` | Aggregated per-platform rejection counters (requires telemetry). |
 
+Top-ups are a two-step flow: issue a certificate with
+`/v1/offline/certificates/issue` (or the renewal variant) and then register it
+via `/v1/offline/allowances` (or `/v1/offline/allowances/{certificate_id_hex}/renew`).
+There is no single “top-up” endpoint; SDK helpers simply chain the two calls
+and verify the certificate ids match.
+
 Issuer endpoints (`/v1/offline/certificates/*/issue`) are only enabled when
 `torii.offline_issuer` is configured. Use `torii.offline_issuer.allowed_controllers` to restrict
 which controller accounts may request new certificates.
@@ -848,6 +854,7 @@ SDKs can avoid building JSON predicates for the common expiry/verdict workflows:
 - `controller_id` — filter allowances by controller account. Torii accepts IH58 (preferred), compressed (`sora`, second-best), or
   raw public-key literals and canonicalises them to the Global form before evaluating the query, so
   operators can feed whichever encoding their tooling surfaces.
+- `asset_id` — filter allowances by asset identifier.
 - `certificate_expires_before_ms` / `certificate_expires_after_ms` — constrain the certificate
   expiry timestamp (`<=`/`>=` respectively).
 - `policy_expires_before_ms` / `policy_expires_after_ms` — constrain the policy expiry timestamp.
@@ -867,6 +874,7 @@ the same certificate metadata without composing JSON:
 - `controller_id` / `receiver_id` / `deposit_account_id` — filter bundles by the originating
   controller, receiver, or deposit account. Each parameter accepts IH58 (preferred), compressed (`sora`, second-best), or raw
   public-key literals and Torii normalises the value to the canonical on-ledger form before matching.
+- `asset_id` — filter bundles by the asset identifier recorded in the transfer commitment.
 - `certificate_id_hex` — case-insensitive certificate identifier match.
 - `certificate_expires_before_ms` / `certificate_expires_after_ms` — filter by the underlying
   certificate expiry window.

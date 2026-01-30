@@ -14,6 +14,9 @@ import org.hyperledger.iroha.android.client.HttpTransportExecutor;
 import org.hyperledger.iroha.android.client.OfflineToriiClient;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.offline.OfflineAllowanceCommitment;
+import org.hyperledger.iroha.android.offline.OfflineWalletCertificateDraft;
+import org.hyperledger.iroha.android.offline.OfflineWalletPolicy;
 
 public final class OfflineWalletTest {
 
@@ -24,6 +27,7 @@ public final class OfflineWalletTest {
     circulationsModesFlipAndNotify();
     verdictFreshnessGuards();
     safetyDetectSnapshotsPersistAndExpire();
+    topUpRecordsVerdictMetadata();
     exportsVerdictJournalJson();
     System.out.println("[IrohaAndroid] OfflineWalletTest passed.");
   }
@@ -270,6 +274,75 @@ public final class OfflineWalletTest {
     }
   }
 
+  private static void topUpRecordsVerdictMetadata() throws Exception {
+    final Path logFile = Files.createTempFile("offline_wallet_topup_test", ".json");
+    final Path verdictFile = verdictJournalPath(logFile);
+    final Path counterFile = counterJournalPath(logFile);
+    try {
+      final SequencedExecutor executor =
+          new SequencedExecutor(
+              List.of(
+                  new StubResponse(
+                      200,
+                      """
+                      {
+                        "certificate_id_hex": "deadbeef",
+                        "certificate": {
+                          "controller": "alice@wonderland",
+                          "allowance": { "asset": "usd#wonderland", "amount": "10", "commitment": [1, 2] },
+                          "spend_public_key": "ed0120deadbeef",
+                          "attestation_report": [3, 4],
+                          "issued_at_ms": 100,
+                          "expires_at_ms": 200,
+                          "policy": { "max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200 },
+                          "operator_signature": "AA",
+                          "metadata": {},
+                          "verdict_id": null,
+                          "attestation_nonce": null,
+                          "refresh_at_ms": null
+                        }
+                      }
+                      """),
+                  new StubResponse(
+                      200,
+                      """
+                      {
+                        "certificate_id_hex": "deadbeef"
+                      }
+                      """)));
+      final OfflineToriiClient client =
+          OfflineToriiClient.builder()
+              .executor(executor)
+              .baseUri(URI.create("https://example.com"))
+              .build();
+      final OfflineWallet wallet = new OfflineWallet(client, logFile, false);
+      final OfflineAllowanceCommitment allowance =
+          new OfflineAllowanceCommitment("usd#wonderland", "10", new byte[] {1, 2});
+      final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
+      final OfflineWalletCertificateDraft draft =
+          new OfflineWalletCertificateDraft(
+              "alice@wonderland",
+              allowance,
+              "ed0120deadbeef",
+              new byte[] {3, 4},
+              100L,
+              200L,
+              policy,
+              null,
+              null,
+              null,
+              null);
+      wallet.topUpAllowance(draft, "treasury@wonderland", "deadbeef").join();
+      final Optional<OfflineVerdictMetadata> verdict = wallet.verdictMetadata("deadbeef");
+      assert verdict.isPresent() : "expected cached verdict metadata";
+      assert "10".equals(verdict.get().remainingAmount()) : "remaining amount mismatch";
+    } finally {
+      Files.deleteIfExists(logFile);
+      Files.deleteIfExists(verdictFile);
+      Files.deleteIfExists(counterFile);
+    }
+  }
+
   private static void exportsVerdictJournalJson() throws Exception {
     final Path logFile = Files.createTempFile("offline_wallet_verdict_export", ".json");
     final Path verdictFile = verdictJournalPath(logFile);
@@ -332,6 +405,38 @@ public final class OfflineWalletTest {
       Files.deleteIfExists(logFile);
       Files.deleteIfExists(verdictFile);
       Files.deleteIfExists(counterFile);
+    }
+  }
+
+  private static final class StubResponse {
+    private final int status;
+    private final byte[] body;
+
+    private StubResponse(final int status, final String body) {
+      this.status = status;
+      this.body = body.getBytes(StandardCharsets.UTF_8);
+    }
+  }
+
+  private static final class SequencedExecutor implements HttpTransportExecutor {
+    private final java.util.List<StubResponse> queue;
+
+    private SequencedExecutor(final java.util.List<StubResponse> responses) {
+      this.queue = new java.util.ArrayList<>(responses);
+    }
+
+    @Override
+    public CompletableFuture<TransportResponse> execute(
+        final org.hyperledger.iroha.android.client.transport.TransportRequest request) {
+      if (queue.isEmpty()) {
+        final TransportResponse response =
+            new TransportResponse(500, "{}".getBytes(StandardCharsets.UTF_8), "", java.util.Map.of());
+        return CompletableFuture.completedFuture(response);
+      }
+      final StubResponse next = queue.remove(0);
+      final TransportResponse response =
+          new TransportResponse(next.status, next.body, "", java.util.Map.of());
+      return CompletableFuture.completedFuture(response);
     }
   }
 

@@ -44,8 +44,11 @@ from iroha_torii_client.client import (
     OfflineAllowanceDeadline,
     OfflineAllowanceListItem,
     OfflineAllowanceListPage,
+    OfflineAllowanceRegisterResponse,
+    OfflineCertificateIssueResponse,
     OfflineSummaryListItem,
     OfflineSummaryListPage,
+    OfflineTopUpResponse,
     OfflineTransferHistoryEntry,
     OfflineTransferListItem,
     OfflineTransferListPage,
@@ -8326,10 +8329,14 @@ class ToriiClient(_BaseToriiClient):
         *,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        asset_id: Optional[str] = None,
     ) -> Optional[Any]:
-        """List account assets via `GET /v1/accounts/{account_id}/assets`."""
+        """List account assets via `GET /v1/accounts/{account_id}/assets` (optional `asset_id`)."""
 
         params = self._pagination_params(limit=limit, offset=offset)
+        asset_id_value = _normalize_optional_string(asset_id, "list_account_assets.asset_id")
+        if asset_id_value is not None:
+            params["asset_id"] = asset_id_value
         return self.request_json(
             "GET",
             f"/v1/accounts/{account_id}/assets",
@@ -8343,10 +8350,16 @@ class ToriiClient(_BaseToriiClient):
         *,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        asset_id: Optional[str] = None,
     ) -> AccountAssetsPage:
         """Typed wrapper for :meth:`list_account_assets`."""
 
-        payload = self.list_account_assets(account_id, limit=limit, offset=offset)
+        payload = self.list_account_assets(
+            account_id,
+            limit=limit,
+            offset=offset,
+            asset_id=asset_id,
+        )
         if payload is None:
             raise RuntimeError("account assets endpoint returned no payload")
         if not isinstance(payload, Mapping):
@@ -8359,10 +8372,17 @@ class ToriiClient(_BaseToriiClient):
         *,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        asset_id: Optional[str] = None,
     ) -> Optional[Any]:
-        """List account transactions via `GET /v1/accounts/{account_id}/transactions`."""
+        """List account transactions via `GET /v1/accounts/{account_id}/transactions` (optional `asset_id`)."""
 
         params = self._pagination_params(limit=limit, offset=offset)
+        asset_id_value = _normalize_optional_string(
+            asset_id,
+            "list_account_transactions.asset_id",
+        )
+        if asset_id_value is not None:
+            params["asset_id"] = asset_id_value
         return self.request_json(
             "GET",
             f"/v1/accounts/{account_id}/transactions",
@@ -8376,10 +8396,16 @@ class ToriiClient(_BaseToriiClient):
         *,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        asset_id: Optional[str] = None,
     ) -> AccountTransactionsPage:
         """Typed wrapper for :meth:`list_account_transactions`."""
 
-        payload = self.list_account_transactions(account_id, limit=limit, offset=offset)
+        payload = self.list_account_transactions(
+            account_id,
+            limit=limit,
+            offset=offset,
+            asset_id=asset_id,
+        )
         if payload is None:
             raise RuntimeError("account transactions endpoint returned no payload")
         if not isinstance(payload, Mapping):
@@ -9328,8 +9354,9 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         address_format: Optional[str] = None,
+        asset_id: Optional[str] = None,
     ) -> Optional[Any]:
-        """List asset holders via `GET /v1/assets/{definition}/holders`."""
+        """List asset holders via `GET /v1/assets/{definition}/holders` (optional `asset_id`)."""
 
         params: Dict[str, Any] = {}
         if limit is not None:
@@ -9339,6 +9366,12 @@ class ToriiClient(_BaseToriiClient):
         address_pref = _normalize_address_format(address_format)
         if address_pref is not None:
             params["address_format"] = address_pref
+        asset_id_value = _normalize_optional_string(
+            asset_id,
+            "list_asset_holders.asset_id",
+        )
+        if asset_id_value is not None:
+            params["asset_id"] = asset_id_value
         return self.request_json(
             "GET",
             f"/v1/assets/{asset_definition_id}/holders",
@@ -9353,6 +9386,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         address_format: Optional[str] = None,
+        asset_id: Optional[str] = None,
     ) -> AssetHolderListPage:
         """Typed wrapper for :meth:`list_asset_holders`."""
 
@@ -9361,6 +9395,7 @@ class ToriiClient(_BaseToriiClient):
             limit=limit,
             offset=offset,
             address_format=address_format,
+            asset_id=asset_id,
         )
         if payload is None:
             return AssetHolderListPage(items=[], total=0)

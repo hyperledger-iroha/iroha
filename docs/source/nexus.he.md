@@ -322,7 +322,8 @@ Configuration and Determinism
 - **Admin endpoint:** `POST /v1/nexus/lifecycle` עם `additions` ו-`retire` לעדכון lanes ללא restart.
 - **Behaviour:** עדכון WSV/Kura, rebuild של queue, תשובה `{ ok: true, lane_count: <u32> }`.
 - **Safety:** שימוש ב-lock משותף למניעת מרוצים.
-- **TODO:** rebalance, propagation, cleanup טרם הושלם.
+- **Propagation:** ניתוב/מגבלות התור ומניפסטי ה-lane נבנים מחדש מתוך הקטלוג המעודכן, ועובדי consensus/DA/RBC קוראים את תצורת ה-lane דרך snapshots של state כך שה-scheduling ובחירת הוולידטורים מתעדכנים ללא אתחול (עבודה בתהליך מסיימת לפי ההגדרה הקודמת).
+- **Storage cleanup:** גאומטריית Kura וה-WSV הטירדי מתואמת (יצירה/הוצאה/relabelling), מיפויי cursors של DA shards מסונכרנים/נשמרים, ו-lanes שיצאו נגרעים ממטמון lane relay ומה-stores של DA commitments/confidential-compute/pin-intent.
 
 Migration Path (Iroha 2 -> Iroha 3)
 1) IDs לפי dataspace ו-global state composition.

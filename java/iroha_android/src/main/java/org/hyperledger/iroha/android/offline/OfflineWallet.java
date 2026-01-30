@@ -292,6 +292,77 @@ public final class OfflineWallet {
         .whenComplete(this::recordVerdictMetadata);
   }
 
+  /**
+   * Issues and registers an offline allowance. By default the issued certificate is recorded in
+   * the verdict journal so refresh checks work without a follow-up list call.
+   */
+  public CompletableFuture<OfflineTopUpResponse> topUpAllowance(
+      final OfflineWalletCertificateDraft draft,
+      final String authority,
+      final String privateKeyHex) {
+    return topUpAllowance(draft, authority, privateKeyHex, true);
+  }
+
+  /**
+   * Issues and registers an offline allowance, optionally recording verdict metadata locally.
+   */
+  public CompletableFuture<OfflineTopUpResponse> topUpAllowance(
+      final OfflineWalletCertificateDraft draft,
+      final String authority,
+      final String privateKeyHex,
+      final boolean recordVerdict) {
+    return toriiClient
+        .topUpAllowance(draft, authority, privateKeyHex)
+        .whenComplete(
+            (response, throwable) -> {
+              if (throwable != null || response == null || !recordVerdict) {
+                return;
+              }
+              try {
+                recordVerdictMetadata(response.certificate());
+              } catch (IOException e) {
+                throw new CompletionException(e);
+              }
+            });
+  }
+
+  /**
+   * Issues and registers a renewed offline allowance. By default the issued certificate is
+   * recorded in the verdict journal so refresh checks work without a follow-up list call.
+   */
+  public CompletableFuture<OfflineTopUpResponse> topUpAllowanceRenewal(
+      final String certificateIdHex,
+      final OfflineWalletCertificateDraft draft,
+      final String authority,
+      final String privateKeyHex) {
+    return topUpAllowanceRenewal(certificateIdHex, draft, authority, privateKeyHex, true);
+  }
+
+  /**
+   * Issues and registers a renewed offline allowance, optionally recording verdict metadata
+   * locally.
+   */
+  public CompletableFuture<OfflineTopUpResponse> topUpAllowanceRenewal(
+      final String certificateIdHex,
+      final OfflineWalletCertificateDraft draft,
+      final String authority,
+      final String privateKeyHex,
+      final boolean recordVerdict) {
+    return toriiClient
+        .topUpAllowanceRenewal(certificateIdHex, draft, authority, privateKeyHex)
+        .whenComplete(
+            (response, throwable) -> {
+              if (throwable != null || response == null || !recordVerdict) {
+                return;
+              }
+              try {
+                recordVerdictMetadata(response.certificate());
+              } catch (IOException e) {
+                throw new CompletionException(e);
+              }
+            });
+  }
+
   public CompletableFuture<OfflineTransferList> fetchTransfers(
       final OfflineListParams params) {
     return toriiClient.listTransfers(params);
@@ -396,6 +467,17 @@ public final class OfflineWallet {
 
   public Optional<OfflineVerdictMetadata> verdictMetadata(final String certificateIdHex) {
     return verdictJournal.find(certificateIdHex);
+  }
+
+  public OfflineVerdictMetadata recordVerdictMetadata(
+      final OfflineCertificateIssueResponse response) throws IOException {
+    return recordVerdictMetadata(response, Instant.now());
+  }
+
+  public OfflineVerdictMetadata recordVerdictMetadata(
+      final OfflineCertificateIssueResponse response, final Instant recordedAt) throws IOException {
+    Objects.requireNonNull(response, "response");
+    return verdictJournal.upsert(response, recordedAt);
   }
 
   public List<OfflineCounterJournal.OfflineCounterCheckpoint> counterCheckpoints() {

@@ -17,7 +17,7 @@ This document completes roadmap item **SF-8b — Repair automation & auditor API
 | Component | Responsibilities | Implementation Notes |
 |-----------|-----------------|----------------------|
 | Repair Scheduler | Accepts repair signals, creates tasks, drives workflow until closure. | Lives in `sorafs_node::repair`, backed by an on-disk Norito snapshot store + async workers. |
-| Repair Worker | Executes chunk fetch/re-seed, orchestrator requests, and governance callbacks. | Uses orchestrator facade for data movement, emits Norito events. |
+| Repair Worker | Executes local rehydration, chunk fetch/re-seed, orchestrator requests, and governance callbacks. | Attempts local rehydration from co-located manifests before invoking the optional repair orchestrator hook for remote fetches. |
 | Auditor API | Signed REST/Norito endpoints for auditors to submit evidence and proposals. | Hosted by Torii (`/sorafs/auditor/*`), requires `SignedAuditorRequestV1`. |
 | Proof Verifier | Validates PoR/PoTR evidence before enqueuing tasks or slashing proposals. | Reuses `sorafs_manifest::proof_stream` helpers and PoR coordinator fixtures. |
 | SLA & Telemetry | Metrics, logs, and alerts for backlog, latency, and outcomes. | Instrumented via `iroha_telemetry`, exported to OTLP + Prometheus. |

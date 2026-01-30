@@ -2773,6 +2773,7 @@ pub struct NetworkBuilder {
     pipeline_time: Option<Duration>,
     ivm_fuel: IvmFuelConfig,
     genesis_isi: Vec<Vec<InstructionBox>>,
+    genesis_post_topology_isi: Vec<Vec<InstructionBox>>,
     custom_genesis: Option<GenesisBuilderFn>,
     seed: Option<String>,
     genesis_key_pair: KeyPair,
@@ -3503,6 +3504,7 @@ impl NetworkBuilder {
             pipeline_time: Some(LOCALNET_PIPELINE_TIME),
             ivm_fuel: IvmFuelConfig::Auto,
             genesis_isi: vec![vec![]],
+            genesis_post_topology_isi: Vec::new(),
             custom_genesis: None,
             seed: None,
             genesis_key_pair: SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
@@ -3654,6 +3656,14 @@ impl NetworkBuilder {
         self
     }
 
+    /// Disable the NPoS bootstrap transaction injected into genesis.
+    ///
+    /// Use this when the caller already provides equivalent validator bootstrap instructions.
+    pub fn without_npos_genesis_bootstrap(mut self) -> Self {
+        self.npos_genesis_bootstrap_stake = None;
+        self
+    }
+
     /// Override the genesis signing key pair used to sign the manifest.
     pub fn with_genesis_keypair(mut self, key_pair: KeyPair) -> Self {
         self.genesis_key_pair = key_pair;
@@ -3723,6 +3733,16 @@ impl NetworkBuilder {
         self
     }
 
+    /// Append a post-topology genesis transaction.
+    ///
+    /// The provided instructions run after peers/topology are registered.
+    pub fn with_genesis_post_topology_isi(mut self, isi: Vec<InstructionBox>) -> Self {
+        if !isi.is_empty() {
+            self.genesis_post_topology_isi.push(isi);
+        }
+        self
+    }
+
     /// Start a new empty transaction in the genesis block.
     pub fn next_genesis_transaction(mut self) -> Self {
         self.genesis_isi.push(Vec::new());
@@ -3768,6 +3788,7 @@ impl NetworkBuilder {
             pipeline_time,
             ivm_fuel,
             mut genesis_isi,
+            mut genesis_post_topology_isi,
             custom_genesis,
             seed,
             genesis_key_pair,
@@ -3960,7 +3981,6 @@ impl NetworkBuilder {
             first_tx.splice(0..0, parameter_prefix);
         }
 
-        let mut genesis_post_topology_isi = Vec::new();
         let npos_bootstrap =
             npos_genesis_bootstrap_stake.filter(|_| matches!(consensus_mode, ConsensusMode::Npos));
         if let Some(stake_amount) = npos_bootstrap {
@@ -8851,6 +8871,80 @@ exit 0
         assert!(
             has_register && has_activate,
             "default NPoS builder should bootstrap validators in genesis"
+        );
+    }
+
+    #[test]
+    fn without_npos_genesis_bootstrap_skips_validator_instructions() {
+        init_instruction_registry();
+        let network = NetworkBuilder::new()
+            .with_peers(2)
+            .with_auto_populated_trusted_peers()
+            .with_config_layer(|layer| {
+                layer.write(["sumeragi", "consensus_mode"], "npos");
+            })
+            .without_npos_genesis_bootstrap()
+            .build();
+        let genesis = network.genesis();
+        let mut has_register = false;
+        let mut has_activate = false;
+        for tx in genesis.0.transactions_vec() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    if instruction
+                        .as_any()
+                        .downcast_ref::<RegisterPublicLaneValidator>()
+                        .is_some()
+                    {
+                        has_register = true;
+                    }
+                    if instruction
+                        .as_any()
+                        .downcast_ref::<ActivatePublicLaneValidator>()
+                        .is_some()
+                    {
+                        has_activate = true;
+                    }
+                }
+            }
+        }
+        assert!(
+            !has_register && !has_activate,
+            "disabling NPoS bootstrap should not inject validator registration"
+        );
+    }
+
+    #[test]
+    fn post_topology_instructions_are_included_in_genesis() {
+        init_instruction_registry();
+        let domain_id: DomainId = "post_topology_test".parse().expect("domain");
+        let network = NetworkBuilder::new()
+            .with_peers(1)
+            .with_genesis_post_topology_isi(vec![
+                Register::domain(Domain::new(domain_id.clone())).into(),
+            ])
+            .build();
+        let genesis = network.genesis();
+        let mut has_domain = false;
+        for tx in genesis.0.transactions_vec() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    if instruction
+                        .as_any()
+                        .downcast_ref::<RegisterBox>()
+                        .is_some_and(|register| match register {
+                            RegisterBox::Domain(domain) => domain.object.id == domain_id,
+                            _ => false,
+                        })
+                    {
+                        has_domain = true;
+                    }
+                }
+            }
+        }
+        assert!(
+            has_domain,
+            "post-topology instructions should be present in genesis"
         );
     }
 

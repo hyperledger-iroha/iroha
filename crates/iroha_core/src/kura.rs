@@ -2362,8 +2362,7 @@ impl Kura {
         if let Err(err) = self.roster_log.lock().truncate_to_height(height) {
             warn!(
                 ?err,
-                height,
-                "failed to truncate commit roster journal after Kura prune"
+                height, "failed to truncate commit roster journal after Kura prune"
             );
         }
 

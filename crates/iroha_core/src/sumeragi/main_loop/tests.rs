@@ -3978,7 +3978,10 @@ async fn block_sync_update_rejects_conflicting_commit_qc_and_keeps_local_block()
     let block1 = sample_block(1, 0, None);
     let block2 = sample_block(2, 0, Some(block1.hash()));
     let block2_hash = block2.hash();
-    actor.kura.store_block(block1.clone()).expect("store block 1");
+    actor
+        .kura
+        .store_block(block1.clone())
+        .expect("store block 1");
     actor.kura.store_block(block2).expect("store block 2");
 
     let conflicting = sample_block(2, 1, Some(block1.hash()));
@@ -4043,7 +4046,10 @@ async fn handle_qc_rejects_conflicting_commit_qc_and_keeps_local_block() {
     let block1 = sample_block(1, 0, None);
     let block2 = sample_block(2, 0, Some(block1.hash()));
     let block2_hash = block2.hash();
-    actor.kura.store_block(block1.clone()).expect("store block 1");
+    actor
+        .kura
+        .store_block(block1.clone())
+        .expect("store block 1");
     actor.kura.store_block(block2).expect("store block 2");
 
     let conflicting = sample_block(2, 1, Some(block1.hash()));

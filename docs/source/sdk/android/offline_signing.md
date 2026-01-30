@@ -218,12 +218,18 @@ in `docs/source/sdk/android/readiness/` for AND5/AND7 readiness gates.
   `OfflineListParams` to control pagination, filters, and address formatting,
   mirroring the Torii REST surface described in the OA7 roadmap item.
 - `OfflineListParams.Builder` exposes the same roadmap filters shipped on the
-  REST side — `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-  and `verdictIdHex` — along with `requireVerdict` / `onlyMissingVerdict`
+  REST side — `assetId`, `certificateExpiresBeforeMs/AfterMs`,
+  `policyExpiresBeforeMs/AfterMs`, and `verdictIdHex` — along with
+  `requireVerdict` / `onlyMissingVerdict`
   toggles so dashboards can target hot certificates without composing JSON
   predicates. Invalid combinations (for example, `verdictIdHex` +
   `onlyMissingVerdict`) are rejected when `build()` is invoked to keep client
   behaviour aligned with Torii validation.
+- `OfflineToriiClient.topUpAllowance(...)` issues a certificate and registers it
+  on-ledger in one call, and `topUpAllowanceRenewal(...)` does the same for
+  renewals. `OfflineWallet.topUpAllowance(...)` / `topUpAllowanceRenewal(...)`
+  wrap the flow and (by default) record the issued certificate into the verdict
+  journal so refresh warnings work without an extra list call.
 - `OfflineWallet.fetchTransfersWithAudit(...)` parses the first receipt from
   each `OfflineToOnlineTransfer` bundle and records `{sender_id, receiver_id,
   asset_id, amount}` using the ledger payload instead of mirroring the

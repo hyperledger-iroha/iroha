@@ -15,6 +15,7 @@ import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.PlatformHttpTransportExecutor;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceList;
+import org.hyperledger.iroha.android.offline.OfflineAllowanceRegisterResponse;
 import org.hyperledger.iroha.android.offline.OfflineCertificateIssueResponse;
 import org.hyperledger.iroha.android.offline.OfflineJsonParser;
 import org.hyperledger.iroha.android.offline.OfflineListParams;
@@ -23,6 +24,7 @@ import org.hyperledger.iroha.android.offline.OfflineProofRequestParams;
 import org.hyperledger.iroha.android.offline.OfflineProofRequestResult;
 import org.hyperledger.iroha.android.offline.OfflineRevocationList;
 import org.hyperledger.iroha.android.offline.OfflineSummaryList;
+import org.hyperledger.iroha.android.offline.OfflineTopUpResponse;
 import org.hyperledger.iroha.android.offline.OfflineToriiException;
 import org.hyperledger.iroha.android.offline.OfflineTransferList;
 import org.hyperledger.iroha.android.offline.OfflineWalletCertificate;
@@ -144,17 +146,86 @@ public final class OfflineToriiClient {
       final OfflineWalletCertificate certificate,
       final String authority,
       final String privateKeyHex) {
+    return registerAllowanceDetailed(certificate, authority, privateKeyHex)
+        .thenApply(response -> null);
+  }
+
+  /** Register a signed certificate on-ledger as an offline allowance and return the response. */
+  public CompletableFuture<OfflineAllowanceRegisterResponse> registerAllowanceDetailed(
+      final OfflineWalletCertificate certificate,
+      final String authority,
+      final String privateKeyHex) {
     Objects.requireNonNull(certificate, "certificate");
     Objects.requireNonNull(authority, "authority");
     Objects.requireNonNull(privateKeyHex, "privateKeyHex");
-    final java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
-    body.put("authority", authority);
-    body.put("private_key", privateKeyHex);
-    body.put("certificate", certificate.toJsonMap());
-    final byte[] bodyBytes = JsonEncoder.encode(body).getBytes(StandardCharsets.UTF_8);
+    final byte[] bodyBytes = buildAllowanceRegisterBody(certificate, authority, privateKeyHex);
     final TransportRequest request = buildPostRequest(ALLOWANCES_PATH, bodyBytes);
     notifyRequest(request);
-    return executeHttpRequest(request, payload -> (Void) null);
+    return executeHttpRequest(request, OfflineJsonParser::parseAllowanceRegisterResponse);
+  }
+
+  /** Renew a signed certificate on-ledger as an offline allowance. */
+  public CompletableFuture<OfflineAllowanceRegisterResponse> renewAllowance(
+      final String certificateIdHex,
+      final OfflineWalletCertificate certificate,
+      final String authority,
+      final String privateKeyHex) {
+    Objects.requireNonNull(certificateIdHex, "certificateIdHex");
+    Objects.requireNonNull(certificate, "certificate");
+    Objects.requireNonNull(authority, "authority");
+    Objects.requireNonNull(privateKeyHex, "privateKeyHex");
+    final String encodedId = urlEncode(certificateIdHex.trim());
+    final String path = ALLOWANCES_PATH + "/" + encodedId + "/renew";
+    final byte[] bodyBytes = buildAllowanceRegisterBody(certificate, authority, privateKeyHex);
+    final TransportRequest request = buildPostRequest(path, bodyBytes);
+    notifyRequest(request);
+    return executeHttpRequest(request, OfflineJsonParser::parseAllowanceRegisterResponse);
+  }
+
+  /**
+   * Issue and register an offline allowance certificate in one call (issue + register).
+   */
+  public CompletableFuture<OfflineTopUpResponse> topUpAllowance(
+      final OfflineWalletCertificateDraft draft,
+      final String authority,
+      final String privateKeyHex) {
+    Objects.requireNonNull(draft, "draft");
+    Objects.requireNonNull(authority, "authority");
+    Objects.requireNonNull(privateKeyHex, "privateKeyHex");
+    return issueCertificate(draft)
+        .thenCompose(
+            issued ->
+                registerAllowanceDetailed(issued.certificate(), authority, privateKeyHex)
+                    .thenApply(
+                        registered -> {
+                          ensureTopUpCertificateIdsMatch(
+                              issued.certificateIdHex(), registered.certificateIdHex());
+                          return new OfflineTopUpResponse(issued, registered);
+                        }));
+  }
+
+  /**
+   * Issue and register a renewed offline allowance certificate in one call.
+   */
+  public CompletableFuture<OfflineTopUpResponse> topUpAllowanceRenewal(
+      final String certificateIdHex,
+      final OfflineWalletCertificateDraft draft,
+      final String authority,
+      final String privateKeyHex) {
+    Objects.requireNonNull(certificateIdHex, "certificateIdHex");
+    Objects.requireNonNull(draft, "draft");
+    Objects.requireNonNull(authority, "authority");
+    Objects.requireNonNull(privateKeyHex, "privateKeyHex");
+    return issueCertificateRenewal(certificateIdHex, draft)
+        .thenCompose(
+            issued ->
+                renewAllowance(certificateIdHex, issued.certificate(), authority, privateKeyHex)
+                    .thenApply(
+                        registered -> {
+                          ensureTopUpCertificateIdsMatch(
+                              issued.certificateIdHex(), registered.certificateIdHex());
+                          return new OfflineTopUpResponse(issued, registered);
+                        }));
   }
 
   /** Issue a signed renewal certificate for an existing allowance. */
@@ -171,6 +242,28 @@ public final class OfflineToriiClient {
     final TransportRequest request = buildPostRequest(path, body);
     notifyRequest(request);
     return executeHttpRequest(request, OfflineJsonParser::parseCertificateIssueResponse);
+  }
+
+  private static byte[] buildAllowanceRegisterBody(
+      final OfflineWalletCertificate certificate,
+      final String authority,
+      final String privateKeyHex) {
+    final Map<String, Object> body = new LinkedHashMap<>();
+    body.put("authority", authority);
+    body.put("private_key", privateKeyHex);
+    body.put("certificate", certificate.toJsonMap());
+    return JsonEncoder.encode(body).getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static void ensureTopUpCertificateIdsMatch(
+      final String issuedId, final String registeredId) {
+    if (issuedId == null || registeredId == null) {
+      throw new IllegalStateException("Missing certificate id in top-up responses");
+    }
+    if (!issuedId.equalsIgnoreCase(registeredId)) {
+      throw new IllegalStateException(
+          "Top-up certificate id mismatch: issued=" + issuedId + " registered=" + registeredId);
+    }
   }
 
   /** Exposes the underlying executor so auxiliary clients can share the same HTTP transport. */

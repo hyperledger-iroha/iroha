@@ -23,6 +23,10 @@ layered on top via the keystore abstraction when running on devices.
 - **Transaction builder:** `TransactionBuilder` encodes payloads, signs with the
   requested key alias, and optionally emits `OfflineSigningEnvelope` records for
   later submission or key export workflows.
+- **Multisig signatures:** `SignedTransaction` can attach optional
+  `MultisigSignatures` bundles (made up of `MultisigSignature` entries) when
+  the authority uses a multisig controller; set them via
+  `SignedTransaction.Builder#setMultisigSignatures(...)` before submission.
 - **Torii clients:** `HttpClientTransport` implements `/v1/pipeline/*`
   submission/polling with deterministic retries and pending-queue persistence,
   while `NoritoRpcClient` surfaces `application/x-norito` RPC calls using the

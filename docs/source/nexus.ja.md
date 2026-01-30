@@ -326,7 +326,8 @@ Configuration and Determinism
 - **Admin endpoint:** `POST /v1/nexus/lifecycle`（Torii）が `additions`（`LaneConfig` 完全オブジェクト）と `retire`（lane ids）を受け取り、再起動なしで lane を追加/削除。`nexus.enabled=true` で gated し、同じ Nexus configuration/state view を使用。
 - **Behaviour:** 成功時に WSV/Kura metadata を更新し、queue routing/limits/manifests を再構築し、`{ ok: true, lane_count: <u32> }` を返す。検証失敗（未知の retire ids、重複 alias/id、Nexus 無効）時は `400 Bad Request` と `lane_lifecycle_error` を返す。
 - **Safety:** shared state view lock を使い読み手との競合を回避。外部で lifecycle 更新のシリアライズは必要。
-- **TODO:** per-lane scheduler/DA/RBC rebalance、validator-set 伝播、ストレージ teardown/cleanup は未対応。頻繁な lifecycle リクエストは避ける。
+- **伝播:** キューのルーティング/リミットと lane マニフェストは更新済みカタログから再構築され、consensus/DA/RBC ワーカーは状態スナップショット経由で最新の lane config を読み取るため、スケジューリングとバリデータ選定が再起動なしで切り替わる（進行中の作業は旧設定で完了）。
+- **ストレージのクリーンアップ:** Kura と tiered WSV のジオメトリを整合（作成/退役/リラベル）し、DA shard cursor マッピングを同期/永続化。退役 lane は lane relay キャッシュと DA commitment/confidential-compute/pin-intent ストアから剪定される。
 
 Migration Path (Iroha 2 -> Iroha 3)
 1) dataspace-qualified IDs と nexus block/global state composition を data model に導入し、Iroha 2 互換用 feature flags を追加。

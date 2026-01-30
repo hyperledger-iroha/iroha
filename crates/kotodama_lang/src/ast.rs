@@ -138,6 +138,7 @@ pub struct TriggerDecl {
     pub call: TriggerCall,
     pub filter: TriggerFilter,
     pub repeats: Option<TriggerRepeats>,
+    pub authority: Option<String>,
     pub metadata: Vec<TriggerMetadataEntry>,
 }
 
@@ -153,6 +154,23 @@ pub struct TriggerCall {
 pub enum TriggerFilter {
     Time(TriggerTimeFilter),
     Execute { trigger_id: String },
+    Data(TriggerDataFilter),
+    Pipeline(TriggerPipelineFilter),
+}
+
+/// Data trigger filter variants.
+#[derive(Debug, PartialEq, Clone)]
+pub enum TriggerDataFilter {
+    Any,
+}
+
+/// Pipeline trigger filter variants.
+#[derive(Debug, PartialEq, Clone)]
+pub enum TriggerPipelineFilter {
+    Transaction,
+    Block,
+    Merge,
+    Witness,
 }
 
 /// Time trigger filter variants.

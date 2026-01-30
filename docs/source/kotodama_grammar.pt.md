@@ -117,7 +117,7 @@ seiyaku Name {
 Semântica
 - `meta { ... }` sobrescreve os padrões do compilador para o cabeçalho IVM emitido: `abi_version`, `vector_length` (0 significa não definido), `max_cycles` (0 significa padrão do compilador), `features` ativa bits de recurso do cabeçalho (tracing ZK, anúncio vetorial). Recursos não suportados são ignorados com aviso. Quando `meta {}` é omitido, o compilador emite `abi_version = 1` e usa os padrões das opções para os demais campos do cabeçalho.
 - `features: ["zk", "simd"]` (aliases: `"vector"`) solicita explicitamente os bits de cabeçalho correspondentes. Strings de recursos desconhecidas agora geram erro de parser em vez de serem ignoradas.
-- `state` declara variáveis do contrato. Hoje o compilador as reduz para armazenamento efêmero por execução (alocado na entrada da função); overlays duráveis com backend do host e rastreamento de conflitos permanecem TODO. Para leituras/escritas com backend do host, use os helpers explícitos `state_get/state_set/state_del` e os helpers de mapa `get_or_insert_default`; eles passam por TLVs Norito e mantêm nomes/ordem de campos estáveis para persistência futura.
+- `state` declara variaveis de contrato duraveis. O compilador reduz os acessos a syscalls `STATE_GET/STATE_SET/STATE_DEL`, e o host os guarda em um overlay por transacao (checkpoint/restore para rollback, flush no commit para WSV). Access hints sao emitidos para caminhos literais; chaves dinamicas caem para conflitos em nivel de mapa. Para leituras/escritas explicitas do host, use `state_get/state_set/state_del` e os helpers de mapa `get_or_insert_default`; passam por TLVs Norito e mantem nomes/ordem de campos estaveis.
 - Identificadores `state` são reservados; sombrear um nome `state` em parâmetros ou `let` é rejeitado (`E_STATE_SHADOWED`).
 - Valores de mapas de estado não são de primeira classe: use o identificador de estado diretamente para operações de mapa e iteração. Vincular ou passar mapas de estado para funções definidas pelo usuário é rejeitado (`E_STATE_MAP_ALIAS`).
 - Mapas de estado duráveis atualmente suportam apenas tipos de chave `int` e pointer-ABI; outros tipos de chave são rejeitados em tempo de compilação.
@@ -144,8 +144,8 @@ Notas
   `namespace::entrypoint` opcional é registrado no manifesto, mas callbacks entre contratos são
   rejeitados por enquanto (apenas callbacks locais).
 - Filtros suportados: `time pre_commit` e `time schedule(start_ms, period_ms?)`, mais
-  `execute trigger <name>` para gatilhos por chamada. Filtros de dados/pipeline ainda não são
-  suportados.
+  `execute trigger <name>` para gatilhos por chamada, `data any` para eventos de dados e filtros
+  de pipeline (`pipeline transaction`, `pipeline block`, `pipeline merge`, `pipeline witness`).
 - Valores de metadata devem ser literais JSON (`string`, `number`, `bool`, `null`) ou `json!(...)`.
 - Chaves de metadata injetadas pelo runtime: `contract_namespace`, `contract_id`,
   `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`.

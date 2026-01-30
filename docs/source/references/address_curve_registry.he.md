@@ -1,135 +1,116 @@
-<!-- TODO: Translation pending; content synced from English for technical accuracy. -->
-
 ---
-title: Account Curve Registry
-description: Canonical mapping between account controller curve identifiers and signing algorithms.
+title: מרשם עקומות חשבון
+description: מיפוי קנוני בין מזהי עקומה של בקר חשבון לבין אלגוריתמי חתימה.
 ---
 
-# Account Curve Registry
+# מרשם עקומות חשבון
 
-Account addresses encode their controllers as a tagged payload that begins with
-an 8-bit curve identifier. Validators, SDKs, and tooling rely on a shared
-registry so that curve identifiers remain stable across releases and enable
-deterministic decoding across implementations.
+כתובות חשבון מקודדות את הבקרים שלהן כ‑payload מתויג שמתחיל במזהה עקומה בן 8
+ביט. מאמתים, SDKs וכלים נשענים על מרשם משותף כדי שמזהי העקומות יישארו יציבים
+בין גרסאות ויאפשרו דה‑קידוד דטרמיניסטי בין מימושים.
 
-The table below is the normative reference for every assigned `curve_id`. A
-machine-readable copy ships alongside this document at
-[`address_curve_registry.json`](address_curve_registry.json); automated tooling
-SHOULD consume the JSON version and pin its `version` field when generating
-fixtures.
+הטבלה שלהלן היא ההפניה הנורמטיבית לכל `curve_id` שהוקצה. עותק קריא־מכונה
+נשלח לצד מסמך זה ב‑[`address_curve_registry.json`](address_curve_registry.json);
+כלים אוטומטיים צריכים לצרוך את גרסת ה‑JSON ולהצמיד (pin) את השדה `version`
+כאשר יוצרים fixtures.
 
-## Registered Curves
+## עקומות רשומות
 
-| ID (`curve_id`) | Algorithm | Feature Gate | Status | Public Key Encoding | Notes |
-|-----------------|-----------|--------------|--------|---------------------|-------|
-| `0x01` (1) | `ed25519` | — | Production | 32-byte compressed Ed25519 key | Canonical curve for V1. All SDK builds MUST support this identifier. |
-| `0x02` (2) | `ml-dsa` | — | Production (config-gated) | Dilithium3 public key (1952 bytes) | Available in all builds. Enable in `crypto.allowed_signing` + `crypto.curves.allowed_curve_ids` before emitting controller payloads. |
-| `0x03` (3) | `bls_normal` | `bls` | Production (feature-gated) | 48-byte compressed G1 public key | Required for consensus validators. Admission allows BLS controllers even when `allowed_signing`/`allowed_curve_ids` omit them. |
-| `0x04` (4) | `secp256k1` | — | Production | 33-byte SEC1-compressed key | Deterministic ECDSA over SHA-256; signatures use the canonical 64-byte `r∥s` layout. |
-| `0x05` (5) | `bls_small` | `bls` | Production (feature-gated) | 96-byte compressed G2 public key | Compact-signature BLS profile (smaller signatures, larger public keys). |
-| `0x0A` (10) | `gost3410-2012-256-paramset-a` | `gost` | Reserved | 64-byte little-endian TC26 param set A point | Unlocks with the `gost` feature once governance approves the rollout. |
-| `0x0B` (11) | `gost3410-2012-256-paramset-b` | `gost` | Reserved | 64-byte little-endian TC26 param set B point | Mirrors the TC26 B parameter set; blocked behind the `gost` feature gate. |
-| `0x0C` (12) | `gost3410-2012-256-paramset-c` | `gost` | Reserved | 64-byte little-endian TC26 param set C point | Reserved for future governance approval. |
-| `0x0D` (13) | `gost3410-2012-512-paramset-a` | `gost` | Reserved | 128-byte little-endian TC26 param set A point | Reserved pending demand for 512-bit GOST curves. |
-| `0x0E` (14) | `gost3410-2012-512-paramset-b` | `gost` | Reserved | 128-byte little-endian TC26 param set B point | Reserved pending demand for 512-bit GOST curves. |
-| `0x0F` (15) | `sm2` | `sm` | Reserved | DistID length (u16 BE) + DistID bytes + 65-byte SEC1 uncompressed SM2 key | Becomes available when the `sm` feature graduates from preview. |
+| מזהה (`curve_id`) | אלגוריתם | שער תכונה | סטטוס | קידוד מפתח ציבורי | הערות |
+|-------------------|-----------|-----------|--------|--------------------|-------|
+| `0x01` (1) | `ed25519` | — | ייצור | מפתח Ed25519 דחוס בגודל 32 בתים | העקומה הקנונית ל‑V1. כל בניות ה‑SDK חייבות לתמוך במזהה הזה. |
+| `0x02` (2) | `ml-dsa` | — | ייצור (מוגבל בקונפיגורציה) | מפתח ציבורי Dilithium3 (1952 בתים) | זמין בכל הבניות. הפעלה ב‑`crypto.allowed_signing` + `crypto.curves.allowed_curve_ids` לפני הנפקת payloads של בקר. |
+| `0x03` (3) | `bls_normal` | `bls` | ייצור (שער תכונה) | מפתח ציבורי G1 דחוס בגודל 48 בתים | נדרש למאמתים של קונצנזוס. Admission מאפשר בקרים BLS גם כאשר `allowed_signing`/`allowed_curve_ids` אינם כוללים אותם. |
+| `0x04` (4) | `secp256k1` | — | ייצור | מפתח SEC1 דחוס בגודל 33 בתים | ECDSA דטרמיניסטי מעל SHA‑256; החתימות משתמשות בפריסת `r∥s` קנונית של 64 בתים. |
+| `0x05` (5) | `bls_small` | `bls` | ייצור (שער תכונה) | מפתח ציבורי G2 דחוס בגודל 96 בתים | פרופיל BLS עם חתימות קטנות ומפתחות ציבוריים גדולים יותר. |
+| `0x0A` (10) | `gost3410-2012-256-paramset-a` | `gost` | שמור | נקודת TC26 param set A בגודל 64 בתים little-endian | נפתח עם הפיצ’ר `gost` לאחר אישור ממשל. |
+| `0x0B` (11) | `gost3410-2012-256-paramset-b` | `gost` | שמור | נקודת TC26 param set B בגודל 64 בתים little-endian | משקף את סט הפרמטרים TC26 B; חסום מאחורי שער `gost`. |
+| `0x0C` (12) | `gost3410-2012-256-paramset-c` | `gost` | שמור | נקודת TC26 param set C בגודל 64 בתים little-endian | שמור לאישור ממשל עתידי. |
+| `0x0D` (13) | `gost3410-2012-512-paramset-a` | `gost` | שמור | נקודת TC26 param set A בגודל 128 בתים little-endian | שמור עד שתעלה דרישה לעקומות GOST של 512 ביט. |
+| `0x0E` (14) | `gost3410-2012-512-paramset-b` | `gost` | שמור | נקודת TC26 param set B בגודל 128 בתים little-endian | שמור עד שתעלה דרישה לעקומות GOST של 512 ביט. |
+| `0x0F` (15) | `sm2` | `sm` | שמור | אורך DistID (u16 BE) + בתים של DistID + מפתח SM2 SEC1 לא דחוס בגודל 65 בתים | זמין כאשר הפיצ’ר `sm` יוצא מ‑preview. |
 
-### Usage Guidelines
+### הנחיות שימוש
 
-- **Fail closed:** Encoders MUST reject unsupported algorithms with
-  `ERR_UNSUPPORTED_ALGORITHM`. Decoders MUST raise `ERR_UNKNOWN_CURVE` for any
-  identifier not listed in this registry.
-- **Feature gating:** BLS/GOST/SM2 remain behind the listed build-time feature
-  gates. Operators must enable matching `iroha_config.crypto.allowed_signing`
-  entries and build-time features before emitting addresses with those curves.
-- **Admission exceptions:** BLS controllers are allowed for consensus
-  validators even when `allowed_signing`/`allowed_curve_ids` do not list them.
-- **Config + manifest parity:** Use `iroha_config.crypto.allowed_curve_ids`
-  (and the matching `ManifestCrypto.allowed_curve_ids`) to publish which curve
-  identifiers the cluster accepts for controllers; admission now enforces this
-  list alongside `allowed_signing`.
-- **Deterministic encoding:** Public keys are encoded exactly as returned by
-  the signing implementation (Ed25519 compressed bytes, ML‑DSA public key
-  bytes, BLS compressed points, etc.). SDKs should surface validation errors
-  before submitting malformed payloads.
-- **Manifest parity:** Genesis manifests and controller manifests MUST use the
-  same identifiers so admission can reject controllers that exceed cluster
-  capabilities.
+- **Fail closed:** מקודדים חייבים לדחות אלגוריתמים לא נתמכים עם
+  `ERR_UNSUPPORTED_ALGORITHM`. דקודרים חייבים להחזיר `ERR_UNKNOWN_CURVE` לכל
+  מזהה שאינו מופיע במרשם.
+- **שער תכונה:** BLS/GOST/SM2 נשארים מאחורי פיצ’רים בזמן build. מפעילים חייבים
+  להפעיל את הערכים המתאימים ב‑`iroha_config.crypto.allowed_signing` ואת פיצ’רי
+  הבנייה לפני הנפקת כתובות עם העקומות האלה.
+- **חריגי admission:** בקרים מסוג BLS מותרים למאמתים של קונצנזוס גם אם
+  `allowed_signing`/`allowed_curve_ids` אינם מציינים אותם.
+- **תאימות config + manifest:** השתמשו ב‑`iroha_config.crypto.allowed_curve_ids`
+  (ובהתאם `ManifestCrypto.allowed_curve_ids`) כדי לפרסם אילו מזהי עקומה
+  מתקבלים; שכבת admission אוכפת כעת רשימה זו לצד `allowed_signing`.
+- **קידוד דטרמיניסטי:** מפתחות ציבוריים מקודדים בדיוק כפי שמחזירה מימוש החתימה
+  (בתים דחוסים של Ed25519, מפתחות ציבוריים ML‑DSA, נקודות BLS דחוסות וכו'). SDKs
+  צריכים לחשוף שגיאות אימות לפני שליחת payloads לא תקינים.
+- **תאימות manifest:** מניפסטים של genesis ושל בקר חייבים להשתמש באותם מזהים
+  כדי ש‑admission ידחה בקרים שחורגים מיכולות הקלאסטר.
 
-## Capability Bitmask Advert
+## פרסום ביטמאפ יכולות
 
-`GET /v1/node/capabilities` now exposes both the `allowed_curve_ids` list and
-the packed `allowed_curve_bitmap` array under `crypto.curves`. The bitmap is
-little-endian across 64-bit lanes (up to four values to cover the 0–255 `u8`
-identifier space). Bit `i` being set means curve identifier `i` is permitted by
-the cluster’s admission policy.
+`GET /v1/node/capabilities` חושף כעת את `allowed_curve_ids` ואת המערך הדחוס
+`allowed_curve_bitmap` תחת `crypto.curves`. הביטמאפ הוא little-endian על פני
+מסלולי 64‑ביט (עד ארבעה ערכים לכיסוי מרחב מזהי `u8`‏ 0–255). ביט `i` מופעל
+משמעו שמזהה עקומה `i` מותר לפי מדיניות admission של הקלאסטר.
 
-- Example: `{ allowed_curve_ids: [1, 15] }` ⇒ `allowed_curve_bitmap: [32770]`
-  because `(1 << 1) | (1 << 15) = 32770`.
-- Curves above `63` set bits in later lanes. Trailing zero lanes are omitted to
-  keep payloads short, so a configuration that also enables `curve_id = 130`
-  would emit `allowed_curve_bitmap = [32768, 0, 4]` (bits 15 and 130 set).
+- דוגמה: `{ allowed_curve_ids: [1, 15] }` ⇒ `allowed_curve_bitmap: [32770]`
+  כי `(1 << 1) | (1 << 15) = 32770`.
+- עקומות מעל `63` מדליקות ביטים במסלולים מאוחרים יותר. מסלולים אפסיים בסוף
+  מושמטים כדי לקצר payloads, כך שקונפיגורציה שמאפשרת גם `curve_id = 130` תפיק
+  `allowed_curve_bitmap = [32768, 0, 4]` (הביטים 15 ו‑130 דולקים).
 
-Prefer the bitmap for dashboards and health checks: a single bit test answers
-capability questions without scanning the full array, while tooling that needs
-ordered identifiers can continue using `allowed_curve_ids`. Surfacing both
-views satisfies roadmap item **ADDR-3**’s requirement to publish deterministic
-capability bitmasks for operators and SDKs.
+העדיפו את הביטמאפ עבור dashboards ובדיקות בריאות: בדיקת ביט אחת עונה על שאלות
+יכולת ללא סריקת כל המערך, בעוד שכלים שזקוקים למזהים מסודרים יכולים להמשיך
+להשתמש ב‑`allowed_curve_ids`. פרסום שתי התצוגות ממלא את דרישת **ADDR-3** לפרסום
+ביטמאפים דטרמיניסטיים עבור מפעילים ו‑SDKs.
 
-## Validation Checklist
+## רשימת בדיקות אימות
 
-Every component that ingests controllers (Torii, admission, SDK encoders,
-offline tooling) must apply the same deterministic checks before accepting a
-payload. The steps below should be treated as mandatory validation logic:
+כל רכיב שקולט בקרים (Torii, admission, מקודדי SDK, כלים offline) חייב ליישם את
+אותן בדיקות דטרמיניסטיות לפני קבלת payload. הצעדים הבאים מחייבים:
 
-1. **Resolve cluster policy:** Parse the leading `curve_id` byte from the
-   account payload and reject the controller if the identifier is not present
-   in `iroha_config.crypto.allowed_curve_ids` (and the mirrored
-   `ManifestCrypto.allowed_curve_ids`). BLS controllers are the exception: when
-   compiled in, admission allows them regardless of the allowlists so consensus
-   validator keys keep working. This prevents clusters from accepting preview
-   curves that operators have not explicitly enabled.
-2. **Enforce encoding length:** Compare the payload length against the
-   algorithm’s canonical size before attempting to decompress or expand the
-   key. Reject any value that fails the length check to eliminate malformed
-   inputs early.
-3. **Run algorithm-specific decoding:** Use the same canonical decoders as
-   `iroha_crypto` (`ed25519_dalek`, `pqcrypto_dilithium`, `w3f_bls`/`blstrs`,
-   `sm2`, the TC26 helpers, etc.) so all implementations share the exact
-   subgroup/point validation behaviour.
-4. **Verify signature sizes:** Admission and SDKs must enforce the signature
-   lengths listed below and reject any payload with a truncated or overlong
-   signature before running the verifier.
+1. **פתרון מדיניות הקלאסטר:** נתחו את הבייט הראשוני `curve_id` ב‑payload של
+   החשבון ודחו את הבקר אם המזהה אינו מופיע ב‑`iroha_config.crypto.allowed_curve_ids`
+   (ובמראה `ManifestCrypto.allowed_curve_ids`). בקרים מסוג BLS הם החריג: כאשר
+   הם קומפלים, admission מאפשר אותם ללא קשר ל‑allowlists כדי שמפתחות מאמתים של
+   קונצנזוס ימשיכו לעבוד. כך נמנעת קבלה של עקומות preview שלא הופעלו במפורש.
+2. **אכיפת אורך קידוד:** השוו את אורך ה‑payload לגודל הקנוני של האלגוריתם לפני
+   ניסיון לפרוס או להרחיב את המפתח. דחו כל ערך שנכשל בבדיקת האורך כדי לחסום
+   קלטים פגומים מוקדם.
+3. **דקוד אלגוריתמי ייעודי:** השתמשו באותם דקודרים קנוניים כמו `iroha_crypto`
+   (`ed25519_dalek`, `pqcrypto_dilithium`, `w3f_bls`/`blstrs`, `sm2`, עזרי TC26
+   וכו’) כדי שכל המימושים ישתפו התנהגות אימות נקודות/תת‑קבוצות זהה.
+4. **בדיקת גדלי חתימה:** admission ו‑SDKs חייבים לאכוף את אורכי החתימה להלן ולדחות
+   כל payload עם חתימה מקוצרת או ארוכה מדי לפני הרצה של המאמת.
 
-| Algorithm | `curve_id` | Public Key Bytes | Signature Bytes | Critical Checks |
-|-----------|------------|------------------|-----------------|-----------------|
-| `ed25519` | `0x01` | 32 | 64 | Reject non-canonical compressed points, enforce cofactor clearing (no small-order points), and ensure `s < L` when validating signatures. |
-| `ml-dsa` (Dilithium3) | `0x02` | 1952 | 3309 | Reject payloads that are not exactly 1952 bytes before decoding; parse the Dilithium3 public key and verify signatures using pqcrypto-dilithium with canonical byte lengths. |
-| `bls_normal` | `0x03` | 48 | 96 | Accept only canonical compressed G1 public keys and compressed G2 signatures; reject identity points and non-canonical encodings. |
-| `secp256k1` | `0x04` | 33 | 64 | Accept only SEC1-compressed points; decompress and reject non-canonical/invalid points, and verify signatures using the canonical 64-byte `r∥s` encoding (low-`s` normalisation enforced by the signer). |
-| `bls_small` | `0x05` | 96 | 48 | Accept only canonical compressed G2 public keys and compressed G1 signatures; reject identity points and non-canonical encodings. |
-| `gost3410-2012-256-paramset-a` | `0x0A` | 64 | 64 | Interpret the payload as `(x||y)` little-endian coordinates, ensure each coordinate `< p`, reject the identity point, and enforce canonical 32-byte `r`/`s` limbs when verifying signatures. |
-| `gost3410-2012-256-paramset-b` | `0x0B` | 64 | 64 | Same validation as param set A but using the TC26 B domain parameters. |
-| `gost3410-2012-256-paramset-c` | `0x0C` | 64 | 64 | Same validation as param set A but using the TC26 C domain parameters. |
-| `gost3410-2012-512-paramset-a` | `0x0D` | 128 | 128 | Interpret `(x||y)` as 64-byte limbs, ensure `< p`, reject the identity point, and require 64-byte `r`/`s` limbs for signatures. |
-| `gost3410-2012-512-paramset-b` | `0x0E` | 128 | 128 | Same validation as param set A but using the TC26 B 512-bit domain parameters. |
-| `sm2` | `0x0F` | 2 + distid + 65 | 64 | Decode distid length (u16 BE), validate the DistID bytes, parse the SEC1 uncompressed point, enforce GM/T 0003 subgroup rules, apply the configured DistID, and require canonical `(r, s)` limbs per SM2. |
+| אלגוריתם | `curve_id` | בתים של מפתח ציבורי | בתים של חתימה | בדיקות קריטיות |
+|----------|------------|----------------------|---------------|-----------------|
+| `ed25519` | `0x01` | 32 | 64 | דחיית נקודות דחוסות לא קנוניות, אכיפת ניקוי cofactor (ללא נקודות מסדר קטן), והבטחת `s < L` בעת אימות חתימות. |
+| `ml-dsa` (Dilithium3) | `0x02` | 1952 | 3309 | דחיית payloads שאינם בדיוק 1952 בתים לפני דקוד; ניתוח מפתח Dilithium3 ואימות חתימות עם pqcrypto-dilithium באורכים קנוניים. |
+| `bls_normal` | `0x03` | 48 | 96 | קבלה של מפתחות ציבוריים G1 דחוסים קנוניים וחתימות G2 דחוסות בלבד; דחיית נקודות זהות וקידודים לא קנוניים. |
+| `secp256k1` | `0x04` | 33 | 64 | קבלה של נקודות SEC1 דחוסות בלבד; פריסה ודחייה של נקודות לא קנוניות/לא תקינות, ואימות חתימות בפורמט `r∥s` קנוני של 64 בתים (נורמליזציית low‑`s` נעשית אצל החותם). |
+| `bls_small` | `0x05` | 96 | 48 | קבלה של מפתחות ציבוריים G2 דחוסים קנוניים וחתימות G1 דחוסות בלבד; דחיית נקודות זהות וקידודים לא קנוניים. |
+| `gost3410-2012-256-paramset-a` | `0x0A` | 64 | 64 | פירוש ה‑payload כקואורדינטות `(x||y)` little-endian, הבטחה שכל קואורדינטה `< p`, דחיית נקודת זהות, ואכיפת limbs קנוניים של `r`/`s` בגודל 32 בתים בעת אימות. |
+| `gost3410-2012-256-paramset-b` | `0x0B` | 64 | 64 | אותה בדיקה של סט A אך עם פרמטרי TC26 B. |
+| `gost3410-2012-256-paramset-c` | `0x0C` | 64 | 64 | אותה בדיקה של סט A אך עם פרמטרי TC26 C. |
+| `gost3410-2012-512-paramset-a` | `0x0D` | 128 | 128 | פירוש `(x||y)` כ‑limbs של 64 בתים, הבטחת `< p`, דחיית נקודת זהות, ודרישת limbs `r`/`s` של 64 בתים לחתימות. |
+| `gost3410-2012-512-paramset-b` | `0x0E` | 128 | 128 | אותה בדיקה של סט A אך עם פרמטרי TC26 B של 512 ביט. |
+| `sm2` | `0x0F` | 2 + distid + 65 | 64 | דקוד אורך distid (u16 BE), אימות בתים של DistID, פירוק נקודת SEC1 לא דחוסה, אכיפת כללי GM/T 0003, החלת DistID המוגדר ודרישת limbs קנוניים `(r, s)` לפי SM2. |
 
-Each row maps to the `validation` object inside
-[`address_curve_registry.json`](address_curve_registry.json). Tooling that
-consumes the JSON export can rely on the `public_key_bytes`,
-`signature_bytes`, and `checks` fields to automate the same validation steps
-described above; variable-length encodings (for example SM2) set
-`public_key_bytes` to null and document the length rule in `checks`.
+כל שורה ממופה לאובייקט `validation` בתוך
+[`address_curve_registry.json`](address_curve_registry.json). כלים שצורכים את
+ייצוא ה‑JSON יכולים להסתמך על השדות `public_key_bytes`, `signature_bytes` ו‑`checks`
+כדי לאוטומט את אותן בדיקות. קידודים באורך משתנה (למשל SM2) מגדירים את
+`public_key_bytes` כ‑null ומתעדים את כלל האורך ב‑`checks`.
 
-## Requesting a New Curve Identifier
+## בקשת מזהה עקומה חדש
 
-1. Draft the algorithm specification (encoding, validation, error handling) and
-   secure governance approval for the rollout.
-2. Submit a pull request updating both this document and
-   `address_curve_registry.json`. New identifiers must be unique and fall within
-   the inclusive range `0x01..=0xFE`.
-3. Update SDKs, Norito fixtures, and operator documentation with the new
-   identifier before deploying to production networks.
-4. Coordinate with the security and observability leads to ensure telemetry,
-   runbooks, and admission policies reflect the new algorithm.
+1. ניסוח מפרט האלגוריתם (קידוד, אימות, טיפול בשגיאות) והשגת אישור ממשל לפריסה.
+2. שליחת pull request שמעדכנת את המסמך ואת `address_curve_registry.json`. מזהים
+   חדשים חייבים להיות ייחודיים ולהיות בטווח `0x01..=0xFE`.
+3. עדכון SDKs, fixtures של Norito ותיעוד מפעילים עם המזהה החדש לפני פריסה לייצור.
+4. תיאום עם צוותי אבטחה ותצפיתיות כדי לוודא שהטלמטריה, runbooks ומדיניות admission
+   משקפות את האלגוריתם החדש.

@@ -1,36 +1,35 @@
-<!-- TODO: Translation pending; content synced from English for technical accuracy. -->
+# Nota de despliegue de IH58 para responsables de SDK y códecs
 
-# IH58 Rollout Note for SDK & Codec Owners
+Equipos: SDK de Rust, SDK de TypeScript/JavaScript, SDK de Python, SDK de Kotlin, tooling de códecs
 
-Teams: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec tooling
+Contexto: `docs/account_structure.md` ahora refleja la implementación de AccountId IH58 en producción.
+Alineen el comportamiento y las pruebas de los SDK con la especificación canónica.
 
-Context: `docs/account_structure.md` now reflects the shipping IH58 account ID
-implementation. Please align SDK behaviour and tests with the canonical spec.
+Referencias clave:
+- Códec de direcciones + layout del encabezado — `docs/account_structure.md` §2
+- Registro de curvas — `docs/source/references/address_curve_registry.md`
+- Manejo de dominio Norm v1 — `docs/source/references/address_norm_v1.md`
+- Vectores de fixtures — `fixtures/account/address_vectors.json`
 
-Key references:
-- Address codec + header layout — `docs/account_structure.md` §2
-- Curve registry — `docs/source/references/address_curve_registry.md`
-- Norm v1 domain handling — `docs/source/references/address_norm_v1.md`
-- Fixture vectors — `fixtures/account/address_vectors.json`
+Acciones:
+1. **Salida canónica:** `AccountId::to_string()`/Display DEBE emitir solo IH58
+   (sin sufijo `@domain`). El hex canónico es solo para depuración (`0x...`).
+2. **Entradas aceptadas:** los parsers DEBEN aceptar IH58 (preferido), `sora`
+   comprimido y hex canónico (solo `0x...`; el hex sin prefijo se rechaza).
+   Las entradas PUEDEN incluir un sufijo `@<domain>` para hints de ruteo;
+   los alias `<label>@<domain>` requieren un resolver. `public_key@domain`
+   (hex multihash) sigue siendo compatible.
+3. **Resolvers:** el parseo IH58/sora sin dominio requiere un resolver de
+   selección de dominio, salvo que el selector sea el default implícito
+   (usar la etiqueta de dominio por defecto configurada). Los literales UAID
+   (`uaid:...`) y opaque (`opaque:...`) requieren resolvers.
+4. **Checksum IH58:** usar Blake2b-512 sobre `IH58PRE || prefix || payload` y
+   tomar los primeros 2 bytes. La base del alfabeto comprimido es **105**.
+5. **Habilitación de curvas:** los SDK usan Ed25519 por defecto. Proveer opt-in
+   explícito para ML‑DSA/GOST/SM (flags de build en Swift; `configureCurveSupport`
+   en JS/Android). No asumir secp256k1 habilitado por defecto fuera de Rust.
+6. **Sin CAIP-10:** aún no hay mapeo CAIP‑10 entregado; no exponer ni depender
+   de conversiones CAIP‑10.
 
-Action items:
-1. **Canonical output:** `AccountId::to_string()`/Display MUST emit IH58 only
-   (no `@domain` suffix). Canonical hex is for debugging (`0x...`).
-2. **Accepted inputs:** parsers MUST accept IH58 (preferred), `sora` compressed,
-   and canonical hex (`0x...` only; bare hex is rejected). Inputs MAY carry an
-   `@<domain>` suffix for routing hints; `<label>@<domain>` aliases require a
-   resolver. Raw `public_key@domain` (multihash hex) remains supported.
-3. **Resolvers:** domainless IH58/sora parsing requires a domain-selector
-   resolver unless the selector is implicit default (use the configured default
-   domain label). UAID (`uaid:...`) and opaque (`opaque:...`) literals require
-   resolvers.
-4. **IH58 checksum:** use Blake2b-512 over `IH58PRE || prefix || payload`, take
-   the first 2 bytes. Compressed alphabet base is **105**.
-5. **Curve gating:** SDKs default to Ed25519-only. Provide explicit opt-in for
-   ML‑DSA/GOST/SM (Swift build flags; JS/Android `configureCurveSupport`). Do
-   not assume secp256k1 is enabled by default outside Rust.
-6. **No CAIP-10:** there is no shipped CAIP‑10 mapping yet; do not expose or
-   depend on CAIP‑10 conversions.
-
-Please confirm once the codecs/tests are updated; open questions can be tracked
-in the account-addressing RFC thread.
+Por favor confirmen una vez que los códecs/pruebas estén actualizados; las dudas
+pueden seguirse en el hilo del RFC de direccionamiento de cuentas.

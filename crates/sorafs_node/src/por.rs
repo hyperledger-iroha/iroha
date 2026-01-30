@@ -16,7 +16,7 @@ use sorafs_manifest::por::{
 };
 use thiserror::Error;
 
-use crate::store::StoredManifest;
+use crate::{repair::RepairStoreError, store::StoredManifest};
 
 const SMALL_LEAF_MAX_LEN: u32 = 4 * 1024;
 const GIB: u64 = 1_073_741_824;
@@ -681,6 +681,9 @@ pub enum PorTrackerError {
     /// Verdict proof digest does not match the previously recorded proof.
     #[error("proof digest reported by verdict does not match recorded proof")]
     ProofDigestMismatch,
+    /// Repair store failed while recording PoR failure history.
+    #[error(transparent)]
+    RepairStore(#[from] RepairStoreError),
 }
 
 #[cfg(test)]

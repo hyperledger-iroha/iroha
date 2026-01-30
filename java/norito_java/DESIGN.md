@@ -40,6 +40,10 @@
 - Streaming helpers: `NoritoStreaming` provides enums, records, and adapters for
   NSC manifests, telemetry, and control frames, sharing discriminant ordering
   and fixed-length hash/signature handling with the Rust codec.
+- Streaming resume parity: `KeyUpdateState`/`ContentKeyState` snapshot helpers
+  plus baseline RLE block decoding with explicit end-of-block validation.
+- Columnar helpers: NCB/AoS layouts for `(u64, String, boolean)`, `(u64, bytes)`
+  (including optional bytes), and `(u64, enum(Name|Code), boolean)` rows.
 - Schema hashing: FNV-1a 64-bit hashed canonical string, duplicated to 16 bytes, plus
   structural schema hashing via Norito's native JSON canonicalisation.
 - CLI utility: `NoritoDump` prints header fields for inspection.
@@ -85,6 +89,9 @@
   and rejects negative payload lengths or unknown profiles.
 - `CompressionConfig.zstdProfile(String, int)` normalises the profile name via
   `Locale.ROOT` so configuration files can rely on case-insensitive strings.
+- Publishing: Gradle includes `maven-publish`; use `./gradlew publishToMavenLocal`
+  with `-PnoritoJavaVersion=...` to publish the `org.hyperledger.iroha:norito-java`
+  artifact for local consumption.
 - Packaging guidance for the JNI backend:
   1. Add `implementation("com.github.luben:zstd-jni:1.5.6-9")` to the Gradle build (or the
      equivalent Maven dependency).
@@ -94,10 +101,18 @@
   3. Gate optional compression paths with `NoritoCompression.hasZstd()` so
      environments without the native dependency fall back gracefully.
 
+## Panama Acceleration Notes
+- The Foreign Function & Memory API remains preview in current JDK releases, and
+  the Norito Java build avoids `--enable-preview` to stay drop-in for CI and
+  downstream consumers.
+- A future acceleration path could use `MemorySegment` for bulk copies and the
+  Vector API for CRC64/varint hot loops, gated behind opt-in build profiles.
+- All acceleration paths must preserve deterministic output across hardware;
+  the pure-Java implementation remains the source of truth.
+
 ## Future Work / TODOs
-- Extend columnar (NCB/AoS) helpers to cover enum/discriminant columns; `(u64, String, boolean)` and `(u64, bytes)` layouts (including optional bytes) are now implemented.
-- Explore Java foreign memory acceleration (Panama) for large payloads.
-- Provide gradle/maven coordinates once the repository is open sourced.
+- Implement Panama-based acceleration once the Foreign Function & Memory API
+  stabilizes without preview flags.
 
 ## Maintenance Notes
 - The Norito Rust crate's `build.rs` invokes `scripts/check_norito_bindings_sync.sh`

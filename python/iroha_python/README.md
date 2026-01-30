@@ -53,6 +53,52 @@ client = create_torii_client(
 )
 ```
 
+## Offline allowances
+
+Issue offline wallet certificates and register them on-ledger with the offline
+allowance endpoints. `top_up_offline_allowance` chains the certificate issue
+and register steps, returning both responses.
+
+```python
+from iroha_python import ToriiClient
+
+client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
+
+draft = {
+    "controller": "ih58:...",
+    "allowance": {"asset": "usd#wonderland", "amount": "10", "commitment": [1, 2]},
+    "spend_public_key": "ed0120deadbeef",
+    "attestation_report": [3, 4],
+    "issued_at_ms": 100,
+    "expires_at_ms": 200,
+    "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
+    "metadata": {},
+}
+
+top_up = client.top_up_offline_allowance(
+    certificate=draft,
+    authority="treasury@wonderland",
+    private_key="operator-private-key",
+)
+print("certificate id", top_up.registration.certificate_id_hex)
+```
+
+For renewals, call `top_up_offline_allowance_renewal` with the current
+`certificate_id_hex`:
+
+```python
+renewed = client.top_up_offline_allowance_renewal(
+    certificate_id_hex=top_up.registration.certificate_id_hex,
+    certificate=draft,
+    authority="treasury@wonderland",
+    private_key="operator-private-key",
+)
+print("renewed", renewed.registration.certificate_id_hex)
+```
+
+If you already have a signed certificate, call `register_offline_allowance` or
+`renew_offline_allowance` directly instead of the top-up helpers.
+
 ## Account addresses
 
 The `iroha_python.address` module mirrors the Rust codecs so applications can
@@ -280,14 +326,25 @@ for provider in ingestion.providers:
 # Decode them with the `norito` crate or via `norito.decode(...)` when the matching schema is available.
 
 # Account listings
-assets = client.list_account_assets("alice@test", limit=10)
-txs = client.query_account_transactions(
+assets = client.list_account_assets(
+    "alice@test",
+    limit=10,
+    asset_id="rose#wonderland#alice@test",
+)
+txs = client.list_account_transactions(
+    "alice@test",
+    limit=5,
+    asset_id="rose#wonderland#alice@test",
+)
+query_txs = client.query_account_transactions(
     "alice@test",
     filter={"status": {"Eq": "Committed"}},
     sort={"timestamp": "DESC"},
     limit=3,
 )
-print(assets, txs)
+print(assets, txs, query_txs)
+
+```
 
 ```python
 # Create a Connect session with type-safe response
@@ -640,7 +697,7 @@ For repeated messaging, use `ConnectSessionKeys.derive(...)` and `ConnectSession
 
 Use `ToriiClient.get_pipeline_recovery_typed` to inspect pipeline recovery sidecars with structured DAG and transaction summaries before streaming pipeline events.
 
-Use the typed account helpers (`list_account_assets_typed`, `list_account_transactions_typed`, and their query counterparts) to receive structured paginated results instead of raw JSON blobs when working with account inventories.
+Use the typed account helpers (`list_account_assets_typed`, `list_account_transactions_typed`, and their query counterparts) to receive structured paginated results instead of raw JSON blobs when working with account inventories. The list endpoints accept an optional `asset_id` for pre-filtering.
 
 
 

@@ -3132,6 +3132,7 @@ pub mod tests {
         let role = Role {
             id: role_id.clone(),
             permissions: Permissions::new(),
+            permission_epochs: BTreeMap::new(),
         };
         world.roles.insert(role_id.clone(), role);
         world.account_roles.insert(

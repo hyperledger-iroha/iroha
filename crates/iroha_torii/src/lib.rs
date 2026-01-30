@@ -2434,7 +2434,7 @@ async fn handler_account_assets(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     AxPath(account_id): AxPath<String>,
-    AxQuery(p): AxQuery<crate::filter::Pagination>,
+    AxQuery(p): AxQuery<crate::routing::AccountAssetsGetParams>,
 ) -> Result<impl IntoResponse, Error> {
     let tel = app.telemetry_handle();
     let key_hint = account_id.clone();
@@ -4021,6 +4021,8 @@ struct ExplorerAssetsQuery {
     owned_by: Option<String>,
     #[norito(default)]
     definition: Option<String>,
+    #[norito(default)]
+    asset_id: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -4045,6 +4047,8 @@ struct ExplorerTransactionsQuery {
     block: Option<u64>,
     #[norito(default)]
     status: Option<String>,
+    #[norito(default)]
+    asset_id: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -4062,6 +4066,8 @@ struct ExplorerInstructionsQuery {
     block: Option<u64>,
     #[norito(default)]
     kind: Option<String>,
+    #[norito(default)]
+    asset_id: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -4220,6 +4226,7 @@ async fn handler_explorer_assets_list(
         pagination,
         owned_by,
         definition,
+        asset_id,
     } = query;
     let owned_by = match owned_by {
         Some(raw) => Some(parse_account_id_for_endpoint(
@@ -4233,11 +4240,22 @@ async fn handler_explorer_assets_list(
         Some(raw) => Some(parse_asset_definition_id(&raw)?),
         None => None,
     };
+    let asset_id = match asset_id {
+        Some(raw) => Some(parse_asset_id(&raw)?),
+        None => None,
+    };
     let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
     if !allowed {
         check_access(&app, &headers, None, "v1/explorer/assets").await?;
     }
-    routing::handle_v1_explorer_assets(app.state.clone(), pagination, owned_by, definition).await
+    routing::handle_v1_explorer_assets(
+        app.state.clone(),
+        pagination,
+        owned_by,
+        definition,
+        asset_id,
+    )
+    .await
 }
 
 #[cfg(feature = "app_api")]
@@ -4297,6 +4315,7 @@ async fn handler_explorer_transactions_list(
         authority,
         block,
         status,
+        asset_id,
     } = query;
     if let Some(block_height) = block {
         if block_height == 0 {
@@ -4315,6 +4334,11 @@ async fn handler_explorer_transactions_list(
         Some(raw) => Some(crate::routing::parse_transaction_status_filter(&raw)?),
         None => None,
     };
+    let asset_id = match asset_id {
+        Some(raw) if raw.trim().is_empty() => None,
+        Some(raw) => Some(parse_asset_id(&raw)?),
+        None => None,
+    };
     let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
     if !allowed {
         check_access(&app, &headers, None, "v1/explorer/transactions").await?;
@@ -4326,6 +4350,7 @@ async fn handler_explorer_transactions_list(
         authority,
         block,
         status,
+        asset_id,
     )
     .await
 }
@@ -4344,6 +4369,7 @@ async fn handler_explorer_instructions_list(
         transaction_status,
         block,
         kind,
+        asset_id,
     } = query;
     if let Some(block_height) = block {
         if block_height == 0 {
@@ -4375,6 +4401,11 @@ async fn handler_explorer_instructions_list(
         ),
         None => None,
     };
+    let asset_id = match asset_id {
+        Some(raw) if raw.trim().is_empty() => None,
+        Some(raw) => Some(parse_asset_id(&raw)?),
+        None => None,
+    };
     let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
     if !allowed {
         check_access(&app, &headers, None, "v1/explorer/instructions").await?;
@@ -4389,6 +4420,7 @@ async fn handler_explorer_instructions_list(
             status,
             block,
             kind,
+            asset_id,
         },
     )
     .await

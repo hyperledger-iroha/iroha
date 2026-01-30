@@ -8,9 +8,11 @@ use std::{
 };
 
 use color_eyre::{Result, eyre::eyre};
-use iroha_crypto::{Hash, KeyPair};
+use iroha_config::parameters::defaults as config_defaults;
+use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::NewAccount,
+    account::rekey::AccountLabel,
     events::{
         EventFilterBox,
         execute_trigger::ExecuteTriggerEventFilter,
@@ -32,8 +34,9 @@ use iroha_data_model::{
             RevokeSpaceDirectoryManifest,
         },
         staking::{
-            BondPublicLaneStake, FinalizePublicLaneUnbond, RecordPublicLaneRewards,
-            RegisterPublicLaneValidator, SchedulePublicLaneUnbond, SlashPublicLaneValidator,
+            ActivatePublicLaneValidator, BondPublicLaneStake, FinalizePublicLaneUnbond,
+            RecordPublicLaneRewards, RegisterPublicLaneValidator, SchedulePublicLaneUnbond,
+            SlashPublicLaneValidator,
         },
     },
     metadata::Metadata,
@@ -42,6 +45,7 @@ use iroha_data_model::{
         ManifestEffect, ManifestEntry, ManifestVersion, PublicLaneRewardRole,
         PublicLaneRewardShare, UniversalAccountId,
     },
+    parameter::system::SumeragiNposParameters,
     prelude::*,
     sorafs::{
         capacity::ProviderId,
@@ -66,6 +70,7 @@ use iroha_executor_data_model::permission::{
     },
     trigger::CanRegisterTrigger,
 };
+use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
 use norito::{
     codec::Encode as NoritoEncode,
     json::{Map as JsonMap, Value as JsonValue},
@@ -78,6 +83,9 @@ use sorafs_manifest::{
     },
     chunker_registry,
 };
+
+/// Base seed used for deterministic peer identity derivation in Izanami networks.
+pub const IZANAMI_BASE_SEED: &str = "izanami-chaos";
 use tokio::sync::Mutex;
 
 use crate::config::WorkloadProfile;
@@ -127,6 +135,13 @@ fn account_from_record(record: &AccountRecord) -> NewAccount {
     }
 }
 
+fn peer_keypair(index: usize) -> KeyPair {
+    let seed = format!("{IZANAMI_BASE_SEED}-peer-{index}");
+    let mut seed_bytes = seed.into_bytes();
+    seed_bytes.extend_from_slice(b":bls");
+    KeyPair::from_seed(seed_bytes, Algorithm::BlsNormal)
+}
+
 /// Prepared chaos state with pre-built genesis instructions.
 #[derive(Debug)]
 pub struct PreparedChaos {
@@ -135,11 +150,37 @@ pub struct PreparedChaos {
     pub recipes: Vec<RecipeKind>,
 }
 
+/// Build post-topology NPoS bootstrap instructions for Izanami peers.
+pub fn npos_post_topology_instructions(peer_count: usize) -> Vec<InstructionBox> {
+    let effective_peers = peer_count.max(1);
+    let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
+    let stake_amount: Numeric = SumeragiNposParameters::default().min_self_bond().into();
+    let mut instructions = Vec::new();
+    for index in 0..effective_peers {
+        let key_pair = peer_keypair(index);
+        let validator_id = AccountId::new(nexus_domain.clone(), key_pair.public_key().clone());
+        instructions.push(InstructionBox::from(RegisterPublicLaneValidator {
+            lane_id: LaneId::SINGLE,
+            validator: validator_id.clone(),
+            stake_account: validator_id.clone(),
+            initial_stake: stake_amount.clone(),
+            metadata: Metadata::default(),
+        }));
+        instructions.push(InstructionBox::from(ActivatePublicLaneValidator {
+            lane_id: LaneId::SINGLE,
+            validator: validator_id,
+        }));
+    }
+    instructions
+}
+
 /// Create the baseline chaos state and its associated genesis block.
 pub fn prepare_state(
     account_count: usize,
+    peer_count: Option<usize>,
     nexus: Option<&crate::config::NexusProfile>,
     workload_profile: WorkloadProfile,
+    allow_contract_deploy_in_stable: bool,
 ) -> Result<PreparedChaos> {
     let effective_accounts = account_count.max(3);
     let base_domain: DomainId = "chaosnet"
@@ -224,6 +265,99 @@ pub fn prepare_state(
         None
     };
 
+    let effective_peers = peer_count.unwrap_or(account_count.max(1)).max(1);
+    let mut nexus_genesis = Vec::new();
+    let mut nexus_staking = None;
+    let mut npos_bootstrap_stake = None;
+    if nexus.is_some() {
+        let nexus_domain: DomainId = "nexus"
+            .parse()
+            .map_err(|_| eyre!("failed to parse nexus domain id"))?;
+        let ivm_domain: DomainId = "ivm"
+            .parse()
+            .map_err(|_| eyre!("failed to parse ivm domain id"))?;
+        let gas_account_id = AccountId::new(
+            ivm_domain.clone(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+        );
+        let gas_label: Name = "gas"
+            .parse()
+            .map_err(|_| eyre!("failed to parse gas account label"))?;
+        let gas_account = Account::new(gas_account_id.clone())
+            .with_label(Some(AccountLabel::new(ivm_domain.clone(), gas_label)));
+
+        let stake_asset: AssetDefinitionId = config_defaults::nexus::staking::stake_asset_id()
+            .parse()
+            .map_err(|_| eyre!("failed to parse nexus stake asset id"))?;
+        let fee_asset: AssetDefinitionId = config_defaults::nexus::fees::FEE_ASSET_ID
+            .parse()
+            .map_err(|_| eyre!("failed to parse nexus fee asset id"))?;
+        let stake_amount_value = SumeragiNposParameters::default().min_self_bond();
+        let stake_amount: Numeric = stake_amount_value.into();
+        npos_bootstrap_stake = Some(stake_amount_value);
+
+        nexus_genesis.push(InstructionBox::from(Register::domain(Domain::new(
+            nexus_domain.clone(),
+        ))));
+        nexus_genesis.push(InstructionBox::from(Register::domain(Domain::new(
+            ivm_domain.clone(),
+        ))));
+        nexus_genesis.push(InstructionBox::from(Register::account(gas_account)));
+        nexus_genesis.push(InstructionBox::from(Register::asset_definition(
+            AssetDefinition::numeric(stake_asset.clone()),
+        )));
+        if fee_asset != stake_asset {
+            nexus_genesis.push(InstructionBox::from(Register::asset_definition(
+                AssetDefinition::numeric(fee_asset.clone()),
+            )));
+        }
+
+        let mut validator_accounts = Vec::new();
+        for index in 0..effective_peers {
+            let key_pair = peer_keypair(index);
+            let account_id = AccountId::new(nexus_domain.clone(), key_pair.public_key().clone());
+            validator_accounts.push(AccountRecord {
+                id: account_id.clone(),
+                key_pair,
+                uaid: None,
+            });
+            nexus_genesis.push(InstructionBox::from(Register::account(Account::new(
+                account_id,
+            ))));
+        }
+
+        for validator in &validator_accounts {
+            nexus_genesis.push(InstructionBox::from(Mint::asset_numeric(
+                stake_amount.clone(),
+                AssetId::new(stake_asset.clone(), validator.id.clone()),
+            )));
+        }
+
+        nexus_genesis.push(InstructionBox::from(Grant::account_permission(
+            CanMintAssetWithDefinition {
+                asset_definition: stake_asset.clone(),
+            },
+            treasury.id.clone(),
+        )));
+        if fee_asset != stake_asset {
+            nexus_genesis.push(InstructionBox::from(Grant::account_permission(
+                CanMintAssetWithDefinition {
+                    asset_definition: fee_asset.clone(),
+                },
+                treasury.id.clone(),
+            )));
+        }
+
+        nexus_staking = Some(NexusStakingSetup {
+            stake_asset,
+            fee_asset,
+            fee_sink: gas_account_id.clone(),
+            stake_escrow: gas_account_id.clone(),
+            slash_sink: gas_account_id,
+            validator_accounts,
+        });
+    }
+
     let mut genesis_tx = Vec::new();
     genesis_tx.push(InstructionBox::from(Register::domain(Domain::new(
         base_domain.clone(),
@@ -243,6 +377,7 @@ pub fn prepare_state(
             account_from_record(account),
         )));
     }
+    genesis_tx.extend(nexus_genesis);
     genesis_tx.push(InstructionBox::from(Grant::account_permission(
         CanRegisterDomain,
         treasury.id.clone(),
@@ -351,12 +486,38 @@ pub fn prepare_state(
         dataspaces,
         lanes,
         sorafs_replication,
+        nexus_staking,
     );
     state.asset_instances.insert(treasury_asset_id);
+    if let (Some(stake_amount), Some(setup)) = (npos_bootstrap_stake, state.nexus_staking.as_ref())
+    {
+        let lane = LaneId::SINGLE;
+        let validator_ids: Vec<AccountId> = setup
+            .validator_accounts
+            .iter()
+            .map(|record| record.id.clone())
+            .collect();
+        if !validator_ids.is_empty() {
+            for validator_id in &validator_ids {
+                state.add_public_lane_stake_share(lane, validator_id, validator_id, stake_amount);
+            }
+            state
+                .public_lane_validators
+                .insert(lane, validator_ids.into_iter().collect());
+        }
+    }
     let mut recipes = match workload_profile {
         WorkloadProfile::Stable => BASE_RECIPES_STABLE.to_vec(),
         WorkloadProfile::Chaos => BASE_RECIPES_CHAOS.to_vec(),
     };
+    if matches!(workload_profile, WorkloadProfile::Stable) && !allow_contract_deploy_in_stable {
+        recipes.retain(|kind| {
+            !matches!(
+                kind,
+                RecipeKind::DeployIvmContract | RecipeKind::DeployKotodamaContract
+            )
+        });
+    }
     if nexus.is_some() {
         let extra = match workload_profile {
             WorkloadProfile::Stable => NEXUS_RECIPES_STABLE,
@@ -470,7 +631,8 @@ pub(crate) enum RecipeKind {
     CompleteReplicationOrder,
 }
 
-// Stable runs avoid non-idempotent registration and indefinite trigger growth to keep long runs steady.
+// Stable runs favor deterministic recipes; contract deployment can be enabled via
+// `allow_contract_deploy_in_stable`.
 const BASE_RECIPES_STABLE: &[RecipeKind] = &[
     RecipeKind::RegisterDomain,
     RecipeKind::RegisterNft,
@@ -488,9 +650,10 @@ const BASE_RECIPES_STABLE: &[RecipeKind] = &[
     RecipeKind::RemoveAssetInstanceKeyValue,
     RecipeKind::RegisterRole,
     RecipeKind::RegisterTimeTrigger,
-    // TODO: Re-enable trigger repetition recipes once repeatable trigger tracking is concurrency-safe.
-    // TODO: Re-enable DeployIvmContract in stable profile once IVM trigger execution is fast enough for perf runs.
-    // TODO: Re-enable DeployKotodamaContract once Kotodama samples only use ABI v1 syscalls.
+    RecipeKind::MintTriggerRepetitions,
+    RecipeKind::BurnTriggerRepetitions,
+    RecipeKind::DeployIvmContract,
+    RecipeKind::DeployKotodamaContract,
 ];
 
 const BASE_RECIPES_CHAOS: &[RecipeKind] = &[
@@ -548,6 +711,16 @@ const NEXUS_RECIPES_CHAOS: &[RecipeKind] = &[
 ];
 
 #[derive(Debug, Clone)]
+struct NexusStakingSetup {
+    stake_asset: AssetDefinitionId,
+    fee_asset: AssetDefinitionId,
+    fee_sink: AccountId,
+    stake_escrow: AccountId,
+    slash_sink: AccountId,
+    validator_accounts: Vec<AccountRecord>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ChaosState {
     base_domain: DomainId,
     treasury: AccountRecord,
@@ -574,10 +747,12 @@ pub struct ChaosState {
     trigger_repetitions: HashMap<TriggerId, u32>,
     space_directory_manifests: HashMap<UniversalAccountId, HashSet<DataSpaceId>>,
     public_lane_validators: HashMap<LaneId, HashSet<AccountId>>,
+    public_lane_stakes: HashMap<(LaneId, AccountId, AccountId), u64>,
     pending_unbonds: Vec<PendingUnbond>,
     pending_replication_orders: Vec<ReplicationOrderId>,
     sorafs_replication: Option<SorafsReplicationSeed>,
     sorafs_replication_ready: bool,
+    nexus_staking: Option<NexusStakingSetup>,
     counters: ChaosCounters,
 }
 
@@ -627,6 +802,7 @@ impl ChaosState {
         dataspaces: Vec<DataSpaceId>,
         lanes: Vec<LaneId>,
         sorafs_replication: Option<SorafsReplicationSeed>,
+        nexus_staking: Option<NexusStakingSetup>,
     ) -> Self {
         let mut asset_definitions = HashSet::new();
         asset_definitions.insert(asset_numeric.clone());
@@ -666,10 +842,12 @@ impl ChaosState {
             trigger_repetitions: HashMap::new(),
             space_directory_manifests: HashMap::new(),
             public_lane_validators: HashMap::new(),
+            public_lane_stakes: HashMap::new(),
             pending_unbonds: Vec::new(),
             pending_replication_orders: Vec::new(),
             sorafs_replication,
             sorafs_replication_ready: false,
+            nexus_staking,
             counters: ChaosCounters::default(),
         }
     }
@@ -681,11 +859,8 @@ impl ChaosState {
         self.users.push(record);
     }
 
-    #[allow(clippy::unused_self)]
     fn nexus_staking_expect_success(&self) -> bool {
-        // TODO: flip to true once Izanami provisions Nexus staking assets, escrow/sink accounts,
-        // and validator accounts backed by registered peers in chaos genesis.
-        false
+        self.nexus_staking.is_some()
     }
 
     fn allocate_uaid_record(&mut self) -> AccountRecord {
@@ -1839,11 +2014,19 @@ impl ChaosState {
 
     fn plan_register_public_validator(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
         let lane = self.random_lane(rng);
-        let validator = self.random_user(rng)?.clone();
-        let stake_account = self.random_user(rng)?.clone();
-        let stake_amount: Numeric = rng.random_range(10_u32..=100_u32).into();
-        let treasury_asset = AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone());
-        let stake_asset = AssetId::new(self.asset_numeric.clone(), stake_account.id.clone());
+        let validator = self
+            .random_staking_validator(rng)
+            .unwrap_or(self.random_user(rng)?.clone());
+        let stake_account = if self.nexus_staking.is_some() {
+            validator.clone()
+        } else {
+            self.random_user(rng)?.clone()
+        };
+        let stake_amount_value = u64::from(rng.random_range(10_u32..=100_u32));
+        let stake_amount: Numeric = stake_amount_value.into();
+        let stake_asset_def = self.stake_asset_definition();
+        let treasury_asset = AssetId::new(stake_asset_def.clone(), self.treasury.id.clone());
+        let stake_asset = AssetId::new(stake_asset_def, stake_account.id.clone());
 
         let mut instructions = vec![InstructionBox::from(Mint::asset_numeric(
             stake_amount.clone(),
@@ -1861,7 +2044,15 @@ impl ChaosState {
             initial_stake: stake_amount,
             metadata: Metadata::default(),
         }));
-        let expect_success = self.nexus_staking_expect_success();
+        let mut expect_success = self.nexus_staking_expect_success();
+        if expect_success
+            && self
+                .public_lane_validators
+                .get(&lane)
+                .is_some_and(|validators| validators.contains(&validator.id))
+        {
+            expect_success = false;
+        }
         if expect_success {
             self.asset_instances.insert(treasury_asset);
             self.asset_instances.insert(stake_asset);
@@ -1869,6 +2060,12 @@ impl ChaosState {
                 .entry(lane)
                 .or_default()
                 .insert(validator.id.clone());
+            self.add_public_lane_stake_share(
+                lane,
+                &validator.id,
+                &stake_account.id,
+                stake_amount_value,
+            );
         }
 
         Ok(TransactionPlan {
@@ -1898,9 +2095,11 @@ impl ChaosState {
             });
         };
         let staker = self.random_user(rng)?.clone();
-        let amount: Numeric = rng.random_range(5_u32..=40_u32).into();
-        let treasury_asset = AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone());
-        let staker_asset = AssetId::new(self.asset_numeric.clone(), staker.id.clone());
+        let amount_value = u64::from(rng.random_range(5_u32..=40_u32));
+        let amount: Numeric = amount_value.into();
+        let stake_asset_def = self.stake_asset_definition();
+        let treasury_asset = AssetId::new(stake_asset_def.clone(), self.treasury.id.clone());
+        let staker_asset = AssetId::new(stake_asset_def, staker.id.clone());
         let mut instructions = vec![InstructionBox::from(Mint::asset_numeric(
             amount.clone(),
             treasury_asset.clone(),
@@ -1921,6 +2120,7 @@ impl ChaosState {
         if expect_success {
             self.asset_instances.insert(treasury_asset);
             self.asset_instances.insert(staker_asset);
+            self.add_public_lane_stake_share(lane, &validator.id, &staker.id, amount_value);
         }
 
         Ok(TransactionPlan {
@@ -1949,18 +2149,35 @@ impl ChaosState {
                 expect_success: false,
             });
         };
-        let staker = self.random_user(rng)?.clone();
+        let staker = if self.nexus_staking.is_some() {
+            validator.clone()
+        } else {
+            self.random_user(rng)?.clone()
+        };
         let request_id = Hash::new(format!("izanami-unbond-{}", self.bump_staking()).as_bytes());
-        let amount: Numeric = rng.random_range(1_u32..=10_u32).into();
+        let mut expect_success = self.nexus_staking_expect_success();
+        let available = if expect_success {
+            self.available_public_lane_stake_share(lane, &validator.id, &staker.id)
+        } else {
+            0
+        };
+        let amount_value = if available > 0 {
+            rng.random_range(1_u64..=available.min(10))
+        } else {
+            u64::from(rng.random_range(1_u32..=10_u32))
+        };
+        let amount: Numeric = amount_value.into();
         let release_at = now_ms().saturating_add(5_000);
-        let expect_success = self.nexus_staking_expect_success();
-        if expect_success {
+        if expect_success && available >= amount_value {
             self.pending_unbonds.push(PendingUnbond {
                 lane,
                 validator: validator.id.clone(),
                 staker: staker.id.clone(),
                 request_id,
             });
+            self.reduce_public_lane_stake_share(lane, &validator.id, &staker.id, amount_value);
+        } else {
+            expect_success = false;
         }
 
         Ok(TransactionPlan {
@@ -2041,7 +2258,8 @@ impl ChaosState {
     fn plan_record_public_rewards(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
         let Some((lane, validator)) = self.pick_registered_validator(rng) else {
             let epoch = self.bump_staking();
-            let reward_asset = AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone());
+            let (reward_asset_def, reward_sink) = self.fee_asset_and_sink();
+            let reward_asset = AssetId::new(reward_asset_def, reward_sink);
             return Ok(TransactionPlan {
                 label: "record_public_lane_rewards",
                 instructions: vec![InstructionBox::from(RecordPublicLaneRewards {
@@ -2056,7 +2274,8 @@ impl ChaosState {
                 expect_success: false,
             });
         };
-        let reward_asset = AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone());
+        let (reward_asset_def, reward_sink) = self.fee_asset_and_sink();
+        let reward_asset = AssetId::new(reward_asset_def, reward_sink);
         let expect_success = self.nexus_staking_expect_success();
         if expect_success {
             self.asset_instances.insert(reward_asset.clone());
@@ -2068,10 +2287,7 @@ impl ChaosState {
             amount: reward.clone(),
         };
         let epoch = self.bump_staking();
-        let mint = InstructionBox::from(Mint::asset_numeric(
-            reward.clone(),
-            AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone()),
-        ));
+        let mint = InstructionBox::from(Mint::asset_numeric(reward.clone(), reward_asset.clone()));
         Ok(TransactionPlan {
             label: "record_public_lane_rewards",
             instructions: vec![
@@ -2288,7 +2504,19 @@ impl ChaosState {
         if &self.treasury.id == id {
             Some(self.treasury.clone())
         } else {
-            self.users.iter().find(|record| &record.id == id).cloned()
+            self.users
+                .iter()
+                .find(|record| &record.id == id)
+                .cloned()
+                .or_else(|| {
+                    self.nexus_staking.as_ref().and_then(|setup| {
+                        setup
+                            .validator_accounts
+                            .iter()
+                            .find(|record| &record.id == id)
+                            .cloned()
+                    })
+                })
         }
     }
 
@@ -2308,12 +2536,77 @@ impl ChaosState {
             .ok_or_else(|| eyre!("no asset instances available"))
     }
 
+    fn random_staking_validator(&self, rng: &mut StdRng) -> Option<AccountRecord> {
+        self.nexus_staking
+            .as_ref()
+            .and_then(|setup| setup.validator_accounts.choose(rng).cloned())
+    }
+
+    fn stake_asset_definition(&self) -> AssetDefinitionId {
+        self.nexus_staking
+            .as_ref()
+            .map(|setup| setup.stake_asset.clone())
+            .unwrap_or_else(|| self.asset_numeric.clone())
+    }
+
+    fn fee_asset_and_sink(&self) -> (AssetDefinitionId, AccountId) {
+        self.nexus_staking
+            .as_ref()
+            .map(|setup| (setup.fee_asset.clone(), setup.fee_sink.clone()))
+            .unwrap_or_else(|| (self.asset_numeric.clone(), self.treasury.id.clone()))
+    }
+
+    fn add_public_lane_stake_share(
+        &mut self,
+        lane: LaneId,
+        validator: &AccountId,
+        staker: &AccountId,
+        amount: u64,
+    ) {
+        let key = (lane, validator.clone(), staker.clone());
+        let entry = self.public_lane_stakes.entry(key).or_insert(0);
+        *entry = entry.saturating_add(amount);
+    }
+
+    fn available_public_lane_stake_share(
+        &self,
+        lane: LaneId,
+        validator: &AccountId,
+        staker: &AccountId,
+    ) -> u64 {
+        let key = (lane, validator.clone(), staker.clone());
+        self.public_lane_stakes.get(&key).copied().unwrap_or(0)
+    }
+
+    fn reduce_public_lane_stake_share(
+        &mut self,
+        lane: LaneId,
+        validator: &AccountId,
+        staker: &AccountId,
+        amount: u64,
+    ) -> bool {
+        let key = (lane, validator.clone(), staker.clone());
+        let Some(entry) = self.public_lane_stakes.get_mut(&key) else {
+            return false;
+        };
+        if *entry < amount {
+            return false;
+        }
+        *entry -= amount;
+        if *entry == 0 {
+            self.public_lane_stakes.remove(&key);
+        }
+        true
+    }
+
     fn random_repeatable_trigger(&self, rng: &mut StdRng) -> Option<TriggerId> {
         self.repeatable_triggers.choose(rng).cloned()
     }
 
     fn track_repeatable_trigger(&mut self, trigger_id: TriggerId) {
-        self.repeatable_triggers.push(trigger_id.clone());
+        if !self.repeatable_triggers.contains(&trigger_id) {
+            self.repeatable_triggers.push(trigger_id.clone());
+        }
         self.trigger_repetitions.entry(trigger_id).or_insert(0);
     }
 
@@ -2392,7 +2685,9 @@ impl ChaosState {
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::isi::{RegisterBox, RemoveKeyValueBox, SetKeyValueBox, UnregisterBox};
+    use iroha_data_model::isi::{
+        MintBox, RegisterBox, RemoveKeyValueBox, SetKeyValueBox, UnregisterBox,
+    };
     use norito::codec::Decode;
     use rand::SeedableRng;
     use tokio::runtime::Builder;
@@ -2410,7 +2705,8 @@ mod tests {
 
     #[test]
     fn prepare_state_builds_genesis() {
-        let prepared = prepare_state(4, None, WorkloadProfile::Stable).expect("state prepared");
+        let prepared =
+            prepare_state(4, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         assert!(!prepared.genesis.is_empty());
         assert!(!prepared.genesis[0].is_empty());
         assert!(prepared.state.users.len() >= 3);
@@ -2420,7 +2716,8 @@ mod tests {
 
     #[test]
     fn prepare_state_grants_treasury_mint_permission() {
-        let prepared = prepare_state(4, None, WorkloadProfile::Stable).expect("state prepared");
+        let prepared =
+            prepare_state(4, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let base_asset = prepared.state.asset_numeric.clone();
         let treasury_id = prepared.state.treasury.id.clone();
         let has_grant = prepared.genesis.iter().flatten().any(|instruction| {
@@ -2446,15 +2743,131 @@ mod tests {
     }
 
     #[test]
+    fn nexus_staking_genesis_registers_fee_sink_and_validators() {
+        let profile = NexusProfile::sora_defaults().expect("profile");
+        let PreparedChaos { state, genesis, .. } =
+            prepare_state(2, None, Some(&profile), WorkloadProfile::Stable, false)
+                .expect("state prepared");
+        let setup = state
+            .nexus_staking
+            .as_ref()
+            .expect("nexus staking setup should be present");
+        assert!(
+            !setup.validator_accounts.is_empty(),
+            "validator accounts should be provisioned"
+        );
+
+        let expected_label = AccountLabel::new(
+            "ivm".parse().expect("ivm domain"),
+            "gas".parse().expect("gas label"),
+        );
+        let mut found_fee_sink = false;
+        for instruction in genesis.iter().flatten() {
+            let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
+                continue;
+            };
+            if let RegisterBox::Account(account) = register {
+                if account.object.label() == Some(&expected_label) {
+                    found_fee_sink = true;
+                    break;
+                }
+            }
+        }
+        assert!(found_fee_sink, "fee sink account should be registered");
+
+        let post_topology = npos_post_topology_instructions(setup.validator_accounts.len());
+        let mut registered_validators = HashSet::new();
+        let mut activated_validators = HashSet::new();
+        for instruction in &post_topology {
+            if let Some(register) = instruction
+                .as_any()
+                .downcast_ref::<RegisterPublicLaneValidator>()
+            {
+                registered_validators.insert(register.validator.clone());
+            }
+            if let Some(activate) = instruction
+                .as_any()
+                .downcast_ref::<ActivatePublicLaneValidator>()
+            {
+                activated_validators.insert(activate.validator.clone());
+            }
+        }
+
+        for validator in &setup.validator_accounts {
+            let registered = genesis.iter().flatten().any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterBox>()
+                    .is_some_and(|register| match register {
+                        RegisterBox::Account(account) => account.object.id == validator.id,
+                        _ => false,
+                    })
+            });
+            assert!(
+                registered,
+                "validator account {} should be registered in genesis",
+                validator.id
+            );
+            assert!(
+                registered_validators.contains(&validator.id),
+                "validator {} should be registered for staking in genesis",
+                validator.id
+            );
+            assert!(
+                activated_validators.contains(&validator.id),
+                "validator {} should be activated in genesis",
+                validator.id
+            );
+        }
+    }
+
+    #[test]
     fn nexus_profile_injects_additional_recipes() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { recipes, .. } =
-            prepare_state(3, Some(&profile), WorkloadProfile::Chaos).expect("state prepared");
+            prepare_state(3, None, Some(&profile), WorkloadProfile::Chaos, false)
+                .expect("state prepared");
         assert!(
             recipes
                 .iter()
                 .any(|kind| matches!(kind, RecipeKind::RegisterPublicLaneValidator)),
             "nexus recipes should include staking paths"
+        );
+    }
+
+    #[test]
+    fn stable_recipes_skip_contract_deploys_by_default() {
+        let PreparedChaos { recipes, .. } =
+            prepare_state(2, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        assert!(
+            !recipes
+                .iter()
+                .any(|kind| matches!(kind, RecipeKind::DeployIvmContract)),
+            "stable recipes should skip IVM contract deployment by default"
+        );
+        assert!(
+            !recipes
+                .iter()
+                .any(|kind| matches!(kind, RecipeKind::DeployKotodamaContract)),
+            "stable recipes should skip Kotodama contract deployment by default"
+        );
+    }
+
+    #[test]
+    fn stable_recipes_allow_contract_deploys_when_enabled() {
+        let PreparedChaos { recipes, .. } =
+            prepare_state(2, None, None, WorkloadProfile::Stable, true).expect("state prepared");
+        assert!(
+            recipes
+                .iter()
+                .any(|kind| matches!(kind, RecipeKind::DeployIvmContract)),
+            "stable recipes should include IVM contract deployment when enabled"
+        );
+        assert!(
+            recipes
+                .iter()
+                .any(|kind| matches!(kind, RecipeKind::DeployKotodamaContract)),
+            "stable recipes should include Kotodama contract deployment when enabled"
         );
     }
 
@@ -2481,7 +2894,22 @@ mod tests {
                 .any(|kind| matches!(kind, RecipeKind::RemoveAssetInstanceKeyValue))
         );
         assert!(
-            !BASE_RECIPES_STABLE
+            BASE_RECIPES_STABLE
+                .iter()
+                .any(|kind| matches!(kind, RecipeKind::MintTriggerRepetitions))
+        );
+        assert!(
+            BASE_RECIPES_STABLE
+                .iter()
+                .any(|kind| matches!(kind, RecipeKind::BurnTriggerRepetitions))
+        );
+        assert!(
+            BASE_RECIPES_STABLE
+                .iter()
+                .any(|kind| matches!(kind, RecipeKind::DeployIvmContract))
+        );
+        assert!(
+            BASE_RECIPES_STABLE
                 .iter()
                 .any(|kind| matches!(kind, RecipeKind::DeployKotodamaContract))
         );
@@ -2496,7 +2924,7 @@ mod tests {
     fn produce_plan_for_all_recipes() {
         let PreparedChaos {
             mut state, recipes, ..
-        } = prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+        } = prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(7);
         for kind in recipes {
             let plan = state.produce_plan(kind, &mut rng).expect("plan builds");
@@ -2510,7 +2938,7 @@ mod tests {
     #[test]
     fn workload_engine_grant_role_never_duplicates_memberships() {
         let PreparedChaos { state, recipes, .. } =
-            prepare_state(4, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(4, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let engine = WorkloadEngine::new(state, recipes);
         let mut rng = StdRng::seed_from_u64(17);
         let runtime = Builder::new_current_thread()
@@ -2565,7 +2993,8 @@ mod tests {
     fn publish_manifest_tracks_dataspaces() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { mut state, .. } =
-            prepare_state(2, Some(&profile), WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(2, None, Some(&profile), WorkloadProfile::Stable, false)
+                .expect("state prepared");
         let mut rng = StdRng::seed_from_u64(99);
         let plan = state
             .plan_publish_space_manifest(&mut rng)
@@ -2584,12 +3013,19 @@ mod tests {
     fn staking_recipes_track_validator_registry() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, Some(&profile), WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
+                .expect("state prepared");
+        state.public_lane_validators.clear();
+        state.public_lane_stakes.clear();
         let mut rng = StdRng::seed_from_u64(31);
         let plan = state
             .plan_register_public_validator(&mut rng)
             .expect("validator plan builds");
         assert_eq!(plan.label, "register_public_lane_validator");
+        assert!(
+            plan.expect_success,
+            "staking should be provisioned in genesis"
+        );
         let has_validators = state
             .public_lane_validators
             .values()
@@ -2598,13 +3034,96 @@ mod tests {
             has_validators, plan.expect_success,
             "validator registry tracking should follow plan success"
         );
+
+        let register = plan
+            .instructions
+            .iter()
+            .find_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+            })
+            .expect("register validator instruction");
+        assert_eq!(
+            register.validator, register.stake_account,
+            "validator registration should self-stake in Izanami genesis"
+        );
+        let stake_asset = state
+            .nexus_staking
+            .as_ref()
+            .expect("staking setup")
+            .stake_asset
+            .clone();
+        let mint_asset = plan
+            .instructions
+            .iter()
+            .find_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<MintBox>()
+                    .and_then(|mint| match mint {
+                        MintBox::Asset(asset) => Some(asset.destination.definition().clone()),
+                        _ => None,
+                    })
+            })
+            .expect("mint instruction");
+        assert_eq!(mint_asset, stake_asset);
+        assert!(
+            !state.public_lane_stakes.is_empty(),
+            "stake shares should be tracked after validator registration"
+        );
+    }
+
+    #[test]
+    fn bond_public_stake_tracks_share_and_uses_stake_asset() {
+        let profile = NexusProfile::sora_defaults().expect("profile");
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
+                .expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(41);
+        assert!(
+            state
+                .public_lane_validators
+                .values()
+                .any(|validators| !validators.is_empty()),
+            "genesis should seed public lane validators"
+        );
+        let before_shares = state.public_lane_stakes.len();
+        let plan = state.plan_bond_public_stake(&mut rng).expect("bond plan");
+        assert_eq!(plan.label, "bond_public_lane_stake");
+        assert!(plan.expect_success, "bond plan should succeed");
+        assert!(
+            state.public_lane_stakes.len() >= before_shares,
+            "bond should add or update stake shares"
+        );
+        let stake_asset = state
+            .nexus_staking
+            .as_ref()
+            .expect("staking setup")
+            .stake_asset
+            .clone();
+        let mint_asset = plan
+            .instructions
+            .iter()
+            .find_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<MintBox>()
+                    .and_then(|mint| match mint {
+                        MintBox::Asset(asset) => Some(asset.destination.definition().clone()),
+                        _ => None,
+                    })
+            })
+            .expect("mint instruction");
+        assert_eq!(mint_asset, stake_asset);
     }
 
     #[test]
     fn replication_orders_are_tracked() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { mut state, .. } =
-            prepare_state(2, Some(&profile), WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(2, None, Some(&profile), WorkloadProfile::Stable, false)
+                .expect("state prepared");
         let mut rng = StdRng::seed_from_u64(45);
         let plan = state
             .plan_issue_replication_order(&mut rng)
@@ -2628,7 +3147,8 @@ mod tests {
     fn replication_order_payload_references_seeded_manifest() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { mut state, .. } =
-            prepare_state(2, Some(&profile), WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(2, None, Some(&profile), WorkloadProfile::Stable, false)
+                .expect("state prepared");
         let mut rng = StdRng::seed_from_u64(52);
         let seed = state
             .plan_issue_replication_order(&mut rng)
@@ -2659,7 +3179,8 @@ mod tests {
     fn complete_replication_order_clears_pending() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { mut state, .. } =
-            prepare_state(2, Some(&profile), WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(2, None, Some(&profile), WorkloadProfile::Stable, false)
+                .expect("state prepared");
         let mut rng = StdRng::seed_from_u64(91);
         let seed = state
             .plan_issue_replication_order(&mut rng)
@@ -2683,7 +3204,7 @@ mod tests {
     #[test]
     fn dvp_settlement_plan_builds() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(77);
         let plan = state
             .plan_dvp_settlement(&mut rng)
@@ -2713,11 +3234,10 @@ mod tests {
     fn public_unbond_tracks_pending_requests() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, Some(&profile), WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
+                .expect("state prepared");
         let mut rng = StdRng::seed_from_u64(51);
-        let _ = state
-            .plan_register_public_validator(&mut rng)
-            .expect("validator plan");
+        let before_state = state.clone();
         let plan = state
             .plan_schedule_public_unbond(&mut rng)
             .expect("unbond plan");
@@ -2727,31 +3247,77 @@ mod tests {
             plan.expect_success,
             "pending unbond tracking should follow plan success"
         );
+        if plan.expect_success {
+            let schedule = plan
+                .instructions
+                .iter()
+                .find_map(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<SchedulePublicLaneUnbond>()
+                })
+                .expect("schedule unbond instruction");
+            let before_share = before_state.available_public_lane_stake_share(
+                schedule.lane_id,
+                &schedule.validator,
+                &schedule.staker,
+            );
+            let after_share = state.available_public_lane_stake_share(
+                schedule.lane_id,
+                &schedule.validator,
+                &schedule.staker,
+            );
+            assert!(
+                after_share < before_share,
+                "successful unbond should reduce tracked stake share"
+            );
+        }
     }
 
     #[test]
     fn public_rewards_follow_validator_registry() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, Some(&profile), WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
+                .expect("state prepared");
         let mut rng = StdRng::seed_from_u64(61);
-        let _ = state
-            .plan_register_public_validator(&mut rng)
-            .expect("validator plan");
         let plan = state
             .plan_record_public_rewards(&mut rng)
             .expect("reward plan");
         assert_eq!(plan.label, "record_public_lane_rewards");
-        assert!(
-            !plan.expect_success,
-            "Nexus staking prerequisites are not provisioned in chaos genesis yet"
-        );
+        assert!(plan.expect_success, "staking genesis should enable rewards");
+        let setup = state.nexus_staking.as_ref().expect("staking setup");
+        let expected_reward_asset = AssetId::new(setup.fee_asset.clone(), setup.fee_sink.clone());
+        let reward = plan
+            .instructions
+            .iter()
+            .find_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RecordPublicLaneRewards>()
+            })
+            .expect("record rewards instruction");
+        assert_eq!(reward.reward_asset, expected_reward_asset);
+        let minted = plan
+            .instructions
+            .iter()
+            .find_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<MintBox>()
+                    .and_then(|mint| match mint {
+                        MintBox::Asset(asset) => Some(asset.destination.clone()),
+                        _ => None,
+                    })
+            })
+            .expect("mint reward instruction");
+        assert_eq!(minted, expected_reward_asset);
     }
 
     #[test]
     fn asset_definition_register_and_unregister_moves_tracking() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(11);
         let before = state.asset_definitions_unclaimed.len();
         let register_plan = state
@@ -2777,7 +3343,7 @@ mod tests {
     #[test]
     fn unregister_asset_definition_fallback_uses_missing_definition() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         assert!(state.asset_definitions_unclaimed.is_empty());
         let before = state.asset_definitions.clone();
         let mut rng = StdRng::seed_from_u64(19);
@@ -2810,7 +3376,7 @@ mod tests {
     #[test]
     fn nft_registration_and_transfer_updates_owner() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(29);
         let register_plan = state.plan_register_nft(&mut rng).expect("register nft");
         assert_eq!(register_plan.label, "register_nft");
@@ -2841,7 +3407,7 @@ mod tests {
     #[test]
     fn trigger_repetition_mint_and_burn_balance() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(93);
         let mint_plan = state
             .plan_mint_trigger_repetitions(&mut rng)
@@ -2869,7 +3435,7 @@ mod tests {
     #[test]
     fn mint_trigger_repetitions_registers_repeatable_trigger() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(111);
         let pipeline = state
             .plan_pipeline_trigger(&mut rng)
@@ -2901,9 +3467,25 @@ mod tests {
     }
 
     #[test]
+    fn repeatable_trigger_tracking_dedupes_ids() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let trigger_id: TriggerId = "repeatable_trigger_dedupe"
+            .parse()
+            .expect("valid trigger id");
+        state.track_repeatable_trigger(trigger_id.clone());
+        state.track_repeatable_trigger(trigger_id);
+        assert_eq!(
+            state.repeatable_triggers.len(),
+            1,
+            "repeatable trigger tracking should not duplicate ids"
+        );
+    }
+
+    #[test]
     fn burn_trigger_repetitions_removes_depleted_trigger() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(141);
         let _ = state
             .plan_mint_trigger_repetitions(&mut rng)
@@ -2932,7 +3514,7 @@ mod tests {
     #[test]
     fn trigger_metadata_plans_do_not_track_repeatable_triggers() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(151);
         let set_plan = state
             .plan_set_trigger_key(&mut rng)
@@ -2977,7 +3559,7 @@ mod tests {
     #[test]
     fn time_trigger_is_not_repeatable() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(161);
         let plan = state.plan_time_trigger(&mut rng).expect("time trigger");
         assert_eq!(plan.label, "register_time_trigger");
@@ -2990,7 +3572,7 @@ mod tests {
     #[test]
     fn deploy_ivm_trigger_is_not_repeatable() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(171);
         let plan = state.plan_deploy_ivm(&mut rng).expect("ivm trigger");
         assert_eq!(plan.label, "deploy_ivm_contract");
@@ -3003,7 +3585,7 @@ mod tests {
     #[test]
     fn execute_trigger_registers_and_executes_call_trigger() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(103);
         let plan = state
             .plan_execute_trigger(&mut rng)
@@ -3037,7 +3619,7 @@ mod tests {
     #[test]
     fn asset_metadata_set_and_remove_trackers() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(55);
         let tracked_before: usize = state.asset_metadata.values().map(HashSet::len).sum();
         let set_plan = state
@@ -3063,7 +3645,7 @@ mod tests {
     #[test]
     fn account_metadata_plans_use_account_signer() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(101);
         let set_plan = state.plan_set_key(&mut rng).expect("set key plan");
         let set_target = set_plan
@@ -3101,7 +3683,7 @@ mod tests {
     #[test]
     fn account_metadata_set_and_remove_trackers() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         assert!(state.account_metadata.is_empty());
         let mut rng = StdRng::seed_from_u64(205);
         let set_plan = state.plan_set_key(&mut rng).expect("set key plan");
@@ -3121,7 +3703,7 @@ mod tests {
     #[test]
     fn register_uaid_account_tracks_mapping() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let plan = state.plan_register_uaid_account();
         assert_eq!(plan.label, "register_uaid_account");
         assert!(
@@ -3136,7 +3718,7 @@ mod tests {
     #[test]
     fn publish_manifest_records_dataspace() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(2, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(2, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(99);
         let plan = state
             .plan_publish_space_manifest(&mut rng)
@@ -3154,7 +3736,7 @@ mod tests {
     #[test]
     fn revoke_manifest_without_entry_sets_failure() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(2, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(2, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(3);
         let plan = state
             .plan_revoke_space_manifest(&mut rng)
@@ -3168,7 +3750,7 @@ mod tests {
     #[test]
     fn domain_metadata_roundtrip_clears_tracking() {
         let PreparedChaos { mut state, .. } =
-            prepare_state(3, None, WorkloadProfile::Stable).expect("state prepared");
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let set_plan = state.plan_set_domain_key().expect("set domain metadata");
         assert_eq!(set_plan.label, "set_domain_kv");
         assert!(

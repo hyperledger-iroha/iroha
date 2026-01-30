@@ -27,6 +27,10 @@
   minor hints (v1 minor fixed to `0x00`), aligning with the Rust
   `ArchiveView::flags*` helpers and rejecting unsupported minor versions when
   deframing.
+- Added enum/discriminant NCB/AoS columnar helpers for `(u64, enum(Name|Code), bool)`
+  rows, matching the Rust/Python descriptors and legacy AoS layout.
+- Enabled Maven/Gradle publishing via `maven-publish` with coordinates
+  `org.hyperledger.iroha:norito-java`.
 - Revalidated parity after the Rust Norito streaming RD harness/PSNR flag
   tweaks; Java bindings stay unchanged beyond rerunning the parity suite for the
   sync guard.
@@ -60,11 +64,10 @@
 - Confirmed parity after the Rust Norito Box/Rc/Arc deserialization alignment fix; Java bindings remain unchanged aside from parity validation.
 - Confirmed parity with the latest Rust Norito crate after supervisor UI updates; no Java codec changes were required, but bindings are marked as refreshed for the sync check.
 - Mirrored the Rust Norito dependency upgrades (`blake3` 1.8, `rand` 0.9); Java parity checks continue to pass without implementation changes.
-- Tracked the Rust Norito streaming change that now surfaces a `MissingEndOfBlock`
-  error when RLE payloads omit the terminator; Java bindings await streaming TODO.
-- Noted the new Rust streaming snapshot/persistence surface (`KeyUpdateSnapshot`,
-  `ContentKeySnapshot`, STS root restoration). Java bindings still need a parity
-  implementation for deterministic resume (TODO).
+- Added baseline RLE block decoding helpers that surface `MissingEndOfBlock`
+  when the end-of-block marker is omitted, matching Rust parity expectations.
+- Added `KeyUpdateState`/`ContentKeyState` snapshot helpers for deterministic
+  resume parity with the Rust streaming state surface.
 - Added NCB/AoS columnar helpers for `(u64, bytes)` rows, including optional byte columns,
   mirroring the Rust/ Python codecs for registry payloads.
 - Implemented streaming ticket and revocation codecs (commitment/nullifier/proof metadata),
@@ -81,4 +84,5 @@
 - Adds optional Zstandard compression (when `com.github.luben:zstd-jni` is on the classpath)
 - Implements structural schema hashing matching Rust's canonical JSON FNV-1a derivation
 - Provides columnar helpers and adaptive AoS layout for `(u64, String, boolean)` rows
-- Columnar helpers currently target only `(u64, String, boolean)` rows; expanding support for bytes/enums/optional columns remains on the Java Norito backlog.
+- Columnar helpers cover `(u64, String, boolean)`, `(u64, bytes)` (including optional bytes),
+  and `(u64, enum(Name|Code), boolean)` rows.

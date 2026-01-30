@@ -1,5 +1,34 @@
 import Foundation
 
+/// Account literal kinds that require resolution before offline Norito encoding.
+public enum OfflineAccountResolutionKind: String {
+    case uaid
+    case opaque
+}
+
+/// Resolver hook for mapping UAID/opaque account literals to canonical account IDs.
+public typealias OfflineAccountResolver = (OfflineAccountResolutionKind, String) throws -> String?
+
+/// Global registry for offline account ID resolution.
+public enum OfflineAccountResolvers {
+    private static let resolverQueue = DispatchQueue(label: "org.hyperledger.iroha.offline.account-resolver")
+    private static var resolver: OfflineAccountResolver?
+
+    /// Register a resolver (or clear by passing `nil`) used by offline Norito encoding.
+    /// The resolver should return an IH58 account address (preferred) or a valid
+    /// `<public_key>@<domain>` string; UAID/opaque literals are rejected.
+    public static func setAccountResolver(_ newResolver: OfflineAccountResolver?) {
+        resolverQueue.sync {
+            resolver = newResolver
+        }
+    }
+
+    static func resolve(_ kind: OfflineAccountResolutionKind, value: String) throws -> String? {
+        let current = resolverQueue.sync { resolver }
+        return try current?(kind, value)
+    }
+}
+
 public enum OfflineNoritoError: Error, LocalizedError {
     case invalidHex(String)
     case invalidLength(String)
@@ -303,7 +332,15 @@ enum OfflineNorito {
         }
         let lowered = trimmed.lowercased()
         if lowered.hasPrefix("uaid:") || lowered.hasPrefix("opaque:") {
-            // TODO: Support UAID/opaque account resolution once Swift resolvers are available.
+            let kind: OfflineAccountResolutionKind = lowered.hasPrefix("uaid:") ? .uaid : .opaque
+            let canonical = try canonicalizeAccountLiteral(trimmed, kind: kind)
+            if let resolved = try OfflineAccountResolvers.resolve(kind, value: canonical) {
+                let resolvedLowered = resolved.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if resolvedLowered.hasPrefix("uaid:") || resolvedLowered.hasPrefix("opaque:") {
+                    throw OfflineNoritoError.invalidAccountId(trimmed)
+                }
+                return try resolveAccountId(resolved)
+            }
             throw OfflineNoritoError.invalidAccountId(trimmed)
         }
         if trimmed.contains("@") {
@@ -370,6 +407,54 @@ enum OfflineNorito {
             throw OfflineNoritoError.invalidAccountId(trimmed)
         }
         return (addressPart, domainPart)
+    }
+
+    private static func canonicalizeAccountLiteral(_ raw: String,
+                                                   kind: OfflineAccountResolutionKind) throws -> String {
+        switch kind {
+        case .uaid:
+            return try canonicalizeUaidLiteral(raw)
+        case .opaque:
+            return try canonicalizeOpaqueLiteral(raw)
+        }
+    }
+
+    private static func canonicalizeUaidLiteral(_ raw: String) throws -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 5 else {
+            throw OfflineNoritoError.invalidAccountId(raw)
+        }
+        let rawHex = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard rawHex.count == 64 else {
+            throw OfflineNoritoError.invalidAccountId(raw)
+        }
+        let hexSet = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        let allHex = rawHex.unicodeScalars.allSatisfy { hexSet.contains($0) }
+        guard allHex else {
+            throw OfflineNoritoError.invalidAccountId(raw)
+        }
+        let lastChar = rawHex.lowercased().suffix(1)
+        guard ["1", "3", "5", "7", "9", "b", "d", "f"].contains(String(lastChar)) else {
+            throw OfflineNoritoError.invalidAccountId(raw)
+        }
+        return "uaid:\(rawHex.lowercased())"
+    }
+
+    private static func canonicalizeOpaqueLiteral(_ raw: String) throws -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 7 else {
+            throw OfflineNoritoError.invalidAccountId(raw)
+        }
+        let rawHex = String(trimmed.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard rawHex.count == 64 else {
+            throw OfflineNoritoError.invalidAccountId(raw)
+        }
+        let hexSet = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        let allHex = rawHex.unicodeScalars.allSatisfy { hexSet.contains($0) }
+        guard allHex else {
+            throw OfflineNoritoError.invalidAccountId(raw)
+        }
+        return "opaque:\(rawHex.lowercased())"
     }
 
     private static func algorithmLabel(_ algorithm: SigningAlgorithm) -> String {

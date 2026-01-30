@@ -36,6 +36,9 @@ from .client import (
     RbcChunkSample,
     RbcMerkleProof,
     RbcSample,
+    OfflineAllowanceRegisterResponse,
+    OfflineCertificateIssueResponse,
+    OfflineTopUpResponse,
     SubscriptionActionResult,
     SubscriptionCreateResult,
     SubscriptionListItem,
@@ -127,5 +130,8 @@ __all__ = [
     "RbcSample",
     "RbcChunkSample",
     "RbcMerkleProof",
+    "OfflineAllowanceRegisterResponse",
+    "OfflineCertificateIssueResponse",
+    "OfflineTopUpResponse",
     "decode_pdp_commitment_header",
 ]

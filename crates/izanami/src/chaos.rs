@@ -150,7 +150,7 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
     let mut genesis = genesis;
     let mut builder = NetworkBuilder::new()
         .with_peers(config.peer_count)
-        .with_base_seed("izanami-chaos");
+        .with_base_seed(instructions::IZANAMI_BASE_SEED);
     builder = match config.pipeline_time {
         Some(duration) => builder.with_pipeline_time(duration),
         None => builder.with_default_pipeline_time(),
@@ -161,8 +161,10 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             .with_config_table(profile.config_layer.clone());
     }
     if config.nexus.is_some() {
-        let stake_amount = SumeragiNposParameters::default().min_self_bond();
-        builder = builder.with_npos_genesis_bootstrap(stake_amount);
+        builder = builder.without_npos_genesis_bootstrap();
+        builder = builder.with_genesis_post_topology_isi(
+            instructions::npos_post_topology_instructions(config.peer_count),
+        );
     }
     if let Ok(filter) = std::env::var("RUST_LOG") {
         let filter = filter.trim();
@@ -464,8 +466,10 @@ impl IzanamiRunner {
             recipes,
         } = instructions::prepare_state(
             account_qty,
+            Some(config.peer_count),
             config.nexus.as_ref(),
             config.workload_profile,
+            config.allow_contract_deploy_in_stable,
         )?;
         let base_domain = state.base_domain().clone();
 
@@ -1001,6 +1005,7 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
@@ -1012,7 +1017,13 @@ mod tests {
             state: _,
             genesis,
             recipes: _,
-        } = instructions::prepare_state(account_qty, None, config.workload_profile)?;
+        } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            None,
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
         let mut builder = make_network_builder(&config, genesis);
         builder = builder.with_config_layer(|layer| {
             layer.write(["sumeragi", "consensus_mode"], "npos");
@@ -1059,6 +1070,7 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
@@ -1072,8 +1084,10 @@ mod tests {
             recipes: _,
         } = instructions::prepare_state(
             account_qty,
+            Some(config.peer_count),
             config.nexus.as_ref(),
             config.workload_profile,
+            config.allow_contract_deploy_in_stable,
         )?;
 
         let network = make_network_builder(&config, genesis).build();
@@ -1124,6 +1138,7 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
@@ -1137,8 +1152,10 @@ mod tests {
             recipes: _,
         } = instructions::prepare_state(
             account_qty,
+            Some(config.peer_count),
             config.nexus.as_ref(),
             config.workload_profile,
+            config.allow_contract_deploy_in_stable,
         )?;
 
         let network = make_network_builder(&config, genesis).build();
@@ -1188,6 +1205,7 @@ mod tests {
             tps: 1.0,
             max_inflight: 1,
             workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
@@ -1223,6 +1241,7 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
@@ -1234,8 +1253,10 @@ mod tests {
             state: _, genesis, ..
         } = instructions::prepare_state(
             account_qty,
+            Some(config.peer_count),
             config.nexus.as_ref(),
             config.workload_profile,
+            config.allow_contract_deploy_in_stable,
         )?;
         let builder = make_network_builder(&config, genesis);
 
@@ -1409,6 +1430,7 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
@@ -1420,7 +1442,13 @@ mod tests {
             state: _,
             genesis,
             recipes: _,
-        } = instructions::prepare_state(account_qty, None, config.workload_profile)?;
+        } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            None,
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
         let builder = make_network_builder(&config, genesis);
 
         let network = match builder.start().await {
@@ -1466,6 +1494,7 @@ mod tests {
             tps: 0.1,
             max_inflight: 1,
             workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
@@ -1562,6 +1591,7 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
@@ -1569,8 +1599,13 @@ mod tests {
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos { genesis, .. } =
-            instructions::prepare_state(account_qty, None, config.workload_profile)?;
+        let PreparedChaos { genesis, .. } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            None,
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
         let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             make_network_builder(&config, genesis).build()
         })) {
@@ -1830,6 +1865,7 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
@@ -1837,8 +1873,13 @@ mod tests {
         };
 
         let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos { genesis, .. } =
-            instructions::prepare_state(account_qty, None, config.workload_profile)?;
+        let PreparedChaos { genesis, .. } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            None,
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
         let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             make_network_builder(&config, genesis).build()
         })) {
@@ -1894,6 +1935,7 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
@@ -1903,8 +1945,10 @@ mod tests {
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos { genesis, .. } = instructions::prepare_state(
             account_qty,
+            Some(config.peer_count),
             config.nexus.as_ref(),
             config.workload_profile,
+            config.allow_contract_deploy_in_stable,
         )?;
         let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             make_network_builder(&config, genesis).build()
@@ -1967,6 +2011,7 @@ mod tests {
             tps: 0.5,
             max_inflight: 2,
             workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
@@ -2010,6 +2055,7 @@ mod tests {
             tps: 1.0,
             max_inflight: 4,
             workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([false, false, false, false]),
@@ -2019,8 +2065,10 @@ mod tests {
         let account_qty = config.peer_count.saturating_mul(3).max(6);
         let PreparedChaos { genesis, .. } = instructions::prepare_state(
             account_qty,
+            Some(config.peer_count),
             config.nexus.as_ref(),
             config.workload_profile,
+            config.allow_contract_deploy_in_stable,
         )?;
         let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             make_network_builder(&config, genesis).build()

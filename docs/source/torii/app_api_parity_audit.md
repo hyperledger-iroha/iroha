@@ -19,7 +19,7 @@ feature-gated route builders (`add_app_api_routes`, `add_contracts_and_vk_routes
 - SSE/webhook buffers are now driven by `torii.events_buffer_capacity` (broadcast channel depth) and
   `torii.webhook.{queue_capacity,max_attempts,backoff_initial_ms,backoff_max_ms,connect_timeout_ms,write_timeout_ms,read_timeout_ms}`
   for the delivery worker. These defaults remain conservative but can be tuned per deployment.
-- App API pagination/backpressure honours `torii.app_api.{default_list_limit,max_list_limit,max_fetch_size,rate_limit_cost_per_row}`; account assets/transactions and asset-holder listings clamp `limit`/`fetch_size` and scale rate-limit cost by requested rows.
+- App API pagination/backpressure honours `torii.app_api.{default_list_limit,max_list_limit,max_fetch_size,rate_limit_cost_per_row}`; account assets/transactions and asset-holder listings clamp `limit`/`fetch_size` and scale rate-limit cost by requested rows. The same endpoints accept an optional `asset_id` query parameter for pre-filtering.
 - The push registration bridge is guarded by `torii.push.*` (feature `push`), enforcing `max_topics_per_device` and requiring FCM/APNS credentials before accepting device tokens.
 
 ### Auth & canonical signing

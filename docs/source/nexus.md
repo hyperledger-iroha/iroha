@@ -350,7 +350,8 @@ Configuration and Determinism
 - **Admin endpoint:** `POST /v1/nexus/lifecycle` (Torii) accepts a Norito/JSON body with `additions` (full `LaneConfig` objects) and `retire` (lane ids) to add or remove lanes without restart. Requests are gated on `nexus.enabled=true` and reuse the same Nexus configuration/state view as the queue.
 - **Behaviour:** On success the node applies the lifecycle plan to WSV/Kura metadata, rebuilds queue routing/limits/manifests, and responds with `{ ok: true, lane_count: <u32> }`. Plans that fail validation (unknown retire ids, duplicate aliases/ids, Nexus disabled) return `400 Bad Request` with a `lane_lifecycle_error`.
 - **Safety:** The handler uses the shared state view lock to avoid racing with readers while updating catalogs; callers should still serialize lifecycle updates externally to avoid conflicting plans.
-- **TODO:** Per-lane scheduler/DA/RBC rebalance, validator-set propagation, and storage teardown/cleanup are pending; keep lifecycle requests infrequent until those hooks land.
+- **Propagation:** Queue routing/limits and lane manifests are rebuilt from the updated catalog, and consensus/DA/RBC workers read the refreshed lane config via state snapshots so scheduling and validator selection shift without restart (in-flight work completes under the previous config).
+- **Storage cleanup:** Kura and tiered WSV geometry are reconciled (create/retire/relabel), DA shard cursor mappings are synced/persisted, and retired lanes are pruned from lane relay caches plus DA commitment/confidential-compute/pin-intent stores.
 
 Migration Path (Iroha 2 → Iroha 3)
 1) Introduce data‑space‑qualified IDs and nexus block/global state composition in data model; add feature flags to keep Iroha 2 legacy modes during transition.

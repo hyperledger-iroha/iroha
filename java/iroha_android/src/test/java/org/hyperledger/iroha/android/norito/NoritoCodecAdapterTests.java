@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.model.Executable;
@@ -59,6 +60,8 @@ import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyRecordDescription;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyStatus;
 import org.hyperledger.iroha.android.crypto.Blake2b;
+import org.hyperledger.iroha.android.tx.MultisigSignature;
+import org.hyperledger.iroha.android.tx.MultisigSignatures;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
@@ -73,6 +76,8 @@ import org.junit.Test;
 
 public final class NoritoCodecAdapterTests {
 
+  private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
+
   @Test
   public void runCodecScenarios() throws NoritoException {
     runAll();
@@ -85,6 +90,8 @@ public final class NoritoCodecAdapterTests {
   private static void runAll() throws NoritoException {
     javaCodecRoundTripsPayload();
     javaCodecEncodesAccountIdAuthority();
+    javaCodecEncodesMultisigAuthority();
+    javaCodecEncodesMultisigSignatures();
     javaCodecEncodesChainIdLayout();
     javaCodecSupportsInstructionsVariant();
     javaCodecSupportsWireInstructionPayloads();
@@ -191,6 +198,130 @@ public final class NoritoCodecAdapterTests {
     assert authorityField.length
         == Math.toIntExact(8 + domainFieldLen + 8 + controllerFieldLen)
         : "Authority payload must contain domain and controller fields only";
+  }
+
+  private static void javaCodecEncodesMultisigAuthority() throws NoritoException {
+    final byte[] memberKeyA = new byte[32];
+    final byte[] memberKeyB = new byte[32];
+    Arrays.fill(memberKeyA, (byte) 0x11);
+    Arrays.fill(memberKeyB, (byte) 0x22);
+    final AccountAddress.MultisigMemberPayload memberA =
+        AccountAddress.MultisigMemberPayload.of(0x01, 1, memberKeyA);
+    final AccountAddress.MultisigMemberPayload memberB =
+        AccountAddress.MultisigMemberPayload.of(0x01, 2, memberKeyB);
+    final AccountAddress.MultisigPolicyPayload policy =
+        AccountAddress.MultisigPolicyPayload.of(1, 2, listOf(memberA, memberB));
+    final String ih58;
+    try {
+      ih58 =
+          AccountAddress.fromMultisigPolicy("wonderland", policy)
+              .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalStateException("Failed to build multisig authority address", ex);
+    }
+    final String authority = ih58 + "@wonderland";
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId("00000002")
+            .setAuthority(authority)
+            .setCreationTimeMs(1_735_000_000_456L)
+            .setExecutable(Executable.ivm(new byte[] {0x04, 0x05, 0x06}))
+            .build();
+
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final byte[] encoded = adapter.encodeTransaction(payload);
+    final TransactionPayload decoded = adapter.decodeTransaction(encoded);
+
+    assert authority.equals(decoded.authority()) : "Multisig authority must round-trip";
+
+    final NoritoDecoder decoder = new NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION);
+    readField(decoder, "payload.chain_id");
+    final byte[] authorityField = readField(decoder, "payload.authority");
+    final long domainFieldLen = readU64(authorityField, 0, "authority.domain");
+    final int controllerFieldOffset = Math.toIntExact(8 + domainFieldLen);
+    final long controllerFieldLen = readU64(authorityField, controllerFieldOffset, "authority.controller");
+    final int controllerPayloadOffset = controllerFieldOffset + 8;
+    final long controllerTag = readU32(authorityField, controllerPayloadOffset, "authority.controller.tag");
+    assert controllerTag == 1L : "AccountController tag must be Multisig";
+    final long policyLen =
+        readU64(authorityField, controllerPayloadOffset + 4, "authority.controller.policy");
+    final int policyOffset = controllerPayloadOffset + 12;
+    assert authorityField.length >= policyOffset + policyLen
+        : "Multisig policy payload must fit within controller field";
+
+    int cursor = policyOffset;
+    final int version = authorityField[cursor] & 0xFF;
+    cursor += 1;
+    final int threshold = readU16(authorityField, cursor, "authority.controller.policy.threshold");
+    cursor += 2;
+    assert version == 1 : "Multisig policy version must round-trip";
+    assert threshold == 2 : "Multisig policy threshold must round-trip";
+    final long memberCount =
+        readU64(authorityField, cursor, "authority.controller.policy.members");
+    cursor += 8;
+    assert memberCount == 2L : "Multisig policy member count must round-trip";
+
+    final String expectedMemberA =
+        PublicKeyCodec.encodePublicKeyMultihash(0x01, memberKeyA);
+    final String expectedMemberB =
+        PublicKeyCodec.encodePublicKeyMultihash(0x01, memberKeyB);
+
+    cursor = assertMultisigMember(authorityField, cursor, expectedMemberA, 1, "member[0]");
+    cursor = assertMultisigMember(authorityField, cursor, expectedMemberB, 2, "member[1]");
+
+    assert authorityField.length
+        == Math.toIntExact(8 + domainFieldLen + 8 + controllerFieldLen)
+        : "Authority payload must contain domain and controller fields only";
+  }
+
+  private static void javaCodecEncodesMultisigSignatures() throws NoritoException {
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setChainId("00000003")
+            .setAuthority("alice@wonderland")
+            .setCreationTimeMs(1_735_000_000_789L)
+            .setExecutable(Executable.ivm(new byte[] {0x0A, 0x0B}))
+            .build();
+    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
+    final byte[] encodedPayload = adapter.encodeTransaction(payload);
+    final byte[] signature = new byte[64];
+    final byte[] publicKey = new byte[32];
+    Arrays.fill(signature, (byte) 0x44);
+    Arrays.fill(publicKey, (byte) 0x55);
+
+    final MultisigSignature sigA =
+        MultisigSignature.fromCurveId(0x01, fill(0x11, 32), fill(0x22, 64));
+    final String sigBKeyLiteral = PublicKeyCodec.encodePublicKeyMultihash(0x01, fill(0x33, 32));
+    final MultisigSignature sigB =
+        MultisigSignature.fromPublicKeyLiteral(sigBKeyLiteral, fill(0x44, 64));
+    assert sigBKeyLiteral.equals(sigB.publicKeyMultihash())
+        : "Multisig public key literal must round-trip";
+    final MultisigSignatures multisig = MultisigSignatures.of(List.of(sigA, sigB));
+
+    final SignedTransaction signed =
+        new SignedTransaction(encodedPayload, signature, publicKey, adapter.schemaName());
+    final SignedTransaction withMultisig =
+        signed.toBuilder().setMultisigSignatures(multisig).build();
+    final byte[] encodedSigned = SignedTransactionEncoder.encode(withMultisig);
+
+    final NoritoDecoder decoder = new NoritoDecoder(encodedSigned, NoritoHeader.MINOR_VERSION);
+    readField(decoder, "signed.signature");
+    readField(decoder, "signed.payload");
+    final byte[] attachmentsField = readField(decoder, "signed.attachments");
+    final byte[] multisigField = readField(decoder, "signed.multisig_signatures");
+    assertOptionPayloadEmpty(attachmentsField, "signed.attachments");
+    final byte[] multisigPayload =
+        decodeOptionPayload(multisigField, "signed.multisig_signatures")
+            .orElseThrow(() -> new IllegalStateException("multisig payload missing"));
+    assert decoder.remaining() == 0 : "Signed transaction payload should not have trailing bytes";
+
+    final NoritoDecoder multisigDecoder =
+        new NoritoDecoder(multisigPayload, NoritoHeader.MINOR_VERSION);
+    final long count = multisigDecoder.readLength(false);
+    assert count == 2 : "Expected two multisig signatures";
+    assertMultisigSignaturePayload(multisigDecoder, sigA, "multisig[0]");
+    assertMultisigSignaturePayload(multisigDecoder, sigB, "multisig[1]");
+    assert multisigDecoder.remaining() == 0 : "Multisig payload should not have trailing bytes";
   }
 
   private static void javaCodecEncodesChainIdLayout() throws NoritoException {
@@ -1420,6 +1551,36 @@ public final class NoritoCodecAdapterTests {
     return value;
   }
 
+  private static int readU16(final byte[] payload, final int offset, final String field) {
+    if (offset < 0 || payload.length - offset < 2) {
+      throw new IllegalArgumentException(field + " missing u16 payload");
+    }
+    return (payload[offset] & 0xFF) | ((payload[offset + 1] & 0xFF) << 8);
+  }
+
+  private static int assertMultisigMember(
+      final byte[] payload,
+      final int offset,
+      final String expectedPublicKey,
+      final int expectedWeight,
+      final String label) {
+    final long memberLen = readU64(payload, offset, "authority.controller.policy." + label);
+    final int memberOffset = offset + 8;
+    final long publicKeyLen =
+        readU64(payload, memberOffset, "authority.controller.policy." + label + ".public_key");
+    final int publicKeyOffset = memberOffset + 8;
+    final int publicKeySize = Math.toIntExact(publicKeyLen);
+    final String publicKey =
+        new String(payload, publicKeyOffset, publicKeySize, StandardCharsets.UTF_8);
+    final int weightOffset = publicKeyOffset + publicKeySize;
+    final int weight = readU16(payload, weightOffset, "authority.controller.policy." + label + ".weight");
+    assert expectedPublicKey.equals(publicKey) : label + " public key must round-trip";
+    assert weight == expectedWeight : label + " weight must round-trip";
+    final int expectedLen = 8 + publicKeySize + 2;
+    assert memberLen == expectedLen : label + " payload size mismatch";
+    return memberOffset + Math.toIntExact(memberLen);
+  }
+
   private static <T> T decodeFieldPayload(
       final byte[] payload, final TypeAdapter<T> adapter, final String field) {
     final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
@@ -1491,5 +1652,56 @@ public final class NoritoCodecAdapterTests {
       map.put(entries[i], entries[i + 1]);
     }
     return map;
+  }
+
+  private static byte[] fill(final int value, final int length) {
+    final byte[] out = new byte[length];
+    Arrays.fill(out, (byte) value);
+    return out;
+  }
+
+  private static java.util.Optional<byte[]> decodeOptionPayload(
+      final byte[] payload, final String field) {
+    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+    final int tag = decoder.readByte();
+    if (tag == 0) {
+      if (decoder.remaining() != 0) {
+        throw new IllegalArgumentException(field + " Option::None has trailing bytes");
+      }
+      return java.util.Optional.empty();
+    }
+    if (tag != 1) {
+      throw new IllegalArgumentException(field + " invalid Option tag: " + tag);
+    }
+    final long length = decoder.readLength(decoder.compactLenActive());
+    if (length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(field + " Option payload too large");
+    }
+    final byte[] inner = decoder.readBytes((int) length);
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException(field + " Option payload has trailing bytes");
+    }
+    return java.util.Optional.of(inner);
+  }
+
+  private static void assertOptionPayloadEmpty(final byte[] payload, final String field) {
+    final java.util.Optional<byte[]> inner = decodeOptionPayload(payload, field);
+    assert inner.isEmpty() : field + " must be empty";
+  }
+
+  private static void assertMultisigSignaturePayload(
+      final NoritoDecoder decoder, final MultisigSignature signature, final String field) {
+    final byte[] publicKeyPayload = BYTE_VECTOR_ADAPTER.decode(decoder);
+    final byte[] signaturePayload = BYTE_VECTOR_ADAPTER.decode(decoder);
+    assert publicKeyPayload.length == signature.publicKey().length + 1
+        : field + " public key payload length mismatch";
+    assert (publicKeyPayload[0] & 0xFF) == signature.algorithmTag()
+        : field + " algorithm tag mismatch";
+    assert Arrays.equals(
+        Arrays.copyOfRange(publicKeyPayload, 1, publicKeyPayload.length),
+        signature.publicKey())
+        : field + " public key payload mismatch";
+    assert Arrays.equals(signaturePayload, signature.signature())
+        : field + " signature payload mismatch";
   }
 }

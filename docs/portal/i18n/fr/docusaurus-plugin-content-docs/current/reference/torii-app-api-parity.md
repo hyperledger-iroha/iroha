@@ -23,6 +23,8 @@ L'audit inspecte les reexportations publiques dans `crates/iroha_torii/src/lib.r
 - Enregistrement du routeur sous les groupes de features `app_api` ou `connect`.
 - Tests d'integration/unitaires existants et equipe responsable de la couverture a long terme.
 
+Les listes d'actifs/transactions de compte et les listes de détenteurs d'actifs acceptent des paramètres de requête `asset_id` facultatifs pour le pré-filtrage, en plus des limites de pagination/backpressure existantes.
+
 ## Authentification et signature canonique
 
 - Les endpoints GET/POST exposes aux apps acceptent des headers optionnels de requete canonique (`X-Iroha-Account`, `X-Iroha-Signature`) construits a partir de `METHOD\n/path\nsorted_query\nsha256(body)`; Torii les enveloppe dans `QueryRequestWithAuthority` avant la validation de l'executor afin de refleter `/query`.

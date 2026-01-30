@@ -58,6 +58,48 @@ final class OfflineNoritoEncodingTests: XCTestCase {
         assertInvalidAccountId("rose#wonderland#alice$@wonderland", expected: "alice$@wonderland")
     }
 
+    func testAccountIdResolutionViaUaidResolver() throws {
+        let keypair = try Keypair(privateKeyBytes: Data(repeating: 3, count: 32))
+        let address = try AccountAddress.fromAccount(domain: "wonderland", publicKey: keypair.publicKey)
+        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
+        let uaid = "uaid:" + String(repeating: "0", count: 63) + "1"
+        OfflineAccountResolvers.setAccountResolver { kind, value in
+            switch kind {
+            case .uaid:
+                XCTAssertEqual(value, uaid)
+                return ih58
+            case .opaque:
+                return nil
+            }
+        }
+        defer { OfflineAccountResolvers.setAccountResolver(nil) }
+
+        let resolved = try OfflineNorito.encodeAccountId(uaid)
+        let expected = try OfflineNorito.encodeAccountId(ih58)
+        XCTAssertEqual(resolved, expected)
+    }
+
+    func testAccountIdResolutionViaOpaqueResolver() throws {
+        let keypair = try Keypair(privateKeyBytes: Data(repeating: 4, count: 32))
+        let address = try AccountAddress.fromAccount(domain: "wonderland", publicKey: keypair.publicKey)
+        let ih58 = try address.toIH58(networkPrefix: 0x02F1)
+        let opaque = "opaque:" + String(repeating: "0", count: 64)
+        OfflineAccountResolvers.setAccountResolver { kind, value in
+            switch kind {
+            case .uaid:
+                return nil
+            case .opaque:
+                XCTAssertEqual(value, opaque)
+                return ih58
+            }
+        }
+        defer { OfflineAccountResolvers.setAccountResolver(nil) }
+
+        let resolved = try OfflineNorito.encodeAccountId(opaque)
+        let expected = try OfflineNorito.encodeAccountId(ih58)
+        XCTAssertEqual(resolved, expected)
+    }
+
     private func assertInvalidAssetId(_ value: String) {
         XCTAssertThrowsError(try OfflineAssetIdParts.parse(value)) { error in
             guard case let OfflineNoritoError.invalidAssetId(raw) = error else {

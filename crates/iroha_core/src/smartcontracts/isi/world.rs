@@ -9227,7 +9227,8 @@ pub mod isi {
             // Preserve the requested initial owner before building the role.
             let new_role = self.object().clone();
             let initial_owner = new_role.grant_to().clone();
-            let role = new_role.build(authority);
+            let mut role = new_role.build(authority);
+            role.ensure_permission_epochs(state_transaction.block_height());
 
             if state_transaction.world.roles.get(role.id()).is_some() {
                 return Err(RepetitionError {
@@ -9301,6 +9302,7 @@ pub mod isi {
         ) -> Result<(), Error> {
             let role_id = self.destination().clone();
             let permission = self.object().clone();
+            let current_epoch = state_transaction.block_height();
 
             let Some(existing_role) = state_transaction.world.roles.get(&role_id) else {
                 return Err(FindError::Role(role_id).into());
@@ -9319,9 +9321,10 @@ pub mod isi {
             // Rebuild role with added permission
             let mut new_role = Role::new(existing_role.id().clone(), authority.clone());
             for p in existing_role.permissions() {
-                new_role = new_role.add_permission(p.clone());
+                let epoch = existing_role.permission_epoch(p).unwrap_or_default();
+                new_role = new_role.add_permission_with_epoch(p.clone(), epoch);
             }
-            new_role = new_role.add_permission(permission.clone());
+            new_role = new_role.add_permission_with_epoch(permission.clone(), current_epoch);
             let new_role = new_role.build(authority);
             state_transaction
                 .world
@@ -9365,7 +9368,8 @@ pub mod isi {
             let mut new_role = Role::new(existing_role.id().clone(), authority.clone());
             for p in existing_role.permissions() {
                 if p != &permission {
-                    new_role = new_role.add_permission(p.clone());
+                    let epoch = existing_role.permission_epoch(p).unwrap_or_default();
+                    new_role = new_role.add_permission_with_epoch(p.clone(), epoch);
                 }
             }
             let new_role = new_role.build(authority);
@@ -9746,7 +9750,10 @@ pub mod isi {
                 HsmBinding,
             },
             events::data::{DataEvent, prelude::BridgeEvent},
-            isi::{Grant, consensus_keys, nexus::SetLaneRelayEmergencyValidators, verifying_keys},
+            isi::{
+                Grant, Revoke, consensus_keys, nexus::SetLaneRelayEmergencyValidators,
+                verifying_keys,
+            },
             metadata::Metadata,
             nexus::{
                 DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, DomainEndorsement,
@@ -9758,6 +9765,7 @@ pub mod isi {
                 ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
             },
             query::error::FindError,
+            role::{Role, RoleId},
             zk::BackendTag,
         };
         use iroha_data_model::{
@@ -9839,6 +9847,43 @@ pub mod isi {
 
         fn new_dummy_block_non_genesis() -> crate::block::CommittedBlock {
             new_dummy_block_at_height(NonZeroU64::new(2).unwrap())
+        }
+
+        #[test]
+        fn grant_role_permission_records_epoch_and_revoke_clears() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut world = World::default();
+
+            let domain_id: iroha_data_model::domain::DomainId =
+                "wonderland".parse().expect("domain id");
+            let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let authority = AccountId::new(domain_id, keypair.public_key().clone());
+
+            let role_id: RoleId = "auditor".parse().expect("role id");
+            let role = Role::new(role_id.clone(), authority.clone()).build(&authority);
+            world.roles.insert(role_id.clone(), role);
+
+            let state = State::new(world, kura, query_handle);
+            let header = BlockHeader::new(NonZeroU64::new(5).unwrap(), None, None, None, 0, 0);
+            let mut state_block = state.block(header);
+            let mut stx = state_block.transaction();
+
+            let perm = Permission::new("can_read_all_accounts".to_string(), Json::new(()));
+            Grant::role_permission(perm.clone(), role_id.clone())
+                .execute(&authority, &mut stx)
+                .expect("grant role permission");
+            let role_after_grant = stx.world.roles.get(&role_id).expect("role exists");
+            assert_eq!(
+                role_after_grant.permission_epoch(&perm),
+                Some(stx.block_height())
+            );
+
+            Revoke::role_permission(perm.clone(), role_id.clone())
+                .execute(&authority, &mut stx)
+                .expect("revoke role permission");
+            let role_after_revoke = stx.world.roles.get(&role_id).expect("role exists");
+            assert_eq!(role_after_revoke.permission_epoch(&perm), None);
         }
 
         #[test]

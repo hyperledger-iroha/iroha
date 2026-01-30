@@ -214,7 +214,9 @@ Configuration and Determinism
 
 ### Runtime Lane Lifecycle Control
 
-- `POST /v1/nexus/lifecycle` for additions/retire without restart; validation, safety, TODO notes۔
+- `POST /v1/nexus/lifecycle` additions/retire بغیر restart؛ validation اور safety کیلئے shared state-view lock استعمال ہوتا ہے۔
+- Propagation: queue routing/limits اور lane manifests updated catalog سے rebuild ہوتے ہیں، اور consensus/DA/RBC workers state snapshots کے ذریعے refreshed lane config پڑھتے ہیں، لہذا scheduling اور validator selection بغیر restart کے بدل جاتا ہے (in-flight کام پچھلی config پر مکمل ہوتا ہے)۔
+- Storage cleanup: Kura/tiered WSV geometry reconcile (create/retire/relabel) ہوتی ہے، DA shard cursor mappings sync/persist ہوتے ہیں، اور retired lanes lane relay caches اور DA commitment/confidential-compute/pin-intent stores سے prune ہوتے ہیں۔
 
 Migration Path
 - 5-step path from Iroha 2 to Iroha 3 with AMX, DA, PQ proofs۔

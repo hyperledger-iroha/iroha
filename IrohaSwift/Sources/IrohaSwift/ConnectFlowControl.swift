@@ -23,7 +23,7 @@ final class ConnectFlowController {
     }
 
     private var tokens: [ConnectDirection: UInt64]
-    private let lock = NSLock()
+    private let queue = DispatchQueue(label: "org.hyperledger.iroha.connect-flow-control")
 
     init(window: ConnectFlowControlWindow) {
         tokens = [
@@ -33,19 +33,23 @@ final class ConnectFlowController {
     }
 
     func consume(direction: ConnectDirection) throws {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let remaining = tokens[direction], remaining > 0 else {
-            throw FlowError.exhausted(direction: direction)
+        let error: FlowError? = queue.sync {
+            guard let remaining = tokens[direction], remaining > 0 else {
+                return FlowError.exhausted(direction: direction)
+            }
+            tokens[direction] = remaining - 1
+            return nil
         }
-        tokens[direction] = remaining - 1
+        if let error {
+            throw error
+        }
     }
 
     func grant(direction: ConnectDirection, tokens amount: UInt64) {
-        lock.lock()
-        defer { lock.unlock() }
-        let current = tokens[direction] ?? 0
-        let (sum, overflow) = current.addingReportingOverflow(amount)
-        tokens[direction] = overflow ? UInt64.max : sum
+        queue.sync {
+            let current = tokens[direction] ?? 0
+            let (sum, overflow) = current.addingReportingOverflow(amount)
+            tokens[direction] = overflow ? UInt64.max : sum
+        }
     }
 }

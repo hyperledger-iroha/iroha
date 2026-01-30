@@ -2920,7 +2920,7 @@ the `hash:...` literal form emitted by Torii (matching the REST API).【crates/i
 
 `listOfflineAllowances` also exposes the roadmap-driven convenience filters from
 `/v1/offline/allowances` via camelCase options. Set `controllerId`,
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
+`assetId`, `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `refreshBeforeMs/AfterMs`, `attestationNonceHex`, `verdictIdHex`,
 `requireVerdict`, or `onlyMissingVerdict` to avoid crafting Norito filter
 expressions for common reporting workflows; invalid combinations (`verdictIdHex`
@@ -2928,6 +2928,37 @@ expressions for common reporting workflows; invalid combinations (`verdictIdHex`
 locally before hitting Torii. Transfers share the same ergonomics while adding
 `receiverId`, `depositAccountId`, and `platformPolicy` to mirror the GET query
 parameters on `/v1/offline/transfers`.
+
+To issue and register an allowance in one call, use
+`topUpOfflineAllowance` (or `topUpOfflineAllowanceRenewal` for renewals). The
+helper performs the certificate issue + register steps, returning both payloads
+so you can persist the verdict metadata immediately.
+
+```js
+const topUp = await torii.topUpOfflineAllowance({
+  authority: "ih58:...",
+  privateKey: "ed25519:...",
+  certificate: draft,
+});
+console.log("registered", topUp.registration.certificate_id_hex);
+```
+
+For renewals, call `topUpOfflineAllowanceRenewal` with the existing certificate id:
+
+```js
+const renewed = await torii.topUpOfflineAllowanceRenewal(
+  topUp.registration.certificate_id_hex,
+  {
+    authority: "ih58:...",
+    privateKey: "ed25519:...",
+    certificate: draft,
+  },
+);
+console.log("renewed", renewed.registration.certificate_id_hex);
+```
+
+If you already have a signed certificate, call `registerOfflineAllowance` or
+`renewOfflineAllowance` directly instead of the top-up helpers.
 
 Offline counter summaries expose the aggregate App Attest / Android series map
 for each certificate via `listOfflineSummaries`/`queryOfflineSummaries`. These
@@ -3036,11 +3067,20 @@ for await (const perm of torii.iterateAccountPermissions("alice@wonderland", {
 }
 const nfts = await torii.listNfts({ limit: 10 });
 console.log("first NFT ids", nfts.items.map((nft) => nft.id));
-const balances = await torii.listAccountAssets("alice@wonderland", { limit: 3 });
+const balances = await torii.listAccountAssets("alice@wonderland", {
+  limit: 3,
+  assetId: "rose#wonderland#alice@wonderland",
+});
 console.log("alice balances", balances.items);
-const holders = await torii.listAssetHolders("rose#wonderland", { limit: 3 });
+const holders = await torii.listAssetHolders("rose#wonderland", {
+  limit: 3,
+  assetId: "rose#wonderland#alice@wonderland",
+});
 console.log("top holders", holders.items.map((entry) => entry.account_id));
-const history = await torii.listAccountTransactions("alice@wonderland", { limit: 2 });
+const history = await torii.listAccountTransactions("alice@wonderland", {
+  limit: 2,
+  assetId: "rose#wonderland#alice@wonderland",
+});
 console.log(
   "recent hashes",
   history.items.map((tx) => tx.entrypoint_hash),

@@ -1241,6 +1241,45 @@ seiyaku Test {
     }
 
     #[test]
+    fn manifest_trigger_decl_sets_authority() {
+        use std::str::FromStr;
+
+        use iroha_data_model::account::AccountId;
+
+        let src = r#"
+seiyaku Test {
+  kotoage fn run() {}
+  register_trigger wake {
+    call run;
+    on time pre_commit;
+    authority "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland";
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let run = entrypoints
+            .iter()
+            .find(|entry| entry.name == "run")
+            .expect("run entrypoint");
+        assert_eq!(run.triggers.len(), 1);
+        let trigger = &run.triggers[0];
+        assert_eq!(trigger.id.to_string(), "wake");
+        assert_eq!(
+            trigger.authority,
+            Some(
+                AccountId::from_str(
+                    "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+                )
+                .expect("authority")
+            )
+        );
+    }
+
+    #[test]
     fn access_hint_diagnostics_report_isi_wildcards() {
         let src = r#"
 seiyaku Test {
@@ -6900,7 +6939,7 @@ fn build_entrypoint_descriptors(
             id: trigger.id.clone(),
             repeats: trigger.repeats,
             filter: trigger.filter.clone(),
-            authority: None,
+            authority: trigger.authority.clone(),
             metadata: trigger.metadata.clone(),
             callback: TriggerCallback {
                 namespace: trigger.call.namespace.clone(),

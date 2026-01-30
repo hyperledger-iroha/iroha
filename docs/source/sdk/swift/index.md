@@ -234,11 +234,13 @@ try await wallet.fetchTransfers(params: ToriiOfflineListParams(limit: 25))
 ```
 
 `ToriiOfflineListParams` mirrors the convenience filters exposed by Torii —
-pass `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `requireVerdict`, or `onlyMissingVerdict` directly to the struct
-instead of composing JSON predicates. The helper lowercases verdict IDs and
-rejects invalid combinations before the request is executed, keeping the Swift
-surface aligned with the OA11 roadmap guarantees.
+pass `assetId`, `controllerId`, `receiverId`, `depositAccountId`,
+`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
+`refreshBeforeMs/AfterMs`, `attestationNonceHex`, `verdictIdHex`,
+`requireVerdict`, or `onlyMissingVerdict` directly to the struct instead of
+composing JSON predicates. The helper lowercases verdict IDs and rejects invalid
+combinations before the request is executed, keeping the Swift surface aligned
+with the OA11 roadmap guarantees.
 
 `OfflineReceiptChallenge.encode(chainId, ...)` reuses the shared native helper to emit the canonical
 Norito payload plus the chain-bound `irohaHash`/`clientDataHash` pair that Apple App Attest and
@@ -431,6 +433,29 @@ let certificate = try topUp.certificate.decodeCertificate()
 print("Issued certificate", try certificate.certificateIdHex())
 ```
 
+If you are using `OfflineWallet`, call `topUpAllowance` to perform the same flow and (by default)
+persist the verdict metadata for refresh warnings. Disable `recordVerdict` if you want to skip
+the local cache update:
+
+```swift
+let wallet = try OfflineWallet(toriiClient: torii)
+let topUp = try await wallet.topUpAllowance(
+    draft: draft,
+    authority: controllerId,
+    privateKey: controllerPrivateKey,
+    recordVerdict: true
+)
+```
+
+If your app issues certificates separately (for example, to inspect the response before registration),
+you can still update the local verdict cache directly:
+
+```swift
+let issued = try await torii.issueOfflineCertificate(.init(certificate: draft))
+let wallet = try OfflineWallet(toriiClient: torii)
+try wallet.recordVerdictMetadata(from: issued)
+```
+
 For renewals, call `topUpOfflineAllowanceRenewal`, which targets
 `/v1/offline/certificates/{certificate_id_hex}/renew/issue` and
 `/v1/offline/allowances/{certificate_id_hex}/renew`:
@@ -443,6 +468,9 @@ let renewal = try await torii.topUpOfflineAllowanceRenewal(
     privateKey: controllerPrivateKey
 )
 ```
+
+`OfflineWallet.topUpAllowanceRenewal` mirrors the same flow and can optionally refresh the verdict
+cache by leaving `recordVerdict` enabled.
 
 ### Offline audit logging
 
@@ -817,7 +845,9 @@ you need the full decrypted payload (sign results, encrypted controls), or
   writes to Application Support with an attestation bundle (SHA-256 of the public key,
   device label, created-at). Bridge-backed keys load automatically when you call
   `generateOrLoad(label:)`, and the returned attestation can be forwarded with approval
-  frames. Secure Enclave storage can be layered later by swapping the keystore backing.
+  frames. Integrity checks use a canonical JSON ordering while legacy orderings remain
+  accepted for backward compatibility. Secure Enclave storage can be layered later by
+  swapping the keystore backing.
 - Queue/journal telemetry exports via `ConnectQueueJournal` + `ConnectQueueStateTracker`
   (see `ConnectQueueDiagnosticsTests`/`ConnectReplayRecorderTests`). Use
   `ConnectSessionDiagnostics.snapshot()` when wiring events into dashboards; evidence
@@ -873,12 +903,30 @@ For higher-level walkthroughs, see:
 
 `ToriiClient` currently ships helpers for:
 
-- **Accounts:** `getAssets`, `getTransactions`, attachment upload/list/delete, trigger
-  management, and general query envelopes. The `getExplorerAccountQr(accountId:addressFormat:)`
+- **Accounts:** `getAssets`, `getTransactions` (both accept optional `assetId` filters),
+  attachment upload/list/delete, trigger management, and general query envelopes. The
+  `getExplorerAccountQr(accountId:addressFormat:)`
   helper wraps `/v1/explorer/accounts/{account_id}/qr` and returns the inline SVG, literal, and
   metadata defined in {doc}`sns/address_display_guidelines` so explorers can embed share-ready
   preferred IH58 or second-best compressed (`sora`) QR payloads without reimplementing the renderer
   (omit the format to use IH58 or pass `.compressed` for the Sora-only `sora` literal).
+- **Explorer:** `getExplorerInstructions` and `getExplorerTransactions` wrap
+  `/v1/explorer/instructions` and `/v1/explorer/transactions` with
+  `ToriiExplorerInstructionsParams`/`ToriiExplorerTransactionsParams` filters (including
+  optional `assetId` scoping). Fetch a single
+  transaction with `getExplorerTransactionDetail(hashHex:)` or a single instruction with
+  `getExplorerInstructionDetail(hashHex:index:)`. For transfer history, use
+  `getExplorerTransfers`/`getExplorerTransferSummaries`, or the convenience helpers
+  `getAccountTransferHistory` and `iterateAccountTransferHistory` (iOS 15/macOS 12+) which page
+  instructions with `kind: "Transfer"` and emit UI-ready `ToriiExplorerTransferSummary` records.
+  Live updates are available via `streamExplorerInstructions` and `streamExplorerTransactions`
+  (SSE, iOS 15/macOS 12+). Combine callers can use
+  `explorerInstructionsPublisher`/`explorerTransactionsPublisher`. Use
+  `streamExplorerTransfers`/`streamExplorerTransferSummaries` when you want transfer-only SSE feeds,
+  and `explorerTransfersPublisher`/`explorerTransferSummariesPublisher` in Combine pipelines. Use
+  `streamAccountTransferHistory` to emit historical transfer summaries and then keep streaming live
+  updates without stitching the two flows manually; Combine callers can use
+  `accountTransferHistoryPublisher`.
 - **Domains & registries:** `listDomains(options:)` wraps `/v1/domains` with typed
   pagination/filtering via `ToriiListOptions`/`ToriiListFilter`/`ToriiListSort`, while
   `iterateDomains(pageSize:maxItems:)` (iOS 15/macOS 12+) emits an

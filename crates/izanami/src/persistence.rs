@@ -25,6 +25,8 @@ struct StoredArgs {
     max_inflight: u32,
     #[norito(default)]
     workload_profile: u8,
+    #[norito(default)]
+    allow_contract_deploy_in_stable: bool,
     log_filter: String,
     fault_min_ms: u64,
     fault_max_ms: u64,
@@ -102,6 +104,7 @@ impl StoredArgs {
             tps: args.tps,
             max_inflight,
             workload_profile: workload_profile_to_u8(args.workload_profile),
+            allow_contract_deploy_in_stable: args.allow_contract_deploy_in_stable,
             log_filter: args.log_filter.clone(),
             fault_min_ms,
             fault_max_ms,
@@ -132,6 +135,7 @@ impl StoredArgs {
             tps: self.tps,
             max_inflight: self.max_inflight as usize,
             workload_profile: workload_profile_from_u8(self.workload_profile),
+            allow_contract_deploy_in_stable: self.allow_contract_deploy_in_stable,
             log_filter: self.log_filter,
             fault_interval_min: to_duration(self.fault_min_ms)?,
             fault_interval_max: to_duration(self.fault_max_ms)?,
@@ -342,6 +346,7 @@ mod tests {
             tps: 12.5,
             max_inflight: 64,
             workload_profile: WorkloadProfile::Chaos,
+            allow_contract_deploy_in_stable: true,
             log_filter: "debug".to_string(),
             fault_interval_min: Duration::from_secs(3),
             fault_interval_max: Duration::from_secs(9),
@@ -369,6 +374,10 @@ mod tests {
         assert_eq!(loaded.tps, args.tps);
         assert_eq!(loaded.max_inflight, args.max_inflight);
         assert_eq!(loaded.workload_profile, args.workload_profile);
+        assert_eq!(
+            loaded.allow_contract_deploy_in_stable,
+            args.allow_contract_deploy_in_stable
+        );
         assert_eq!(loaded.log_filter, args.log_filter);
         assert_eq!(loaded.fault_interval_min, args.fault_interval_min);
         assert_eq!(loaded.fault_interval_max, args.fault_interval_max);
@@ -420,6 +429,7 @@ mod tests {
         assert_eq!(loaded.tps, legacy.tps);
         assert_eq!(loaded.max_inflight, legacy.max_inflight as usize);
         assert_eq!(loaded.workload_profile, WorkloadProfile::Stable);
+        assert!(!loaded.allow_contract_deploy_in_stable);
         assert_eq!(loaded.log_filter, legacy.log_filter);
         assert_eq!(loaded.faults.to_toggles().bits(), legacy.fault_flags);
         assert_eq!(loaded.nexus, legacy.nexus);
