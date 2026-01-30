@@ -116,27 +116,28 @@ pub(crate) enum PlanUpdate {
     TrackRepeatableTrigger(TriggerId),
     MintTriggerRepetitions { trigger_id: TriggerId, amount: u32 },
     BurnTriggerRepetitions { trigger_id: TriggerId, amount: u32 },
+    ReleaseTriggerRepetitionsReservation { trigger_id: TriggerId, amount: u32 },
     SetTriggerMetadata { trigger_id: TriggerId, key: Name },
     ClearTriggerMetadata(TriggerId),
 }
 
 impl PlanUpdate {
-    fn apply(&self, state: &mut ChaosState) {
+    fn apply(&self, state: &mut ChaosState, succeeded: bool) {
         match self {
-            PlanUpdate::RegisterTrigger(trigger_id) => {
+            PlanUpdate::RegisterTrigger(trigger_id) if succeeded => {
                 if !state.registered_triggers.contains(trigger_id) {
                     state.registered_triggers.push(trigger_id.clone());
                 }
             }
-            PlanUpdate::RegisterCallTrigger(trigger_id) => {
+            PlanUpdate::RegisterCallTrigger(trigger_id) if succeeded => {
                 if !state.call_triggers.contains(trigger_id) {
                     state.call_triggers.push(trigger_id.clone());
                 }
             }
-            PlanUpdate::TrackRepeatableTrigger(trigger_id) => {
+            PlanUpdate::TrackRepeatableTrigger(trigger_id) if succeeded => {
                 state.track_repeatable_trigger(trigger_id.clone());
             }
-            PlanUpdate::MintTriggerRepetitions { trigger_id, amount } => {
+            PlanUpdate::MintTriggerRepetitions { trigger_id, amount } if succeeded => {
                 state.track_repeatable_trigger(trigger_id.clone());
                 let entry = state
                     .trigger_repetitions
@@ -144,7 +145,8 @@ impl PlanUpdate {
                     .or_default();
                 *entry = entry.saturating_add(*amount);
             }
-            PlanUpdate::BurnTriggerRepetitions { trigger_id, amount } => {
+            PlanUpdate::BurnTriggerRepetitions { trigger_id, amount } if succeeded => {
+                state.release_trigger_repetitions_reservation(trigger_id, *amount);
                 let Some(entry) = state.trigger_repetitions.get_mut(trigger_id) else {
                     return;
                 };
@@ -154,24 +156,30 @@ impl PlanUpdate {
                     state.repeatable_triggers.retain(|id| id != trigger_id);
                 }
             }
-            PlanUpdate::SetTriggerMetadata { trigger_id, key } => {
+            PlanUpdate::ReleaseTriggerRepetitionsReservation { trigger_id, amount }
+                if !succeeded =>
+            {
+                state.release_trigger_repetitions_reservation(trigger_id, *amount);
+            }
+            PlanUpdate::SetTriggerMetadata { trigger_id, key } if succeeded => {
                 state
                     .trigger_metadata
                     .entry(trigger_id.clone())
                     .or_default()
                     .insert(key.clone());
             }
-            PlanUpdate::ClearTriggerMetadata(trigger_id) => {
+            PlanUpdate::ClearTriggerMetadata(trigger_id) if succeeded => {
                 state.trigger_metadata.remove(trigger_id);
             }
+            _ => {}
         }
     }
 }
 
 impl TransactionPlan {
-    fn apply_updates(&self, state: &mut ChaosState) {
+    fn apply_updates(&self, state: &mut ChaosState, succeeded: bool) {
         for update in &self.state_updates {
-            update.apply(state);
+            update.apply(state, succeeded);
         }
     }
 }
@@ -641,11 +649,11 @@ impl WorkloadEngine {
     }
 
     pub async fn record_result(&self, plan: &TransactionPlan, succeeded: bool) {
-        if !succeeded || plan.state_updates.is_empty() {
+        if plan.state_updates.is_empty() {
             return;
         }
         let mut guard = self.state.lock().await;
-        plan.apply_updates(&mut guard);
+        plan.apply_updates(&mut guard, succeeded);
     }
 
     #[cfg(test)]
@@ -821,6 +829,7 @@ pub struct ChaosState {
     asset_metadata: HashMap<AssetId, HashSet<Name>>,
     trigger_metadata: HashMap<TriggerId, HashSet<Name>>,
     trigger_repetitions: HashMap<TriggerId, u32>,
+    pending_trigger_repetitions: HashMap<TriggerId, u32>,
     space_directory_manifests: HashMap<UniversalAccountId, HashSet<DataSpaceId>>,
     public_lane_validators: HashMap<LaneId, HashSet<AccountId>>,
     public_lane_stakes: HashMap<(LaneId, AccountId, AccountId), u64>,
@@ -916,6 +925,7 @@ impl ChaosState {
             asset_metadata: HashMap::new(),
             trigger_metadata: HashMap::new(),
             trigger_repetitions: HashMap::new(),
+            pending_trigger_repetitions: HashMap::new(),
             space_directory_manifests: HashMap::new(),
             public_lane_validators: HashMap::new(),
             public_lane_stakes: HashMap::new(),
@@ -1659,19 +1669,28 @@ impl ChaosState {
         } else {
             return self.plan_mint_trigger_repetitions(rng);
         };
-        let available = *self.trigger_repetitions.get(&trigger_id).unwrap_or(&0);
+        let tracked = *self.trigger_repetitions.get(&trigger_id).unwrap_or(&0);
+        let pending = self.pending_trigger_repetitions(&trigger_id);
+        let available = tracked.saturating_sub(pending);
         if available == 0 {
             return self.plan_mint_trigger_repetitions(rng);
         }
         let burn_amount = rng.random_range(1..=available);
+        self.reserve_trigger_repetitions(&trigger_id, burn_amount);
         instructions.push(InstructionBox::from(Burn::trigger_repetitions(
             burn_amount,
             trigger_id.clone(),
         )));
-        let state_updates = vec![PlanUpdate::BurnTriggerRepetitions {
-            trigger_id,
-            amount: burn_amount,
-        }];
+        let state_updates = vec![
+            PlanUpdate::BurnTriggerRepetitions {
+                trigger_id: trigger_id.clone(),
+                amount: burn_amount,
+            },
+            PlanUpdate::ReleaseTriggerRepetitionsReservation {
+                trigger_id,
+                amount: burn_amount,
+            },
+        ];
         Ok(TransactionPlan {
             state_updates,
             label: "burn_trigger_repetitions",
@@ -2729,6 +2748,37 @@ impl ChaosState {
         self.trigger_repetitions.entry(trigger_id).or_insert(0);
     }
 
+    fn pending_trigger_repetitions(&self, trigger_id: &TriggerId) -> u32 {
+        self.pending_trigger_repetitions
+            .get(trigger_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn reserve_trigger_repetitions(&mut self, trigger_id: &TriggerId, amount: u32) {
+        if amount == 0 {
+            return;
+        }
+        let entry = self
+            .pending_trigger_repetitions
+            .entry(trigger_id.clone())
+            .or_insert(0);
+        *entry = entry.saturating_add(amount);
+    }
+
+    fn release_trigger_repetitions_reservation(&mut self, trigger_id: &TriggerId, amount: u32) {
+        if amount == 0 {
+            return;
+        }
+        let Some(entry) = self.pending_trigger_repetitions.get_mut(trigger_id) else {
+            return;
+        };
+        *entry = entry.saturating_sub(amount);
+        if *entry == 0 {
+            self.pending_trigger_repetitions.remove(trigger_id);
+        }
+    }
+
     fn bump_domain(&mut self) -> u64 {
         let value = self.counters.domain;
         self.counters.domain += 1;
@@ -3532,7 +3582,7 @@ mod tests {
             .plan_mint_trigger_repetitions(&mut rng)
             .expect("mint repetitions");
         assert_eq!(mint_plan.label, "mint_trigger_repetitions");
-        mint_plan.apply_updates(&mut state);
+        mint_plan.apply_updates(&mut state, true);
         if state
             .trigger_repetitions
             .values()
@@ -3542,7 +3592,7 @@ mod tests {
                 .plan_mint_trigger_repetitions(&mut rng)
                 .expect("mint repetitions after register");
             assert_eq!(mint_plan.label, "mint_trigger_repetitions");
-            mint_plan.apply_updates(&mut state);
+            mint_plan.apply_updates(&mut state, true);
         }
         let (trigger_id, minted) = state
             .trigger_repetitions
@@ -3555,7 +3605,7 @@ mod tests {
             .plan_burn_trigger_repetitions(&mut rng)
             .expect("burn repetitions");
         assert_eq!(burn_plan.label, "burn_trigger_repetitions");
-        burn_plan.apply_updates(&mut state);
+        burn_plan.apply_updates(&mut state, true);
         let remaining = state
             .trigger_repetitions
             .get(&trigger_id)
@@ -3635,6 +3685,82 @@ mod tests {
         }
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn workload_record_result_releases_trigger_reservation_on_failure() {
+        let PreparedChaos {
+            mut state,
+            genesis: _,
+            recipes,
+        } = prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let trigger_id: TriggerId = "repeatable_trigger_failure"
+            .parse()
+            .expect("valid trigger id");
+        state.repeatable_triggers.push(trigger_id.clone());
+        state.trigger_repetitions.insert(trigger_id.clone(), 2);
+        let engine = WorkloadEngine::new(state, recipes);
+        engine.set_recipe_override(Some(RecipeKind::BurnTriggerRepetitions));
+        let mut rng = StdRng::seed_from_u64(412);
+        let plan = engine.next_plan(&mut rng).await.expect("burn plan");
+        {
+            let guard = engine.state.lock().await;
+            assert!(
+                guard.pending_trigger_repetitions.contains_key(&trigger_id),
+                "burn plan should reserve repetitions"
+            );
+        }
+
+        engine.record_result(&plan, false).await;
+        {
+            let guard = engine.state.lock().await;
+            assert_eq!(
+                guard
+                    .pending_trigger_repetitions
+                    .get(&trigger_id)
+                    .copied()
+                    .unwrap_or(0),
+                0,
+                "failed submissions should release trigger reservations"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn workload_record_result_releases_pending_on_failure() {
+        let PreparedChaos {
+            mut state,
+            genesis: _,
+            recipes,
+        } = prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let trigger_id: TriggerId = "repeatable_trigger_pending_failure"
+            .parse()
+            .expect("valid trigger id");
+        state
+            .pending_trigger_repetitions
+            .insert(trigger_id.clone(), 2);
+        let plan = TransactionPlan {
+            label: "release_pending_trigger_repetitions",
+            instructions: Vec::new(),
+            signer: state.treasury.clone(),
+            expect_success: false,
+            state_updates: vec![PlanUpdate::ReleaseTriggerRepetitionsReservation {
+                trigger_id: trigger_id.clone(),
+                amount: 2,
+            }],
+        };
+        let engine = WorkloadEngine::new(state, recipes);
+        engine.record_result(&plan, false).await;
+        let guard = engine.state.lock().await;
+        assert!(
+            guard
+                .pending_trigger_repetitions
+                .get(&trigger_id)
+                .copied()
+                .unwrap_or(0)
+                == 0,
+            "failed submissions should release pending burn reservations"
+        );
+    }
+
     #[test]
     fn repeatable_trigger_tracking_dedupes_ids() {
         let PreparedChaos { mut state, .. } =
@@ -3659,7 +3785,7 @@ mod tests {
         let mint_plan = state
             .plan_mint_trigger_repetitions(&mut rng)
             .expect("mint plan");
-        mint_plan.apply_updates(&mut state);
+        mint_plan.apply_updates(&mut state, true);
         let trigger_id = state
             .repeatable_triggers
             .first()
@@ -3671,7 +3797,7 @@ mod tests {
             .plan_burn_trigger_repetitions(&mut rng)
             .expect("burn plan");
         assert_eq!(burn.label, "burn_trigger_repetitions");
-        burn.apply_updates(&mut state);
+        burn.apply_updates(&mut state, true);
         assert!(
             !state.repeatable_triggers.contains(&trigger_id),
             "depleted trigger should be removed from repeatable list"
@@ -3679,6 +3805,48 @@ mod tests {
         assert!(
             !state.trigger_repetitions.contains_key(&trigger_id),
             "depleted trigger should be removed from repetition tracking"
+        );
+    }
+
+    #[test]
+    fn burn_trigger_repetitions_releases_pending_on_failure() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let trigger_id: TriggerId = "repeatable_trigger_pending"
+            .parse()
+            .expect("valid trigger id");
+        state.repeatable_triggers.push(trigger_id.clone());
+        state.trigger_repetitions.insert(trigger_id.clone(), 2);
+        let mut rng = StdRng::seed_from_u64(212);
+
+        let burn = state
+            .plan_burn_trigger_repetitions(&mut rng)
+            .expect("burn plan");
+        let reserved = state
+            .pending_trigger_repetitions
+            .get(&trigger_id)
+            .copied()
+            .unwrap_or(0);
+        assert!(reserved > 0, "burn plan should reserve repetitions");
+
+        burn.apply_updates(&mut state, false);
+        assert_eq!(
+            state
+                .pending_trigger_repetitions
+                .get(&trigger_id)
+                .copied()
+                .unwrap_or(0),
+            0,
+            "failed burn should release pending reservation"
+        );
+        assert_eq!(
+            state
+                .trigger_repetitions
+                .get(&trigger_id)
+                .copied()
+                .unwrap_or(0),
+            2,
+            "failed burn should not change tracked repetitions"
         );
     }
 
@@ -3691,7 +3859,7 @@ mod tests {
             .plan_set_trigger_key(&mut rng)
             .expect("set trigger metadata");
         assert_eq!(set_plan.label, "set_trigger_kv");
-        set_plan.apply_updates(&mut state);
+        set_plan.apply_updates(&mut state, true);
         let trigger = set_plan
             .instructions
             .iter()
@@ -3722,7 +3890,7 @@ mod tests {
             .plan_remove_trigger_key(&mut rng)
             .expect("remove trigger metadata");
         assert_eq!(remove_plan.label, "remove_trigger_kv");
-        remove_plan.apply_updates(&mut state);
+        remove_plan.apply_updates(&mut state, true);
         assert!(
             state.repeatable_triggers.is_empty(),
             "metadata trigger should not be tracked as repeatable"
@@ -3764,7 +3932,7 @@ mod tests {
             .plan_execute_trigger(&mut rng)
             .expect("execute trigger");
         assert_eq!(plan.label, "execute_trigger");
-        plan.apply_updates(&mut state);
+        plan.apply_updates(&mut state, true);
         let registered = plan
             .instructions
             .iter()

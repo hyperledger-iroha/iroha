@@ -9,7 +9,6 @@ source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
 
 ---
 lang: es

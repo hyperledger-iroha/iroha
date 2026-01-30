@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for he translation. Replace this content with the full translation. -->
-
 ---
 id: portal-publish-plan
 lang: he

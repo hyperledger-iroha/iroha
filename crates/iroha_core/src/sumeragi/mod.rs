@@ -836,22 +836,14 @@ mod tests {
     fn should_run_tick_when_gap_exceeds_min() {
         let now = Instant::now();
         let last_tick = backdate(now, Duration::from_millis(250));
-        assert!(should_run_tick(
-            now,
-            last_tick,
-            Duration::from_millis(200)
-        ));
+        assert!(should_run_tick(now, last_tick, Duration::from_millis(200)));
     }
 
     #[test]
     fn should_skip_tick_when_gap_small() {
         let now = Instant::now();
         let last_tick = backdate(now, Duration::from_millis(50));
-        assert!(!should_run_tick(
-            now,
-            last_tick,
-            Duration::from_millis(200)
-        ));
+        assert!(!should_run_tick(now, last_tick, Duration::from_millis(200)));
     }
 
     #[test]
@@ -864,6 +856,27 @@ mod tests {
             Some(Duration::from_millis(150))
         );
         assert_eq!(idle_wait_duration(base + min_gap, base, min_gap), None);
+    }
+
+    #[test]
+    fn busy_tick_gap_clamps_to_idle_and_budget() {
+        let idle_gap = Duration::from_millis(80);
+        let busy_gap = busy_tick_gap(
+            Duration::from_millis(1_000),
+            Duration::from_millis(1_000),
+            idle_gap,
+            Duration::ZERO,
+        );
+        assert!(busy_gap <= idle_gap);
+        assert!(busy_gap >= Duration::from_millis(BUSY_TICK_GAP_FLOOR_MS));
+
+        let budgeted = busy_tick_gap(
+            Duration::from_millis(1_000),
+            Duration::from_millis(1_000),
+            idle_gap,
+            Duration::from_millis(200),
+        );
+        assert!(budgeted >= Duration::from_millis(200));
     }
 
     #[test]
@@ -931,6 +944,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -1010,6 +1024,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -1106,6 +1121,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(2),
             non_vote_starve_max: Duration::from_millis(1),
@@ -1159,6 +1175,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -1242,6 +1259,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(2),
             non_vote_starve_max: Duration::from_secs(2),
@@ -5022,6 +5040,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -5131,6 +5150,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -5225,6 +5245,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_secs(1),
+            tick_busy_gap: Duration::from_secs(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -5336,6 +5357,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -5465,6 +5487,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -5596,6 +5619,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -5677,6 +5701,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(100),
+            tick_busy_gap: Duration::from_millis(100),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -5735,6 +5760,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -5793,6 +5819,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -5871,6 +5898,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -5927,6 +5955,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -5983,6 +6012,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -6062,6 +6092,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_millis(50),
             block_rx_starve_max: Duration::from_millis(50),
             non_vote_starve_max: Duration::from_millis(50),
@@ -6171,6 +6202,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_millis(100),
             block_rx_starve_max: Duration::ZERO,
             non_vote_starve_max: Duration::ZERO,
@@ -6277,6 +6309,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_millis(10),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -6362,6 +6395,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_millis(15),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -6462,6 +6496,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -6554,6 +6589,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -6612,6 +6648,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -6695,6 +6732,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -6827,6 +6865,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -7015,6 +7054,7 @@ mod tests {
                 lane_relay_rx_drain_max_messages: 16,
                 background_rx_drain_max_messages: 16,
                 tick_min_gap: Duration::from_millis(1),
+                tick_busy_gap: Duration::from_millis(1),
                 tick_max_gap: Duration::from_secs(1),
                 block_rx_starve_max: Duration::from_secs(1),
                 non_vote_starve_max: Duration::from_secs(1),
@@ -7213,6 +7253,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -7275,6 +7316,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -7336,6 +7378,7 @@ mod tests {
             lane_relay_rx_drain_max_messages: 16,
             background_rx_drain_max_messages: 16,
             tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
             tick_max_gap: Duration::from_secs(1),
             block_rx_starve_max: Duration::from_secs(1),
             non_vote_starve_max: Duration::from_secs(1),
@@ -9119,11 +9162,7 @@ struct SumeragiWorker {
 }
 
 /// Rate-limit ticks by the minimum gap so queue backlogs do not throttle consensus progress.
-fn should_run_tick(
-    now: Instant,
-    last_tick: Instant,
-    min_tick_gap: Duration,
-) -> bool {
+fn should_run_tick(now: Instant, last_tick: Instant, min_tick_gap: Duration) -> bool {
     now.saturating_duration_since(last_tick) >= min_tick_gap
 }
 
@@ -9230,6 +9269,8 @@ fn vote_rx_drain_budget(
 const TIME_BUDGET_FLOOR_MS: u64 = 200;
 const TIME_BUDGET_CAP_MS: u64 = 2_000;
 const IDLE_TICK_GAP_FLOOR_MS: u64 = 50;
+const BUSY_TICK_GAP_FLOOR_MS: u64 = 10;
+const BUSY_TICK_GAP_DIVISOR: u32 = 16;
 const IDLE_SHUTDOWN_POLL_MS: u64 = 1_000;
 const DRAIN_BUDGET_CAP_MS: u64 = 500;
 const VOTE_DRAIN_BUDGET_CAP_MS: u64 = 2_000;
@@ -9254,6 +9295,29 @@ fn idle_tick_gap(
         gap
     } else {
         gap.max(tick_work_budget_cap)
+    }
+}
+
+fn busy_tick_gap(
+    block_time: Duration,
+    commit_time: Duration,
+    idle_tick_gap: Duration,
+    tick_work_budget_cap: Duration,
+) -> Duration {
+    let base = block_time.min(commit_time);
+    let raw = if base == Duration::ZERO {
+        idle_tick_gap
+    } else {
+        base / BUSY_TICK_GAP_DIVISOR
+    };
+    let mut gap = raw
+        .max(Duration::from_millis(BUSY_TICK_GAP_FLOOR_MS))
+        .min(idle_tick_gap);
+    if tick_work_budget_cap.is_zero() {
+        gap
+    } else {
+        gap = gap.max(tick_work_budget_cap);
+        gap
     }
 }
 
@@ -9658,6 +9722,7 @@ struct WorkerLoopConfig {
     lane_relay_rx_drain_max_messages: usize,
     background_rx_drain_max_messages: usize,
     tick_min_gap: Duration,
+    tick_busy_gap: Duration,
     tick_max_gap: Duration,
     block_rx_starve_max: Duration,
     non_vote_starve_max: Duration,
@@ -9734,6 +9799,7 @@ enum DrainPhase {
 fn drain_mailbox<A: WorkerActor>(
     actor: &mut A,
     cfg: &WorkerLoopConfig,
+    tick_gap: Duration,
     iter_start: Instant,
     mailbox: &mut WorkerMailbox<'_>,
     budgets: &mut TierBudgets,
@@ -9757,9 +9823,7 @@ fn drain_mailbox<A: WorkerActor>(
     let tick_deadline = tick_deadline
         .map(|deadline| {
             if deadline <= iter_start {
-                iter_start
-                    .checked_add(cfg.tick_min_gap)
-                    .unwrap_or(iter_start)
+                iter_start.checked_add(tick_gap).unwrap_or(iter_start)
             } else {
                 deadline
             }
@@ -9954,6 +10018,11 @@ fn run_worker_iteration<A: WorkerActor>(
     let mut cfg = *cfg;
     let queue_depths = status::worker_queue_depth_snapshot();
     apply_adaptive_drain_caps(&mut cfg, queue_depths);
+    let pre_tick_gap = if has_pending_queue_depths(queue_depths) {
+        cfg.tick_busy_gap
+    } else {
+        cfg.tick_min_gap
+    };
     let mut budgets = TierBudgets::new(&cfg);
     let WorkerLoopState {
         last_tick,
@@ -9976,6 +10045,7 @@ fn run_worker_iteration<A: WorkerActor>(
     drain_mailbox(
         actor,
         &cfg,
+        pre_tick_gap,
         iter_start,
         &mut mailbox,
         &mut budgets,
@@ -10024,13 +10094,17 @@ fn run_worker_iteration<A: WorkerActor>(
     let tick_now = Instant::now();
     let tick_deadline = actor.next_tick_deadline(tick_now);
     let tick_due = tick_deadline.is_some_and(|deadline| deadline <= tick_now);
-    if tick_due
-        && should_run_tick(
-            tick_now,
-            *last_tick,
-            cfg.tick_min_gap,
-        )
-    {
+    let busy = has_pending_queue_depths(pre_tick_depths)
+        || stats.vote_rx_budget_exhausted
+        || stats.block_payload_rx_budget_exhausted
+        || stats.rbc_chunk_rx_budget_exhausted
+        || stats.block_rx_budget_exhausted;
+    let tick_gap = if busy {
+        cfg.tick_busy_gap
+    } else {
+        cfg.tick_min_gap
+    };
+    if tick_due && should_run_tick(tick_now, *last_tick, tick_gap) {
         status::set_worker_stage(status::WorkerLoopStage::Tick);
         let tick_start = Instant::now();
         stats.progress |= actor.tick();
@@ -10044,6 +10118,7 @@ fn run_worker_iteration<A: WorkerActor>(
         drain_mailbox(
             actor,
             &cfg,
+            cfg.tick_min_gap,
             iter_start,
             &mut mailbox,
             &mut budgets,
@@ -10210,6 +10285,7 @@ fn run_worker_loop<A: WorkerActor>(
         rbc_chunk_rx_drain_budget = ?cfg.rbc_chunk_rx_drain_budget,
         block_rx_drain_budget = ?cfg.block_rx_drain_budget,
         tick_min_gap = ?cfg.tick_min_gap,
+        tick_busy_gap = ?cfg.tick_busy_gap,
         "sumeragi worker drain budgets"
     );
     loop {
@@ -10487,6 +10563,8 @@ impl SumeragiWorker {
         let starve_max = block_time.max(commit_time).max(time_budget);
         let tick_min_gap =
             idle_tick_gap(block_time, commit_time, time_budget, tick_work_budget_cap);
+        let tick_busy_gap =
+            busy_tick_gap(block_time, commit_time, tick_min_gap, tick_work_budget_cap);
         let mut tick_max_gap = if block_time.is_zero() {
             time_budget
         } else {
@@ -10508,6 +10586,7 @@ impl SumeragiWorker {
             lane_relay_rx_drain_max_messages: control_msg_channel_cap.max(1),
             background_rx_drain_max_messages: control_msg_channel_cap.max(1),
             tick_min_gap,
+            tick_busy_gap,
             tick_max_gap,
             block_rx_starve_max: starve_max,
             non_vote_starve_max: starve_max,

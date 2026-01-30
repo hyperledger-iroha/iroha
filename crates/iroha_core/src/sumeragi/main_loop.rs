@@ -9259,6 +9259,12 @@ impl Actor {
             time_budget,
             self.config.worker.tick_work_budget_cap,
         );
+        let tick_busy_gap = super::busy_tick_gap(
+            block_time,
+            commit_time,
+            tick_min_gap,
+            self.config.worker.tick_work_budget_cap,
+        );
         let mut tick_max_gap = if block_time.is_zero() {
             time_budget
         } else {
@@ -9273,6 +9279,7 @@ impl Actor {
         cfg.block_rx_drain_budget = block_rx_drain_budget;
         cfg.rbc_chunk_rx_drain_budget = rbc_chunk_drain_budget;
         cfg.tick_min_gap = tick_min_gap;
+        cfg.tick_busy_gap = tick_busy_gap;
         cfg.tick_max_gap = tick_max_gap;
         cfg.block_rx_starve_max = starve_max;
         cfg.non_vote_starve_max = starve_max;

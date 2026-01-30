@@ -9,7 +9,6 @@ source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
 
 ---
 id: pq-ratchet-runbook

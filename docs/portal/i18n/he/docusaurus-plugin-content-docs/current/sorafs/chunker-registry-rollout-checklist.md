@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 id: chunker-registry-rollout-checklist
 lang: he

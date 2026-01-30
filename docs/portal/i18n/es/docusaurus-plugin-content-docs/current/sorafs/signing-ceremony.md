@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for es translation. Replace this content with the full translation. -->
-
 ---
 id: signing-ceremony
 lang: es

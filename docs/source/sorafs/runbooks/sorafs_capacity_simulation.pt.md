@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
@@ -8,7 +6,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: a74e1cb5abc86822ff9d24b9ce42a6567d964cbc01ca4c619b49ca6d239101da
 source_last_modified: "2025-11-05T18:02:08.787799+00:00"
-translation_last_reviewed: 2025-12-28
+translation_last_reviewed: 2026-01-30
 ---
 
 # Runbook de simulação de capacidade do SoraFS

@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for ja translation. Replace this content with the full translation. -->
-
 ---
 id: taikai-monitoring-dashboards
 lang: ja

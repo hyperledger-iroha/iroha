@@ -9,7 +9,6 @@ source_last_modified: "2026-01-04T17:38:16+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
-<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
 
 ---
 id: chunker-conformance

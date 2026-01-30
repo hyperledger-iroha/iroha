@@ -9,7 +9,6 @@ source_last_modified: "2026-01-22T15:55:01+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
 
 ---
 lang: pt
