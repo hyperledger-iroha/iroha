@@ -472,6 +472,10 @@ let renewal = try await torii.topUpOfflineAllowanceRenewal(
 `OfflineWallet.topUpAllowanceRenewal` mirrors the same flow and can optionally refresh the verdict
 cache by leaving `recordVerdict` enabled.
 
+If you already have a signed certificate (for example, issued out-of-band), call
+`ToriiClient.registerOfflineAllowance` or `ToriiClient.renewOfflineAllowance` directly instead of
+the top-up helpers.
+
 ### Offline audit logging
 
 When `auditLoggingEnabled` is `true`, `OfflineWallet` writes `{sender, receiver, asset, amount, timestamp}` entries to

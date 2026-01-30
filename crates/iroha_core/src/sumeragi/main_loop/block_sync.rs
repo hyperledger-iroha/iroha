@@ -470,6 +470,10 @@ impl Actor {
             .pending
             .missing_block_requests
             .contains_key(&block_hash);
+        let block_known_locally = self.block_known_locally(block_hash);
+        let has_commit_votes = !commit_votes.is_empty();
+        let has_commit_evidence =
+            incoming_qc.is_some() || validator_checkpoint.is_some() || has_commit_votes;
         if self.should_drop_future_block_sync_update(
             &block_hash,
             parent_hash,
@@ -513,7 +517,7 @@ impl Actor {
             return Ok(());
         }
         if let Some(local_view) = self.stale_view(block_height, block_view) {
-            if !requested_missing_block {
+            if !requested_missing_block && !block_known_locally && !has_commit_evidence {
                 debug!(
                     height = block_height,
                     view = block_view,
@@ -534,6 +538,8 @@ impl Actor {
                 view = block_view,
                 local_view,
                 da_enabled,
+                block_known_locally,
+                has_commit_evidence,
                 missing_request = requested_missing_block,
                 "accepting BlockSyncUpdate for stale view"
             );
@@ -856,10 +862,14 @@ impl Actor {
         // already opt into the uncertified path.
         let allow_uncertified = match consensus_mode {
             ConsensusMode::Permissioned => {
-                block_height == local_height.saturating_add(1) || requested_missing_block
+                block_height == local_height.saturating_add(1)
+                    || requested_missing_block
+                    || has_commit_votes
             }
             ConsensusMode::Npos => {
-                block_height == local_height.saturating_add(1) || requested_missing_block
+                block_height == local_height.saturating_add(1)
+                    || requested_missing_block
+                    || has_commit_votes
             }
         };
         let selection_start = Instant::now();
