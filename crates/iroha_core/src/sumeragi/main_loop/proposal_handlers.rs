@@ -859,6 +859,18 @@ impl Actor {
         msg: super::message::BlockCreated,
         sender: Option<PeerId>,
     ) -> Result<()> {
+        if crate::sumeragi::status::local_peer_removed() {
+            debug!(
+                ?sender,
+                "dropping BlockCreated because local peer removed from world"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::BlockCreated,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::ModeMismatch,
+            );
+            return Ok(());
+        }
         let block = msg.block;
         let block_hash = block.hash();
         let header = block.header();
