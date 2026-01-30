@@ -197,6 +197,8 @@ const REBROADCAST_COOLDOWN_MULTIPLIER_FAST: u32 = 1;
 const REBROADCAST_COOLDOWN_FAST_THRESHOLD_MS: u64 = 1_000;
 /// Payload rebroadcasts (block payloads/RBC chunks) are heavier, so keep them slower.
 const PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 2;
+/// Keep RBC rebroadcasts alive for a small window of recently committed blocks.
+const RBC_REBROADCAST_COMMITTED_DEPTH: u64 = 4;
 /// Cap the number of missing READY senders logged per deferral.
 const READY_MISSING_LOG_LIMIT: usize = 8;
 /// EMA smoothing factor for pacemaker phase latencies.
@@ -3747,7 +3749,14 @@ impl Actor {
         );
         let matches_tip =
             tip_hash.is_some_and(|hash| hash == key.0) && block_height == tip_height_u64;
-        extends_tip || matches_tip
+        if extends_tip || matches_tip {
+            return true;
+        }
+        if session.delivered && block_height <= tip_height_u64 {
+            let behind = tip_height_u64.saturating_sub(block_height);
+            return behind <= RBC_REBROADCAST_COMMITTED_DEPTH;
+        }
+        false
     }
 
     fn rbc_rebroadcast_active_with_tip(
