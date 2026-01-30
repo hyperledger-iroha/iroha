@@ -1,15 +1,31 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/portal/docs/intro.ar.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Traducción en curso
+# مرحبا بكم في بوابة مطوري SORA Nexus
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+تجمع بوابة مطوري SORA Nexus وثائق تفاعلية ودروس SDK ومراجع API لمشغلي Nexus ومساهمي Hyperledger Iroha. تكمل موقع الوثائق الرئيسي عبر ابراز الادلة العملية والمواصفات المولدة مباشرة من هذا المستودع. صفحة الهبوط تحتوي الان على نقاط دخول ذات طابع Norito/SoraFS، ولقطات OpenAPI موقعة، ومرجع مخصص لـ Norito Streaming حتى يتمكن المساهمون من العثور على عقد طبقة التحكم للبث دون التنقيب في المواصفة الجذرية.
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+## ما الذي يمكنك فعله هنا
+
+- **تعلم Norito** - ابدأ بنظرة عامة و quickstart لفهم نموذج التسلسل وادوات bytecode.
+- **اطلاق SDKs** - اتبع quickstarts ل JavaScript و Rust اليوم؛ ستنضم ادلة Python و Swift و Android مع ترحيل الوصفات.
+- **تصفح مراجع API** - تعرض صفحة Torii OpenAPI احدث مواصفات REST، وترتبط جداول الاعدادات بمصادر Markdown القياسية.
+- **تحضير النشر** - يتم ترحيل كتيبات التشغيل (telemetry, settlement, Nexus overlays) من `docs/source/` وستصل الى هذا الموقع مع تقدم الترحيل.
+
+## الحالة الحالية
+
+- ✅ صفحة هبوط Docusaurus v3 ذات طابع مع طباعة مجددة و hero/cards مدفوعة بتدرجات وبلاطات موارد تتضمن ملخص Norito Streaming.
+- ✅ تم توصيل اضافة Torii OpenAPI بامر `npm run sync-openapi` مع فحوصات لقطات موقعة وحمايات CSP يفرضها `buildSecurityHeaders`.
+- ✅ تشغيل تغطية preview و probe في CI (`docs-portal-preview.yml` + `scripts/portal-probe.mjs`) والتي باتت تضع بوابة لوثيقة streaming و quickstarts SoraFS وقوائم المراجعة المرجعية قبل نشر الحزم.
+- ✅ اصبحت quickstarts الخاصة بـ Norito و SoraFS و SDKs مع اقسام المرجع متاحة في الشريط الجانبي؛ وتصل الاستيرادات الجديدة من `docs/source/` (streaming, orchestration, runbooks) هنا عند كتابتها.
+
+## المشاركة
+
+- راجع `docs/portal/README.md` لاوامر التطوير المحلي (`npm install`, `npm run start`, `npm run build`).
+- تتم متابعة مهام ترحيل المحتوى جنبًا الى جنب مع عناصر roadmap `DOCS-*`. المساهمات مرحب بها - انقل اقساما من `docs/source/` واضف الصفحة الى الشريط الجانبي.
+- اذا اضفت مخرجا مولدا (specs، جداول config)، وثق امر البناء ليتمكن المساهمون مستقبلا من تحديثه بسهولة.

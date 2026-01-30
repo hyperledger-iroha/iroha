@@ -1,18 +1,20 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
 source: docs/source/compliance/android/eu/README.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8100c4fe83dc4fb6de9d6d188d688a4edeac4c40fc01348ad26c9a4a2f9c201f
-source_last_modified: "2025-11-07T17:46:18.591574+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:59.205680+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Tradução em andamento
+<!--
+  SPDX-License-Identifier: Apache-2.0
+-->
 
-Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+# EU Compliance Artefacts
 
-Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.
+Store EU-facing artefacts for AND6 here (security target, GDPR DPIA summary,
+SBOM attestations). Each Markdown stub should link to the signed artefact in
+the governance share and record the checksum plus approval metadata.

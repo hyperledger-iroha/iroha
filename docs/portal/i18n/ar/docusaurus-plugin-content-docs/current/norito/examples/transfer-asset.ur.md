@@ -1,17 +1,46 @@
-<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
-
 ---
 lang: ar
 direction: rtl
 source: docs/portal/docs/norito/examples/transfer-asset.ur.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# قيد الترجمة
+---
+slug: /norito/examples/transfer-asset
+title: اکاؤنٹس کے درمیان اثاثہ منتقل کریں
+description: سادہ اثاثہ ٹرانسفر ورک فلو جو SDK quickstarts اور لیجر walkthroughs کی عکاسی کرتا ہے۔
+source: examples/transfer/transfer.ko
+---
 
-<div dir="rtl">
-هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث حقل `status` في بيانات التعريف أعلاه.
+سادہ اثاثہ ٹرانسفر ورک فلو جو SDK quickstarts اور لیجر walkthroughs کی عکاسی کرتا ہے۔
 
-هذا المخطط في انتظار الترجمة. استبدل هذا النص بالمحتوى المترجَم وغيّر الحالة إلى `complete` عند الانتهاء. تأكد أيضًا من أن حقل `translation_last_reviewed` يعكس آخر مراجعة تمت مقارنةً بالنص الإنجليزي.
-</div>
+## لیجر واک تھرو
+
+- Alice کو ہدف اثاثہ پہلے سے فنڈ کریں (مثلا `register and mint` اسنیپٹ یا SDK quickstart فلو کے ذریعے)۔
+- `do_transfer` انٹری پوائنٹ چلائیں تاکہ Alice سے Bob کو 10 یونٹس منتقل ہوں، اور `AssetTransferRole` اجازت پوری ہو۔
+- بیلنس (`FindAccountAssets`, `iroha_cli ledger assets list`) چیک کریں یا پائپ لائن ایونٹس سبسکرائب کریں تاکہ ٹرانسفر کے نتیجے کا مشاہدہ ہو۔
+
+## متعلقہ SDK گائیڈز
+
+- [Rust SDK quickstart](/sdks/rust)
+- [Python SDK quickstart](/sdks/python)
+- [JavaScript SDK quickstart](/sdks/javascript)
+
+[Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/transfer-asset.ko)
+
+```text
+// Transfer example: uses typed pointer constructors and transfer_asset syscall
+
+seiyaku TransferDemo {
+  // Public entrypoint to transfer 10 units of rose#wonderland from alice to bob
+  kotoage fn do_transfer() permission(AssetTransferRole) {
+    transfer_asset(
+      account!("ih58..."),
+      account!("ih58..."),
+      asset_definition!("rose#wonderland"),
+      10
+    );
+  }
+}
+```

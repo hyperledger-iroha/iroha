@@ -82,7 +82,8 @@ print(assets, txs, holders)
 
 Use the offline allowance helpers to issue wallet certificates and register them
 on-ledger. `top_up_offline_allowance` chains the certificate issue + register
-steps and returns both responses.
+steps and returns both responses. There is no single top-up endpoint; the helper
+simply chains the issue + register calls.
 
 ```python
 from iroha_python import ToriiClient

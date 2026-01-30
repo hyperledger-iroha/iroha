@@ -944,6 +944,19 @@ final class AddressCopyTelemetry {
         Text("Verified: \(vm.verifiedAccount)").font(.footnote).foregroundColor(.green)
       }
 
+#if canImport(IrohaSwift)
+      if #available(iOS 15.0, macOS 12.0, *) {
+        Divider()
+        TransferHistorySection(baseURL: vm.baseURL,
+                               defaultAccountId: vm.verifiedAccount)
+      } else {
+        Divider()
+        Text("Transfer history requires iOS 15/macOS 12+")
+          .font(.footnote)
+          .foregroundColor(.secondary)
+      }
+#endif
+
       Divider()
       Text("Logs").font(.headline)
       #if canImport(CryptoKit)
@@ -1061,6 +1074,111 @@ final class AddressCopyTelemetry {
     #endif
   }
 }
+
+#if canImport(IrohaSwift)
+@available(iOS 15.0, macOS 12.0, *)
+final class TransferHistoryViewModel: ObservableObject {
+  @Published var summaries: [ToriiExplorerTransferSummary] = []
+  @Published var isLoading = false
+  @Published var errorMessage: String?
+
+  func load(baseURL: String, accountId: String) {
+    let trimmedAccount = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedAccount.isEmpty else {
+      errorMessage = "Enter an account id."
+      return
+    }
+    let trimmedURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let url = URL(string: trimmedURL), !trimmedURL.isEmpty else {
+      errorMessage = "Invalid node URL."
+      return
+    }
+    isLoading = true
+    errorMessage = nil
+
+    Task { @MainActor in
+      do {
+        let sdk = IrohaSDK(baseURL: url)
+        summaries = try await sdk.getTransactionHistory(accountId: trimmedAccount,
+                                                        page: 1,
+                                                        perPage: 25)
+      } catch {
+        errorMessage = error.localizedDescription
+      }
+      isLoading = false
+    }
+  }
+
+  func clear() {
+    summaries.removeAll()
+    errorMessage = nil
+  }
+}
+
+@available(iOS 15.0, macOS 12.0, *)
+struct TransferHistorySection: View {
+  let baseURL: String
+  let defaultAccountId: String
+  @StateObject private var history = TransferHistoryViewModel()
+  @State private var accountId: String = ""
+
+  private func directionLabel(for summary: ToriiExplorerTransferSummary) -> String {
+    if summary.isIncoming { return "In" }
+    if summary.isOutgoing { return "Out" }
+    if summary.isSelfTransfer { return "Self" }
+    return "?"
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text("Transfer History").font(.headline)
+      TextField("Account ID", text: $accountId)
+        .autocapitalization(.none)
+        .disableAutocorrection(true)
+        .textFieldStyle(RoundedBorderTextFieldStyle())
+
+      HStack(spacing: 10) {
+        Button("Use Verified") { accountId = defaultAccountId }
+          .disabled(defaultAccountId.isEmpty)
+        Button("Load") { history.load(baseURL: baseURL, accountId: accountId) }
+        Button("Clear") { history.clear() }
+          .disabled(history.summaries.isEmpty && history.errorMessage == nil)
+      }
+
+      if history.isLoading {
+        Text("Loading...").font(.footnote).foregroundColor(.secondary)
+      }
+      if let error = history.errorMessage {
+        Text(error).font(.footnote).foregroundColor(.red)
+      }
+
+      ForEach(history.summaries.prefix(5)) { summary in
+        VStack(alignment: .leading, spacing: 2) {
+          Text("\(directionLabel(for: summary)) \(summary.amount) \(summary.assetDefinitionId)")
+            .font(.footnote)
+          Text("\(summary.senderAccountId) -> \(summary.receiverAccountId)")
+            .font(.caption)
+            .foregroundColor(.secondary)
+          Text(summary.createdAt)
+            .font(.caption2)
+            .foregroundColor(.secondary)
+        }
+      }
+
+      if history.summaries.count > 5 {
+        Text("Showing first 5 transfers.")
+          .font(.footnote)
+          .foregroundColor(.secondary)
+      }
+    }
+    .onAppear {
+      if accountId.isEmpty {
+        accountId = defaultAccountId
+      }
+    }
+  }
+}
+#endif
 
 struct ActivityView: UIViewControllerRepresentable {
   let activityItems: [Any]

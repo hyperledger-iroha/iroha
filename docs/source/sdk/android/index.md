@@ -17,9 +17,9 @@ layered on top via the keystore abstraction when running on devices.
   fallback so aliases can be generated on emulators and desktop JVMs. The
   manager exports/imports HKDF-derived bundles for offline tooling.
 - **Norito codec:** `NoritoJavaCodecAdapter` bridges to the in-repo Norito
-  implementation (`java/norito_java`) providing typed instruction hydration and
-  canonical transaction encoding. Fixtures in `src/test/resources` mirror the
-  Rust canonical payloads.
+  implementation (`java/norito_java`) providing canonical transaction encoding
+  for IVM bytecode and wire-framed instruction payloads. Fixtures in
+  `src/test/resources` mirror the Rust canonical payloads.
 - **Transaction builder:** `TransactionBuilder` encodes payloads, signs with the
   requested key alias, and optionally emits `OfflineSigningEnvelope` records for
   later submission or key export workflows.
@@ -81,9 +81,11 @@ transport.submitTransaction(tx).join();
 
 - `IrohaKeyManager.withDefaultProviders()` prefers hardware-backed providers
   when present and falls back to the software signer on emulators/desktop JVMs.
-- For instruction lists, populate `TransactionPayload.setInstructions(...)`; the
-  adapter hydrates typed instruction builders when available and falls back to
-  key/value payloads for unsupported variants.
+- For instruction lists, populate `TransactionPayload.setInstructions(...)`
+  with `InstructionBox.fromWirePayload(...)` entries. Each payload must already
+  include the Norito header/checksum; legacy argument-map instruction payloads
+  are rejected by the encoder. Trigger registration instructions also require
+  wire-framed nested instructions (`wire_name` + `payload_base64` only).
 - `HttpClientTransport.submitTransaction` returns a `CompletableFuture`; use
   `waitForTransactionStatus` to poll `/v1/pipeline/transactions/status` for the
   resulting hash, or configure a `PendingTransactionQueue` so failed submissions
@@ -101,7 +103,8 @@ transport exposes typed helpers in `org.hyperledger.iroha.android.nexus`:
 
 - `HttpClientTransport.getUaidPortfolio(String uaid)` returns a
   `CompletableFuture<UaidPortfolioResponse>` with per-dataspace totals and
-  account labels pulled from `/v1/accounts/{uaid}/portfolio`.
+  account labels pulled from `/v1/accounts/{uaid}/portfolio`. Use the overload
+  that accepts a `UaidPortfolioQuery` when you need to filter by `asset_id`.
 - `HttpClientTransport.getUaidBindings(String uaid)` hits
   `/v1/space-directory/uaids/{uaid}` when only the account bindings are needed.
   Supply a `UaidBindingsQuery` when you need to override the
@@ -120,10 +123,13 @@ Example:
 ```java
 import org.hyperledger.iroha.android.nexus.UaidLiteral;
 import org.hyperledger.iroha.android.nexus.UaidManifestQuery;
+import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
 
 String uaid = UaidLiteral.canonicalize("  UAID:DEADBEEF...  ", "lookup uaid");
-UaidPortfolioResponse portfolio = transport.getUaidPortfolio(uaid).join();
+UaidPortfolioQuery portfolioQuery =
+    UaidPortfolioQuery.builder().setAssetId("cash#global::holder@global").build();
+UaidPortfolioResponse portfolio = transport.getUaidPortfolio(uaid, portfolioQuery).join();
 portfolio.dataspaces().forEach(ds -> {
     String alias = ds.dataspaceAlias();
     System.out.printf("Dataspace %d (%s) exposes %d account(s)%n",

@@ -129,9 +129,10 @@ authority (private keys travel only in-memory inside Torii’s secure handler):
 - `GET /v1/space-directory/uaids/{uaid}` — resolve the current dataspace bindings
   for a UAID (normalized addresses, dataspace ids, program bindings). Add
   `address_format=compressed` for Sora Name Service output (IH58 preferred; compressed (`sora`) is second-best Sora-only).
-- `GET /v1/space-directory/uaids/{uaid}/portfolio` —
+- `GET /v1/accounts/{uaid}/portfolio` —
   Norito-backed aggregator that mirrors `ToriiClient.getUaidPortfolio` so wallets
-  can render universal holdings without scraping per-dataspace state.
+  can render universal holdings without scraping per-dataspace state. Pass
+  `asset_id=<asset#definition::owner>` to filter the snapshot down to one asset.
 - `GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}` — fetch the
   canonical manifest JSON, lifecycle metadata, and manifest hash for audits.
 - `POST /v1/space-directory/manifests` — submit new or replacement manifests

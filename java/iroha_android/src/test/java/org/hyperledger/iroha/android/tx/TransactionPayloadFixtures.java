@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -16,7 +17,6 @@ import java.util.Optional;
 import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.TransactionPayload;
-import org.hyperledger.iroha.android.model.instructions.InstructionKind;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.testing.SimpleJson;
 
@@ -167,26 +167,26 @@ final class TransactionPayloadFixtures {
         final List<InstructionBox> instructions = new ArrayList<>(instructionsRaw.size());
         for (Object entry : instructionsRaw) {
           final Map<String, Object> instructionMap = asMap(entry, "instruction", name);
-          InstructionKind kind = InstructionKind.CUSTOM;
-          if (instructionMap.containsKey("kind")) {
-            kind =
-                InstructionKind.fromDisplayName(asString(instructionMap.get("kind"), "instruction.kind"));
+          final Object wireNameRaw = instructionMap.get("wire_name");
+          final Object wirePayloadRaw = instructionMap.get("payload_base64");
+          if (wireNameRaw == null || wirePayloadRaw == null) {
+            throw new IllegalStateException(
+                name + ": instruction payload requires wire_name and payload_base64");
           }
-          final Map<String, Object> args = instructionMap.get("arguments") == null
-              ? Collections.emptyMap()
-              : asMap(instructionMap.get("arguments"), "instruction.arguments", name);
-          final Map<String, String> convertedArgs = new LinkedHashMap<>();
-          args.forEach((key, value) -> convertedArgs.put(key, Objects.toString(value)));
-          if (instructionMap.containsKey("name")) {
-            final String customName = asString(instructionMap.get("name"), "instruction.name");
-            convertedArgs.putIfAbsent("action", customName);
-            try {
-              kind = InstructionKind.fromDisplayName(customName);
-            } catch (final IllegalArgumentException ignored) {
-              kind = InstructionKind.CUSTOM;
-            }
+          if (instructionMap.size() != 2) {
+            throw new IllegalStateException(
+                name + ": instruction entries must only include wire_name and payload_base64");
           }
-          instructions.add(InstructionBox.fromNorito(kind, convertedArgs));
+          final String wireName = Objects.toString(wireNameRaw);
+          final String payloadBase64 = Objects.toString(wirePayloadRaw);
+          final byte[] wirePayload;
+          try {
+            wirePayload = Base64.getDecoder().decode(payloadBase64);
+          } catch (final IllegalArgumentException ex) {
+            throw new IllegalStateException(
+                name + ": instruction payload_base64 is not valid base64", ex);
+          }
+          instructions.add(InstructionBox.fromWirePayload(wireName, wirePayload));
         }
         builder.setExecutable(Executable.instructions(instructions));
       } else {

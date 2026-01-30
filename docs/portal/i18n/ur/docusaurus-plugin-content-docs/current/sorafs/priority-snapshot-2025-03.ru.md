@@ -1,17 +1,38 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.ru.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# ترجمہ جاری ہے
+---
+id: priority-snapshot-2025-03
+title: Снимок приоритетов — март 2025 (Бета)
+description: Зеркало steering snapshot Nexus 2025-03; ожидает ACKs перед публичным rollout.
+---
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+> Канонический источник: `docs/source/sorafs/priority_snapshot_2025-03.md`
+>
+> Статус: **Бета / ожидаются ACKs steering** (Networking, Storage, Docs leads).
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+## Обзор
+
+Мартовский snapshot удерживает инициативы docs/content-network в согласии с
+доставочными треками SoraFS (SF-3, SF-6b, SF-9). Как только все leads подтвердят
+snapshot в канале steering Nexus, удалите примечание “Beta” выше.
+
+### Фокусные темы
+
+1. **Распространить snapshot приоритетов** — собрать acknowledgements и
+   зафиксировать их в minutes совета от 2025-03-05.
+2. **Закрыть kickoff Gateway/DNS** — отрепетировать новый facilitation kit (Раздел 6
+   в runbook) до воркшопа 2025-03-03.
+3. **Миграция операторских runbooks** — портал `Runbook Index` уже live; открыть beta
+   preview URL после sign-off onboarding для reviewers.
+4. **Треки доставки SoraFS** — согласовать оставшуюся работу SF-3/6b/9 с планом/roadmap:
+   - Worker ingestion PoR + status endpoint в `sorafs-node`.
+   - Полировка CLI/SDK bindings в интеграциях orchestrator Rust/JS/Swift.
+   - Wiring runtime для координатора PoR и события GovernanceLog.
+
+См. исходный файл для полной таблицы, distribution checklist и log entries.

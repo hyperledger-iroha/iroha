@@ -40,6 +40,10 @@ final class TriggerInstructionUtils {
   static void appendInstructions(final List<InstructionBox> instructions, final Map<String, String> target) {
     for (int index = 0; index < instructions.size(); index++) {
       final InstructionBox instruction = instructions.get(index);
+      if (!(instruction.payload() instanceof InstructionBox.WirePayload)) {
+        throw new IllegalArgumentException(
+            "Trigger registration requires wire-framed instruction payloads");
+      }
       target.put(INSTRUCTION_PREFIX + index + KIND_SUFFIX, instruction.kind().displayName());
       for (final Map.Entry<String, String> entry : instruction.arguments().entrySet()) {
         target.put(
@@ -94,6 +98,16 @@ final class TriggerInstructionUtils {
             "instruction." + entry.getKey() + ".kind is required for trigger registration");
       }
       final InstructionKind nestedKind = InstructionKind.fromDisplayName(parts.kind);
+      if (!parts.arguments.containsKey("wire_name")
+          || !parts.arguments.containsKey("payload_base64")) {
+        throw new IllegalArgumentException(
+            "instruction." + entry.getKey() + " must include wire_name and payload_base64");
+      }
+      if (parts.arguments.size() != 2) {
+        throw new IllegalArgumentException(
+            "instruction." + entry.getKey()
+                + " must not include extra arguments when using wire payloads");
+      }
       instructions.add(
           InstructionBox.fromNorito(
               nestedKind,

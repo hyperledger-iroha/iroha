@@ -3515,14 +3515,29 @@ class ToriiClient:
     # ------------------------------------------------------------------
     # UAID & Space Directory surfaces
     # ------------------------------------------------------------------
-    def get_uaid_portfolio(self, uaid: str) -> UaidPortfolioResponse:
-        """Fetch aggregated holdings for a UAID (`GET /v1/accounts/{uaid}/portfolio`)."""
+    def get_uaid_portfolio(
+        self,
+        uaid: str,
+        *,
+        asset_id: Optional[str] = None,
+    ) -> UaidPortfolioResponse:
+        """Fetch aggregated holdings for a UAID (`GET /v1/accounts/{uaid}/portfolio`).
+
+        Provide ``asset_id`` to restrict the response to matching positions.
+        """
 
         canonical = self._normalize_uaid_literal(uaid, context="uaid")
+        params: Dict[str, Any] = {}
+        if asset_id is not None:
+            params["asset_id"] = self._normalize_optional_string(
+                asset_id,
+                "uaid portfolio asset_id",
+            )
         response = self._request(
             "GET",
             f"/v1/accounts/{quote(canonical, safe='')}/portfolio",
             headers={"Accept": "application/json"},
+            params=self._clean_params(params),
         )
         self._expect_status(response, {200})
         payload = self._maybe_json(response)

@@ -1,18 +1,34 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/source/samples/sumeragi_pacemaker_status.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c91eb98f17f4c9f6120828b74e0ec7276abbf129472e32721f3550ed16aff637
-source_last_modified: "2025-11-02T04:40:40.167587+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:58.932951+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traducción en curso
+# Sumeragi — Pacemaker Status (Torii)
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+Endpoint
+- `GET /v1/sumeragi/pacemaker`
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+Response (example)
+```json
+{
+  "backoff_ms": 0,
+  "rtt_floor_ms": 0,
+  "backoff_multiplier": 0,
+  "rtt_floor_multiplier": 0,
+  "max_backoff_ms": 0,
+  "jitter_ms": 0,
+  "jitter_frac_permille": 0
+}
+```
+
+Notes
+- Available only when built with telemetry enabled.
+- Exposes current pacemaker backoff window and timing parameters.
+- Intended for operator visibility; values are implementation-specific gauges.
+

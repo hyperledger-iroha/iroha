@@ -335,13 +335,15 @@ public enum ToriiExplorerTransferDirection: Sendable, Equatable {
 }
 
 /// Flattened transfer summary derived from explorer instruction payloads.
-public struct ToriiExplorerTransferSummary: Sendable, Equatable {
+public struct ToriiExplorerTransferSummary: Sendable, Equatable, Identifiable {
     public let transactionHash: String
     public let block: UInt64
     public let createdAt: String
     public let status: String
     public let authority: String
     public let instructionIndex: UInt32
+    /// Index of the transfer entry within the instruction payload (0 for single-asset transfers).
+    public let transferIndex: UInt32
     public let senderAccountId: String
     public let receiverAccountId: String
     public let assetDefinitionId: String
@@ -354,6 +356,145 @@ public struct ToriiExplorerTransferSummary: Sendable, Equatable {
 
     public var isOutgoing: Bool {
         direction == .outgoing
+    }
+
+    public var isSelfTransfer: Bool {
+        direction == .selfTransfer
+    }
+
+    /// Construct the source asset id from the asset definition and sender account when possible.
+    public var sourceAssetId: String? {
+        ToriiExplorerTransferSummary.assetId(assetDefinitionId: assetDefinitionId,
+                                             accountId: senderAccountId)
+    }
+
+    /// Construct the destination asset id from the asset definition and receiver account when possible.
+    public var destinationAssetId: String? {
+        ToriiExplorerTransferSummary.assetId(assetDefinitionId: assetDefinitionId,
+                                             accountId: receiverAccountId)
+    }
+
+    /// Stable identifier for SwiftUI lists (`transactionHash|instructionIndex|transferIndex`).
+    public var id: String {
+        "\(transactionHash)|\(instructionIndex)|\(transferIndex)"
+    }
+
+    /// Recompute direction relative to a specific account identifier.
+    public func direction(relativeTo accountId: String?) -> ToriiExplorerTransferDirection {
+        let trimmed = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let relative = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        return ToriiExplorerTransferSummary.direction(sender: senderAccountId,
+                                                      receiver: receiverAccountId,
+                                                      relativeTo: relative)
+    }
+
+    /// Return the counterparty account id relative to a specific account identifier.
+    public func counterpartyAccountId(relativeTo accountId: String?) -> String? {
+        let trimmed = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmed, !trimmed.isEmpty else {
+            return nil
+        }
+        if senderAccountId == trimmed && receiverAccountId == trimmed {
+            return trimmed
+        }
+        if senderAccountId == trimmed {
+            return receiverAccountId
+        }
+        if receiverAccountId == trimmed {
+            return senderAccountId
+        }
+        return nil
+    }
+
+    public func isIncoming(relativeTo accountId: String?) -> Bool {
+        direction(relativeTo: accountId) == .incoming
+    }
+
+    public func isOutgoing(relativeTo accountId: String?) -> Bool {
+        direction(relativeTo: accountId) == .outgoing
+    }
+
+    public func isSelfTransfer(relativeTo accountId: String?) -> Bool {
+        direction(relativeTo: accountId) == .selfTransfer
+    }
+
+    /// Return the asset id scoped to the provided account (source for sender, destination for receiver).
+    public func assetId(relativeTo accountId: String?) -> String? {
+        let trimmed = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmed, !trimmed.isEmpty else {
+            return nil
+        }
+        if senderAccountId == trimmed && receiverAccountId == trimmed {
+            return sourceAssetId ?? destinationAssetId
+        }
+        if senderAccountId == trimmed {
+            return sourceAssetId
+        }
+        if receiverAccountId == trimmed {
+            return destinationAssetId
+        }
+        return nil
+    }
+
+    /// Return the counterparty asset id relative to the provided account (destination for sender, source for receiver).
+    public func counterpartyAssetId(relativeTo accountId: String?) -> String? {
+        let trimmed = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmed, !trimmed.isEmpty else {
+            return nil
+        }
+        if senderAccountId == trimmed && receiverAccountId == trimmed {
+            return sourceAssetId ?? destinationAssetId
+        }
+        if senderAccountId == trimmed {
+            return destinationAssetId
+        }
+        if receiverAccountId == trimmed {
+            return sourceAssetId
+        }
+        return nil
+    }
+
+    /// Return the amount with a sign relative to the provided account (`+` for incoming, `-` for outgoing).
+    public func signedAmount(relativeTo accountId: String?) -> String {
+        let trimmedAmount = amount.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAmount.isEmpty else {
+            return amount
+        }
+        let hasSign = trimmedAmount.hasPrefix("-") || trimmedAmount.hasPrefix("+")
+        switch direction(relativeTo: accountId) {
+        case .incoming:
+            return hasSign ? trimmedAmount : "+\(trimmedAmount)"
+        case .outgoing:
+            return hasSign ? trimmedAmount : "-\(trimmedAmount)"
+        case .selfTransfer, .unknown:
+            return trimmedAmount
+        }
+    }
+
+    public init(transactionHash: String,
+                block: UInt64,
+                createdAt: String,
+                status: String,
+                authority: String,
+                instructionIndex: UInt32,
+                senderAccountId: String,
+                receiverAccountId: String,
+                assetDefinitionId: String,
+                amount: String,
+                direction: ToriiExplorerTransferDirection,
+                transferIndex: UInt32 = 0) {
+        self.transactionHash = transactionHash
+        self.block = block
+        self.createdAt = createdAt
+        self.status = status
+        self.authority = authority
+        self.instructionIndex = instructionIndex
+        self.transferIndex = transferIndex
+        self.senderAccountId = senderAccountId
+        self.receiverAccountId = receiverAccountId
+        self.assetDefinitionId = assetDefinitionId
+        self.amount = amount
+        self.direction = direction
     }
 }
 
@@ -469,6 +610,23 @@ public extension ToriiExplorerTransferDetails {
             return entries.contains { $0.assetDefinitionId == trimmed }
         }
     }
+
+    /// Check whether a transfer involves the provided asset id (source asset literal).
+    func involvesAssetId(_ assetId: String) -> Bool {
+        let trimmed = assetId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return false
+        }
+        switch self {
+        case .asset(let asset):
+            return asset.sourceAssetId == trimmed
+        case .assetBatch(let entries):
+            return entries.contains {
+                ToriiExplorerTransferSummary.assetId(assetDefinitionId: $0.assetDefinitionId,
+                                                     accountId: $0.senderAccountId) == trimmed
+            }
+        }
+    }
 }
 
 extension ToriiExplorerTransferSummary {
@@ -488,6 +646,22 @@ extension ToriiExplorerTransferSummary {
             return .incoming
         }
         return .unknown
+    }
+
+    fileprivate static func assetId(assetDefinitionId: String, accountId: String) -> String? {
+        let trimmedDefinition = assetDefinitionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAccount = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedDefinition.isEmpty, !trimmedAccount.isEmpty else {
+            return nil
+        }
+        guard let hashIndex = trimmedDefinition.firstIndex(of: "#") else {
+            return nil
+        }
+        let name = String(trimmedDefinition[..<hashIndex])
+        guard !name.isEmpty else {
+            return nil
+        }
+        return "\(name)##\(trimmedAccount)"
     }
 }
 
@@ -517,10 +691,11 @@ public extension ToriiExplorerTransferRecord {
                                              receiverAccountId: receiver,
                                              assetDefinitionId: assetDefinition,
                                              amount: asset.amount,
-                                             direction: direction),
+                                             direction: direction,
+                                             transferIndex: 0),
             ]
         case .assetBatch(let entries):
-            return entries.map { entry in
+            return entries.enumerated().map { offset, entry in
                 let direction = ToriiExplorerTransferSummary.direction(sender: entry.senderAccountId,
                                                                         receiver: entry.receiverAccountId,
                                                                         relativeTo: relativeAccount)
@@ -534,29 +709,35 @@ public extension ToriiExplorerTransferRecord {
                                                     receiverAccountId: entry.receiverAccountId,
                                                     assetDefinitionId: entry.assetDefinitionId,
                                                     amount: entry.amount,
-                                                    direction: direction)
+                                                    direction: direction,
+                                                    transferIndex: UInt32(offset))
             }
         }
     }
 }
 
 public extension ToriiExplorerInstructionsPage {
-    /// Extract flattened transfer summaries from this page.
+    /// Extract flattened transfer summaries from this page, optionally filtering by account, asset definition, or asset id.
     func transferSummaries(matchingAccount accountId: String? = nil,
                            assetDefinitionId: String? = nil,
+                           assetId: String? = nil,
                            relativeTo relativeAccountId: String? = nil) -> [ToriiExplorerTransferSummary] {
         let relative = relativeAccountId ?? accountId
-        let records = transferRecords(matchingAccount: accountId, assetDefinitionId: assetDefinitionId)
+        let records = transferRecords(matchingAccount: accountId,
+                                      assetDefinitionId: assetDefinitionId,
+                                      assetId: assetId)
         return records.flatMap { $0.summaries(relativeTo: relative) }
     }
 }
 
 public extension ToriiExplorerInstructionsPage {
-    /// Extract transfer records from this page, optionally filtering by account or asset definition.
+    /// Extract transfer records from this page, optionally filtering by account, asset definition, or asset id.
     func transferRecords(matchingAccount accountId: String? = nil,
-                         assetDefinitionId: String? = nil) -> [ToriiExplorerTransferRecord] {
+                         assetDefinitionId: String? = nil,
+                         assetId: String? = nil) -> [ToriiExplorerTransferRecord] {
         let accountFilter = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let assetFilter = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let assetIdFilter = assetId?.trimmingCharacters(in: .whitespacesAndNewlines)
         var records: [ToriiExplorerTransferRecord] = []
         records.reserveCapacity(items.count)
         for item in items {
@@ -567,6 +748,9 @@ public extension ToriiExplorerInstructionsPage {
                 continue
             }
             if let assetFilter, !assetFilter.isEmpty, !details.involvesAssetDefinition(assetFilter) {
+                continue
+            }
+            if let assetIdFilter, !assetIdFilter.isEmpty, !details.involvesAssetId(assetIdFilter) {
                 continue
             }
             records.append(ToriiExplorerTransferRecord(instruction: item, details: details))
@@ -4278,6 +4462,23 @@ public struct ToriiUaidBindingsQuery: Sendable, Equatable {
     }
 }
 
+public struct ToriiUaidPortfolioQuery: Sendable, Equatable {
+    public var assetId: String?
+
+    public init(assetId: String? = nil) {
+        self.assetId = assetId
+    }
+
+    public func queryItems() -> [URLQueryItem]? {
+        var items: [URLQueryItem] = []
+        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !assetId.isEmpty {
+            items.append(URLQueryItem(name: "asset_id", value: assetId))
+        }
+        return items.isEmpty ? nil : items
+    }
+}
+
 public enum ToriiUaidManifestStatus: String, Decodable, Sendable {
     case active = "Active"
     case pending = "Pending"
@@ -7585,8 +7786,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     @discardableResult
     public func getUaidPortfolio(uaid: String,
+                                 query: ToriiUaidPortfolioQuery? = nil,
                                  completion: @escaping (Result<ToriiUaidPortfolioResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getUaidPortfolio(uaid: uaid) }
+        runTask(completion) { try await self.getUaidPortfolio(uaid: uaid, query: query) }
     }
 
     @discardableResult
@@ -7648,11 +7850,13 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getExplorerTransfers(params: ToriiExplorerInstructionsParams? = nil,
                                      matchingAccount accountId: String? = nil,
                                      assetDefinitionId: String? = nil,
+                                     assetId: String? = nil,
                                      completion: @escaping (Result<[ToriiExplorerTransferRecord], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getExplorerTransfers(params: params,
                                                 matchingAccount: accountId,
-                                                assetDefinitionId: assetDefinitionId)
+                                                assetDefinitionId: assetDefinitionId,
+                                                assetId: assetId)
         }
     }
 
@@ -7661,13 +7865,55 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getExplorerTransferSummaries(params: ToriiExplorerInstructionsParams? = nil,
                                              matchingAccount accountId: String? = nil,
                                              assetDefinitionId: String? = nil,
+                                             assetId: String? = nil,
                                              relativeTo relativeAccountId: String? = nil,
                                              completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getExplorerTransferSummaries(params: params,
                                                         matchingAccount: accountId,
                                                         assetDefinitionId: assetDefinitionId,
+                                                        assetId: assetId,
                                                         relativeTo: relativeAccountId)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    @discardableResult
+    public func getExplorerTransactionTransfers(hashHex: String,
+                                                addressFormat: AccountAddressFormat? = nil,
+                                                matchingAccount accountId: String? = nil,
+                                                assetDefinitionId: String? = nil,
+                                                assetId: String? = nil,
+                                                maxItems: UInt64? = nil,
+                                                completion: @escaping (Result<[ToriiExplorerTransferRecord], Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.getExplorerTransactionTransfers(hashHex: hashHex,
+                                                           addressFormat: addressFormat,
+                                                           matchingAccount: accountId,
+                                                           assetDefinitionId: assetDefinitionId,
+                                                           assetId: assetId,
+                                                           maxItems: maxItems)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    @discardableResult
+    public func getExplorerTransactionTransferSummaries(hashHex: String,
+                                                        addressFormat: AccountAddressFormat? = nil,
+                                                        matchingAccount accountId: String? = nil,
+                                                        assetDefinitionId: String? = nil,
+                                                        assetId: String? = nil,
+                                                        relativeTo relativeAccountId: String? = nil,
+                                                        maxItems: UInt64? = nil,
+                                                        completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.getExplorerTransactionTransferSummaries(hashHex: hashHex,
+                                                                   addressFormat: addressFormat,
+                                                                   matchingAccount: accountId,
+                                                                   assetDefinitionId: assetDefinitionId,
+                                                                   assetId: assetId,
+                                                                   relativeTo: relativeAccountId,
+                                                                   maxItems: maxItems)
         }
     }
 
@@ -7678,13 +7924,35 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                           perPage: UInt64? = nil,
                                           addressFormat: AccountAddressFormat? = nil,
                                           assetDefinitionId: String? = nil,
+                                          assetId: String? = nil,
                                           completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getAccountTransferHistory(accountId: accountId,
                                                      page: page,
                                                      perPage: perPage,
                                                      addressFormat: addressFormat,
-                                                     assetDefinitionId: assetDefinitionId)
+                                                     assetDefinitionId: assetDefinitionId,
+                                                     assetId: assetId)
+        }
+    }
+
+    /// Convenience alias for transfer-rich transaction history derived from explorer instructions.
+    @available(iOS 15.0, macOS 12.0, *)
+    @discardableResult
+    public func getTransactionHistory(accountId: String,
+                                      page: UInt64? = nil,
+                                      perPage: UInt64? = nil,
+                                      addressFormat: AccountAddressFormat? = nil,
+                                      assetDefinitionId: String? = nil,
+                                      assetId: String? = nil,
+                                      completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.getTransactionHistory(accountId: accountId,
+                                                 page: page,
+                                                 perPage: perPage,
+                                                 addressFormat: addressFormat,
+                                                 assetDefinitionId: assetDefinitionId,
+                                                 assetId: assetId)
         }
     }
 
@@ -7694,6 +7962,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                               perPage: UInt64? = nil,
                                               addressFormat: AccountAddressFormat? = nil,
                                               assetDefinitionId: String? = nil,
+                                              assetId: String? = nil,
                                               maxItems: UInt64? = nil) -> AsyncThrowingStream<ToriiExplorerTransferSummary, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -7708,13 +7977,15 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                         let params = ToriiExplorerInstructionsParams(page: currentPage,
                                                                      perPage: currentPerPage,
                                                                      addressFormat: addressFormat,
-                                                                     kind: "Transfer")
+                                                                     kind: "Transfer",
+                                                                     assetId: assetId)
                         let response = try await getExplorerInstructions(params: params)
                         if currentPerPage == nil {
                             currentPerPage = response.pagination.perPage
                         }
                         let summaries = response.transferSummaries(matchingAccount: normalizedAccount,
                                                                    assetDefinitionId: assetDefinitionId,
+                                                                   assetId: assetId,
                                                                    relativeTo: normalizedAccount)
                         for summary in summaries {
                             continuation.yield(summary)
@@ -8375,6 +8646,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeAssetBalances(from: data)
     }
 
+    /// Returns account transaction metadata from `/v1/accounts/{account_id}/transactions`.
+    /// Use `getTransactionHistory`/`getAccountTransferHistory` for transfer details.
     public func getTransactions(accountId: String, limit: Int = 50, offset: Int = 0, assetId: String? = nil) async throws -> ToriiTxEnvelope {
         let encodedAccountId = try encodeAccountIdPath(accountId)
         var items = [
@@ -8453,35 +8726,243 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     public func getExplorerTransfers(params: ToriiExplorerInstructionsParams? = nil,
                                      matchingAccount accountId: String? = nil,
-                                     assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferRecord] {
-        let page = try await getExplorerInstructions(params: params)
-        return page.transferRecords(matchingAccount: accountId, assetDefinitionId: assetDefinitionId)
+                                     assetDefinitionId: String? = nil,
+                                     assetId: String? = nil) async throws -> [ToriiExplorerTransferRecord] {
+        var effectiveParams = params ?? ToriiExplorerInstructionsParams()
+        let kindTrimmed = effectiveParams.kind?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if kindTrimmed == nil || kindTrimmed?.isEmpty == true {
+            effectiveParams.kind = "Transfer"
+        }
+        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !assetId.isEmpty {
+            let existing = effectiveParams.assetId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if existing == nil || existing?.isEmpty == true {
+                effectiveParams.assetId = assetId
+            }
+        }
+        let page = try await getExplorerInstructions(params: effectiveParams)
+        return page.transferRecords(matchingAccount: accountId,
+                                    assetDefinitionId: assetDefinitionId,
+                                    assetId: assetId)
     }
 
     public func getExplorerTransferSummaries(params: ToriiExplorerInstructionsParams? = nil,
                                              matchingAccount accountId: String? = nil,
                                              assetDefinitionId: String? = nil,
+                                             assetId: String? = nil,
                                              relativeTo relativeAccountId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
-        let page = try await getExplorerInstructions(params: params)
+        var effectiveParams = params ?? ToriiExplorerInstructionsParams()
+        let kindTrimmed = effectiveParams.kind?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if kindTrimmed == nil || kindTrimmed?.isEmpty == true {
+            effectiveParams.kind = "Transfer"
+        }
+        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !assetId.isEmpty {
+            let existing = effectiveParams.assetId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if existing == nil || existing?.isEmpty == true {
+                effectiveParams.assetId = assetId
+            }
+        }
+        let page = try await getExplorerInstructions(params: effectiveParams)
         return page.transferSummaries(matchingAccount: accountId,
                                       assetDefinitionId: assetDefinitionId,
+                                      assetId: assetId,
                                       relativeTo: relativeAccountId)
+    }
+
+    public func getExplorerTransactionTransfers(hashHex: String,
+                                                addressFormat: AccountAddressFormat? = nil,
+                                                matchingAccount accountId: String? = nil,
+                                                assetDefinitionId: String? = nil,
+                                                assetId: String? = nil,
+                                                maxItems: UInt64? = nil) async throws -> [ToriiExplorerTransferRecord] {
+        if let maxItems, maxItems == 0 {
+            return []
+        }
+        let normalizedHash = try ToriiRequestValidation.normalizedNonEmpty(hashHex, field: "hashHex")
+        var currentPage: UInt64 = 1
+        var currentPerPage: UInt64?
+        var remaining = maxItems
+        var records: [ToriiExplorerTransferRecord] = []
+        while true {
+            let params = ToriiExplorerInstructionsParams(page: currentPage,
+                                                         perPage: currentPerPage,
+                                                         addressFormat: addressFormat,
+                                                         transactionHash: normalizedHash,
+                                                         kind: "Transfer",
+                                                         assetId: assetId)
+            let response = try await getExplorerInstructions(params: params)
+            if currentPerPage == nil {
+                currentPerPage = response.pagination.perPage
+            }
+            let pageRecords = response.transferRecords(matchingAccount: accountId,
+                                                       assetDefinitionId: assetDefinitionId,
+                                                       assetId: assetId)
+            for record in pageRecords {
+                records.append(record)
+                if let remainingValue = remaining {
+                    if remainingValue <= 1 {
+                        remaining = 0
+                        break
+                    }
+                    remaining = remainingValue - 1
+                }
+            }
+            if remaining == 0 {
+                break
+            }
+            if response.items.isEmpty || response.pagination.totalPages == 0 {
+                break
+            }
+            if currentPage >= response.pagination.totalPages {
+                break
+            }
+            currentPage += 1
+        }
+        return records
+    }
+
+    public func getExplorerTransactionTransferSummaries(hashHex: String,
+                                                        addressFormat: AccountAddressFormat? = nil,
+                                                        matchingAccount accountId: String? = nil,
+                                                        assetDefinitionId: String? = nil,
+                                                        assetId: String? = nil,
+                                                        relativeTo relativeAccountId: String? = nil,
+                                                        maxItems: UInt64? = nil) async throws -> [ToriiExplorerTransferSummary] {
+        let records = try await getExplorerTransactionTransfers(hashHex: hashHex,
+                                                                addressFormat: addressFormat,
+                                                                matchingAccount: accountId,
+                                                                assetDefinitionId: assetDefinitionId,
+                                                                assetId: assetId,
+                                                                maxItems: maxItems)
+        let relative = relativeAccountId ?? accountId
+        return records.flatMap { $0.summaries(relativeTo: relative) }
+    }
+
+    /// Stream transfer summaries for a specific transaction, emitting history first then live updates.
+    @available(iOS 15.0, macOS 12.0, *)
+    public func streamTransactionTransferSummaries(hashHex: String,
+                                                   addressFormat: AccountAddressFormat? = nil,
+                                                   matchingAccount accountId: String? = nil,
+                                                   assetDefinitionId: String? = nil,
+                                                   assetId: String? = nil,
+                                                   relativeTo relativeAccountId: String? = nil,
+                                                   lastEventId: String? = nil,
+                                                   maxItems: UInt64? = nil,
+                                                   dedupeLimit: Int = 10_000) -> AsyncThrowingStream<ToriiExplorerTransferSummary, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    if let maxItems, maxItems == 0 {
+                        continuation.finish()
+                        return
+                    }
+                    let normalizedHash = try ToriiRequestValidation.normalizedNonEmpty(hashHex, field: "hashHex")
+                    let relative = relativeAccountId ?? accountId
+                    var remaining = maxItems
+                    var deduper = TransferSummaryDeduper(limit: dedupeLimit)
+
+                    func emit(_ summary: ToriiExplorerTransferSummary) -> Bool {
+                        guard deduper.shouldYield(summary) else {
+                            return true
+                        }
+                        continuation.yield(summary)
+                        if let remainingValue = remaining {
+                            if remainingValue <= 1 {
+                                remaining = 0
+                                return false
+                            }
+                            remaining = remainingValue - 1
+                        }
+                        return true
+                    }
+
+                    let history = try await getExplorerTransactionTransferSummaries(hashHex: normalizedHash,
+                                                                                    addressFormat: addressFormat,
+                                                                                    matchingAccount: accountId,
+                                                                                    assetDefinitionId: assetDefinitionId,
+                                                                                    assetId: assetId,
+                                                                                    relativeTo: relative,
+                                                                                    maxItems: remaining)
+                    for summary in history {
+                        if Task.isCancelled {
+                            break
+                        }
+                        if !emit(summary) {
+                            continuation.finish()
+                            return
+                        }
+                    }
+
+                    if remaining == 0 {
+                        continuation.finish()
+                        return
+                    }
+
+                    for try await summary in streamExplorerTransferSummaries(lastEventId: lastEventId,
+                                                                             matchingAccount: accountId,
+                                                                             assetDefinitionId: assetDefinitionId,
+                                                                             assetId: assetId,
+                                                                             relativeTo: relative) {
+                        if Task.isCancelled {
+                            break
+                        }
+                        if summary.transactionHash != normalizedHash {
+                            continue
+                        }
+                        if !emit(summary) {
+                            continuation.finish()
+                            return
+                        }
+                    }
+
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    if Task.isCancelled {
+                        continuation.finish()
+                    } else {
+                        continuation.finish(throwing: error)
+                    }
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 
     public func getAccountTransferHistory(accountId: String,
                                           page: UInt64? = nil,
                                           perPage: UInt64? = nil,
                                           addressFormat: AccountAddressFormat? = nil,
-                                          assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
+                                          assetDefinitionId: String? = nil,
+                                          assetId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         let normalizedAccount = try ToriiRequestValidation.normalizedNonEmpty(accountId, field: "accountId")
         let params = ToriiExplorerInstructionsParams(page: page,
                                                      perPage: perPage,
                                                      addressFormat: addressFormat,
-                                                     kind: "Transfer")
+                                                     kind: "Transfer",
+                                                     assetId: assetId)
         return try await getExplorerTransferSummaries(params: params,
                                                       matchingAccount: normalizedAccount,
                                                       assetDefinitionId: assetDefinitionId,
+                                                      assetId: assetId,
                                                       relativeTo: normalizedAccount)
+    }
+
+    /// Convenience alias for transfer-rich transaction history derived from explorer instructions.
+    public func getTransactionHistory(accountId: String,
+                                      page: UInt64? = nil,
+                                      perPage: UInt64? = nil,
+                                      addressFormat: AccountAddressFormat? = nil,
+                                      assetDefinitionId: String? = nil,
+                                      assetId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
+        try await getAccountTransferHistory(accountId: accountId,
+                                            page: page,
+                                            perPage: perPage,
+                                            addressFormat: addressFormat,
+                                            assetDefinitionId: assetDefinitionId,
+                                            assetId: assetId)
     }
 
     public func listDomains(options: ToriiListOptions = ToriiListOptions()) async throws -> ToriiDomainListPage {
@@ -8603,10 +9084,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiSubscriptionActionResponse.self, from: data)
     }
 
-    public func getUaidPortfolio(uaid: String) async throws -> ToriiUaidPortfolioResponse {
+    public func getUaidPortfolio(uaid: String,
+                                 query: ToriiUaidPortfolioQuery? = nil) async throws -> ToriiUaidPortfolioResponse {
         let canonical = try canonicalizeUaidLiteral(uaid)
         let encoded = encodePathComponent(canonical)
-        let request = try makeRequest(path: "/v1/accounts/\(encoded)/portfolio")
+        let request = try makeRequest(path: "/v1/accounts/\(encoded)/portfolio",
+                                      queryItems: query?.queryItems())
         let data = try await data(for: request)
         return try decodeJSON(ToriiUaidPortfolioResponse.self, from: data)
     }
@@ -9956,12 +10439,14 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     @available(iOS 15.0, macOS 12.0, *)
     public func streamExplorerTransfers(lastEventId: String? = nil,
                                         matchingAccount accountId: String? = nil,
-                                        assetDefinitionId: String? = nil) -> AsyncThrowingStream<ToriiExplorerTransferRecord, Error> {
+                                        assetDefinitionId: String? = nil,
+                                        assetId: String? = nil) -> AsyncThrowingStream<ToriiExplorerTransferRecord, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let accountFilter = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
                     let assetFilter = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let assetIdFilter = assetId?.trimmingCharacters(in: .whitespacesAndNewlines)
                     for try await item in streamExplorerInstructions(lastEventId: lastEventId) {
                         if Task.isCancelled {
                             break
@@ -9973,6 +10458,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                             continue
                         }
                         if let assetFilter, !assetFilter.isEmpty, !details.involvesAssetDefinition(assetFilter) {
+                            continue
+                        }
+                        if let assetIdFilter, !assetIdFilter.isEmpty, !details.involvesAssetId(assetIdFilter) {
                             continue
                         }
                         continuation.yield(ToriiExplorerTransferRecord(instruction: item, details: details))
@@ -9999,12 +10487,14 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func streamExplorerTransferSummaries(lastEventId: String? = nil,
                                                 matchingAccount accountId: String? = nil,
                                                 assetDefinitionId: String? = nil,
+                                                assetId: String? = nil,
                                                 relativeTo relativeAccountId: String? = nil) -> AsyncThrowingStream<ToriiExplorerTransferSummary, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let accountFilter = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
                     let assetFilter = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let assetIdFilter = assetId?.trimmingCharacters(in: .whitespacesAndNewlines)
                     let relativeCandidate = relativeAccountId ?? accountId
                     let relativeTrimmed = relativeCandidate?.trimmingCharacters(in: .whitespacesAndNewlines)
                     let relativeAccount = (relativeTrimmed?.isEmpty ?? true) ? nil : relativeTrimmed
@@ -10019,6 +10509,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                             continue
                         }
                         if let assetFilter, !assetFilter.isEmpty, !details.involvesAssetDefinition(assetFilter) {
+                            continue
+                        }
+                        if let assetIdFilter, !assetIdFilter.isEmpty, !details.involvesAssetId(assetIdFilter) {
                             continue
                         }
                         let record = ToriiExplorerTransferRecord(instruction: item, details: details)
@@ -10050,6 +10543,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                              perPage: UInt64? = nil,
                                              addressFormat: AccountAddressFormat? = nil,
                                              assetDefinitionId: String? = nil,
+                                             assetId: String? = nil,
                                              lastEventId: String? = nil,
                                              maxItems: UInt64? = nil,
                                              dedupeLimit: Int = 10_000) -> AsyncThrowingStream<ToriiExplorerTransferSummary, Error> {
@@ -10085,6 +10579,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                                                            perPage: perPage,
                                                                            addressFormat: addressFormat,
                                                                            assetDefinitionId: assetDefinitionId,
+                                                                           assetId: assetId,
                                                                            maxItems: remaining) {
                         if Task.isCancelled {
                             break
@@ -10103,6 +10598,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                     for try await summary in streamExplorerTransferSummaries(lastEventId: lastEventId,
                                                                              matchingAccount: normalizedAccount,
                                                                              assetDefinitionId: assetDefinitionId,
+                                                                             assetId: assetId,
                                                                              relativeTo: normalizedAccount) {
                         if Task.isCancelled {
                             break
@@ -11033,7 +11529,7 @@ private struct TransferSummaryDeduper {
     }
 
     private static func makeKey(_ summary: ToriiExplorerTransferSummary) -> String {
-        "\(summary.transactionHash)|\(summary.instructionIndex)|\(summary.senderAccountId)|\(summary.receiverAccountId)|\(summary.assetDefinitionId)|\(summary.amount)"
+        "\(summary.transactionHash)|\(summary.instructionIndex)|\(summary.transferIndex)|\(summary.senderAccountId)|\(summary.receiverAccountId)|\(summary.assetDefinitionId)|\(summary.amount)"
     }
 }
 

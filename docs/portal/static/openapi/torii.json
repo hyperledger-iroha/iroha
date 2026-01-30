@@ -3728,13 +3728,22 @@
     },
     "/v1/accounts/{uaid}/portfolio": {
       "get": {
-        "description": "Fetch the asset portfolio for an account identifier.",
+        "description": "Fetch the asset portfolio for an account identifier (supports optional asset_id filtering).",
         "parameters": [
           {
             "description": "User account identifier.",
             "in": "path",
             "name": "uaid",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter portfolio positions by asset identifier.",
+            "in": "query",
+            "name": "asset_id",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -7004,7 +7013,7 @@
     },
     "/v1/nexus/public_lanes/{lane_id}/rewards/pending": {
       "get": {
-        "description": "Returns the unclaimed reward amount per asset for the requested account in the given public lane. Requires an `account` query parameter (IH58 (preferred)/sora (second-best)) and accepts an optional `upto_epoch` upper bound.",
+        "description": "Returns the unclaimed reward amount per asset for the requested account in the given public lane. Requires an `account` query parameter (IH58 (preferred)/sora (second-best)) and accepts optional `asset_id` and `upto_epoch` filters.",
         "operationId": "nexusPublicLaneRewards",
         "parameters": [
           {
@@ -7034,6 +7043,15 @@
             "description": "Account literal to evaluate pending rewards for (IH58 (preferred)/sora (second-best)).",
             "in": "query",
             "name": "account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter pending rewards by asset identifier.",
+            "in": "query",
+            "name": "asset_id",
             "required": false,
             "schema": {
               "type": "string"

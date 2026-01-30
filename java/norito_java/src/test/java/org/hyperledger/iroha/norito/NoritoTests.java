@@ -19,6 +19,7 @@ public final class NoritoTests {
 
   public static void main(String[] args) {
     testCrc64();
+    testCrc64ByteBuffer();
     testHeaderRoundtrip();
     testHeaderPaddingAccepted();
     testSchemaHashCanonicalPath();
@@ -43,6 +44,7 @@ public final class NoritoTests {
     testStructuralSchemaHash();
     testCompression();
     testCompressionProfiles();
+    testDecodeFromByteBuffer();
     testColumnarHelpers();
     testDecodeRequiresCompactLenFlag();
     testSequenceLenRejectsVarintHeader();
@@ -113,6 +115,14 @@ public final class NoritoTests {
     assert negativeLenFailed : "Expected negative payload length to throw";
   }
 
+  private static void testDecodeFromByteBuffer() {
+    TypeAdapter<Long> adapter = NoritoAdapters.uint(64);
+    byte[] encoded = NoritoCodec.encode(42L, "iroha.test.Value", adapter);
+    ByteBuffer buffer = ByteBuffer.wrap(encoded);
+    long decoded = NoritoCodec.decode(buffer, adapter, "iroha.test.Value");
+    assert decoded == 42L : "ByteBuffer decode mismatch";
+  }
+
   private static byte[] fill(int seed, int length) {
     byte[] data = new byte[length];
     for (int i = 0; i < length; i++) {
@@ -129,6 +139,12 @@ public final class NoritoTests {
   private static void testCrc64() {
     long crc = CRC64.compute("123456789".getBytes());
     assert crc == 0x995DC9BBDF1939FAL : "CRC64 mismatch";
+  }
+
+  private static void testCrc64ByteBuffer() {
+    ByteBuffer buffer = ByteBuffer.wrap("123456789".getBytes());
+    long crc = CRC64.compute(buffer);
+    assert crc == 0x995DC9BBDF1939FAL : "CRC64 mismatch for ByteBuffer";
   }
 
   private static void testSchemaHashCanonicalPath() {

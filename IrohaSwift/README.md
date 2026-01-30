@@ -249,18 +249,38 @@ if #available(iOS 15.0, macOS 12.0, *) {
 }
 ```
 
-For a one-shot transaction history helper, use `getAccountTransferHistory`:
+Transfer summaries also expose `sourceAssetId` and `destinationAssetId` when they can be
+constructed from the asset definition and account ids. For batch transfers, `transferIndex`
+tracks the entry position within the instruction payload. Convenience flags `isIncoming`,
+`isOutgoing`, and `isSelfTransfer` help with UI direction labels.
+If you need to recompute direction for another account or show counterparties, use
+`direction(relativeTo:)` and `counterpartyAccountId(relativeTo:)`. Direction helpers also accept
+`isIncoming(relativeTo:)`, `isOutgoing(relativeTo:)`, and `isSelfTransfer(relativeTo:)`.
+To resolve asset ids relative to a specific account, use `assetId(relativeTo:)` and
+`counterpartyAssetId(relativeTo:)`.
+Use `signedAmount(relativeTo:)` when you need a simple +/‑ string for UI totals.
+Summaries conform to `Identifiable`, using `transactionHash|instructionIndex|transferIndex` as the
+stable identifier.
+Use `matchingAccount`, `assetDefinitionId`, or `assetId` to filter transfer records and summaries.
+
+For a one-shot transaction history helper, use `getTransactionHistory` (alias of
+`getAccountTransferHistory`):
 
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
-    let history = try await torii.getAccountTransferHistory(accountId: "alice@wonderland",
-                                                            page: 1,
-                                                            perPage: 50)
+    let history = try await torii.getTransactionHistory(accountId: "alice@wonderland",
+                                                        page: 1,
+                                                        perPage: 50)
     for item in history {
         print(item.isIncoming ? "in" : "out", item.amount, item.assetDefinitionId)
     }
 }
 ```
+
+You can also pass `assetDefinitionId` or `assetId` to narrow results. The `assetId` filter matches
+the source asset id literal (definition + sender account) as reported by explorer transfers.
+Transaction-scoped helpers (`getExplorerTransactionTransferSummaries`,
+`streamTransactionTransferSummaries`) accept the same filters.
 
 To stream multiple pages, use `iterateAccountTransferHistory`:
 
@@ -290,6 +310,11 @@ if #available(iOS 15.0, macOS 12.0, *) {
 To fetch a single instruction payload, use `getExplorerInstructionDetail` with the transaction hash
 and instruction index.
 
+If you need transfer details for a specific transaction, call
+`getExplorerTransactionTransferSummaries(hashHex:matchingAccount:)`.
+Use `streamTransactionTransferSummaries` or `transactionTransferSummariesPublisher` to keep
+receiving live transfer updates for that transaction.
+
 To react to new blocks as they commit, subscribe to the explorer SSE streams:
 
 ```swift
@@ -306,6 +331,7 @@ Use `streamExplorerTransactions()` if you only need transaction summaries.
 Combine users can call `explorerInstructionsPublisher` / `explorerTransactionsPublisher`.
 For a UI-ready transfer feed, use `streamExplorerTransferSummaries(matchingAccount:)` or
 `explorerTransferSummariesPublisher`.
+Transfer stream helpers accept `matchingAccount`, `assetDefinitionId`, and `assetId` filters.
 If you need history plus live updates in one stream, use `streamAccountTransferHistory`.
 Combine users can call `accountTransferHistoryPublisher` for the same flow.
 

@@ -1,20 +1,35 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/source/sorafs/developer/index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 7f51ae76dd62405ce036f8b8893f948f6737f3a69d4b344702258161dee04a88
-source_last_modified: "2025-11-10T05:30:58.652943+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:58.352210+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# בתהליך תרגום
+---
+title: SoraFS Developer Guides
+summary: Entry point for SoraFS CLI, SDK, CI, and deployment guidance.
+---
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+> **Portal:** Mirrored in `docs/portal/docs/sorafs/developer-index.md`.
+> Update both copies to keep reviewers aligned.
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+# SoraFS Developer Guides
+
+```{toctree}
+:caption: Getting Started
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

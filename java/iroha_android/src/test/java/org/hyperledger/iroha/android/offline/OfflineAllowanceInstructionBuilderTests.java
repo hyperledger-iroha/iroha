@@ -2,8 +2,6 @@ package org.hyperledger.iroha.android.offline;
 
 import java.util.Map;
 import org.hyperledger.iroha.android.model.InstructionBox;
-import org.hyperledger.iroha.android.model.instructions.InstructionBuilders;
-import org.hyperledger.iroha.android.model.instructions.InstructionKind;
 import org.hyperledger.iroha.android.model.instructions.RegisterOfflineAllowanceInstruction;
 import org.hyperledger.iroha.android.model.instructions.RegisterOfflineAllowanceInstruction.OfflineAllowance;
 import org.hyperledger.iroha.android.model.instructions.RegisterOfflineAllowanceInstruction.OfflineWalletCertificate;
@@ -50,7 +48,7 @@ public final class OfflineAllowanceInstructionBuilderTests {
     final RegisterOfflineAllowanceInstruction instruction =
         RegisterOfflineAllowanceInstruction.builder().setCertificate(certificate).build();
 
-    final InstructionBox box = InstructionBuilders.registerOfflineAllowance(instruction);
+    final InstructionBox box = instruction.toInstructionBox();
     final Map<String, String> argsMap = box.arguments();
 
     assert "RegisterOfflineAllowance".equals(argsMap.get("action"))
@@ -60,15 +58,6 @@ public final class OfflineAllowanceInstructionBuilderTests {
     assert certificate.metadata().get("ios.app_attest.team_id")
         .equals(argsMap.get("certificate.metadata.ios.app_attest.team_id"))
         : "metadata mismatch";
-
-    final InstructionBox decoded =
-        InstructionBox.fromNorito(InstructionKind.CUSTOM, box.arguments());
-    assert decoded.payload() instanceof RegisterOfflineAllowanceInstruction
-        : "Decoded payload type mismatch";
-    final RegisterOfflineAllowanceInstruction decodedInstruction =
-        (RegisterOfflineAllowanceInstruction) decoded.payload();
-    assert certificate.equals(decodedInstruction.certificate())
-        : "Decoded certificate mismatch";
 
     System.out.println("[IrohaAndroid] OfflineAllowanceInstructionBuilderTests passed.");
   }

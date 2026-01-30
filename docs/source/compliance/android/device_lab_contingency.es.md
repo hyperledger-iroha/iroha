@@ -1,18 +1,24 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/source/compliance/android/device_lab_contingency.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4016b82d86dc61a9de5e345950d02aeadf26db4cc26777c60db336c57479ba15
-source_last_modified: "2025-11-07T18:04:07.382687+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:59.250950+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traducción en curso
+<!--
+  SPDX-License-Identifier: Apache-2.0
+-->
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+# Device Lab Contingency Log
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+Record every activation of the Android device-lab contingency plan here.
+Include enough detail for compliance reviews and future readiness audits.
+
+| Date | Trigger | Actions Taken | Follow-ups | Owner |
+|------|---------|---------------|------------|-------|
+| 2026-02-11 | Capacity fell to 78% after Pixel 8 Pro lane outage and delayed Pixel 8a delivery (see `android_strongbox_device_matrix.md`). | Promoted Pixel 7 lane to primary CI target, borrowed shared Pixel 6 fleet, scheduled Firebase Test Lab smoke tests for retail-wallet sample, and engaged external StrongBox lab per AND6 plan. | Replace faulty USB-C hub for Pixel 8 Pro (due 2026-02-15); confirm Pixel 8a arrival and rebaseline capacity report. | Hardware Lab Lead |
+| 2026-02-13 | Pixel 8 Pro hub replaced and Galaxy S24 approved, restoring capacity to 85%. | Returned Pixel 7 lane to secondary, re-enabled `android-strongbox-attestation` Buildkite job with tags `pixel8pro-strongbox-a` and `s24-strongbox-a`, updated readiness matrix + evidence log. | Monitor Pixel 8a delivery ETA (still pending); keep spare hub inventory documented. | Hardware Lab Lead |

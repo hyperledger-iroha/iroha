@@ -107,11 +107,28 @@ public final class NoritoHeader {
     }
   }
 
+  public void validateChecksum(ByteBuffer payload) {
+    long actual = CRC64.compute(payload);
+    if (actual != checksum) {
+      throw new IllegalArgumentException(
+          String.format("Checksum mismatch: expected 0x%016x got 0x%016x", checksum, actual));
+    }
+  }
+
+
   public static DecodeResult decode(byte[] data, byte[] expectedHash) {
-    if (data.length < HEADER_LENGTH) {
+    DecodeView view = decodeView(ByteBuffer.wrap(data), expectedHash);
+    ByteBuffer payloadView = view.payload();
+    byte[] payload = new byte[payloadView.remaining()];
+    payloadView.get(payload);
+    return new DecodeResult(view.header(), payload);
+  }
+
+  public static DecodeView decodeView(ByteBuffer data, byte[] expectedHash) {
+    ByteBuffer buffer = data.slice().order(ByteOrder.LITTLE_ENDIAN);
+    if (buffer.remaining() < HEADER_LENGTH) {
       throw new IllegalArgumentException("Insufficient data for Norito header");
     }
-    ByteBuffer buffer = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
     byte[] magic = new byte[4];
     buffer.get(magic);
     if (!Arrays.equals(magic, MAGIC)) {
@@ -147,39 +164,48 @@ public final class NoritoHeader {
     }
     int intPayloadLength = (int) payloadLength;
     int payloadOffset = HEADER_LENGTH;
-    byte[] payload;
+    int payloadLimit = buffer.limit();
+    ByteBuffer payload;
     if (compression == COMPRESSION_NONE) {
       int minEnd = payloadOffset + intPayloadLength;
-      if (minEnd > data.length) {
+      if (minEnd > payloadLimit) {
         throw new IllegalArgumentException("Length mismatch between header and payload");
       }
-      int paddingLength = data.length - minEnd;
+      int paddingLength = payloadLimit - minEnd;
       if (paddingLength > MAX_HEADER_PADDING) {
         throw new IllegalArgumentException("Trailing data after Norito payload");
       }
       if (paddingLength > 0) {
         for (int i = 0; i < paddingLength; i++) {
-          if (data[payloadOffset + i] != 0) {
+          if (buffer.get(payloadOffset + i) != 0) {
             throw new IllegalArgumentException("Non-zero Norito header padding");
           }
         }
       }
       payloadOffset += paddingLength;
       int payloadEnd = payloadOffset + intPayloadLength;
-      if (payloadEnd != data.length) {
+      if (payloadEnd != payloadLimit) {
         throw new IllegalArgumentException("Trailing data after Norito payload");
       }
-      payload = Arrays.copyOfRange(data, payloadOffset, payloadEnd);
+      payload = buffer.duplicate();
+      payload.position(payloadOffset);
+      payload.limit(payloadEnd);
+      payload = payload.slice().order(ByteOrder.LITTLE_ENDIAN);
     } else {
-      if (payloadOffset >= data.length) {
+      if (payloadOffset >= payloadLimit) {
         throw new IllegalArgumentException("Missing compressed payload bytes");
       }
-      payload = Arrays.copyOfRange(data, payloadOffset, data.length);
+      payload = buffer.duplicate();
+      payload.position(payloadOffset);
+      payload.limit(payloadLimit);
+      payload = payload.slice().order(ByteOrder.LITTLE_ENDIAN);
     }
     NoritoHeader header =
         new NoritoHeader(schemaHash, intPayloadLength, checksum, flags, compression, minor);
-    return new DecodeResult(header, payload);
+    return new DecodeView(header, payload);
   }
+
+  public record DecodeView(NoritoHeader header, ByteBuffer payload) {}
 
   public record DecodeResult(NoritoHeader header, byte[] payload) {}
 }

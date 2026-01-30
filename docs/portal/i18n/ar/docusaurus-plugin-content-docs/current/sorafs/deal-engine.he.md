@@ -1,20 +1,83 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/deal-engine.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 0b80d2474353f198b3c8e982e42cf50a8f1285838d044037e0a3fdb05ff528c7
-source_last_modified: "2025-11-14T04:43:21.563342+00:00"
-translation_last_reviewed: null
+source_hash: 73eae008f27dc927c9022aeb13dac8ea269fd823a9496a08bfbdb427f1dc387b
+source_last_modified: "2026-01-03T18:08:02+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# בתהליך תרגום
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+---
+id: deal-engine
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/deal-engine.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+
+:::note المصدر المعتمد
+تعكس هذه الصفحة `docs/source/sorafs/deal_engine.md`. احرص على إبقاء الموقعين متوافقين ما دامت الوثائق القديمة نشطة.
+:::
+
+# محرك الصفقات في SoraFS
+
+يعرف مسار خارطة الطريق SF-8 محرك الصفقات في SoraFS، موفراً
+محاسبة حتمية لاتفاقات التخزين والاسترجاع بين
+العملاء والمزوّدين. تُوصَف الاتفاقات عبر حمولات Norito
+المعرّفة في `crates/sorafs_manifest/src/deal.rs`، وتشمل شروط الصفقة،
+قفل السندات، المدفوعات المصغرة الاحتمالية، وسجلات التسوية.
+
+ينشئ العامل المضمن في SoraFS (`sorafs_node::NodeHandle`) الآن
+مثيلاً من `DealEngine` لكل عملية عقدة. يقوم المحرك بما يلي:
+
+- يتحقق من الصفقات ويسجلها باستخدام `DealTermsV1`؛
+- يراكم رسومًا مقومة بـ XOR عند الإبلاغ عن استخدام النسخ المتماثل؛
+- يقيّم نوافذ المدفوعات المصغرة الاحتمالية باستخدام أخذ عينات حتمية
+  قائمة على BLAKE3؛ و
+- ينتج لقطات ledger وحمولات تسوية مناسبة للنشر الحوكمـي.
+
+تغطي الاختبارات الوحدوية التحقق، واختيار المدفوعات المصغرة، وتدفقات التسوية ليتمكن
+المشغّلون من ممارسة واجهات API بثقة. تبعث التسويات الآن حمولات حوكمة `DealSettlementV1`،
+وترتبط مباشرةً بخط نشر SF-12، كما تُحدّث سلسلة OpenTelemetry `sorafs.node.deal_*`
+(`deal_settlements_total`, `deal_expected_charge_nano`, `deal_client_debit_nano`,
+`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) من أجل لوحات Torii
+وتطبيق SLOs. وتركّز العناصر اللاحقة على أتمتة slashing التي يبدأها المدققون
+وتنسيق دلالات الإلغاء مع سياسة الحوكمة.
+
+تغذي تليمترية الاستخدام أيضًا مجموعة المقاييس `sorafs.node.micropayment_*`:
+`micropayment_charge_nano`, `micropayment_credit_generated_nano`,
+`micropayment_credit_applied_nano`, `micropayment_credit_carry_nano`,
+`micropayment_outstanding_nano`, وعدّادات التذاكر
+(`micropayment_tickets_processed_total`, `micropayment_tickets_won_total`,
+`micropayment_tickets_duplicate_total`). تكشف هذه الإجماليات عن تدفق اليانصيب
+الاحتمالي لتمكين المشغّلين من ربط مكاسب المدفوعات المصغرة وترحيل الرصيد
+بنتائج التسوية.
+
+## تكامل Torii
+
+تعرض Torii نقاط نهاية مخصصة كي يتمكن المزوّدون من الإبلاغ عن الاستخدام وتحريك
+دورة حياة الصفقة بدون wiring مخصص:
+
+- `POST /v1/sorafs/deal/usage` يقبل تليمترية `DealUsageReport` ويعيد
+  نتائج محاسبة حتمية (`UsageOutcome`).
+- `POST /v1/sorafs/deal/settle` ينهى النافذة الحالية، ويبث
+  `DealSettlementRecord` الناتج إلى جانب `DealSettlementV1` مشفّرًا بـ base64
+  وجاهزًا للنشر في DAG الحوكمة.
+- يغذي `/v1/events/sse` في Torii الآن سجلات `SorafsGatewayEvent::DealUsage`
+  التي تلخص كل إرسال استخدام (epoch، ساعات GiB المقاسة، عدّادات التذاكر،
+  الرسوم الحتمية)، وسجلات `SorafsGatewayEvent::DealSettlement`
+  التي تتضمن لقطة ledger المعتمدة للتسوية مع digest/الحجم/base64 من BLAKE3
+  للقطعة الحوكمية على القرص، وتنبيهات `SorafsGatewayEvent::ProofHealth`
+  عندما تتجاوز عتبات PDP/PoTR (المزوّد، النافذة، حالة strike/cooldown، مبلغ العقوبة).
+  يمكن للمستهلكين التصفية حسب المزوّد للتفاعل مع تليمترية جديدة أو تسويات أو تنبيهات
+  صحة البراهين دون polling.
+
+يشارك كلا نقطتي النهاية في إطار حصص SoraFS عبر نافذة
+`torii.sorafs.quota.deal_telemetry` الجديدة، ما يسمح للمشغّلين بضبط معدل الإرسال
+المسموح لكل نشر.

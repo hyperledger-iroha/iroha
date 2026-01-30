@@ -1,15 +1,21 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/portal/docs/norito/examples/index.es.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Traducción en curso
+---
+title: Ejemplos de Norito
+description: Fragmentos de Kotodama seleccionados con recorridos del libro mayor.
+slug: /norito/examples
+---
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+Estos ejemplos reflejan los quickstarts de los SDK y los recorridos del libro mayor. Cada fragmento incluye una lista de verificación del libro mayor y enlaza a las guías de Rust, Python y JavaScript para que puedas repetir el mismo escenario de principio a fin.
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+- **[Esqueleto del entrypoint Hajimari](./hajimari-entrypoint)** — Andamiaje mínimo de contrato Kotodama con un único entrypoint público y un manejador de estado.
+- **[Registrar dominio y acuñar activos](./register-and-mint)** — Demuestra la creación de dominios con permisos, el registro de activos y la acuñación determinista.
+- **[Invocar transferencia del host desde Kotodama](./call-transfer-asset)** — Demuestra cómo un entrypoint de Kotodama puede llamar a la instrucción de host `transfer_asset` con validación de metadatos en línea.
+- **[Transferir activo entre cuentas](./transfer-asset)** — Flujo directo de transferencia de activos que refleja los quickstarts de los SDK y los recorridos del libro mayor.
+- **[Acuñar, transferir y quemar un NFT](./nft-flow)** — Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propietario, transferencias, etiquetado de metadatos y quema.

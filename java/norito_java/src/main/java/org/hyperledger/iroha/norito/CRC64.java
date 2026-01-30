@@ -3,6 +3,8 @@
 
 package org.hyperledger.iroha.norito;
 
+import java.nio.ByteBuffer;
+
 /** CRC64-XZ implementation matching Rust/Python codecs. */
 public final class CRC64 {
   private static final long POLY = 0xC96C5795D7870F42L;
@@ -20,6 +22,20 @@ public final class CRC64 {
     long crc = initial;
     for (byte b : data) {
       int index = (int) ((crc ^ (b & 0xFF)) & 0xFF);
+      crc = TABLE[index] ^ (crc >>> 8);
+    }
+    return crc ^ XOR_OUT;
+  }
+
+  public static long compute(ByteBuffer data) {
+    return compute(data, INIT);
+  }
+
+  public static long compute(ByteBuffer data, long initial) {
+    ByteBuffer view = data.slice();
+    long crc = initial;
+    while (view.hasRemaining()) {
+      int index = (int) ((crc ^ (view.get() & 0xFF)) & 0xFF);
       crc = TABLE[index] ^ (crc >>> 8);
     }
     return crc ^ XOR_OUT;

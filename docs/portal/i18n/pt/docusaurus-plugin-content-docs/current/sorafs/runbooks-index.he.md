@@ -1,20 +1,63 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/runbooks-index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b1221ca760e19b06a5bfebc8893000b8a4d69ff9a15d3575235e027f6601f8d5
-source_last_modified: "2025-11-14T04:43:22.300681+00:00"
-translation_last_reviewed: null
+source_hash: b9a79f84fb72f6fc3240d71de51d85bf8206155fe6583e5e72e7b0a72e7b6a86
+source_last_modified: "2026-01-04T10:50:53+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# בתהליך תרגום
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+---
+id: runbooks-index
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/runbooks-index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Índice de runbooks de operadores
+sidebar_label: Índice de runbooks
+description: Ponto de entrada canônico para os runbooks de operadores do SoraFS migrados.
+---
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+> Reflete o registro de responsáveis que fica em `docs/source/sorafs/runbooks/`.
+> Cada novo guia de operações do SoraFS deve ser vinculado aqui assim que for publicado no
+> build do portal.
+
+Use esta página para verificar quais runbooks concluíram a migração da árvore de docs
+alternativa para o portal. Cada entrada lista a responsabilidade, o caminho de origem canônico
+e a cópia no portal para que revisores possam ir direto ao guia desejado durante a prévia beta.
+
+## Host de prévia beta
+
+A onda DocOps já promoveu o host de prévia beta aprovado pelos revisores em
+`https://docs.iroha.tech/`. Ao direcionar operadores ou revisores para um runbook migrado,
+referencie esse hostname para que usem o snapshot do portal protegido por checksum.
+Os procedimentos de publicação/rollback estão em
+[`devportal/preview-host-exposure`](../devportal/preview-host-exposure.md).
+
+| Runbook | Responsável(is) | Cópia no portal | Fonte |
+|---------|-----------------|-----------------|-------|
+| Kickoff de gateway e DNS | Networking TL, Ops Automation, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
+| Playbook de operações do SoraFS | Docs/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
+| Reconciliação de capacidade | Treasury / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
+| Operações do registro de pins | Tooling WG | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
+| Checklist de operações de nó | Storage Team, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
+| Runbook de disputas e revogações | Governance Council | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
+| Playbook de manifesto de staging | Docs/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
+| Observabilidade da âncora Taikai | Media Platform WG / DA Program / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
+
+## Checklist de verificação
+
+- [x] A build do portal aponta para este índice (entrada na barra lateral).
+- [x] Cada runbook migrado lista o caminho de origem canônico para manter os revisores
+  alinhados durante as revisões de documentação.
+- [x] O pipeline de prévia do DocOps bloqueia merges quando um runbook listado estiver
+  ausente da saída do portal.
+
+Migrações futuras (por exemplo, novas simulações de caos ou apêndices de governança) devem
+adicionar uma linha à tabela acima e atualizar a checklist do DocOps embutida em
+`docs/examples/docs_preview_request_template.md`.

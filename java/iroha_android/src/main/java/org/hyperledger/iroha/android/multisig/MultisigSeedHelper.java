@@ -105,7 +105,7 @@ public final class MultisigSeedHelper {
       final NoritoEncoder encoder,
       final SortedMap<AccountIdParts, Long> signatories,
       final MultisigSpec spec) {
-    final TypeAdapter<SortedMap<AccountIdParts, Long>> signatoryAdapter =
+    final TypeAdapter<Map<AccountIdParts, Long>> signatoryAdapter =
         NoritoAdapters.map(ACCOUNT_ID_ADAPTER, U8_ADAPTER);
     encodeSizedField(encoder, signatoryAdapter, signatories);
     encodeSizedField(encoder, U16_ADAPTER, (long) spec.quorum());

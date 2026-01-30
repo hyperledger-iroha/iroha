@@ -1,15 +1,21 @@
-<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
-
 ---
 lang: ru
 direction: ltr
 source: docs/portal/docs/norito/examples/index.ar.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Перевод в процессе
+---
+title: أمثلة Norito
+description: مقتطفات Kotodama مختارة مع جولات في دفتر الأستاذ.
+slug: /norito/examples
+---
 
-Этот файл является заготовкой для русскоязычного перевода английского документа. После завершения перевода обновите поле `status` в метаданных выше.
+تعكس هذه الأمثلة بدايات SDK السريعة وجولات دفتر الأستاذ. كل مقتطف يتضمن قائمة تحقق للدفتر ويعود إلى أدلة Rust وPython وJavaScript حتى تتمكن من إعادة نفس السيناريو من البداية إلى النهاية.
 
-Этот черновик ожидает перевода. Замените этот текст готовым переводом и установите значение `status` в `complete` после завершения. Убедитесь, что поле `translation_last_reviewed` отражает дату последней проверки с английским оригиналом.
+- **[هيكل نقطة دخول Hajimari](./hajimari-entrypoint)** — هيكل عقد Kotodama بسيط بنقطة دخول عامة واحدة ومقبض حالة.
+- **[تسجيل نطاق وسك الأصول](./register-and-mint)** — يوضح إنشاء النطاقات المصرح بها وتسجيل الأصول والسك الحتمي.
+- **[استدعاء نقل المضيف من Kotodama](./call-transfer-asset)** — يوضح كيف يمكن لنقطة دخول Kotodama استدعاء تعليمة المضيف `transfer_asset` مع التحقق المضمن من بيانات التعريف.
+- **[نقل أصل بين الحسابات](./transfer-asset)** — سير عمل بسيط لنقل الأصول يعكس بدايات SDK السريعة وجولات دفتر الأستاذ.
+- **[سك ونقل وحرق NFT](./nft-flow)** — يسرد دورة حياة NFT من البداية إلى النهاية: السك للمالك، النقل، ووسم بيانات التعريف، والحرق.

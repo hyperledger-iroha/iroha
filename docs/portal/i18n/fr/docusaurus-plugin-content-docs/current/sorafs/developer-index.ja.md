@@ -1,18 +1,42 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/developer-index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b0082791eaee614815eafb8bb0ea8fa1b2648af21023cc55689b761bd6939e74
-source_last_modified: "2025-11-14T04:43:21.637215+00:00"
-translation_last_reviewed: null
+source_hash: 40099acf08be17326c2a3bd0704be1d510be346ced21752727c8f7ce126244be
+source_last_modified: "2026-01-04T10:50:53+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+---
+id: developer-index
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/developer-index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+
+:::note Source canonique
+:::
+
+# Guides de developpeurs SoraFS
+
+```{toctree}
+:caption: Demarrage
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

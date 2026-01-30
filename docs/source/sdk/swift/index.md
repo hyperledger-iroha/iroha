@@ -919,15 +919,36 @@ For higher-level walkthroughs, see:
   `ToriiExplorerInstructionsParams`/`ToriiExplorerTransactionsParams` filters (including
   optional `assetId` scoping). Fetch a single
   transaction with `getExplorerTransactionDetail(hashHex:)` or a single instruction with
-  `getExplorerInstructionDetail(hashHex:index:)`. For transfer history, use
-  `getExplorerTransfers`/`getExplorerTransferSummaries`, or the convenience helpers
-  `getAccountTransferHistory` and `iterateAccountTransferHistory` (iOS 15/macOS 12+) which page
-  instructions with `kind: "Transfer"` and emit UI-ready `ToriiExplorerTransferSummary` records.
+  `getExplorerInstructionDetail(hashHex:index:)`. Use
+  `getExplorerTransactionTransfers`/`getExplorerTransactionTransferSummaries` to derive transfer
+  details for a single transaction (optionally filtering by `matchingAccount`, `assetDefinitionId`,
+  or `assetId`), or `streamTransactionTransferSummaries` for history+live streaming of a single
+  transaction. For transfer history, use
+  `getExplorerTransfers`/`getExplorerTransferSummaries` (support `matchingAccount`,
+  `assetDefinitionId`, and `assetId` filters), or the convenience helpers
+  `getAccountTransferHistory` (alias: `getTransactionHistory`) and `iterateAccountTransferHistory`
+  (iOS 15/macOS 12+) which page instructions with `kind: "Transfer"` and emit UI-ready
+  `ToriiExplorerTransferSummary` records.
+  These helpers accept `assetDefinitionId` or `assetId` filters (the asset-id filter matches the
+  source asset literal in transfer payloads). Transfer summaries also expose `sourceAssetId` and
+  `destinationAssetId` convenience accessors when they can be derived from the asset definition and
+  account ids, plus `transferIndex` to track the entry position within batch transfer payloads.
+  Convenience flags `isIncoming`, `isOutgoing`, and `isSelfTransfer` assist with UI direction
+  labels. Use `direction(relativeTo:)` and `counterpartyAccountId(relativeTo:)` to recompute
+  direction or display counterparties for a different account; `isIncoming(relativeTo:)`,
+  `isOutgoing(relativeTo:)`, and `isSelfTransfer(relativeTo:)` are available for quick checks.
+  To resolve asset ids relative to a specific account, use `assetId(relativeTo:)` and
+  `counterpartyAssetId(relativeTo:)`. Use `signedAmount(relativeTo:)` when you need a +/‑ string
+  for UI totals.
+  Transfer summaries also conform to `Identifiable` with a stable
+  `transactionHash|instructionIndex|transferIndex` identifier.
   Live updates are available via `streamExplorerInstructions` and `streamExplorerTransactions`
   (SSE, iOS 15/macOS 12+). Combine callers can use
   `explorerInstructionsPublisher`/`explorerTransactionsPublisher`. Use
   `streamExplorerTransfers`/`streamExplorerTransferSummaries` when you want transfer-only SSE feeds,
-  and `explorerTransfersPublisher`/`explorerTransferSummariesPublisher` in Combine pipelines. Use
+  and `explorerTransfersPublisher`/`explorerTransferSummariesPublisher` in Combine pipelines. These
+  transfer stream helpers accept the same `matchingAccount`, `assetDefinitionId`, and `assetId`
+  filters as the history helpers. Use
   `streamAccountTransferHistory` to emit historical transfer summaries and then keep streaming live
   updates without stitching the two flows manually; Combine callers can use
   `accountTransferHistoryPublisher`.

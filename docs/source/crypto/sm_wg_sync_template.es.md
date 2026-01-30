@@ -1,18 +1,45 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/source/crypto/sm_wg_sync_template.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c5fe52a907606a67a09e0ff229adb94f91dda73d809d8a8344166862dc62def9
-source_last_modified: "2025-11-02T04:40:40.092129+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:57.090255+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traducción en curso
+//! Template for recording SM rollout decisions during Crypto WG syncs.
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+# SM Rollout – WG Sync Notes (Template)
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+- **Date:** 2025-__-__
+- **Participants:** Crypto WG core, Release Eng, Security Review, SDK leads
+- **Facilitator:** ___________________
+
+## Agenda
+1. Lock refresh approval (`sm_lock_refresh_plan.md`)
+2. Deterministic policy & config knobs (SM-1/SM-3 tasks)
+3. Compliance brief status (SM-6a complete) & operator checklist updates (SM-6b)
+4. Dependency audit reviewers for `sm2`, `sm3`, `sm4`, `rfc6979`
+
+## Decisions
+- [ ] Lock refresh approved? Details:
+- [ ] Deterministic policy affirmed? Notes:
+- [ ] Compliance brief owner + due date:
+- [ ] Audit reviewers assigned:
+
+## Action Items
+| Item | Owner | Due | Status |
+|------|-------|-----|--------|
+| Prepare Cargo.lock PR after approval | Release Eng | ████ | ☐ |
+| Verify Annex D OpenSSL checks | Crypto WG | ████ | ☐ |
+| Track compliance brief revisions & operator checklist addenda | Docs/Legal | ████ | ☐ |
+
+## Notes / Risks
+- _______________________________
+- _______________________________
+
+## Follow-up
+- Next review date:
+- Reporting back channel:

@@ -2210,6 +2210,25 @@ test("getUaidPortfolio accepts mixed-case UAID prefixes", async () => {
   assert.equal(result.uaid, canonical);
 });
 
+test("getUaidPortfolio encodes assetId filters", async () => {
+  let capturedUrl;
+  const fixture = cloneFixture(toriiFixtures.uaid.portfolio);
+  const assetId = fixture.dataspaces[0].accounts[0].assets[0].asset_id;
+  const fetchImpl = async (url) => {
+    capturedUrl = url;
+    return createResponse({
+      status: 200,
+      jsonData: fixture,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await client.getUaidPortfolio(fixture.uaid, { assetId });
+  const parsed = new URL(capturedUrl);
+  assert.equal(parsed.pathname, `/v1/accounts/${encodeURIComponent(fixture.uaid)}/portfolio`);
+  assert.equal(parsed.searchParams.get("asset_id"), assetId);
+});
+
 test("getUaidPortfolio rejects unsupported option fields", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {

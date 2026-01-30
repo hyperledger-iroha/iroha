@@ -45,6 +45,9 @@ pub(super) struct CommitResult {
 pub(super) struct CommitStageTimings {
     pub(super) qc_verify_ms: Option<u64>,
     pub(super) persist_ms: Option<u64>,
+    pub(super) kura_store_ms: Option<u64>,
+    pub(super) state_apply_ms: Option<u64>,
+    pub(super) state_commit_ms: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -239,6 +242,7 @@ pub(super) fn execute_commit_work(
                 let kura_start = Instant::now();
                 if let Err(err) = kura.store_block(committed_block_for_kura) {
                     log_stage_end("kura_store", kura_start);
+                    timings.kura_store_ms = Some(to_ms(kura_start.elapsed()));
                     timings.persist_ms = Some(to_ms(persist_start.elapsed()));
                     return (
                         CommitOutcome::KuraStoreFailed {
@@ -248,6 +252,7 @@ pub(super) fn execute_commit_work(
                         timings,
                     );
                 }
+                timings.kura_store_ms = Some(to_ms(kura_start.elapsed()));
                 log_stage_end("kura_store", kura_start);
             }
             log_stage_start("emit_pipeline_events");
@@ -280,11 +285,13 @@ pub(super) fn execute_commit_work(
             let apply_start = Instant::now();
             let state_events =
                 state_block.apply_without_execution(&committed_block, commit_topology);
+            timings.state_apply_ms = Some(to_ms(apply_start.elapsed()));
             log_stage_end("state_apply", apply_start);
             log_stage_start("state_commit");
             let state_commit_start = Instant::now();
             if let Err(err) = state_block.commit() {
                 log_stage_end("state_commit", state_commit_start);
+                timings.state_commit_ms = Some(to_ms(state_commit_start.elapsed()));
                 timings.persist_ms = Some(to_ms(persist_start.elapsed()));
                 return (
                     CommitOutcome::StateCommitFailed {
@@ -294,6 +301,7 @@ pub(super) fn execute_commit_work(
                     timings,
                 );
             }
+            timings.state_commit_ms = Some(to_ms(state_commit_start.elapsed()));
             log_stage_end("state_commit", state_commit_start);
             timings.persist_ms = Some(to_ms(persist_start.elapsed()));
             (
@@ -785,18 +793,38 @@ impl Actor {
                 self.telemetry
                     .observe_commit_stage_ms(crate::telemetry::CommitStage::QcVerify, ms);
             }
+            if let Some(ms) = timings.kura_store_ms {
+                self.telemetry
+                    .observe_commit_stage_ms(crate::telemetry::CommitStage::KuraStore, ms);
+            }
+            if let Some(ms) = timings.state_apply_ms {
+                self.telemetry
+                    .observe_commit_stage_ms(crate::telemetry::CommitStage::StateApply, ms);
+            }
+            if let Some(ms) = timings.state_commit_ms {
+                self.telemetry
+                    .observe_commit_stage_ms(crate::telemetry::CommitStage::StateCommit, ms);
+            }
             if let Some(ms) = timings.persist_ms {
                 self.telemetry
                     .observe_commit_stage_ms(crate::telemetry::CommitStage::Persist, ms);
             }
         }
-        if timings.qc_verify_ms.is_some() || timings.persist_ms.is_some() {
+        if timings.qc_verify_ms.is_some()
+            || timings.persist_ms.is_some()
+            || timings.kura_store_ms.is_some()
+            || timings.state_apply_ms.is_some()
+            || timings.state_commit_ms.is_some()
+        {
             debug!(
                 height = pending_height,
                 view = pending_view,
                 block = %block_hash,
                 qc_verify_ms = ?timings.qc_verify_ms,
-                kura_persist_ms = ?timings.persist_ms,
+                kura_store_ms = ?timings.kura_store_ms,
+                state_apply_ms = ?timings.state_apply_ms,
+                state_commit_ms = ?timings.state_commit_ms,
+                persist_ms = ?timings.persist_ms,
                 "commit stage timings"
             );
         }
@@ -5386,6 +5414,9 @@ mod tests {
         };
         assert!(timings.qc_verify_ms.is_some());
         assert!(timings.persist_ms.is_some());
+        assert!(timings.kura_store_ms.is_some());
+        assert!(timings.state_apply_ms.is_some());
+        assert!(timings.state_commit_ms.is_some());
         assert!(
             pipeline_events.is_empty(),
             "pipeline events should be emitted early"
@@ -5590,6 +5621,9 @@ mod tests {
         };
         assert!(matches!(error, crate::kura::Error::IO(_, _)));
         assert!(timings.persist_ms.is_some());
+        assert!(timings.kura_store_ms.is_some());
+        assert!(timings.state_apply_ms.is_none());
+        assert!(timings.state_commit_ms.is_none());
         assert_eq!(state.view().height(), 0);
         assert_eq!(kura.blocks_count(), 0);
     }
@@ -5657,6 +5691,9 @@ mod tests {
             .expect("commit result");
         assert!(result.timings.qc_verify_ms.is_some());
         assert!(result.timings.persist_ms.is_some());
+        assert!(result.timings.kura_store_ms.is_none());
+        assert!(result.timings.state_apply_ms.is_some());
+        assert!(result.timings.state_commit_ms.is_some());
         wake_rx
             .recv_timeout(COMMIT_WORKER_TIMEOUT)
             .expect("wake signal");
@@ -5826,6 +5863,9 @@ mod tests {
             .expect("commit result");
         assert!(result.timings.qc_verify_ms.is_some());
         assert!(result.timings.persist_ms.is_some());
+        assert!(result.timings.kura_store_ms.is_none());
+        assert!(result.timings.state_apply_ms.is_some());
+        assert!(result.timings.state_commit_ms.is_some());
 
         assert!(wake_rx.try_recv().is_ok(), "prefilled wake should remain");
         assert!(matches!(wake_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));

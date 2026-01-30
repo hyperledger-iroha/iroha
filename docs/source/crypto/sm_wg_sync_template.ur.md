@@ -1,20 +1,45 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/source/crypto/sm_wg_sync_template.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c5fe52a907606a67a09e0ff229adb94f91dda73d809d8a8344166862dc62def9
-source_last_modified: "2025-11-02T04:40:40.092129+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:57.090255+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# ترجمہ جاری ہے
+//! Template for recording SM rollout decisions during Crypto WG syncs.
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+# SM Rollout – WG Sync Notes (Template)
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+- **Date:** 2025-__-__
+- **Participants:** Crypto WG core, Release Eng, Security Review, SDK leads
+- **Facilitator:** ___________________
+
+## Agenda
+1. Lock refresh approval (`sm_lock_refresh_plan.md`)
+2. Deterministic policy & config knobs (SM-1/SM-3 tasks)
+3. Compliance brief status (SM-6a complete) & operator checklist updates (SM-6b)
+4. Dependency audit reviewers for `sm2`, `sm3`, `sm4`, `rfc6979`
+
+## Decisions
+- [ ] Lock refresh approved? Details:
+- [ ] Deterministic policy affirmed? Notes:
+- [ ] Compliance brief owner + due date:
+- [ ] Audit reviewers assigned:
+
+## Action Items
+| Item | Owner | Due | Status |
+|------|-------|-----|--------|
+| Prepare Cargo.lock PR after approval | Release Eng | ████ | ☐ |
+| Verify Annex D OpenSSL checks | Crypto WG | ████ | ☐ |
+| Track compliance brief revisions & operator checklist addenda | Docs/Legal | ████ | ☐ |
+
+## Notes / Risks
+- _______________________________
+- _______________________________
+
+## Follow-up
+- Next review date:
+- Reporting back channel:

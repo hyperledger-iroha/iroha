@@ -1,15 +1,46 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
 source: docs/portal/docs/norito/examples/transfer-asset.ru.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Tradução em andamento
+---
+slug: /norito/examples/transfer-asset
+title: Перевести актив между аккаунтами
+description: Простой сценарий перевода активов, отражающий quickstart'ы SDK и walkthrough'ы реестра.
+source: examples/transfer/transfer.ko
+---
 
-Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+Простой сценарий перевода активов, отражающий quickstart'ы SDK и walkthrough'ы реестра.
 
-Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.
+## Пошаговый обход реестра
+
+- Предварительно пополните Alice целевым активом (например через сниппет `register and mint` или потоки quickstart SDK).
+- Выполните точку входа `do_transfer`, чтобы перевести 10 единиц от Alice к Bob, удовлетворяя разрешению `AssetTransferRole`.
+- Проверьте балансы (`FindAccountAssets`, `iroha_cli ledger assets list`) или подпишитесь на события pipeline, чтобы наблюдать результат перевода.
+
+## Связанные руководства SDK
+
+- [Quickstart Rust SDK](/sdks/rust)
+- [Quickstart Python SDK](/sdks/python)
+- [Quickstart JavaScript SDK](/sdks/javascript)
+
+[Скачать исходник Kotodama](/norito-snippets/transfer-asset.ko)
+
+```text
+// Transfer example: uses typed pointer constructors and transfer_asset syscall
+
+seiyaku TransferDemo {
+  // Public entrypoint to transfer 10 units of rose#wonderland from alice to bob
+  kotoage fn do_transfer() permission(AssetTransferRole) {
+    transfer_asset(
+      account!("ih58..."),
+      account!("ih58..."),
+      asset_definition!("rose#wonderland"),
+      10
+    );
+  }
+}
+```

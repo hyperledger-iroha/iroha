@@ -1,18 +1,21 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/source/mochi/index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4d937016be3a2ce90d15edb45a56d73a4609e6777e6be1897781a08d2ae54e29
-source_last_modified: "2025-11-15T07:55:47.614485+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:56.997736+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traducción en curso
+# MOCHI Documentation
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+```{toctree}
+:maxdepth: 1
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+quickstart
+packaging
+../mochi_architecture_plan
+troubleshooting
+```

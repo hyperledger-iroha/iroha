@@ -105,7 +105,7 @@ public final class OfflineToriiClientTests {
         .contains("limit=5") : "limit query missing";
     final String query = executor.lastRequest.uri().getQuery();
     assert query.contains("offset=10") : "offset query missing";
-    assert query.contains("asset_id=usd%23%23alice@wonderland") : "asset_id missing";
+    assert query.contains("asset_id=usd##alice@wonderland") : "asset_id missing";
     assert query.contains("certificate_expires_before_ms=1000")
         : "certificate_expires_before_ms missing";
     assert query.contains("certificate_expires_after_ms=500")
@@ -358,7 +358,14 @@ public final class OfflineToriiClientTests {
   }
 
   private static void registerAllowancePostsCertificate() {
-    final StubExecutor executor = new StubExecutor(200, "{}");
+    final StubExecutor executor =
+        new StubExecutor(
+            200,
+            """
+            {
+              "certificate_id_hex": "deadbeef"
+            }
+            """);
     final OfflineToriiClient client =
         OfflineToriiClient.builder()
             .executor(executor)

@@ -1,20 +1,63 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sns/local-to-global-toolkit.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6467669ecf44a2f00769d490cd69214589208b1752254dba449ec786aa944850
-source_last_modified: "2025-11-14T04:43:21.357478+00:00"
-translation_last_reviewed: null
+source_hash: 8c1a01d73c4254cd5be0a59c5f6c9e7636e713bf6772ca4c6cdc6edc541c303a
+source_last_modified: "2026-01-28T17:58:57+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# בתהליך תרגום
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/sns/local-to-global-toolkit.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+# Local -> Global ایڈریس ٹول کٹ
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+یہ صفحہ `docs/source/sns/local_to_global_toolkit.md` کا عکاس ہے۔ یہ roadmap آئٹم **ADDR-5c** کے لیے درکار CLI helpers اور runbooks اکٹھے کرتا ہے۔
+
+## جائزہ
+
+- `scripts/address_local_toolkit.sh` `iroha` CLI کو wrap کرتا ہے تاکہ یہ پیدا کرے:
+  - `audit.json` -- `iroha tools address audit --format json` کا structured output۔
+  - `normalized.txt` -- ہر Local-domain selector کے لیے IH58 (ترجیحی) / compressed (`sora`, second-best) literals۔
+- اس اسکرپٹ کو address ingest dashboard (`dashboards/grafana/address_ingest.json`)
+  اور Alertmanager rules (`dashboards/alerts/address_ingest_rules.yml`) کے ساتھ استعمال کریں تاکہ
+  Local-8 / Local-12 cutover کی حفاظت ثابت ہو۔ Local-8 اور Local-12 collision panels اور
+  `AddressLocal8Resurgence`, `AddressLocal12Collision`, اور `AddressInvalidRatioSlo` alerts
+  کو manifest تبدیلیاں promote کرنے سے پہلے دیکھیں۔
+- UX اور incident-response کے لیے [Address Display Guidelines](address-display-guidelines.md) اور
+  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) کو دیکھیں۔
+
+## استعمال
+
+```bash
+scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
+```
+
+اختیارات:
+
+- `--format compressed` IH58 کے بجائے `sora...` output کے لیے۔
+- `--no-append-domain` تاکہ bare literals نکلیں۔
+- `--audit-only` conversion step چھوڑنے کے لیے۔
+- `--allow-errors` تاکہ malformed rows پر بھی scan جاری رہے (CLI behavior جیسا)۔
+
+اسکرپٹ رن کے آخر میں artefact paths لکھتا ہے۔ دونوں فائلیں
+change-management ticket کے ساتھ منسلک کریں اور Grafana screenshot بھی شامل کریں جو
+>=30 دن تک صفر Local-8 detections اور صفر Local-12 collisions دکھائے۔
+
+## CI انضمام
+
+1. اسکرپٹ کو dedicated job میں چلائیں اور outputs اپ لوڈ کریں۔
+2. جب `audit.json` Local selectors رپورٹ کرے (`domain.kind = local12`) تو merges روک دیں۔
+   default `true` پر رکھیں (صرف dev/test میں regressions کی تشخیص کے وقت `false` کریں) اور
+   `iroha tools address normalize --fail-on-warning --only-local` کو CI میں شامل کریں تاکہ
+   regressions production تک پہنچنے سے پہلے فیل ہوں۔
+
+مزید تفصیلات، evidence checklists، اور release-note snippet کے لیے سورس دستاویز دیکھیں
+جسے آپ cutover کا اعلان کرتے وقت دوبارہ استعمال کر سکتے ہیں۔

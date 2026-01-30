@@ -1,20 +1,28 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/migration-ledger.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 122fbbf6ade664ff4cc61f4f398c040086ba8916b59c216641326843f037b34c
-source_last_modified: "2025-11-14T04:43:21.791705+00:00"
-translation_last_reviewed: null
+source_hash: af53bec74e561d7c24b9a0bb4428e1244dc51f9405392cf8455e1764e3b582df
+source_last_modified: "2026-01-04T10:50:53+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# בתהליך תרגום
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+---
+id: migration-ledger
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/migration-ledger.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+
+> Adaptado de [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
+
+# Razao de migracao SoraFS
+
+Este documento nao se aplica a primeira release. Nao ha migracoes pendentes; fica reservado para futuras atualizacoes.

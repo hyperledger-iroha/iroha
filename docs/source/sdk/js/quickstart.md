@@ -464,7 +464,8 @@ version, TTL, and optional digest under `integrity_metadata.provisioned`.
 
 To top up an offline allowance, issue a certificate and register it on-ledger.
 `topUpOfflineAllowance` performs both steps in one call and returns the issued
-certificate plus registration response.
+certificate plus registration response. There is no dedicated top-up endpoint;
+the helper simply chains the issue + register calls.
 
 ```js
 const topUp = await torii.topUpOfflineAllowance({

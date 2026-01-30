@@ -24,7 +24,7 @@ Objectives:
 | Sample | Capabilities | Dependencies | Notes |
 |--------|--------------|--------------|-------|
 | **Operator Console** | Governance transaction builder, StrongBox signing, Torii `/v1/pipeline` retries, telemetry dashboards (AND7 hooks) | AND2 attestation harness, AND4 mock Torii harness, `docs/source/android_support_playbook.md` for ops alignment | Target audience: validator/operators. Must expose provenance hashes, pending queue inspector, and attestation upload workflow. Scaffold lives at `examples/android/operator-console`. |
-| **Retail Wallet** | Offline signing envelope creation, device-to-device handoff, Norito instruction templates (transfer/mint), recovery + rotation playbooks | AND2 fallback derivation, `TransactionBuilder.encodeAndSignEnvelopeWithAttestation`, Norito fixture regeneration SLA | Demonstrates deterministic offline flows and queue reconciliation when connectivity returns. Ships with mocked ledger + CLI to replay envelopes. Scaffold lives at `examples/android/retail-wallet`. |
+| **Retail Wallet** | Offline signing envelope creation, device-to-device handoff, wire-framed instruction payloads (transfer/mint), recovery + rotation playbooks | AND2 fallback derivation, `TransactionBuilder.encodeAndSignEnvelopeWithAttestation`, Norito fixture regeneration SLA | Demonstrates deterministic offline flows and queue reconciliation when connectivity returns. Ships with mocked ledger + CLI to replay envelopes. Scaffold lives at `examples/android/retail-wallet`. |
 
 Implementation notes:
 

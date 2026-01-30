@@ -133,7 +133,8 @@ Notes:
 - Signatory/quorum syscalls update the multisig spec stored in account metadata key `multisig/spec`.
   The public key is mapped to an `AccountId` in the same domain with weight 1; the signatory
   account must exist and the resulting spec must remain acyclic with quorum reachable.
-- These syscalls update multisig roles and metadata only; they do not rekey the account controller.
+- These syscalls update multisig roles and metadata and rekey the account controller to the
+  canonical multisig id derived from the spec (signatories must be single-key accounts).
 
 Assets (FT)
 - 0x20 REGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_reg_asset

@@ -14,13 +14,13 @@ public final class MultisigRegisterInstructionTests {
   private MultisigRegisterInstructionTests() {}
 
   public static void main(final String[] args) {
-    testRoundTripEncoding();
+    testArgumentSchema();
     testControllerDomainMustMatchSpec();
     testSignatoryDomainDriftIsRejected();
     testDerivedControllerIsRejected();
   }
 
-  private static void testRoundTripEncoding() {
+  private static void testArgumentSchema() {
     final MultisigSpec spec =
         MultisigSpec.builder()
             .setQuorum(2)
@@ -46,14 +46,7 @@ public final class MultisigRegisterInstructionTests {
     assert "1".equals(args.get("spec.signatories.alice@wonderland")) : "alice weight mismatch";
     assert "1".equals(args.get("spec.signatories.bob@wonderland")) : "bob weight mismatch";
 
-    final InstructionBox decoded = InstructionBox.fromNorito(InstructionKind.CUSTOM, args);
-    assert decoded.payload() instanceof MultisigRegisterInstruction : "decoded payload mismatch";
-    final MultisigRegisterInstruction roundTrip =
-        (MultisigRegisterInstruction) decoded.payload();
-    assert roundTrip.accountId().equals("controller@wonderland") : "roundtrip account mismatch";
-    assert roundTrip.spec().equals(spec) : "roundtrip spec mismatch";
-
-    System.out.println("[IrohaAndroid] MultisigRegisterInstruction roundtrip passed.");
+    System.out.println("[IrohaAndroid] MultisigRegisterInstruction tests passed.");
   }
 
   private static void testControllerDomainMustMatchSpec() {

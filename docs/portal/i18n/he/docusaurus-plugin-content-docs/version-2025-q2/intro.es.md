@@ -1,18 +1,67 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/version-2025-q2/intro.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b46ac88f830de9b8072ed35af419b249ba1488a5672a24e2a59cd4ae275a55ed
-source_last_modified: "2025-11-04T12:24:28.192634+00:00"
-translation_last_reviewed: null
+source_hash: 11f605c3f246eab1533b21694a4be9c9a50732cd5129c0f5cc0723e0d4ae23d7
+source_last_modified: "2026-01-30T17:50:55+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traducción en curso
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/intro.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 9f775ae297c910da91c6ce97e97ee36fb87f60218fcfb97639ace6eba39f2252
+source_last_modified: "2026-01-03T18:07:57+00:00"
+translation_last_reviewed: 2026-01-30
+---
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+# Welcome to the SORA Nexus Developer Portal
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+The SORA Nexus developer portal bundles interactive documentation, SDK
+tutorials, and API references for Nexus operators and Hyperledger Iroha
+contributors. It complements the main docs site by surfacing hands-on guides
+and generated specs directly from this repository. The landing page now carries
+themed Norito/SoraFS entry points, signed OpenAPI snapshots, and a dedicated
+Norito Streaming reference so contributors can find the streaming control-plane
+contract without digging through the root spec.
+
+## What you can do here
+
+- **Learn Norito** – start with the overview and quickstart to understand the
+  serialization model and bytecode tooling.
+- **Bootstrap SDKs** – follow quickstarts for JavaScript and Rust today; Python,
+  Swift, and Android guides will join them as recipes are migrated.
+- **Browse API references** – the Torii OpenAPI page renders the latest REST
+  specification, and configuration tables link back to the canonical Markdown
+  sources.
+- **Prepare deployments** – operational runbooks (telemetry, settlement, Nexus
+  overlays) are being ported from `docs/source/` and will land in this site as
+  the migration progresses.
+
+## Current status
+
+- ✅ Themed Docusaurus v3 landing with refreshed typography, gradient-driven
+  hero/cards, and resource tiles that include the Norito Streaming summary.
+- ✅ Torii OpenAPI plugin wired to `npm run sync-openapi`, with signed snapshot
+  checks and CSP guards enforced by `buildSecurityHeaders`.
+- ✅ Preview and probe coverage run in CI (`docs-portal-preview.yml` +
+  `scripts/portal-probe.mjs`), now gating the streaming doc, SoraFS quickstarts,
+  and the reference checklists before artifacts are published.
+- ✅ Norito, SoraFS, and SDK quickstarts plus reference sections are live in the
+  sidebar; new imports from `docs/source/` (streaming, orchestration, runbooks)
+  land here as they are authored.
+
+## Getting involved
+
+- See `docs/portal/README.md` for local development commands (`npm install`,
+  `npm run start`, `npm run build`).
+- Content migration tasks are tracked alongside the `DOCS-*` roadmap items.
+  Contributions are welcome—port sections from `docs/source/` and add the page
+  to the sidebar.
+- If you add a generated artifact (specs, config tables), document the build
+  command so future contributors can refresh it easily.

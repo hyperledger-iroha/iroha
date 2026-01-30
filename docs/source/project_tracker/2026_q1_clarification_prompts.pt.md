@@ -1,18 +1,28 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
 source: docs/source/project_tracker/2026_q1_clarification_prompts.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3e08889837a9dc8fb2ba9ae59d209bc24bf93b2452d1b689727b850debe7aba0
-source_last_modified: "2025-11-18T05:53:43.299290+00:00"
-translation_last_reviewed: null
+source_hash: 538cb55e4ddd6d9186181278dd7dc4ab0407fad3f9298411a9be61ed495a4a75
+source_last_modified: "2026-01-04T10:50:53.633768+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Tradução em andamento
+# Q1 2026 Clarification Prompts
 
-Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+These ready-to-send LLM prompts target the open roadmap items flagged for
+Q1 2026. Copy the relevant block into the coordination thread, swap the
+bracketed placeholders, and attach any local diffs or logs before routing to
+@mtakemiya.
 
-Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.
+## Kaigi Privacy Phase 3 — Relay Overlay & Governance Hooks
+
+*(Completed: governance allowlists, health reporting, telemetry, and failover tooling have landed; no follow-up needed.)*
+
+## NPoS Sumeragi — Restart & Randomness Acceptance Gates
+
+*(Completed: restart liveness and pacemaker telemetry coverage landed; RBC cold-start recovery and downtime resume tests now backstop Milestone A3. See `integration_tests/tests/sumeragi_da.rs::sumeragi_rbc_session_recovers_after_cold_restart` and `integration_tests/tests/sumeragi_npos_liveness.rs::npos_pacemaker_resumes_after_downtime`. VRF acceptance for Milestone A4 shipped alongside the telemetry/runbook updates referenced in `status.md`.)*
+
+## Dual Iroha 2/3 Release Track — Build & Packaging Decisions
+

@@ -51,7 +51,7 @@ const IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS: i64 = 1_000;
 const IZANAMI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT: i64 = 8;
 const IZANAMI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: i64 = 8;
 const IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: i64 = 128;
-const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 2;
+const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 1;
 const IZANAMI_FUTURE_HEIGHT_WINDOW: i64 = 2;
 const IZANAMI_FUTURE_VIEW_WINDOW: i64 = 2;
 const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 1_500;
@@ -131,8 +131,9 @@ fn derive_npos_timing(config: &ChaosConfig) -> NposTiming {
     let propose_ms = clamp_nonzero_ms(duration_ms(timeouts.propose));
     let prevote_ms = clamp_nonzero_ms(duration_ms(timeouts.prevote));
     let precommit_ms = clamp_nonzero_ms(duration_ms(timeouts.precommit));
-    let commit_timeout_ms = clamp_nonzero_ms(duration_ms(timeouts.commit));
-    let da_ms = clamp_nonzero_ms(duration_ms(timeouts.da));
+    // Keep commit/DA windows at least as large as the target commit time for DA stability.
+    let commit_timeout_ms = clamp_nonzero_ms(duration_ms(timeouts.commit).max(commit_time_ms));
+    let da_ms = clamp_nonzero_ms(duration_ms(timeouts.da).max(commit_time_ms));
     let aggregator_ms = clamp_nonzero_ms(duration_ms(timeouts.aggregator));
     NposTiming {
         block_ms,
@@ -670,8 +671,17 @@ impl IzanamiRunner {
                 let peer = peer.clone();
                 let metrics = Arc::clone(&metrics);
                 let submission_counter = Arc::clone(&submission_counter);
+                let workload = Arc::clone(&workload);
                 submissions.spawn(async move {
-                    submit_plan(&peer, &plan, permit, &metrics, &submission_counter).await;
+                    submit_plan(
+                        &peer,
+                        plan,
+                        permit,
+                        &metrics,
+                        &submission_counter,
+                        &workload,
+                    )
+                    .await;
                 });
             }
             while let Some(result) = submissions.join_next().await {
@@ -816,10 +826,11 @@ fn submission_metadata(counter: &AtomicU64) -> Metadata {
 
 async fn submit_plan(
     peer: &NetworkPeer,
-    plan: &TransactionPlan,
+    plan: TransactionPlan,
     _permit: OwnedSemaphorePermit,
     metrics: &Arc<Metrics>,
     submission_counter: &Arc<AtomicU64>,
+    workload: &Arc<WorkloadEngine>,
 ) {
     let peer = peer.clone();
     let signer = plan.signer.clone();
@@ -828,8 +839,9 @@ async fn submit_plan(
     let expect_success = plan.expect_success;
     let metrics = Arc::clone(metrics);
     let submission_counter = Arc::clone(submission_counter);
+    let workload = Arc::clone(workload);
 
-    run_submission(plan_label, expect_success, metrics, move || {
+    let succeeded = run_submission(plan_label, expect_success, metrics, move || {
         let client = peer.client_for(&signer.id, signer.key_pair.private_key().clone());
         let metadata = submission_metadata(&submission_counter);
         client
@@ -837,6 +849,7 @@ async fn submit_plan(
             .map(|_| ())
     })
     .await;
+    workload.record_result(&plan, succeeded).await;
 }
 
 async fn run_submission<F>(
@@ -844,7 +857,8 @@ async fn run_submission<F>(
     expect_success: bool,
     metrics: Arc<Metrics>,
     blocking: F,
-) where
+) -> bool
+where
     F: FnOnce() -> Result<()> + Send + 'static,
 {
     let result = match spawn_blocking(blocking).await {
@@ -873,6 +887,7 @@ async fn run_submission<F>(
             "plan submission failed"
         );
     }
+    succeeded
 }
 
 #[derive(Default)]
@@ -1215,8 +1230,10 @@ mod tests {
         let timing = derive_npos_timing(&config);
         let expected =
             SumeragiNposTimeouts::from_block_time(Duration::from_millis(timing.block_ms));
-        assert_eq!(timing.commit_timeout_ms, duration_ms(expected.commit));
-        assert_ne!(timing.commit_timeout_ms, timing.commit_time_ms);
+        let expected_commit = duration_ms(expected.commit).max(timing.commit_time_ms);
+        let expected_da = duration_ms(expected.da).max(timing.commit_time_ms);
+        assert_eq!(timing.commit_timeout_ms, expected_commit);
+        assert_eq!(timing.da_ms, expected_da);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1305,7 +1322,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_submission_records_success() {
         let metrics = Arc::new(Metrics::default());
-        run_submission("success", true, Arc::clone(&metrics), || Ok(())).await;
+        let succeeded = run_submission("success", true, Arc::clone(&metrics), || Ok(())).await;
+        assert!(succeeded);
 
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.successes, 1);
@@ -1317,10 +1335,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_submission_records_failure() {
         let metrics = Arc::new(Metrics::default());
-        run_submission("failure", true, Arc::clone(&metrics), || {
+        let succeeded = run_submission("failure", true, Arc::clone(&metrics), || {
             Err(eyre!("submission failed"))
         })
         .await;
+        assert!(!succeeded);
 
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.successes, 0);
@@ -1332,10 +1351,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_submission_records_expected_failure() {
         let metrics = Arc::new(Metrics::default());
-        run_submission("expected_failure", false, Arc::clone(&metrics), || {
+        let succeeded = run_submission("expected_failure", false, Arc::clone(&metrics), || {
             Err(eyre!("submission failed"))
         })
         .await;
+        assert!(!succeeded);
 
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.successes, 0);
@@ -1347,7 +1367,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_submission_records_unexpected_success() {
         let metrics = Arc::new(Metrics::default());
-        run_submission("unexpected_success", false, Arc::clone(&metrics), || Ok(())).await;
+        let succeeded =
+            run_submission("unexpected_success", false, Arc::clone(&metrics), || Ok(())).await;
+        assert!(succeeded);
 
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.successes, 0);

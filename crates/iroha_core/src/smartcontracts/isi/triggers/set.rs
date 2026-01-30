@@ -725,6 +725,44 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         self.data_triggers.apply();
     }
 
+    /// Replace occurrences of `old` with `new` in trigger authorities and filters.
+    pub fn replace_account_id(&mut self, old: &AccountId, new: &AccountId) {
+        if old == new {
+            return;
+        }
+        let trigger_ids: Vec<_> = self.ids.iter().map(|(id, _)| id.clone()).collect();
+        for trigger_id in trigger_ids {
+            let Some(event_type) = self.ids.get(&trigger_id).copied() else {
+                continue;
+            };
+            let updated = match event_type {
+                TriggeringEventType::Data => self
+                    .data_triggers
+                    .get_mut(&trigger_id)
+                    .map(|action| replace_trigger_authority(action, old, new)),
+                TriggeringEventType::Pipeline => self
+                    .pipeline_triggers
+                    .get_mut(&trigger_id)
+                    .map(|action| replace_trigger_authority(action, old, new)),
+                TriggeringEventType::Time => self
+                    .time_triggers
+                    .get_mut(&trigger_id)
+                    .map(|action| replace_trigger_authority(action, old, new)),
+                TriggeringEventType::ExecuteTrigger => self
+                    .by_call_triggers
+                    .get_mut(&trigger_id)
+                    .map(|action| replace_by_call_authority(action, old, new)),
+            };
+            if updated.is_none() {
+                warn!(
+                    trigger_id = %trigger_id,
+                    ?event_type,
+                    "`Set` ids referenced a missing trigger while rekeying"
+                );
+            }
+        }
+    }
+
     /// Add trigger with [`DataEventFilter`]
     ///
     /// Return `false` if a trigger with given id already exists
@@ -1052,6 +1090,36 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
     }
 }
 
+fn replace_trigger_authority<F>(
+    action: &mut LoadedAction<F>,
+    old: &AccountId,
+    new: &AccountId,
+) -> bool {
+    if action.authority == *old {
+        action.authority = new.clone();
+        true
+    } else {
+        false
+    }
+}
+
+fn replace_by_call_authority(
+    action: &mut LoadedAction<ExecuteTriggerEventFilter>,
+    old: &AccountId,
+    new: &AccountId,
+) -> bool {
+    let mut updated = replace_trigger_authority(action, old, new);
+    let update_filter = match action.filter.authority() {
+        Some(authority) => authority == old,
+        None => action.authority == *new,
+    };
+    if update_filter {
+        action.filter = action.filter.clone().under_authority(new.clone());
+        updated = true;
+    }
+    updated
+}
+
 /// Same as [`Executable`], but instead of
 /// [`Ivm`](iroha_data_model::transaction::Executable::Ivm) contains hash of the IVM blob
 /// Hash of the bytecode used by the trigger
@@ -1128,7 +1196,9 @@ impl json::JsonDeserialize for ExecutableRef {
 mod tests {
     use core::time::Duration;
 
+    use iroha_crypto::KeyPair;
     use iroha_data_model::{
+        events::execute_trigger::ExecuteTriggerEventFilter,
         metadata::Metadata,
         prelude::{
             AccountId, Executable, ExecutionTime, InstructionBox, Level, Log, TimeEvent,
@@ -1210,6 +1280,65 @@ mod tests {
             norito::to_bytes(&dto).expect("serialize ExecutableRefDto::Instructions variant");
         let decoded: ExecutableRefDto = norito::decode_from_bytes(&bytes).expect("decode dto");
         assert_eq!(decoded, dto);
+    }
+
+    #[test]
+    fn replace_account_id_updates_trigger_authority_and_filter() {
+        let set = Set::default();
+        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let old = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+        let new = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+
+        let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
+        let executable = Executable::Instructions(ConstVec::from(vec![instruction.clone()]));
+        let time_trigger_id: TriggerId = "time_trigger_rekey".parse().expect("valid id");
+        let call_trigger_id: TriggerId = "call_trigger_rekey".parse().expect("valid id");
+
+        let time_action = SpecializedAction::new(
+            executable.clone(),
+            Repeats::Exactly(1),
+            old.clone(),
+            TimeEventFilter(ExecutionTime::PreCommit),
+        );
+        let call_action = SpecializedAction::new(
+            executable,
+            Repeats::Exactly(1),
+            old.clone(),
+            ExecuteTriggerEventFilter::new(),
+        );
+
+        let mut block = set.block();
+        let mut tx = block.transaction();
+        tx.add_time_trigger(SpecializedTrigger::new(
+            time_trigger_id.clone(),
+            time_action,
+        ))
+        .expect("add time trigger");
+        tx.add_by_call_trigger(SpecializedTrigger::new(
+            call_trigger_id.clone(),
+            call_action,
+        ))
+        .expect("add call trigger");
+        tx.replace_account_id(&old, &new);
+        tx.apply();
+        block.commit();
+
+        let view = set.view();
+        let time_action = view
+            .time_triggers()
+            .get(&time_trigger_id)
+            .expect("time trigger present");
+        assert_eq!(time_action.authority, new);
+        let call_action = view
+            .by_call_triggers()
+            .get(&call_trigger_id)
+            .expect("call trigger present");
+        assert_eq!(call_action.authority, new);
+        assert_eq!(
+            call_action.filter.authority(),
+            Some(&new),
+            "by-call filter authority should be updated"
+        );
     }
 
     #[test]

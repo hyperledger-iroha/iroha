@@ -1,18 +1,20 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/source/sdk/android/norito_fixture_alignment.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 50d73e6235895c57778ec6a6327cf48591c9a1c0ec14a65479cd975744b7f683
-source_last_modified: "2025-11-21T19:39:24.791226+00:00"
-translation_last_reviewed: null
+source_hash: 06e2a046319c6d59cacefc43e4315a304665002388cd395e66b9aca41a55a82c
+source_last_modified: "2026-01-18T05:31:56.977872+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traducción en curso
+# Norito fixture alignment
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+- Canonical: `fixtures/norito_rpc/transaction_fixtures.manifest.json` (fixtures: 27, fingerprint: `43a83550a43f10c33516ddb75477751d`, age_hours: 0.0)
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+| SDK | Status | Missing | Extra | Mismatched | Age (h) | Fingerprint |
+|-----|--------|---------|-------|------------|---------|-------------|
+| android | ok | — | — | — | 0.0 | `2cf2a5f41e9ed99a6dda7ab9475f8551` |
+| python | ok | — | — | — | 44.43 | `ef39d896eda1eb0b53ebf8a5d4754777` |
+| swift | ok | — | — | — | 44.43 | `ef39d896eda1eb0b53ebf8a5d4754777` |

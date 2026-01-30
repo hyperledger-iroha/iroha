@@ -2,11 +2,9 @@ package org.hyperledger.iroha.android.sorafs;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
-import org.hyperledger.iroha.android.model.InstructionBox;
+import java.util.Map;
 import org.hyperledger.iroha.android.model.instructions.ApprovePinManifestInstruction;
 import org.hyperledger.iroha.android.model.instructions.BindManifestAliasInstruction;
-import org.hyperledger.iroha.android.model.instructions.InstructionBuilders;
-import org.hyperledger.iroha.android.model.instructions.InstructionKind;
 import org.hyperledger.iroha.android.model.instructions.RetirePinManifestInstruction;
 
 /**
@@ -41,22 +39,15 @@ public final class SorafsManifestInstructionBuilderTests {
             .setCouncilEnvelopeDigestHex(envelopeDigest)
             .build();
 
-    final InstructionBox box = InstructionBuilders.approvePinManifest(instruction);
-    assert "ApprovePinManifest".equals(box.arguments().get("action")) : "action mismatch";
-    assert digest.equals(box.arguments().get("digest_hex")) : "digest mismatch";
-    assert envelopeBase64.equals(box.arguments().get("council_envelope_base64"))
+    final Map<String, String> args = instruction.toArguments();
+    assert "ApprovePinManifest".equals(args.get("action")) : "action mismatch";
+    assert digest.equals(args.get("digest_hex")) : "digest mismatch";
+    assert envelopeBase64.equals(args.get("council_envelope_base64"))
         : "envelope mismatch";
-    assert envelopeDigest.equals(box.arguments().get("council_envelope_digest_hex"))
+    assert envelopeDigest.equals(args.get("council_envelope_digest_hex"))
         : "envelope digest mismatch";
-
-    final InstructionBox decoded =
-        InstructionBox.fromNorito(InstructionKind.CUSTOM, box.arguments());
-    assert decoded.payload() instanceof ApprovePinManifestInstruction
-        : "Expected ApprovePinManifestInstruction payload";
-    final ApprovePinManifestInstruction payload =
-        (ApprovePinManifestInstruction) decoded.payload();
-    assert payload.approvedEpoch() == 42 : "approved epoch mismatch";
-    assert envelopeBase64.equals(payload.councilEnvelopeBase64()) : "payload envelope mismatch";
+    assert instruction.approvedEpoch() == 42 : "approved epoch mismatch";
+    assert envelopeBase64.equals(instruction.councilEnvelopeBase64()) : "payload envelope mismatch";
   }
 
   private static void approvePinManifestRejectsInvalidEnvelope() {
@@ -91,16 +82,9 @@ public final class SorafsManifestInstructionBuilderTests {
             .setRetiredEpoch(99)
             .setReason("governance-retired")
             .build();
-    final InstructionBox box = InstructionBuilders.retirePinManifest(instruction);
-    assert "governance-retired".equals(box.arguments().get("reason")) : "reason mismatch";
-
-    final InstructionBox decoded =
-        InstructionBox.fromNorito(InstructionKind.CUSTOM, box.arguments());
-    assert decoded.payload() instanceof RetirePinManifestInstruction
-        : "Expected RetirePinManifestInstruction payload";
-    final RetirePinManifestInstruction payload =
-        (RetirePinManifestInstruction) decoded.payload();
-    assert payload.retiredEpoch() == 99 : "retired epoch mismatch";
+    final Map<String, String> args = instruction.toArguments();
+    assert "governance-retired".equals(args.get("reason")) : "reason mismatch";
+    assert instruction.retiredEpoch() == 99 : "retired epoch mismatch";
   }
 
   private static void retirePinManifestRejectsNegativeEpoch() {
@@ -124,19 +108,12 @@ public final class SorafsManifestInstructionBuilderTests {
             .setExpiryEpoch(36)
             .build();
 
-    final InstructionBox box = InstructionBuilders.bindManifestAlias(instruction);
-    assert "docs".equals(box.arguments().get("alias.name")) : "alias name mismatch";
-    assert "sora".equals(box.arguments().get("alias.namespace")) : "alias namespace mismatch";
-    assert "36".equals(box.arguments().get("expiry_epoch")) : "expiry epoch mismatch";
-
-    final InstructionBox decoded =
-        InstructionBox.fromNorito(InstructionKind.CUSTOM, box.arguments());
-    assert decoded.payload() instanceof BindManifestAliasInstruction
-        : "Expected BindManifestAliasInstruction payload";
-    final BindManifestAliasInstruction payload =
-        (BindManifestAliasInstruction) decoded.payload();
-    assert payload.boundEpoch() == 12 : "bound epoch mismatch";
-    assert "docs".equals(payload.aliasBinding().name()) : "alias binding mismatch";
+    final Map<String, String> args = instruction.toArguments();
+    assert "docs".equals(args.get("alias.name")) : "alias name mismatch";
+    assert "sora".equals(args.get("alias.namespace")) : "alias namespace mismatch";
+    assert "36".equals(args.get("expiry_epoch")) : "expiry epoch mismatch";
+    assert instruction.boundEpoch() == 12 : "bound epoch mismatch";
+    assert "docs".equals(instruction.aliasBinding().name()) : "alias binding mismatch";
   }
 
   private static void bindManifestAliasRejectsNegativeEpoch() {

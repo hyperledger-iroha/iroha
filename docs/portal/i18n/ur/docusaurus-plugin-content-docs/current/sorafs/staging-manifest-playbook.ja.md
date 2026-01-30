@@ -1,18 +1,127 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/staging-manifest-playbook.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 888e10f1d1fb3bf5459b1a14ec84c4e2d5067ad7caf8d91bc44c03e49853dc07
-source_last_modified: "2025-11-14T04:43:22.340996+00:00"
-translation_last_reviewed: null
+source_hash: 8ced1d035b2e2a3daa547ad077b3c1f879ad9038436efc68d9fa1e8e7bb9e860
+source_last_modified: "2026-01-04T10:50:53+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+---
+id: staging-manifest-playbook
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/staging-manifest-playbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+:::note مستند ماخذ
+:::
+
+## Overview
+
+یہ playbook staging Torii deployment پر Parliament-ratified chunker profile فعال کرنے کے مراحل بیان کرتا ہے تاکہ تبدیلی کو production میں promote کرنے سے پہلے تصدیق ہو سکے۔ یہ فرض کرتا ہے کہ SoraFS governance charter ratify ہو چکا ہے اور canonical fixtures repository میں موجود ہیں۔
+
+## 1. Prerequisites
+
+1. Canonical fixtures اور signatures sync کریں:
+
+   ```bash
+   cargo xtask sorafs-fetch-fixture \
+     --signatures https://nexus.example/api/sorafs/manifest_signatures.json \
+     --out fixtures/sorafs_chunker
+   ci/check_sorafs_fixtures.sh
+   ```
+
+2. admission envelopes کی وہ directory تیار کریں جسے Torii startup پر پڑھے گا (example path): `/var/lib/iroha/admission/sorafs`.
+3. یقینی بنائیں کہ Torii config discovery cache اور admission enforcement کو enable کرتی ہے:
+
+   ```toml
+   [torii.sorafs.discovery]
+   discovery_enabled = true
+   known_capabilities = ["torii_gateway", "chunk_range_fetch", "vendor_reserved"]
+
+   [torii.sorafs.discovery.admission]
+   envelopes_dir = "/var/lib/iroha/admission/sorafs"
+
+   [torii.sorafs.storage]
+   enabled = true
+
+   [torii.sorafs.gateway]
+   enforce_admission = true
+   enforce_capabilities = true
+   ```
+
+## 2. Admission envelopes publish کریں
+
+1. approved provider admission envelopes کو `torii.sorafs.discovery.admission.envelopes_dir` کے directory میں copy کریں:
+
+   ```bash
+   install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
+     /var/lib/iroha/admission/sorafs/
+   ```
+
+2. Torii restart کریں (یا اگر loader hot reload کے ساتھ wrap ہے تو SIGHUP بھیجیں).
+3. admission messages کے لیے logs tail کریں:
+
+   ```bash
+   torii | grep "loaded provider admission envelope"
+   ```
+
+## 3. Discovery propagation validate کریں
+
+1. provider pipeline سے بنے ہوئے signed provider advert payload (Norito bytes) کو post کریں:
+
+   ```bash
+   curl -sS -X POST --data-binary @provider_advert.to \
+     http://staging-torii:8080/v1/sorafs/provider/advert
+   ```
+
+2. discovery endpoint query کریں اور confirm کریں کہ advert canonical aliases کے ساتھ نظر آتا ہے:
+
+   ```bash
+   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
+   ```
+
+   یقینی بنائیں کہ `profile_aliases` میں `"sorafs.sf1@1.0.0"` پہلی entry کے طور پر شامل ہو۔
+
+## 4. Manifest اور plan endpoints exercise کریں
+
+1. manifest metadata fetch کریں (اگر admission enforce ہے تو stream token درکار ہوگا):
+
+   ```bash
+   sorafs-fetch \
+     --plan fixtures/chunk_fetch_specs.json \
+     --gateway-provider name=staging,provider-id=<hex>,base-url=https://staging-gateway/,stream-token=<base64> \
+     --gateway-manifest-id <manifest_id_hex> \
+     --gateway-chunker-handle sorafs.sf1@1.0.0 \
+     --json-out=reports/staging_manifest.json
+   ```
+
+2. JSON output inspect کریں اور verify کریں:
+   - `chunk_profile_handle`، `sorafs.sf1@1.0.0` ہو۔
+   - `manifest_digest_hex` determinism report سے match کرے۔
+   - `chunk_digests_blake3` regenerated fixtures سے align ہوں۔
+
+## 5. Telemetry checks
+
+- تصدیق کریں کہ Prometheus نئی profile metrics expose کر رہا ہے:
+
+  ```bash
+  curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
+  ```
+
+- dashboards کو staging provider expected alias کے تحت دکھانا چاہیے اور profile فعال ہونے پر brownout counters صفر رہنے چاہییں۔
+
+## 6. Rollout readiness
+
+1. URLs، manifest ID، اور telemetry snapshot کے ساتھ مختصر رپورٹ بنائیں۔
+2. رپورٹ کو Nexus rollout channel میں planned production activation window کے ساتھ شیئر کریں۔
+3. stakeholders کے sign off کے بعد production checklist پر جائیں (Section 4 in `chunker_registry_rollout_checklist.md`).
+
+اس playbook کو اپ ڈیٹ رکھنا یقینی بناتا ہے کہ ہر chunker/admission rollout staging اور production میں ایک جیسے deterministic steps پر چلتا ہے۔

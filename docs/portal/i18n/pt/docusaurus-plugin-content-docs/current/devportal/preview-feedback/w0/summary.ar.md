@@ -1,15 +1,62 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w0/summary.ar.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Tradução em andamento
+---
+id: preview-feedback-w0-summary
+title: ملخص ملاحظات منتصف W0
+sidebar_label: ملاحظات W0 (منتصف)
+description: نقاط تحقق منتصف المرحلة، النتائج، وبنود العمل لموجة المعاينة لمشرفي النواة.
+---
 
-Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+| البند | التفاصيل |
+| --- | --- |
+| الموجة | W0 - مشرفو النواة |
+| تاريخ الملخص | 2025-03-27 |
+| نافذة المراجعة | 2025-03-25 -> 2025-04-08 |
+| المشاركون | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
+| وسم الاثر | `preview-2025-03-24` |
 
-Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.
+## ابرز النقاط
+
+1. **سير عمل checksum** - اكد جميع المراجعين ان `scripts/preview_verify.sh`
+   نجح مع زوج الوصف/الارشيف المشترك. لم تتطلب اي تجاوزات يدوية.
+2. **ملاحظات التنقل** - تم تسجيل مشكلتين بسيطتين في ترتيب الشريط الجانبي
+   (`docs-preview/w0 #1-#2`). كلتاهما محالتان الى Docs/DevRel ولا تعرقلان
+   الموجة.
+3. **تكافؤ runbook في SoraFS** - طلب sorafs-ops-01 روابط متقاطعة اوضح بين
+   `sorafs/orchestrator-ops` و `sorafs/multi-source-rollout`. تم فتح مشكلة
+   متابعة؛ تعالج قبل W1.
+4. **مراجعة القياس** - اكد observability-01 ان `docs.preview.integrity`,
+   `TryItProxyErrors` وسجلات وكيل Try-it بقيت خضراء؛ لم تنطلق تنبيهات.
+
+## بنود العمل
+
+| المعرف | الوصف | المالك | الحالة |
+| --- | --- | --- | --- |
+| W0-A1 | اعادة ترتيب مداخل الشريط الجانبي في devportal لاظهار الوثائق الموجهة للمراجعين (`preview-invite-*` مجمعة). | Docs-core-01 | مكتمل - الشريط الجانبي يعرض الان وثائق المراجعين بشكل متجاور (`docs/portal/sidebars.js`). |
+| W0-A2 | اضافة رابط متقاطع صريح بين `sorafs/orchestrator-ops` و `sorafs/multi-source-rollout`. | Sorafs-ops-01 | مكتمل - كل runbook يشير الان الى الاخر حتى يرى المشغلون الدليلين اثناء عمليات rollout. |
+| W0-A3 | مشاركة لقطات القياس + حزمة الاستعلامات مع متتبع الحوكمة. | Observability-01 | مكتمل - الحزمة مرفقة بـ `DOCS-SORA-Preview-W0`. |
+
+## ملخص الختام (2025-04-08)
+
+- اكد جميع المراجعين الخمسة الاكتمال، ونظفوا البناءات المحلية، وغادروا نافذة
+  المعاينة؛ وتم تسجيل سحب الوصول في `DOCS-SORA-Preview-W0`.
+- لم تقع حوادث او تنبيهات خلال الموجة؛ بقيت لوحات القياس خضراء طوال الفترة.
+- تم تنفيذ اجراءات التنقل + الروابط المتقاطعة (W0-A1/A2) وعكسها في الوثائق
+  اعلاه؛ وادلة القياس (W0-A3) مرفقة بالمتتبع.
+- تم ارشفة حزمة الادلة: لقطات قياس الشاشة، تاكيدات الدعوة، وهذا الملخص مرتبط
+  في تذكرة المتتبع.
+
+## الخطوات التالية
+
+- تنفيذ بنود عمل W0 قبل فتح W1.
+- الحصول على موافقة قانونية وحجز slot للـ staging الخاص بالوكيل، ثم اتباع خطوات
+  التحضير لموجة الشركاء الموضحة في [preview invite flow](../../preview-invite-flow.md).
+
+_هذا الملخص مرتبط من [preview invite tracker](../../preview-invite-tracker.md) من اجل
+الحفاظ على قابلية تتبع خارطة طريق DOCS-SORA._

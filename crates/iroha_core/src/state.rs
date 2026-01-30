@@ -16050,6 +16050,10 @@ impl<'state> StateBlock<'state> {
                 Duration::ZERO
             };
             let view_lock_hold = view_lock_hold_start.elapsed();
+            #[cfg(feature = "telemetry")]
+            state_ref
+                .telemetry
+                .observe_state_commit_view_lock(view_lock_wait, view_lock_hold);
             let (mut max_component, mut max_hold) = ("prev_commit_topology", prev_topology_hold);
             if commit_topology_hold > max_hold {
                 max_component = "commit_topology";

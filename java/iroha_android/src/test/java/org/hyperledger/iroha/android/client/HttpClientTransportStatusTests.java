@@ -22,8 +22,10 @@ public final class HttpClientTransportStatusTests {
   public static void main(final String[] args) {
     waitForTransactionStatusResolvesOnCommit();
     waitForTransactionStatusTreatsNotFoundAsPending();
+    waitForTransactionStatusIgnoresNoritoBodyOnNotFound();
     waitForTransactionStatusThrowsOnFailure();
     waitForTransactionStatusHonoursMaxAttempts();
+    waitForTransactionStatusFailsOnInvalidPayload();
     submitTransactionProvidesCanonicalHashForPolling();
     System.out.println("[IrohaAndroid] HTTP client status tests passed.");
   }
@@ -81,6 +83,29 @@ public final class HttpClientTransportStatusTests {
         : "Expected committed status after 404 retry";
   }
 
+  private static void waitForTransactionStatusIgnoresNoritoBodyOnNotFound() {
+    final byte[] noritoBody = new byte[] {'N', 'R', 'T', '0', 0x01};
+    final SequencedExecutor executor = new SequencedExecutor(
+        newResponse(404, noritoBody),
+        newResponse(200, statusPayload("Committed")));
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(
+        executor,
+        ClientConfig.builder()
+            .setBaseUri(URI.create("http://localhost:8080"))
+            .setRequestTimeout(Duration.ofSeconds(5))
+            .build());
+
+    final Map<String, Object> result =
+        transport
+            .waitForTransactionStatus(
+                "deadbeef", PipelineStatusOptions.builder().intervalMillis(0L).build())
+            .join();
+
+    assert "Committed".equals(
+            PipelineStatusExtractor.extractStatusKind(result).orElse(null))
+        : "Expected committed status after Norito 404 retry";
+  }
+
   private static void waitForTransactionStatusThrowsOnFailure() {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(
         request -> CompletableFuture.completedFuture(
@@ -122,6 +147,27 @@ public final class HttpClientTransportStatusTests {
       assert ((TransactionTimeoutException) cause).attempts() == 2 : "Expected two attempts";
     }
     assert threw : "Expected waitForTransactionStatus to time out";
+  }
+
+  private static void waitForTransactionStatusFailsOnInvalidPayload() {
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(
+        request -> CompletableFuture.completedFuture(
+            newResponse(200, "[]".getBytes(StandardCharsets.UTF_8))),
+        ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
+
+    boolean threw = false;
+    try {
+      transport
+          .waitForTransactionStatus(
+              "feedface", PipelineStatusOptions.builder().intervalMillis(0L).build())
+          .join();
+    } catch (final RuntimeException ex) {
+      threw = true;
+      final Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+      assert cause instanceof IllegalStateException
+          : "Expected parsing error to propagate";
+    }
+    assert threw : "Expected waitForTransactionStatus to fail on invalid payload";
   }
 
   private static void submitTransactionProvidesCanonicalHashForPolling() {
