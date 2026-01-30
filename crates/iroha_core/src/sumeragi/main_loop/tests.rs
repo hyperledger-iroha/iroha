@@ -18245,8 +18245,10 @@ async fn rebroadcast_stalled_rbc_payloads_retries_chunks_after_ready_quorum() {
         .pending
         .pending_blocks
         .get(&key.0)
-        .expect("pending block");
-    session.test_set_block_header_and_signature(&pending_block.block);
+        .expect("pending block")
+        .block
+        .clone();
+    session.test_set_block_header_and_signature(&pending_block);
 
     let roster = harness.actor.effective_commit_topology();
     assert!(!roster.is_empty());
@@ -18418,8 +18420,10 @@ async fn rebroadcast_stalled_rbc_payloads_rebroadcasts_deliver_after_delivery() 
         .pending
         .pending_blocks
         .get(&key.0)
-        .expect("pending block");
-    session.test_set_block_header_and_signature(&pending_block.block);
+        .expect("pending block")
+        .block
+        .clone();
+    session.test_set_block_header_and_signature(&pending_block);
 
     let roster = harness.actor.effective_commit_topology();
     assert!(!roster.is_empty());
@@ -18478,6 +18482,106 @@ async fn rebroadcast_stalled_rbc_payloads_rebroadcasts_deliver_after_delivery() 
             .deliver_rebroadcast_last_sent
             .contains_key(&key),
         "expected deliver rebroadcast timestamp"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rebroadcast_stalled_rbc_payloads_rebroadcasts_deliver_for_recent_committed_block() {
+    let mut harness = test_actor_harness(4).await;
+    let background_log = attach_background_log(&mut harness.actor);
+    let key = insert_active_pending_block(&mut harness.actor, 0);
+    let payload = vec![0xAB; 2048];
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0)
+        .expect("rbc session");
+    let pending_block = harness
+        .actor
+        .pending
+        .pending_blocks
+        .get(&key.0)
+        .expect("pending block")
+        .block
+        .clone();
+    session.test_set_block_header_and_signature(&pending_block);
+
+    let roster = harness.actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = harness.actor.rbc_deliver_quorum(&topology);
+    assert!(required > 0, "ready quorum should be non-zero");
+    let (_, mode_tag, prf_seed) = harness.actor.consensus_context_for_height(key.1);
+    let signature_topology = super::topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+    let local_idx = harness
+        .actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local sender");
+    for (idx, _peer) in signature_topology.as_ref().iter().enumerate() {
+        if session.ready_signatures.len() >= required {
+            break;
+        }
+        let idx = u32::try_from(idx).expect("sender fits u32");
+        session.record_ready(idx, vec![u8::try_from(idx).expect("index fits u8")]);
+    }
+    assert!(session.ready_signatures.len() >= required);
+    session.sent_ready = true;
+    assert!(session.record_deliver(local_idx, vec![0xD1, 0xD2]));
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session);
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+
+    let committed_block = pending_block.clone();
+    harness
+        .actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed block");
+    let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(committed_block.hash());
+    let next_block = sample_block(key.1.saturating_add(1), 0, Some(committed_block.hash()));
+    harness
+        .actor
+        .kura
+        .store_block(next_block.clone())
+        .expect("store committed block");
+    state.push_block_hash_for_testing(next_block.hash());
+    let next_next_block = sample_block(key.1.saturating_add(2), 0, Some(next_block.hash()));
+    harness
+        .actor
+        .kura
+        .store_block(next_next_block.clone())
+        .expect("store committed block");
+    state.push_block_hash_for_testing(next_next_block.hash());
+
+    let _ = take_background_log(&background_log);
+    let progress = harness
+        .actor
+        .rebroadcast_stalled_rbc_payloads(Instant::now());
+    assert!(
+        progress,
+        "expected deliver rebroadcast progress for recent committed block"
+    );
+
+    let entries = take_background_log(&background_log);
+    let deliver_posts = entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("RbcDeliver")
+        })
+        .count();
+    assert_eq!(
+        deliver_posts, 1,
+        "expected deliver rebroadcast for recent committed block"
     );
 
     harness.shutdown.send();
