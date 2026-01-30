@@ -1,6 +1,8 @@
 # Status
 
 Last update: 2026-01-30
+- Docs: replaced Spanish stub for `docs/source/sorafs_gateway_load_tests.es.md` with a full translation and marked it complete.
+- Tests: not run (docs-only change).
 - Izanami: avoid mint/burn repetition instructions in the same transaction as trigger registration (and when repetition count is zero), so workload plans stop issuing invalid trigger-repetition transactions; updated the mint/burn balance unit test to handle the new registration-first flow.
 - Core build fix: import `ensure_controller_capabilities` from the domain ISI module and remove the duplicate trigger-set rekey helper to unblock `iroha_core` builds.
 - Tests: `cargo test -p izanami trigger_repetition_mint_and_burn_balance` (ok).
