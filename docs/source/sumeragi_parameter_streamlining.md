@@ -133,7 +133,7 @@ set (non-zero/non-null). Values below reference `iroha_config` defaults:
 - RBC (resource tuning):
   - `chunk_max_bytes`: 256 KiB
   - `session_ttl_ms`: 120_000
-  - `pending_ttl_ms`: 30_000
+  - `pending_ttl_ms`: 120_000
   - `rebroadcast_sessions_per_tick`: 8
   - `payload_chunks_per_tick`: 64
   - `store_max_sessions`: 1_024

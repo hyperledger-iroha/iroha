@@ -879,8 +879,8 @@ async fn apply_mode_flip_defers_while_commit_pipeline_active() {
 
     let height = 2u64;
     let view = actor.phase_tracker.current_view(height).unwrap_or(0);
-    let parent = actor.state.view().latest_block_hash();
-    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let parent = seed_genesis_block_for_state(actor.state.as_ref());
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent));
     let block_hash = block.hash();
     actor.pending.pending_processing.set(Some(block_hash));
     actor
@@ -15656,10 +15656,12 @@ async fn handle_qc_marks_pending_with_commit_qc() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
-    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 0).await;
     let actor = &mut harness.actor;
 
-    let height = 2_u64;
+    seed_genesis_block_for_state(actor.state.as_ref());
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
     let view = 0_u64;
     let view_index = view;
     let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view_index, None);
@@ -15737,6 +15739,58 @@ async fn handle_qc_marks_pending_with_commit_qc() {
         "pending block should mark commit certificate seen"
     );
     assert_eq!(pending.commit_qc_epoch, Some(qc.epoch));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_qc_validates_pending_block_on_commit_qc() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 0).await;
+    let actor = &mut harness.actor;
+
+    let parent = Some(seed_genesis_block_for_state(actor.state.as_ref()));
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    assert!(
+        !actor.block_known_for_lock(block_hash),
+        "pending block should start unvalidated"
+    );
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        0,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    actor.handle_qc(qc).expect("handle qc");
+
+    assert!(
+        actor.block_known_for_lock(block_hash),
+        "commit QC should validate pending block when payload is present"
+    );
 
     harness.shutdown.send();
 }
@@ -15957,7 +16011,7 @@ async fn block_created_applies_cached_precommit_qc() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
-    let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 1).await;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
     let height = 2u64;
@@ -17641,6 +17695,97 @@ async fn handle_rbc_deliver_refreshes_roster_when_unverified() {
         "DELIVER should be accepted after roster refresh"
     );
     assert!(stored.deliver_signature.is_some());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_deliver_rebroadcasts_when_deferred_for_ready_quorum() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let key: SessionKey = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"rbc-deliver-defer-rebroadcast")),
+        height,
+        0,
+    );
+    let epoch = actor.epoch_for_height(height);
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
+    session.ingest_chunk(0, payload, None);
+    let chunk_root = session.expected_chunk_root.expect("chunk root");
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let roster = actor.effective_commit_topology();
+    assert!(roster.len() > 1, "test requires multiple peers");
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, 0, mode_tag, prf_seed);
+    let local_peer = actor.common_config.peer.id().clone();
+    let (signer_idx, signer_peer) = signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .find(|(_, peer)| *peer != &local_peer)
+        .map(|(idx, peer)| (idx, peer.clone()))
+        .expect("signer peer");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair");
+    let roster_hash = super::rbc::rbc_roster_hash(&roster);
+
+    let mut ready = crate::sumeragi::consensus::RbcReady {
+        block_hash: key.0,
+        height,
+        view: 0,
+        epoch,
+        roster_hash,
+        chunk_root,
+        sender: u32::try_from(signer_idx).expect("sender fits u32"),
+        signature: Vec::new(),
+    };
+    let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
+    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    ready.signature = signature.payload().to_vec();
+
+    let mut deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash: key.0,
+        height,
+        view: 0,
+        epoch,
+        roster_hash,
+        chunk_root,
+        sender: u32::try_from(signer_idx).expect("sender fits u32"),
+        signature: Vec::new(),
+        ready_signatures: vec![crate::sumeragi::consensus::RbcReadySignature {
+            sender: ready.sender,
+            signature: ready.signature.clone(),
+        }],
+    };
+    let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
+    let signature = Signature::new(signer_kp.private_key(), &preimage);
+    deliver.signature = signature.payload().to_vec();
+
+    actor.handle_rbc_deliver(deliver).expect("deliver handled");
+
+    let entries = take_background_log(&background_log);
+    let deliver_posts = entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("RbcDeliver")
+        })
+        .count();
+    assert!(deliver_posts > 0, "deferred DELIVER should be rebroadcast");
 
     harness.shutdown.send();
 }

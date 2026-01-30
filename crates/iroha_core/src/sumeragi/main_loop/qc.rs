@@ -83,6 +83,53 @@ pub(super) fn select_commit_root_signers(
 }
 
 impl Actor {
+    fn maybe_validate_pending_for_commit_qc(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        commit_topology: &[PeerId],
+    ) -> bool {
+        if commit_topology.is_empty() {
+            return false;
+        }
+        let hash = qc.subject_block_hash;
+        if self
+            .pending
+            .pending_processing
+            .get()
+            .is_some_and(|pending| pending == hash)
+        {
+            return false;
+        }
+        if self.subsystems.validation.inflight.contains_key(&hash) {
+            return false;
+        }
+        let needs_validation = match self.pending.pending_blocks.get(&hash) {
+            Some(pending) => {
+                !pending.aborted && pending.validation_status == ValidationStatus::Pending
+            }
+            None => return false,
+        };
+        if !needs_validation {
+            return false;
+        }
+        let outcome = self.validate_pending_block_for_voting_inline(hash, commit_topology);
+        match outcome {
+            ValidationGateOutcome::Valid => true,
+            ValidationGateOutcome::Deferred => false,
+            ValidationGateOutcome::Invalid {
+                hash,
+                height,
+                view,
+                evidence,
+                reason,
+                reason_label,
+            } => {
+                self.handle_validation_reject(hash, height, view, evidence, reason, reason_label);
+                false
+            }
+        }
+    }
+
     fn defer_qc_for_roster(&mut self, qc: crate::sumeragi::consensus::Qc, reason: &'static str) {
         let key = Self::qc_tally_key(&qc);
         if self.deferred_qcs.contains_key(&key) {
@@ -2422,7 +2469,7 @@ impl Actor {
         }
 
         let block_known_locally = self.block_known_locally(qc.subject_block_hash);
-        let block_known_for_lock = self.block_known_for_lock(qc.subject_block_hash);
+        let mut block_known_for_lock = self.block_known_for_lock(qc.subject_block_hash);
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             iroha_logger::debug!(
                 height = qc.height,
@@ -2594,6 +2641,14 @@ impl Actor {
             cache_len = self.qc_cache.len(),
             "cached validated QC"
         );
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
+            && block_known_locally
+            && !block_known_for_lock
+        {
+            if self.maybe_validate_pending_for_commit_qc(&qc, &commit_topology) {
+                block_known_for_lock = self.block_known_for_lock(qc.subject_block_hash);
+            }
+        }
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) && block_known_locally {
             if block_known_for_lock {
                 let commit_ready = self
