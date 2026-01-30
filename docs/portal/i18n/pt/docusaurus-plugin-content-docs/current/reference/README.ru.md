@@ -1,15 +1,21 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
 source: docs/portal/docs/reference/README.ru.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Tradução em andamento
+---
+title: Индекс справочников
+slug: /reference
+---
 
-Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+Этот раздел собирает материалы «читайте как спецификацию» для Iroha. Эти страницы остаются стабильными даже по мере развития гайдов и туториалов.
 
-Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.
+## Доступно сегодня
+
+- **Обзор кодека Norito** - `reference/norito-codec.md` напрямую ссылается на авторитетную спецификацию `norito.md`, пока таблица портала заполняется.
+- **Torii OpenAPI** - `/reference/torii-openapi` отображает последнюю спецификацию REST Torii через Redoc. Перегенерируйте spec командой `npm run sync-openapi -- --version=current --latest` (добавьте `--mirror=<label>` для копирования snapshot в дополнительные исторические версии).
+- **Таблицы конфигурации** - Полный каталог параметров хранится в `docs/source/references/configuration.md`. Пока портал не предоставляет auto-import, обращайтесь к этому Markdown файлу за точными значениями по умолчанию и переопределениями окружения.
+- **Версионирование docs** - Выпадающий список версий в навбаре показывает замороженные snapshots, созданные с помощью `npm run docs:version -- <label>`, что упрощает сравнение рекомендаций между релизами.

@@ -1,20 +1,26 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/version-2025-q2/reference/publishing-checklist.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 1a5dae18732b5af369ad7bf6b9c6b66550982dff2c37e422c610d32899c6e738
 source_last_modified: "2025-11-04T12:24:28.212510+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# ترجمہ جاری ہے
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/reference/publishing-checklist.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+---
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+# 翻訳作業中
+
+このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+
+翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。

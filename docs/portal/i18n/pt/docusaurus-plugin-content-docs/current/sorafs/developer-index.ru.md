@@ -1,15 +1,34 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
 source: docs/portal/docs/sorafs/developer-index.ru.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Tradução em andamento
+---
+id: developer-index
+title: Руководства для разработчиков SoraFS
+description: Стартовая страница документации для разработчиков SoraFS, примеров и справок по автоматизации.
+sidebar_label: Обзор для разработчиков
+---
 
-Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+:::note Канонический источник
+:::
 
-Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.
+# Руководства для разработчиков SoraFS
+
+```{toctree}
+:caption: Начало работы
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

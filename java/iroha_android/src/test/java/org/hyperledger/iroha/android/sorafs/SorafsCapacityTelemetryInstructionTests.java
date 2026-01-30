@@ -1,9 +1,6 @@
 package org.hyperledger.iroha.android.sorafs;
 
 import java.util.Map;
-import org.hyperledger.iroha.android.model.InstructionBox;
-import org.hyperledger.iroha.android.model.instructions.InstructionBuilders;
-import org.hyperledger.iroha.android.model.instructions.InstructionKind;
 import org.hyperledger.iroha.android.model.instructions.RecordCapacityTelemetryInstruction;
 
 /** Regression tests covering SoraFS capacity telemetry instruction builder. */
@@ -40,10 +37,7 @@ public final class SorafsCapacityTelemetryInstructionTests {
             .setNonce(77)
             .build();
 
-    final InstructionBox box =
-        InstructionBuilders.recordCapacityTelemetry(instruction);
-    final Map<String, String> args = box.arguments();
-    assert InstructionKind.CUSTOM == box.kind() : "kind mismatch";
+    final Map<String, String> args = instruction.toArguments();
     assert "RecordCapacityTelemetry".equals(args.get("action")) : "action mismatch";
     assert PROVIDER_ID.equals(args.get("provider_id_hex")) : "provider id mismatch";
     assert "1700112".equals(args.get("window_end_epoch")) : "window end mismatch";
@@ -52,15 +46,9 @@ public final class SorafsCapacityTelemetryInstructionTests {
     assert "1234567".equals(args.get("egress_bytes")) : "egress mismatch";
     assert "77".equals(args.get("nonce")) : "nonce mismatch";
 
-    final InstructionBox decoded =
-        InstructionBox.fromNorito(InstructionKind.CUSTOM, args);
-    assert decoded.payload() instanceof RecordCapacityTelemetryInstruction
-        : "Expected RecordCapacityTelemetryInstruction";
-    final RecordCapacityTelemetryInstruction payload =
-        (RecordCapacityTelemetryInstruction) decoded.payload();
-    assert payload.windowStartEpoch() == 1_700_100L : "window start mismatch";
-    assert payload.ordersCompleted() == 10 : "orders completed mismatch";
-    assert payload.pdpFailures() == 1 : "pdp failures mismatch";
-    assert payload.nonce() == 77 : "nonce mismatch";
+    assert instruction.windowStartEpoch() == 1_700_100L : "window start mismatch";
+    assert instruction.ordersCompleted() == 10 : "orders completed mismatch";
+    assert instruction.pdpFailures() == 1 : "pdp failures mismatch";
+    assert instruction.nonce() == 77 : "nonce mismatch";
   }
 }

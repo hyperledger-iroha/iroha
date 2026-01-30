@@ -1,14 +1,22 @@
+---
+lang: he
+direction: rtl
+source: docs/portal/i18n/he/docusaurus-plugin-content-docs/version-2025-q2/norito-streaming-roadmap.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 78a8397e813ab0347a71a1603db99e23c0c18afb19141864fb6a084fb8e40afd
+source_last_modified: "2025-11-04T12:24:28.192763+00:00"
+translation_last_reviewed: 2026-01-30
+---
+
 <!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
 
 ---
 lang: he
 direction: rtl
-source: docs/portal/i18n/he/docusaurus-plugin-content-docs/version-2025-q2/norito-streaming-roadmap.md
+source: docs/portal/docs/norito-streaming-roadmap.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 78a8397e813ab0347a71a1603db99e23c0c18afb19141864fb6a084fb8e40afd
-source_last_modified: "2025-11-04T12:24:28.192763+00:00"
-translation_last_reviewed: null
 ---
 
 # בתהליך תרגום

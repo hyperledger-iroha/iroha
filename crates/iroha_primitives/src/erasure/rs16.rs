@@ -541,6 +541,7 @@ mod neon {
         use std::arch::aarch64 as arch;
 
         #[test]
+        #[allow(unsafe_code)]
         fn neon_gf_mul_vec_matches_scalar() {
             if !std::arch::is_aarch64_feature_detected!("neon") {
                 return;

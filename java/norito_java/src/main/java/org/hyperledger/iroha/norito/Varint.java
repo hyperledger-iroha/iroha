@@ -5,6 +5,7 @@ package org.hyperledger.iroha.norito;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 
 /** 7-bit little-endian varint helpers. */
 public final class Varint {
@@ -55,6 +56,34 @@ public final class Varint {
       }
     }
     return new DecodeResult(result, index);
+  }
+
+  public static DecodeResult decode(ByteBuffer buffer) {
+    long result = 0;
+    int shift = 0;
+    int start = buffer.position();
+    while (true) {
+      if (!buffer.hasRemaining()) {
+        throw new IllegalArgumentException("Unexpected end of data while decoding varint");
+      }
+      int b = buffer.get() & 0xFF;
+      int chunk = b & 0x7F;
+      if (shift == 63 && chunk > 1) {
+        throw new IllegalArgumentException("Varint exceeds 64 bits");
+      }
+      result |= (long) chunk << shift;
+      if ((b & 0x80) == 0) {
+        if (shift > 0 && chunk == 0) {
+          throw new IllegalArgumentException("Varint is not canonically encoded");
+        }
+        break;
+      }
+      shift += 7;
+      if (shift >= 64) {
+        throw new IllegalArgumentException("Varint exceeds 64 bits");
+      }
+    }
+    return new DecodeResult(result, start + (buffer.position() - start));
   }
 
   public record DecodeResult(long value, int nextOffset) {}

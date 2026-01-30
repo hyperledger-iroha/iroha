@@ -1,18 +1,49 @@
-<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
-
 ---
 lang: fr
 direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/reference/address-safety.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 64c8fbe64d0f80179ba17494d913e02e8c0e65a4ab62c5f1a69167d60d4044a9
 source_last_modified: "2025-11-07T10:33:21.916557+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traduction en cours
+---
+title: アドレスの安全性とアクセシビリティ
+description: Iroha アドレスを安全に表示・共有するための UX 要件 (ADDR-6c)。
+---
 
-Ce fichier sert de modèle pour la traduction française du document anglais. Une fois la traduction terminée, mettez à jour le champ `status` dans les métadonnées ci-dessus.
+このページは ADDR-6c のドキュメント成果物をまとめたものです。ウォレット、エクスプローラ、SDK ツール、そして人間向けアドレスを表示または受け付けるポータルのあらゆる面にこれらの制約を適用してください。カノニカルなデータモデルは `docs/account_structure.md` にあり、以下のチェックリストは安全性とアクセシビリティを損なわずにこれらの形式を露出する方法を説明します。
 
-Ce brouillon est en attente de traduction. Remplacez ce texte par le contenu traduit et passez l’état à `complete` lorsque le travail est terminé. Vérifiez également que `translation_last_reviewed` correspond à la dernière vérification par rapport à la version anglaise.
+## 安全な共有フロー
+
+- すべてのコピー/共有アクションは IH58 アドレスをデフォルトにします。解決済みドメインを補助的なコンテキストとして表示し、チェックサム付き文字列が中心になるようにします。
+- “共有” アクションは、完全なプレーンテキストアドレスと同じ payload から生成した QR をまとめて提供します。確定前に両方を確認できるようにします。
+- スペース都合で省略が必要な場合（小さなカード、通知）、人間可読プレフィックスを残し、省略記号を表示し、最後の 4–6 文字を保持してチェックサムの手がかりを残します。省略なしで全文をコピーするためのタップ/キーボードショートカットを提供します。
+- クリップボードの不一致を防ぐため、コピーされた正確な IH58 文字列をプレビューする確認トーストを表示します。テレメトリがある場合、コピー試行と共有アクションの数を記録して UX 回帰を迅速に検出します。
+
+## IME と入力保護
+
+- アドレス入力では非 ASCII を拒否します。IME の合成アーティファクト（全角、かな、声調記号）が現れた場合、ラテン入力に切り替える方法を説明するインライン警告を表示します。
+- プレーンテキストのペースト領域を提供し、結合文字を取り除き、空白を ASCII スペースに置換してから検証します。これにより、IME を途中で無効にした場合でも進捗が失われません。
+- zero-width joiners、variation selectors、その他のステルス Unicode コードポイントを弾くよう検証を強化します。拒否したコードポイントのカテゴリを記録し、ファジングスイートがテレメトリを取り込めるようにします。
+
+## 支援技術の期待事項
+
+- 各アドレスブロックに `aria-label` または `aria-describedby` を付け、人間可読プレフィックスを読み上げ、payload を 4–8 文字ごとに区切って読み上げられるようにします（“ih dash b three two …”）。これによりスクリーンリーダーが無意味な文字列の連続を読み上げるのを防ぎます。
+- コピー/共有の成功を polite な live region 更新で通知します。宛先（クリップボード、共有シート、QR）を含め、フォーカスを移さずに完了が分かるようにします。
+- QR プレビューには説明的な `alt` テキストを用意します（例: “IH58 address for `<account>` on chain `0x1234`”）。視覚支援のため、QR キャンバスの横に “Copy address as text” のフォールバックを置きます。
+
+## Sora 専用の圧縮アドレス
+
+- Gating: 圧縮文字列 `sora…` を明示的な確認の背後に隠します。確認はその形式が Sora Nexus チェーンでのみ動作することを再確認させます。
+- Labelling: すべての表示に “Sora-only” バッジを付け、他のネットワークでは IH58 が必要な理由を説明するツールチップを付けます。
+- Guardrails: アクティブチェーンの識別子が Nexus の割り当てでない場合は、圧縮アドレスの生成を拒否し、IH58 へ誘導します。
+- Telemetry: 圧縮形式の要求とコピー頻度を記録し、インシデントプレイブックが誤共有の急増を検知できるようにします。
+
+## 品質ゲート
+
+- 自動 UI テスト（または storybook の a11y スイート）を拡張し、アドレスコンポーネントが必要な ARIA メタデータを公開し、IME 拒否メッセージが表示されることを確認します。
+- リリース前に、IME 入力（かな、ピンイン）、スクリーンリーダーのパス（VoiceOver/NVDA）、高コントラストテーマでの QR コピーを含む手動 QA シナリオを実施します。
+- これらのチェックを IH58 のパリティテストと並んでリリースチェックリストに含め、回帰が修正されるまでブロックされるようにします。

@@ -28,4 +28,17 @@ public final class InstructionBoxTests {
     assert Arrays.equals(wirePayload, wire.payloadBytes())
         : "Wire payload bytes should round-trip";
   }
+
+  @Test
+  public void fromNoritoRejectsMissingWirePayload() {
+    final Map<String, String> args = new LinkedHashMap<>();
+    args.put("action", "LegacyInstruction");
+    boolean threw = false;
+    try {
+      InstructionBox.fromNorito(InstructionKind.CUSTOM, args);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("wire_name");
+    }
+    assert threw : "Expected missing wire payload to be rejected";
+  }
 }

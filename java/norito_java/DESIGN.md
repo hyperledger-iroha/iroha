@@ -1,9 +1,9 @@
-# Norito Java Library Design (JDK 25)
+# Norito Java Library Design (JDK 21)
 
 ## Goals
 - Provide a pure-Java reference implementation of the Norito serialization
   codec that mirrors the Rust implementation semantics and the Python port.
-- Target JDK 25 without requiring third-party dependencies, so compilation with
+- Target JDK 21 without requiring third-party dependencies, so compilation with
   `javac` works in constrained environments.
 - Offer composable adapters for encoding/decoding common types (primitives,
   strings, byte slices, options, results, sequences, packed structs) and expose
@@ -102,17 +102,11 @@
      environments without the native dependency fall back gracefully.
 
 ## Panama Acceleration Notes
-- The Foreign Function & Memory API remains preview in current JDK releases, and
-  the Norito Java build avoids `--enable-preview` to stay drop-in for CI and
-  downstream consumers.
-- A future acceleration path could use `MemorySegment` for bulk copies and the
-  Vector API for CRC64/varint hot loops, gated behind opt-in build profiles.
-- All acceleration paths must preserve deterministic output across hardware;
-  the pure-Java implementation remains the source of truth.
-
-## Future Work / TODOs
-- Implement Panama-based acceleration once the Foreign Function & Memory API
-  stabilizes without preview flags.
+- norito-java currently avoids the Foreign Function & Memory API to keep the
+  artifact compatible with Android and Java 21 toolchains; buffer paths operate
+  on `ByteBuffer` without preview or Panama dependencies.
+- Additional vectorized CRC/varint paths can build on these entrypoints later,
+  but the pure-Java implementation remains the source of truth.
 
 ## Maintenance Notes
 - The Norito Rust crate's `build.rs` invokes `scripts/check_norito_bindings_sync.sh`

@@ -1,7 +1,86 @@
 # Status
 
 Last update: 2026-01-30
+- Izanami: avoid mint/burn repetition instructions in the same transaction as trigger registration (and when repetition count is zero), so workload plans stop issuing invalid trigger-repetition transactions; updated the mint/burn balance unit test to handle the new registration-first flow.
+- Core build fix: import `ensure_controller_capabilities` from the domain ISI module and remove the duplicate trigger-set rekey helper to unblock `iroha_core` builds.
+- Tests: `cargo test -p izanami trigger_repetition_mint_and_burn_balance` (ok).
+- Izanami soak: `cargo run -p izanami --release -- --allow-net --peers 4 --faulty 0 --pipeline-time 3s --tps 1 --duration 180s --target-blocks 120` (failed: min height ~15; target 120 not reached; saw `repeat_trigger_12` missing during mint plan).
+- Swift SDK: add `getTransactionHistory` alias for transfer-rich account history, update docs/tests, and surface the helper in the iOS demo apps.
+- Tests: `cd IrohaSwift && swift test` (ok).
+- Docs: replaced Spanish stub for `docs/source/sorafs_gateway_chunk_range.es.md` with a full translation and marked it complete.
+- Tests: not run (docs-only change).
+- Docs: replaced Spanish stubs for `docs/source/sorafs_chaos_plan.es.md` and `docs/source/soranet_handshake_plan.es.md` with full translations and marked them complete.
+- Tests: not run (docs-only change).
+- Workspace tests: `cargo test --workspace` started but was interrupted by user after ~1134s.
+- Norito Java: removed MemorySegment/Panama usage to keep the artifact Android- and Java 21-friendly, keeping ByteBuffer buffer helpers as the zero-copy path; updated norito-java docs/tooling accordingly.
+- Tests: `cd java/norito_java && ./run_tests.sh` (ok).
+- Roadmap TODO inventory: removed the stale multisig rekeying entry (controller derivation from spec is already enforced; signatories remain single-key accounts per multisig policy docs).
+- Tests: not run (docs-only change).
+- Android SDK: wrap signed transaction hashes in TransactionEntrypoint bytes, ignore Norito NRT0 pipeline status bodies, and guard pollPipelineStatus exception propagation; added unit coverage for entrypoint bytes and pipeline status handling; refreshed offline/UAID test expectations, regenerated the Norito fixture manifest, and removed preview/Panama build flags to keep Android builds compatible.
+- Tests: `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :norito_java:clean :core:test` (ok; deprecation/unchecked warnings noted). `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :jvm:test` (ok). `cd java/iroha_android && ANDROID_HOME=$HOME/Library/Android/sdk JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :android:test` (ok).
+- Android Norito payloads: drop legacy ChainId/IVM decoding, reject legacy instruction payloads, fix multisig signature sequence decoding in tests, guard MultisigSignatures null checks, and tidy Java test typing/imports; updated unit coverage for legacy payload rejection.
+- Tests: `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core:test --tests org.hyperledger.iroha.android.norito.NoritoCodecAdapterTests` (ok; notes about deprecation/unchecked warnings).
+- Swift tests: buffer stub WebSocket frames and fix UAID portfolio test vector; `cd IrohaSwift && swift test` passed.
+- Swift SDK tests: `cd IrohaSwift && swift test` timed out after 122s (tests were still running; no failures observed before timeout).
+- Swift explorer transfer summaries: add `signedAmount(relativeTo:)` helper with unit coverage and docs updates.
+- Tests: not run (not requested).
+- Swift explorer transfer summaries: add asset-id helper accessors relative to an account, with unit coverage and docs updates.
+- Tests: not run (not requested).
+- Swift explorer transfer summaries: add `isIncoming/Outgoing/SelfTransfer(relativeTo:)` helpers with unit coverage and docs updates.
+- Tests: not run (not requested).
+- Portal i18n sync: refreshed mirrors for all completed translations (reference/intro/norito/devportal/quickstart sets) under `docs/portal/i18n/*/docusaurus-plugin-content-docs/`.
+- Tests: not run (docs-only change).
+- Swift explorer transfer summaries: add `direction(relativeTo:)` + `counterpartyAccountId(relativeTo:)` helpers with unit coverage and docs updates.
+- Tests: not run (not requested).
+- Swift explorer transfer summaries: add `isSelfTransfer` helper with unit coverage and docs update.
+- Tests: not run (not requested).
+- Swift explorer transfer summaries: add `Identifiable` conformance with stable ids and document it.
+- Tests: not run (not requested).
+- Portal versioned docs: translated `intro` + `devportal/try-it` stubs across ar/es/fr/he/ja/pt/ru/ur under `docs/portal/versioned_docs/version-2025-q2/`.
+- Tests: not run (docs-only change).
+- Portal versioned Norito docs: translated `getting-started` + `overview` stubs across ar/es/fr/he/ja/pt/ru/ur under `docs/portal/versioned_docs/version-2025-q2/norito/`.
+- Tests: not run (docs-only change).
+- Portal versioned Norito roadmap: translated `norito-streaming-roadmap` stubs across ar/es/fr/he/ja/pt/ru/ur under `docs/portal/versioned_docs/version-2025-q2/`.
+- Tests: not run (docs-only change).
+- Portal docs: translated `docs/portal/README.he.md` + `docs/portal/README.ja.md` and marked them complete.
+- Tests: not run (docs-only change).
+- Portal versioned reference docs: translated README, publishing checklist, and Norito codec stubs across ar/es/fr/he/ja/pt/ru/ur under `docs/portal/versioned_docs/version-2025-q2/reference/`.
+- Tests: not run (docs-only change).
+- Swift explorer transfer summaries: add `transferIndex` and include it in dedupe keys to avoid dropping duplicate batch entries, with unit coverage.
+- Tests: not run (not requested).
+- Commit persistence telemetry: added commit-stage breakdown metrics (kura_store/state_apply/state_commit) plus state commit view_lock wait/hold histograms, wired commit pipeline logging/telemetry, and updated unit coverage.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target cargo test -p iroha_core --features telemetry --lib commit_stage_metrics_recorded -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused vars in `iroha_core`). `CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target cargo test -p iroha_core --features telemetry --lib state_commit_view_lock_metrics_recorded -- --nocapture` (ok; same warnings). `CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target cargo test -p iroha_core --features telemetry -- --nocapture` (failed: `No space left on device` during link).
+- Portal OpenAPI docs: replaced stub translations for `docs/portal/static/openapi/README.*` across ar/es/fr/he/ja/pt/ru/ur and marked them complete.
+- Tests: not run (docs-only change).
+- Swift explorer transfers: default explorer instruction queries to `kind=Transfer` when using transfer helpers, with unit coverage updates.
+- Tests: not run (not requested).
+- Swift explorer transfers: forward asset-id filters into explorer instruction queries when available, with unit coverage.
+- Tests: not run (not requested).
+- Swift explorer transfer streams: document asset-id filters and expand SSE/Combine coverage.
+- Tests: not run (not requested).
+- Swift explorer transfers: add asset-id filtering for transaction-scoped transfer history/stream helpers plus Combine wrappers, with unit coverage.
+- Tests: not run (not requested).
+- Android SDK fixtures: accept wire payload fields inside instruction arguments (`wire_name`, `payload_base64`) with unit coverage.
+- Tests: not run (not requested).
 - Android SDK fixtures: allow instruction entries to supply `wire_name` + `payload_base64` to build wire payload instructions; added unit coverage in fixture tests.
+- Tests: not run (not requested).
+- Android SDK fixtures: exporter now injects instruction-level wire payloads (`wire_name`, `payload_base64`) and `transaction_payloads.json` is regenerated with wire payloads; exporter coverage added.
+- Tests: not run (not requested).
+- Android SDK tests: fixture validation now requires wire payloads for instruction executables (legacy re-encode fallback removed).
+- Tests: not run (not requested).
+- Android SDK tests: removed legacy instruction fixture/payload scaffolding now that wire-only instruction payloads are required.
+- Tests: not run (not requested).
+- Android SDK Norito codec: instruction encoding/decoding now requires wire-framed payloads (legacy argument-map encoding removed); codec tests cover wire-only instructions plus legacy chain/IVM rejection.
+- Tests: not run (not requested).
+- Android SDK docs: Java ledger-flow recipe now uses wire payload placeholders instead of legacy `InstructionBuilders`.
+- Tests: not run (docs-only change).
+- Android SDK docs: clarified wire-only instruction payload requirement in the Android SDK index.
+- Tests: not run (docs-only change).
+- Android SDK docs: updated developer experience plan to reference wire-framed instruction payloads instead of legacy templates.
+- Tests: not run (docs-only change).
+- Android SDK tests: removed the legacy instruction schema manifest snapshot (argument-map builders) now that instruction payloads are wire-only.
+- Tests: not run (not requested).
+- Android SDK instructions: removed legacy `InstructionBuilders`, require wire payload arguments in `InstructionBox.fromNorito`, and refit instruction builder tests to validate argument schemas without legacy roundtrips; README now shows wire payload placeholders.
 - Tests: not run (not requested).
 - Swift explorer transfers: add asset-id filtering for transfer details/history helpers and SSE publishers, with unit coverage.
 - Tests: not run (not requested).
@@ -12,7 +91,7 @@ Last update: 2026-01-30
 - Tests: not run (not requested).
 - Android SDK: InstructionBox now recognizes wire payload arguments (`wire_name` + `payload_base64`) and preserves Norito-framed instruction bytes; added unit coverage.
 - Tests: not run (not requested).
-- Android SDK tests: fixture encoder now compares directly when all instructions are wire payloads, otherwise falls back to canonical re-encode stability.
+- Android SDK tests: fixture encoder compares directly for instruction fixtures now that wire payloads are required.
 - Tests: not run (not requested).
 - Android SDK: added multisig signature bundle support for `SignedTransaction` encoding (new `MultisigSignature`/`MultisigSignatures` models, encoder updates, and Android SDK doc note).
 - Tests: not run (per request).
@@ -1649,3 +1728,15 @@ Last update: 2026-01-30
 - Checks: compiled 51 Kotodama example `.ko` files with `koto_compile --abi 1` (dynamic bounds enabled).
 - Integration tests: keep `trusted_peers_pop` aligned with `trusted_peers` in `observer_sync` to satisfy config validation; tests not run.
 - Torii: add `asset_id` filtering for UAID portfolio and public-lane pending rewards; update JS/Swift/Python/Android clients + SDK docs and refresh OpenAPI snapshots/portal manifests. Tests not run (not requested).
+- Docs: translated the portal JavaScript ledger-flow SDK recipe across locales and synced the portal i18n copies. Tests not run (docs-only).
+- Docs: translated the portal Python ledger-flow SDK recipe across locales and synced the portal i18n copies. Tests not run (docs-only).
+- Docs: translated the portal Swift ledger-flow SDK recipe across locales and synced the portal i18n copies. Tests not run (docs-only).
+- Docs: translated the portal Rust ledger-flow SDK recipe across locales and synced the portal i18n copies. Tests not run (docs-only).
+- Docs: translated the portal Java ledger-flow SDK recipe across locales and synced the portal i18n copies. Tests not run (docs-only).
+- Docs: translated the portal JavaScript Connect preview SDK recipe across locales and synced the portal i18n copies. Tests not run (docs-only).
+- Docs: translated the portal SNS training collateral across locales and synced the portal i18n copies. Tests not run (docs-only).
+- Docs: translated the portal SNS regulatory EU DSA 2026-03 memo across locales and synced the portal i18n copies. Tests not run (docs-only).
+- Docs: translated the portal SNS regulatory EU DSA 2027-01 memo across locales and synced the portal i18n copies. Tests not run (docs-only).
+- Docs: translated the portal Rust SDK quickstart across locales and synced the portal i18n copies. Tests not run (docs-only).
+- Docs: translated the portal Python SDK quickstart across locales and synced the portal i18n copies. Tests not run (docs-only).
+- Docs: translated the portal AI Moderation Runner specification across locales and synced the portal i18n copies. Tests not run (docs-only).

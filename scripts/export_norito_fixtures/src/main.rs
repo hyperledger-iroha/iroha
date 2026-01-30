@@ -28,8 +28,9 @@ use iroha_data_model::{
     executor::Executor,
     ipfs::IpfsPath,
     isi::{
-        Burn, ExecuteTrigger, Grant, InstructionBox, Mint, Register, RemoveAssetKeyValue,
-        RemoveKeyValue, Revoke, SetAssetKeyValue, SetKeyValue, SetParameter, Transfer, Unregister,
+        Burn, ExecuteTrigger, Grant, Instruction, InstructionBox, Mint, Register,
+        RemoveAssetKeyValue, RemoveKeyValue, Revoke, SetAssetKeyValue, SetKeyValue, SetParameter,
+        Transfer, Unregister, frame_instruction_payload,
         Upgrade,
         register::RegisterPeerWithPop,
         repo::{RepoIsi, ReverseRepoIsi},
@@ -212,6 +213,11 @@ struct PayloadSummary {
     signed_base64: String,
     payload_hash_hex: String,
     signed_hash_hex: String,
+}
+
+struct WireInstructionPayload {
+    wire_name: String,
+    payload_base64: String,
 }
 
 struct SignedEnvelopeFields {
@@ -2419,6 +2425,10 @@ fn build_fixtures_json(raw_fixtures: &[RawFixture], fixtures: &[Fixture]) -> Res
         .iter()
         .map(|fixture| (fixture.name.as_str(), &fixture.summary))
         .collect();
+    let fixtures_by_name: BTreeMap<&str, &Fixture> = fixtures
+        .iter()
+        .map(|fixture| (fixture.name.as_str(), fixture))
+        .collect();
     let mut entries = Vec::with_capacity(raw_fixtures.len());
     for raw in raw_fixtures {
         let summary = summaries.get(raw.name.as_str()).ok_or_else(|| {
@@ -2430,7 +2440,26 @@ fn build_fixtures_json(raw_fixtures: &[RawFixture], fixtures: &[Fixture]) -> Res
         let mut map = Map::new();
         map.insert("name".into(), Value::String(raw.name.clone()));
         if let Some(payload) = &raw.payload_json {
-            map.insert("payload".into(), payload.clone());
+            let mut payload_value = payload.clone();
+            if let Some(fixture) = fixtures_by_name.get(raw.name.as_str()) {
+                if let Some(wire_payloads) = wire_payloads_from_encoded(&fixture.encoded)
+                    .with_context(|| {
+                        format!(
+                            "failed to derive wire instruction payloads for '{}'",
+                            raw.name
+                        )
+                    })?
+                {
+                    apply_wire_payloads_to_payload_json(&mut payload_value, &wire_payloads)
+                        .with_context(|| {
+                            format!(
+                                "failed to inject wire payloads into fixture '{}'",
+                                raw.name
+                            )
+                        })?;
+                }
+            }
+            map.insert("payload".into(), payload_value);
         }
         map.insert(
             "encoded".into(),
@@ -2471,6 +2500,73 @@ fn build_fixtures_json(raw_fixtures: &[RawFixture], fixtures: &[Fixture]) -> Res
     }
 
     Ok(Value::Array(entries))
+}
+
+fn wire_payloads_from_encoded(encoded: &[u8]) -> Result<Option<Vec<WireInstructionPayload>>> {
+    let mut cursor = encoded;
+    let payload = TransactionPayload::decode(&mut cursor)?;
+    if !cursor.is_empty() {
+        bail!("payload decoding left trailing bytes");
+    }
+
+    let instructions = match payload.instructions {
+        Executable::Instructions(instructions) => instructions,
+        Executable::Ivm(_) => return Ok(None),
+    };
+
+    let registry = iroha_data_model::instruction_registry::default();
+    let mut out = Vec::with_capacity(instructions.len());
+    for instruction in instructions.iter() {
+        let type_name = Instruction::id(&**instruction);
+        let wire_name = registry.wire_id(type_name).unwrap_or(type_name);
+        let payload_bytes = Instruction::dyn_encode(&**instruction);
+        let framed = frame_instruction_payload(type_name, &payload_bytes)?;
+        out.push(WireInstructionPayload {
+            wire_name: wire_name.to_string(),
+            payload_base64: BASE64.encode(framed),
+        });
+    }
+
+    Ok(Some(out))
+}
+
+fn apply_wire_payloads_to_payload_json(
+    payload: &mut Value,
+    wire_payloads: &[WireInstructionPayload],
+) -> Result<()> {
+    let payload_obj = payload
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("payload must be an object"))?;
+    let executable_value = payload_obj
+        .get_mut("executable")
+        .ok_or_else(|| anyhow::anyhow!("payload missing executable"))?;
+    let executable_obj = executable_value
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("payload executable must be an object"))?;
+    let instructions_value = executable_obj
+        .get_mut("Instructions")
+        .ok_or_else(|| anyhow::anyhow!("payload executable missing Instructions"))?;
+    let instructions = instructions_value
+        .as_array_mut()
+        .ok_or_else(|| anyhow::anyhow!("payload Instructions must be an array"))?;
+    if instructions.len() != wire_payloads.len() {
+        bail!(
+            "payload instructions length mismatch: expected {}, got {}",
+            wire_payloads.len(),
+            instructions.len()
+        );
+    }
+    for (entry, wire) in instructions.iter_mut().zip(wire_payloads) {
+        let obj = entry
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("instruction entries must be objects"))?;
+        obj.insert("wire_name".into(), Value::String(wire.wire_name.clone()));
+        obj.insert(
+            "payload_base64".into(),
+            Value::String(wire.payload_base64.clone()),
+        );
+    }
+    Ok(())
 }
 
 fn write_fixtures_json(
@@ -2681,6 +2777,97 @@ mod tests {
         assert_eq!(payload_base64, fixture.summary.payload_base64);
         let nonce = obj.get("nonce").expect("nonce must be present");
         assert!(matches!(nonce, Value::Null));
+    }
+
+    #[test]
+    fn fixtures_json_injects_wire_instruction_payloads() {
+        let keypair = signing_keypair().expect("test keypair");
+        let mut args = BTreeMap::new();
+        args.insert("action".to_string(), "RegisterDomain".to_string());
+        args.insert("domain".to_string(), "wonderland".to_string());
+        let raw_instruction = RawInstruction {
+            kind: "Register".to_string(),
+            arguments: args,
+        };
+        let raw_payload = RawPayload {
+            chain: "00000002".to_string(),
+            authority: "alice@wonderland".to_string(),
+            creation_time_ms: 1_735_000_000_123,
+            executable: RawExecutable::Instructions(vec![raw_instruction.clone()]),
+            ttl_ms: Some(1_000),
+            nonce: None,
+            metadata: Vec::new(),
+        };
+
+        let mut args_value = Map::new();
+        args_value.insert("action".into(), Value::String("RegisterDomain".into()));
+        args_value.insert("domain".into(), Value::String("wonderland".into()));
+        let mut instruction_value = Map::new();
+        instruction_value.insert("kind".into(), Value::String("Register".into()));
+        instruction_value.insert("arguments".into(), Value::Object(args_value));
+        let mut executable_value = Map::new();
+        executable_value.insert("Instructions".into(), Value::Array(vec![Value::Object(instruction_value)]));
+        let mut payload_value = Map::new();
+        payload_value.insert("chain".into(), Value::String("00000002".into()));
+        payload_value.insert("authority".into(), Value::String("alice@wonderland".into()));
+        payload_value.insert(
+            "creation_time_ms".into(),
+            Value::Number(Number::U64(1_735_000_000_123)),
+        );
+        payload_value.insert("executable".into(), Value::Object(executable_value));
+        payload_value.insert("time_to_live_ms".into(), Value::Number(Number::U64(1_000)));
+        payload_value.insert("nonce".into(), Value::Null);
+        payload_value.insert("metadata".into(), Value::Object(Map::new()));
+
+        let raw = RawFixture {
+            name: "wire-inject".to_string(),
+            payload: Some(raw_payload),
+            payload_json: Some(Value::Object(payload_value)),
+            payload_base64: None,
+            signed_base64: None,
+            chain_hint: None,
+            authority_hint: None,
+            creation_time_ms_hint: None,
+            ttl_ms_hint: None,
+            nonce_hint: None,
+            payload_hash_hint: None,
+            signed_hash_hint: None,
+            encoded: None,
+        };
+
+        let fixture = raw
+            .clone()
+            .into_fixture(&keypair, true, true)
+            .expect("fixture");
+        let expected_wire = wire_payloads_from_encoded(&fixture.encoded)
+            .expect("wire payloads")
+            .expect("instruction payloads");
+
+        let value =
+            build_fixtures_json(&[raw], std::slice::from_ref(&fixture)).expect("fixtures json");
+        let entries = value.as_array().expect("fixtures json must be array");
+        let payload = entries[0]
+            .as_object()
+            .and_then(|obj| obj.get("payload"))
+            .expect("payload must be present");
+        let instructions = payload
+            .get("executable")
+            .and_then(|exec| exec.get("Instructions"))
+            .and_then(Value::as_array)
+            .expect("instructions must be present");
+        let instruction = instructions[0]
+            .as_object()
+            .expect("instruction must be object");
+        let wire_name = instruction
+            .get("wire_name")
+            .and_then(Value::as_str)
+            .expect("wire_name must be present");
+        let payload_base64 = instruction
+            .get("payload_base64")
+            .and_then(Value::as_str)
+            .expect("payload_base64 must be present");
+        assert_eq!(wire_name, expected_wire[0].wire_name);
+        assert_eq!(payload_base64, expected_wire[0].payload_base64);
     }
 
     #[test]

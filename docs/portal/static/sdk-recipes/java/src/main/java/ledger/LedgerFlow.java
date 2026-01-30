@@ -7,6 +7,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
@@ -19,7 +20,6 @@ import org.hyperledger.iroha.android.client.RetryPolicy;
 import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.TransactionPayload;
-import org.hyperledger.iroha.android.model.instructions.InstructionBuilders;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
 
@@ -36,12 +36,18 @@ public final class LedgerFlow {
     }
 
     final Signer signer = signerFromHex(privateKeyHex);
+    // Replace placeholders with Norito wire payload bytes for each instruction.
     final List<InstructionBox> instructions =
         List.of(
-            InstructionBuilders.registerAssetDefinition("coffee#wonderland"),
-            InstructionBuilders.mintAsset(assetId("coffee#wonderland", adminAccount), "250"),
-            InstructionBuilders.transferAsset(
-                assetId("coffee#wonderland", adminAccount), "50", receiverAccount));
+            InstructionBox.fromWirePayload(
+                "<WIRE_NAME_REGISTER_ASSET_DEFINITION>",
+                Base64.getDecoder().decode("<WIRE_PAYLOAD_BASE64_REGISTER_ASSET_DEFINITION>")),
+            InstructionBox.fromWirePayload(
+                "<WIRE_NAME_MINT_ASSET>",
+                Base64.getDecoder().decode("<WIRE_PAYLOAD_BASE64_MINT_ASSET>")),
+            InstructionBox.fromWirePayload(
+                "<WIRE_NAME_TRANSFER_ASSET>",
+                Base64.getDecoder().decode("<WIRE_PAYLOAD_BASE64_TRANSFER_ASSET>")));
 
     final TransactionPayload payload =
         TransactionPayload.builder()

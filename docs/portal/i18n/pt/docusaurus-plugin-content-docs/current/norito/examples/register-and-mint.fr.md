@@ -1,15 +1,49 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.fr.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Tradução em andamento
+---
+slug: /norito/examples/register-and-mint
+title: Enregistrer un domaine et frapper des actifs
+description: Démontre la création de domaines avec autorisations, l'enregistrement d'actifs et la frappe déterministe.
+source: crates/ivm/docs/examples/13_register_and_mint.ko
+---
 
-Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+Démontre la création de domaines avec autorisations, l'enregistrement d'actifs et la frappe déterministe.
 
-Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.
+## Parcours du registre
+
+- Assurez-vous que le compte de destination (par exemple `ih58...`) existe, en reflétant la phase de mise en place dans chaque quickstart SDK.
+- Invoquez le point d'entrée `register_and_mint` pour créer la définition d'actif ROSE et frapper 250 unités pour Alice en une seule transaction.
+- Vérifiez les soldes via `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account ih58...` pour confirmer que la frappe a réussi.
+
+## Guides SDK associés
+
+- [Quickstart SDK Rust](/sdks/rust)
+- [Quickstart SDK Python](/sdks/python)
+- [Quickstart SDK JavaScript](/sdks/javascript)
+
+[Télécharger la source Kotodama](/norito-snippets/register-and-mint.ko)
+
+```text
+// Register a new asset and mint some to the specified account.
+seiyaku RegisterAndMint {
+  kotoage fn register_and_mint() permission(AssetManager) {
+    // name, symbol, quantity (precision or supply depending on host), mintable flag
+    let name = "rose";
+    let symbol = "ROSE";
+    let qty = 1000;      // interpretation depends on data model (example only)
+    let mintable = 1;    // 1 = mintable, 0 = fixed
+    register_asset(name, symbol, qty, mintable);
+
+    // Mint 250 ROSE to Alice
+    let to = account!("ih58...");
+    let asset = asset_definition!("rose#wonderland");
+    mint_asset(to, asset, 250);
+  }
+}
+```

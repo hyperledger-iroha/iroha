@@ -13,7 +13,7 @@ use std::collections::btree_map::Entry as BTreeEntry;
 #[cfg(feature = "telemetry")]
 use std::sync::Mutex;
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroUsize,
@@ -21,7 +21,6 @@ use std::{
         Arc, RwLock as StdRwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::Duration,
 };
 
 use http::StatusCode;
@@ -696,6 +695,21 @@ impl StateTelemetry {
     /// Access the `SoraNet` privacy aggregator.
     pub fn soranet_privacy(&self) -> Arc<SoranetSecureAggregator> {
         Arc::clone(&self.soranet_privacy)
+    }
+
+    /// Observe view_lock wait/hold durations during block commit.
+    pub fn observe_state_commit_view_lock(&self, wait: Duration, hold: Duration) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        let wait_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX);
+        let hold_ms = u64::try_from(hold.as_millis()).unwrap_or(u64::MAX);
+        self.metrics
+            .state_commit_view_lock_wait_ms
+            .observe(u64_to_f64(wait_ms));
+        self.metrics
+            .state_commit_view_lock_hold_ms
+            .observe(u64_to_f64(hold_ms));
     }
 
     /// Replace the cached Nexus lane/dataspace metadata used for telemetry labels.
@@ -5029,6 +5043,12 @@ pub enum CommitStage {
     BlockSync,
     /// QC verification + block validation in the commit worker.
     QcVerify,
+    /// Kura persistence in the commit worker.
+    KuraStore,
+    /// WSV apply in the commit worker.
+    StateApply,
+    /// WSV commit in the commit worker.
+    StateCommit,
     /// Persistence work (kura + WSV apply/commit).
     Persist,
 }
@@ -5039,6 +5059,9 @@ impl CommitStage {
         match self {
             CommitStage::BlockSync => "block_sync",
             CommitStage::QcVerify => "qc_verify",
+            CommitStage::KuraStore => "kura_store",
+            CommitStage::StateApply => "state_apply",
+            CommitStage::StateCommit => "state_commit",
             CommitStage::Persist => "persist",
         }
     }
@@ -12306,6 +12329,9 @@ mod tests {
         tel.observe_commit_stage_ms(CommitStage::QcVerify, 12);
         tel.observe_commit_stage_ms(CommitStage::Persist, 34);
         tel.observe_commit_stage_ms(CommitStage::BlockSync, 56);
+        tel.observe_commit_stage_ms(CommitStage::KuraStore, 7);
+        tel.observe_commit_stage_ms(CommitStage::StateApply, 9);
+        tel.observe_commit_stage_ms(CommitStage::StateCommit, 11);
         assert_eq!(
             metrics
                 .sumeragi_commit_stage_ms
@@ -12325,6 +12351,42 @@ mod tests {
                 .sumeragi_commit_stage_ms
                 .with_label_values(&["block_sync"])
                 .get_sample_count(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_commit_stage_ms
+                .with_label_values(&["kura_store"])
+                .get_sample_count(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_commit_stage_ms
+                .with_label_values(&["state_apply"])
+                .get_sample_count(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_commit_stage_ms
+                .with_label_values(&["state_commit"])
+                .get_sample_count(),
+            1
+        );
+    }
+
+    #[test]
+    fn state_commit_view_lock_metrics_recorded() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
+        telemetry.observe_state_commit_view_lock(Duration::from_millis(12), Duration::from_millis(34));
+        assert_eq!(
+            metrics.state_commit_view_lock_wait_ms.get_sample_count(),
+            1
+        );
+        assert_eq!(
+            metrics.state_commit_view_lock_hold_ms.get_sample_count(),
             1
         );
     }

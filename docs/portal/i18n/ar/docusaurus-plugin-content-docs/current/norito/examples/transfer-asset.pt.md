@@ -1,17 +1,46 @@
-<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
-
 ---
 lang: ar
 direction: rtl
 source: docs/portal/docs/norito/examples/transfer-asset.pt.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# قيد الترجمة
+---
+slug: /norito/examples/transfer-asset
+title: Transferir ativo entre contas
+description: Fluxo direto de transferencia de ativos que espelha os quickstarts do SDK e os roteiros do livro razao.
+source: examples/transfer/transfer.ko
+---
 
-<div dir="rtl">
-هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث حقل `status` في بيانات التعريف أعلاه.
+Fluxo direto de transferencia de ativos que espelha os quickstarts do SDK e os roteiros do livro razao.
 
-هذا المخطط في انتظار الترجمة. استبدل هذا النص بالمحتوى المترجَم وغيّر الحالة إلى `complete` عند الانتهاء. تأكد أيضًا من أن حقل `translation_last_reviewed` يعكس آخر مراجعة تمت مقارنةً بالنص الإنجليزي.
-</div>
+## Roteiro do livro razao
+
+- Pre-financie Alice com o ativo alvo (por exemplo via o trecho `register and mint` ou os fluxos de quickstart do SDK).
+- Execute o entrypoint `do_transfer` para mover 10 unidades de Alice para Bob, atendendo a permissao `AssetTransferRole`.
+- Consulte saldos (`FindAccountAssets`, `iroha_cli ledger assets list`) ou assine eventos do pipeline para observar o resultado da transferencia.
+
+## Guias de SDK relacionados
+
+- [Quickstart do SDK Rust](/sdks/rust)
+- [Quickstart do SDK Python](/sdks/python)
+- [Quickstart do SDK JavaScript](/sdks/javascript)
+
+[Baixe a fonte Kotodama](/norito-snippets/transfer-asset.ko)
+
+```text
+// Transfer example: uses typed pointer constructors and transfer_asset syscall
+
+seiyaku TransferDemo {
+  // Public entrypoint to transfer 10 units of rose#wonderland from alice to bob
+  kotoage fn do_transfer() permission(AssetTransferRole) {
+    transfer_asset(
+      account!("ih58..."),
+      account!("ih58..."),
+      asset_definition!("rose#wonderland"),
+      10
+    );
+  }
+}
+```

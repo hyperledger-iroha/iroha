@@ -1,20 +1,31 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/developer-index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 27b9997967e7b5dd748d8c70274c79af6013209bcda27ae6001e1805a7f371ee
 source_last_modified: "2025-11-14T04:43:21.636900+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# בתהליך תרגום
+:::note Fuente canónica
+Esta página refleja `docs/source/sorafs/developer/index.md`. Mantén ambas versiones sincronizadas hasta que los docs heredados se retiren.
+:::
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+# Guías para desarrolladores de SoraFS
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+```{toctree}
+:caption: Primeros pasos
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

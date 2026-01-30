@@ -705,90 +705,102 @@ public final class HttpClientTransport implements IrohaClient {
         .execute(request)
         .whenComplete(
             (response, throwable) -> {
-              if (future.isDone()) {
-                return;
-              }
-              if (throwable != null) {
-                final Throwable cause =
-                    throwable instanceof CompletionException ? throwable.getCause() : throwable;
-                notifyFailure(request, cause);
-                future.completeExceptionally(cause);
-                return;
-              }
-
-          final ClientResponse clientResponse =
-              new ClientResponse(
-                  response.statusCode(),
-                  response.body(),
-                  response.message(),
-                  null,
-                  extractRejectCode(response));
-              notifyResponse(request, clientResponse);
-
-              final int statusCode = clientResponse.statusCode();
-              if (statusCode != 200 && statusCode != 202 && statusCode != 204 && statusCode != 404) {
-                future.completeExceptionally(
-                    new RuntimeException(
-                        "Unexpected pipeline status code " + statusCode + " for transaction " + hashHex));
-                return;
-              }
-
-              final Map<String, Object> payload = parsePipelineStatusPayload(clientResponse.body());
-              final int nextAttempts = attemptsSoFar + 1;
-              final Optional<String> statusKind =
-                  payload == null
-                      ? Optional.empty()
-                      : PipelineStatusExtractor.extractStatusKind(payload);
-              final String statusLiteral = statusKind.orElse(null);
-              final boolean isSuccess =
-                  statusLiteral != null && options.successStatuses().contains(statusLiteral);
-              final boolean isFailure =
-                  statusLiteral != null && options.failureStatuses().contains(statusLiteral);
-              emitPipelineStatusTelemetry(
-                  request, hashHex, statusLiteral, isSuccess, isFailure, nextAttempts);
-
-              if (options.observer() != null) {
-                try {
-                  options.observer().onStatus(statusLiteral, payload, nextAttempts);
-                } catch (final RuntimeException observerError) {
-                  future.completeExceptionally(observerError);
+              try {
+                if (future.isDone()) {
                   return;
                 }
-              }
+                if (throwable != null) {
+                  final Throwable cause =
+                      throwable instanceof CompletionException ? throwable.getCause() : throwable;
+                  notifyFailure(request, cause);
+                  future.completeExceptionally(cause);
+                  return;
+                }
 
-              if (isSuccess) {
-                future.complete(payload != null ? payload : Map.of());
-                return;
-              }
-              if (isFailure) {
-                future.completeExceptionally(new TransactionStatusException(hashHex, statusLiteral, payload));
-                return;
-              }
+                final ClientResponse clientResponse =
+                    new ClientResponse(
+                        response.statusCode(),
+                        response.body(),
+                        response.message(),
+                        null,
+                        extractRejectCode(response));
+                notifyResponse(request, clientResponse);
 
-              if (options.maxAttempts() != null && nextAttempts >= options.maxAttempts()) {
-                future.completeExceptionally(
-                    new TransactionTimeoutException(
-                        "Transaction " + hashHex + " did not reach a terminal status "
-                            + "after " + nextAttempts + " attempts",
-                        hashHex,
-                        nextAttempts,
-                        payload));
-                return;
-              }
+                final int statusCode = clientResponse.statusCode();
+                if (statusCode != 200
+                    && statusCode != 202
+                    && statusCode != 204
+                    && statusCode != 404) {
+                  future.completeExceptionally(
+                      new RuntimeException(
+                          "Unexpected pipeline status code " + statusCode + " for transaction "
+                              + hashHex));
+                  return;
+                }
 
-              if (deadline != Long.MAX_VALUE && System.currentTimeMillis() >= deadline) {
-                future.completeExceptionally(
-                    new TransactionTimeoutException(
-                        "Transaction " + hashHex + " did not reach a terminal status "
-                            + "within the configured timeout",
-                        hashHex,
-                        nextAttempts,
-                        payload));
-                return;
-              }
+                final Map<String, Object> payload =
+                    parsePipelineStatusPayload(clientResponse.body());
+                final int nextAttempts = attemptsSoFar + 1;
+                final Optional<String> statusKind =
+                    payload == null
+                        ? Optional.empty()
+                        : PipelineStatusExtractor.extractStatusKind(payload);
+                final String statusLiteral = statusKind.orElse(null);
+                final boolean isSuccess =
+                    statusLiteral != null && options.successStatuses().contains(statusLiteral);
+                final boolean isFailure =
+                    statusLiteral != null && options.failureStatuses().contains(statusLiteral);
+                emitPipelineStatusTelemetry(
+                    request, hashHex, statusLiteral, isSuccess, isFailure, nextAttempts);
 
-              scheduleNextPoll(
-                  hashHex, options, deadline, nextAttempts, payload, future);
+                if (options.observer() != null) {
+                  try {
+                    options.observer().onStatus(statusLiteral, payload, nextAttempts);
+                  } catch (final RuntimeException observerError) {
+                    future.completeExceptionally(observerError);
+                    return;
+                  }
+                }
+
+                if (isSuccess) {
+                  future.complete(payload != null ? payload : Map.of());
+                  return;
+                }
+                if (isFailure) {
+                  future.completeExceptionally(
+                      new TransactionStatusException(hashHex, statusLiteral, payload));
+                  return;
+                }
+
+                if (options.maxAttempts() != null && nextAttempts >= options.maxAttempts()) {
+                  future.completeExceptionally(
+                      new TransactionTimeoutException(
+                          "Transaction " + hashHex + " did not reach a terminal status "
+                              + "after " + nextAttempts + " attempts",
+                          hashHex,
+                          nextAttempts,
+                          payload));
+                  return;
+                }
+
+                if (deadline != Long.MAX_VALUE && System.currentTimeMillis() >= deadline) {
+                  future.completeExceptionally(
+                      new TransactionTimeoutException(
+                          "Transaction " + hashHex + " did not reach a terminal status "
+                              + "within the configured timeout",
+                          hashHex,
+                          nextAttempts,
+                          payload));
+                  return;
+                }
+
+                scheduleNextPoll(
+                    hashHex, options, deadline, nextAttempts, payload, future);
+              } catch (final Exception e) {
+                if (!future.isDone()) {
+                  future.completeExceptionally(e);
+                }
+              }
             });
   }
 
@@ -828,6 +840,13 @@ public final class HttpClientTransport implements IrohaClient {
   @SuppressWarnings("unchecked")
   private Map<String, Object> parsePipelineStatusPayload(final byte[] body) {
     if (body == null || body.length == 0) {
+      return null;
+    }
+    if (body.length >= 4
+        && body[0] == 'N'
+        && body[1] == 'R'
+        && body[2] == 'T'
+        && body[3] == '0') {
       return null;
     }
     final String json = new String(body, StandardCharsets.UTF_8).trim();

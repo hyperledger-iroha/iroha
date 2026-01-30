@@ -1,17 +1,46 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/portal/docs/norito/examples/nft-flow.ur.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# ترجمہ جاری ہے
+---
+slug: /norito/examples/nft-flow
+title: NFT کو منٹ، منتقل اور برن کریں
+description: NFT کے لائف سائیکل کو ابتدا سے انتہا تک دکھاتا ہے: مالک کو منٹ کرنا، منتقل کرنا، میٹا ڈیٹا ٹیگ کرنا، اور برن کرنا۔
+source: crates/ivm/docs/examples/12_nft_flow.ko
+---
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+NFT کے لائف سائیکل کو ابتدا سے انتہا تک دکھاتا ہے: مالک کو منٹ کرنا، منتقل کرنا، میٹا ڈیٹا ٹیگ کرنا، اور برن کرنا۔
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+## لیجر واک تھرو
+
+- یقینی بنائیں کہ NFT ڈیفینیشن (مثلا `n0#wonderland`) موجود ہو اور اسنیپٹ میں استعمال ہونے والے مالک/موصول کنندہ اکاؤنٹس (`ih58...`, `ih58...`) بھی موجود ہوں۔
+- `nft_issue_and_transfer` انٹری پوائنٹ کال کریں تاکہ NFT منٹ ہو، Alice سے Bob کو منتقل ہو، اور اجرا کی وضاحت کرنے والا میٹا ڈیٹا فلیگ منسلک ہو۔
+- `iroha_cli ledger nfts list --account <id>` یا SDK کے متبادل استعمال کر کے NFT لیجر اسٹیٹ دیکھیں تاکہ ٹرانسفر کی تصدیق ہو، پھر تصدیق کریں کہ برن انسٹرکشن چلنے کے بعد اثاثہ حذف ہو جاتا ہے۔
+
+## متعلقہ SDK گائیڈز
+
+- [Rust SDK quickstart](/sdks/rust)
+- [Python SDK quickstart](/sdks/python)
+- [JavaScript SDK quickstart](/sdks/javascript)
+
+[Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/nft-flow.ko)
+
+```text
+// Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
+seiyaku NftFlow {
+  kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
+    let owner = account!("ih58...");
+    let nft = nft_id!("n0$wonderland");
+    nft_mint_asset(nft, owner);
+
+    let to = account!("ih58...");
+    nft_transfer_asset(owner, nft, to);
+    nft_set_metadata(nft, json!{ issued: "demo" });
+    nft_burn_asset(nft);
+  }
+}
+```

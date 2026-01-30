@@ -75,9 +75,11 @@ fi
 MAIN_SOURCES=$(find "$ROOT/src/main/java" -name '*.java')
 TEST_SOURCES=$(find "$ROOT/src/test/java" -name '*.java')
 
-JAVAC_FLAGS=("-d" "$CLASSES")
 if javac --release 21 -version >/dev/null 2>&1; then
   JAVAC_FLAGS=("--release" "21" "-d" "$CLASSES")
+else
+  echo "JDK 21+ is required to compile norito-java." >&2
+  exit 1
 fi
 
 javac "${JAVAC_FLAGS[@]}" $MAIN_SOURCES $TEST_SOURCES

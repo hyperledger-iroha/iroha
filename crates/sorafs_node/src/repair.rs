@@ -3294,10 +3294,9 @@ mod tests {
         let file_path = dir.path().join("not-a-dir");
         fs::write(&file_path, b"blocked").expect("write guard file");
 
-        let config = RepairConfig {
-            state_dir: Some(file_path),
-            ..RepairConfig::default()
-        };
+        let mut actual = actual::SorafsRepair::default();
+        actual.state_dir = Some(file_path);
+        let config = RepairConfig::from(&actual);
         let manager = RepairManager::new_with_config(config);
         let verdict = AuditVerdictV1 {
             version: AUDIT_VERDICT_VERSION_V1,

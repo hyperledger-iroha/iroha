@@ -1,15 +1,41 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.fr.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Traducción en curso
+---
+id: priority-snapshot-2025-03
+title: Instantané des priorités — mars 2025 (Bêta)
+description: Miroir du snapshot de steering Nexus 2025-03 ; en attente d'ACKs avant le rollout public.
+---
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+> Source canonique : `docs/source/sorafs/priority_snapshot_2025-03.md`
+>
+> Statut : **Bêta / en attente des ACKs du steering** (Networking, Storage, Docs leads).
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+## Aperçu
+
+L'instantané de mars maintient les initiatives docs/content-network alignées
+avec les axes de livraison SoraFS (SF-3, SF-6b, SF-9). Une fois que tous les
+leads auront accusé réception dans le canal de steering Nexus, retirez la note
+« Bêta » ci-dessus.
+
+### Fils de focus
+
+1. **Diffuser l'instantané des priorités** — collecter les acknowledgements et
+   les consigner dans les minutes du council du 2025-03-05.
+2. **Clôturer le kickoff Gateway/DNS** — répéter le nouveau kit de facilitation
+   (Section 6 du runbook) avant le workshop 2025-03-03.
+3. **Migration des runbooks opérateur** — le portail `Runbook Index` est live ;
+   exposer l'URL de beta preview après le sign-off d'onboarding des reviewers.
+4. **Fils de delivery SoraFS** — aligner le travail restant SF-3/6b/9 avec le
+   plan/roadmap :
+   - Worker d'ingestion PoR + endpoint de statut dans `sorafs-node`.
+   - Polissage des bindings CLI/SDK sur les intégrations orchestrator Rust/JS/Swift.
+   - Câblage runtime du coordinateur PoR et événements GovernanceLog.
+
+Voir le fichier source pour la table complète, la checklist de distribution et
+les entrées de log.

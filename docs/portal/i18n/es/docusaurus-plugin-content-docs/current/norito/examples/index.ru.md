@@ -1,15 +1,21 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/portal/docs/norito/examples/index.ru.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Traducción en curso
+---
+title: Примеры Norito
+description: Подборка Kotodama-сниппетов с пошаговыми обходами реестра.
+slug: /norito/examples
+---
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+Эти примеры повторяют quickstart'ы SDK и walkthrough'ы реестра. Каждый сниппет включает чек-лист по реестру и ссылается на руководства по Rust, Python и JavaScript, чтобы вы могли воспроизвести тот же сценарий от начала до конца.
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+- **[Каркас входной точки Hajimari](./hajimari-entrypoint)** — Минимальный каркас контракта Kotodama с одной публичной точкой входа и хендлом состояния.
+- **[Зарегистрировать домен и выпустить активы](./register-and-mint)** — Показывает создание доменов с разрешениями, регистрацию активов и детерминированный выпуск.
+- **[Вызвать перенос с хоста из Kotodama](./call-transfer-asset)** — Показывает, как точка входа Kotodama может вызвать инструкцию хоста `transfer_asset` с встроенной проверкой метаданных.
+- **[Перевести актив между аккаунтами](./transfer-asset)** — Простой сценарий перевода активов, повторяющий quickstart'ы SDK и walkthrough'ы реестра.
+- **[Выпустить, перевести и сжечь NFT](./nft-flow)** — Проводит по жизненному циклу NFT от начала до конца: выпуск владельцу, перевод, добавление метаданных и сжигание.

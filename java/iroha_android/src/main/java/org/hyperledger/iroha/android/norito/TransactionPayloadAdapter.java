@@ -11,7 +11,6 @@ import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.TransactionPayload;
-import org.hyperledger.iroha.android.model.instructions.InstructionKind;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
@@ -20,10 +19,9 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 
 /**
  * Norito adapter that mirrors the {@link TransactionPayload} structure used by the Android library.
- * IVM bytecode payloads are encoded directly. Instruction payloads are preserved when provided as
- * wire-framed Norito blobs (wire id + Norito header), while legacy argument-map encoding remains
- * available for backwards-compatible decoding. Metadata values are encoded as JSON strings to match
- * the Rust `Json` wrapper.
+ * IVM bytecode payloads are encoded directly. Instruction payloads must be provided as wire-framed
+ * Norito blobs (wire id + Norito header). Metadata values are encoded as JSON strings to match the
+ * Rust `Json` wrapper.
  */
 final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload> {
 
@@ -39,8 +37,6 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final TypeAdapter<Long> UINT8_ADAPTER = NoritoAdapters.uint(8);
   private static final TypeAdapter<byte[]> BYTE_VECTOR_ADAPTER = NoritoAdapters.byteVecAdapter();
   private static final TypeAdapter<byte[]> IVM_BYTECODE_ADAPTER = new IvmBytecodeAdapter();
-  private static final TypeAdapter<Map<String, String>> STRING_MAP_ADAPTER =
-      NoritoAdapters.map(STRING_ADAPTER, STRING_ADAPTER);
   private static final TypeAdapter<List<InstructionBox>> INSTRUCTION_LIST_ADAPTER =
       NoritoAdapters.sequence(new InstructionAdapter());
   private static final TypeAdapter<Long> ENUM_TAG_ADAPTER = NoritoAdapters.uint(32);
@@ -120,9 +116,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
         encodeSizedField(encoder, BYTE_VECTOR_ADAPTER, wire.payloadBytes());
         return;
       }
-      // TODO: Switch legacy instructions to canonical wire payloads once codegen encoders land.
-      encodeSizedField(encoder, ENUM_TAG_ADAPTER, (long) value.kind().discriminant());
-      encodeSizedField(encoder, STRING_MAP_ADAPTER, value.arguments());
+      throw new IllegalArgumentException("Instruction payload must be wire-framed");
     }
 
     @Override
@@ -135,7 +129,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       if (wire != null) {
         return wire;
       }
-      return decodeLegacyInstruction(payload, decoder.flags(), decoder.flagsHint());
+      throw new IllegalArgumentException("Instruction payload must be wire-framed");
     }
   }
 
@@ -540,19 +534,6 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     }
   }
 
-  private static InstructionBox decodeLegacyInstruction(
-      final byte[] payload, final int flags, final int flagsHint) {
-    final NoritoDecoder legacyDecoder = new NoritoDecoder(payload, flags, flagsHint);
-    final long discriminant = decodeSizedField(legacyDecoder, ENUM_TAG_ADAPTER);
-    final Map<String, String> arguments =
-        new LinkedHashMap<>(decodeSizedField(legacyDecoder, STRING_MAP_ADAPTER));
-    if (legacyDecoder.remaining() != 0) {
-      throw new IllegalArgumentException("Instruction payload has trailing bytes");
-    }
-    final InstructionKind kind = InstructionKind.fromDiscriminant(discriminant);
-    return InstructionBox.fromNorito(kind, arguments);
-  }
-
   private static boolean isWirePayloadCandidate(final String wireName, final byte[] payload) {
     if (wireName == null || wireName.isBlank()) {
       return false;
@@ -586,21 +567,12 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
 
     private static String decodePayload(
         final byte[] payload, final int flags, final int flagsHint) {
-      try {
-        final NoritoDecoder sized = new NoritoDecoder(payload, flags, flagsHint);
-        final String value = decodeSizedField(sized, STRING_ADAPTER);
-        if (sized.remaining() != 0) {
-          throw new IllegalArgumentException("Trailing bytes after ChainId payload");
-        }
-        return value;
-      } catch (final IllegalArgumentException ex) {
-        final NoritoDecoder legacy = new NoritoDecoder(payload, flags, flagsHint);
-        final String value = STRING_ADAPTER.decode(legacy);
-        if (legacy.remaining() != 0) {
-          throw new IllegalArgumentException("Trailing bytes after ChainId legacy payload");
-        }
-        return value;
+      final NoritoDecoder sized = new NoritoDecoder(payload, flags, flagsHint);
+      final String value = decodeSizedField(sized, STRING_ADAPTER);
+      if (sized.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after ChainId payload");
       }
+      return value;
     }
   }
 
@@ -618,21 +590,12 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
 
     private static byte[] decodePayload(
         final byte[] payload, final int flags, final int flagsHint) {
-      try {
-        final NoritoDecoder sized = new NoritoDecoder(payload, flags, flagsHint);
-        final byte[] value = decodeSizedField(sized, BYTE_VECTOR_ADAPTER);
-        if (sized.remaining() != 0) {
-          throw new IllegalArgumentException("Trailing bytes after IVM payload");
-        }
-        return value;
-      } catch (final IllegalArgumentException ex) {
-        final NoritoDecoder legacy = new NoritoDecoder(payload, flags, flagsHint);
-        final byte[] value = BYTE_VECTOR_ADAPTER.decode(legacy);
-        if (legacy.remaining() != 0) {
-          throw new IllegalArgumentException("Trailing bytes after IVM legacy payload");
-        }
-        return value;
+      final NoritoDecoder sized = new NoritoDecoder(payload, flags, flagsHint);
+      final byte[] value = decodeSizedField(sized, BYTE_VECTOR_ADAPTER);
+      if (sized.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after IVM payload");
       }
+      return value;
     }
   }
 

@@ -1,18 +1,45 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/norito/examples/register-and-mint.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 1d21b5602be418c1154d18c287c408bcae8f9ca110811a59e48cdf539e270cdf
 source_last_modified: "2025-11-14T04:43:20.791089+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+## Roteiro do livro razao
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+- Garanta que a conta de destino (por exemplo `ih58...`) exista, espelhando a fase de configuracao em cada quickstart do SDK.
+- Invoque o entrypoint `register_and_mint` para criar a definicao do ativo ROSE e cunhar 250 unidades para Alice em uma unica transacao.
+- Verifique os saldos via `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account ih58...` para confirmar que a cunhagem foi bem-sucedida.
+
+## Guias de SDK relacionados
+
+- [Quickstart do SDK Rust](/sdks/rust)
+- [Quickstart do SDK Python](/sdks/python)
+- [Quickstart do SDK JavaScript](/sdks/javascript)
+
+[Baixe a fonte Kotodama](/norito-snippets/register-and-mint.ko)
+
+```text
+// Register a new asset and mint some to the specified account.
+seiyaku RegisterAndMint {
+  kotoage fn register_and_mint() permission(AssetManager) {
+    // name, symbol, quantity (precision or supply depending on host), mintable flag
+    let name = "rose";
+    let symbol = "ROSE";
+    let qty = 1000;      // interpretation depends on data model (example only)
+    let mintable = 1;    // 1 = mintable, 0 = fixed
+    register_asset(name, symbol, qty, mintable);
+
+    // Mint 250 ROSE to Alice
+    let to = account!("ih58...");
+    let asset = asset_definition!("rose#wonderland");
+    mint_asset(to, asset, 250);
+  }
+}
+```

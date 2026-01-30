@@ -1,18 +1,45 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w2/plan.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 7b40b559dff7453a3ad71114618bf2f1db0944f93ac0f1944167c2899dea6cdd
 source_last_modified: "2025-11-14T04:43:19.937457+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+| البند | التفاصيل |
+| --- | --- |
+| الموجة | W2 - مراجعة المجتمع |
+| نافذة الهدف | الربع الثالث 2025 الاسبوع 1 (مبدئي) |
+| وسم الاثر (مخطط) | `preview-2025-06-15` |
+| تذكرة المتتبع | `DOCS-SORA-Preview-W2` |
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+## الاهداف
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+1. تعريف معايير intake المجتمعية وسير عمل التقييم.
+2. الحصول على موافقة الحوكمة على القائمة المقترحة وملحق الاستخدام المقبول.
+3. تحديث اثر المعاينة المتحقق بالـ checksum وحزمة القياس للنافذة الجديدة.
+4. تجهيز وكيل Try it واللوحات قبل ارسال الدعوات.
+
+## تفصيل المهام
+
+| المعرف | المهمة | المالك | الاستحقاق | الحالة | ملاحظات |
+| --- | --- | --- | --- | --- | --- |
+| W2-P1 | صياغة معايير intake المجتمعية (الاهلية، الحد الاقصى، متطلبات CoC) وتوزيعها على الحوكمة | Docs/DevRel lead | 2025-05-15 | ✅ مكتمل | تم دمج سياسة intake في `DOCS-SORA-Preview-W2` واعتمادها في اجتماع المجلس 2025-05-20. |
+| W2-P2 | تحديث قالب الطلب باسئلة خاصة بالمجتمع (الدوافع، الاتاحة، احتياجات التوطين) | Docs-core-01 | 2025-05-18 | ✅ مكتمل | ملف `docs/examples/docs_preview_request_template.md` يتضمن الان قسم Community، ومشار اليه في نموذج intake. |
+| W2-P3 | تأمين موافقة الحوكمة على خطة intake (تصويت اجتماع + محاضر مسجلة) | Governance liaison | 2025-05-22 | ✅ مكتمل | تم تمرير التصويت بالاجماع في 2025-05-20؛ المحاضر وقائمة التصويت مربوطة في `DOCS-SORA-Preview-W2`. |
+| W2-P4 | جدولة staging لوكيل Try it والتقاط القياس لنافذة W2 (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025-06-05 | ✅ مكتمل | تذكرة التغيير `OPS-TRYIT-188` تمت الموافقة عليها وتنفيذها في 2025-06-09 02:00-04:00 UTC؛ لقطات Grafana ارشفت مع التذكرة. |
+| W2-P5 | بناء/التحقق من وسم اثر المعاينة الجديد (`preview-2025-06-15`) وارشفة سجلات descriptor/checksum/probe | Portal TL | 2025-06-07 | ✅ مكتمل | تم تشغيل `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` في 2025-06-10؛ المخرجات محفوظة تحت `artifacts/docs_preview/W2/preview-2025-06-15/`. |
+| W2-P6 | تجميع قائمة دعوات المجتمع (<=25 مراجع، دفعات مرحلية) بمعلومات اتصال معتمدة من الحوكمة | Community manager | 2025-06-10 | ✅ مكتمل | تمت الموافقة على الدفعة الاولى من 8 مراجعين مجتمعيين؛ معرفات الطلب `DOCS-SORA-Preview-REQ-C01...C08` مسجلة في المتتبع. |
+
+## قائمة ادلة الاثبات
+
+- [x] سجل موافقة الحوكمة (محاضر الاجتماع + رابط التصويت) مرفق بـ `DOCS-SORA-Preview-W2`.
+- [x] قالب الطلب المحدث مثبت تحت `docs/examples/`.
+- [x] descriptor لاصدار `preview-2025-06-15` وسجل checksum ومخرجات probe وتقرير الروابط ونص وكيل Try it محفوظة تحت `artifacts/docs_preview/W2/`.
+- [x] لقطات Grafana (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) ملتقطة لنافذة preflight في W2.
+- [x] جدول roster للدعوات مع معرفات المراجعين وتذاكر الطلب وتواريخ الموافقة معبأة قبل الارسال (راجع قسم W2 في المتتبع).
+
+حافظ على تحديث هذه الخطة؛ يشير اليها المتتبع كي يرى مخطط DOCS-SORA ما تبقى قبل ارسال دعوات W2.

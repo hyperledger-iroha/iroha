@@ -7,14 +7,12 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.model.InstructionBox;
-import org.hyperledger.iroha.android.model.instructions.InstructionBuilders;
-import org.hyperledger.iroha.android.model.instructions.InstructionKind;
 import org.hyperledger.iroha.android.model.instructions.RegisterPinManifestInstruction;
 import org.hyperledger.iroha.android.testing.SimpleJson;
 
 /**
- * Ensures {@link RegisterPinManifestInstruction} mirrors the tracked SoraFS fixture and round-trips
- * through the Norito-compatible {@link InstructionBox} helpers.
+ * Ensures {@link RegisterPinManifestInstruction} mirrors the tracked SoraFS fixture and
+ * serializes into the expected argument schema.
  */
 public final class SorafsRegisterPinManifestBuilderTests {
 
@@ -27,7 +25,7 @@ public final class SorafsRegisterPinManifestBuilderTests {
     final Map<String, Object> instruction = asMap(fixture.get("instruction"), "instruction");
 
     final RegisterPinManifestInstruction payload = buildInstruction(instruction);
-    final InstructionBox box = InstructionBuilders.registerPinManifest(payload);
+    final InstructionBox box = payload.toInstructionBox();
 
     assert Objects.equals(
             box.arguments().get("digest_hex"), requireString(instruction, "digest_hex"))
@@ -36,11 +34,6 @@ public final class SorafsRegisterPinManifestBuilderTests {
             box.arguments().get("policy.storage_class"),
             requireString(asMap(instruction.get("policy"), "policy"), "storage_class"))
         : "policy.storage_class mismatch";
-
-    final InstructionBox decoded =
-        InstructionBox.fromNorito(InstructionKind.REGISTER, box.arguments());
-    assert decoded.payload() instanceof RegisterPinManifestInstruction
-        : "Expected RegisterPinManifestInstruction payload";
 
     System.out.println(
         "[IrohaAndroid] SorafsRegisterPinManifestBuilderTests passed (" + box.arguments().size()

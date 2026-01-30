@@ -10,10 +10,12 @@ public final class MultisigSignatures {
 
   private MultisigSignatures(final List<MultisigSignature> signatures) {
     Objects.requireNonNull(signatures, "signatures");
-    this.signatures = List.copyOf(signatures);
-    if (this.signatures.contains(null)) {
-      throw new IllegalArgumentException("signatures must not contain null entries");
+    for (final MultisigSignature signature : signatures) {
+      if (signature == null) {
+        throw new IllegalArgumentException("signatures must not contain null entries");
+      }
     }
+    this.signatures = List.copyOf(signatures);
   }
 
   /** Construct a bundle from the provided signatures. */

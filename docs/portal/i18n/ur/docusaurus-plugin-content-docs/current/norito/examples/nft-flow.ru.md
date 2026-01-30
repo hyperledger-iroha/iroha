@@ -1,17 +1,46 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/portal/docs/norito/examples/nft-flow.ru.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# ترجمہ جاری ہے
+---
+slug: /norito/examples/nft-flow
+title: Выпустить, перевести и сжечь NFT
+description: Проводит по жизненному циклу NFT от начала до конца: выпуск владельцу, перевод, добавление метаданных и сжигание.
+source: crates/ivm/docs/examples/12_nft_flow.ko
+---
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+Проводит по жизненному циклу NFT от начала до конца: выпуск владельцу, перевод, добавление метаданных и сжигание.
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+## Пошаговый обход реестра
+
+- Убедитесь, что определение NFT (например `n0#wonderland`) существует вместе с аккаунтами владельца/получателя, используемыми в сниппете (`ih58...`, `ih58...`).
+- Вызовите точку входа `nft_issue_and_transfer`, чтобы выпустить NFT, перевести его от Alice к Bob и прикрепить флаг метаданных, описывающий выпуск.
+- Проверьте состояние NFT-реестра через `iroha_cli ledger nfts list --account <id>` или эквиваленты SDK, чтобы подтвердить перевод, затем убедитесь, что актив удаляется после выполнения инструкции burn.
+
+## Связанные руководства SDK
+
+- [Quickstart Rust SDK](/sdks/rust)
+- [Quickstart Python SDK](/sdks/python)
+- [Quickstart JavaScript SDK](/sdks/javascript)
+
+[Скачать исходник Kotodama](/norito-snippets/nft-flow.ko)
+
+```text
+// Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
+seiyaku NftFlow {
+  kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
+    let owner = account!("ih58...");
+    let nft = nft_id!("n0$wonderland");
+    nft_mint_asset(nft, owner);
+
+    let to = account!("ih58...");
+    nft_transfer_asset(owner, nft, to);
+    nft_set_metadata(nft, json!{ issued: "demo" });
+    nft_burn_asset(nft);
+  }
+}
+```

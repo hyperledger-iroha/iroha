@@ -1,15 +1,35 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/portal/docs/sorafs/developer-index.es.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Traducción en curso
+---
+id: developer-index
+title: Guías para desarrolladores de SoraFS
+description: Página de inicio para la documentación de desarrolladores de SoraFS, ejemplos y referencias de automatización.
+sidebar_label: Resumen para desarrolladores
+---
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+:::note Fuente canónica
+Esta página refleja `docs/source/sorafs/developer/index.md`. Mantén ambas versiones sincronizadas hasta que los docs heredados se retiren.
+:::
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+# Guías para desarrolladores de SoraFS
+
+```{toctree}
+:caption: Primeros pasos
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

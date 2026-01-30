@@ -1530,7 +1530,12 @@ impl ChaosState {
                 action,
             ))));
             self.track_repeatable_trigger(trigger_id.clone());
-            trigger_id
+            return Ok(TransactionPlan {
+                label: "mint_trigger_repetitions",
+                instructions,
+                signer: self.treasury.clone(),
+                expect_success: true,
+            });
         };
         let amount = rng.random_range(1_u32..=3_u32);
         *self
@@ -1557,20 +1562,10 @@ impl ChaosState {
             return self.plan_mint_trigger_repetitions(rng);
         };
         let available = *self.trigger_repetitions.get(&trigger_id).unwrap_or(&0);
-        let burn_amount = if available > 0 {
-            rng.random_range(1..=available)
-        } else {
-            let amount = rng.random_range(1_u32..=2_u32);
-            instructions.push(InstructionBox::from(Mint::trigger_repetitions(
-                amount,
-                trigger_id.clone(),
-            )));
-            *self
-                .trigger_repetitions
-                .entry(trigger_id.clone())
-                .or_default() += amount;
-            amount
-        };
+        if available == 0 {
+            return self.plan_mint_trigger_repetitions(rng);
+        }
+        let burn_amount = rng.random_range(1..=available);
         instructions.push(InstructionBox::from(Burn::trigger_repetitions(
             burn_amount,
             trigger_id.clone(),
@@ -3413,6 +3408,16 @@ mod tests {
             .plan_mint_trigger_repetitions(&mut rng)
             .expect("mint repetitions");
         assert_eq!(mint_plan.label, "mint_trigger_repetitions");
+        if state
+            .trigger_repetitions
+            .values()
+            .all(|amount| *amount == 0)
+        {
+            let mint_plan = state
+                .plan_mint_trigger_repetitions(&mut rng)
+                .expect("mint repetitions after register");
+            assert_eq!(mint_plan.label, "mint_trigger_repetitions");
+        }
         let (trigger_id, minted) = state
             .trigger_repetitions
             .iter()

@@ -1,15 +1,38 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.ar.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# 翻訳作業中
+---
+id: priority-snapshot-2025-03
+title: لقطة الأولويات — مارس 2025 (بيتا)
+description: نسخة مرآة من لقطة توجيه Nexus 2025-03؛ بانتظار ACKs قبل الطرح العام.
+---
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+> المصدر المعتمد: `docs/source/sorafs/priority_snapshot_2025-03.md`
+>
+> الحالة: **بيتا / بانتظار ACKs التوجيه** (Networking, Storage, Docs leads).
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+## نظرة عامة
+
+تحافظ لقطة مارس على اتساق مبادرات docs/content-network مع مسارات تسليم SoraFS
+(SF-3, SF-6b, SF-9). بمجرد إقرار جميع القادة باللقطة في قناة Nexus steering،
+أزل ملاحظة “Beta” أعلاه.
+
+### محاور التركيز
+
+1. **تعميم لقطة الأولويات** — جمع acknowledgements وتسجيلها في محاضر المجلس بتاريخ
+   2025-03-05.
+2. **إغلاق kickoff Gateway/DNS** — التدرب على حزمة التيسير الجديدة (القسم 6 في
+   runbook) قبل ورشة 2025-03-03.
+3. **ترحيل runbook للمشغلين** — بوابة `Runbook Index` أصبحت live؛ اكشف رابط
+   المعاينة beta بعد توقيع reviewer onboarding.
+4. **مسارات تسليم SoraFS** — مواءمة العمل المتبقي لـ SF-3/6b/9 مع plan/roadmap:
+   - عامل ingestion لـ PoR + endpoint الحالة في `sorafs-node`.
+   - صقل bindings الخاصة بـ CLI/SDK عبر تكاملات orchestrator في Rust/JS/Swift.
+   - توصيل runtime لمنسق PoR وأحداث GovernanceLog.
+
+راجع الملف المصدر للجدول الكامل وقائمة التوزيع وسجلات الإدخال.

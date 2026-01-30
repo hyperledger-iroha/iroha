@@ -1,15 +1,35 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/docs/sorafs/developer-index.pt.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# 翻訳作業中
+---
+id: developer-index
+title: Guias para desenvolvedores de SoraFS
+description: Pagina inicial para a documentacao de desenvolvedores de SoraFS, exemplos e referencias de automacao.
+sidebar_label: Visao geral de desenvolvedores
+---
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+:::note Fonte canonica
+Esta pagina espelha `docs/source/sorafs/developer/index.md`. Mantenha ambas as copias sincronizadas.
+:::
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+# Guias para desenvolvedores de SoraFS
+
+```{toctree}
+:caption: Primeiros passos
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

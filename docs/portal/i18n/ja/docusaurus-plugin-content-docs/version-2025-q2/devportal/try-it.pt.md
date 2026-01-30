@@ -1,18 +1,26 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/version-2025-q2/devportal/try-it.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 432bbd3dfdbbf767e136a513385f39c4670b53955710ce8f38857728226fc1ab
 source_last_modified: "2025-11-04T12:24:28.211843+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# Tradução em andamento
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
 
-Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/devportal/try-it.md
+status: needs-translation
+generator: docs/portal/scripts/sync-i18n.mjs
+---
 
-Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.
+# 翻訳作業中
+
+このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+
+翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。

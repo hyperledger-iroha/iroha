@@ -1,11 +1,14 @@
 //! Built-in handling for multisig instructions without requiring an executor upgrade.
 
-use std::{collections::BTreeSet, str::FromStr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    str::FromStr,
+};
 
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     ValidationFail,
-    account::AccountId,
+    account::{AccountId, MultisigMember, MultisigPolicy},
     isi::{
         AddSignatory, CustomInstruction, InstructionBox, RemoveSignatory, SetAccountQuorum,
         error::{InstructionExecutionError, InvalidParameterError},
@@ -24,6 +27,7 @@ use mv::storage::StorageReadOnly;
 
 use crate::{
     smartcontracts::Execute,
+    smartcontracts::isi::domain::isi::ensure_controller_capabilities,
     state::{StateTransaction, WorldReadOnly},
 };
 
@@ -128,8 +132,10 @@ impl Execute for RemoveSignatory {
                 .execute(authority, state_transaction)?;
         }
         let signatory_role_id = multisig_role_for(&signatory_account);
-        if has_role(state_transaction, &account, &signatory_role_id).map_err(map_validation_fail)? {
-            Revoke::account_role(signatory_role_id, account.clone())
+        if has_role(state_transaction, &updated_account, &signatory_role_id)
+            .map_err(map_validation_fail)?
+        {
+            Revoke::account_role(signatory_role_id, updated_account.clone())
                 .execute(authority, state_transaction)?;
         }
 
@@ -185,10 +191,832 @@ fn rekey_multisig_account(
     account: &AccountId,
     spec: &MultisigSpec,
 ) -> Result<AccountId, InstructionExecutionError> {
-    // TODO: migrate multisig accounts to a controller derived from spec once account-based members
-    // are supported in the account controller surface.
-    let _ = (state_transaction, spec);
-    Ok(account.clone())
+    ensure_signatories_are_single(spec).map_err(map_validation_fail)?;
+    let policy = multisig_policy_from_spec(spec)?;
+    let updated_account = AccountId::new_multisig(account.domain().clone(), policy);
+    ensure_controller_capabilities(
+        updated_account.controller(),
+        &state_transaction.crypto.allowed_signing,
+        &state_transaction.crypto.allowed_curve_ids,
+    )?;
+
+    if &updated_account == account {
+        return Ok(account.clone());
+    }
+
+    if account_exists(state_transaction, &updated_account).map_err(map_validation_fail)? {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("multisig account `{updated_account}` already exists").into(),
+        ));
+    }
+
+    rekey_account_id(state_transaction, account, &updated_account)?;
+    Ok(updated_account)
+}
+
+fn multisig_policy_from_spec(
+    spec: &MultisigSpec,
+) -> Result<MultisigPolicy, InstructionExecutionError> {
+    let mut members = Vec::with_capacity(spec.signatories.len());
+    for (account, weight) in &spec.signatories {
+        let Some(signatory) = account.controller().single_signatory() else {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("multisig signatory `{account}` must be a single-key account").into(),
+            ));
+        };
+        let member = MultisigMember::new(signatory.clone(), u16::from(*weight)).map_err(|err| {
+            InstructionExecutionError::InvariantViolation(format!("{err}").into())
+        })?;
+        members.push(member);
+    }
+    MultisigPolicy::new(spec.quorum.get(), members).map_err(|err| {
+        InstructionExecutionError::InvariantViolation(format!("{err}").into())
+    })
+}
+
+fn rekey_account_id(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    old_account: &AccountId,
+    new_account: &AccountId,
+) -> Result<(), InstructionExecutionError> {
+    let account_value = state_transaction
+        .world
+        .accounts
+        .remove(old_account.clone())
+        .ok_or_else(|| InstructionExecutionError::Find(FindError::Account(old_account.clone())))?;
+
+    if state_transaction.world.accounts.get(new_account).is_some() {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("account `{new_account}` already exists").into(),
+        ));
+    }
+
+    state_transaction
+        .world
+        .accounts
+        .insert(new_account.clone(), account_value.clone());
+
+    if let Some(label) = account_value.label().cloned() {
+        state_transaction
+            .world
+            .account_aliases
+            .insert(label.clone(), new_account.clone());
+        state_transaction.world.account_rekey_records.remove(label);
+    }
+
+    if let Some(uaid) = account_value.uaid().copied() {
+        state_transaction
+            .world
+            .uaid_accounts
+            .insert(uaid, new_account.clone());
+        state_transaction.rebuild_space_directory_bindings(uaid);
+    }
+
+    if let Some(sequence) = state_transaction.world.tx_sequences.remove(old_account.clone()) {
+        state_transaction
+            .world
+            .tx_sequences
+            .insert(new_account.clone(), sequence);
+    }
+
+    if let Some(perms) = state_transaction
+        .world
+        .account_permissions
+        .remove(old_account.clone())
+    {
+        state_transaction
+            .world
+            .account_permissions
+            .insert(new_account.clone(), perms);
+    }
+
+    let old_multisig_role = multisig_role_for(old_account);
+    let new_multisig_role = multisig_role_for(new_account);
+    if old_multisig_role != new_multisig_role
+        && state_transaction
+            .world
+            .roles
+            .get(&new_multisig_role)
+            .is_some()
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("role `{new_multisig_role}` already exists").into(),
+        ));
+    }
+
+    if old_multisig_role != new_multisig_role {
+        if let Some(mut role) = state_transaction.world.roles.remove(old_multisig_role.clone()) {
+            role.id = new_multisig_role.clone();
+            state_transaction.world.roles.insert(new_multisig_role.clone(), role);
+        }
+    }
+
+    let mut role_updates = Vec::new();
+    for (role_id, _) in state_transaction.world.account_roles.iter() {
+        let mut updated = role_id.clone();
+        if updated.account == *old_account {
+            updated.account = new_account.clone();
+        }
+        if updated.id == old_multisig_role {
+            updated.id = new_multisig_role.clone();
+        }
+        if &updated != role_id {
+            role_updates.push((role_id.clone(), updated));
+        }
+    }
+    for (old_key, new_key) in role_updates {
+        state_transaction.world.account_roles.remove(old_key);
+        state_transaction.world.account_roles.insert(new_key, ());
+    }
+
+    let assets_to_move: Vec<_> = state_transaction
+        .world
+        .assets_in_account_iter(old_account)
+        .map(|asset| asset.id().clone())
+        .collect();
+    for asset_id in assets_to_move {
+        let new_asset_id = iroha_data_model::asset::AssetId::new(
+            asset_id.definition().clone(),
+            new_account.clone(),
+        );
+        if state_transaction.world.assets.get(&new_asset_id).is_some() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("asset `{new_asset_id}` already exists").into(),
+            ));
+        }
+        if let Some(value) = state_transaction.world.assets.remove(asset_id.clone()) {
+            state_transaction.world.assets.insert(new_asset_id.clone(), value);
+        }
+        if let Some(meta) = state_transaction
+            .world
+            .asset_metadata
+            .remove(asset_id.clone())
+        {
+            state_transaction
+                .world
+                .asset_metadata
+                .insert(new_asset_id, meta);
+        }
+    }
+
+    let nft_ids: Vec<_> = state_transaction
+        .world
+        .nfts
+        .iter()
+        .filter(|(_, value)| value.owned_by == *old_account)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for nft_id in nft_ids {
+        if let Some(value) = state_transaction.world.nfts.get_mut(&nft_id) {
+            value.owned_by = new_account.clone();
+        }
+    }
+
+    let domain_ids: Vec<_> = state_transaction
+        .world
+        .domains
+        .iter()
+        .filter(|(_, domain)| domain.owned_by == *old_account)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for domain_id in domain_ids {
+        if let Some(domain) = state_transaction.world.domains.get_mut(&domain_id) {
+            domain.owned_by = new_account.clone();
+        }
+    }
+
+    let asset_def_ids: Vec<_> = state_transaction
+        .world
+        .asset_definitions
+        .iter()
+        .filter(|(_, definition)| definition.owned_by == *old_account)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for asset_def_id in asset_def_ids {
+        if let Some(definition) = state_transaction.world.asset_definitions.get_mut(&asset_def_id) {
+            definition.owned_by = new_account.clone();
+        }
+    }
+
+    let provider_ids: Vec<_> = state_transaction
+        .world
+        .provider_owners
+        .iter()
+        .filter(|(_, owner)| *owner == old_account)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for provider_id in provider_ids {
+        state_transaction
+            .world
+            .provider_owners
+            .insert(provider_id, new_account.clone());
+    }
+
+    replace_account_id_in_offline(state_transaction, old_account, new_account);
+    replace_account_id_in_public_lane(state_transaction, old_account, new_account);
+    replace_account_id_in_repo_agreements(state_transaction, old_account, new_account);
+    replace_account_id_in_settlements(state_transaction, old_account, new_account);
+    replace_account_id_in_citizens(state_transaction, old_account, new_account);
+    replace_account_id_in_governance(state_transaction, old_account, new_account);
+    replace_account_id_in_oracle(state_transaction, old_account, new_account);
+    replace_account_id_in_content_bundles(state_transaction, old_account, new_account);
+
+    state_transaction
+        .world
+        .triggers
+        .replace_account_id(old_account, new_account);
+
+    state_transaction.invalidate_permission_cache_for_account(old_account);
+    state_transaction.invalidate_permission_cache_for_account(new_account);
+
+    Ok(())
+}
+
+fn replace_account_id(target: &mut AccountId, old: &AccountId, new: &AccountId) -> bool {
+    if target == old {
+        *target = new.clone();
+        true
+    } else {
+        false
+    }
+}
+
+fn replace_account_id_in_asset_id(
+    asset_id: &iroha_data_model::asset::AssetId,
+    old: &AccountId,
+    new: &AccountId,
+) -> iroha_data_model::asset::AssetId {
+    if asset_id.account() == old {
+        iroha_data_model::asset::AssetId::new(asset_id.definition().clone(), new.clone())
+    } else {
+        asset_id.clone()
+    }
+}
+
+fn replace_account_id_in_vec(accounts: &mut Vec<AccountId>, old: &AccountId, new: &AccountId) {
+    for account in accounts.iter_mut() {
+        replace_account_id(account, old, new);
+    }
+}
+
+fn replace_account_id_in_set(
+    accounts: &mut BTreeSet<AccountId>,
+    old: &AccountId,
+    new: &AccountId,
+) {
+    if accounts.remove(old) {
+        accounts.insert(new.clone());
+    }
+}
+
+fn replace_account_id_in_offline(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    old: &AccountId,
+    new: &AccountId,
+) {
+    let allowance_ids: Vec<_> = state_transaction
+        .world
+        .offline_allowances
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
+    for allowance_id in allowance_ids {
+        if let Some(record) = state_transaction
+            .world
+            .offline_allowances
+            .get_mut(&allowance_id)
+        {
+            replace_account_id_in_offline_allowance(record, old, new);
+        }
+    }
+
+    let transfer_ids: Vec<_> = state_transaction
+        .world
+        .offline_to_online_transfers
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
+    for transfer_id in transfer_ids {
+        if let Some(record) = state_transaction
+            .world
+            .offline_to_online_transfers
+            .get_mut(&transfer_id)
+        {
+            replace_account_id_in_offline_transfer_record(record, old, new);
+        }
+    }
+
+    let revocation_ids: Vec<_> = state_transaction
+        .world
+        .offline_verdict_revocations
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
+    for revocation_id in revocation_ids {
+        if let Some(record) = state_transaction
+            .world
+            .offline_verdict_revocations
+            .get_mut(&revocation_id)
+        {
+            replace_account_id(&mut record.issuer, old, new);
+        }
+    }
+
+    if let Some(mut transfers) = state_transaction
+        .world
+        .offline_transfer_sender_index
+        .remove(old.clone())
+    {
+        if let Some(existing) = state_transaction
+            .world
+            .offline_transfer_sender_index
+            .get_mut(new)
+        {
+            existing.append(&mut transfers);
+        } else {
+            state_transaction
+                .world
+                .offline_transfer_sender_index
+                .insert(new.clone(), transfers);
+        }
+    }
+
+    if let Some(mut transfers) = state_transaction
+        .world
+        .offline_transfer_receiver_index
+        .remove(old.clone())
+    {
+        if let Some(existing) = state_transaction
+            .world
+            .offline_transfer_receiver_index
+            .get_mut(new)
+        {
+            existing.append(&mut transfers);
+        } else {
+            state_transaction
+                .world
+                .offline_transfer_receiver_index
+                .insert(new.clone(), transfers);
+        }
+    }
+}
+
+fn replace_account_id_in_offline_allowance(
+    record: &mut iroha_data_model::offline::OfflineAllowanceRecord,
+    old: &AccountId,
+    new: &AccountId,
+) {
+    replace_account_id_in_offline_wallet_certificate(&mut record.certificate, old, new);
+}
+
+fn replace_account_id_in_offline_wallet_certificate(
+    certificate: &mut iroha_data_model::offline::OfflineWalletCertificate,
+    old: &AccountId,
+    new: &AccountId,
+) {
+    replace_account_id(&mut certificate.controller, old, new);
+    certificate.allowance.asset =
+        replace_account_id_in_asset_id(&certificate.allowance.asset, old, new);
+}
+
+fn replace_account_id_in_offline_spend_receipt(
+    receipt: &mut iroha_data_model::offline::OfflineSpendReceipt,
+    old: &AccountId,
+    new: &AccountId,
+) {
+    replace_account_id(&mut receipt.from, old, new);
+    replace_account_id(&mut receipt.to, old, new);
+    receipt.asset = replace_account_id_in_asset_id(&receipt.asset, old, new);
+    replace_account_id_in_offline_wallet_certificate(&mut receipt.sender_certificate, old, new);
+}
+
+fn replace_account_id_in_offline_transfer(
+    transfer: &mut iroha_data_model::offline::OfflineToOnlineTransfer,
+    old: &AccountId,
+    new: &AccountId,
+) {
+    replace_account_id(&mut transfer.receiver, old, new);
+    replace_account_id(&mut transfer.deposit_account, old, new);
+    for receipt in &mut transfer.receipts {
+        replace_account_id_in_offline_spend_receipt(receipt, old, new);
+    }
+}
+
+fn replace_account_id_in_offline_transfer_record(
+    record: &mut iroha_data_model::offline::OfflineTransferRecord,
+    old: &AccountId,
+    new: &AccountId,
+) {
+    replace_account_id(&mut record.controller, old, new);
+    replace_account_id_in_offline_transfer(&mut record.transfer, old, new);
+}
+
+fn replace_account_id_in_public_lane(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    old: &AccountId,
+    new: &AccountId,
+) {
+    let mut validator_updates = Vec::new();
+    for (key, _) in state_transaction.world.public_lane_validators.iter() {
+        if key.1 == *old {
+            validator_updates.push((key.clone(), (key.0, new.clone())));
+        }
+    }
+    for (old_key, new_key) in validator_updates {
+        if let Some(mut record) = state_transaction.world.public_lane_validators.remove(old_key) {
+            replace_account_id(&mut record.validator, old, new);
+            replace_account_id(&mut record.stake_account, old, new);
+            state_transaction
+                .world
+                .public_lane_validators
+                .insert(new_key, record);
+        }
+    }
+
+    let validator_keys: Vec<_> = state_transaction
+        .world
+        .public_lane_validators
+        .iter()
+        .map(|(key, _)| key.clone())
+        .collect();
+    for key in validator_keys {
+        if let Some(record) = state_transaction.world.public_lane_validators.get_mut(&key) {
+            replace_account_id(&mut record.validator, old, new);
+            replace_account_id(&mut record.stake_account, old, new);
+        }
+    }
+
+    let mut stake_updates = Vec::new();
+    for (key, _) in state_transaction.world.public_lane_stake_shares.iter() {
+        if key.1 == *old || key.2 == *old {
+            let new_validator = if key.1 == *old {
+                new.clone()
+            } else {
+                key.1.clone()
+            };
+            let new_staker = if key.2 == *old {
+                new.clone()
+            } else {
+                key.2.clone()
+            };
+            stake_updates.push((key.clone(), (key.0, new_validator, new_staker)));
+        }
+    }
+    for (old_key, new_key) in stake_updates {
+        if let Some(mut record) = state_transaction
+            .world
+            .public_lane_stake_shares
+            .remove(old_key)
+        {
+            replace_account_id(&mut record.validator, old, new);
+            replace_account_id(&mut record.staker, old, new);
+            state_transaction
+                .world
+                .public_lane_stake_shares
+                .insert(new_key, record);
+        }
+    }
+
+    let reward_keys: Vec<_> = state_transaction
+        .world
+        .public_lane_rewards
+        .iter()
+        .map(|(key, _)| key.clone())
+        .collect();
+    for key in reward_keys {
+        if let Some(record) = state_transaction.world.public_lane_rewards.get_mut(&key) {
+            record.asset = replace_account_id_in_asset_id(&record.asset, old, new);
+            for share in &mut record.shares {
+                replace_account_id(&mut share.account, old, new);
+            }
+        }
+    }
+
+    let mut claim_updates = Vec::new();
+    for (key, value) in state_transaction.world.public_lane_reward_claims.iter() {
+        let (lane_id, account_id, asset_id) = key;
+        let mut updated = false;
+        let updated_account = if account_id == old {
+            updated = true;
+            new.clone()
+        } else {
+            account_id.clone()
+        };
+        let updated_asset = replace_account_id_in_asset_id(asset_id, old, new);
+        if &updated_asset != asset_id {
+            updated = true;
+        }
+        if updated {
+            claim_updates.push((key.clone(), (lane_id.clone(), updated_account, updated_asset), *value));
+        }
+    }
+    for (old_key, new_key, value) in claim_updates {
+        state_transaction.world.public_lane_reward_claims.remove(old_key);
+        state_transaction
+            .world
+            .public_lane_reward_claims
+            .insert(new_key, value);
+    }
+}
+
+fn replace_account_id_in_repo_agreements(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    old: &AccountId,
+    new: &AccountId,
+) {
+    let agreement_ids: Vec<_> = state_transaction
+        .world
+        .repo_agreements
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    for agreement_id in agreement_ids {
+        if let Some(agreement) = state_transaction.world.repo_agreements.get_mut(&agreement_id) {
+            replace_account_id(&mut agreement.initiator, old, new);
+            replace_account_id(&mut agreement.counterparty, old, new);
+            if let Some(custodian) = agreement.custodian.as_mut() {
+                replace_account_id(custodian, old, new);
+            }
+        }
+    }
+}
+
+fn replace_account_id_in_settlements(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    old: &AccountId,
+    new: &AccountId,
+) {
+    let ledger_ids: Vec<_> = state_transaction
+        .world
+        .settlement_ledgers
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    for ledger_id in ledger_ids {
+        if let Some(ledger) = state_transaction
+            .world
+            .settlement_ledgers
+            .get_mut(&ledger_id)
+        {
+            for entry in &mut ledger.entries {
+                replace_account_id(&mut entry.authority, old, new);
+                for leg in &mut entry.legs {
+                    replace_account_id(&mut leg.leg.from, old, new);
+                    replace_account_id(&mut leg.leg.to, old, new);
+                }
+            }
+        }
+    }
+}
+
+fn replace_account_id_in_citizens(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    old: &AccountId,
+    new: &AccountId,
+) {
+    if let Some(mut record) = state_transaction.world.citizens.remove(old.clone()) {
+        replace_account_id(&mut record.owner, old, new);
+        state_transaction
+            .world
+            .citizens
+            .insert(new.clone(), record);
+    }
+
+    let citizen_ids: Vec<_> = state_transaction
+        .world
+        .citizens
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    for citizen_id in citizen_ids {
+        if let Some(record) = state_transaction.world.citizens.get_mut(&citizen_id) {
+            replace_account_id(&mut record.owner, old, new);
+        }
+    }
+}
+
+fn replace_account_id_in_governance(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    old: &AccountId,
+    new: &AccountId,
+) {
+    let proposal_ids: Vec<_> = state_transaction
+        .world
+        .governance_proposals
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
+    for proposal_id in proposal_ids {
+        if let Some(record) = state_transaction
+            .world
+            .governance_proposals
+            .get_mut(&proposal_id)
+        {
+            replace_account_id(&mut record.proposer, old, new);
+        }
+    }
+
+    let approval_ids: Vec<_> = state_transaction
+        .world
+        .governance_stage_approvals
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    for approval_id in approval_ids {
+        if let Some(approvals) = state_transaction
+            .world
+            .governance_stage_approvals
+            .get_mut(&approval_id)
+        {
+            for stage in approvals.stages.values_mut() {
+                replace_account_id_in_set(&mut stage.approvers, old, new);
+            }
+        }
+    }
+
+    let lock_ids: Vec<_> = state_transaction
+        .world
+        .governance_locks
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    for lock_id in lock_ids {
+        if let Some(locks) = state_transaction.world.governance_locks.get_mut(&lock_id) {
+            let mut updated = BTreeMap::new();
+            for (account, mut record) in std::mem::take(&mut locks.locks) {
+                let key = if account == *old {
+                    new.clone()
+                } else {
+                    account
+                };
+                replace_account_id(&mut record.owner, old, new);
+                updated.insert(key, record);
+            }
+            locks.locks = updated;
+        }
+    }
+
+    let slash_ids: Vec<_> = state_transaction
+        .world
+        .governance_slashes
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    for slash_id in slash_ids {
+        if let Some(slashes) = state_transaction
+            .world
+            .governance_slashes
+            .get_mut(&slash_id)
+        {
+            let mut updated = BTreeMap::new();
+            for (account, record) in std::mem::take(&mut slashes.slashes) {
+                let key = if account == *old {
+                    new.clone()
+                } else {
+                    account
+                };
+                updated.insert(key, record);
+            }
+            slashes.slashes = updated;
+        }
+    }
+
+    let council_epochs: Vec<_> = state_transaction
+        .world
+        .council
+        .iter()
+        .map(|(epoch, _)| *epoch)
+        .collect();
+    for epoch in council_epochs {
+        if let Some(term) = state_transaction.world.council.get_mut(&epoch) {
+            replace_account_id_in_vec(&mut term.members, old, new);
+            replace_account_id_in_vec(&mut term.alternates, old, new);
+        }
+    }
+
+    let body_epochs: Vec<_> = state_transaction
+        .world
+        .parliament_bodies
+        .iter()
+        .map(|(epoch, _)| *epoch)
+        .collect();
+    for epoch in body_epochs {
+        if let Some(bodies) = state_transaction.world.parliament_bodies.get_mut(&epoch) {
+            for roster in bodies.rosters.values_mut() {
+                replace_account_id_in_vec(&mut roster.members, old, new);
+                replace_account_id_in_vec(&mut roster.alternates, old, new);
+            }
+        }
+    }
+}
+
+fn replace_account_id_in_oracle(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    old: &AccountId,
+    new: &AccountId,
+) {
+    let feed_ids: Vec<_> = state_transaction
+        .world
+        .oracle_feeds
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    for feed_id in feed_ids {
+        if let Some(feed) = state_transaction.world.oracle_feeds.get_mut(&feed_id) {
+            replace_account_id_in_vec(&mut feed.providers, old, new);
+        }
+    }
+
+    let change_ids: Vec<_> = state_transaction
+        .world
+        .oracle_changes
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    for change_id in change_ids {
+        if let Some(change) = state_transaction.world.oracle_changes.get_mut(&change_id) {
+            replace_account_id(&mut change.proposer, old, new);
+            replace_account_id_in_vec(&mut change.feed.providers, old, new);
+            for stage in &mut change.stages {
+                replace_account_id_in_set(&mut stage.approvals, old, new);
+                replace_account_id_in_set(&mut stage.rejections, old, new);
+            }
+        }
+    }
+
+    let dispute_ids: Vec<_> = state_transaction
+        .world
+        .oracle_disputes
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    for dispute_id in dispute_ids {
+        if let Some(dispute) = state_transaction.world.oracle_disputes.get_mut(&dispute_id) {
+            replace_account_id(&mut dispute.challenger, old, new);
+            replace_account_id(&mut dispute.target, old, new);
+        }
+    }
+
+    let mut provider_updates = Vec::new();
+    for (key, value) in state_transaction.world.oracle_provider_stats.iter() {
+        if key.provider_id == *old {
+            let new_key =
+                iroha_data_model::oracle::OracleProviderKey::new(key.feed_id.clone(), new.clone());
+            provider_updates.push((key.clone(), new_key, *value));
+        }
+    }
+    for (old_key, new_key, value) in provider_updates {
+        state_transaction.world.oracle_provider_stats.remove(old_key);
+        state_transaction
+            .world
+            .oracle_provider_stats
+            .insert(new_key, value);
+    }
+
+    let observation_keys: Vec<_> = state_transaction
+        .world
+        .oracle_observations
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    for observation_key in observation_keys {
+        if let Some(window) = state_transaction
+            .world
+            .oracle_observations
+            .get_mut(&observation_key)
+        {
+            if window.observations.contains_key(old) {
+                let mut updated = BTreeMap::new();
+                for (provider, observation) in std::mem::take(&mut window.observations) {
+                    let provider = if provider == *old {
+                        new.clone()
+                    } else {
+                        provider
+                    };
+                    updated.insert(provider, observation);
+                }
+                window.observations = updated;
+            }
+        }
+    }
+}
+
+fn replace_account_id_in_content_bundles(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    old: &AccountId,
+    new: &AccountId,
+) {
+    let bundle_ids: Vec<_> = state_transaction
+        .world
+        .content_bundles
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    for bundle_id in bundle_ids {
+        if let Some(bundle) = state_transaction.world.content_bundles.get_mut(&bundle_id) {
+            replace_account_id(&mut bundle.created_by, old, new);
+        }
+    }
 }
 
 fn execute_register(
@@ -225,12 +1053,9 @@ fn execute_register(
         .map_err(map_find_error)?
         .insert(spec_key(), spec_json.clone());
 
-    configure_roles(
-        state_transaction,
-        &domain_owner,
-        &multisig_account_id,
-        &spec,
-    )?;
+    let updated_account = rekey_multisig_account(state_transaction, &multisig_account_id, &spec)
+        .map_err(ValidationFail::InstructionFailed)?;
+    configure_roles(state_transaction, &domain_owner, &updated_account, &spec)?;
 
     Ok(())
 }
@@ -510,6 +1335,7 @@ fn validate_registration(
     }
     ensure_quorum_reachable(spec)?;
     ensure_signatories_exist(state_transaction, spec)?;
+    ensure_signatories_are_single(spec)?;
     ensure_multisig_graph_is_acyclic(spec.signatories.keys().cloned(), state_transaction)?;
     Ok(domain_id)
 }
@@ -562,6 +1388,17 @@ fn ensure_signatories_exist(
             .world
             .account(account)
             .map_err(map_find_error)?;
+    }
+    Ok(())
+}
+
+fn ensure_signatories_are_single(spec: &MultisigSpec) -> Result<(), ValidationFail> {
+    for account in spec.signatories.keys() {
+        if account.controller().single_signatory().is_none() {
+            return Err(ValidationFail::NotPermitted(format!(
+                "multisig signatory `{account}` must be a single-key account"
+            )));
+        }
     }
     Ok(())
 }
@@ -937,21 +1774,8 @@ mod tests {
         )
         .execute(owner_id, state_transaction)
         .expect(label);
-        multisig_id
-    }
-
-    fn register_multisig_role(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        owner_id: &AccountId,
-        role_id: &RoleId,
-        account_id: &AccountId,
-    ) {
-        Register::role(Role::new(role_id.clone(), owner_id.clone()))
-            .execute(owner_id, state_transaction)
-            .expect("register multisig role");
-        Grant::account_role(role_id.clone(), account_id.clone())
-            .execute(owner_id, state_transaction)
-            .expect("grant multisig role");
+        rekey_multisig_account(state_transaction, &multisig_id, spec)
+            .expect("rekey multisig account")
     }
 
     #[test]
@@ -1004,16 +1828,25 @@ mod tests {
             .expect("multisig register");
 
         let spec_key = spec_key();
+        let policy = multisig_policy_from_spec(&spec).expect("policy");
+        let expected_id = AccountId::new_multisig(domain_id.clone(), policy);
         let account_after_register = state_transaction
             .world
-            .account(&multisig_id)
+            .account(&expected_id)
             .expect("multisig account registered");
         assert!(
             account_after_register.metadata().get(&spec_key).is_some(),
             "multisig spec metadata must be stored on registration"
         );
+        assert!(
+            matches!(
+                state_transaction.world.account(&multisig_id),
+                Err(FindError::Account(_))
+            ),
+            "initial controller id should be rekeyed"
+        );
         let stored_spec =
-            multisig_spec(&state_transaction, &multisig_id).expect("spec must decode");
+            multisig_spec(&state_transaction, &expected_id).expect("spec must decode");
         assert_eq!(stored_spec, spec, "spec roundtrip through metadata");
     }
 
@@ -1069,13 +1902,24 @@ mod tests {
             .execute(&owner_id, &mut state_transaction)
             .expect("add signatory");
 
-        let updated =
-            multisig_spec(&state_transaction, &multisig_id).expect("spec must decode after add");
+        let mut updated_spec = spec.clone();
+        updated_spec.signatories.insert(signer2_id.clone(), 1);
+        let updated_policy = multisig_policy_from_spec(&updated_spec).expect("policy");
+        let updated_account = AccountId::new_multisig(domain_id.clone(), updated_policy);
+        let updated = multisig_spec(&state_transaction, &updated_account)
+            .expect("spec must decode after add");
         assert!(
             updated.signatories.contains_key(&signer2_id),
             "added signatory must appear in spec"
         );
-        let multisig_role = multisig_role_for(&multisig_id);
+        assert!(
+            matches!(
+                state_transaction.world.account(&multisig_id),
+                Err(FindError::Account(_))
+            ),
+            "multisig account should be rekeyed after add"
+        );
+        let multisig_role = multisig_role_for(&updated_account);
         let signer_role = multisig_role_for(&signer2_id);
         assert!(
             state_transaction
@@ -1087,7 +1931,7 @@ mod tests {
         assert!(
             state_transaction
                 .world
-                .account_roles_iter(&multisig_id)
+                .account_roles_iter(&updated_account)
                 .any(|role| role == &signer_role),
             "multisig account should receive the signatory role"
         );
@@ -1147,13 +1991,27 @@ mod tests {
             .execute(&owner_id, &mut state_transaction)
             .expect("remove signatory");
 
-        let updated =
-            multisig_spec(&state_transaction, &multisig_id).expect("spec must decode after remove");
+        let updated_spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer1_id.clone(), 1)]),
+            quorum: NonZeroU16::new(1).unwrap(),
+            transaction_ttl_ms: spec.transaction_ttl_ms,
+        };
+        let updated_policy = multisig_policy_from_spec(&updated_spec).expect("policy");
+        let updated_account = AccountId::new_multisig(domain_id.clone(), updated_policy);
+        let updated = multisig_spec(&state_transaction, &updated_account)
+            .expect("spec must decode after remove");
         assert!(
             !updated.signatories.contains_key(&signer2_id),
             "removed signatory must be absent from spec"
         );
-        let multisig_role = multisig_role_for(&multisig_id);
+        assert!(
+            matches!(
+                state_transaction.world.account(&multisig_id),
+                Err(FindError::Account(_))
+            ),
+            "multisig account should be rekeyed after removal"
+        );
+        let multisig_role = multisig_role_for(&updated_account);
         let signer_role = multisig_role_for(&signer2_id);
         assert!(
             !state_transaction
@@ -1165,7 +2023,7 @@ mod tests {
         assert!(
             !state_transaction
                 .world
-                .account_roles_iter(&multisig_id)
+                .account_roles_iter(&updated_account)
                 .any(|role| role == &signer_role),
             "multisig account should drop removed signatory role"
         );
@@ -1224,9 +2082,23 @@ mod tests {
             .execute(&owner_id, &mut state_transaction)
             .expect("set quorum");
 
-        let updated = multisig_spec(&state_transaction, &multisig_id)
+        let updated_spec = MultisigSpec {
+            signatories: spec.signatories.clone(),
+            quorum: new_quorum,
+            transaction_ttl_ms: spec.transaction_ttl_ms,
+        };
+        let updated_policy = multisig_policy_from_spec(&updated_spec).expect("policy");
+        let updated_account = AccountId::new_multisig(domain_id.clone(), updated_policy);
+        let updated = multisig_spec(&state_transaction, &updated_account)
             .expect("spec must decode after set quorum");
         assert_eq!(updated.quorum, new_quorum, "quorum update should persist");
+        assert!(
+            matches!(
+                state_transaction.world.account(&multisig_id),
+                Err(FindError::Account(_))
+            ),
+            "multisig account should be rekeyed after quorum update"
+        );
     }
 
     #[test]
@@ -1340,9 +2212,11 @@ mod tests {
             )
             .expect("multisig register");
 
+        let policy = multisig_policy_from_spec(&spec).expect("policy");
+        let expected_id = AccountId::new_multisig(domain_id.clone(), policy);
         let override_ttl =
             NonZeroU64::new(spec.transaction_ttl_ms.get().saturating_add(1)).unwrap();
-        let propose = MultisigPropose::new(multisig_id.clone(), Vec::new(), Some(override_ttl));
+        let propose = MultisigPropose::new(expected_id.clone(), Vec::new(), Some(override_ttl));
 
         let result = Executor::Initial.execute_instruction(
             &mut state_transaction,
@@ -1479,18 +2353,17 @@ mod tests {
     }
 
     #[test]
-    fn relayer_ttl_is_capped_by_nested_spec() {
+    fn multisig_signatories_must_be_single_accounts() {
         let state = State::new_with_chain(
             World::new(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-            ChainId::from("multisig-ttl-cap-chain"),
+            ChainId::from("multisig-signatories-single"),
         );
-        let now_ms = 1_000;
-        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, now_ms, 0);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "ttlcap".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId = "signatory-single".parse().unwrap();
 
         let (owner, leaf_a, leaf_b) = (KeyPair::random(), KeyPair::random(), KeyPair::random());
 
@@ -1511,14 +2384,13 @@ mod tests {
                 .expect(label);
         }
 
-        let child_ttl_ms: u64 = 2_000;
         let child_spec = MultisigSpec {
             signatories: BTreeMap::from([
                 (first_leaf_account_id.clone(), 1),
                 (second_leaf_account_id.clone(), 1),
             ]),
             quorum: NonZeroU16::new(2).unwrap(),
-            transaction_ttl_ms: NonZeroU64::new(child_ttl_ms).unwrap(),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
         let child_id = register_multisig_account(
             &mut state_transaction,
@@ -1528,55 +2400,30 @@ mod tests {
             "register child multisig account",
         );
 
-        let parent_ttl_ms: u64 = 10_000;
         let parent_spec = MultisigSpec {
             signatories: BTreeMap::from([(owner_id.clone(), 1), (child_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
-            transaction_ttl_ms: NonZeroU64::new(parent_ttl_ms).unwrap(),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
-        let parent_id = register_multisig_account(
-            &mut state_transaction,
-            &owner_id,
-            &domain_id,
-            &parent_spec,
-            "register parent multisig account",
-        );
-
-        let child_role = multisig_role_for(&child_id);
-        let parent_role = multisig_role_for(&parent_id);
-        register_multisig_role(&mut state_transaction, &owner_id, &child_role, &child_id);
-        register_multisig_role(&mut state_transaction, &owner_id, &parent_role, &parent_id);
-        let _ = Grant::account_role(parent_role.clone(), owner_id.clone())
-            .execute(&owner_id, &mut state_transaction);
-
-        let instructions: Vec<InstructionBox> = Vec::new();
-        let instructions_hash = HashOf::new(&instructions);
-        let proposal = MultisigPropose::new(parent_id.clone(), instructions, None);
-        Executor::Initial
+        let parent_key = KeyPair::random();
+        let parent_id = AccountId::new(domain_id.clone(), parent_key.public_key().clone());
+        let register = MultisigRegister::new(parent_id, parent_spec);
+        let err = Executor::Initial
             .execute_instruction(
                 &mut state_transaction,
                 &owner_id,
-                InstructionBox::from(proposal),
+                InstructionBox::from(register),
             )
-            .expect("parent multisig propose");
-
-        let parent_value = proposal_value(&state_transaction, &parent_id, &instructions_hash)
-            .expect("parent value");
-        assert_eq!(
-            parent_value.expires_at_ms,
-            now_ms + parent_ttl_ms,
-            "parent TTL should remain unchanged"
-        );
-
-        let relay = MultisigApprove::new(parent_id.clone(), instructions_hash);
-        let relay_hash = HashOf::new(&vec![InstructionBox::from(relay)]);
-        let child_value =
-            proposal_value(&state_transaction, &child_id, &relay_hash).expect("child value");
-        assert_eq!(
-            child_value.expires_at_ms,
-            now_ms + child_ttl_ms,
-            "nested relayer TTL must be capped by the child multisig policy"
-        );
+            .expect_err("multisig signatory must be single");
+        match err {
+            ValidationFail::NotPermitted(msg) => {
+                assert!(
+                    msg.contains("single-key account"),
+                    "unexpected error message: {msg}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]

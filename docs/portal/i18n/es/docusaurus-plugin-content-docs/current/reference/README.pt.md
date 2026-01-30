@@ -1,15 +1,21 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/portal/docs/reference/README.pt.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Traducción en curso
+---
+title: Indice de referencia
+slug: /reference
+---
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+Esta secao agrega o material "leia como especificacao" para Iroha. Essas paginas permanecem estaveis mesmo quando guias e tutoriais evoluem.
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+## Disponivel hoje
+
+- **Visao geral do codec Norito** - `reference/norito-codec.md` aponta diretamente para a especificacao autoritativa `norito.md` enquanto a tabela do portal esta sendo preenchida.
+- **Torii OpenAPI** - `/reference/torii-openapi` renderiza a especificacao REST mais recente de Torii usando Redoc. Regenere a spec com `npm run sync-openapi -- --version=current --latest` (adicione `--mirror=<label>` para copiar o snapshot para versoes historicas adicionais).
+- **Tabelas de configuracao** - O catalogo completo de parametros fica em `docs/source/references/configuration.md`. Ate o portal oferecer auto-import, consulte esse arquivo Markdown para defaults exatos e overrides de ambiente.
+- **Versionamento de docs** - O dropdown de versao na navbar expoe snapshots congelados criados com `npm run docs:version -- <label>`, facilitando comparar orientacoes entre releases.

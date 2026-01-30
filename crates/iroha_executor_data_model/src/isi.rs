@@ -167,8 +167,9 @@ pub mod multisig {
     pub struct MultisigRegister {
         /// Account backing the multisig controller.
         ///
-        /// Must live in the same domain as the signatories. The key is provided by
-        /// the caller to anchor the multisig controller identity.
+        /// Must live in the same domain as the signatories. The supplied id anchors the
+        /// registration step, but the account is rekeyed to the canonical multisig controller
+        /// derived from the spec after registration, so the key is never used for signing.
         pub account: AccountId,
         /// Specification of the multisig account
         pub spec: MultisigSpec,
@@ -182,7 +183,8 @@ pub mod multisig {
 
         /// Construct a multisig registration using a freshly generated account id that lives in
         /// the signatory domain. The generated key is not meant for direct signing; it only
-        /// anchors the multisig controller identity.
+        /// anchors the registration step before the account is rekeyed to the canonical controller
+        /// derived from the spec.
         pub fn from_spec(spec: MultisigSpec) -> Self {
             let domain = signatory_domain(&spec)
                 .expect("multisig spec must include at least one signatory to derive the domain");
