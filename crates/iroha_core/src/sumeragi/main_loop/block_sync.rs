@@ -452,6 +452,18 @@ impl Actor {
         update: super::message::BlockSyncUpdate,
         sender: Option<PeerId>,
     ) -> Result<()> {
+        if crate::sumeragi::status::local_peer_removed() {
+            debug!(
+                ?sender,
+                "dropping BlockSyncUpdate because local peer removed from world"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::BlockSyncUpdate,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::ModeMismatch,
+            );
+            return Ok(());
+        }
         let super::message::BlockSyncUpdate {
             block,
             commit_votes,

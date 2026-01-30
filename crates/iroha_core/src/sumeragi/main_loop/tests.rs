@@ -1621,6 +1621,24 @@ struct TestActorHarness {
     key_pairs: Vec<KeyPair>,
 }
 
+struct LocalRemovedGuard {
+    previous: bool,
+}
+
+impl LocalRemovedGuard {
+    fn new(removed: bool) -> Self {
+        let previous = super::status::local_peer_removed();
+        super::status::set_local_removed_from_world(removed);
+        Self { previous }
+    }
+}
+
+impl Drop for LocalRemovedGuard {
+    fn drop(&mut self) {
+        super::status::set_local_removed_from_world(self.previous);
+    }
+}
+
 const NETWORK_START_TIMEOUT: Duration = Duration::from_secs(5);
 
 async fn start_network_or_closed(
@@ -4357,6 +4375,145 @@ async fn block_sync_update_accepts_uncertified_next_height_in_permissioned_mode(
         "block sync should accept next-height block without QC when explicitly requested"
     );
 
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_ignored_when_local_removed_from_world() {
+    use crate::sumeragi::status;
+
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let _removed = LocalRemovedGuard::new(true);
+
+    let _genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let (committed_height, committed_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(u64::MAX),
+            view.latest_block_hash(),
+        )
+    };
+    let block_height = committed_height.saturating_add(1).max(1);
+    let view_index = 0_u64;
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(block_height);
+    let signature_topology =
+        super::topology_for_view(&topology, block_height, view_index, mode_tag, prf_seed);
+    let signer_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("signer in topology");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair exists in harness");
+    let signer_idx = signature_topology
+        .position(signer_kp.public_key())
+        .expect("signer index in topology");
+    let prev_hash = if block_height == 1 {
+        None
+    } else {
+        committed_hash
+    };
+    let tx_params = actor
+        .state
+        .view()
+        .world()
+        .parameters()
+        .transaction()
+        .clone();
+    let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+    let heartbeat_signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let heartbeat = crate::tx::build_heartbeat_transaction_with_time_source(
+        actor.common_config.chain.clone(),
+        &heartbeat_signer,
+        &tx_params,
+        block_height,
+        &time_source,
+    );
+    time_handle.advance(Duration::from_millis(1));
+    let creation_time_ms =
+        u64::try_from(time_source.get_unix_time().as_millis()).expect("creation time fits in u64");
+    let header = BlockHeader::new(
+        NonZeroU64::new(block_height).expect("block height"),
+        prev_hash,
+        None,
+        None,
+        creation_time_ms,
+        view_index,
+    );
+    let mut builder = BlockBuilder::new(header);
+    builder.push_transaction(heartbeat);
+    let default_policies =
+        crate::da::proof_policy_bundle(&iroha_config::parameters::actual::LaneConfig::default());
+    builder.set_da_proof_policies(Some(default_policies));
+    let block = builder.build_with_signature(
+        u64::try_from(signer_idx).expect("signer index fits u64"),
+        signer_kp.private_key(),
+    );
+    let update = super::message::BlockSyncUpdate::from(&block);
+    let now = Instant::now();
+    let retry_window = Duration::from_secs(1);
+    actor.pending.missing_block_requests.insert(
+        block.hash(),
+        super::MissingBlockRequest {
+            height: block_height,
+            view: view_index,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window,
+            view_change_window: Some(retry_window),
+            first_seen: now,
+            last_requested: now,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+
+    assert!(
+        !actor.vote_roster_cache.contains_key(&block.hash()),
+        "block sync update should be ignored after local removal"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block.hash()),
+        "block sync update should not insert pending block after local removal"
+    );
+    assert!(
+        !actor.block_known_locally(block.hash()),
+        "block sync update should not accept block after local removal"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block.hash()),
+        "block sync update should not clear missing-block request after local removal"
+    );
+
+    let entries = super::status::snapshot().consensus_message_handling.entries;
+    let entry = entries
+        .iter()
+        .find(|entry| {
+            entry.kind == super::status::ConsensusMessageKind::BlockSyncUpdate
+                && entry.outcome == super::status::ConsensusMessageOutcome::Dropped
+                && entry.reason == super::status::ConsensusMessageReason::ModeMismatch
+        })
+        .expect("block sync update drop should be recorded");
+    assert_eq!(entry.total, 1);
+
+    super::status::reset_message_handling_for_tests();
     harness.shutdown.send();
 }
 
@@ -15751,11 +15908,33 @@ async fn handle_qc_validates_pending_block_on_commit_qc() {
     let mut harness = test_actor_harness_with_config_and_height(4, consensus_cfg, None, 0).await;
     let actor = &mut harness.actor;
 
-    let parent = Some(seed_genesis_block_for_state(actor.state.as_ref()));
+    let parent = seed_genesis_block_for_state(actor.state.as_ref());
     let committed_height = actor.state.view().height() as u64;
     let height = committed_height.saturating_add(1);
     let view = 0_u64;
-    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, parent);
+    let commit_topology = actor.effective_commit_topology();
+    let mut leader_topology = super::network_topology::Topology::new(commit_topology.clone());
+    let leader_idx = actor
+        .leader_index_for(&mut leader_topology, height, view)
+        .expect("leader index available for tests");
+    let leader_peer = leader_topology
+        .as_ref()
+        .get(leader_idx)
+        .expect("leader exists in topology");
+    let leader_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == leader_peer.public_key())
+        .expect("leader keypair available in harness");
+    let block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.chain_id,
+        height,
+        view,
+        Some(parent),
+        leader_kp,
+        u64::try_from(leader_idx).expect("leader index fits u64"),
+    );
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     actor.pending.pending_blocks.insert(
@@ -15768,7 +15947,7 @@ async fn handle_qc_validates_pending_block_on_commit_qc() {
         "pending block should start unvalidated"
     );
 
-    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let topology = super::network_topology::Topology::new(commit_topology);
     let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
         .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
         .collect();
@@ -15787,16 +15966,10 @@ async fn handle_qc_validates_pending_block_on_commit_qc() {
 
     actor.handle_qc(qc).expect("handle qc");
 
-    if !actor.block_known_for_lock(block_hash) {
-        let outcome = actor.validate_pending_block_for_voting_inline(
-            block_hash,
-            &actor.effective_commit_topology(),
-        );
-        panic!(
-            "commit QC should validate pending block when payload is present; manual outcome: {:?}",
-            outcome
-        );
-    }
+    assert!(
+        actor.block_known_for_lock(block_hash),
+        "commit QC should validate pending block when payload is present"
+    );
 
     harness.shutdown.send();
 }
@@ -41358,6 +41531,54 @@ async fn stale_block_created_accepted_under_da() {
         "stale BlockCreated should be accepted under DA"
     );
 
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_created_ignored_when_local_removed_from_world() {
+    let _guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+    let _removed = LocalRemovedGuard::new(true);
+
+    let height = 1_u64;
+    let view = 0_u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
+    let block_hash = block.hash();
+
+    actor
+        .handle_block_created(super::message::BlockCreated { block }, None)
+        .expect("handle BlockCreated");
+
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "BlockCreated should be ignored after local removal"
+    );
+    assert!(
+        !actor
+            .pending
+            .pending_fetch_requests
+            .contains_key(&block_hash),
+        "BlockCreated should not enqueue fetch after local removal"
+    );
+    assert!(
+        !actor.block_known_locally(block_hash),
+        "BlockCreated should not mark block as known after local removal"
+    );
+
+    let entries = super::status::snapshot().consensus_message_handling.entries;
+    let entry = entries
+        .iter()
+        .find(|entry| {
+            entry.kind == super::status::ConsensusMessageKind::BlockCreated
+                && entry.outcome == super::status::ConsensusMessageOutcome::Dropped
+                && entry.reason == super::status::ConsensusMessageReason::ModeMismatch
+        })
+        .expect("block created drop should be recorded");
+    assert_eq!(entry.total, 1);
+
+    super::status::reset_message_handling_for_tests();
     harness.shutdown.send();
 }
 
