@@ -1,6 +1,8 @@
 # Status
 
 Last update: 2026-01-30
+- Docs: replaced Spanish stub for `docs/source/sorafs_gateway_conformance.es.md` with a full translation and marked it complete.
+- Tests: not run (docs-only change).
 - Docs: replaced Spanish stub for `docs/source/sorafs_gateway_load_tests.es.md` with a full translation and marked it complete.
 - Tests: not run (docs-only change).
 - Izanami: avoid mint/burn repetition instructions in the same transaction as trigger registration (and when repetition count is zero), so workload plans stop issuing invalid trigger-repetition transactions; updated the mint/burn balance unit test to handle the new registration-first flow.
@@ -88,6 +90,8 @@ Last update: 2026-01-30
 - Tests: not run (not requested).
 - Swift explorer transfer summaries: add source/destination asset-id convenience accessors with unit coverage.
 - Tests: not run (not requested).
+- Sumeragi RBC: align RBC chunk fanout minimum with the full-roster commit quorum to avoid under-targeting when fanout is capped; updated `rbc_chunk_target_count` unit expectations.
+- Tests: `cargo test -p iroha_core rbc_chunk_target_count_defaults_to_full_roster -- --nocapture` (timed out after 300s; target test passed before timeout, cargo continued running filtered binaries).
 - Izanami: added `allow_contract_deploy_in_stable` flag to gate contract deployment recipes in stable runs, wired through config/persistence/recipe selection with new CLI override coverage.
 - Izanami TUI: added a stable contract deploy toggle and input validation coverage.
 - Tests: not run (not requested).
