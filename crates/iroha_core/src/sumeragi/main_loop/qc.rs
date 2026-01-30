@@ -2363,6 +2363,27 @@ impl Actor {
             };
             telemetry.note_qc_signer_counts(phase_label, present_signers, signer_indices.len());
         }
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            if let Some(pending) = self.pending.pending_blocks.get_mut(&qc.subject_block_hash) {
+                if pending.aborted
+                    && !matches!(pending.validation_status, ValidationStatus::Invalid)
+                {
+                    let block = pending.block.clone();
+                    let payload_hash = pending.payload_hash;
+                    let height = pending.height;
+                    let view = pending.view;
+                    pending.revive_after_abort(block, payload_hash, height, view);
+                    pending.commit_qc_seen = true;
+                    pending.commit_qc_epoch = Some(qc.epoch);
+                    info!(
+                        height = qc.height,
+                        view = qc.view,
+                        block = %qc.subject_block_hash,
+                        "revived aborted pending block after commit QC"
+                    );
+                }
+            }
+        }
         let committed_height = self.state.view().height();
         let committed_height_u64 = u64::try_from(committed_height).unwrap_or(u64::MAX);
         self.drop_missing_lock_if_unknown(&qc);

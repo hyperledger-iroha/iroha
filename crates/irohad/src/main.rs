@@ -841,8 +841,8 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::BlockCreated(_) => IngressPolicy::critical(),
                 BlockMessage::RbcInit(_)
                 | BlockMessage::RbcReady(_)
-                | BlockMessage::RbcDeliver(_)
-                | BlockMessage::RbcChunk(_) => IngressPolicy::critical_with_rbc_sessions(),
+                | BlockMessage::RbcDeliver(_) => IngressPolicy::critical_with_rbc_sessions(),
+                BlockMessage::RbcChunk(_) => IngressPolicy::bulk(),
                 BlockMessage::ConsensusParams(_) => IngressPolicy::limited(),
                 BlockMessage::BlockSyncUpdate(_) | BlockMessage::ExecWitness(_) => {
                     IngressPolicy::bulk()
@@ -2663,6 +2663,7 @@ mod network_relay_tests {
         let peer = sample_peer();
         assert_bulk(&peer, &block_sync_update_msg());
         assert_bulk(&peer, &exec_witness_msg());
+        assert_bulk(&peer, &rbc_chunk_msg(0x01, 2, 0));
     }
 
     #[test]
