@@ -43,7 +43,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 
 ## Current Open Work
 
-- Re-run the previously failing suites (extra_functional seven_peer_consistency/unregister_peer/unstable_network, smart_contract_query_scenarios, sumeragi_da payload-loss/eviction, sumeragi_npos_liveness) after the READY+DELIVER rebroadcast fixes to confirm RBC delivery across 7+ peers and DA recovery.
+- Re-run the previously failing suites (extra_functional seven_peer_consistency/unregister_peer/unstable_network, smart_contract_query_scenarios, sumeragi_da payload-loss/eviction, sumeragi_npos_liveness) after the READY+DELIVER rebroadcast fixes to confirm RBC delivery across 7+ peers and DA recovery; re-run unstable_network_8_peers_1_fault with the RBC chunk fanout min-quorum fix.
 - Izanami perf: re-run 1 TPS after scaling NPoS timeout derivation to align the timeout budget with `block_time_ms`; confirm block height progress and whether remaining execution DAG spikes still gate consensus. 2026-01-30 run (4 peers, `--pipeline-time 3s`, `--tps 1`, 180s, target 120) reached min height ~15 and failed the target; one repeatable-trigger mint was rejected as missing. Next: tighten Izanami workload/state synchronization or cadence so the 1 TPS soak can reach the 1 Hz target.
 - Localnet 1 Hz: re-run the NPoS 1 Hz soak with the fast-finality gas cap enabled (`sumeragi.block.fast_gas_limit_per_block`) and confirm block spacing falls under 1s on localhost.
 - Izanami perf: re-run 1 TPS after the proposal committed-tx filter (fix for `HasCommittedTransactions` invalid blocks) to confirm height progress and no repeated view-change loops around stale proposal batches.

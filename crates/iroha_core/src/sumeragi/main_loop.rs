@@ -9889,25 +9889,43 @@ impl Actor {
                             super::status::ConsensusMessageReason::FutureWindow,
                         );
                     }
-                    BlockMessage::RbcInit(_) => {
+                    BlockMessage::RbcInit(init) => {
                         self.record_consensus_message_handling(
                             super::status::ConsensusMessageKind::RbcInit,
                             super::status::ConsensusMessageOutcome::Dropped,
                             super::status::ConsensusMessageReason::FutureWindow,
                         );
+                        let key = Self::session_key(&init.block_hash, init.height, init.view);
+                        self.request_missing_block_for_pending_rbc(
+                            key,
+                            "rbc_init_future_window",
+                            None,
+                        );
                     }
-                    BlockMessage::RbcChunk(_) => {
+                    BlockMessage::RbcChunk(chunk) => {
                         self.record_consensus_message_handling(
                             super::status::ConsensusMessageKind::RbcChunk,
                             super::status::ConsensusMessageOutcome::Dropped,
                             super::status::ConsensusMessageReason::FutureWindow,
                         );
+                        let key = Self::session_key(&chunk.block_hash, chunk.height, chunk.view);
+                        self.request_missing_block_for_pending_rbc(
+                            key,
+                            "rbc_chunk_future_window",
+                            None,
+                        );
                     }
-                    BlockMessage::RbcReady(_) => {
+                    BlockMessage::RbcReady(ready) => {
                         self.record_consensus_message_handling(
                             super::status::ConsensusMessageKind::RbcReady,
                             super::status::ConsensusMessageOutcome::Dropped,
                             super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                        let key = Self::session_key(&ready.block_hash, ready.height, ready.view);
+                        self.request_missing_block_for_pending_rbc(
+                            key,
+                            "rbc_ready_future_window",
+                            None,
                         );
                     }
                     BlockMessage::RbcDeliver(deliver) => {
@@ -11448,8 +11466,7 @@ impl Actor {
         let ready_quorum = required != 0 && readies.len() >= required;
         if ready_quorum && !self.should_rebroadcast_rbc_ready(&topology_peers, key) {
             let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
-            let signature_topology =
-                topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+            let signature_topology = topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
             let local_idx = self.local_validator_index_for_topology(&signature_topology);
             let local_ready_idx =
                 local_idx.filter(|idx| readies.iter().any(|ready| ready.sender == *idx));
@@ -11986,15 +12003,16 @@ impl Actor {
             if roster.is_empty() || !roster_source.is_authoritative() {
                 continue;
             }
-            let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) else {
+            let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() else {
                 continue;
             };
             if session.is_invalid() {
                 continue;
             }
-            if session.delivered {
+            let delivered = session.delivered;
+            if delivered {
                 if self.rbc_deliver_rebroadcast_due(&key, now, ready_cooldown) {
-                    if let Some(deliver) = self.build_rbc_deliver(key, session) {
+                    if let Some(deliver) = self.build_rbc_deliver(key, &session) {
                         self.schedule_background(BackgroundRequest::Broadcast {
                             msg: BlockMessage::RbcDeliver(deliver),
                         });
@@ -12006,7 +12024,6 @@ impl Actor {
                         progress = true;
                     }
                 }
-                continue;
             }
             let roster_hash = rbc::rbc_roster_hash(&roster);
             let topology = super::network_topology::Topology::new(roster.clone());
@@ -12036,16 +12053,16 @@ impl Actor {
             } else {
                 false
             };
-            if ready_quorum && !missing_chunks && !ready_rebroadcast_after_quorum {
+            if !delivered && ready_quorum && !missing_chunks && !ready_rebroadcast_after_quorum {
                 continue;
             }
-            let should_rebroadcast_payload = missing_chunks || !ready_quorum;
+            let should_rebroadcast_payload = missing_chunks || !ready_quorum || delivered;
             let payload_bundle = if should_rebroadcast_payload
                 && !payload_backpressure
                 && self.should_rebroadcast_rbc_payload(&roster, key)
                 && self.rbc_payload_rebroadcast_due(&key, now, payload_cooldown)
             {
-                Self::rbc_payload_bundle(key, session, &roster)
+                Self::rbc_payload_bundle(key, &session, &roster)
             } else {
                 None
             };
@@ -12053,7 +12070,7 @@ impl Actor {
                 && ready_count != 0
                 && self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown)
             {
-                Self::rbc_ready_bundle(key, session, roster_hash)
+                Self::rbc_ready_bundle(key, &session, roster_hash)
             } else {
                 None
             };
@@ -12818,7 +12835,8 @@ impl Actor {
         let da_enabled = self.runtime_da_enabled();
         // Keep DA availability state across view changes until payloads are durably resolved.
         // In DA mode, retain stale pending payloads (as aborted) so block sync can still
-        // serve missing payloads after view changes.
+        // serve missing payloads after view changes. Retain stale RBC sessions until
+        // delivery (or invalidation) so READY/DELIVER can converge after view changes.
         let stale_pending: Vec<_> = self
             .pending
             .pending_blocks
@@ -12840,7 +12858,11 @@ impl Actor {
                     pending_retained = pending_retained.saturating_add(1);
                     continue;
                 }
-                if !da_enabled || committed || invalid {
+                if !da_enabled || invalid {
+                    self.clean_rbc_sessions_for_block(hash, pending.height);
+                } else if committed
+                    && !self.should_retain_rbc_sessions_after_commit(hash, pending.height)
+                {
                     self.clean_rbc_sessions_for_block(hash, pending.height);
                 }
                 pending_removed = pending_removed.saturating_add(1);
@@ -12870,7 +12892,16 @@ impl Actor {
             .iter()
             .filter(|(key, _)| key.1 == height && key.2 < min_view)
             .filter(|(key, session)| {
-                !da_enabled || session.is_invalid() || self.block_payload_available_locally(key.0)
+                if !da_enabled {
+                    return true;
+                }
+                if session.is_invalid() {
+                    return true;
+                }
+                if session.delivered {
+                    return self.kura.block_payload_available_by_hash(key.0);
+                }
+                false
             })
             .map(|(key, _)| *key)
             .collect();

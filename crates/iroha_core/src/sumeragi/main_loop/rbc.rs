@@ -46,6 +46,7 @@ use crate::{
             RbcChunk, RbcDeliver, RbcInit, RbcReady, rbc_deliver_preimage, rbc_ready_preimage,
         },
         message::BlockMessage,
+        network_topology::commit_quorum_from_len,
         rbc_status,
         rbc_store::{ChunkStore, PersistOutcome, PersistedSession, SessionKey, StorePressure},
         status,
@@ -472,11 +473,7 @@ pub(super) fn rbc_chunk_target_count(roster_len: usize, fanout_cap: Option<NonZe
     if peers == 0 {
         return 0;
     }
-    let commit_quorum = if roster_len > 3 {
-        ((roster_len.saturating_sub(1)) / 3).saturating_mul(2) + 1
-    } else {
-        roster_len
-    };
+    let commit_quorum = commit_quorum_from_len(roster_len);
     // Ensure a commit quorum of peers receives chunks even if the leader is excluded.
     let min_targets = commit_quorum.min(peers);
     // Default to the full roster so RBC can reach READY quorum even with up to f faulty peers.
@@ -648,6 +645,7 @@ fn distribute_allocation_weights(total_chunks: u32, weights: &[u128]) -> Vec<u32
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sumeragi::network_topology::commit_quorum_from_len;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::peer::PeerId;
 
@@ -665,7 +663,7 @@ mod tests {
     fn rbc_chunk_target_count_defaults_to_full_roster() {
         let roster_len: usize = 7;
         let peers = roster_len.saturating_sub(1);
-        let commit_quorum = ((roster_len.saturating_sub(1)) / 3).saturating_mul(2) + 1;
+        let commit_quorum = commit_quorum_from_len(roster_len);
         let expected_min = commit_quorum.min(peers);
         assert_eq!(rbc_chunk_target_count(roster_len, None), peers);
         assert_eq!(
