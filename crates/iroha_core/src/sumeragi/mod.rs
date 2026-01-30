@@ -9790,6 +9790,14 @@ fn should_warn_slow_iteration(stats: &WorkerIterationStats) -> bool {
         || has_pending_queue_depths(stats.queue_depths)
 }
 
+fn should_warn_slow_iteration_with_budget(
+    cfg: &WorkerLoopConfig,
+    stats: &WorkerIterationStats,
+    iter_elapsed: Duration,
+) -> bool {
+    iter_elapsed >= cfg.time_budget && should_warn_slow_iteration(stats)
+}
+
 #[derive(Clone, Copy, Debug)]
 enum DrainPhase {
     PreTick,
@@ -10347,7 +10355,7 @@ fn run_worker_loop<A: WorkerActor>(
         status::record_worker_iteration(
             u64::try_from(iter_elapsed.as_millis()).unwrap_or(u64::MAX),
         );
-        if iter_elapsed >= Duration::from_millis(500) && should_warn_slow_iteration(&stats) {
+        if should_warn_slow_iteration_with_budget(&cfg, &stats, iter_elapsed) {
             iroha_logger::warn!(
                 elapsed_ms = iter_elapsed.as_millis(),
                 votes_handled = stats.votes_handled,
@@ -10424,6 +10432,29 @@ mod worker_iteration_warn_tests {
         }
     }
 
+    fn warn_config(time_budget: Duration) -> WorkerLoopConfig {
+        WorkerLoopConfig {
+            time_budget,
+            drain_budget_cap: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 1,
+            vote_rx_drain_max_messages: 1,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 1,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 1,
+            consensus_rx_drain_max_messages: 1,
+            lane_relay_rx_drain_max_messages: 1,
+            background_rx_drain_max_messages: 1,
+            tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        }
+    }
+
     #[test]
     fn slow_iteration_without_progress_or_backlog_does_not_warn() {
         let stats = empty_stats();
@@ -10435,6 +10466,32 @@ mod worker_iteration_warn_tests {
         let mut stats = empty_stats();
         stats.queue_depths.vote_rx = 1;
         assert!(should_warn_slow_iteration(&stats));
+    }
+
+    #[test]
+    fn slow_iteration_under_budget_does_not_warn_with_budget_gate() {
+        let cfg = warn_config(Duration::from_secs(1));
+        let mut stats = empty_stats();
+        stats.queue_depths.vote_rx = 1;
+        let iter_elapsed = Duration::from_millis(500);
+        assert!(!should_warn_slow_iteration_with_budget(
+            &cfg,
+            &stats,
+            iter_elapsed
+        ));
+    }
+
+    #[test]
+    fn slow_iteration_over_budget_warns_with_budget_gate() {
+        let cfg = warn_config(Duration::from_millis(300));
+        let mut stats = empty_stats();
+        stats.queue_depths.vote_rx = 1;
+        let iter_elapsed = Duration::from_millis(301);
+        assert!(should_warn_slow_iteration_with_budget(
+            &cfg,
+            &stats,
+            iter_elapsed
+        ));
     }
 }
 

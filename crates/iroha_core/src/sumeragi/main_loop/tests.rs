@@ -57178,6 +57178,38 @@ fn tick_timing_monitor_logs_long_tick_cost() {
 }
 
 #[test]
+fn tick_timing_monitor_respects_custom_thresholds() {
+    let base = Instant::now();
+    let mut monitor = super::TickTimingMonitor::new(base);
+    let tick_start = base + Duration::from_millis(10);
+    let tick_cost = Duration::from_millis(9);
+
+    let report = monitor.observe_with_thresholds(
+        tick_start,
+        tick_cost,
+        Duration::from_millis(5),
+        Duration::from_millis(8),
+    );
+    assert!(report.log_gap, "custom gap threshold should be honored");
+    assert!(report.log_cost, "custom cost threshold should be honored");
+
+    let suppressed = monitor.observe_with_thresholds(
+        tick_start + Duration::from_millis(2),
+        Duration::from_millis(1),
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+    );
+    assert!(
+        !suppressed.log_gap,
+        "higher thresholds should suppress logs"
+    );
+    assert!(
+        !suppressed.log_cost,
+        "higher thresholds should suppress logs"
+    );
+}
+
+#[test]
 fn propose_attempt_monitor_enforces_cooldown() {
     let base = Instant::now();
     let mut monitor = super::ProposeAttemptMonitor::new();
