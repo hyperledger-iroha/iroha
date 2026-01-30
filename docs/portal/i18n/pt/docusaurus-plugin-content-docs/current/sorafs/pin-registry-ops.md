@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 id: pin-registry-ops
 lang: pt

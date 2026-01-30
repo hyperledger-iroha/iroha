@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
-
 ---
 id: pq-rollout-plan
 lang: fr

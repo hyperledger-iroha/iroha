@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for ar translation. Replace this content with the full translation. -->
-
 ---
 id: signing-ceremony
 lang: ar

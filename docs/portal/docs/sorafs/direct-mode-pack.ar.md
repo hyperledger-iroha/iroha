@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
-
 ---
 lang: ar
 direction: rtl
@@ -8,7 +6,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 59d36561f60e28f8d7d5794e953755d3221daf8f0627e0be6a540115b0ad1f05
 source_last_modified: "2025-11-20T08:09:37.293192+00:00"
-translation_last_reviewed: 2025-12-30
+translation_last_reviewed: 2026-01-30
 ---
 
 ---

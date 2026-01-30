@@ -1,14 +1,42 @@
 # Status
 
 Last update: 2026-01-30
+- Docs: cleared auto-generated stub markers for SoraFS manifest pipeline + capacity simulation runbook translations and the docs preview feedback form across all locales, refreshing `translation_last_reviewed`.
+- Tests: not run (docs-only change).
+- Docs/portal: cleared auto-generated stub markers for Norito examples across all locales and synced the portal i18n mirrors; refreshed `translation_last_reviewed` under `docs/portal/docs/norito/examples/*.{ar,es,fr,he,ja,pt,ru,ur}.md`.
+- Tests: not run (docs-only change).
+- Docs/portal: cleared auto-generated stub markers for SoraNet portal docs across ar/es/fr/he/ja/pt/ru/ur and synced the matching i18n mirrors; refreshed `translation_last_reviewed` for `docs/portal/docs/soranet/*.{ar,es,fr,he,ja,pt,ru,ur}.md`.
+- Tests: not run (docs-only change).
+- Docs/portal: cleared auto-generated stub markers for Urdu SoraFS portal docs and synced the ur i18n mirrors; refreshed `translation_last_reviewed` across `docs/portal/docs/sorafs/*.ur.md` and `docs/portal/docs/sorafs/reports/*.ur.md`.
+- Tests: not run (docs-only change).
+- Docs/portal: cleared auto-generated stub markers for Hebrew SoraFS portal docs and synced the he i18n mirrors; refreshed `translation_last_reviewed` across `docs/portal/docs/sorafs/*.he.md` and `docs/portal/docs/sorafs/reports/*.he.md`.
+- Tests: not run (docs-only change).
+- Docs/portal: cleared auto-generated stub markers for Arabic SoraFS portal docs and synced the ar i18n mirrors; refreshed `translation_last_reviewed` across `docs/portal/docs/sorafs/*.ar.md` and `docs/portal/docs/sorafs/reports/*.ar.md`.
+- Tests: not run (docs-only change).
+- Docs/portal: cleared auto-generated stub markers for Russian SoraFS portal docs and synced the ru i18n mirrors; refreshed `translation_last_reviewed` across `docs/portal/docs/sorafs/*.ru.md` and `docs/portal/docs/sorafs/reports/*.ru.md`.
+- Tests: not run (docs-only change).
+- Docs/portal: cleared auto-generated stub markers for Portuguese SoraFS portal docs and synced the pt i18n mirrors; refreshed `translation_last_reviewed` across `docs/portal/docs/sorafs/*.pt.md` and `docs/portal/docs/sorafs/reports/*.pt.md`.
+- Tests: not run (docs-only change).
+- Docs/portal: cleared auto-generated stub markers for Japanese SoraFS portal docs and synced the ja i18n mirrors; refreshed `translation_last_reviewed` across `docs/portal/docs/sorafs/*.ja.md` and `docs/portal/docs/sorafs/reports/*.ja.md`.
+- Tests: not run (docs-only change).
+- Docs/portal: cleared auto-generated stub markers for French SoraFS portal docs and synced the fr i18n mirrors; refreshed `translation_last_reviewed` across `docs/portal/docs/sorafs/*.fr.md` and `docs/portal/docs/sorafs/reports/*.fr.md`.
+- Tests: not run (docs-only change).
+- SDK fixtures: removed the legacy `instructions_double_payment` Norito fixture from manifests/payload lists across Android/Swift/Python and deleted the legacy blobs so only wire-only instruction fixtures remain.
+- Tests: not run (fixtures cleanup only).
+- Docs/portal: cleared auto-generated stub markers for Spanish SoraFS portal docs and synced the es i18n mirrors; refreshed `translation_last_reviewed` across `docs/portal/docs/sorafs/*.es.md`.
+- Tests: not run (docs-only change).
+- TODO audit: marked the IVM syscall gas schedule enforcement and CoreHost parity harness as complete in `docs/source/ivm_isi_kotodama_alignment.ja.md`, and refreshed the roadmap TODO inventory (vendored dependency TODOs tagged as upstream references).
+- Integration tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-unstable IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo test -p integration_tests --test mod extra_functional::unstable_network::unstable_network_12_peers_4_faults -- --nocapture` (timed out after ~20m; repeated `ConnectionRefused` warnings; network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_lHH0l8`).
+- Docs/portal: cleared auto-generated stub markers for the SoraFS portal publish plan across ar/es/fr/he/ja/pt/ru/ur, refreshed `translation_last_reviewed`, and synced the portal i18n mirrors.
+- Tests: not run (docs-only change).
 - Izanami soak: `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-release/iroha-test-network cargo build -p irohad --release --bin iroha3d --features expensive-telemetry` (ok; warnings: unused `padded` in `norito`, unused `mut` in `iroha_data_model`).
 - Izanami soak: `/tmp/iroha-codex-izanami-release/release/izanami --allow-net --peers 4 --faulty 0 --pipeline-time 3s --tps 1 --duration 180s --target-blocks 120` with `TEST_NETWORK_BIN_IROHAD=/tmp/iroha-codex-izanami-release/iroha-test-network/release/iroha3d` and `IROHA_TEST_NETWORK_KEEP_DIRS=1` (failed: min height 61/target 120; saw `burn_trigger_repetitions` overflow `InstructionFailed(Math(Overflow))`; network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_2Y2hg7` preserved).
-- IVM: exposed the canonical gas schedule via `ivm::limits`, added core `ivm_gas_schedule_*` helpers plus `limits_enforcement` coverage, and documented the opcode gas table + schedule hash in `docs/source/gas_model.md`; refreshed the roadmap TODO inventory for remaining CoreHost parity.
+- IVM: exposed the canonical gas schedule via `ivm::limits`, added core `ivm_gas_schedule_*` helpers plus `limits_enforcement` coverage, added `host_roundtrip` (ivm) and `ivm_host_shadow_execute` (iroha_core) parity tests, and documented the opcode gas table + schedule hash in `docs/source/gas_model.md`; refreshed the roadmap TODO inventory.
 - Tests: not run (not requested).
 - Docs: replaced Spanish stubs for `docs/source/sorafs/chunker_profile_authoring.es.md`, `docs/source/sorafs/chunker_registry.es.md`, `docs/source/sorafs/portal_publish_plan.es.md`, `docs/source/sorafs/sorafs_node_plan.es.md`, `docs/source/sorafs/sorafs_node_storage.es.md`, and `docs/source/sorafs/storage_capacity_marketplace.es.md` with full translations and marked them complete.
 - Tests: not run (docs-only change).
-- Sumeragi: allow worker-loop ticks to run at the minimum gap even under queue backlogs so consensus progress is not throttled by pending drains; added unit coverage for backlogged ticks.
-- Tests: `cargo test -p iroha_core --lib should_run_tick_when_gap_exceeds_min -- --nocapture`, `cargo test -p iroha_core --lib run_worker_iteration_ticks_when_backlogged_before_max_gap -- --nocapture` (ok; warnings: unused assignments in `norito`, unused `mut` in `iroha_data_model`, unused `should_send` in `iroha_core` tests).
+- Sumeragi: introduce a busy tick gap derived from block/commit timing (clamped below the idle gap) so worker-loop ticks stay responsive under queue backlogs without changing pacemaker deadlines; added unit coverage for busy-gap behavior and backlogged ticks.
+- Tests: `cargo test -p iroha_core --lib should_run_tick_when_gap_exceeds_min -- --nocapture`, `cargo test -p iroha_core --lib run_worker_iteration_ticks_when_backlogged_before_max_gap -- --nocapture`, `cargo test -p iroha_core --lib busy_tick_gap_clamps_to_idle_and_budget -- --nocapture` (ok; warnings: unused assignments in `norito`, unused `mut` in `iroha_data_model`, unused `should_send` in `iroha_core` tests).
 - Docs/source: added the missing Android telemetry readiness outline (AND7) and cleared remaining docs/source translation stubs (including Org templates) by mirroring source content with `translation_last_reviewed` set to 2026-01-30.
 - Tests: not run (docs-only change).
 - Docs/portal: cleared remaining portal i18n stubs marked `status: needs-translation` (current + versioned docs) by mirroring canonical sources and updating translation metadata where applicable.
@@ -1805,3 +1833,7 @@ Last update: 2026-01-30
 - Docs: translated the portal Rust SDK quickstart across locales and synced the portal i18n copies. Tests not run (docs-only).
 - Docs: translated the portal Python SDK quickstart across locales and synced the portal i18n copies. Tests not run (docs-only).
 - Docs: translated the portal AI Moderation Runner specification across locales and synced the portal i18n copies. Tests not run (docs-only).
+- Izanami workload: reserve trigger-repetition burns per plan, release pending reservations on failure, and apply plan updates on failed submissions to avoid overflow when triggers consume repetitions.
+- Tests: `cargo test -p izanami burn_trigger_repetitions_releases_pending_on_failure -- --nocapture` (ok).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami cargo test -p izanami workload_record_result_releases_pending_on_failure -- --nocapture` (ok).
+- Izanami 1 TPS run (4 peers, `--pipeline-time 3s`, `--tps 1`, 180s, target 120) after burn reservation fix: stopped before target blocks (min height 75); no overflow observed. Network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_ZtgMQJ`.

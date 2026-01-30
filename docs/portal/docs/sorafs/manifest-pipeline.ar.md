@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
-
 ---
 lang: ar
 direction: rtl
@@ -8,7 +6,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 262ae1b2fc707b1bfc4bca57458ce7db8238acfd719116f86b997337fdda1816
 source_last_modified: "2025-11-02T17:51:00.907686+00:00"
-translation_last_reviewed: 2025-12-28
+translation_last_reviewed: 2026-01-30
 ---
 
 # تجزئة SoraFS → مسار المانيفست

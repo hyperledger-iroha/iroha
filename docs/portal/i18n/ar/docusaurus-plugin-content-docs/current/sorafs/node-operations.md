@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
-
 ---
 id: node-operations
 lang: ar

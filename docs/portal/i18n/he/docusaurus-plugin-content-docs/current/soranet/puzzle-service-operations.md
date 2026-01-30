@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 id: puzzle-service-operations
 lang: he

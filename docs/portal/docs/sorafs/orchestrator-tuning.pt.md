@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
@@ -8,7 +6,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 364e6c85da0b765404e4ec6dd245a8fc024ec7d1801b5b0e002b42f5f4e3a989
 source_last_modified: "2025-11-18T04:20:50.893014+00:00"
-translation_last_reviewed: 2025-12-29
+translation_last_reviewed: 2026-01-30
 ---
 
 ---

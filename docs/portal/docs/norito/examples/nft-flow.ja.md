@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
@@ -8,7 +6,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 41a944c3e016d0dc96a0edb3559700670a7bd57b437751a777df8b35567b34fb
 source_last_modified: "2025-11-23T15:30:33.687691+00:00"
-translation_last_reviewed: 2025-12-30
+translation_last_reviewed: 2026-01-30
 ---
 
 ---

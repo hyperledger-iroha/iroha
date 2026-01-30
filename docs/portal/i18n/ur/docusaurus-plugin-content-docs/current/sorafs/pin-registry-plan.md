@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 id: pin-registry-plan
 lang: ur

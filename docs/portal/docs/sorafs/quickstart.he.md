@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
@@ -8,7 +6,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c93ecca74f97ebe64c8b8a529a92de44b19ad3b692add43796d9413d5c08ae4b
 source_last_modified: "2025-11-02T17:51:26.194476+00:00"
-translation_last_reviewed: 2025-12-28
+translation_last_reviewed: 2026-01-30
 ---
 
 # מדריך התחלה מהירה ל‑SoraFS

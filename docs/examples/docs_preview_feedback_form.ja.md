@@ -6,7 +6,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: afb7e51ddc0b7e819f2cbf3888aadf907b0e0010c676cb44af648f9f4818f8f5
 source_last_modified: "2025-11-10T19:22:20.036140+00:00"
-translation_last_reviewed: 2026-01-01
+translation_last_reviewed: 2026-01-30
 ---
 
 # Docs preview フィードバックフォーム (W1 パートナー wave)

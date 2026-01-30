@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 id: priority-snapshot-2025-03
 lang: he

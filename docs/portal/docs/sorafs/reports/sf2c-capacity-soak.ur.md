@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
@@ -8,7 +6,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 09567fc0280e726bdd1f2f1289dc98547ac70db9b19324ef5e413c2cff34de80
 source_last_modified: "2025-11-10T16:20:18.769519+00:00"
-translation_last_reviewed: 2025-12-30
+translation_last_reviewed: 2026-01-30
 ---
 
 # SF-2c Capacity Accrual Soak رپورٹ

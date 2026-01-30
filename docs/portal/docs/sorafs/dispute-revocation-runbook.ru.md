@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
-
 ---
 lang: ru
 direction: ltr
@@ -8,7 +6,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: b9a1c32940f993a44c63843d0936768af1af37d6677d7b60a5c86b659742bb71
 source_last_modified: "2025-11-06T19:51:05.537172+00:00"
-translation_last_reviewed: 2025-12-29
+translation_last_reviewed: 2026-01-30
 ---
 
 ---

@@ -9,7 +9,6 @@ source_last_modified: "2026-01-21T07:38:35+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
-<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
 
 ---
 id: observability-plan

@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 id: developer-ci
 lang: es

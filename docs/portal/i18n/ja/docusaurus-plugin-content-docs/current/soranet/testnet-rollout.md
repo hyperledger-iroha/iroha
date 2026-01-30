@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 id: testnet-rollout
 lang: ja

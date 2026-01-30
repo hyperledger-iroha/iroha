@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
@@ -8,7 +6,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4cd9ef613d7c825bd562d2708ed0027f3866ddf031655592820a46aeadad3256
 source_last_modified: "2025-11-13T08:10:42.118544+00:00"
-translation_last_reviewed: 2025-12-30
+translation_last_reviewed: 2026-01-30
 ---
 
 ---

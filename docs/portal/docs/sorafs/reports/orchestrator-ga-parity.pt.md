@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
@@ -8,7 +6,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: a206b033b430fc9895f64d402cd53bfea35c3f269b2c18bb12a1f929114423aa
 source_last_modified: "2025-11-10T16:58:52.735898+00:00"
-translation_last_reviewed: 2025-12-30
+translation_last_reviewed: 2026-01-30
 ---
 
 # Relatorio de paridade GA do Orchestrator SoraFS

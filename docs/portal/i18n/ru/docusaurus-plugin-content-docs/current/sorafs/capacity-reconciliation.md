@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
-
 ---
 id: capacity-reconciliation
 lang: ru

@@ -115,8 +115,9 @@ fn split_pipeline_time(duration: Duration) -> (u64, u64) {
 
 fn derive_npos_timing(config: &ChaosConfig) -> NposTiming {
     let (block_ms, commit_time_ms) = if let Some(duration) = config.pipeline_time {
-        let (block_ms, commit_ms) = split_pipeline_time(duration);
-        (block_ms, commit_ms)
+        let (block_ms, _commit_ms) = split_pipeline_time(duration);
+        // Favor block cadence for soak tests; commit time must be >= block time.
+        (block_ms, block_ms)
     } else {
         let block_ms = u64::try_from(IZANAMI_NPOS_BLOCK_TIME_MS)
             .expect("izanami block time must be non-negative");

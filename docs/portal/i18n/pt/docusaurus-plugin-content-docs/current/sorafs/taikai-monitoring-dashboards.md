@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for pt translation. Replace this content with the full translation. -->
-
 ---
 id: taikai-monitoring-dashboards
 lang: pt

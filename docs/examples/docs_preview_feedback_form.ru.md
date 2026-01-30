@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
-
 ---
 lang: ru
 direction: ltr
@@ -8,7 +6,7 @@ status: complete
 translator: manual
 source_hash: afb7e51ddc0b7e819f2cbf3888aadf907b0e0010c676cb44af648f9f4818f8f5
 source_last_modified: "2025-11-10T19:22:20.036140+00:00"
-translation_last_reviewed: 2025-11-14
+translation_last_reviewed: 2026-01-30
 ---
 
 <!-- Русский перевод docs/examples/docs_preview_feedback_form.md (Docs preview feedback form) -->

@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
-
 ---
 lang: fr
 direction: ltr
@@ -8,7 +6,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 2895818612da6e0afbeb5bb44da3a6ecef6cab0aefd401ed79b4236df1dd9d18
 source_last_modified: "2025-11-08T20:22:25.757062+00:00"
-translation_last_reviewed: 2025-12-29
+translation_last_reviewed: 2026-01-30
 ---
 
 ---

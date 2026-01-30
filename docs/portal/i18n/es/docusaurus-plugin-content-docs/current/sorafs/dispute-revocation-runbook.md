@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 id: dispute-revocation-runbook
 lang: es

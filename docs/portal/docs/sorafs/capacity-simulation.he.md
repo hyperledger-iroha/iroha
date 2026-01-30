@@ -1,5 +1,3 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
@@ -8,7 +6,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: a1abda76e18818ce513173e3e77cdc5c9adbdb873bfcb3f4c486ff626aedcd8b
 source_last_modified: "2025-11-10T17:32:23.748928+00:00"
-translation_last_reviewed: 2025-12-28
+translation_last_reviewed: 2026-01-30
 ---
 
 ---
