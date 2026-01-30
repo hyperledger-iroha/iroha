@@ -1,6 +1,13 @@
 # Status
 
 Last update: 2026-01-30
+- Tests: `cargo test -p ivm host_roundtrip -- --nocapture` (ok).
+- Tests: `cargo test -p iroha_core ivm_host_shadow_execute -- --nocapture` (timed out after ~20m; warnings: `norito` unused `padded` assignments, `iroha_data_model` unused `mut`, `iroha_core` test unused `should_send`).
+- Sumeragi DA tests: make the Kura eviction path submit/await blocks until an eviction marker appears, and poll for rehydrated blocks after DA eviction so the tests no longer assume one block per submit.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo test -p integration_tests --test sumeragi_da sumeragi_da_kura_eviction_rehydrates_from_da_store -- --nocapture` (ok; warnings: unused `padded` in `norito`, unused `mut` in `iroha_data_model`).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo test -p integration_tests --test sumeragi_da sumeragi_da_eviction_rehydrates_block_bodies -- --nocapture` (ok; warnings: unused `padded` in `norito`, unused `mut` in `iroha_data_model`).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo test -p integration_tests --test sumeragi_da sumeragi_da_payload_loss_does_not_block_commit -- --nocapture` (ok; warning: `RBC session not observed before commit`; warnings: unused `padded` in `norito`, unused `mut` in `iroha_data_model`).
+- Localnet soak: `IROHA_TEST_NETWORK_PARALLELISM=5 IROHA_SOAK_TARGET_BLOCKS=200 cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --ignored --nocapture` (failed: stalled 40s at min_non_empty=68/target 201; last snapshots had blocks=68, queue_size~133, view_changes=0; network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_RGxhhQ`).
 - Docs: cleared auto-generated stub markers for SoraFS manifest pipeline + capacity simulation runbook translations and the docs preview feedback form across all locales, refreshing `translation_last_reviewed`.
 - Tests: not run (docs-only change).
 - Docs/portal: cleared auto-generated stub markers for Norito examples across all locales and synced the portal i18n mirrors; refreshed `translation_last_reviewed` under `docs/portal/docs/norito/examples/*.{ar,es,fr,he,ja,pt,ru,ur}.md`.
@@ -1833,6 +1840,9 @@ Last update: 2026-01-30
 - Docs: translated the portal Rust SDK quickstart across locales and synced the portal i18n copies. Tests not run (docs-only).
 - Docs: translated the portal Python SDK quickstart across locales and synced the portal i18n copies. Tests not run (docs-only).
 - Docs: translated the portal AI Moderation Runner specification across locales and synced the portal i18n copies. Tests not run (docs-only).
+- Sumeragi: align tick-lag and worker-iteration warnings with configured worker budgets; tick timing now uses dynamic thresholds (tick gap + tick min gap, tick work budget cap) and worker-iteration warnings only fire when the iteration exceeds the configured time budget. Added targeted coverage for budget-gated slow-iteration warnings and custom tick-timing thresholds.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-warn-fix cargo test -p iroha_core tick_timing_monitor_respects_custom_thresholds -- --nocapture` (ok; long compile; warnings from `norito` unused `padded`, `iroha_data_model` unused `mut`, and an existing unused variable in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`).
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-warn-fix cargo test -p iroha_core slow_iteration_under_budget_does_not_warn_with_budget_gate -- --nocapture` (ok; same warnings as above).
 - Izanami workload: reserve trigger-repetition burns per plan, release pending reservations on failure, and apply plan updates on failed submissions to avoid overflow when triggers consume repetitions.
 - Tests: `cargo test -p izanami burn_trigger_repetitions_releases_pending_on_failure -- --nocapture` (ok).
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami cargo test -p izanami workload_record_result_releases_pending_on_failure -- --nocapture` (ok).

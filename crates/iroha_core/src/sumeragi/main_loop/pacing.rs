@@ -283,6 +283,24 @@ pub(super) struct TickTimingReport {
     pub(super) log_cost: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct TickTimingThresholds {
+    pub(super) lag: Duration,
+    pub(super) cost: Duration,
+}
+
+impl TickTimingThresholds {
+    pub(super) const fn new(lag: Duration, cost: Duration) -> Self {
+        Self { lag, cost }
+    }
+}
+
+impl Default for TickTimingThresholds {
+    fn default() -> Self {
+        Self::new(TICK_LAG_LOG_THRESHOLD, TICK_COST_LOG_THRESHOLD)
+    }
+}
+
 #[derive(Debug)]
 #[allow(clippy::struct_field_names)] // Fields intentionally share prefix for clarity.
 pub(super) struct TickTimingMonitor {
@@ -300,14 +318,30 @@ impl TickTimingMonitor {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn observe(&mut self, tick_start: Instant, tick_cost: Duration) -> TickTimingReport {
+        self.observe_with_thresholds(
+            tick_start,
+            tick_cost,
+            TICK_LAG_LOG_THRESHOLD,
+            TICK_COST_LOG_THRESHOLD,
+        )
+    }
+
+    pub(super) fn observe_with_thresholds(
+        &mut self,
+        tick_start: Instant,
+        tick_cost: Duration,
+        lag_threshold: Duration,
+        cost_threshold: Duration,
+    ) -> TickTimingReport {
         let since_last_tick = tick_start.saturating_duration_since(self.last_tick_start);
         self.last_tick_start = tick_start;
 
-        let log_gap = since_last_tick >= TICK_LAG_LOG_THRESHOLD
+        let log_gap = since_last_tick >= lag_threshold
             && Self::should_log(tick_start, &mut self.last_gap_log);
-        let log_cost = tick_cost >= TICK_COST_LOG_THRESHOLD
-            && Self::should_log(tick_start, &mut self.last_cost_log);
+        let log_cost =
+            tick_cost >= cost_threshold && Self::should_log(tick_start, &mut self.last_cost_log);
 
         TickTimingReport {
             since_last_tick,

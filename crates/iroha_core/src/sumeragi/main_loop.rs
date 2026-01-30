@@ -138,6 +138,7 @@ use locked_qc::{
 use pacing::{
     AdaptiveAction, AdaptiveObservabilityMetrics, AdaptiveObservabilityState, BackpressureGate,
     Pacemaker, PacemakerBackpressure, ProposeAttemptMonitor, TickTimingMonitor,
+    TickTimingThresholds,
 };
 use pending_block::{
     DaGateStatus, PendingBlock, ValidationGateOutcome, ValidationStatus, recompute_da_gate_status,
@@ -4132,6 +4133,7 @@ pub(super) struct Actor {
     locked_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     tick_counter: u64,
     tick_timing: TickTimingMonitor,
+    tick_timing_thresholds: TickTimingThresholds,
     last_qc_rebuild: Instant,
     relay_backpressure: RelayBackpressure,
     queue_drop_backpressure: QueueDropBackpressure,
@@ -8424,6 +8426,7 @@ impl Actor {
             locked_qc: None,
             tick_counter: 0,
             tick_timing: TickTimingMonitor::new(now),
+            tick_timing_thresholds: TickTimingThresholds::default(),
             last_qc_rebuild: initial_qc_rebuild,
             relay_backpressure: RelayBackpressure::default(),
             queue_drop_backpressure: QueueDropBackpressure::default(),
@@ -9271,6 +9274,19 @@ impl Actor {
             block_time.min(time_budget)
         };
         tick_max_gap = tick_max_gap.max(tick_min_gap);
+        let tick_lag_threshold = tick_max_gap
+            .saturating_add(tick_min_gap)
+            .max(TICK_LAG_LOG_THRESHOLD);
+        let tick_cost_threshold = if self.config.worker.tick_work_budget_cap.is_zero() {
+            TICK_COST_LOG_THRESHOLD
+        } else {
+            self.config
+                .worker
+                .tick_work_budget_cap
+                .max(TICK_COST_LOG_THRESHOLD)
+        };
+        self.tick_timing_thresholds =
+            TickTimingThresholds::new(tick_lag_threshold, tick_cost_threshold);
 
         cfg.time_budget = time_budget;
         cfg.drain_budget_cap = self.config.worker.iteration_drain_budget_cap;
@@ -9519,7 +9535,13 @@ impl Actor {
             }
         }
         let tick_cost = tick_start.elapsed();
-        let timing = self.tick_timing.observe(tick_start, tick_cost);
+        let thresholds = self.tick_timing_thresholds;
+        let timing = self.tick_timing.observe_with_thresholds(
+            tick_start,
+            tick_cost,
+            thresholds.lag,
+            thresholds.cost,
+        );
         if timing.log_gap || timing.log_cost {
             let pacemaker_remaining = self
                 .subsystems
