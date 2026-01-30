@@ -94,7 +94,8 @@ print(assets, txs, holders)
 ## 5. Offline allowances
 
 Use the offline allowance endpoints to issue wallet certificates and register
-them on-ledger. `top_up_offline_allowance` chains the issue + register steps:
+them on-ledger. `top_up_offline_allowance` chains the issue + register steps
+(there is no single top-up endpoint):
 
 ```python
 from iroha_python import ToriiClient

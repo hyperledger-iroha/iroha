@@ -28,6 +28,7 @@ import org.hyperledger.iroha.android.nexus.UaidJsonParser;
 import org.hyperledger.iroha.android.nexus.UaidLiteral;
 import org.hyperledger.iroha.android.nexus.UaidManifestQuery;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse;
+import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
 import org.hyperledger.iroha.android.offline.OfflineAuditLogger;
 import org.hyperledger.iroha.android.offline.OfflineJournalKey;
@@ -168,10 +169,17 @@ public final class HttpClientTransport implements IrohaClient {
 
   /** Fetches `/v1/accounts/{uaid}/portfolio`. */
   public CompletableFuture<UaidPortfolioResponse> getUaidPortfolio(final String uaid) {
+    return getUaidPortfolio(uaid, null);
+  }
+
+  /** Fetches `/v1/accounts/{uaid}/portfolio` with optional query parameters. */
+  public CompletableFuture<UaidPortfolioResponse> getUaidPortfolio(
+      final String uaid, final UaidPortfolioQuery query) {
     final String canonical = UaidLiteral.canonicalize(uaid, "uaid portfolio");
+    final Map<String, String> params = query == null ? Map.of() : query.toQueryParameters();
     final TransportRequest request =
         buildJsonGetRequest(
-            "/v1/accounts/" + encodePathSegment(canonical) + "/portfolio", Map.of());
+            "/v1/accounts/" + encodePathSegment(canonical) + "/portfolio", params);
     return fetchJson(request, UaidJsonParser::parsePortfolio, "UAID portfolio");
   }
 

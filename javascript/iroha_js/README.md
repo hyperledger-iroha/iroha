@@ -1438,6 +1438,8 @@ helpers for all three surfaces:
 const uaidLiteral = "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11";
 
 const portfolio = await torii.getUaidPortfolio(uaidLiteral);
+// Optionally filter positions by a specific asset id.
+// const portfolio = await torii.getUaidPortfolio(uaidLiteral, { assetId: "cash#portfolio::..." });
 for (const ds of portfolio.dataspaces) {
   console.log(`dataspace ${ds.dataspace_alias ?? ds.dataspace_id} accounts=${ds.accounts.length}`);
   ds.accounts.forEach((account) => {

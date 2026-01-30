@@ -646,6 +646,25 @@ def test_get_uaid_portfolio_parses_payload() -> None:
     assert session.calls[0]["url"].endswith(expected_suffix)
 
 
+def test_get_uaid_portfolio_encodes_asset_id_filter() -> None:
+    uaid_literal = "uaid:" + "ab" * 32
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "uaid": uaid_literal,
+                "totals": {"accounts": 0, "positions": 0},
+                "dataspaces": [],
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    client.get_uaid_portfolio(uaid_literal, asset_id="xor#wonderland")
+
+    assert "asset_id=xor%23wonderland" in session.calls[0]["url"]
+
+
 def test_get_uaid_portfolio_rejects_invalid_lsb() -> None:
     client = ToriiClient("http://node.test", session=RecordingSession())
     invalid = "uaid:" + "10" * 32

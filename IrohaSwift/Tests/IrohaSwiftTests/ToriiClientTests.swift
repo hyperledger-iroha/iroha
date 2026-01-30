@@ -1492,7 +1492,9 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(details.role(for: "bob@wonderland"), .receiver)
             XCTAssertTrue(details.involvesAccount("bob@wonderland"))
             XCTAssertTrue(details.involvesAssetDefinition("rose#wonderland"))
+            XCTAssertTrue(details.involvesAssetId("rose##ih58example@wonderland"))
             XCTAssertFalse(details.involvesAssetDefinition("tulip#wonderland"))
+            XCTAssertFalse(details.involvesAssetId("rose##carol@wonderland"))
         case .assetBatch:
             XCTFail("Expected asset transfer details.")
         }
@@ -1560,6 +1562,9 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertTrue(details.involvesAssetDefinition("rose#wonderland"))
             XCTAssertTrue(details.involvesAssetDefinition("tulip#wonderland"))
             XCTAssertFalse(details.involvesAssetDefinition("orchid#wonderland"))
+            XCTAssertTrue(details.involvesAssetId("rose##alice@wonderland"))
+            XCTAssertTrue(details.involvesAssetId("tulip##carol@wonderland"))
+            XCTAssertFalse(details.involvesAssetId("rose##bob@wonderland"))
         }
     }
 
@@ -1632,6 +1637,8 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(page.transferRecords(matchingAccount: "carol@wonderland").count, 1)
         XCTAssertEqual(page.transferRecords(assetDefinitionId: "tulip#wonderland").count, 1)
         XCTAssertEqual(page.transferRecords(assetDefinitionId: "rose#wonderland").count, 1)
+        XCTAssertEqual(page.transferRecords(assetId: "rose##ih58example@wonderland").count, 1)
+        XCTAssertEqual(page.transferRecords(assetId: "tulip##carol@wonderland").count, 1)
         XCTAssertEqual(page.transferRecords(matchingAccount: "bob@wonderland",
                                             assetDefinitionId: "tulip#wonderland").count, 0)
     }
@@ -1680,6 +1687,8 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(summary.amount, "10")
         XCTAssertTrue(summary.isIncoming)
         XCTAssertFalse(summary.isOutgoing)
+        XCTAssertEqual(summary.sourceAssetId, "rose##ih58example@wonderland")
+        XCTAssertEqual(summary.destinationAssetId, "rose##bob@wonderland")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2000,6 +2009,154 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransactionTransfersAggregatesPages() async throws {
+        let pageOne = """
+        {
+            "pagination": {"page":1,"per_page":1,"total_pages":2,"total_items":2},
+            "items": [
+                {
+                    "authority":"alice@wonderland",
+                    "created_at":"2025-01-01T00:00:00Z",
+                    "kind":"Transfer",
+                    "box":{
+                        "scale":"0x00",
+                        "json":{
+                            "kind":"Transfer",
+                            "payload":{
+                                "variant":"Asset",
+                                "value":{
+                                    "source":"rose##alice@wonderland",
+                                    "object":"5",
+                                    "destination":"bob@wonderland"
+                                }
+                            }
+                        }
+                    },
+                    "transaction_hash":"deadbeef",
+                    "transaction_status":"Committed",
+                    "block":10,
+                    "index":0
+                }
+            ]
+        }
+        """.data(using: .utf8)!
+
+        let pageTwo = """
+        {
+            "pagination": {"page":2,"per_page":1,"total_pages":2,"total_items":2},
+            "items": [
+                {
+                    "authority":"alice@wonderland",
+                    "created_at":"2025-01-01T00:00:01Z",
+                    "kind":"Transfer",
+                    "box":{
+                        "scale":"0x00",
+                        "json":{
+                            "kind":"Transfer",
+                            "payload":{
+                                "variant":"Asset",
+                                "value":{
+                                    "source":"rose##alice@wonderland",
+                                    "object":"7",
+                                    "destination":"bob@wonderland"
+                                }
+                            }
+                        }
+                    },
+                    "transaction_hash":"deadbeef",
+                    "transaction_status":"Committed",
+                    "block":10,
+                    "index":1
+                }
+            ]
+        }
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let queryItems = components?.queryItems ?? []
+            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(query["transaction_hash"], "deadbeef")
+            XCTAssertEqual(query["kind"], "Transfer")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            switch query["page"] {
+            case "1":
+                return (response, pageOne)
+            case "2":
+                return (response, pageTwo)
+            default:
+                return (response, Data())
+            }
+        }
+
+        let records = try await makeClient().getExplorerTransactionTransfers(hashHex: "deadbeef")
+        XCTAssertEqual(records.count, 2)
+        XCTAssertEqual(records.first?.instruction.index, 0)
+        XCTAssertEqual(records.last?.instruction.index, 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransactionTransferSummariesCompletion() {
+        let expectation = expectation(description: "explorer-transaction-transfer-summaries")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+                "pagination": {"page":1,"per_page":50,"total_pages":1,"total_items":1},
+                "items": [
+                    {
+                        "authority":"alice@wonderland",
+                        "created_at":"2025-01-01T00:00:00Z",
+                        "kind":"Transfer",
+                        "box":{
+                            "scale":"0x00",
+                            "json":{
+                                "kind":"Transfer",
+                                "payload":{
+                                    "variant":"Asset",
+                                    "value":{
+                                        "source":"rose##alice@wonderland",
+                                        "object":"5",
+                                        "destination":"bob@wonderland"
+                                    }
+                                }
+                            }
+                        },
+                        "transaction_hash":"deadbeef",
+                        "transaction_status":"Committed",
+                        "block":10,
+                        "index":0
+                    }
+                ]
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        _ = makeClient().getExplorerTransactionTransferSummaries(hashHex: "deadbeef",
+                                                                 matchingAccount: "bob@wonderland") { result in
+            switch result {
+            case .success(let summaries):
+                XCTAssertEqual(summaries.count, 1)
+                XCTAssertEqual(summaries.first?.transactionHash, "deadbeef")
+                XCTAssertEqual(summaries.first?.direction, .incoming)
+            case .failure(let error):
+                XCTFail("Unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 2.0)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetExplorerInstructionDetailCompletion() {
         let expectation = expectation(description: "explorer-instruction-detail")
         StubURLProtocol.handler = { request in
@@ -2135,6 +2292,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(query["page"], "3")
             XCTAssertEqual(query["per_page"], "20")
             XCTAssertEqual(query["address_format"], "compressed")
+            XCTAssertEqual(query["asset_id"], "rose##alice@wonderland")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -2151,7 +2309,8 @@ final class ToriiClientTests: XCTestCase {
         let summaries = try await makeClient().getAccountTransferHistory(accountId: "alice@wonderland",
                                                                           page: 3,
                                                                           perPage: 20,
-                                                                          addressFormat: .compressed)
+                                                                          addressFormat: .compressed,
+                                                                          assetId: "rose##alice@wonderland")
         XCTAssertEqual(summaries.count, 0)
     }
 
@@ -2680,6 +2839,35 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(response.uaid, "uaid:\(uaidHex)")
         XCTAssertEqual(response.totals.accounts, 2)
         XCTAssertEqual(response.dataspaces.first?.accounts.first?.assets.first?.quantity, "500")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetUaidPortfolioIncludesAssetIdQuery() async throws {
+        let uaidHex = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+        let assetId = "cash#global::holder@global"
+        let payload = """
+        {
+          "uaid":"uaid:\(uaidHex)",
+          "totals":{"accounts":1,"positions":1},
+          "dataspaces":[]
+        }
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/uaid%3A\(uaidHex)/portfolio"))
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let queryItems = components?.queryItems ?? []
+            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(query["asset_id"], assetId)
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, payload)
+        }
+
+        _ = try await makeClient().getUaidPortfolio(uaid: "uaid:\(uaidHex)",
+                                                    query: ToriiUaidPortfolioQuery(assetId: assetId))
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -4652,6 +4840,183 @@ data: {"authority":"alice@wonderland","created_at":"2025-01-01T00:00:01Z","kind"
         waitForExpectations(timeout: 2.0)
         XCTAssertEqual(hashes, ["hash1", "hash2"])
         XCTAssertEqual(lastEventIdHeader, "9")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamTransactionTransferSummariesCombinesHistoryAndStream() async throws {
+        let historyPayload = """
+        {
+            "pagination": {
+                "page": 1,
+                "per_page": 1,
+                "total_pages": 1,
+                "total_items": 1
+            },
+            "items": [
+                {
+                    "authority": "alice@wonderland",
+                    "created_at": "2025-01-01T00:00:00Z",
+                    "kind": "Transfer",
+                    "box": {
+                        "scale": "0x00",
+                        "json": {
+                            "kind": "Transfer",
+                            "payload": {
+                                "variant": "Asset",
+                                "value": {
+                                    "source": "rose##alice@wonderland",
+                                    "object": "5",
+                                    "destination": "bob@wonderland"
+                                }
+                            }
+                        }
+                    },
+                    "transaction_hash": "deadbeef",
+                    "transaction_status": "Committed",
+                    "block": 10,
+                    "index": 0
+                }
+            ]
+        }
+        """
+            .data(using: .utf8)!
+
+        let ssePayload = """
+data: {"authority":"alice@wonderland","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"rose##alice@wonderland","object":"7","destination":"bob@wonderland"}}}},"transaction_hash":"deadbeef","transaction_status":"Committed","block":11,"index":0}
+
+data: {"authority":"alice@wonderland","created_at":"2025-01-01T00:00:02Z","kind":"Transfer","box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"rose##alice@wonderland","object":"9","destination":"bob@wonderland"}}}},"transaction_hash":"otherhash","transaction_status":"Committed","block":11,"index":1}
+
+"""
+            .data(using: .utf8)!
+
+        var lastEventIdHeader: String?
+        StubURLProtocol.handler = { request in
+            guard let url = request.url else {
+                throw ToriiClientError.invalidResponse
+            }
+            if url.path == "/v1/explorer/instructions" {
+                let response = HTTPURLResponse(url: url,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, historyPayload)
+            }
+            if url.path == "/v1/explorer/instructions/stream" {
+                lastEventIdHeader = request.value(forHTTPHeaderField: "Last-Event-ID")
+                let response = HTTPURLResponse(url: url,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "text/event-stream"])!
+                return (response, ssePayload)
+            }
+            throw ToriiClientError.invalidResponse
+        }
+
+        let stream = makeClient().streamTransactionTransferSummaries(hashHex: "deadbeef",
+                                                                     matchingAccount: "bob@wonderland",
+                                                                     lastEventId: "12")
+        var iterator = stream.makeAsyncIterator()
+
+        let first = try await iterator.next()
+        XCTAssertEqual(first?.transactionHash, "deadbeef")
+
+        let second = try await iterator.next()
+        XCTAssertEqual(second?.transactionHash, "deadbeef")
+
+        let third = try await iterator.next()
+        XCTAssertNil(third)
+        XCTAssertEqual(lastEventIdHeader, "12")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testTransactionTransferSummariesPublisherCombinesHistoryAndStream() throws {
+        let historyPayload = """
+        {
+            "pagination": {
+                "page": 1,
+                "per_page": 1,
+                "total_pages": 1,
+                "total_items": 1
+            },
+            "items": [
+                {
+                    "authority": "alice@wonderland",
+                    "created_at": "2025-01-01T00:00:00Z",
+                    "kind": "Transfer",
+                    "box": {
+                        "scale": "0x00",
+                        "json": {
+                            "kind": "Transfer",
+                            "payload": {
+                                "variant": "Asset",
+                                "value": {
+                                    "source": "rose##alice@wonderland",
+                                    "object": "5",
+                                    "destination": "bob@wonderland"
+                                }
+                            }
+                        }
+                    },
+                    "transaction_hash": "deadbeef",
+                    "transaction_status": "Committed",
+                    "block": 10,
+                    "index": 0
+                }
+            ]
+        }
+        """
+            .data(using: .utf8)!
+
+        let ssePayload = """
+data: {"authority":"alice@wonderland","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"rose##alice@wonderland","object":"7","destination":"bob@wonderland"}}}},"transaction_hash":"deadbeef","transaction_status":"Committed","block":11,"index":0}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            guard let url = request.url else {
+                throw ToriiClientError.invalidResponse
+            }
+            if url.path == "/v1/explorer/instructions" {
+                let response = HTTPURLResponse(url: url,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, historyPayload)
+            }
+            if url.path == "/v1/explorer/instructions/stream" {
+                let response = HTTPURLResponse(url: url,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "text/event-stream"])!
+                return (response, ssePayload)
+            }
+            throw ToriiClientError.invalidResponse
+        }
+
+        let client = makeClient()
+        var cancellables: Set<AnyCancellable> = []
+        let valueExpectation = expectation(description: "received tx history + stream items")
+        valueExpectation.expectedFulfillmentCount = 2
+        let completionExpectation = expectation(description: "publisher completed")
+
+        var hashes: [String] = []
+        client.transactionTransferSummariesPublisher(hashHex: "deadbeef",
+                                                     matchingAccount: "bob@wonderland",
+                                                     scheduler: nil)
+            .sink { completion in
+                if case .failure(let error) = completion {
+                    XCTFail("Unexpected failure: \(error)")
+                }
+                completionExpectation.fulfill()
+            } receiveValue: { summary in
+                hashes.append(summary.transactionHash)
+                valueExpectation.fulfill()
+            }
+            .store(in: &cancellables)
+
+        waitForExpectations(timeout: 2.0)
+        XCTAssertEqual(hashes, ["deadbeef", "deadbeef"])
     }
 #endif
 

@@ -169,7 +169,9 @@ the UAID-centric surfaces described above. Use this checklist during upgrades:
   workspace crates or regenerating Norito bindings.
 - **API calls:** Replace domain-scoped portfolio queries with
   `GET /v1/accounts/{uaid}/portfolio` and the manifest/bindings endpoints.
-  Client helpers such as `ToriiClient.getUaidPortfolio` (JS) and the Android
+  `GET /v1/accounts/{uaid}/portfolio` accepts an optional `asset_id` query
+  parameter when wallets only need a single asset instance. Client helpers such
+  as `ToriiClient.getUaidPortfolio` (JS) and the Android
   `SpaceDirectoryClient` already wrap these routes; prefer them over bespoke
   HTTP code.
 - **Caching & telemetry:** Cache entries by UAID + dataspace instead of raw

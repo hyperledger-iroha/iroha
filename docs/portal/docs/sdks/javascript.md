@@ -208,8 +208,9 @@ for (const entry of allowances) {
 
 Use the top-up helpers when you want to issue a certificate and immediately
 register it on-ledger. The SDK verifies the issued and registered certificate
-IDs match before returning, and the response includes both payloads. If you
-already have a signed certificate, call `registerOfflineAllowance` (or
+IDs match before returning, and the response includes both payloads. There is
+no dedicated top-up endpoint; the helper chains the issue + register calls. If
+you already have a signed certificate, call `registerOfflineAllowance` (or
 `renewOfflineAllowance`) directly.
 
 ```ts
@@ -507,8 +508,9 @@ The Space Directory APIs surface the Universal Account ID (UAID) lifecycle. The
 helpers accept `uaid:<hex>` literals or raw 64-hex digests (LSB=1) and
 canonicalise them before submitting requests:
 
-- `getUaidPortfolio(uaid)` aggregates balances per dataspace, grouping asset
-  holdings by canonical account IDs.
+- `getUaidPortfolio(uaid, { assetId })` aggregates balances per dataspace,
+  grouping asset holdings by canonical account IDs; pass `assetId` to filter the
+  portfolio down to a single asset instance.
 - `getUaidBindings(uaid, { addressFormat })` enumerates every dataspace ↔ account
   binding (`addressFormat: "compressed"` returns the `sora…` literals).
 - `getUaidManifests(uaid, { dataspaceId })` returns each capability manifest,
@@ -523,7 +525,9 @@ import { promises as fs } from "node:fs";
 
 const uaid = "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11";
 
-const portfolio = await torii.getUaidPortfolio(uaid);
+const portfolio = await torii.getUaidPortfolio(uaid, {
+  assetId: "cash#global::holder@global",
+});
 portfolio.dataspaces.forEach((entry) => {
   console.log(entry.dataspace_alias ?? entry.dataspace_id, entry.accounts.length);
 });

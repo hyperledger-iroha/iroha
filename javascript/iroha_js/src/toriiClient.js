@@ -2677,18 +2677,26 @@ export class ToriiClient {
   /**
    * Fetch aggregated holdings for a UAID (`GET /v1/accounts/{uaid}/portfolio`).
    * @param {string} uaid
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{assetId?: string, signal?: AbortSignal}} [options]
    * @returns {Promise<UaidPortfolioResponse>}
    */
   async getUaidPortfolio(uaid, options = {}) {
     const canonicalUaid = normalizeUaidLiteral(uaid, "getUaidPortfolio.uaid");
-    const { signal } = normalizeSignalOnlyOption(options, "getUaidPortfolio");
+    const { signal, assetId } = normalizeUaidPortfolioOptions(
+      options,
+      "getUaidPortfolio",
+    );
+    const params = {};
+    if (assetId !== undefined) {
+      params.asset_id = assetId;
+    }
     const response = await this._request(
       "GET",
       `/v1/accounts/${encodeURIComponent(canonicalUaid)}/portfolio`,
       {
         headers: { Accept: "application/json" },
         signal,
+        params: Object.keys(params).length === 0 ? undefined : params,
       },
     );
     await this._expectStatus(response, [200]);
@@ -13879,6 +13887,20 @@ function normalizeUaidLiteral(value, context = "uaid") {
     throw new TypeError(`${context} must have least significant bit set to 1`);
   }
   return `uaid:${hexPortion.toLowerCase()}`;
+}
+
+function normalizeUaidPortfolioOptions(options, context = "getUaidPortfolio") {
+  if (options === undefined) {
+    return { signal: undefined, assetId: undefined };
+  }
+  const record = ensureRecord(options, `${context} options`);
+  assertSupportedOptionKeys(record, new Set(["signal", "assetId"]), `${context} options`);
+  const { signal } = normalizeSignalOption(record, context);
+  let assetId;
+  if (record.assetId !== undefined && record.assetId !== null) {
+    assetId = requireNonEmptyString(record.assetId, `${context}.assetId`).trim();
+  }
+  return { signal, assetId };
 }
 
 function normalizeUaidPortfolioResponse(payload) {

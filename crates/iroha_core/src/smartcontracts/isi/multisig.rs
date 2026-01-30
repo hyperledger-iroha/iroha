@@ -60,8 +60,6 @@ impl Execute for AddSignatory {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        // TODO: Update the account controller when rekeying is wired; for now this only updates
-        // multisig spec metadata and role assignments.
         let AddSignatory { account, signatory } = self;
         let signatory_account = AccountId::new(account.domain().clone(), signatory);
         let mut spec = multisig_spec_strict(state_transaction, &account)?;
@@ -76,9 +74,10 @@ impl Execute for AddSignatory {
         validate_registration(state_transaction, &account, &spec).map_err(map_validation_fail)?;
         SetKeyValue::account(account.clone(), spec_key(), Json::new(spec.clone()))
             .execute(authority, state_transaction)?;
+        let updated_account = rekey_multisig_account(state_transaction, &account, &spec)?;
         let domain_owner =
             domain_owner(state_transaction, account.domain()).map_err(map_validation_fail)?;
-        configure_roles(state_transaction, &domain_owner, &account, &spec)
+        configure_roles(state_transaction, &domain_owner, &updated_account, &spec)
             .map_err(map_validation_fail)?;
         Ok(())
     }
@@ -90,8 +89,6 @@ impl Execute for RemoveSignatory {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        // TODO: Update the account controller when rekeying is wired; for now this only updates
-        // multisig spec metadata and role assignments.
         let RemoveSignatory { account, signatory } = self;
         let signatory_account = AccountId::new(account.domain().clone(), signatory);
         let mut spec = multisig_spec_strict(state_transaction, &account)?;
@@ -121,8 +118,9 @@ impl Execute for RemoveSignatory {
         validate_registration(state_transaction, &account, &spec).map_err(map_validation_fail)?;
         SetKeyValue::account(account.clone(), spec_key(), Json::new(spec.clone()))
             .execute(authority, state_transaction)?;
+        let updated_account = rekey_multisig_account(state_transaction, &account, &spec)?;
 
-        let multisig_role_id = multisig_role_for(&account);
+        let multisig_role_id = multisig_role_for(&updated_account);
         if has_role(state_transaction, &signatory_account, &multisig_role_id)
             .map_err(map_validation_fail)?
         {
@@ -145,14 +143,13 @@ impl Execute for SetAccountQuorum {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        // TODO: Update the account controller when rekeying is wired; for now this only updates
-        // multisig spec metadata.
         let SetAccountQuorum { account, quorum } = self;
         let mut spec = multisig_spec_strict(state_transaction, &account)?;
         spec.quorum = quorum;
         validate_registration(state_transaction, &account, &spec).map_err(map_validation_fail)?;
         SetKeyValue::account(account.clone(), spec_key(), Json::new(spec.clone()))
             .execute(authority, state_transaction)?;
+        let _ = rekey_multisig_account(state_transaction, &account, &spec)?;
         Ok(())
     }
 }
@@ -168,13 +165,30 @@ fn proposal_key(hash: &HashOf<Vec<InstructionBox>>) -> Name {
 }
 
 fn multisig_role_for(account: &AccountId) -> RoleId {
+    let suffix = match account.controller() {
+        iroha_data_model::account::AccountController::Single(_) => {
+            account.signatory().to_string()
+        }
+        iroha_data_model::account::AccountController::Multisig(_) => account.to_string(),
+    };
     format!(
         "{MULTISIG_SIGNATORY}{DELIMITER}{}{DELIMITER}{}",
         account.domain(),
-        account.signatory(),
+        suffix,
     )
     .parse()
     .expect("multisig role name must be valid")
+}
+
+fn rekey_multisig_account(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    account: &AccountId,
+    spec: &MultisigSpec,
+) -> Result<AccountId, InstructionExecutionError> {
+    // TODO: migrate multisig accounts to a controller derived from spec once account-based members
+    // are supported in the account controller surface.
+    let _ = (state_transaction, spec);
+    Ok(account.clone())
 }
 
 fn execute_register(

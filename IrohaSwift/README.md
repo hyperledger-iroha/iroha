@@ -249,6 +249,9 @@ if #available(iOS 15.0, macOS 12.0, *) {
 }
 ```
 
+Transfer summaries also expose `sourceAssetId` and `destinationAssetId` when they can be
+constructed from the asset definition and account ids.
+
 For a one-shot transaction history helper, use `getAccountTransferHistory`:
 
 ```swift
@@ -261,6 +264,9 @@ if #available(iOS 15.0, macOS 12.0, *) {
     }
 }
 ```
+
+You can also pass `assetDefinitionId` or `assetId` to narrow results. The `assetId` filter matches
+the source asset id literal (definition + sender account) as reported by explorer transfers.
 
 To stream multiple pages, use `iterateAccountTransferHistory`:
 
@@ -289,6 +295,11 @@ if #available(iOS 15.0, macOS 12.0, *) {
 
 To fetch a single instruction payload, use `getExplorerInstructionDetail` with the transaction hash
 and instruction index.
+
+If you need transfer details for a specific transaction, call
+`getExplorerTransactionTransferSummaries(hashHex:matchingAccount:)`.
+Use `streamTransactionTransferSummaries` or `transactionTransferSummariesPublisher` to keep
+receiving live transfer updates for that transaction.
 
 To react to new blocks as they commit, subscribe to the explorer SSE streams:
 

@@ -17775,6 +17775,24 @@ async fn handle_rbc_deliver_drops_when_derived_roster_mismatches() {
     harness.shutdown.send();
 }
 
+#[test]
+fn rbc_session_record_ready_skips_after_deliver() {
+    let mut session = RbcSession::test_new(
+        0,
+        Some(Hash::prehashed([0x11; 32])),
+        Some(Hash::prehashed([0x22; 32])),
+        0,
+    );
+    assert!(session.record_ready(1, vec![0xAA]));
+    assert!(session.record_deliver(0, vec![0xDD]));
+    let ready_count = session.ready_signatures.len();
+
+    assert!(!session.record_ready(2, vec![0xBB]));
+    assert_eq!(session.ready_signatures.len(), ready_count);
+    assert!(session.delivered);
+    assert!(!session.is_invalid());
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn maybe_emit_rbc_ready_skips_invalid_session() {
     let mut harness = test_actor_harness(4).await;
@@ -19180,9 +19198,6 @@ async fn record_rbc_session_roster_rejects_unverified_override() {
         .expect("session");
     session.record_ready(42, vec![0xAA]);
     session.sent_ready = true;
-    session.delivered = true;
-    session.deliver_sender = Some(42);
-    session.deliver_signature = Some(vec![0xBB]);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
     actor.record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Derived);
@@ -19259,6 +19274,51 @@ async fn record_rbc_session_roster_rejects_unverified_override() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn record_rbc_session_roster_skips_update_after_deliver() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD1; Hash::LENGTH]));
+    let key = (block_hash, height, view);
+    let roster_a = actor.effective_commit_topology();
+    assert!(roster_a.len() > 1, "test requires multiple peers");
+    let mut roster_b = roster_a.clone();
+    roster_b.pop();
+    assert!(!roster_b.is_empty(), "roster should remain non-empty");
+
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let epoch = actor.epoch_for_height(height);
+    let mut session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
+    session.record_ready(0, vec![0xAA]);
+    assert!(session.record_deliver(0, vec![0xBB]));
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    actor.record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Derived);
+    actor.record_rbc_session_roster(key, roster_b, super::RbcRosterSource::Derived);
+
+    assert_eq!(
+        actor.subsystems.da_rbc.rbc.session_rosters.get(&key),
+        Some(&roster_a)
+    );
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(stored.delivered);
+    assert_eq!(stored.deliver_signature, Some(vec![0xBB]));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn record_rbc_session_roster_refreshes_derived_on_change() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -19281,9 +19341,6 @@ async fn record_rbc_session_roster_refreshes_derived_on_change() {
         .expect("session");
     session.record_ready(42, vec![0xAA]);
     session.sent_ready = true;
-    session.delivered = true;
-    session.deliver_sender = Some(42);
-    session.deliver_signature = Some(vec![0xBB]);
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
     actor.record_rbc_session_roster(key, roster_a.clone(), super::RbcRosterSource::Derived);

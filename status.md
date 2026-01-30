@@ -1,7 +1,18 @@
 # Status
 
 Last update: 2026-01-30
+- Android SDK fixtures: allow instruction entries to supply `wire_name` + `payload_base64` to build wire payload instructions; added unit coverage in fixture tests.
+- Tests: not run (not requested).
+- Swift explorer transfers: add asset-id filtering for transfer details/history helpers and SSE publishers, with unit coverage.
+- Tests: not run (not requested).
+- Swift explorer transfer summaries: add source/destination asset-id convenience accessors with unit coverage.
+- Tests: not run (not requested).
 - Izanami: added `allow_contract_deploy_in_stable` flag to gate contract deployment recipes in stable runs, wired through config/persistence/recipe selection with new CLI override coverage.
+- Izanami TUI: added a stable contract deploy toggle and input validation coverage.
+- Tests: not run (not requested).
+- Android SDK: InstructionBox now recognizes wire payload arguments (`wire_name` + `payload_base64`) and preserves Norito-framed instruction bytes; added unit coverage.
+- Tests: not run (not requested).
+- Android SDK tests: fixture encoder now compares directly when all instructions are wire payloads, otherwise falls back to canonical re-encode stability.
 - Tests: not run (not requested).
 - Android SDK: added multisig signature bundle support for `SignedTransaction` encoding (new `MultisigSignature`/`MultisigSignatures` models, encoder updates, and Android SDK doc note).
 - Tests: not run (per request).
@@ -64,6 +75,10 @@ Last update: 2026-01-30
 - Tests: not run (docs-only change).
 - Swift SDK docs: note that you can call register/renew directly when you already have a signed certificate.
 - Tests: not run (docs-only change).
+- JS/Python SDK docs: clarify that top-up helpers chain issue + register (no dedicated endpoint).
+- Tests: not run (docs-only change).
+- Portal SDK translations: refresh JavaScript/Python SDK stub metadata (source hash/mtime) for all locales.
+- Tests: not run (docs-only change).
 - Torii app API parity audit: note optional `asset_id` filters on account asset/transaction + holder lists.
 - Tests: not run (docs-only change).
 - Android offline SDK: add top-up helpers (issue+register + renewal), parse register responses, and let OfflineWallet cache verdict metadata from issued certificates; docs + unit coverage updated.
@@ -109,6 +124,10 @@ Last update: 2026-01-30
 - Swift explorer params: add `asset_id` filtering for explorer instructions/transactions with unit coverage and README/doc updates.
 - Tests: not run (not requested).
 - Swift explorer instructions: add instruction-detail endpoint (async + completion) with SDK wrappers and unit coverage.
+- Tests: not run (not requested).
+- Swift explorer transactions: add per-transaction transfer summary helpers (records + summaries) with SDK wrappers and unit coverage.
+- Tests: not run (not requested).
+- Swift explorer transactions: add history+live transfer summaries (async + Combine) with unit coverage.
 - Tests: not run (not requested).
 - Swift explorer transfers: add summary helpers (flattened direction-aware transfer history) with Torii/IrohaSDK wrappers, unit coverage, and README snippet.
 - Tests: not run (not requested).
@@ -1629,3 +1648,4 @@ Last update: 2026-01-30
 - Builds: `cargo build -p ivm --features kotodama_dynamic_bounds --bin koto_compile`, `cargo build -p iroha_cli` (ok).
 - Checks: compiled 51 Kotodama example `.ko` files with `koto_compile --abi 1` (dynamic bounds enabled).
 - Integration tests: keep `trusted_peers_pop` aligned with `trusted_peers` in `observer_sync` to satisfy config validation; tests not run.
+- Torii: add `asset_id` filtering for UAID portfolio and public-lane pending rewards; update JS/Swift/Python/Android clients + SDK docs and refresh OpenAPI snapshots/portal manifests. Tests not run (not requested).

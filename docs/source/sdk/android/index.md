@@ -101,7 +101,8 @@ transport exposes typed helpers in `org.hyperledger.iroha.android.nexus`:
 
 - `HttpClientTransport.getUaidPortfolio(String uaid)` returns a
   `CompletableFuture<UaidPortfolioResponse>` with per-dataspace totals and
-  account labels pulled from `/v1/accounts/{uaid}/portfolio`.
+  account labels pulled from `/v1/accounts/{uaid}/portfolio`. Use the overload
+  that accepts a `UaidPortfolioQuery` when you need to filter by `asset_id`.
 - `HttpClientTransport.getUaidBindings(String uaid)` hits
   `/v1/space-directory/uaids/{uaid}` when only the account bindings are needed.
   Supply a `UaidBindingsQuery` when you need to override the
@@ -120,10 +121,13 @@ Example:
 ```java
 import org.hyperledger.iroha.android.nexus.UaidLiteral;
 import org.hyperledger.iroha.android.nexus.UaidManifestQuery;
+import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
 
 String uaid = UaidLiteral.canonicalize("  UAID:DEADBEEF...  ", "lookup uaid");
-UaidPortfolioResponse portfolio = transport.getUaidPortfolio(uaid).join();
+UaidPortfolioQuery portfolioQuery =
+    UaidPortfolioQuery.builder().setAssetId("cash#global::holder@global").build();
+UaidPortfolioResponse portfolio = transport.getUaidPortfolio(uaid, portfolioQuery).join();
 portfolio.dataspaces().forEach(ds -> {
     String alias = ds.dataspaceAlias();
     System.out.printf("Dataspace %d (%s) exposes %d account(s)%n",
