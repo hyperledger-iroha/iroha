@@ -2102,7 +2102,7 @@ impl Actor {
     }
 
     #[allow(clippy::needless_pass_by_value)]
-    fn handle_validation_reject(
+    pub(super) fn handle_validation_reject(
         &mut self,
         invalid_hash: HashOf<BlockHeader>,
         invalid_height: u64,

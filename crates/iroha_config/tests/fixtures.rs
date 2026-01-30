@@ -1055,7 +1055,7 @@ fn minimal_config_snapshot() {
                     pending_max_chunks: 128,
                     pending_max_bytes: 8388608,
                     pending_session_limit: 256,
-                    pending_ttl: 30s,
+                    pending_ttl: 120s,
                     session_ttl: 120s,
                     rebroadcast_sessions_per_tick: 8,
                     payload_chunks_per_tick: 64,

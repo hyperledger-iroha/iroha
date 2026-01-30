@@ -2412,7 +2412,8 @@ pub mod sumeragi {
     /// Default maximum pending RBC sessions stashed before INIT.
     pub const RBC_PENDING_SESSION_LIMIT: usize = 256;
     /// Default TTL (milliseconds) for pending RBC stashes awaiting INIT.
-    pub const RBC_PENDING_TTL_MS: u64 = 30_000;
+    /// Align with session TTL so partitions don't evict pre-INIT evidence early.
+    pub const RBC_PENDING_TTL_MS: u64 = RBC_SESSION_TTL_MS;
     /// Default: do not force RBC deliver quorum to 1.
     pub const DEBUG_RBC_FORCE_DELIVER_QUORUM_ONE: bool = false;
     /// Maximum height delta accepted for inbound consensus messages (0 disables future gating).

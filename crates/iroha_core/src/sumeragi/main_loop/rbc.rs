@@ -4725,6 +4725,16 @@ impl Actor {
                     defer_kind,
                 );
             }
+            if self.rbc_deliver_rebroadcast_due(&key, now, self.rebroadcast_cooldown()) {
+                self.schedule_background(BackgroundRequest::Broadcast {
+                    msg: BlockMessage::RbcDeliver(deliver.clone()),
+                });
+                self.subsystems
+                    .da_rbc
+                    .rbc
+                    .deliver_rebroadcast_last_sent
+                    .insert(key, now);
+            }
             if matches!(
                 defer_kind,
                 Some(super::status::ConsensusMessageReason::ReadyQuorumMissing)
