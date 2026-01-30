@@ -62,6 +62,8 @@ Last update: 2026-01-30
 - Tests: not run (docs-only change).
 - Python SDK docs: add a blank line after the renewal example to separate the split-flow guidance.
 - Tests: not run (docs-only change).
+- Swift SDK docs: note that you can call register/renew directly when you already have a signed certificate.
+- Tests: not run (docs-only change).
 - Torii app API parity audit: note optional `asset_id` filters on account asset/transaction + holder lists.
 - Tests: not run (docs-only change).
 - Android offline SDK: add top-up helpers (issue+register + renewal), parse register responses, and let OfflineWallet cache verdict metadata from issued certificates; docs + unit coverage updated.
@@ -163,6 +165,12 @@ Last update: 2026-01-30
 - Tests: `swift test` (ok; 1 test skipped).
 - Swift concurrency: replace `NSLock` guards in offline account resolution, Connect flow-control, and Connect keystore caching with serial queues to stay Swift 6-safe.
 - Tests: `swift test` (ok; 1 test skipped).
+- Sumeragi RBC DELIVER rebroadcast: delivered sessions now re-broadcast local DELIVER on cooldown so dropped DELIVER messages can still reach peers; added unit coverage for deliver rebroadcast.
+- Tests: `cargo test -p iroha_core rebroadcast_stalled_rbc_payloads_rebroadcasts_deliver_after_delivery -- --nocapture` (ok; norito `padded` warnings; unused `should_send` warning in `crates/iroha_core/src/sumeragi/main_loop/tests.rs:11841`).
+- Sumeragi RBC stalled rebroadcast: when READY quorum is already met and the local peer is not a rebroadcaster, keep re-sending the local READY on cooldown so dropped signatures can still reach other peers; added stalled-rebroadcast unit coverage.
+- Tests: `cargo test -p iroha_core rebroadcast_stalled_rbc_payloads_rebroadcasts_ready_after_quorum_when_not_rebroadcaster -- --nocapture` (ok; norito `padded` warnings). `cargo fmt --all` (warns about nightly-only rustfmt options).
+- Sumeragi RBC READY rebroadcast: non-rebroadcasters now keep rebroadcasting their own READY after quorum (sending only the local READY) to recover from dropped broadcasts; added unit coverage for post‑quorum local READY rebroadcast.
+- Tests: `cargo test -p iroha_core rbc_ready_rebroadcasts_local_ready_after_quorum_when_not_rebroadcaster -- --nocapture` (ok). `cargo fmt --all` (warns about nightly-only rustfmt options).
 - Swift Connect keystore: make file-backed HMAC computation deterministic, accept legacy key-order permutations during verification, and add regression coverage for legacy ordering acceptance.
 - Tests: `swift test` (ok; 1 test skipped).
 - Swift offline allowances: added top-up helpers (issue+register and renewal), added Torii renewal endpoint, and documented the new flow in Swift docs/README with unit coverage.

@@ -2492,7 +2492,7 @@ mod tests {
         handle.incoming_block_message(msg.clone());
         handle.incoming_block_message(msg);
 
-        let received: Vec<_> = rbc_chunk_rx.try_iter().collect();
+        let received: Vec<_> = block_rx.try_iter().collect();
         assert_eq!(received.len(), 1);
         assert!(received.iter().all(|msg| {
             matches!(
@@ -2504,6 +2504,10 @@ mod tests {
             )
         }));
         assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
         assert!(matches!(
             block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -2559,7 +2563,7 @@ mod tests {
         handle.incoming_block_message(BlockMessage::RbcReady(base_ready));
         handle.incoming_block_message(BlockMessage::RbcReady(alt_ready));
 
-        let received: Vec<_> = rbc_chunk_rx.try_iter().collect();
+        let received: Vec<_> = block_rx.try_iter().collect();
         assert_eq!(received.len(), 2);
         assert!(received.iter().all(|msg| {
             matches!(
@@ -2571,6 +2575,10 @@ mod tests {
             )
         }));
         assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
         assert!(matches!(
             block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -2625,7 +2633,7 @@ mod tests {
         handle.incoming_block_message(msg.clone());
         handle.incoming_block_message(msg);
 
-        let received: Vec<_> = rbc_chunk_rx.try_iter().collect();
+        let received: Vec<_> = block_rx.try_iter().collect();
         assert_eq!(received.len(), 1);
         assert!(received.iter().all(|msg| {
             matches!(
@@ -2637,6 +2645,10 @@ mod tests {
             )
         }));
         assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
         assert!(matches!(
             block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -3636,11 +3648,11 @@ mod tests {
     }
 
     #[test]
-    fn try_incoming_block_message_waits_when_rbc_ready_queue_full() {
+    fn try_incoming_block_message_waits_when_block_queue_full_for_rbc_ready() {
         const CAP: usize = 1;
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
-        let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
-        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
         let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
         let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
@@ -3653,7 +3665,7 @@ mod tests {
                 BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
                 BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
             )));
-        let rbc_chunk_tx_fill = rbc_chunk_tx.clone();
+        let block_tx_fill = block_tx.clone();
         let handle = SumeragiHandle::new(
             block_payload_tx,
             block_tx,
@@ -3666,20 +3678,18 @@ mod tests {
             block_payload_dedup,
         );
 
-        let filler_ready = BlockMessage::RbcReady(crate::sumeragi::consensus::RbcReady {
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([6u8; 32])),
-            height: 1,
+        let requester = PeerId::new(KeyPair::random().public_key().clone());
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([9u8; 32]));
+        let request = message::FetchPendingBlock {
+            requester,
+            block_hash,
+            height: 0,
             view: 0,
-            epoch: 0,
-            roster_hash: Hash::prehashed([0x20; 32]),
-            chunk_root: Hash::prehashed([0x30; 32]),
-            sender: 0,
-            signature: vec![0x10],
-        });
-
-        rbc_chunk_tx_fill
-            .send(inbound(filler_ready))
-            .expect("fill RBC chunk channel");
+            priority: None,
+        };
+        block_tx_fill
+            .send(inbound(BlockMessage::FetchPendingBlock(request)))
+            .expect("fill block channel");
 
         let ready = BlockMessage::RbcReady(crate::sumeragi::consensus::RbcReady {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([7u8; 32])),
@@ -3701,11 +3711,11 @@ mod tests {
 
         assert!(
             done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
-            "RbcReady should wait for RBC chunk queue capacity"
+            "RbcReady should wait for block queue capacity"
         );
-        let _ = rbc_chunk_rx
+        let _ = block_rx
             .recv()
-            .expect("drain RBC chunk queue to unblock sender");
+            .expect("drain block queue to unblock sender");
         let accepted = done_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("RbcReady should be enqueued after space is available");
@@ -3715,7 +3725,7 @@ mod tests {
         );
         join.join().expect("join RbcReady sender");
 
-        let received = rbc_chunk_rx
+        let received = block_rx
             .try_recv()
             .expect("RbcReady should be enqueued after space is freed");
         assert!(matches!(
@@ -3726,7 +3736,7 @@ mod tests {
             }
         ));
         assert!(matches!(
-            rbc_chunk_rx.try_recv(),
+            block_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
         assert!(matches!(
@@ -3854,11 +3864,11 @@ mod tests {
     }
 
     #[test]
-    fn try_incoming_block_message_waits_when_rbc_deliver_queue_full() {
+    fn try_incoming_block_message_waits_when_block_queue_full_for_rbc_deliver() {
         const CAP: usize = 1;
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(CAP);
-        let (block_tx, _block_rx) = mpsc::sync_channel(CAP);
-        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
         let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
         let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
         let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
@@ -3871,7 +3881,7 @@ mod tests {
                 BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
                 BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
             )));
-        let rbc_chunk_tx_fill = rbc_chunk_tx.clone();
+        let block_tx_fill = block_tx.clone();
         let handle = SumeragiHandle::new(
             block_payload_tx,
             block_tx,
@@ -3884,21 +3894,18 @@ mod tests {
             block_payload_dedup,
         );
 
-        let filler_deliver = BlockMessage::RbcDeliver(crate::sumeragi::consensus::RbcDeliver {
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([7u8; 32])),
-            height: 1,
+        let requester = PeerId::new(KeyPair::random().public_key().clone());
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x10; 32]));
+        let request = message::FetchPendingBlock {
+            requester,
+            block_hash,
+            height: 0,
             view: 0,
-            epoch: 0,
-            roster_hash: Hash::prehashed([0x21; 32]),
-            chunk_root: Hash::prehashed([0x41; 32]),
-            sender: 0,
-            signature: vec![0x21],
-            ready_signatures: Vec::new(),
-        });
-
-        rbc_chunk_tx_fill
-            .send(inbound(filler_deliver))
-            .expect("fill RBC chunk channel");
+            priority: None,
+        };
+        block_tx_fill
+            .send(inbound(BlockMessage::FetchPendingBlock(request)))
+            .expect("fill block channel");
 
         let deliver = BlockMessage::RbcDeliver(crate::sumeragi::consensus::RbcDeliver {
             block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([8u8; 32])),
@@ -3921,11 +3928,11 @@ mod tests {
 
         assert!(
             done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
-            "RbcDeliver should wait for RBC chunk queue capacity"
+            "RbcDeliver should wait for block queue capacity"
         );
-        let _ = rbc_chunk_rx
+        let _ = block_rx
             .recv()
-            .expect("drain RBC chunk queue to unblock sender");
+            .expect("drain block queue to unblock sender");
         let accepted = done_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("RbcDeliver should be enqueued after space is available");
@@ -3935,7 +3942,7 @@ mod tests {
         );
         join.join().expect("join RbcDeliver sender");
 
-        let received = rbc_chunk_rx
+        let received = block_rx
             .try_recv()
             .expect("RbcDeliver should be enqueued after space is freed");
         assert!(matches!(
@@ -3946,7 +3953,7 @@ mod tests {
             }
         ));
         assert!(matches!(
-            rbc_chunk_rx.try_recv(),
+            block_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
         assert!(matches!(
@@ -4146,7 +4153,7 @@ mod tests {
     }
 
     #[test]
-    fn incoming_block_message_routes_rbc_ready_via_rbc_chunk_queue() {
+    fn incoming_block_message_routes_rbc_ready_via_block_queue() {
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -4187,9 +4194,9 @@ mod tests {
 
         handle.incoming_block_message(msg);
 
-        let received = rbc_chunk_rx
+        let received = block_rx
             .try_recv()
-            .expect("RbcReady should be enqueued to RBC chunk channel");
+            .expect("RbcReady should be enqueued to block channel");
         assert!(matches!(
             received,
             InboundBlockMessage {
@@ -4198,6 +4205,10 @@ mod tests {
             }
         ));
         assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
         assert!(matches!(
             block_payload_rx.try_recv(),
             Err(mpsc::TryRecvError::Empty)
@@ -8308,10 +8319,10 @@ impl SumeragiHandle {
                     return false;
                 }
                 let accepted = enqueue_with_mode(
-                    &self.rbc_chunks,
+                    &self.block,
                     InboundBlockMessage::new(BlockMessage::RbcReady(message), sender),
                     "RbcReady",
-                    status::WorkerQueueKind::RbcChunks,
+                    status::WorkerQueueKind::Blocks,
                     mode,
                 );
                 if !accepted {
@@ -8344,10 +8355,10 @@ impl SumeragiHandle {
                     return false;
                 }
                 let accepted = enqueue_with_mode(
-                    &self.rbc_chunks,
+                    &self.block,
                     InboundBlockMessage::new(BlockMessage::RbcDeliver(message), sender),
                     "RbcDeliver",
-                    status::WorkerQueueKind::RbcChunks,
+                    status::WorkerQueueKind::Blocks,
                     mode,
                 );
                 if !accepted {

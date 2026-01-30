@@ -4692,6 +4692,7 @@ struct RbcState {
     status_handle: rbc_status::Handle,
     payload_rebroadcast_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
     ready_rebroadcast_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
+    deliver_rebroadcast_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
     ready_deferral: BTreeMap<super::rbc_store::SessionKey, RbcReadyDeferral>,
     deliver_deferral: BTreeMap<super::rbc_store::SessionKey, RbcDeliverDeferral>,
     outbound_chunks: BTreeMap<super::rbc_store::SessionKey, RbcOutboundChunks>,
@@ -6808,6 +6809,11 @@ impl Actor {
                         .rbc
                         .ready_rebroadcast_last_sent
                         .remove(&key);
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .deliver_rebroadcast_last_sent
+                        .remove(&key);
                     self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
                     if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
                         self.update_rbc_status_entry(key, &session, false);
@@ -6859,6 +6865,11 @@ impl Actor {
                             .rbc
                             .ready_rebroadcast_last_sent
                             .remove(&key);
+                        self.subsystems
+                            .da_rbc
+                            .rbc
+                            .deliver_rebroadcast_last_sent
+                            .remove(&key);
                         self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
                         if let Some(session) =
                             self.subsystems.da_rbc.rbc.sessions.get(&key).cloned()
@@ -6904,6 +6915,11 @@ impl Actor {
                         .da_rbc
                         .rbc
                         .ready_rebroadcast_last_sent
+                        .remove(&key);
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .deliver_rebroadcast_last_sent
                         .remove(&key);
                     self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
                     if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
@@ -8247,6 +8263,7 @@ impl Actor {
             status_handle: rbc_status_handle,
             payload_rebroadcast_last_sent: BTreeMap::new(),
             ready_rebroadcast_last_sent: BTreeMap::new(),
+            deliver_rebroadcast_last_sent: BTreeMap::new(),
             ready_deferral: BTreeMap::new(),
             deliver_deferral: BTreeMap::new(),
             outbound_chunks: BTreeMap::new(),
@@ -9092,7 +9109,17 @@ impl Actor {
         let ready_cooldown = self.rebroadcast_cooldown();
 
         for (key, session) in &rbc.sessions {
-            if session.delivered || session.is_invalid() {
+            if session.is_invalid() {
+                continue;
+            }
+            if session.delivered {
+                let deadline = rbc
+                    .deliver_rebroadcast_last_sent
+                    .get(key)
+                    .and_then(|last| last.checked_add(ready_cooldown))
+                    .unwrap_or(now)
+                    .max(now);
+                next_due = Self::merge_deadline(next_due, Some(deadline));
                 continue;
             }
 
@@ -10400,6 +10427,12 @@ impl Actor {
             } | BackgroundRequest::Post {
                 msg: BlockMessage::RbcChunk(_),
                 ..
+            } | BackgroundRequest::Post {
+                msg: BlockMessage::RbcReady(_),
+                ..
+            } | BackgroundRequest::Post {
+                msg: BlockMessage::RbcDeliver(_),
+                ..
             } | BackgroundRequest::Broadcast {
                 msg: BlockMessage::Proposal(_),
             } | BackgroundRequest::Broadcast {
@@ -10408,6 +10441,10 @@ impl Actor {
                 msg: BlockMessage::RbcInit(_),
             } | BackgroundRequest::Broadcast {
                 msg: BlockMessage::RbcChunk(_),
+            } | BackgroundRequest::Broadcast {
+                msg: BlockMessage::RbcReady(_),
+            } | BackgroundRequest::Broadcast {
+                msg: BlockMessage::RbcDeliver(_),
             }
         );
         if bypass_queue {
@@ -11278,8 +11315,6 @@ impl Actor {
             return Ok(());
         }
         if let Some(ready) = ready_to_send {
-            let topology_peers = self.rbc_session_roster(key);
-            let local_peer_id = self.common_config.peer.id().clone();
             iroha_logger::info!(
                 height = key.1,
                 view = key.2,
@@ -11296,25 +11331,13 @@ impl Actor {
                     sender = forked.sender,
                     "sending conflicting RBC READY to commit topology due to debug mask"
                 );
-                for peer in &topology_peers {
-                    if peer == &local_peer_id {
-                        continue;
-                    }
-                    self.schedule_background(BackgroundRequest::Post {
-                        peer: peer.clone(),
-                        msg: BlockMessage::RbcReady(forked.clone()),
-                    });
-                }
-            }
-            for peer in &topology_peers {
-                if peer == &local_peer_id {
-                    continue;
-                }
-                self.schedule_background(BackgroundRequest::Post {
-                    peer: peer.clone(),
-                    msg: BlockMessage::RbcReady(ready.clone()),
+                self.schedule_background(BackgroundRequest::Broadcast {
+                    msg: BlockMessage::RbcReady(forked),
                 });
             }
+            self.schedule_background(BackgroundRequest::Broadcast {
+                msg: BlockMessage::RbcReady(ready),
+            });
         }
 
         self.maybe_emit_rbc_deliver(key)?;
@@ -11371,14 +11394,13 @@ impl Actor {
     fn rebroadcast_rbc_ready_bundle(
         &mut self,
         key: super::rbc_store::SessionKey,
-        readies: Vec<RbcReady>,
+        mut readies: Vec<RbcReady>,
     ) {
         if readies.is_empty() {
             return;
         }
         let expected_hash = readies.first().map(|ready| ready.roster_hash);
         let topology_peers = self.ensure_rbc_session_roster(key);
-        let local_peer_id = self.common_config.peer.id().clone();
         if topology_peers.is_empty() {
             return;
         }
@@ -11394,20 +11416,22 @@ impl Actor {
                 return;
             }
         }
-        if !self.should_rebroadcast_rbc_ready(&topology_peers, key) {
-            let topology = super::network_topology::Topology::new(topology_peers.clone());
-            let required = self.rbc_deliver_quorum(&topology);
-            let ready_quorum = required != 0 && readies.len() >= required;
-            if ready_quorum {
-                return;
-            }
+        let topology = super::network_topology::Topology::new(topology_peers.clone());
+        let required = self.rbc_deliver_quorum(&topology);
+        let ready_quorum = required != 0 && readies.len() >= required;
+        if ready_quorum && !self.should_rebroadcast_rbc_ready(&topology_peers, key) {
             let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
-            let signature_topology = topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+            let signature_topology =
+                topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
             let local_idx = self.local_validator_index_for_topology(&signature_topology);
-            let local_ready =
-                local_idx.is_some_and(|idx| readies.iter().any(|ready| ready.sender == idx));
-            // Ensure local READY evidence eventually propagates even if initial sends were lost.
-            if !local_ready {
+            let local_ready_idx =
+                local_idx.filter(|idx| readies.iter().any(|ready| ready.sender == *idx));
+            // Keep the local READY in flight even after quorum to recover from dropped broadcasts.
+            let Some(local_ready_idx) = local_ready_idx else {
+                return;
+            };
+            readies.retain(|ready| ready.sender == local_ready_idx);
+            if readies.is_empty() {
                 return;
             }
         }
@@ -11425,15 +11449,9 @@ impl Actor {
             }
         }
         for ready in readies {
-            for peer in &topology_peers {
-                if peer == &local_peer_id {
-                    continue;
-                }
-                self.schedule_background(BackgroundRequest::Post {
-                    peer: peer.clone(),
-                    msg: BlockMessage::RbcReady(ready.clone()),
-                });
-            }
+            self.schedule_background(BackgroundRequest::Broadcast {
+                msg: BlockMessage::RbcReady(ready),
+            });
         }
         self.subsystems
             .da_rbc
@@ -11776,6 +11794,20 @@ impl Actor {
             .is_none_or(|last| now.saturating_duration_since(*last) >= cooldown)
     }
 
+    fn rbc_deliver_rebroadcast_due(
+        &self,
+        key: &super::rbc_store::SessionKey,
+        now: Instant,
+        cooldown: Duration,
+    ) -> bool {
+        self.subsystems
+            .da_rbc
+            .rbc
+            .deliver_rebroadcast_last_sent
+            .get(key)
+            .is_none_or(|last| now.saturating_duration_since(*last) >= cooldown)
+    }
+
     fn flush_pending_rbc_if_roster_ready(&mut self, key: super::rbc_store::SessionKey) -> bool {
         if !self.subsystems.da_rbc.rbc.pending.contains_key(&key) {
             return false;
@@ -11808,13 +11840,13 @@ impl Actor {
         }
 
         let payload_cooldown = self.payload_rebroadcast_cooldown();
-        if self.relay_backpressure_active(now, payload_cooldown) {
+        let relay_backpressure = self.relay_backpressure_active(now, payload_cooldown);
+        if relay_backpressure {
             trace!("skipping RBC payload rebroadcast due to relay backpressure");
-            return false;
         }
         let queue_drop = self.queue_drop_backpressure_active(now, payload_cooldown);
         let queue_block = self.queue_block_backpressure_active(now, payload_cooldown);
-        let payload_backpressure = queue_drop || queue_block;
+        let payload_backpressure = relay_backpressure || queue_drop || queue_block;
         if payload_backpressure {
             let queue_depths = super::status::worker_queue_depth_snapshot();
             trace!(
@@ -11930,7 +11962,23 @@ impl Actor {
             let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) else {
                 continue;
             };
-            if session.delivered || session.is_invalid() {
+            if session.is_invalid() {
+                continue;
+            }
+            if session.delivered {
+                if self.rbc_deliver_rebroadcast_due(&key, now, ready_cooldown) {
+                    if let Some(deliver) = self.build_rbc_deliver(key, session) {
+                        self.schedule_background(BackgroundRequest::Broadcast {
+                            msg: BlockMessage::RbcDeliver(deliver),
+                        });
+                        self.subsystems
+                            .da_rbc
+                            .rbc
+                            .deliver_rebroadcast_last_sent
+                            .insert(key, now);
+                        progress = true;
+                    }
+                }
                 continue;
             }
             let roster_hash = rbc::rbc_roster_hash(&roster);
@@ -11940,7 +11988,28 @@ impl Actor {
             let total_chunks = session.total_chunks();
             let missing_chunks = total_chunks != 0 && session.received_chunks() < total_chunks;
             let ready_quorum = ready_count >= required;
-            if ready_quorum && !missing_chunks {
+            let ready_rebroadcast_after_quorum = if ready_quorum && ready_count != 0 {
+                let seed = rbc::shuffle_seed(&key.0, key.1, key.2);
+                let is_rebroadcaster =
+                    rbc::is_ready_rebroadcaster(&roster, self.common_config.peer.id(), seed);
+                if is_rebroadcaster {
+                    false
+                } else {
+                    let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
+                    let signature_topology =
+                        topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+                    let local_idx = self.local_validator_index_for_topology(&signature_topology);
+                    local_idx.is_some_and(|idx| {
+                        session
+                            .ready_signatures
+                            .iter()
+                            .any(|entry| entry.sender == idx)
+                    })
+                }
+            } else {
+                false
+            };
+            if ready_quorum && !missing_chunks && !ready_rebroadcast_after_quorum {
                 continue;
             }
             let should_rebroadcast_payload = missing_chunks || !ready_quorum;
@@ -11953,8 +12022,8 @@ impl Actor {
             } else {
                 None
             };
-            let ready_bundle = if !ready_quorum
-                && !session.ready_signatures.is_empty()
+            let ready_bundle = if (!ready_quorum || ready_rebroadcast_after_quorum)
+                && ready_count != 0
                 && self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown)
             {
                 Self::rbc_ready_bundle(key, session, roster_hash)
@@ -12449,16 +12518,9 @@ impl Actor {
             senders = ?ready_senders,
             "sending RBC DELIVER to commit topology after READY quorum"
         );
-        let local_peer_id = self.common_config.peer.id().clone();
-        for peer in &commit_topology {
-            if peer == &local_peer_id {
-                continue;
-            }
-            self.schedule_background(BackgroundRequest::Post {
-                peer: peer.clone(),
-                msg: BlockMessage::RbcDeliver(deliver.clone()),
-            });
-        }
+        self.schedule_background(BackgroundRequest::Broadcast {
+            msg: BlockMessage::RbcDeliver(deliver),
+        });
 
         self.recover_block_from_rbc_session(key);
         self.process_commit_candidates();
@@ -12824,6 +12886,11 @@ impl Actor {
             .da_rbc
             .rbc
             .ready_rebroadcast_last_sent
+            .remove(&key);
+        self.subsystems
+            .da_rbc
+            .rbc
+            .deliver_rebroadcast_last_sent
             .remove(&key);
         self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
         self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
