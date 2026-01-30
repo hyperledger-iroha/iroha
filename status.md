@@ -1,6 +1,10 @@
 # Status
 
 Last update: 2026-01-30
+- Sumeragi: validate pending blocks inline when commit QCs arrive for known payloads so commit certificates no longer stall behind deferred validation; added unit coverage for the commit-QC validation path.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-target-unit cargo test -p iroha_core handle_qc_validates_pending_block_on_commit_qc -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused `should_send` in `iroha_core` tests).
+- Integration tests: `CARGO_TARGET_DIR=/tmp/iroha-target-integ cargo test -p integration_tests extra_functional::unstable_network::unstable_network_8_peers_1_fault -- --nocapture` (ok; test ran ~17m).
+- Formatting: `cargo fmt --all` (stable rustfmt warnings about nightly-only options).
 - Docs: cleared auto-generated stub markers for SoraFS manifest pipeline + capacity simulation runbook translations and the docs preview feedback form across all locales, refreshing `translation_last_reviewed`.
 - Tests: not run (docs-only change).
 - Docs/portal: cleared auto-generated stub markers for Norito examples across all locales and synced the portal i18n mirrors; refreshed `translation_last_reviewed` under `docs/portal/docs/norito/examples/*.{ar,es,fr,he,ja,pt,ru,ur}.md`.
