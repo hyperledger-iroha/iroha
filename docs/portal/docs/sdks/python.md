@@ -80,7 +80,63 @@ for domain in domains.items:
 Pagination-aware helpers (e.g., `list_accounts_typed`) return an object that
 contains both `items` and `next_cursor`.
 
-## 5. Stream events
+Account inventory helpers accept an optional `asset_id` filter when you only
+care about a specific asset:
+
+```python
+asset_id = "rose#wonderland#alice@test"
+assets = client.list_account_assets("alice@test", asset_id=asset_id, limit=5)
+txs = client.list_account_transactions("alice@test", asset_id=asset_id, limit=5)
+holders = client.list_asset_holders("rose#wonderland", asset_id=asset_id, limit=5)
+print(assets, txs, holders)
+```
+
+## 5. Offline allowances
+
+Use the offline allowance endpoints to issue wallet certificates and register
+them on-ledger. `top_up_offline_allowance` chains the issue + register steps:
+
+```python
+from iroha_python import ToriiClient
+
+client = ToriiClient("http://127.0.0.1:8080")
+
+draft = {
+    "controller": "ih58:...",
+    "allowance": {"asset": "usd#wonderland", "amount": "10", "commitment": [1, 2]},
+    "spend_public_key": "ed0120deadbeef",
+    "attestation_report": [3, 4],
+    "issued_at_ms": 100,
+    "expires_at_ms": 200,
+    "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
+    "metadata": {},
+}
+
+top_up = client.top_up_offline_allowance(
+    certificate=draft,
+    authority="treasury@wonderland",
+    private_key="operator-private-key",
+)
+print("registered", top_up.registration.certificate_id_hex)
+```
+
+For renewals, call `top_up_offline_allowance_renewal` with the current certificate id:
+
+```python
+renewed = client.top_up_offline_allowance_renewal(
+    certificate_id_hex=top_up.registration.certificate_id_hex,
+    certificate=draft,
+    authority="treasury@wonderland",
+    private_key="operator-private-key",
+)
+print("renewed", renewed.registration.certificate_id_hex)
+```
+
+If you need to split the flow, call `issue_offline_certificate` (or
+`issue_offline_certificate_renewal`) followed by `register_offline_allowance`
+or `renew_offline_allowance`.
+
+## 6. Stream events
 
 Torii SSE endpoints are exposed via generators. The SDK automatically resumes
 when `resume=True` and you provide an `EventCursor`.
@@ -102,7 +158,7 @@ for event in client.stream_pipeline_blocks(
 Other convenience methods include `stream_pipeline_transactions`,
 `stream_events` (with typed filter builders), and `stream_verifying_key_events`.
 
-## 6. Next steps
+## 7. Next steps
 
 - Explore the examples under `python/iroha_python/src/iroha_python/examples/`
   for end-to-end flows covering governance, ISO bridge helpers, and Connect.

@@ -360,7 +360,8 @@ Cross-Data-Space workflow (пример)
 - **Admin endpoint:** `POST /v1/nexus/lifecycle` (Torii) принимает Norito/JSON тело с `additions` (полные объекты `LaneConfig`) и `retire` (lane ids) для добавления или удаления lanes без рестарта. Запросы gated на `nexus.enabled=true` и используют ту же Nexus configuration/state view, что и очередь.
 - **Behaviour:** при успехе узел применяет lifecycle план к WSV/Kura metadata, пересобирает queue routing/limits/manifests и отвечает `{ ok: true, lane_count: <u32> }`. Планы с ошибками валидации (неизвестные retire ids, дубликаты aliases/ids, Nexus отключен) возвращают `400 Bad Request` с `lane_lifecycle_error`.
 - **Safety:** handler использует shared state view lock, чтобы избежать гонок с читателями при обновлении каталогов; вызывающие все равно должны сериализовать lifecycle обновления внешне, чтобы избежать конфликтующих планов.
-- **TODO:** Rebalance per-lane scheduler/DA/RBC, propagation validator-set, storage teardown/cleanup пока в работе; держите lifecycle запросы редкими до этих хуков.
+- **Распространение:** Роутинг/лимиты очереди и lane-манифесты пересобираются из обновленного каталога, а воркеры consensus/DA/RBC читают актуальный lane config через снапшоты состояния, поэтому планирование и выбор валидаторов переключаются без рестарта (in-flight работа завершается по прежней конфигурации).
+- **Очистка хранилища:** Геометрия Kura и tiered-WSV согласуется (создать/вывести/переименовать), маппинги курсоров DA-шардов синхронизируются/сохраняются, а retired lanes удаляются из кешей lane relay и хранилищ DA commitments/confidential-compute/pin-intent.
 
 Путь миграции (Iroha 2 -> Iroha 3)
 1) Ввести dataspace-qualified IDs и nexus block/global state composition в data model; добавить feature flags для режима совместимости Iroha 2 на время перехода.

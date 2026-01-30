@@ -4,10 +4,12 @@ import org.gradle.api.tasks.compile.JavaCompile
 
 plugins {
     `java-library`
+    `maven-publish`
 }
 
 java {
     toolchain.languageVersion.set(JavaLanguageVersion.of(21))
+    withSourcesJar()
 }
 
 group = "org.hyperledger.iroha"
@@ -36,4 +38,13 @@ val runNoritoTests =
 
 tasks.named("check") {
     dependsOn(runNoritoTests)
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("mavenJava") {
+            from(components["java"])
+            artifactId = "norito-java"
+        }
+    }
 }

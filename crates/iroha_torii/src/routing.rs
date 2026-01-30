@@ -12543,6 +12543,175 @@ fn tx_field_value(
 }
 
 #[cfg(feature = "app_api")]
+fn append_asset_ids_from_instruction(
+    out: &mut Vec<iroha_data_model::asset::AssetId>,
+    instr: &iroha_data_model::isi::InstructionBox,
+) {
+    use iroha_data_model::{
+        asset::AssetId,
+        isi::{
+            BurnBox, MintBox, RemoveAssetKeyValue, SetAssetKeyValue, TransferAssetBatch,
+            TransferBox, staking::RecordPublicLaneRewards,
+        },
+    };
+
+    fn push_asset(out: &mut Vec<AssetId>, asset: &AssetId) {
+        out.push(asset.clone());
+    }
+
+    let any = instr.as_any();
+    if let Some(transfer) = any.downcast_ref::<TransferBox>() {
+        if let TransferBox::Asset(asset_transfer) = transfer {
+            push_asset(out, asset_transfer.source());
+        }
+        return;
+    }
+    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
+        for entry in batch.entries() {
+            out.push(AssetId::new(
+                entry.asset_definition().clone(),
+                entry.from().clone(),
+            ));
+        }
+        return;
+    }
+    if let Some(mint) = any.downcast_ref::<MintBox>() {
+        if let MintBox::Asset(asset_mint) = mint {
+            push_asset(out, asset_mint.destination());
+        }
+        return;
+    }
+    if let Some(burn) = any.downcast_ref::<BurnBox>() {
+        if let BurnBox::Asset(asset_burn) = burn {
+            push_asset(out, asset_burn.destination());
+        }
+        return;
+    }
+    if let Some(set) = any.downcast_ref::<SetAssetKeyValue>() {
+        push_asset(out, set.asset());
+        return;
+    }
+    if let Some(remove) = any.downcast_ref::<RemoveAssetKeyValue>() {
+        push_asset(out, remove.asset());
+        return;
+    }
+    if let Some(rewards) = any.downcast_ref::<RecordPublicLaneRewards>() {
+        push_asset(out, rewards.reward_asset());
+        return;
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn instruction_matches_asset_id(
+    instr: &iroha_data_model::isi::InstructionBox,
+    expected: &iroha_data_model::asset::AssetId,
+) -> bool {
+    use iroha_data_model::{
+        asset::AssetId,
+        isi::{
+            BurnBox, MintBox, RemoveAssetKeyValue, SetAssetKeyValue, TransferAssetBatch,
+            TransferBox, staking::RecordPublicLaneRewards,
+        },
+    };
+
+    let any = instr.as_any();
+    if let Some(transfer) = any.downcast_ref::<TransferBox>() {
+        if let TransferBox::Asset(asset_transfer) = transfer {
+            return asset_transfer.source() == expected;
+        }
+        return false;
+    }
+    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
+        return batch.entries().iter().any(|entry| {
+            AssetId::new(entry.asset_definition().clone(), entry.from().clone()) == *expected
+        });
+    }
+    if let Some(mint) = any.downcast_ref::<MintBox>() {
+        if let MintBox::Asset(asset_mint) = mint {
+            return asset_mint.destination() == expected;
+        }
+        return false;
+    }
+    if let Some(burn) = any.downcast_ref::<BurnBox>() {
+        if let BurnBox::Asset(asset_burn) = burn {
+            return asset_burn.destination() == expected;
+        }
+        return false;
+    }
+    if let Some(set) = any.downcast_ref::<SetAssetKeyValue>() {
+        return set.asset() == expected;
+    }
+    if let Some(remove) = any.downcast_ref::<RemoveAssetKeyValue>() {
+        return remove.asset() == expected;
+    }
+    if let Some(rewards) = any.downcast_ref::<RecordPublicLaneRewards>() {
+        return rewards.reward_asset() == expected;
+    }
+    false
+}
+
+#[cfg(feature = "app_api")]
+fn executable_contains_asset_id(
+    executable: &iroha_data_model::transaction::Executable,
+    expected: &iroha_data_model::asset::AssetId,
+) -> bool {
+    use iroha_data_model::transaction::Executable;
+    match executable {
+        Executable::Instructions(instructions) => instructions
+            .iter()
+            .any(|instruction| instruction_matches_asset_id(instruction, expected)),
+        _ => false,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn tx_collect_asset_ids(
+    tx: &iroha_data_model::query::CommittedTransaction,
+) -> Vec<iroha_data_model::asset::AssetId> {
+    use iroha_data_model::transaction::{Executable, signed::TransactionEntrypoint};
+
+    let mut out = Vec::new();
+    let mut visit_instruction = |instr: &iroha_data_model::isi::InstructionBox| {
+        append_asset_ids_from_instruction(&mut out, instr)
+    };
+    match tx.entrypoint() {
+        TransactionEntrypoint::External(signed) => {
+            if let Executable::Instructions(instructions) = signed.instructions() {
+                for instr in instructions.iter() {
+                    visit_instruction(instr);
+                }
+            }
+        }
+        TransactionEntrypoint::Time(entry) => {
+            for instr in entry.instructions.iter() {
+                visit_instruction(instr);
+            }
+        }
+    }
+
+    out
+}
+
+#[cfg(all(feature = "app_api", feature = "tx_predicates"))]
+fn filter_contains_asset_id(expr: &FilterExpr) -> bool {
+    use FilterExpr as F;
+    match expr {
+        F::And(list) | F::Or(list) => list.iter().any(filter_contains_asset_id),
+        F::Not(inner) => filter_contains_asset_id(inner),
+        F::Eq(field, _)
+        | F::Ne(field, _)
+        | F::Lt(field, _)
+        | F::Lte(field, _)
+        | F::Gt(field, _)
+        | F::Gte(field, _)
+        | F::In(field, _)
+        | F::Nin(field, _)
+        | F::Exists(field)
+        | F::IsNull(field) => field.0 == "asset_id",
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> Result<()> {
     // Strict adapter validation with depth and set-size limits + value parsing
     const MAX_DEPTH: usize = 10;
@@ -12597,6 +12766,14 @@ fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> 
                         .map_err(|_| Error::Query(dm::ValidationFail::TooComplex))?;
                     Ok(())
                 }
+                "asset_id" => {
+                    let s = v
+                        .as_str()
+                        .ok_or_else(|| Error::Query(dm::ValidationFail::TooComplex))?;
+                    s.parse::<iroha_data_model::asset::AssetId>()
+                        .map(|_| ())
+                        .map_err(|_| Error::Query(dm::ValidationFail::TooComplex))
+                }
                 "result_ok" => {
                     if !matches!(v, Value::Bool(_)) {
                         return Err(Error::Query(dm::ValidationFail::TooComplex));
@@ -12619,8 +12796,10 @@ fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> 
                     Ok(())
                 }
                 field
-                    if matches!(field, "authority" | "entrypoint_hash" | "result_ok")
-                        || field.starts_with("metadata.") =>
+                    if matches!(
+                        field,
+                        "authority" | "entrypoint_hash" | "result_ok" | "asset_id"
+                    ) || field.starts_with("metadata.") =>
                 {
                     Err(Error::Query(dm::ValidationFail::TooComplex))
                 }
@@ -12674,6 +12853,17 @@ fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> 
                             Err(Error::Query(dm::ValidationFail::TooComplex))
                         }
                     }
+                    "asset_id" => {
+                        for value in list {
+                            let Some(s) = value.as_str() else {
+                                return Err(Error::Query(dm::ValidationFail::TooComplex));
+                            };
+                            if s.parse::<iroha_data_model::asset::AssetId>().is_err() {
+                                return Err(Error::Query(dm::ValidationFail::TooComplex));
+                            }
+                        }
+                        Ok(())
+                    }
                     "result_ok" => {
                         if list.iter().all(|v| matches!(v, Value::Bool(_))) {
                             Ok(())
@@ -12685,7 +12875,9 @@ fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> 
                 }
             }
             F::Exists(f) | F::IsNull(f) => match f.0.as_str() {
-                "authority" | "timestamp_ms" | "entrypoint_hash" | "result_ok" => Ok(()),
+                "authority" | "timestamp_ms" | "entrypoint_hash" | "result_ok" | "asset_id" => {
+                    Ok(())
+                }
                 field if field.starts_with("metadata.") => {
                     let rest = field.strip_prefix("metadata.").unwrap_or("");
                     rest.parse::<iroha_data_model::prelude::Name>()
@@ -12743,6 +12935,8 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
     let authority_fallback = tx_field_value(tx, "authority");
     let ts_fallback = tx_field_value(tx, "timestamp_ms");
     let _entry_fallback = tx_field_value(tx, "entrypoint_hash");
+    let asset_ids_cache: OnceLock<Vec<iroha_data_model::asset::AssetId>> = OnceLock::new();
+    let asset_ids_for_tx = || asset_ids_cache.get_or_init(|| tx_collect_asset_ids(tx));
     fn num_to_i128(v: &norito::json::Value) -> Option<i128> {
         if let Some(u) = v.as_u64() {
             Some(u as i128)
@@ -12816,6 +13010,11 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                         false
                     }
                 }
+                "asset_id" => v
+                    .as_str()
+                    .and_then(|s| s.parse::<iroha_data_model::asset::AssetId>().ok())
+                    .map(|id| asset_ids_for_tx().iter().any(|candidate| candidate == &id))
+                    .unwrap_or(false),
                 "entrypoint_hash" => v
                     .as_str()
                     .and_then(|s| {
@@ -12870,6 +13069,11 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                         false
                     }
                 }
+                "asset_id" => v
+                    .as_str()
+                    .and_then(|s| s.parse::<iroha_data_model::asset::AssetId>().ok())
+                    .map(|id| !asset_ids_for_tx().iter().any(|candidate| candidate == &id))
+                    .unwrap_or(false),
                 // For app-facing queries, treat NE(entrypoint_hash) as a no-op filter
                 // to avoid surprising interactions with on-chain hashing nuances. In
                 // practice, callers pair NE with a timestamp bound which still
@@ -12943,6 +13147,11 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 "authority" => list.iter().filter_map(|v| v.as_str()).any(|s| {
                     authority_str.as_deref() == Some(s) || authority_fallback.as_deref() == Some(s)
                 }),
+                "asset_id" => list
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .filter_map(|s| s.parse::<iroha_data_model::asset::AssetId>().ok())
+                    .any(|id| asset_ids_for_tx().iter().any(|candidate| candidate == &id)),
                 _ => match tx_field_value(tx, &f.0) {
                     Some(val) => list.iter().any(|v| v.as_str() == Some(&val)),
                     None => false,
@@ -12985,6 +13194,11 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 "authority" => list.iter().filter_map(|v| v.as_str()).all(|s| {
                     authority_str.as_deref() != Some(s) && authority_fallback.as_deref() != Some(s)
                 }),
+                "asset_id" => list
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .filter_map(|s| s.parse::<iroha_data_model::asset::AssetId>().ok())
+                    .all(|id| !asset_ids_for_tx().iter().any(|candidate| candidate == &id)),
                 _ => match tx_field_value(tx, &f.0) {
                     Some(val) => list.iter().all(|v| v.as_str() != Some(&val)),
                     None => true,
@@ -13003,6 +13217,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 "timestamp_ms" => ts_ms_opt.is_some(),
                 "entrypoint_hash" => true,
                 "result_ok" => true,
+                "asset_id" => !asset_ids_for_tx().is_empty(),
                 _ => tx_field_value(tx, &f.0).is_some(),
             }
         }
@@ -13025,6 +13240,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 "timestamp_ms" => ts_ms_opt.is_none(),
                 "entrypoint_hash" => false,
                 "result_ok" => false,
+                "asset_id" => asset_ids_for_tx().is_empty(),
                 _ => tx_field_value(tx, &f.0).is_none(),
             }
         }
@@ -13092,6 +13308,9 @@ fn tx_predicate_from_filter(
 
     #[cfg(feature = "tx_predicates")]
     {
+        if filter_contains_asset_id(expr) {
+            return CP::PASS;
+        }
         return crate::predicates::build_tx_predicate(expr);
     }
 
@@ -14242,6 +14461,9 @@ mod account_path_metric_tests {
 ///     http://127.0.0.1:8080/v1/accounts/ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland/transactions/query
 ///
 /// Returns: `{ "items": [ {"authority": "...", "timestamp_ms": 0, "entrypoint_hash": "...", "result_ok": true } ], "total": N }`
+///
+/// Supported filter fields: `authority`, `timestamp_ms`, `entrypoint_hash`, `result_ok`,
+/// `metadata.<key>`, and `asset_id` (matches asset ids referenced by instruction payloads).
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_account_transactions(
@@ -14604,7 +14826,7 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     use std::time::Instant;
 
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::transaction::prelude::FindTransactions;
+    use iroha_data_model::{asset::AssetId, query::transaction::prelude::FindTransactions};
 
     #[cfg(feature = "telemetry")]
     let start = Instant::now();
@@ -14613,6 +14835,14 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     let (_, canonical_literal) =
         parse_account_path_segment(&account_id, &telemetry, ENDPOINT_ACCOUNTS_TRANSACTIONS)?;
     let canonical_account = Arc::<str>::from(canonical_literal);
+    let asset_filter = params
+        .asset_id
+        .as_deref()
+        .map(|raw| {
+            raw.parse::<AssetId>()
+                .map_err(|_| conversion_error("asset_id must be a valid asset id".to_owned()))
+        })
+        .transpose()?;
     let cap = app_query_page_cap(&state);
     let limits = app_query_limits();
 
@@ -14636,16 +14866,22 @@ pub async fn handle_v1_account_transactions_get_with_policy(
             .map(|v| v.min(pagination.cap));
         let filtered = iter.filter_map({
             let canonical = canonical_account.clone();
+            let asset_filter = asset_filter.clone();
             move |tx| {
                 let include = match tx_field_value(&tx, "authority") {
                     Some(auth) => auth == canonical.as_ref(),
                     None => true,
                 };
-                if include {
-                    Some(project_tx(&tx, &None))
-                } else {
-                    None
+                if !include {
+                    return None;
                 }
+                if let Some(expected) = asset_filter.as_ref() {
+                    let assets = tx_collect_asset_ids(&tx);
+                    if !assets.iter().any(|candidate| candidate == expected) {
+                        return None;
+                    }
+                }
+                Some(project_tx(&tx, &None))
             }
         });
         collect_page_streaming(
@@ -15356,6 +15592,83 @@ mod tx_query_filter_tests {
         )
     }
 
+    fn make_external_tx_with_instructions(
+        authority: &dm::AccountId,
+        keypair: &KeyPair,
+        created_ms: u64,
+        instructions: Vec<dm::InstructionBox>,
+    ) -> iroha_data_model::query::CommittedTransaction {
+        let chain: dm::ChainId = "test-chain".parse().unwrap();
+        let mut builder = dm::TransactionBuilder::new(chain, authority.clone());
+        builder.set_creation_time(core::time::Duration::from_millis(created_ms));
+        builder = builder.with_instructions(instructions);
+        let signed = builder.sign(keypair.private_key());
+        let entry = dm::TransactionEntrypoint::External(signed);
+
+        let entry_hash =
+            GenericHashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
+        let result = dm::TransactionResult(Ok(dm::DataTriggerSequence::default()));
+
+        iroha_data_model::query::CommittedTransaction {
+            block_hash: dummy_block_hash(),
+            entrypoint_hash: entry_hash,
+            entrypoint_proof: dummy_proof(),
+            entrypoint: entry,
+            result_hash: GenericHashOf::from_untyped_unchecked(Hash::prehashed(
+                [0x22; Hash::LENGTH],
+            )),
+            result_proof: dummy_proof(),
+            result,
+        }
+    }
+
+    #[test]
+    fn explorer_transaction_filters_match_asset_id() {
+        let (authority, keypair) = account_with_key();
+        let def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_id = dm::AssetId::new(def.clone(), authority.clone());
+        let other_asset_id = dm::AssetId::new(def, "bob@wonderland".parse().unwrap());
+        let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
+        let tx = make_external_tx_with_instructions(
+            &authority,
+            &keypair,
+            1_710_000_000_000,
+            vec![mint.into()],
+        );
+        let dm::TransactionEntrypoint::External(signed) = &tx.entrypoint else {
+            panic!("expected external transaction");
+        };
+
+        let filters = ExplorerTransactionFilters {
+            authority: None,
+            status: None,
+            block: None,
+            asset_id: Some(asset_id.clone()),
+        };
+        assert!(filters.matches(signed, 1, &tx.result));
+
+        let filters = ExplorerTransactionFilters {
+            authority: None,
+            status: None,
+            block: None,
+            asset_id: Some(other_asset_id),
+        };
+        assert!(!filters.matches(signed, 1, &tx.result));
+    }
+
+    #[test]
+    fn instruction_matches_asset_id_handles_mint_assets() {
+        let (authority, _) = account_with_key();
+        let def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_id = dm::AssetId::new(def.clone(), authority.clone());
+        let other_asset_id = dm::AssetId::new(def, "bob@wonderland".parse().unwrap());
+        let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
+        let instruction: dm::InstructionBox = mint.into();
+
+        assert!(instruction_matches_asset_id(&instruction, &asset_id));
+        assert!(!instruction_matches_asset_id(&instruction, &other_asset_id));
+    }
+
     #[test]
     fn filter_authority_eq_matches() {
         let domain: dm::DomainId = "wonderland".parse().unwrap();
@@ -15431,6 +15744,45 @@ mod tx_query_filter_tests {
         let expr_is_null =
             crate::filter::FilterExpr::IsNull(crate::filter::FieldPath("metadata.note".into()));
         assert!(filter_tx(&expr_is_null, &tx_null));
+    }
+
+    #[test]
+    fn filter_asset_id_eq_matches_instruction_asset() {
+        let (account, kp) = account_with_key();
+        let asset_def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_id = dm::AssetId::new(asset_def.clone(), account.clone());
+        let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
+
+        let tx =
+            make_external_tx_with_instructions(&account, &kp, 1_710_000_000_000, vec![mint.into()]);
+        let expr = crate::filter::FilterExpr::Eq(
+            crate::filter::FieldPath("asset_id".into()),
+            norito::json::Value::from(asset_id.to_string()),
+        );
+        assert!(filter_tx(&expr, &tx));
+
+        let other_kp = KeyPair::random();
+        let other_account =
+            dm::AccountId::new(asset_def.domain().clone(), other_kp.public_key().clone());
+        let other_id = dm::AssetId::new(asset_def, other_account);
+        let expr_miss = crate::filter::FilterExpr::Eq(
+            crate::filter::FieldPath("asset_id".into()),
+            norito::json::Value::from(other_id.to_string()),
+        );
+        assert!(!filter_tx(&expr_miss, &tx));
+    }
+
+    #[test]
+    fn tx_filter_adapter_accepts_asset_id_eq() {
+        let telemetry = MaybeTelemetry::disabled();
+        let (account, _kp) = account_with_key();
+        let asset_def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_id = dm::AssetId::new(asset_def, account);
+        let expr = crate::filter::FilterExpr::Eq(
+            crate::filter::FieldPath("asset_id".into()),
+            norito::json::Value::from(asset_id.to_string()),
+        );
+        assert!(validate_tx_filter_adapter(&expr, &telemetry).is_ok());
     }
 
     #[test]
@@ -15739,6 +16091,7 @@ mod tx_query_integration_smoke {
             limit: Some(cap + 1),
             offset: 0,
             address_format: None,
+            asset_id: None,
         };
 
         let err = handle_v1_account_transactions_get(
@@ -15754,6 +16107,107 @@ mod tx_query_integration_smoke {
             Err(other) => panic!("unexpected error: {other:?}"),
             Ok(_) => panic!("expected error for limit above cap"),
         }
+    }
+
+    #[tokio::test]
+    async fn account_transactions_get_filters_by_asset_id() {
+        use iroha_crypto::Algorithm;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+
+        // Prepare world: domain + account
+        let leader0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+        let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader0.private_key())
+            .unpack(|_| {});
+        let mut st_block0 = state.block(unverified0.header());
+        let mut stx0 = st_block0.transaction();
+        let domain_id: dm::DomainId = "wonderland".parse().unwrap();
+        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let exec_id = dm::AccountId::new(domain_id.clone(), kp_exec.public_key().clone());
+        dm::Register::domain(dm::Domain::new(domain_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        let kp_actor = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let actor_id = dm::AccountId::new(domain_id.clone(), kp_actor.public_key().clone());
+        dm::Register::account(dm::Account::new(actor_id.clone()))
+            .execute(&exec_id, &mut stx0)
+            .ok();
+        stx0.apply();
+        let valid0 = unverified0
+            .clone()
+            .validate_and_record_transactions(&mut st_block0)
+            .unpack(|_| {});
+        let committed0 = valid0.commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
+
+        let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+        let asset_def: dm::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_id = dm::AssetId::new(asset_def, actor_id.clone());
+        let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
+
+        let mut bldr_asset = dm::TransactionBuilder::new(chain_id.clone(), actor_id.clone());
+        bldr_asset.set_creation_time(core::time::Duration::from_millis(1000));
+        let signed_asset = bldr_asset
+            .with_instructions::<dm::InstructionBox>([mint.into()])
+            .sign(kp_actor.private_key());
+        let entry_hash_asset = format!("{}", signed_asset.hash_as_entrypoint());
+        let tx_asset = AcceptedTransaction::new_unchecked(Cow::Owned(signed_asset));
+
+        let mut bldr_log = dm::TransactionBuilder::new(chain_id, actor_id.clone());
+        bldr_log.set_creation_time(core::time::Duration::from_millis(1100));
+        let signed_log = bldr_log
+            .with_instructions::<dm::InstructionBox>([log_instruction()])
+            .sign(kp_actor.private_key());
+        let tx_log = AcceptedTransaction::new_unchecked(Cow::Owned(signed_log));
+
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+        let unverified = BlockBuilder::new(vec![tx_asset, tx_log])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut st_block = state.block(unverified.header());
+        let valid: ValidBlock = unverified
+            .validate_and_record_transactions(&mut st_block)
+            .unpack(|_| {});
+        let committed = valid.clone().commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, st_block, committed);
+
+        let params = AccountTransactionsGetParams {
+            limit: Some(10),
+            offset: 0,
+            address_format: None,
+            asset_id: Some(asset_id.to_string()),
+        };
+        let resp = handle_v1_account_transactions_get(
+            state,
+            axum::extract::Path(actor_id.to_string()),
+            crate::NoritoQuery(params),
+            crate::routing::MaybeTelemetry::for_tests(),
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let parsed: norito::json::Value = norito::json::from_slice(&body).unwrap();
+        let items = parsed["items"].as_array().unwrap();
+        assert_eq!(parsed["total"].as_u64(), Some(1));
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]["entrypoint_hash"].as_str(),
+            Some(entry_hash_asset.as_str())
+        );
     }
 
     #[tokio::test]
@@ -18586,6 +19040,62 @@ mod app_api_integration_tests {
     }
 
     #[tokio::test]
+    async fn asset_holders_query_filters_by_asset_id() {
+        let _guard = app_query_limits_guard();
+        let (state, alice_id, _bob_id) = build_asset_holder_fixture_state();
+
+        let telemetry = MaybeTelemetry::disabled();
+        let app = Router::new().route(
+            "/v1/assets/{definition_id}/holders/query",
+            post({
+                let state = state.clone();
+                let telemetry = telemetry.clone();
+                move |axum::extract::Path(def_id): axum::extract::Path<String>,
+                      crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<QueryEnvelope>| async move {
+                    let telemetry = telemetry.clone();
+                    let state = state.clone();
+                    handle_v1_asset_holders_query(
+                        state,
+                        axum::extract::Path(def_id),
+                        crate::utils::extractors::NoritoJson(env),
+                        telemetry,
+                    )
+                    .await
+                }
+            }),
+        );
+
+        let def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_id = AssetId::new(def_id, alice_id.clone());
+        let body = json_string(obj(vec![(
+            "filter",
+            obj(vec![
+                ("op", val("eq")),
+                (
+                    "args",
+                    arr(vec![val("asset_id"), val(&asset_id.to_string())]),
+                ),
+            ]),
+        )]));
+        let req = http::Request::builder()
+            .method("POST")
+            .uri("/v1/assets/rose%23wonderland/holders/query")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(body))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::OK);
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let s = String::from_utf8(bytes.to_vec()).unwrap();
+        let json: norito::json::Value = norito::json::from_str(&s).unwrap();
+        let items = json["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        let account_id = items[0]["account_id"].as_str().unwrap();
+        assert_eq!(account_id, alice_id.to_string());
+    }
+
+    #[tokio::test]
     async fn account_assets_get_pagination_preserves_total() {
         let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
@@ -18619,9 +19129,7 @@ mod app_api_integration_tests {
             get({
                 let state = state.clone();
                 move |axum::extract::Path(account_id): axum::extract::Path<String>,
-                          crate::NoritoQuery(p): crate::NoritoQuery<
-                        crate::filter::Pagination,
-                    >| async move {
+                          crate::NoritoQuery(p): crate::NoritoQuery<AccountAssetsGetParams>| async move {
                         handle_v1_account_assets(
                             state,
                             axum::extract::Path(account_id),
@@ -18649,6 +19157,72 @@ mod app_api_integration_tests {
     }
 
     #[tokio::test]
+    async fn account_assets_get_filters_by_asset_id() {
+        let _guard = app_query_limits_guard();
+        use iroha_crypto::KeyPair;
+        let kp = KeyPair::random();
+        let alice_id: AccountId =
+            AccountId::new("wonderland".parse().unwrap(), kp.public_key().clone());
+        let domain_id = alice_id.domain().clone();
+        let rose_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let lily_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
+        let assets = vec![
+            Asset::new(
+                AssetId::new(rose_def.clone(), alice_id.clone()),
+                Numeric::from(10_u32),
+            ),
+            Asset::new(
+                AssetId::new(lily_def.clone(), alice_id.clone()),
+                Numeric::from(7_u32),
+            ),
+        ];
+        let state = state_with_assets(
+            domain_id,
+            alice_id.clone(),
+            vec![alice_id.clone()],
+            vec![rose_def.clone(), lily_def],
+            assets,
+        );
+
+        use axum::routing::get;
+        let app = Router::new().route(
+            "/v1/accounts/{account_id}/assets",
+            get({
+                let state = state.clone();
+                move |axum::extract::Path(account_id): axum::extract::Path<String>,
+                      crate::NoritoQuery(p): crate::NoritoQuery<AccountAssetsGetParams>| async move {
+                    handle_v1_account_assets(
+                        state,
+                        axum::extract::Path(account_id),
+                        crate::NoritoQuery(p),
+                        crate::routing::MaybeTelemetry::disabled(),
+                    )
+                    .await
+                }
+            }),
+        );
+
+        let asset_id = AssetId::new(rose_def, alice_id.clone()).to_string();
+        let req = http::Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/v1/accounts/{}/assets?asset_id={}",
+                alice_id,
+                urlencoding::encode(&asset_id)
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::OK);
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+        assert_eq!(json["total"].as_u64(), Some(1));
+        let items = json["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["asset_id"].as_str(), Some(asset_id.as_str()));
+    }
+
+    #[tokio::test]
     async fn account_assets_get_rejects_limit_above_cap() {
         let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
@@ -18670,9 +19244,10 @@ mod app_api_integration_tests {
         );
         let cap = app_query_limits().max_page_limit;
 
-        let params = crate::filter::Pagination {
+        let params = AccountAssetsGetParams {
             limit: Some(cap + 1),
             offset: 0,
+            asset_id: None,
         };
 
         let err = handle_v1_account_assets(
@@ -18734,6 +19309,59 @@ mod app_api_integration_tests {
     }
 
     #[tokio::test]
+    async fn asset_holders_get_filters_by_asset_id() {
+        let _guard = app_query_limits_guard();
+        let (state, alice_id, _) = build_asset_holder_fixture_state();
+
+        use axum::routing::get;
+        let telemetry = MaybeTelemetry::for_tests();
+        let app = Router::new().route(
+            "/v1/assets/{definition_id}/holders",
+            get({
+                let state = state.clone();
+                let telemetry = telemetry.clone();
+                move |axum::extract::Path(def_id): axum::extract::Path<String>,
+                      crate::NoritoQuery(p): crate::NoritoQuery<AssetHolderGetParams>| {
+                    let telemetry = telemetry.clone();
+                    let state = state.clone();
+                    async move {
+                        handle_v1_asset_holders(
+                            state,
+                            axum::extract::Path(def_id),
+                            crate::NoritoQuery(p),
+                            telemetry,
+                        )
+                        .await
+                    }
+                }
+            }),
+        );
+
+        let asset_id =
+            AssetId::new("rose#wonderland".parse().unwrap(), alice_id.clone()).to_string();
+        let expected_account = alice_id.to_string();
+        let req = http::Request::builder()
+            .method("GET")
+            .uri(format!(
+                "/v1/assets/rose%23wonderland/holders?asset_id={}",
+                urlencoding::encode(&asset_id)
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::OK);
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+        assert_eq!(json["total"].as_u64(), Some(1));
+        let items = json["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]["account_id"].as_str(),
+            Some(expected_account.as_str())
+        );
+    }
+
+    #[tokio::test]
     async fn asset_holders_get_rejects_limit_above_cap() {
         let _guard = app_query_limits_guard();
         let (state, _, _) = build_asset_holder_fixture_state();
@@ -18742,6 +19370,7 @@ mod app_api_integration_tests {
             limit: Some(cap + 1),
             offset: 0,
             address_format: None,
+            asset_id: None,
         };
 
         let err = handle_v1_asset_holders(
@@ -19590,6 +20219,7 @@ fn populate_explorer_queue(
                 authority: None,
                 status: None,
                 block: Some(height),
+                asset_id: None,
             };
             match collect_transaction_summaries(
                 kura,
@@ -19621,6 +20251,7 @@ fn populate_explorer_queue(
                 status: None,
                 block: Some(height),
                 kind: None,
+                asset_id: None,
             };
             match collect_instruction_history(kura, height, &filters, AddressFormatPreference::Ih58)
             {
@@ -25625,6 +26256,8 @@ pub struct OfflineAllowanceListParams {
     pub address_format: Option<String>,
     /// Filter allowances by controller account literal (IH58 (preferred)/sora (second-best)/public-key supported).
     pub controller_id: Option<String>,
+    /// Filter allowances by asset identifier.
+    pub asset_id: Option<String>,
     /// Require allowances whose certificate expiry is <= this timestamp.
     pub certificate_expires_before_ms: Option<u64>,
     /// Require allowances whose certificate expiry is >= this timestamp.
@@ -25678,6 +26311,8 @@ pub struct OfflineTransferListParams {
     pub receiver_id: Option<String>,
     /// Filter transfers by deposit account literal (IH58 (preferred)/sora (second-best)/public-key literals accepted).
     pub deposit_account_id: Option<String>,
+    /// Filter transfers by asset identifier.
+    pub asset_id: Option<String>,
     /// Match a specific certificate identifier (hex, case-insensitive).
     pub certificate_id_hex: Option<String>,
     /// Require transfers whose certificate expiry is <= this timestamp.
@@ -26091,6 +26726,20 @@ pub struct OfflineStateResponse {
 #[derive(
     crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
 )]
+pub struct AccountAssetsGetParams {
+    /// Optional limit for pagination.
+    pub limit: Option<u64>,
+    /// Offset for pagination (default 0).
+    #[norito(default)]
+    pub offset: u64,
+    /// Filter assets by asset identifier.
+    pub asset_id: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
+)]
 pub struct AccountTransactionsGetParams {
     /// Optional limit for pagination.
     pub limit: Option<u64>,
@@ -26099,6 +26748,8 @@ pub struct AccountTransactionsGetParams {
     pub offset: u64,
     /// Optional response address format (`ih58` or `compressed`).
     pub address_format: Option<String>,
+    /// Filter transactions by asset identifier.
+    pub asset_id: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -26113,6 +26764,8 @@ pub struct AssetHolderGetParams {
     pub offset: u64,
     /// Optional response address format (`ih58` or `compressed`).
     pub address_format: Option<String>,
+    /// Filter holders by asset identifier.
+    pub asset_id: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -26784,7 +27437,7 @@ pub async fn handle_v1_account_permissions_with_policy(
 pub async fn handle_v1_account_assets(
     state: Arc<CoreState>,
     axum::extract::Path(account_id): axum::extract::Path<String>,
-    crate::NoritoQuery(p): crate::NoritoQuery<crate::filter::Pagination>,
+    crate::NoritoQuery(p): crate::NoritoQuery<AccountAssetsGetParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     handle_v1_account_assets_with_policy(
@@ -26802,16 +27455,27 @@ pub async fn handle_v1_account_assets(
 pub async fn handle_v1_account_assets_with_policy(
     state: Arc<CoreState>,
     axum::extract::Path(account_id): axum::extract::Path<String>,
-    crate::NoritoQuery(p): crate::NoritoQuery<crate::filter::Pagination>,
+    crate::NoritoQuery(p): crate::NoritoQuery<AccountAssetsGetParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     use iroha_core::smartcontracts::ValidQuery;
-    use iroha_data_model::query::{asset::prelude::FindAssets, dsl::CompoundPredicate};
+    use iroha_data_model::{
+        asset::AssetId,
+        query::{asset::prelude::FindAssets, dsl::CompoundPredicate},
+    };
 
     let state_view = state.view();
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_ASSETS)?;
     let (acct, _) = parse_account_path_segment(&account_id, &telemetry, ENDPOINT_ACCOUNTS_ASSETS)?;
+    let asset_filter = p
+        .asset_id
+        .as_deref()
+        .map(|raw| {
+            raw.parse::<AssetId>()
+                .map_err(|_| conversion_error("asset_id must be a valid asset id".to_owned()))
+        })
+        .transpose()?;
     let limits = app_query_limits();
     let page_limit = pagination.limit.unwrap_or(limits.default_page_limit);
     let fetch_cap = limits
@@ -26823,17 +27487,21 @@ pub async fn handle_v1_account_assets_with_policy(
 
     let (items, total) = collect_page_streaming(
         iter.filter_map(|asset| {
-            if *asset.id().account() == acct {
-                Some((
-                    (),
-                    AccountAssetListItem {
-                        asset_id: asset.id().to_string(),
-                        quantity: asset.value().clone(),
-                    },
-                ))
-            } else {
-                None
+            if *asset.id().account() != acct {
+                return None;
             }
+            if let Some(expected) = asset_filter.as_ref() {
+                if asset.id() != expected {
+                    return None;
+                }
+            }
+            Some((
+                (),
+                AccountAssetListItem {
+                    asset_id: asset.id().to_string(),
+                    quantity: asset.value().clone(),
+                },
+            ))
         }),
         p.offset,
         Some(page_limit),
@@ -29544,12 +30212,14 @@ pub async fn handle_v1_explorer_assets(
     pagination: crate::explorer::ExplorerPaginationQuery,
     owned_by: Option<AccountId>,
     definition: Option<AssetDefinitionId>,
+    asset_id: Option<AssetId>,
 ) -> Result<AxResponse, Error> {
     let view = state.view();
     let page = crate::explorer::assets_page(
         view.world().assets_iter(),
         owned_by.as_ref(),
         definition.as_ref(),
+        asset_id.as_ref(),
         pagination.page,
         pagination.per_page,
     );
@@ -29639,6 +30309,7 @@ struct ExplorerTransactionFilters {
     authority: Option<AccountId>,
     status: Option<ExplorerTransactionStatusFilter>,
     block: Option<u64>,
+    asset_id: Option<iroha_data_model::asset::AssetId>,
 }
 
 #[cfg(feature = "app_api")]
@@ -29667,6 +30338,11 @@ impl ExplorerTransactionFilters {
                 _ => {}
             }
         }
+        if let Some(expected) = &self.asset_id {
+            if !executable_contains_asset_id(tx.instructions(), expected) {
+                return false;
+            }
+        }
         true
     }
 }
@@ -29678,6 +30354,7 @@ struct ExplorerInstructionFilters {
     status: Option<ExplorerTransactionStatusFilter>,
     block: Option<u64>,
     kind: Option<ExplorerInstructionKind>,
+    asset_id: Option<iroha_data_model::asset::AssetId>,
 }
 
 #[cfg(feature = "app_api")]
@@ -29827,6 +30504,7 @@ pub async fn handle_v1_explorer_transactions(
     authority: Option<AccountId>,
     block: Option<u64>,
     status: Option<ExplorerTransactionStatusFilter>,
+    asset_id: Option<iroha_data_model::asset::AssetId>,
 ) -> Result<AxResponse, Error> {
     let view = state.view();
     let max_height = view.height() as u64;
@@ -29850,6 +30528,7 @@ pub async fn handle_v1_explorer_transactions(
         authority,
         status,
         block,
+        asset_id,
     };
     let transactions =
         collect_transaction_summaries(view.kura(), max_height, &filters, address_format)?;
@@ -29870,6 +30549,7 @@ pub struct ExplorerInstructionQuery {
     pub status: Option<ExplorerTransactionStatusFilter>,
     pub block: Option<u64>,
     pub kind: Option<ExplorerInstructionKind>,
+    pub asset_id: Option<iroha_data_model::asset::AssetId>,
 }
 
 #[cfg(feature = "app_api")]
@@ -29889,6 +30569,7 @@ pub async fn handle_v1_explorer_instructions(
         status,
         block,
         kind,
+        asset_id,
     } = query;
     if let Some(block_height) = block {
         if block_height > max_height {
@@ -29910,6 +30591,7 @@ pub async fn handle_v1_explorer_instructions(
         status,
         block,
         kind,
+        asset_id,
     };
     let instructions =
         collect_instruction_history(view.kura(), max_height, &filters, address_format)?;
@@ -30042,6 +30724,11 @@ fn collect_instruction_history(
                 let kind = crate::explorer::instruction_kind(instruction);
                 if !filters.matches_instruction(kind) {
                     continue;
+                }
+                if let Some(expected) = filters.asset_id.as_ref() {
+                    if !instruction_matches_asset_id(instruction, expected) {
+                        continue;
+                    }
                 }
                 let index = u32::try_from(idx).unwrap_or(u32::MAX);
                 out.push(crate::explorer::instruction_dto_with_kind(
@@ -30861,6 +31548,7 @@ struct AllowanceDeadlineSummary {
 #[derive(Clone, Debug, Default)]
 struct OfflineAllowanceQueryFilters {
     controller_id: Option<String>,
+    asset_id: Option<AssetId>,
     certificate_expires_before_ms: Option<u64>,
     certificate_expires_after_ms: Option<u64>,
     policy_expires_before_ms: Option<u64>,
@@ -30900,6 +31588,14 @@ impl OfflineAllowanceQueryFilters {
             telemetry,
             context,
         )?;
+        let asset_id = params
+            .asset_id
+            .as_deref()
+            .map(|raw| {
+                raw.parse::<AssetId>()
+                    .map_err(|_| Self::conversion_error("asset_id must be a valid asset id"))
+            })
+            .transpose()?;
         Self::validate_window(
             params.certificate_expires_after_ms,
             params.certificate_expires_before_ms,
@@ -30927,6 +31623,7 @@ impl OfflineAllowanceQueryFilters {
         };
         Ok(Self {
             controller_id,
+            asset_id,
             certificate_expires_before_ms: params.certificate_expires_before_ms,
             certificate_expires_after_ms: params.certificate_expires_after_ms,
             policy_expires_before_ms: params.policy_expires_before_ms,
@@ -30950,6 +31647,11 @@ impl OfflineAllowanceQueryFilters {
     fn matches(&self, record: &OfflineAllowanceRecord) -> bool {
         if let Some(expected) = &self.controller_id {
             if record.certificate.controller.to_string() != *expected {
+                return false;
+            }
+        }
+        if let Some(expected) = &self.asset_id {
+            if &record.certificate.allowance.asset != expected {
                 return false;
             }
         }
@@ -31061,6 +31763,7 @@ struct OfflineTransferQueryFilters {
     controller_id: Option<String>,
     receiver_id: Option<String>,
     deposit_account_id: Option<String>,
+    asset_id: Option<AssetId>,
     certificate_expires_before_ms: Option<u64>,
     certificate_expires_after_ms: Option<u64>,
     policy_expires_before_ms: Option<u64>,
@@ -31111,6 +31814,14 @@ impl OfflineTransferQueryFilters {
             telemetry,
             context,
         )?;
+        let asset_id = params
+            .asset_id
+            .as_deref()
+            .map(|raw| {
+                raw.parse::<AssetId>()
+                    .map_err(|_| Self::conversion_error("asset_id must be a valid asset id"))
+            })
+            .transpose()?;
         Self::validate_window(
             params.certificate_expires_after_ms,
             params.certificate_expires_before_ms,
@@ -31159,6 +31870,7 @@ impl OfflineTransferQueryFilters {
             controller_id,
             receiver_id,
             deposit_account_id,
+            asset_id,
             certificate_expires_before_ms: params.certificate_expires_before_ms,
             certificate_expires_after_ms: params.certificate_expires_after_ms,
             policy_expires_before_ms: params.policy_expires_before_ms,
@@ -31195,6 +31907,11 @@ impl OfflineTransferQueryFilters {
         }
         if let Some(expected) = &self.deposit_account_id {
             if record.transfer.deposit_account.to_string() != *expected {
+                return false;
+            }
+        }
+        if let Some(expected) = &self.asset_id {
+            if &record.transfer.balance_proof.initial_commitment.asset != expected {
                 return false;
             }
         }
@@ -38248,6 +38965,51 @@ mod adapter_filter_tests {
 
     #[cfg(feature = "app_api")]
     #[test]
+    fn asset_holder_filter_adapter_accepts_asset_id_eq() {
+        use iroha_test_samples::ALICE_ID;
+
+        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_id = AssetId::new(asset_def, ALICE_ID.clone());
+        let expr = FilterExpr::Eq(
+            FieldPath("asset_id".into()),
+            Value::from(asset_id.to_string()),
+        );
+        validate_holders_filter_adapter(&expr).unwrap();
+
+        let bad = FilterExpr::Eq(FieldPath("asset_id".into()), Value::from("not-an-asset"));
+        assert!(validate_holders_filter_adapter(&bad).is_err());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn asset_holder_filter_matches_asset_id() {
+        use iroha_test_samples::ALICE_ID;
+
+        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_id = AssetId::new(asset_def.clone(), ALICE_ID.clone());
+        let item = AssetHolderListItem {
+            account_id: ALICE_ID.clone(),
+            canonical_id: ALICE_ID.to_string(),
+            asset_id: asset_id.to_string(),
+            quantity: Numeric::from(10_u32),
+        };
+        let expr = FilterExpr::Eq(
+            FieldPath("asset_id".into()),
+            Value::from(asset_id.to_string()),
+        );
+        assert!(filter_asset_holder_item(&expr, &item));
+
+        let other_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
+        let other_asset_id = AssetId::new(other_def, ALICE_ID.clone());
+        let expr2 = FilterExpr::Eq(
+            FieldPath("asset_id".into()),
+            Value::from(other_asset_id.to_string()),
+        );
+        assert!(!filter_asset_holder_item(&expr2, &item));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
     fn offline_allowance_filter_validator_rejects_numeric_controller() {
         let expr = FilterExpr::Eq(FieldPath("controller_id".into()), Value::from(42));
         assert!(validate_offline_allowances_filter_adapter(&expr).is_err());
@@ -38492,6 +39254,35 @@ mod adapter_filter_tests {
         )
         .expect("filters");
         assert!(filters.matches(&record));
+
+        let asset_id = record.certificate.allowance.asset.to_string();
+        let params = OfflineAllowanceListParams {
+            asset_id: Some(asset_id),
+            ..Default::default()
+        };
+        let filters = OfflineAllowanceQueryFilters::from_params(
+            &params,
+            1_720_000_000_000,
+            &telemetry,
+            ENDPOINT_OFFLINE_ALLOWANCES_LIST,
+        )
+        .expect("filters");
+        assert!(filters.matches(&record));
+
+        let other_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
+        let other_asset_id = AssetId::new(other_def, record.certificate.controller.clone());
+        let params = OfflineAllowanceListParams {
+            asset_id: Some(other_asset_id.to_string()),
+            ..Default::default()
+        };
+        let filters = OfflineAllowanceQueryFilters::from_params(
+            &params,
+            1_720_000_000_000,
+            &telemetry,
+            ENDPOINT_OFFLINE_ALLOWANCES_LIST,
+        )
+        .expect("filters");
+        assert!(!filters.matches(&record));
 
         let params = OfflineAllowanceListParams {
             certificate_expires_before_ms: Some(1_000),
@@ -38840,6 +39631,45 @@ mod adapter_filter_tests {
 
         let params = OfflineTransferListParams {
             certificate_expires_before_ms: Some(1_000),
+            ..Default::default()
+        };
+        let filters = OfflineTransferQueryFilters::from_params(
+            &params,
+            &telemetry,
+            ENDPOINT_OFFLINE_TRANSFERS_LIST,
+        )
+        .expect("filters");
+        assert!(!filters.matches(&record));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn offline_transfer_query_filters_match_asset_id() {
+        let record = sample_transfer_record();
+        let telemetry = MaybeTelemetry::for_tests();
+        let asset_id = record
+            .transfer
+            .balance_proof
+            .initial_commitment
+            .asset
+            .to_string();
+
+        let params = OfflineTransferListParams {
+            asset_id: Some(asset_id),
+            ..Default::default()
+        };
+        let filters = OfflineTransferQueryFilters::from_params(
+            &params,
+            &telemetry,
+            ENDPOINT_OFFLINE_TRANSFERS_LIST,
+        )
+        .expect("filters");
+        assert!(filters.matches(&record));
+
+        let other_def: AssetDefinitionId = "lily#wonderland".parse().unwrap();
+        let other_asset = AssetId::new(other_def, record.controller.clone());
+        let params = OfflineTransferListParams {
+            asset_id: Some(other_asset.to_string()),
             ..Default::default()
         };
         let filters = OfflineTransferQueryFilters::from_params(
@@ -39330,7 +40160,9 @@ fn validate_asset_filter_adapter(expr: &FilterExpr) -> Result<()> {
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct AssetHolderListItem {
+    account_id: iroha_data_model::account::AccountId,
     canonical_id: String,
+    asset_id: String,
     quantity: iroha_primitives::numeric::Numeric,
 }
 
@@ -39406,6 +40238,7 @@ fn filter_asset_holder_item(expr: &crate::filter::FilterExpr, item: &AssetHolder
         F::Not(inner) => !filter_asset_holder_item(inner, item),
         F::Eq(f, v) => match f.0.as_str() {
             "account_id" => v.as_str().map(|s| s == item.canonical_id).unwrap_or(false),
+            "asset_id" => v.as_str().map(|s| s == item.asset_id).unwrap_or(false),
             "quantity" => v
                 .as_u64()
                 .map(|n| item.quantity == n.into())
@@ -39414,6 +40247,7 @@ fn filter_asset_holder_item(expr: &crate::filter::FilterExpr, item: &AssetHolder
         },
         F::Ne(f, v) => match f.0.as_str() {
             "account_id" => v.as_str().map(|s| s != item.canonical_id).unwrap_or(false),
+            "asset_id" => v.as_str().map(|s| s != item.asset_id).unwrap_or(false),
             "quantity" => v
                 .as_u64()
                 .map(|n| item.quantity != n.into())
@@ -39441,6 +40275,10 @@ fn filter_asset_holder_item(expr: &crate::filter::FilterExpr, item: &AssetHolder
                 .iter()
                 .filter_map(|v| v.as_str())
                 .any(|s| s == item.canonical_id),
+            "asset_id" => list
+                .iter()
+                .filter_map(|v| v.as_str())
+                .any(|s| s == item.asset_id),
             "quantity" => list
                 .iter()
                 .filter_map(norito::json::Value::as_u64)
@@ -39452,13 +40290,17 @@ fn filter_asset_holder_item(expr: &crate::filter::FilterExpr, item: &AssetHolder
                 .iter()
                 .filter_map(|v| v.as_str())
                 .all(|s| s != item.canonical_id),
+            "asset_id" => list
+                .iter()
+                .filter_map(|v| v.as_str())
+                .all(|s| s != item.asset_id),
             "quantity" => list
                 .iter()
                 .filter_map(norito::json::Value::as_u64)
                 .all(|n| item.quantity != n.into()),
             _ => false,
         },
-        F::Exists(f) => matches!(f.0.as_str(), "account_id" | "quantity"),
+        F::Exists(f) => matches!(f.0.as_str(), "account_id" | "asset_id" | "quantity"),
         F::IsNull(_) => false,
     }
 }
@@ -39475,7 +40317,8 @@ pub async fn handle_v1_asset_holders(
 
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::{
-        asset::id::AssetDefinitionId,
+        account::AccountId,
+        asset::{AssetId, id::AssetDefinitionId},
         query::{asset::prelude::FindAssets, dsl::CompoundPredicate},
     };
 
@@ -39483,15 +40326,28 @@ pub async fn handle_v1_asset_holders(
     let def_id: AssetDefinitionId = definition_id
         .parse()
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    let asset_filter = p
+        .asset_id
+        .as_deref()
+        .map(|raw| {
+            raw.parse::<AssetId>()
+                .map_err(|_| conversion_error("asset_id must be a valid asset id".to_owned()))
+        })
+        .transpose()?;
 
     let iter = ValidQuery::execute(FindAssets, CompoundPredicate::PASS, &state_view)
         .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
 
     // Aggregate balances per account
-    let mut map: BTreeMap<String, iroha_primitives::numeric::Numeric> = BTreeMap::new();
+    let mut map: BTreeMap<AccountId, iroha_primitives::numeric::Numeric> = BTreeMap::new();
     for asset in iter {
         if *asset.id().definition() == def_id {
-            let acct = asset.id().account().to_string();
+            if let Some(expected) = asset_filter.as_ref() {
+                if asset.id() != expected {
+                    continue;
+                }
+            }
+            let acct = asset.id().account().clone();
             let entry = map
                 .entry(acct)
                 .or_insert_with(iroha_primitives::numeric::Numeric::zero);
@@ -39510,12 +40366,16 @@ pub async fn handle_v1_asset_holders(
         .map(|cap| cap.min(pagination.cap));
 
     let (items_vec, total) = collect_page_streaming(
-        map.into_iter().map(|(k, v)| {
+        map.into_iter().map(|(account_id, quantity)| {
+            let canonical_id = account_id.to_string();
+            let asset_id = AssetId::new(def_id.clone(), account_id.clone()).to_string();
             (
-                k.clone(),
+                canonical_id.clone(),
                 AssetHolderListItem {
-                    canonical_id: k,
-                    quantity: v,
+                    account_id,
+                    canonical_id,
+                    asset_id,
+                    quantity,
                 },
             )
         }),
@@ -39527,7 +40387,7 @@ pub async fn handle_v1_asset_holders(
     let mut arr = Vec::with_capacity(items_vec.len());
     for it in &items_vec {
         let mut m = norito::json::Map::new();
-        let display = address_format.display_from_literal(&it.canonical_id);
+        let display = address_format.display_literal(&it.account_id);
         m.insert("account_id".into(), norito::json::Value::from(display));
         m.insert(
             "quantity".into(),
@@ -39551,7 +40411,8 @@ pub async fn handle_v1_asset_holders(
     Ok(resp)
 }
 
-/// POST /v1/assets/{definition_id}/holders/query — JSON envelope with pagination/sort
+/// POST /v1/assets/{definition_id}/holders/query — JSON envelope with pagination/sort.
+/// Supports filter fields: `account_id`, `asset_id`, and `quantity`.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_asset_holders_query(
@@ -39564,7 +40425,8 @@ pub async fn handle_v1_asset_holders_query(
 
     use iroha_core::smartcontracts::ValidQuery;
     use iroha_data_model::{
-        asset::id::AssetDefinitionId,
+        account::AccountId,
+        asset::{AssetId, id::AssetDefinitionId},
         query::{asset::prelude::FindAssets, dsl::CompoundPredicate},
     };
 
@@ -39576,10 +40438,10 @@ pub async fn handle_v1_asset_holders_query(
     let iter = ValidQuery::execute(FindAssets, CompoundPredicate::PASS, &state_view)
         .map_err(|e| Error::Query(iroha_data_model::ValidationFail::QueryFailed(e)))?;
 
-    let mut map: BTreeMap<String, iroha_primitives::numeric::Numeric> = BTreeMap::new();
+    let mut map: BTreeMap<AccountId, iroha_primitives::numeric::Numeric> = BTreeMap::new();
     for asset in iter {
         if *asset.id().definition() == def_id {
-            let acct = asset.id().account().to_string();
+            let acct = asset.id().account().clone();
             let entry = map
                 .entry(acct)
                 .or_insert_with(iroha_primitives::numeric::Numeric::zero);
@@ -39640,9 +40502,14 @@ pub async fn handle_v1_asset_holders_query(
     let mapped_iter = map.into_iter().filter_map({
         let filter_ref = filter_ref;
         let selectors = selectors;
+        let def_id = def_id.clone();
         move |(account_id, quantity)| {
+            let canonical_id = account_id.to_string();
+            let asset_id = AssetId::new(def_id.clone(), account_id.clone()).to_string();
             let projected = AssetHolderListItem {
-                canonical_id: account_id,
+                account_id,
+                canonical_id,
+                asset_id,
                 quantity,
             };
             if let Some(expr) = filter_ref {
@@ -39659,7 +40526,7 @@ pub async fn handle_v1_asset_holders_query(
     // Norito JSON response
     let mut arr = Vec::with_capacity(items.len());
     for it in &items {
-        let display = address_format.display_from_literal(&it.canonical_id);
+        let display = address_format.display_literal(&it.account_id);
         let mut m = norito::json::Map::new();
         m.insert("account_id".into(), norito::json::Value::from(display));
         m.insert(
@@ -39700,6 +40567,11 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
                 .is_string()
                 .then_some(())
                 .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
+            "asset_id" => v
+                .as_str()
+                .and_then(|s| s.parse::<iroha_data_model::asset::AssetId>().ok())
+                .map(|_| ())
+                .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
             "quantity" => v
                 .is_number()
                 .then_some(())
@@ -39719,6 +40591,15 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
                 .all(norito::json::Value::is_string)
                 .then_some(())
                 .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
+            "asset_id" => list
+                .iter()
+                .all(|v| {
+                    v.as_str()
+                        .and_then(|s| s.parse::<iroha_data_model::asset::AssetId>().ok())
+                        .is_some()
+                })
+                .then_some(())
+                .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
             "quantity" => list
                 .iter()
                 .all(norito::json::Value::is_number)
@@ -39727,7 +40608,7 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
             _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
         },
         F::Exists(f) | F::IsNull(f) => match f.0.as_str() {
-            "account_id" | "quantity" => Ok(()),
+            "account_id" | "asset_id" | "quantity" => Ok(()),
             _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
         },
     }

@@ -9,12 +9,14 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceCommitment;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceList;
+import org.hyperledger.iroha.android.offline.OfflineAllowanceRegisterResponse;
 import org.hyperledger.iroha.android.offline.OfflineCertificateIssueResponse;
 import org.hyperledger.iroha.android.offline.OfflineListParams;
 import org.hyperledger.iroha.android.offline.OfflineProofRequestKind;
 import org.hyperledger.iroha.android.offline.OfflineProofRequestParams;
 import org.hyperledger.iroha.android.offline.OfflineProofRequestResult;
 import org.hyperledger.iroha.android.offline.OfflineQueryEnvelope;
+import org.hyperledger.iroha.android.offline.OfflineTopUpResponse;
 import org.hyperledger.iroha.android.offline.OfflineToriiException;
 import org.hyperledger.iroha.android.offline.OfflineWalletCertificate;
 import org.hyperledger.iroha.android.offline.OfflineWalletCertificateDraft;
@@ -37,6 +39,9 @@ public final class OfflineToriiClientTests {
     issueCertificatePostsDraft();
     issueCertificateRenewalUsesPath();
     registerAllowancePostsCertificate();
+    registerAllowanceParsesResponse();
+    topUpAllowanceChainsIssueAndRegister();
+    topUpAllowanceRenewalChainsIssueAndRegister();
     System.out.println("[IrohaAndroid] OfflineToriiClientTests passed.");
   }
 
@@ -78,6 +83,7 @@ public final class OfflineToriiClientTests {
                 OfflineListParams.builder()
                     .limit(5L)
                     .offset(10L)
+                    .assetId("usd##alice@wonderland")
                     .certificateExpiresBeforeMs(1_000L)
                     .certificateExpiresAfterMs(500L)
                     .policyExpiresBeforeMs(2_000L)
@@ -99,6 +105,7 @@ public final class OfflineToriiClientTests {
         .contains("limit=5") : "limit query missing";
     final String query = executor.lastRequest.uri().getQuery();
     assert query.contains("offset=10") : "offset query missing";
+    assert query.contains("asset_id=usd%23%23alice@wonderland") : "asset_id missing";
     assert query.contains("certificate_expires_before_ms=1000")
         : "certificate_expires_before_ms missing";
     assert query.contains("certificate_expires_after_ms=500")
@@ -397,6 +404,169 @@ public final class OfflineToriiClientTests {
         : "attestation nonce not normalized in body";
   }
 
+  private static void registerAllowanceParsesResponse() {
+    final StubExecutor executor =
+        new StubExecutor(
+            200,
+            """
+            {
+              "certificate_id_hex": "cafebabe"
+            }
+            """);
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    final OfflineAllowanceCommitment allowance =
+        new OfflineAllowanceCommitment("usd#wonderland", "10", new byte[] {1, 2});
+    final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
+    final OfflineWalletCertificate certificate =
+        new OfflineWalletCertificate(
+            "alice@wonderland",
+            allowance,
+            "ed0120deadbeef",
+            new byte[] {3, 4},
+            100L,
+            200L,
+            policy,
+            "AA",
+            Map.of(),
+            null,
+            null,
+            null);
+    final OfflineAllowanceRegisterResponse response =
+        client.registerAllowanceDetailed(certificate, "treasury@wonderland", "deadbeef").join();
+    assert "cafebabe".equals(response.certificateIdHex()) : "register response id mismatch";
+  }
+
+  private static void topUpAllowanceChainsIssueAndRegister() {
+    final SequencedExecutor executor =
+        new SequencedExecutor(
+            List.of(
+                new StubResponse(
+                    200,
+                    """
+                    {
+                      "certificate_id_hex": "deadbeef",
+                      "certificate": {
+                        "controller": "alice@wonderland",
+                        "allowance": { "asset": "usd#wonderland", "amount": "10", "commitment": [1, 2] },
+                        "spend_public_key": "ed0120deadbeef",
+                        "attestation_report": [3, 4],
+                        "issued_at_ms": 100,
+                        "expires_at_ms": 200,
+                        "policy": { "max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200 },
+                        "operator_signature": "AA",
+                        "metadata": {},
+                        "verdict_id": null,
+                        "attestation_nonce": null,
+                        "refresh_at_ms": null
+                      }
+                    }
+                    """),
+                new StubResponse(
+                    200,
+                    """
+                    {
+                      "certificate_id_hex": "deadbeef"
+                    }
+                    """)));
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    final OfflineAllowanceCommitment allowance =
+        new OfflineAllowanceCommitment("usd#wonderland", "10", new byte[] {1, 2});
+    final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
+    final OfflineWalletCertificateDraft draft =
+        new OfflineWalletCertificateDraft(
+            "alice@wonderland",
+            allowance,
+            "ed0120deadbeef",
+            new byte[] {3, 4},
+            100L,
+            200L,
+            policy,
+            null,
+            null,
+            null,
+            null);
+    final OfflineTopUpResponse response =
+        client.topUpAllowance(draft, "treasury@wonderland", "deadbeef").join();
+    assert response.certificate().certificateIdHex().equals("deadbeef") : "issue id mismatch";
+    assert response.registration().certificateIdHex().equals("deadbeef") : "register id mismatch";
+    assert executor.requests.size() == 2 : "expected two requests";
+    assert executor.requests.get(0).uri().getPath().endsWith("/v1/offline/certificates/issue")
+        : "issue path mismatch";
+    assert executor.requests.get(1).uri().getPath().endsWith("/v1/offline/allowances")
+        : "register path mismatch";
+    assert executor.bodies.get(1).contains("\"private_key\":\"deadbeef\"")
+        : "private key missing in register body";
+  }
+
+  private static void topUpAllowanceRenewalChainsIssueAndRegister() {
+    final SequencedExecutor executor =
+        new SequencedExecutor(
+            List.of(
+                new StubResponse(
+                    200,
+                    """
+                    {
+                      "certificate_id_hex": "beadfeed",
+                      "certificate": {
+                        "controller": "alice@wonderland",
+                        "allowance": { "asset": "usd#wonderland", "amount": "10", "commitment": [1, 2] },
+                        "spend_public_key": "ed0120deadbeef",
+                        "attestation_report": [3, 4],
+                        "issued_at_ms": 100,
+                        "expires_at_ms": 200,
+                        "policy": { "max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200 },
+                        "operator_signature": "AA",
+                        "metadata": {},
+                        "verdict_id": null,
+                        "attestation_nonce": null,
+                        "refresh_at_ms": null
+                      }
+                    }
+                    """),
+                new StubResponse(
+                    200,
+                    """
+                    {
+                      "certificate_id_hex": "beadfeed"
+                    }
+                    """)));
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .build();
+    final OfflineAllowanceCommitment allowance =
+        new OfflineAllowanceCommitment("usd#wonderland", "10", new byte[] {1, 2});
+    final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
+    final OfflineWalletCertificateDraft draft =
+        new OfflineWalletCertificateDraft(
+            "alice@wonderland",
+            allowance,
+            "ed0120deadbeef",
+            new byte[] {3, 4},
+            100L,
+            200L,
+            policy,
+            null,
+            null,
+            null,
+            null);
+    client.topUpAllowanceRenewal("deadbeef", draft, "treasury@wonderland", "deadbeef").join();
+    assert executor.requests.size() == 2 : "expected two requests";
+    assert executor.requests.get(0).uri().getPath().endsWith("/v1/offline/certificates/deadbeef/renew/issue")
+        : "renew issue path mismatch";
+    assert executor.requests.get(1).uri().getPath().endsWith("/v1/offline/allowances/deadbeef/renew")
+        : "renew register path mismatch";
+  }
+
   private static final class StubExecutor implements HttpTransportExecutor {
     private final int status;
     private final byte[] body;
@@ -413,6 +583,41 @@ public final class OfflineToriiClientTests {
       this.lastRequest = request;
       this.lastBody = new String(request.body(), StandardCharsets.UTF_8);
       return CompletableFuture.completedFuture(new TransportResponse(status, body, "", java.util.Map.of()));
+    }
+  }
+
+  private static final class StubResponse {
+    private final int status;
+    private final byte[] body;
+
+    private StubResponse(final int status, final String body) {
+      this.status = status;
+      this.body = body.getBytes(StandardCharsets.UTF_8);
+    }
+  }
+
+  private static final class SequencedExecutor implements HttpTransportExecutor {
+    private final List<StubResponse> queue;
+    private final java.util.List<TransportRequest> requests = new java.util.ArrayList<>();
+    private final java.util.List<String> bodies = new java.util.ArrayList<>();
+
+    private SequencedExecutor(final List<StubResponse> responses) {
+      this.queue = new java.util.ArrayList<>(responses);
+    }
+
+    @Override
+    public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+      this.requests.add(request);
+      this.bodies.add(new String(request.body(), StandardCharsets.UTF_8));
+      if (queue.isEmpty()) {
+        final TransportResponse response =
+            new TransportResponse(500, "{}".getBytes(StandardCharsets.UTF_8), "", java.util.Map.of());
+        return CompletableFuture.completedFuture(response);
+      }
+      final StubResponse next = queue.remove(0);
+      final TransportResponse response =
+          new TransportResponse(next.status, next.body, "", java.util.Map.of());
+      return CompletableFuture.completedFuture(response);
     }
   }
 

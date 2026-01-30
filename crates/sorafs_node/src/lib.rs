@@ -128,7 +128,8 @@ enum GcEvictionPolicy {
     LruExpired,
 }
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet, hash_map::Entry},
+    fs,
     io::Read,
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
@@ -226,6 +227,14 @@ fn repair_task_terminal(task: &RepairTaskRecordV1) -> bool {
     )
 }
 
+#[derive(Debug, Default)]
+struct RepairRehydrateOutcome {
+    missing_before: usize,
+    missing_after: usize,
+    rehydrated: usize,
+    errors: usize,
+}
+
 fn reconciliation_divergence_count(storage: &StorageBackend, manifests: &[StoredManifest]) -> u32 {
     let mut divergence_count = 0_u32;
     let manifest_count = storage.manifest_count();
@@ -317,6 +326,46 @@ impl GovernancePublishError {
     }
 }
 
+/// Payload returned by a repair orchestrator for a missing chunk.
+#[derive(Debug, Clone)]
+pub struct RepairChunkPayload {
+    /// Expected BLAKE3-256 digest of the chunk.
+    pub digest: [u8; 32],
+    /// Raw chunk bytes.
+    pub bytes: Vec<u8>,
+    /// Optional source label (provider id, URL, or orchestrator hint).
+    pub source: Option<String>,
+}
+
+/// Errors surfaced when the repair orchestrator cannot fetch missing chunks.
+#[derive(Debug, Error)]
+pub enum RepairOrchestratorError {
+    /// Generic failure with human-readable context.
+    #[error("{0}")]
+    Other(String),
+}
+
+impl RepairOrchestratorError {
+    /// Construct a generic orchestrator failure.
+    #[must_use]
+    pub fn other(message: impl Into<String>) -> Self {
+        Self::Other(message.into())
+    }
+}
+
+/// Interface for orchestrator-backed repair rehydration.
+pub trait RepairOrchestrator: Send + Sync + std::fmt::Debug {
+    /// Fetch missing chunks from remote sources for the supplied repair task.
+    ///
+    /// Implementations must return payloads whose digests match `missing_chunks`.
+    fn rehydrate_missing_chunks(
+        &self,
+        task: &RepairTaskRecordV1,
+        manifest: &StoredManifest,
+        missing_chunks: &[ChunkFileRecord],
+    ) -> Result<Vec<RepairChunkPayload>, RepairOrchestratorError>;
+}
+
 /// Lightweight handle representing the embedded SoraFS storage worker.
 #[derive(Debug, Clone)]
 pub struct NodeHandle {
@@ -333,6 +382,7 @@ pub struct NodeHandle {
     storage: Option<Arc<StorageBackend>>,
     deal_engine: DealEngine,
     repair: RepairManager,
+    repair_orchestrator: Arc<RwLock<Option<Arc<dyn RepairOrchestrator>>>>,
     governance_publisher: Arc<RwLock<Option<Arc<dyn GovernancePublisher>>>>,
 }
 
@@ -428,6 +478,7 @@ impl NodeHandle {
             storage,
             deal_engine,
             repair,
+            repair_orchestrator: Arc::new(RwLock::new(None)),
             governance_publisher: Arc::new(RwLock::new(None)),
         };
 
@@ -514,6 +565,27 @@ impl NodeHandle {
         report: DealUsageReport,
     ) -> Result<UsageOutcome, DealEngineError> {
         self.deal_engine.record_usage(report)
+    }
+
+    /// Register a repair orchestrator used to rehydrate missing chunks remotely.
+    pub fn set_repair_orchestrator(&self, orchestrator: Arc<dyn RepairOrchestrator>) {
+        if let Ok(mut guard) = self.repair_orchestrator.write() {
+            *guard = Some(orchestrator);
+        }
+    }
+
+    /// Remove any configured repair orchestrator.
+    pub fn clear_repair_orchestrator(&self) {
+        if let Ok(mut guard) = self.repair_orchestrator.write() {
+            *guard = None;
+        }
+    }
+
+    fn repair_orchestrator(&self) -> Option<Arc<dyn RepairOrchestrator>> {
+        self.repair_orchestrator
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone())
     }
 
     /// Register the governance publisher used to surface settlement artefacts.
@@ -887,6 +959,260 @@ impl NodeHandle {
         Ok(report)
     }
 
+    fn missing_chunk_records(manifest: &StoredManifest) -> Vec<ChunkFileRecord> {
+        let total = manifest.chunk_count();
+        let mut missing = Vec::new();
+        for idx in 0..total {
+            let Some(chunk) = manifest.chunk(idx) else {
+                continue;
+            };
+            if !chunk.path.exists() {
+                missing.push(chunk.clone());
+            }
+        }
+        missing
+    }
+
+    fn rehydrate_missing_chunks_from_local_replicas(
+        &self,
+        storage: &StorageBackend,
+        missing_chunks: &[ChunkFileRecord],
+    ) -> RepairRehydrateOutcome {
+        let mut outcome = RepairRehydrateOutcome {
+            missing_before: missing_chunks.len(),
+            ..RepairRehydrateOutcome::default()
+        };
+        if missing_chunks.is_empty() {
+            return outcome;
+        }
+
+        let missing_digests: HashSet<[u8; 32]> =
+            missing_chunks.iter().map(|chunk| chunk.digest).collect();
+        let root_dir = storage.root_dir();
+        let mut sources: HashMap<[u8; 32], (String, ChunkFileRecord)> = HashMap::new();
+
+        for manifest in storage.manifests() {
+            for idx in 0..manifest.chunk_count() {
+                let Some(chunk) = manifest.chunk(idx) else {
+                    continue;
+                };
+                if !missing_digests.contains(&chunk.digest) {
+                    continue;
+                }
+                if !chunk.path.exists() {
+                    continue;
+                }
+                let key = chunk
+                    .path
+                    .strip_prefix(root_dir)
+                    .unwrap_or(&chunk.path)
+                    .to_string_lossy()
+                    .to_string();
+                match sources.entry(chunk.digest) {
+                    Entry::Vacant(entry) => {
+                        entry.insert((key, chunk.clone()));
+                    }
+                    Entry::Occupied(mut entry) => {
+                        if key < entry.get().0 {
+                            entry.insert((key, chunk.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        for chunk in missing_chunks {
+            if chunk.path.exists() {
+                continue;
+            }
+            let Some((_, source)) = sources.get(&chunk.digest) else {
+                continue;
+            };
+            if source.length != chunk.length {
+                outcome.errors = outcome.errors.saturating_add(1);
+                iroha_logger::warn!(
+                    digest = %hex::encode(chunk.digest),
+                    expected = chunk.length,
+                    actual = source.length,
+                    "rehydration source length mismatch"
+                );
+                continue;
+            }
+            let bytes = match fs::read(&source.path) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    outcome.errors = outcome.errors.saturating_add(1);
+                    iroha_logger::warn!(
+                        %err,
+                        digest = %hex::encode(chunk.digest),
+                        path = %source.path.display(),
+                        "failed to read rehydration source chunk"
+                    );
+                    continue;
+                }
+            };
+            if bytes.len() != chunk.length as usize {
+                outcome.errors = outcome.errors.saturating_add(1);
+                iroha_logger::warn!(
+                    digest = %hex::encode(chunk.digest),
+                    expected = chunk.length,
+                    actual = bytes.len(),
+                    path = %source.path.display(),
+                    "rehydration source length mismatch"
+                );
+                continue;
+            }
+            let digest = blake3::hash(&bytes);
+            if digest.as_bytes() != &chunk.digest {
+                outcome.errors = outcome.errors.saturating_add(1);
+                iroha_logger::warn!(
+                    digest = %hex::encode(chunk.digest),
+                    actual = %digest.to_hex(),
+                    path = %source.path.display(),
+                    "rehydration source digest mismatch"
+                );
+                continue;
+            }
+            if let Err(err) = crate::store::write_atomic(&chunk.path, &bytes) {
+                outcome.errors = outcome.errors.saturating_add(1);
+                iroha_logger::warn!(
+                    %err,
+                    digest = %hex::encode(chunk.digest),
+                    path = %chunk.path.display(),
+                    "failed to write rehydrated chunk"
+                );
+                continue;
+            }
+            outcome.rehydrated = outcome.rehydrated.saturating_add(1);
+        }
+
+        outcome.missing_after = missing_chunks
+            .iter()
+            .filter(|chunk| !chunk.path.exists())
+            .count();
+        outcome
+    }
+
+    fn rehydrate_missing_chunks_from_orchestrator(
+        &self,
+        task: &RepairTaskRecordV1,
+        manifest: &StoredManifest,
+        missing_chunks: &[ChunkFileRecord],
+    ) -> RepairRehydrateOutcome {
+        let remaining = missing_chunks
+            .iter()
+            .filter(|chunk| !chunk.path.exists())
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut outcome = RepairRehydrateOutcome {
+            missing_before: remaining.len(),
+            ..RepairRehydrateOutcome::default()
+        };
+        if remaining.is_empty() {
+            return outcome;
+        }
+
+        let Some(orchestrator) = self.repair_orchestrator() else {
+            outcome.missing_after = outcome.missing_before;
+            return outcome;
+        };
+
+        let payloads = match orchestrator.rehydrate_missing_chunks(task, manifest, &remaining) {
+            Ok(payloads) => payloads,
+            Err(err) => {
+                outcome.errors = outcome.errors.saturating_add(1);
+                iroha_logger::warn!(
+                    %err,
+                    ticket = %task.ticket_id,
+                    manifest = %hex::encode(task.manifest_digest),
+                    provider = %hex::encode(task.provider_id),
+                    "repair orchestrator rehydration failed"
+                );
+                outcome.missing_after = outcome.missing_before;
+                return outcome;
+            }
+        };
+
+        let mut missing_by_digest: HashMap<[u8; 32], Vec<&ChunkFileRecord>> = HashMap::new();
+        for chunk in &remaining {
+            missing_by_digest
+                .entry(chunk.digest)
+                .or_default()
+                .push(chunk);
+        }
+
+        for payload in payloads {
+            let source = payload.source.as_deref();
+            let payload_len = match u32::try_from(payload.bytes.len()) {
+                Ok(length) => length,
+                Err(_) => {
+                    outcome.errors = outcome.errors.saturating_add(1);
+                    iroha_logger::warn!(
+                        digest = %hex::encode(payload.digest),
+                        actual = payload.bytes.len(),
+                        source,
+                        "orchestrator chunk length exceeds supported size"
+                    );
+                    continue;
+                }
+            };
+            let digest = blake3::hash(&payload.bytes);
+            if digest.as_bytes() != &payload.digest {
+                outcome.errors = outcome.errors.saturating_add(1);
+                iroha_logger::warn!(
+                    digest = %hex::encode(payload.digest),
+                    actual = %digest.to_hex(),
+                    source,
+                    "orchestrator chunk digest mismatch"
+                );
+                continue;
+            }
+            let Some(targets) = missing_by_digest.get(&payload.digest) else {
+                outcome.errors = outcome.errors.saturating_add(1);
+                iroha_logger::warn!(
+                    digest = %hex::encode(payload.digest),
+                    source,
+                    "orchestrator returned unexpected chunk digest"
+                );
+                continue;
+            };
+            for &chunk in targets {
+                if chunk.path.exists() {
+                    continue;
+                }
+                if payload_len != chunk.length {
+                    outcome.errors = outcome.errors.saturating_add(1);
+                    iroha_logger::warn!(
+                        digest = %hex::encode(chunk.digest),
+                        expected = chunk.length,
+                        actual = payload_len,
+                        source,
+                        "orchestrator chunk length mismatch"
+                    );
+                    continue;
+                }
+                if let Err(err) = crate::store::write_atomic(&chunk.path, &payload.bytes) {
+                    outcome.errors = outcome.errors.saturating_add(1);
+                    iroha_logger::warn!(
+                        %err,
+                        digest = %hex::encode(chunk.digest),
+                        path = %chunk.path.display(),
+                        source,
+                        "failed to write rehydrated chunk from orchestrator"
+                    );
+                    continue;
+                }
+                outcome.rehydrated = outcome.rehydrated.saturating_add(1);
+            }
+        }
+
+        outcome.missing_after = remaining
+            .iter()
+            .filter(|chunk| !chunk.path.exists())
+            .count();
+        outcome
+    }
+
     /// Run a single repair worker tick for the supplied worker identifier.
     pub fn run_repair_worker_once(&self, worker_id: &str, now_unix: u64) -> RepairWorkerReport {
         let mut report = RepairWorkerReport::default();
@@ -935,19 +1261,11 @@ impl NodeHandle {
             let manifest = storage.manifest_by_digest(&task.manifest_digest);
             let (update, stage) = match manifest {
                 Some(manifest) => {
-                    let (total, missing) = self.schedulers.with_pin(|| {
-                        let total = manifest.chunk_count();
-                        let missing = (0..total)
-                            .filter(|idx| {
-                                manifest
-                                    .chunk(*idx)
-                                    .map(|chunk| !chunk.path.exists())
-                                    .unwrap_or(true)
-                            })
-                            .count();
-                        (total, missing)
-                    });
-                    // TODO: integrate the orchestrator repair pipeline to rehydrate missing chunks.
+                    let total = manifest.chunk_count();
+                    let missing_chunks = self
+                        .schedulers
+                        .with_pin(|| Self::missing_chunk_records(&manifest));
+                    let missing = missing_chunks.len();
                     if missing == 0 {
                         let complete_key =
                             repair_idempotency_key("complete", worker_id, &ticket_id, now_unix);
@@ -976,27 +1294,100 @@ impl NodeHandle {
                             }
                         }
                     } else {
-                        let reason = format!("missing {missing} of {total} chunks");
-                        let fail_key =
-                            repair_idempotency_key("fail", worker_id, &ticket_id, now_unix);
-                        let update = self
-                            .repair
-                            .fail_ticket_with_event(
-                                &ticket_id, worker_id, now_unix, reason, &fail_key,
+                        let mut outcome = self.schedulers.with_pin(|| {
+                            self.rehydrate_missing_chunks_from_local_replicas(
+                                storage,
+                                &missing_chunks,
                             )
-                            .map_err(|err| {
-                                iroha_logger::warn!(
-                                    %err,
-                                    ticket = %ticket_id,
-                                    "repair failure update rejected"
+                        });
+                        if outcome.missing_after > 0 {
+                            let orchestrator_outcome = self
+                                .rehydrate_missing_chunks_from_orchestrator(
+                                    &task,
+                                    &manifest,
+                                    &missing_chunks,
                                 );
-                                err
-                            });
-                        match update {
-                            Ok(update) => (update, Some(RepairSlashStage::Drafted)),
-                            Err(_) => {
-                                report.record_error();
-                                break;
+                            outcome.rehydrated = outcome
+                                .rehydrated
+                                .saturating_add(orchestrator_outcome.rehydrated);
+                            outcome.errors =
+                                outcome.errors.saturating_add(orchestrator_outcome.errors);
+                            outcome.missing_after = orchestrator_outcome.missing_after;
+                        }
+                        if outcome.errors > 0 {
+                            iroha_logger::warn!(
+                                ticket = %ticket_id,
+                                missing_before = outcome.missing_before,
+                                missing_after = outcome.missing_after,
+                                errors = outcome.errors,
+                                "repair rehydration encountered errors"
+                            );
+                        }
+                        if outcome.missing_after == 0 {
+                            let mut resolution = if outcome.rehydrated > 0 {
+                                format!(
+                                    "rehydrated {} missing chunks from local replicas",
+                                    outcome.rehydrated
+                                )
+                            } else {
+                                "verified local chunks after rehydration attempt".to_string()
+                            };
+                            if outcome.errors > 0 {
+                                resolution
+                                    .push_str(&format!("; {} rehydration errors", outcome.errors));
+                            }
+                            let complete_key =
+                                repair_idempotency_key("complete", worker_id, &ticket_id, now_unix);
+                            let update = self
+                                .repair
+                                .complete_ticket_with_event(
+                                    &ticket_id,
+                                    worker_id,
+                                    now_unix,
+                                    Some(resolution),
+                                    &complete_key,
+                                )
+                                .map_err(|err| {
+                                    iroha_logger::warn!(
+                                        %err,
+                                        ticket = %ticket_id,
+                                        "repair completion failed"
+                                    );
+                                    err
+                                });
+                            match update {
+                                Ok(update) => (update, None),
+                                Err(_) => {
+                                    report.record_error();
+                                    break;
+                                }
+                            }
+                        } else {
+                            let reason = format!(
+                                "missing {} of {} chunks after rehydrating {}",
+                                outcome.missing_after, total, outcome.rehydrated
+                            );
+                            let fail_key =
+                                repair_idempotency_key("fail", worker_id, &ticket_id, now_unix);
+                            let update = self
+                                .repair
+                                .fail_ticket_with_event(
+                                    &ticket_id, worker_id, now_unix, reason, &fail_key,
+                                )
+                                .map_err(|err| {
+                                    iroha_logger::warn!(
+                                        %err,
+                                        ticket = %ticket_id,
+                                        "repair failure update rejected"
+                                    );
+                                    err
+                                });
+                            match update {
+                                Ok(update) => (update, Some(RepairSlashStage::Drafted)),
+                                Err(_) => {
+                                    report.record_error();
+                                    break;
+                                }
                             }
                         }
                     }
@@ -1505,7 +1896,7 @@ impl NodeHandle {
         let slash = self.evaluate_por_penalty(verdict, &stats, consecutive_failures);
         let repair_history_id = self
             .repair
-            .register_por_verdict(verdict, stats.failed_samples);
+            .register_por_verdict(verdict, stats.failed_samples)?;
         Ok(PorVerdictOutcome {
             stats,
             repair_history_id,
@@ -2051,7 +2442,10 @@ impl NodeHandle {
 mod tests {
     use std::{
         str::FromStr,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use iroha_data_model::{
@@ -3106,6 +3500,214 @@ mod tests {
                 .iter()
                 .any(|proposal| proposal.ticket_id == report_missing.ticket_id)
         );
+    }
+
+    #[test]
+    fn node_handle_repair_worker_rehydrates_missing_chunks_from_local_replicas() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let repair_actual = iroha_config::parameters::actual::SorafsRepair {
+            enabled: true,
+            max_attempts: 1,
+            ..Default::default()
+        };
+        let handle = NodeHandle::new_with_policies(
+            cfg,
+            RepairConfig::from(&repair_actual),
+            GcConfig::default(),
+        );
+
+        let payload = b"repair-worker-rehydrate";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let manifest_a = ManifestBuilder::new()
+            .root_cid(vec![0xA1; 16])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(plan.content_length)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("manifest");
+        let manifest_b = ManifestBuilder::new()
+            .root_cid(vec![0xB2; 16])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(plan.content_length)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("manifest");
+
+        let mut reader = payload.as_slice();
+        handle
+            .ingest_manifest(&manifest_a, &plan, &mut reader)
+            .expect("ingest manifest a");
+        let mut reader = payload.as_slice();
+        handle
+            .ingest_manifest(&manifest_b, &plan, &mut reader)
+            .expect("ingest manifest b");
+
+        let digest_a: [u8; 32] = manifest_a.digest().expect("digest").into();
+        let digest_b: [u8; 32] = manifest_b.digest().expect("digest").into();
+
+        let stored_a = handle
+            .manifest_metadata_by_digest(&digest_a)
+            .expect("stored manifest a");
+        let stored_b = handle
+            .manifest_metadata_by_digest(&digest_b)
+            .expect("stored manifest b");
+
+        let missing_chunk = stored_a.chunk(0).expect("chunk").clone();
+        let source_chunk = stored_b.chunk(0).expect("chunk").clone();
+        assert_eq!(missing_chunk.digest, source_chunk.digest);
+
+        std::fs::remove_file(&missing_chunk.path).expect("remove missing chunk");
+        assert!(!missing_chunk.path.exists());
+
+        let report = RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: RepairTicketId("REP-472".into()),
+            auditor_account: "auditor#sora".into(),
+            submitted_at_unix: 1_700_700_000,
+            evidence: RepairEvidenceV1 {
+                version: REPAIR_EVIDENCE_VERSION_V1,
+                manifest_digest: digest_a,
+                provider_id: [0x03; 32],
+                por_history_id: None,
+                cause: RepairCauseV1::Manual {
+                    reason: "local-rehydrate".into(),
+                },
+                evidence_json: None,
+                notes: None,
+            },
+            notes: None,
+        };
+
+        handle
+            .enqueue_repair_report(&report)
+            .expect("enqueue repair report");
+
+        let now_unix = report.submitted_at_unix + 120;
+        let worker_report = handle.run_repair_worker_once("worker-1", now_unix);
+        assert_eq!(worker_report.claimed, 1);
+
+        let task = handle
+            .repair_task_record(&report.ticket_id)
+            .expect("repair task");
+        assert!(matches!(
+            task.state,
+            RepairTaskStateV1::Completed(CompletedRepairStateV1 { .. })
+        ));
+
+        let bytes = std::fs::read(&missing_chunk.path).expect("rehydrated bytes");
+        assert_eq!(bytes.len(), missing_chunk.length as usize);
+        assert_eq!(blake3::hash(&bytes).as_bytes(), &missing_chunk.digest);
+    }
+
+    #[test]
+    fn node_handle_repair_worker_rehydrates_missing_chunks_from_orchestrator() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let repair_actual = iroha_config::parameters::actual::SorafsRepair {
+            enabled: true,
+            max_attempts: 1,
+            ..Default::default()
+        };
+        let handle = NodeHandle::new_with_policies(
+            cfg,
+            RepairConfig::from(&repair_actual),
+            GcConfig::default(),
+        );
+
+        let payload = b"repair-worker-orchestrator";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let manifest = ManifestBuilder::new()
+            .root_cid(vec![0xC3; 16])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(plan.content_length)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("manifest");
+
+        let mut reader = payload.as_slice();
+        handle
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest manifest");
+
+        let digest: [u8; 32] = manifest.digest().expect("digest").into();
+        let stored = handle
+            .manifest_metadata_by_digest(&digest)
+            .expect("stored manifest");
+        let missing_chunk = stored.chunk(0).expect("chunk").clone();
+        std::fs::remove_file(&missing_chunk.path).expect("remove missing chunk");
+        assert!(!missing_chunk.path.exists());
+
+        let start = missing_chunk.offset as usize;
+        let end = start + missing_chunk.length as usize;
+        let chunk_bytes = payload[start..end].to_vec();
+        let payloads = vec![RepairChunkPayload {
+            digest: missing_chunk.digest,
+            bytes: chunk_bytes,
+            source: Some("orchestrator#test".into()),
+        }];
+        let calls = Arc::new(AtomicUsize::new(0));
+        let orchestrator = Arc::new(StaticRepairOrchestrator {
+            payloads,
+            calls: calls.clone(),
+        });
+        handle.set_repair_orchestrator(orchestrator);
+
+        let report = RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: RepairTicketId("REP-473".into()),
+            auditor_account: "auditor#sora".into(),
+            submitted_at_unix: 1_700_700_300,
+            evidence: RepairEvidenceV1 {
+                version: REPAIR_EVIDENCE_VERSION_V1,
+                manifest_digest: digest,
+                provider_id: [0x04; 32],
+                por_history_id: None,
+                cause: RepairCauseV1::Manual {
+                    reason: "orchestrator-rehydrate".into(),
+                },
+                evidence_json: None,
+                notes: None,
+            },
+            notes: None,
+        };
+
+        handle
+            .enqueue_repair_report(&report)
+            .expect("enqueue repair report");
+
+        let now_unix = report.submitted_at_unix + 120;
+        let worker_report = handle.run_repair_worker_once("worker-1", now_unix);
+        assert_eq!(worker_report.claimed, 1);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        let task = handle
+            .repair_task_record(&report.ticket_id)
+            .expect("repair task");
+        assert!(matches!(
+            task.state,
+            RepairTaskStateV1::Completed(CompletedRepairStateV1 { .. })
+        ));
+
+        let bytes = std::fs::read(&missing_chunk.path).expect("rehydrated bytes");
+        assert_eq!(bytes.len(), missing_chunk.length as usize);
+        assert_eq!(blake3::hash(&bytes).as_bytes(), &missing_chunk.digest);
     }
 
     #[test]
@@ -4267,6 +4869,24 @@ mod tests {
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect_err("storage disabled");
         assert!(matches!(err, NodeStorageError::Disabled));
+    }
+
+    #[derive(Debug)]
+    struct StaticRepairOrchestrator {
+        payloads: Vec<RepairChunkPayload>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl RepairOrchestrator for StaticRepairOrchestrator {
+        fn rehydrate_missing_chunks(
+            &self,
+            _task: &RepairTaskRecordV1,
+            _manifest: &StoredManifest,
+            _missing_chunks: &[ChunkFileRecord],
+        ) -> Result<Vec<RepairChunkPayload>, RepairOrchestratorError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(self.payloads.clone())
+        }
     }
 
     #[derive(Debug, Default)]

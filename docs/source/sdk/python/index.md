@@ -60,3 +60,67 @@ are delayed but the pacs.002 status must be reported). Bridge responses include
 the derived pacs.002 code, optional transaction hash, ledger/asset identifiers,
 and reason codes so automation can generate the same evidence bundles described
 in :doc:`../../finance/settlement_iso_mapping`.
+
+## Account inventory filters
+
+Use `asset_id` filters on the account inventory helpers to pre-filter holdings,
+transactions, and asset holder listings without building a full query envelope:
+
+```python
+from iroha_python import ToriiClient
+
+client = ToriiClient("https://torii.sora.example")
+asset_id = "rose#wonderland#alice@test"
+
+assets = client.list_account_assets("alice@test", asset_id=asset_id, limit=10)
+txs = client.list_account_transactions("alice@test", asset_id=asset_id, limit=5)
+holders = client.list_asset_holders("rose#wonderland", asset_id=asset_id, limit=5)
+print(assets, txs, holders)
+```
+
+## Offline allowances
+
+Use the offline allowance helpers to issue wallet certificates and register them
+on-ledger. `top_up_offline_allowance` chains the certificate issue + register
+steps and returns both responses.
+
+```python
+from iroha_python import ToriiClient
+
+client = ToriiClient("https://torii.sora.example")
+
+draft = {
+    "controller": "ih58:...",
+    "allowance": {"asset": "usd#wonderland", "amount": "10", "commitment": [1, 2]},
+    "spend_public_key": "ed0120deadbeef",
+    "attestation_report": [3, 4],
+    "issued_at_ms": 100,
+    "expires_at_ms": 200,
+    "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
+    "metadata": {},
+}
+
+top_up = client.top_up_offline_allowance(
+    certificate=draft,
+    authority="treasury@wonderland",
+    private_key="operator-private-key",
+)
+print(top_up.registration.certificate_id_hex)
+```
+
+For renewals, use `top_up_offline_allowance_renewal` with the existing
+`certificate_id_hex`:
+
+```python
+renewed = client.top_up_offline_allowance_renewal(
+    certificate_id_hex=top_up.registration.certificate_id_hex,
+    certificate=draft,
+    authority="treasury@wonderland",
+    private_key="operator-private-key",
+)
+print(renewed.registration.certificate_id_hex)
+```
+
+If you need to split the flow, call `issue_offline_certificate` (or
+`issue_offline_certificate_renewal`) followed by `register_offline_allowance`
+or `renew_offline_allowance`.

@@ -2041,6 +2041,230 @@ def test_query_offline_allowances_posts_payload() -> None:
     }
 
 
+def test_issue_offline_certificate_posts_payload() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "certificate_id_hex": "deadbeef",
+                "certificate": {
+                    "controller": CANONICAL_OWNER,
+                    "allowance": {"asset": "rose#wonderland", "amount": "10", "commitment": [1, 2]},
+                    "spend_public_key": "ed0120deadbeef",
+                    "attestation_report": [3, 4],
+                    "issued_at_ms": 100,
+                    "expires_at_ms": 200,
+                    "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
+                    "operator_signature": "AA",
+                    "metadata": {},
+                    "verdict_id": None,
+                    "attestation_nonce": None,
+                    "refresh_at_ms": None,
+                },
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+    draft = {
+        "controller": CANONICAL_OWNER,
+        "allowance": {"asset": "rose#wonderland", "amount": "10", "commitment": [1, 2]},
+        "spend_public_key": "ed0120deadbeef",
+        "attestation_report": [3, 4],
+        "issued_at_ms": 100,
+        "expires_at_ms": 200,
+        "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
+        "metadata": {},
+        "verdict_id": None,
+        "attestation_nonce": None,
+        "refresh_at_ms": None,
+    }
+
+    response = client.issue_offline_certificate(draft)
+
+    assert response.certificate_id_hex == "deadbeef"
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/v1/offline/certificates/issue")
+    assert json.loads(call["data"].decode("utf-8")) == {"certificate": draft}
+
+
+def test_register_offline_allowance_posts_payload() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload={"certificate_id_hex": "deadbeef"}))
+    client = ToriiClient("http://node.test", session=session)
+    certificate = {
+        "controller": CANONICAL_OWNER,
+        "allowance": {"asset": "rose#wonderland", "amount": "10", "commitment": [1, 2]},
+        "spend_public_key": "ed0120deadbeef",
+        "attestation_report": [3, 4],
+        "issued_at_ms": 100,
+        "expires_at_ms": 200,
+        "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
+        "operator_signature": "AA",
+        "metadata": {},
+        "verdict_id": None,
+        "attestation_nonce": None,
+        "refresh_at_ms": None,
+    }
+
+    response = client.register_offline_allowance(
+        certificate=certificate,
+        authority="treasury@wonderland",
+        private_key="deadbeef",
+    )
+
+    assert response.certificate_id_hex == "deadbeef"
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/v1/offline/allowances")
+    assert json.loads(call["data"].decode("utf-8")) == {
+        "authority": "treasury@wonderland",
+        "private_key": "deadbeef",
+        "certificate": certificate,
+    }
+
+
+def test_renew_offline_allowance_posts_payload() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload={"certificate_id_hex": "deadbeef"}))
+    client = ToriiClient("http://node.test", session=session)
+    certificate = {
+        "controller": CANONICAL_OWNER,
+        "allowance": {"asset": "rose#wonderland", "amount": "10", "commitment": [1, 2]},
+        "spend_public_key": "ed0120deadbeef",
+        "attestation_report": [3, 4],
+        "issued_at_ms": 100,
+        "expires_at_ms": 200,
+        "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
+        "operator_signature": "AA",
+        "metadata": {},
+        "verdict_id": None,
+        "attestation_nonce": None,
+        "refresh_at_ms": None,
+    }
+
+    client.renew_offline_allowance(
+        certificate_id_hex="deadbeef",
+        certificate=certificate,
+        authority="treasury@wonderland",
+        private_key="deadbeef",
+    )
+
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/v1/offline/allowances/deadbeef/renew")
+    assert json.loads(call["data"].decode("utf-8")) == {
+        "authority": "treasury@wonderland",
+        "private_key": "deadbeef",
+        "certificate": certificate,
+    }
+
+
+def test_top_up_offline_allowance_chains_issue_and_register() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "certificate_id_hex": "deadbeef",
+                "certificate": {
+                    "controller": CANONICAL_OWNER,
+                    "allowance": {"asset": "rose#wonderland", "amount": "10", "commitment": [1, 2]},
+                    "spend_public_key": "ed0120deadbeef",
+                    "attestation_report": [3, 4],
+                    "issued_at_ms": 100,
+                    "expires_at_ms": 200,
+                    "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
+                    "operator_signature": "AA",
+                    "metadata": {},
+                    "verdict_id": None,
+                    "attestation_nonce": None,
+                    "refresh_at_ms": None,
+                },
+            }
+        )
+    )
+    session.queue(StubResponse(payload={"certificate_id_hex": "deadbeef"}))
+    client = ToriiClient("http://node.test", session=session)
+    draft = {
+        "controller": CANONICAL_OWNER,
+        "allowance": {"asset": "rose#wonderland", "amount": "10", "commitment": [1, 2]},
+        "spend_public_key": "ed0120deadbeef",
+        "attestation_report": [3, 4],
+        "issued_at_ms": 100,
+        "expires_at_ms": 200,
+        "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
+        "metadata": {},
+        "verdict_id": None,
+        "attestation_nonce": None,
+        "refresh_at_ms": None,
+    }
+
+    response = client.top_up_offline_allowance(
+        certificate=draft,
+        authority="treasury@wonderland",
+        private_key="deadbeef",
+    )
+
+    assert response.certificate.certificate_id_hex == "deadbeef"
+    assert response.registration.certificate_id_hex == "deadbeef"
+    assert len(session.calls) == 2
+    assert session.calls[0]["url"].endswith("/v1/offline/certificates/issue")
+    assert session.calls[1]["url"].endswith("/v1/offline/allowances")
+    register_body = json.loads(session.calls[1]["data"].decode("utf-8"))
+    assert register_body["certificate"]["operator_signature"] == "AA"
+
+
+def test_top_up_offline_allowance_renewal_chains_issue_and_register() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "certificate_id_hex": "deadbeef",
+                "certificate": {
+                    "controller": CANONICAL_OWNER,
+                    "allowance": {"asset": "rose#wonderland", "amount": "10", "commitment": [1, 2]},
+                    "spend_public_key": "ed0120deadbeef",
+                    "attestation_report": [3, 4],
+                    "issued_at_ms": 100,
+                    "expires_at_ms": 200,
+                    "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
+                    "operator_signature": "AA",
+                    "metadata": {},
+                    "verdict_id": None,
+                    "attestation_nonce": None,
+                    "refresh_at_ms": None,
+                },
+            }
+        )
+    )
+    session.queue(StubResponse(payload={"certificate_id_hex": "deadbeef"}))
+    client = ToriiClient("http://node.test", session=session)
+    draft = {
+        "controller": CANONICAL_OWNER,
+        "allowance": {"asset": "rose#wonderland", "amount": "10", "commitment": [1, 2]},
+        "spend_public_key": "ed0120deadbeef",
+        "attestation_report": [3, 4],
+        "issued_at_ms": 100,
+        "expires_at_ms": 200,
+        "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
+        "metadata": {},
+        "verdict_id": None,
+        "attestation_nonce": None,
+        "refresh_at_ms": None,
+    }
+
+    client.top_up_offline_allowance_renewal(
+        certificate_id_hex="deadbeef",
+        certificate=draft,
+        authority="treasury@wonderland",
+        private_key="deadbeef",
+    )
+
+    assert len(session.calls) == 2
+    assert session.calls[0]["url"].endswith("/v1/offline/certificates/deadbeef/renew/issue")
+    assert session.calls[1]["url"].endswith("/v1/offline/allowances/deadbeef/renew")
+
+
 def test_list_offline_transfers_parses_payload() -> None:
     session = RecordingSession()
     session.queue(

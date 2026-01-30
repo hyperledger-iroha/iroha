@@ -101,6 +101,9 @@ fn merge_with_overrides(
     if is_cli_source(matches, "workload_profile") {
         base.workload_profile = overrides.workload_profile;
     }
+    if is_cli_source(matches, "allow_contract_deploy_in_stable") {
+        base.allow_contract_deploy_in_stable = overrides.allow_contract_deploy_in_stable;
+    }
     if is_cli_source(matches, "log_filter") {
         base.log_filter.clone_from(&overrides.log_filter);
     }
@@ -243,6 +246,25 @@ mod tests {
         assert_eq!(merged.target_blocks, persisted.target_blocks);
         assert_eq!(merged.progress_interval, persisted.progress_interval);
         assert_eq!(merged.progress_timeout, persisted.progress_timeout);
+    }
+
+    #[test]
+    fn cli_overrides_allow_contract_deploy_in_stable() {
+        let defaults = config::IzanamiArgs::defaults();
+        let mut persisted = defaults.clone();
+        persisted.allow_contract_deploy_in_stable = false;
+
+        let (cli_args, matches) = parse_cli_arguments(vec![
+            "izanami".to_string(),
+            "--allow-contract-deploy-in-stable".to_string(),
+        ]);
+
+        let merged = merge_with_overrides(persisted, &cli_args, &matches);
+
+        assert!(
+            merged.allow_contract_deploy_in_stable,
+            "cli flag should enable contract deploys in stable runs"
+        );
     }
 
     #[test]

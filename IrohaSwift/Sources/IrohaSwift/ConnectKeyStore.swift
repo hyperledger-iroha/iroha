@@ -311,7 +311,7 @@ private struct IntegrityKeyProvider {
     private let baseDirectory: URL
     private let accessGroup: String?
     private let useKeychain: Bool
-    private static let cacheLock = NSLock()
+    private static let cacheQueue = DispatchQueue(label: "org.hyperledger.iroha.connect-keystore.cache")
     private static nonisolated(unsafe) var cachedKeys: [String: SymmetricKey] = [:]
 
     init(baseDirectory: URL, accessGroup: String?, useKeychain: Bool) {
@@ -356,15 +356,13 @@ private struct IntegrityKeyProvider {
     }
 
     private static func cachedKey(for key: String) -> SymmetricKey? {
-        cacheLock.lock()
-        defer { cacheLock.unlock() }
-        return cachedKeys[key]
+        cacheQueue.sync { cachedKeys[key] }
     }
 
     private static func storeCached(_ key: SymmetricKey, for cacheKey: String) {
-        cacheLock.lock()
-        cachedKeys[cacheKey] = key
-        cacheLock.unlock()
+        cacheQueue.sync {
+            cachedKeys[cacheKey] = key
+        }
     }
 
     private func loadFromKeychain() throws -> Data? {
@@ -515,6 +513,7 @@ private struct FileBacking: Backing {
         }
     }
 
+    // HMACs use a canonical JSON key ordering to avoid encoder-dependent reordering; legacy orderings stay accepted.
     private static let canonicalPayloadOrder: [PayloadKey] = [.attestation, .keyPair]
     private static let canonicalKeyPairOrder: [KeyPairKey] = [.privateKey, .publicKey]
     private static let canonicalAttestationOrder: [AttestationKey] = [.createdAt, .deviceLabel, .publicKeyDigest]

@@ -109,7 +109,7 @@ seiyaku Name {
 Semantics
 - `meta { ... }` fields override compiler defaults for the emitted IVM header: `abi_version`, `vector_length` (0 means unset), `max_cycles` (0 means compiler default), `features` toggles header feature bits (ZK tracing, vector announce). The compiler treats `max_cycles: 0` as “use default” and emits the configured non‑zero default to satisfy admission requirements. Unsupported features are ignored with a warning. When `meta {}` is omitted, the compiler emits `abi_version = 1` and uses the option defaults for the remaining header fields.
 - `features: ["zk", "simd"]` (aliases: `"vector"`) explicitly requests the corresponding header bits. Unknown feature strings now produce a parser error instead of being ignored.
-- `state` declares contract variables. Today the compiler lowers them to per-run ephemeral storage (allocated at function entry); durable host-backed overlays and conflict tracking remain TODO. For host-backed reads/writes, use the explicit helpers `state_get/state_set/state_del` and the `get_or_insert_default` map helpers; these route through Norito TLVs and keep names/field order stable for future persistence.
+- `state` declares durable contract variables. The compiler lowers accesses into `STATE_GET/STATE_SET/STATE_DEL` syscalls and the host stages them in a per-transaction overlay (checkpoint/restore rollback, flush-on-commit into WSV). Access hints are emitted for literal state paths; dynamic keys fall back to map-level conflict keys. For explicit host-backed reads/writes, use the `state_get/state_set/state_del` helpers and the `get_or_insert_default` map helpers; these route through Norito TLVs and keep names/field order stable.
 - State identifiers are reserved; shadowing a `state` name in parameters or `let` bindings is rejected (`E_STATE_SHADOWED`).
 - State map values are not first-class: use the state identifier directly for map operations and iteration. Binding or passing state maps to user-defined functions is rejected (`E_STATE_MAP_ALIAS`).
 - Durable state maps currently support `int` and pointer-ABI key types only; other key types are rejected at compile time.
@@ -140,6 +140,7 @@ register_trigger wake {
   call run;
   on time pre_commit;
   repeats 2;
+  authority "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland";
   metadata { tag: "alpha"; count: 1; enabled: true; }
 }
 ```
@@ -149,7 +150,10 @@ Notes
   `namespace::entrypoint` is recorded in the manifest but cross-contract callbacks are rejected
   by the runtime for now (local callbacks only).
 - Supported filters: `time pre_commit` and `time schedule(start_ms, period_ms?)`, plus
-  `execute trigger <name>` for by-call triggers. Data/pipeline filters are not yet supported.
+  `execute trigger <name>` for by-call triggers, `data any`, and pipeline filters
+  (`pipeline transaction`, `pipeline block`, `pipeline merge`, `pipeline witness`).
+- `authority` optionally overrides the trigger authority (AccountId string literal). If omitted,
+  the runtime uses the contract-activation authority.
 - Metadata values must be JSON literals (`string`, `number`, `bool`, `null`) or `json!(...)`.
 - Runtime-injected trigger metadata keys: `contract_namespace`, `contract_id`,
   `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`.

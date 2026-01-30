@@ -1,36 +1,33 @@
-<!-- TODO: Translation pending; content synced from English for technical accuracy. -->
+# SDK اور codec مالکان کے لیے IH58 rollout نوٹ
 
-# IH58 Rollout Note for SDK & Codec Owners
+ٹیمیں: Rust SDK، TypeScript/JavaScript SDK، Python SDK، Kotlin SDK، codec tooling
 
-Teams: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec tooling
+سیاق: `docs/account_structure.md` اب جاری شدہ IH58 اکاؤنٹ ID امپلیمنٹیشن کو ظاہر کرتا ہے۔
+براہِ کرم SDK کے رویے اور ٹیسٹ کو کینونیکل اسپیک کے مطابق کریں۔
 
-Context: `docs/account_structure.md` now reflects the shipping IH58 account ID
-implementation. Please align SDK behaviour and tests with the canonical spec.
+اہم حوالہ جات:
+- ایڈریس codec + ہیڈر لے آؤٹ — `docs/account_structure.md` §2
+- کرف رجسٹری — `docs/source/references/address_curve_registry.md`
+- Norm v1 ڈومین ہینڈلنگ — `docs/source/references/address_norm_v1.md`
+- فکسچر ویکٹرز — `fixtures/account/address_vectors.json`
 
-Key references:
-- Address codec + header layout — `docs/account_structure.md` §2
-- Curve registry — `docs/source/references/address_curve_registry.md`
-- Norm v1 domain handling — `docs/source/references/address_norm_v1.md`
-- Fixture vectors — `fixtures/account/address_vectors.json`
+کارروائیاں:
+1. **کینونیکل آؤٹ پٹ:** `AccountId::to_string()`/Display لازماً صرف IH58 دے
+   (`@domain` لاحقہ کے بغیر)۔ کینونیکل hex صرف ڈی بگنگ کے لیے ہے (`0x...`).
+2. **قابلِ قبول ان پٹس:** پارسرز کو IH58 (ترجیحی)، `sora` compressed، اور کینونیکل hex
+   (صرف `0x...`؛ بغیر prefix کے hex کو مسترد کریں) قبول کرنا چاہیے۔ ان پٹس میں
+   routing hints کے لیے `@<domain>` لاحقہ ہو سکتا ہے؛ `<label>@<domain>` aliases
+   کے لیے resolver درکار ہے۔ `public_key@domain` (multihash hex) بدستور سپورٹڈ ہے۔
+3. **Resolvers:** ڈومین کے بغیر IH58/sora parsing کے لیے domain‑selector resolver چاہیے
+   سوائے اس کے کہ selector implicit default ہو (configured default domain label استعمال کریں)۔
+   UAID (`uaid:...`) اور opaque (`opaque:...`) literals کے لیے بھی resolvers درکار ہیں۔
+4. **IH58 checksum:** `IH58PRE || prefix || payload` پر Blake2b‑512 استعمال کریں اور
+   پہلے 2 بائٹس لیں۔ compressed alphabet base **105** ہے۔
+5. **Curve gating:** SDKs کا ڈیفالٹ صرف Ed25519 ہے۔ ML‑DSA/GOST/SM کے لیے واضح opt‑in دیں
+   (Swift build flags؛ JS/Android میں `configureCurveSupport`)۔ Rust کے علاوہ secp256k1
+   کو ڈیفالٹ enabled مت سمجھیں۔
+6. **CAIP-10 نہیں:** ابھی کوئی CAIP‑10 mapping جاری نہیں ہوئی؛ CAIP‑10 conversions کو
+   expose نہ کریں اور نہ ان پر انحصار کریں۔
 
-Action items:
-1. **Canonical output:** `AccountId::to_string()`/Display MUST emit IH58 only
-   (no `@domain` suffix). Canonical hex is for debugging (`0x...`).
-2. **Accepted inputs:** parsers MUST accept IH58 (preferred), `sora` compressed,
-   and canonical hex (`0x...` only; bare hex is rejected). Inputs MAY carry an
-   `@<domain>` suffix for routing hints; `<label>@<domain>` aliases require a
-   resolver. Raw `public_key@domain` (multihash hex) remains supported.
-3. **Resolvers:** domainless IH58/sora parsing requires a domain-selector
-   resolver unless the selector is implicit default (use the configured default
-   domain label). UAID (`uaid:...`) and opaque (`opaque:...`) literals require
-   resolvers.
-4. **IH58 checksum:** use Blake2b-512 over `IH58PRE || prefix || payload`, take
-   the first 2 bytes. Compressed alphabet base is **105**.
-5. **Curve gating:** SDKs default to Ed25519-only. Provide explicit opt-in for
-   ML‑DSA/GOST/SM (Swift build flags; JS/Android `configureCurveSupport`). Do
-   not assume secp256k1 is enabled by default outside Rust.
-6. **No CAIP-10:** there is no shipped CAIP‑10 mapping yet; do not expose or
-   depend on CAIP‑10 conversions.
-
-Please confirm once the codecs/tests are updated; open questions can be tracked
-in the account-addressing RFC thread.
+براہِ کرم codecs/tests کے اپڈیٹ ہونے پر تصدیق کریں؛ کھلے سوالات account‑addressing RFC تھریڈ
+میں ٹریک کیے جا سکتے ہیں۔

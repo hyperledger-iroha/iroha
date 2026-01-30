@@ -127,6 +127,13 @@ public final class OfflineJsonParser {
     return new OfflineCertificateIssueResponse(certificateIdHex, parsed);
   }
 
+  public static OfflineAllowanceRegisterResponse parseAllowanceRegisterResponse(final byte[] payload) {
+    final Object root = parse(payload);
+    final Map<String, Object> object = expectObject(root, "root");
+    final String certificateIdHex = asString(object.get("certificate_id_hex"), "certificate_id_hex");
+    return new OfflineAllowanceRegisterResponse(certificateIdHex);
+  }
+
   /** Returns a canonical JSON string for the provided payload (keys sorted). */
   public static String canonicalJson(final byte[] payload) {
     final Object root = parse(payload);

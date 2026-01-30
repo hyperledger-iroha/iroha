@@ -1145,6 +1145,7 @@ pub(crate) fn assets_page<'world, I>(
     assets: I,
     owned_by: Option<&AccountId>,
     definition_filter: Option<&AssetDefinitionId>,
+    asset_filter: Option<&AssetId>,
     page: u64,
     per_page: u64,
 ) -> ExplorerAssetsPage
@@ -1153,6 +1154,11 @@ where
 {
     let mut items = Vec::new();
     for asset in assets {
+        if let Some(expected) = asset_filter {
+            if asset.id() != expected {
+                continue;
+            }
+        }
         if let Some(account_id) = owned_by {
             if asset.id().account() != account_id {
                 continue;
@@ -1532,6 +1538,7 @@ mod tests {
             ],
             Some(&*ALICE_ID),
             None,
+            None,
             1,
             10,
         );
@@ -1545,11 +1552,35 @@ mod tests {
             ],
             None,
             Some(&lily_def),
+            None,
             1,
             10,
         );
         assert_eq!(definition_page.items.len(), 1);
         assert_eq!(definition_page.items[0].id, bob_asset_id.to_string());
+    }
+
+    #[test]
+    fn assets_page_filters_by_asset_id() {
+        let rose_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
+        let alice_asset_id = AssetId::new(rose_def.clone(), ALICE_ID.clone());
+        let bob_asset_id = AssetId::new(rose_def, BOB_ID.clone());
+        let alice_value = Owned::new(Numeric::from(10u32));
+        let bob_value = Owned::new(Numeric::from(5u32));
+
+        let page = assets_page(
+            vec![
+                Ref::new(&alice_asset_id, &alice_value),
+                Ref::new(&bob_asset_id, &bob_value),
+            ],
+            None,
+            None,
+            Some(&alice_asset_id),
+            1,
+            10,
+        );
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, alice_asset_id.to_string());
     }
 
     #[test]

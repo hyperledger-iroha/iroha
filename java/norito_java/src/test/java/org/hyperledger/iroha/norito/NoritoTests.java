@@ -3,6 +3,7 @@
 
 package org.hyperledger.iroha.norito;
 
+import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -62,6 +63,10 @@ public final class NoritoTests {
     testControlFrameErrorRoundtrip();
     testStreamingTicketRoundtrip();
     testTicketRevocationRoundtrip();
+    testKeyUpdateStateSnapshots();
+    testContentKeyStateSnapshots();
+    testRleDecodeMissingEndOfBlock();
+    testRleDecodeAcceptsExplicitEndOfBlock();
     System.out.println("All Norito Java tests passed.");
   }
 
@@ -114,6 +119,11 @@ public final class NoritoTests {
       data[i] = (byte) ((seed + i) & 0xFF);
     }
     return data;
+  }
+
+  private static void writeShortLe(ByteArrayOutputStream out, short value) {
+    out.write(value & 0xFF);
+    out.write((value >>> 8) & 0xFF);
   }
 
   private static void testCrc64() {
@@ -614,6 +624,28 @@ public final class NoritoTests {
     List<NoritoColumnar.BytesOptionalRow> optionalDecodedAos =
         NoritoAoS.decodeU64OptionalBytes(optionalAos);
     assert optionalDecodedAos.equals(optionalRows);
+
+    List<NoritoColumnar.EnumBoolRow> enumRows = List.of(
+        new NoritoColumnar.EnumBoolRow(10L, new NoritoColumnar.EnumName("x"), false),
+        new NoritoColumnar.EnumBoolRow(12L, new NoritoColumnar.EnumName("y"), true),
+        new NoritoColumnar.EnumBoolRow(14L, new NoritoColumnar.EnumCode(7L), false),
+        new NoritoColumnar.EnumBoolRow(15L, new NoritoColumnar.EnumCode(8L), true));
+    byte[] enumColumnar = NoritoColumnar.encodeNcbU64EnumBool(enumRows);
+    assert toHex(enumColumnar).equals(
+            "04000000670000000a000000000000000404020000010100000000000100000002000000"
+                + "7879000007000000020a")
+        : "Enum columnar encoding mismatch";
+    byte[] enumAdaptive = NoritoColumnar.encodeRowsU64EnumBoolAdaptive(enumRows);
+    assert toHex(enumAdaptive).equals(
+            "0104000000670000000a000000000000000404020000010100000000000100000002000000"
+                + "7879000007000000020a")
+        : "Enum adaptive encoding mismatch";
+    List<NoritoColumnar.EnumBoolRow> enumDecoded =
+        NoritoColumnar.decodeRowsU64EnumBoolAdaptive(enumAdaptive);
+    assert enumDecoded.equals(enumRows);
+    byte[] enumAos = NoritoAoS.encodeU64EnumBool(enumRows);
+    List<NoritoColumnar.EnumBoolRow> enumDecodedAos = NoritoAoS.decodeU64EnumBool(enumAos);
+    assert enumDecodedAos.equals(enumRows);
   }
 
   private static void testDecodeRequiresCompactLenFlag() {
@@ -946,6 +978,129 @@ public final class NoritoTests {
     NoritoStreaming.TicketRevocation decoded =
         NoritoCodec.decode(encoded, adapter, "iroha.test.TicketRevocation");
     assert decoded.equals(revocation);
+  }
+
+  private static void testKeyUpdateStateSnapshots() {
+    NoritoStreaming.KeyUpdateState state = new NoritoStreaming.KeyUpdateState();
+    NoritoStreaming.EncryptionSuite suite =
+        new NoritoStreaming.X25519ChaCha20Poly1305Suite(fill(0x11, NoritoStreaming.HASH_LEN));
+    NoritoStreaming.KeyUpdate update =
+        new NoritoStreaming.KeyUpdate(
+            fill(0x22, NoritoStreaming.HASH_LEN),
+            suite,
+            1,
+            fill(0x33, NoritoStreaming.HASH_LEN),
+            7,
+            fill(0x44, NoritoStreaming.SIGNATURE_LEN));
+    state.record(update);
+    Optional<NoritoStreaming.KeyUpdateSnapshot> snapshot = state.snapshot();
+    assert snapshot.isPresent() : "snapshot must be present after record";
+    NoritoStreaming.KeyUpdateState restored =
+        NoritoStreaming.KeyUpdateState.fromSnapshot(snapshot.get());
+    assert restored.lastCounter().orElseThrow() == 7L : "lastCounter must persist";
+    assert restored.suite().orElseThrow().equals(suite) : "suite must persist";
+
+    boolean nonMonotonic = false;
+    try {
+      state.record(
+          new NoritoStreaming.KeyUpdate(
+              fill(0x22, NoritoStreaming.HASH_LEN),
+              suite,
+              1,
+              fill(0x33, NoritoStreaming.HASH_LEN),
+              7,
+              fill(0x44, NoritoStreaming.SIGNATURE_LEN)));
+    } catch (NoritoStreaming.CryptoException ex) {
+      nonMonotonic = ex.error() instanceof NoritoStreaming.CryptoError.NonMonotonicKeyCounter;
+    }
+    assert nonMonotonic : "expected NonMonotonicKeyCounter";
+
+    boolean suiteChanged = false;
+    NoritoStreaming.EncryptionSuite suite2 =
+        new NoritoStreaming.Kyber768XChaCha20Poly1305Suite(fill(0x55, NoritoStreaming.HASH_LEN));
+    try {
+      state.record(
+          new NoritoStreaming.KeyUpdate(
+              fill(0x22, NoritoStreaming.HASH_LEN),
+              suite2,
+              1,
+              fill(0x33, NoritoStreaming.HASH_LEN),
+              8,
+              fill(0x44, NoritoStreaming.SIGNATURE_LEN)));
+    } catch (NoritoStreaming.CryptoException ex) {
+      suiteChanged = ex.error() instanceof NoritoStreaming.CryptoError.SuiteChanged;
+    }
+    assert suiteChanged : "expected SuiteChanged";
+  }
+
+  private static void testContentKeyStateSnapshots() {
+    NoritoStreaming.ContentKeyState state = new NoritoStreaming.ContentKeyState();
+    NoritoStreaming.ContentKeyUpdate update =
+        new NoritoStreaming.ContentKeyUpdate(2, fill(0x66, 32), 10);
+    state.record(update);
+    Optional<NoritoStreaming.ContentKeySnapshot> snapshot = state.snapshot();
+    assert snapshot.isPresent() : "snapshot must be present after record";
+    NoritoStreaming.ContentKeyState restored =
+        NoritoStreaming.ContentKeyState.fromSnapshot(snapshot.get());
+    assert restored.lastId().orElseThrow() == 2L : "lastId must persist";
+    assert restored.lastValidFrom().orElseThrow() == 10L : "lastValidFrom must persist";
+
+    boolean invalidWrapped = false;
+    try {
+      state.record(new NoritoStreaming.ContentKeyUpdate(3, new byte[0], 11));
+    } catch (NoritoStreaming.CryptoException ex) {
+      invalidWrapped = ex.error() instanceof NoritoStreaming.CryptoError.InvalidWrappedKey;
+    }
+    assert invalidWrapped : "expected InvalidWrappedKey";
+
+    boolean regression = false;
+    try {
+      state.record(new NoritoStreaming.ContentKeyUpdate(1, fill(0x77, 32), 12));
+    } catch (NoritoStreaming.CryptoException ex) {
+      regression = ex.error() instanceof NoritoStreaming.CryptoError.ContentKeyRegression;
+    }
+    assert regression : "expected ContentKeyRegression";
+
+    boolean invalidValidFrom = false;
+    try {
+      state.record(new NoritoStreaming.ContentKeyUpdate(3, fill(0x88, 32), 9));
+    } catch (NoritoStreaming.CryptoException ex) {
+      invalidValidFrom = ex.error() instanceof NoritoStreaming.CryptoError.InvalidValidFrom;
+    }
+    assert invalidValidFrom : "expected InvalidValidFrom";
+  }
+
+  private static void testRleDecodeMissingEndOfBlock() {
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    writeShortLe(out, (short) 0);
+    for (int i = 0; i < NoritoStreamingCodec.BLOCK_PIXELS - 1; i++) {
+      out.write(0);
+      writeShortLe(out, (short) 0);
+    }
+    byte[] payload = out.toByteArray();
+    boolean missing = false;
+    try {
+      NoritoStreamingCodec.decodeBlockRle(payload, 0, (short) 0, 0);
+    } catch (NoritoStreamingCodec.CodecException ex) {
+      missing = ex.error() instanceof NoritoStreamingCodec.CodecError.MissingEndOfBlock;
+    }
+    assert missing : "expected MissingEndOfBlock";
+  }
+
+  private static void testRleDecodeAcceptsExplicitEndOfBlock() {
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    writeShortLe(out, (short) 0);
+    for (int i = 0; i < NoritoStreamingCodec.BLOCK_PIXELS - 1; i++) {
+      out.write(0);
+      writeShortLe(out, (short) 0);
+    }
+    out.write(NoritoStreamingCodec.RLE_EOB);
+    writeShortLe(out, (short) 0);
+    byte[] payload = out.toByteArray();
+    NoritoStreamingCodec.BlockDecodeResult result =
+        NoritoStreamingCodec.decodeBlockRle(payload, 0, (short) 0, 1);
+    assert result.offset() == payload.length : "offset must consume payload";
+    assert result.coeffs().length == NoritoStreamingCodec.BLOCK_PIXELS : "coeff length mismatch";
   }
 
   private static final class RootAwareAdapter implements TypeAdapter<Long> {

@@ -164,6 +164,42 @@ public final class OfflineWallet {
         return result
     }
 
+    /// Issues and registers an offline allowance. When `recordVerdict` is `true`, the issued
+    /// certificate is cached in the verdict journal using `recordedAt` (or now when omitted).
+    @discardableResult
+    public func topUpAllowance(draft: OfflineWalletCertificateDraft,
+                               authority: String,
+                               privateKey: String,
+                               recordVerdict: Bool = true,
+                               recordedAt timestampMs: UInt64? = nil) async throws -> ToriiOfflineTopUpResponse {
+        let response = try await toriiClient.topUpOfflineAllowance(draft: draft,
+                                                                   authority: authority,
+                                                                   privateKey: privateKey)
+        if recordVerdict {
+            try recordVerdictMetadata(from: response.certificate, recordedAt: timestampMs)
+        }
+        return response
+    }
+
+    /// Issues and registers a renewed offline allowance. When `recordVerdict` is `true`, the issued
+    /// certificate is cached in the verdict journal using `recordedAt` (or now when omitted).
+    @discardableResult
+    public func topUpAllowanceRenewal(certificateIdHex: String,
+                                      draft: OfflineWalletCertificateDraft,
+                                      authority: String,
+                                      privateKey: String,
+                                      recordVerdict: Bool = true,
+                                      recordedAt timestampMs: UInt64? = nil) async throws -> ToriiOfflineTopUpResponse {
+        let response = try await toriiClient.topUpOfflineAllowanceRenewal(certificateIdHex: certificateIdHex,
+                                                                          draft: draft,
+                                                                          authority: authority,
+                                                                          privateKey: privateKey)
+        if recordVerdict {
+            try recordVerdictMetadata(from: response.certificate, recordedAt: timestampMs)
+        }
+        return response
+    }
+
     public func fetchTransfers(params: ToriiOfflineListParams? = nil) async throws -> ToriiOfflineTransferList {
         try await toriiClient.listOfflineTransfers(params: params)
     }
@@ -321,6 +357,41 @@ public final class OfflineWallet {
         -> [OfflineVerdictMetadata] {
         let recordedAt = timestampMs ?? state.nowMs
         return try verdictJournal.upsert(rawAllowances: state.allowances, recordedAtMs: recordedAt)
+    }
+
+    /// Records verdict metadata from a certificate-issue response (for flows that issue without listing allowances).
+    @discardableResult
+    public func recordVerdictMetadata(from issued: ToriiOfflineCertificateIssueResponse,
+                                      recordedAt timestampMs: UInt64? = nil) throws
+        -> [OfflineVerdictMetadata] {
+        let recordedAt = timestampMs ?? OfflineWallet.currentTimestampMs()
+        let record = try Self.makeRawAllowanceRecord(from: issued)
+        return try verdictJournal.upsert(rawAllowances: [record], recordedAtMs: recordedAt)
+    }
+
+    private static func makeRawAllowanceRecord(from issued: ToriiOfflineCertificateIssueResponse) throws -> ToriiJSONValue {
+        let certificate = try issued.decodeCertificate()
+        let canonicalValue = try Self.canonicalCertificateValue(from: certificate)
+        var object: [String: ToriiJSONValue] = [
+            "certificate": canonicalValue,
+            "remaining_amount": .string(certificate.allowance.amount),
+            "controller_display": .string(certificate.controller)
+        ]
+        if let verdictId = certificate.verdictId {
+            object["verdict_id_hex"] = .string(verdictId.hexUppercased())
+        }
+        if let attestationNonce = certificate.attestationNonce {
+            object["attestation_nonce_hex"] = .string(attestationNonce.hexUppercased())
+        }
+        if let refreshAtMs = certificate.refreshAtMs {
+            object["refresh_at_ms"] = .string(String(refreshAtMs))
+        }
+        return .object(object)
+    }
+
+    private static func canonicalCertificateValue(from certificate: OfflineWalletCertificate) throws -> ToriiJSONValue {
+        let data = try JSONEncoder().encode(certificate)
+        return try JSONDecoder().decode(ToriiJSONValue.self, from: data)
     }
 
     public func verdictWarnings(warningThresholdMs: UInt64 = OfflineVerdictJournal.defaultWarningThresholdMs,

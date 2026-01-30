@@ -3,20 +3,20 @@
     "2025-q2",
     "current"
   ],
-  "generatedAt": "2026-01-16T04:56:58.938Z",
+  "generatedAt": "2026-01-30T11:53:04Z",
   "entries": [
     {
       "label": "latest",
       "path": "torii.json",
-      "bytes": 390855,
-      "sha256": "17448206c16b7f25614bbbcdaeb7a573b2ee6c0ff2b80bb99e6f741376b6e935",
-      "blake3": "12c04c838a419da7004428210172d47937bc323144d60dd33d1f410bc04264f9",
-      "updatedAt": "2026-01-16T04:56:58.929Z",
+      "bytes": 411826,
+      "sha256": "0dabca512e7fb3c4642b49eb4ba7603daae9c25d1345eb34149a8bdb145c7c76",
+      "blake3": "1062df09987eac0b15789dcde1d4e54fb14152605cfb8c6dd514aa0c9d52e0b3",
+      "updatedAt": "2026-01-30T11:53:04Z",
       "signed": true,
       "manifestPath": "manifest.json",
       "signatureAlgorithm": "ed25519",
       "signaturePublicKeyHex": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
-      "signatureHex": "31559e8c0b8b6784b994b030324927e87668d55ef04b980ec02467a57d51f3aa247092b5ddb297dbcf26478b26961a8ddd3c37b5a021ca3d254b81b1022fb604"
+      "signatureHex": "9e67dcdf8b15db7810ffe3f471476b8381a8f7ff3f484ba1c39a259fed80ffc976f3ab1958299391be55c94e54ab679b08578c7205a502221e9a713e3db6320a"
     },
     {
       "label": "2025-q2",
@@ -34,15 +34,15 @@
     {
       "label": "current",
       "path": "versions/current/torii.json",
-      "bytes": 390855,
-      "sha256": "17448206c16b7f25614bbbcdaeb7a573b2ee6c0ff2b80bb99e6f741376b6e935",
-      "blake3": "12c04c838a419da7004428210172d47937bc323144d60dd33d1f410bc04264f9",
-      "updatedAt": "2026-01-16T04:56:58.893Z",
+      "bytes": 411826,
+      "sha256": "0dabca512e7fb3c4642b49eb4ba7603daae9c25d1345eb34149a8bdb145c7c76",
+      "blake3": "1062df09987eac0b15789dcde1d4e54fb14152605cfb8c6dd514aa0c9d52e0b3",
+      "updatedAt": "2026-01-30T11:53:04Z",
       "signed": true,
       "manifestPath": "versions/current/manifest.json",
       "signatureAlgorithm": "ed25519",
       "signaturePublicKeyHex": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
-      "signatureHex": "31559e8c0b8b6784b994b030324927e87668d55ef04b980ec02467a57d51f3aa247092b5ddb297dbcf26478b26961a8ddd3c37b5a021ca3d254b81b1022fb604"
+      "signatureHex": "9e67dcdf8b15db7810ffe3f471476b8381a8f7ff3f484ba1c39a259fed80ffc976f3ab1958299391be55c94e54ab679b08578c7205a502221e9a713e3db6320a"
     }
   ]
 }

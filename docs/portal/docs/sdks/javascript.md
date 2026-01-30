@@ -153,6 +153,21 @@ const defs = await torii.queryAssetDefinitions({
   fetchSize: 64,
 });
 console.log("filtered definitions", defs.items);
+
+const assetId = "rose#wonderland#alice@test";
+const balances = await torii.listAccountAssets("alice@test", {
+  limit: 10,
+  assetId,
+});
+const txs = await torii.listAccountTransactions("alice@test", {
+  limit: 5,
+  assetId,
+});
+const holders = await torii.listAssetHolders("rose#wonderland", {
+  limit: 5,
+  assetId,
+});
+console.log(balances.items, txs.items, holders.items);
 ```
 
 ## Offline allowances & verdict metadata
@@ -187,6 +202,34 @@ for (const entry of allowances) {
     entry.refresh_at_ms,
   );
 }
+```
+
+## Offline top-ups (issue + register)
+
+Use the top-up helpers when you want to issue a certificate and immediately
+register it on-ledger. The SDK verifies the issued and registered certificate
+IDs match before returning, and the response includes both payloads. If you
+already have a signed certificate, call `registerOfflineAllowance` (or
+`renewOfflineAllowance`) directly.
+
+```ts
+const topUp = await torii.topUpOfflineAllowance({
+  authority: "alice@wonderland",
+  privateKeyHex: alicePrivateKey,
+  certificate: draftCertificate,
+});
+console.log(topUp.certificate.certificate_id_hex);
+console.log(topUp.registration.certificate_id_hex);
+
+const renewed = await torii.topUpOfflineAllowanceRenewal(
+  topUp.registration.certificate_id_hex,
+  {
+    authority: "alice@wonderland",
+    privateKeyHex: alicePrivateKey,
+    certificate: draftCertificate,
+  },
+);
+console.log(renewed.registration.certificate_id_hex);
 ```
 
 ## Torii queries & streaming (WebSockets)

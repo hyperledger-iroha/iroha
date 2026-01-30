@@ -121,7 +121,7 @@ seiyaku Name {
 الدلالات
 - `meta { ... }` تتجاوز افتراضات المترجم لرأس IVM المُصدر: `abi_version`, `vector_length` (0 يعني غير مُحدد)، `max_cycles` (0 يعني افتراض المترجم)، `features` تُفعّل بتات الميزات في الرأس (تتبع ZK، إعلان المتجه). تُتجاهل الميزات غير المدعومة مع تحذير. عند غياب `meta {}` يصدر المترجم `abi_version = 1` ويستخدم افتراضات الخيارات لبقية حقول الرأس.
 - `features: ["zk", "simd"]` (مرادفات: `"vector"`) تطلب صراحة بتات الرأس المقابلة. السلاسل غير المعروفة للميزات تُنتج الآن خطأ في المحلل بدل التجاهل.
-- `state` تعلن متغيرات العقد. حاليًا يُخفضها المترجم إلى تخزين مؤقت لكل تشغيل (مُخصص عند دخول الدالة)؛ overlays الدائمة المدعومة بالمضيف وتتبع التعارضات ما زالت TODO. لقراءات/كتابات المضيف استخدم المساعدات الصريحة `state_get/state_set/state_del` ومساعدات الخرائط `get_or_insert_default`؛ هذه تمر عبر Norito TLV وتحافظ على الأسماء/ترتيب الحقول ثابتًا للتخزين المستقبلي.
+- `state` تعلن متغيرات العقد الدائمة. يُخفض المترجم عمليات الوصول إلى syscalls `STATE_GET/STATE_SET/STATE_DEL`، ويحتفظ المضيف بها في overlay لكل معاملة (checkpoint/restore للتراجع، و flush عند الـ commit إلى WSV). تُصدر access hints للمسارات الحرفية؛ المفاتيح الديناميكية تهبط إلى تعارضات على مستوى الخريطة. لقراءات/كتابات المضيف الصريحة استخدم `state_get/state_set/state_del` ومساعدات الخرائط `get_or_insert_default`؛ تمر عبر Norito TLV وتحافظ على الأسماء/ترتيب الحقول ثابتة.
 - معرفات `state` محجوزة؛ تظليل اسم `state` في المعاملات أو `let` مرفوض (`E_STATE_SHADOWED`).
 - قيم خرائط الحالة ليست من الدرجة الأولى: استخدم معرف الحالة مباشرةً لعمليات الخرائط والتكرار. ربط خرائط الحالة أو تمريرها إلى دوال المستخدم مرفوض (`E_STATE_MAP_ALIAS`).
 - خرائط الحالة الدائمة تدعم حاليًا مفاتيح `int` وأنواع pointer‑ABI فقط؛ الأنواع الأخرى للمفاتيح تُرفض في وقت الترجمة.
@@ -146,7 +146,8 @@ register_trigger wake {
 - يجب أن يشير `call` إلى `kotoage fn` عامة داخل نفس العقد؛ يمكن تسجيل `namespace::entrypoint`
   اختياريًا في المانيفست لكن ردود الاستدعاء بين العقود مرفوضة حاليًا (محلية فقط).
 - المرشحات المدعومة: `time pre_commit` و`time schedule(start_ms, period_ms?)`، بالإضافة إلى
-  `execute trigger <name>` لمشغلات الاستدعاء. مرشحات البيانات/الأنابيب غير مدعومة بعد.
+  `execute trigger <name>` لمشغلات الاستدعاء، و`data any` لأحداث البيانات، ومرشحات الـpipeline
+  (`pipeline transaction`، `pipeline block`، `pipeline merge`، `pipeline witness`).
 - يجب أن تكون قيم metadata ليتيرالات JSON (`string`, `number`, `bool`, `null`) أو `json!(...)`.
 - مفاتيح metadata التي يحقنها الـ runtime: `contract_namespace`, `contract_id`,
   `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`.

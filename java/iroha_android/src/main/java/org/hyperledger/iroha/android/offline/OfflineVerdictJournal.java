@@ -128,6 +128,37 @@ public final class OfflineVerdictJournal {
     }
   }
 
+  public OfflineVerdictMetadata upsert(
+      final OfflineCertificateIssueResponse response, final Instant recordedAt) throws IOException {
+    Objects.requireNonNull(response, "response");
+    final long recordedAtMs = Objects.requireNonNull(recordedAt, "recordedAt").toEpochMilli();
+    synchronized (lock) {
+      final OfflineWalletCertificate certificate = response.certificate();
+      final IntegritySnapshot snapshot = parseIntegritySnapshotFromMetadata(certificate.metadata());
+      final OfflineVerdictMetadata metadata =
+          new OfflineVerdictMetadata(
+              response.certificateIdHex(),
+              certificate.controller(),
+              certificate.controller(),
+              certificate.verdictIdHex(),
+              certificate.attestationNonceHex(),
+              certificate.expiresAtMs(),
+              certificate.policy().expiresAtMs(),
+              certificate.refreshAtMs(),
+              certificate.allowance().amount(),
+              recordedAtMs,
+              snapshot.policy(),
+              snapshot.playIntegrityMetadata(),
+              null,
+              snapshot.hmsMetadata(),
+              null,
+              snapshot.provisionedMetadata());
+      entries.put(metadata.certificateIdHex(), metadata);
+      persistLocked();
+      return metadata;
+    }
+  }
+
   public List<OfflineVerdictWarning> warnings(
       final long warningThresholdMs, final Instant now) {
     final long nowMs = Objects.requireNonNull(now, "now").toEpochMilli();
@@ -316,7 +347,10 @@ public final class OfflineVerdictJournal {
     if (!(certificate instanceof Map<?, ?> certificateMap)) {
       return IntegritySnapshot.empty();
     }
-    final Object metadataObj = certificateMap.get("metadata");
+    return parseIntegritySnapshotFromMetadata(certificateMap.get("metadata"));
+  }
+
+  private static IntegritySnapshot parseIntegritySnapshotFromMetadata(final Object metadataObj) {
     if (!(metadataObj instanceof Map<?, ?> metadataMap)) {
       return IntegritySnapshot.empty();
     }

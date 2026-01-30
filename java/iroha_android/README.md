@@ -1050,6 +1050,21 @@ OfflineWalletCertificate certificate =
 transport.offlineToriiClient().registerAllowance(certificate, authorityId, authorityPrivateKeyHex);
 ```
 
+If you want to issue and register in one call, use the top-up helpers:
+
+```java
+OfflineWalletCertificateDraft draft = /* build draft certificate */;
+
+transport
+    .offlineToriiClient()
+    .topUpAllowance(draft, authorityId, authorityPrivateKeyHex)
+    .thenAccept(topUp -> System.out.println(topUp.registration().certificateIdHex()));
+
+transport
+    .offlineToriiClient()
+    .topUpAllowanceRenewal(existingCertificateIdHex, draft, authorityId, authorityPrivateKeyHex);
+```
+
 For jurisdictions that require offline spend logs, use the shared audit logger
 and facade:
 

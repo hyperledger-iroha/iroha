@@ -3,6 +3,8 @@ package org.hyperledger.iroha.android.norito;
 import java.util.List;
 import java.util.Optional;
 import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.tx.MultisigSignature;
+import org.hyperledger.iroha.android.tx.MultisigSignatures;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
@@ -18,13 +20,22 @@ public final class SignedTransactionEncoder {
   private static final TypeAdapter<byte[]> SIGNATURE_ADAPTER = new TransactionSignatureAdapter();
   private static final TypeAdapter<Optional<byte[]>> EMPTY_OPTION_ADAPTER =
       NoritoAdapters.option(BYTE_VECTOR_ADAPTER);
+  private static final TypeAdapter<MultisigSignature> MULTISIG_SIGNATURE_ADAPTER =
+      new MultisigSignatureAdapter();
+  private static final TypeAdapter<List<MultisigSignature>> MULTISIG_SIGNATURE_LIST_ADAPTER =
+      NoritoAdapters.sequence(MULTISIG_SIGNATURE_ADAPTER);
+  private static final TypeAdapter<MultisigSignatures> MULTISIG_SIGNATURES_ADAPTER =
+      new MultisigSignaturesAdapter();
+  private static final TypeAdapter<Optional<MultisigSignatures>> MULTISIG_SIGNATURES_OPTION_ADAPTER =
+      NoritoAdapters.option(MULTISIG_SIGNATURES_ADAPTER);
   private static final NoritoJavaCodecAdapter PAYLOAD_CODEC = new NoritoJavaCodecAdapter();
 
   private SignedTransactionEncoder() {}
 
   public static byte[] encode(final SignedTransaction transaction) throws NoritoException {
     final TransactionPayload payload = PAYLOAD_CODEC.decodeTransaction(transaction.encodedPayload());
-    final SignedRecord record = new SignedRecord(transaction.signature(), payload);
+    final SignedRecord record =
+        new SignedRecord(transaction.signature(), payload, transaction.multisigSignatures());
     try {
       return NoritoCodec.encodeAdaptive(record, SignedTransactionAdapter.INSTANCE).payload();
     } catch (final Exception ex) {
@@ -43,10 +54,15 @@ public final class SignedTransactionEncoder {
   private static final class SignedRecord {
     private final byte[] signature;
     private final TransactionPayload payload;
+    private final Optional<MultisigSignatures> multisigSignatures;
 
-    private SignedRecord(final byte[] signature, final TransactionPayload payload) {
+    private SignedRecord(
+        final byte[] signature,
+        final TransactionPayload payload,
+        final Optional<MultisigSignatures> multisigSignatures) {
       this.signature = signature;
       this.payload = payload;
+      this.multisigSignatures = multisigSignatures == null ? Optional.empty() : multisigSignatures;
     }
 
     private byte[] signature() {
@@ -55,6 +71,10 @@ public final class SignedTransactionEncoder {
 
     private TransactionPayload payload() {
       return payload;
+    }
+
+    private Optional<MultisigSignatures> multisigSignatures() {
+      return multisigSignatures;
     }
   }
 
@@ -66,8 +86,7 @@ public final class SignedTransactionEncoder {
       encodeSizedField(encoder, SIGNATURE_ADAPTER, value.signature());
       encodeSizedField(encoder, PAYLOAD_ADAPTER, value.payload());
       encodeSizedField(encoder, EMPTY_OPTION_ADAPTER, Optional.empty());
-      // TODO: Encode multisig signatures once Android SDK exposes them.
-      encodeSizedField(encoder, EMPTY_OPTION_ADAPTER, Optional.empty());
+      encodeSizedField(encoder, MULTISIG_SIGNATURES_OPTION_ADAPTER, value.multisigSignatures());
     }
 
     @Override
@@ -95,6 +114,31 @@ public final class SignedTransactionEncoder {
     @Override
     public byte[] decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
       throw new UnsupportedOperationException("Decoding signatures is not supported");
+    }
+  }
+
+  private static final class MultisigSignatureAdapter implements TypeAdapter<MultisigSignature> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final MultisigSignature value) {
+      BYTE_VECTOR_ADAPTER.encode(encoder, value.publicKeyNoritoPayload());
+      BYTE_VECTOR_ADAPTER.encode(encoder, value.signature());
+    }
+
+    @Override
+    public MultisigSignature decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
+      throw new UnsupportedOperationException("Decoding multisig signatures is not supported");
+    }
+  }
+
+  private static final class MultisigSignaturesAdapter implements TypeAdapter<MultisigSignatures> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final MultisigSignatures value) {
+      MULTISIG_SIGNATURE_LIST_ADAPTER.encode(encoder, value.signatures());
+    }
+
+    @Override
+    public MultisigSignatures decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
+      throw new UnsupportedOperationException("Decoding multisig signature bundles is not supported");
     }
   }
 }

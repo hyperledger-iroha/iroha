@@ -1669,6 +1669,162 @@ public final class NoritoStreaming {
     }
   }
 
+  public sealed interface CryptoError
+      permits CryptoError.NonMonotonicKeyCounter,
+          CryptoError.SuiteChanged,
+          CryptoError.ContentKeyRegression,
+          CryptoError.InvalidValidFrom,
+          CryptoError.InvalidWrappedKey {
+    record NonMonotonicKeyCounter(long previous, long found) implements CryptoError {}
+
+    record SuiteChanged(EncryptionSuite expected, EncryptionSuite found) implements CryptoError {
+      public SuiteChanged {
+        Objects.requireNonNull(expected, "expected");
+        Objects.requireNonNull(found, "found");
+      }
+    }
+
+    record ContentKeyRegression(long previous, long found) implements CryptoError {}
+
+    record InvalidValidFrom(long previous, long found) implements CryptoError {}
+
+    record InvalidWrappedKey() implements CryptoError {}
+  }
+
+  public static final class CryptoException extends RuntimeException {
+    private final CryptoError error;
+
+    public CryptoException(CryptoError error) {
+      super(error.toString());
+      this.error = Objects.requireNonNull(error, "error");
+    }
+
+    public CryptoError error() {
+      return error;
+    }
+  }
+
+  public record KeyUpdateSnapshot(EncryptionSuite suite, long lastCounter) {
+    public KeyUpdateSnapshot {
+      Objects.requireNonNull(suite, "suite");
+      if (lastCounter < 0 || Long.compareUnsigned(lastCounter, -1L) > 0) {
+        throw new IllegalArgumentException("lastCounter must fit in u64");
+      }
+    }
+  }
+
+  public record ContentKeySnapshot(long lastId, long lastValidFrom) {
+    public ContentKeySnapshot {
+      if (lastId < 0 || Long.compareUnsigned(lastId, -1L) > 0) {
+        throw new IllegalArgumentException("lastId must fit in u64");
+      }
+      if (lastValidFrom < 0 || Long.compareUnsigned(lastValidFrom, -1L) > 0) {
+        throw new IllegalArgumentException("lastValidFrom must fit in u64");
+      }
+    }
+  }
+
+  public static final class KeyUpdateState {
+    private EncryptionSuite suite;
+    private Long lastCounter;
+
+    public void record(KeyUpdate frame) {
+      Objects.requireNonNull(frame, "frame");
+      if (lastCounter != null && frame.keyCounter() <= lastCounter) {
+        throw new CryptoException(
+            new CryptoError.NonMonotonicKeyCounter(lastCounter, frame.keyCounter()));
+      }
+      if (suite != null) {
+        if (!suite.equals(frame.suite())) {
+          throw new CryptoException(new CryptoError.SuiteChanged(suite, frame.suite()));
+        }
+      } else {
+        suite = frame.suite();
+      }
+      lastCounter = frame.keyCounter();
+    }
+
+    public Optional<EncryptionSuite> suite() {
+      return Optional.ofNullable(suite);
+    }
+
+    public Optional<Long> lastCounter() {
+      return Optional.ofNullable(lastCounter);
+    }
+
+    public void restore(Optional<Long> lastCounter, Optional<EncryptionSuite> suite) {
+      Objects.requireNonNull(lastCounter, "lastCounter");
+      Objects.requireNonNull(suite, "suite");
+      this.lastCounter = lastCounter.orElse(null);
+      this.suite = suite.orElse(null);
+    }
+
+    public Optional<KeyUpdateSnapshot> snapshot() {
+      if (suite == null || lastCounter == null) {
+        return Optional.empty();
+      }
+      return Optional.of(new KeyUpdateSnapshot(suite, lastCounter));
+    }
+
+    public static KeyUpdateState fromSnapshot(KeyUpdateSnapshot snapshot) {
+      Objects.requireNonNull(snapshot, "snapshot");
+      KeyUpdateState state = new KeyUpdateState();
+      state.restore(Optional.of(snapshot.lastCounter()), Optional.of(snapshot.suite()));
+      return state;
+    }
+  }
+
+  public static final class ContentKeyState {
+    private Long lastId;
+    private Long lastValidFrom;
+
+    public void record(ContentKeyUpdate update) {
+      Objects.requireNonNull(update, "update");
+      if (update.gckWrapped().length == 0) {
+        throw new CryptoException(new CryptoError.InvalidWrappedKey());
+      }
+      if (lastId != null && update.contentKeyId() <= lastId) {
+        throw new CryptoException(
+            new CryptoError.ContentKeyRegression(lastId, update.contentKeyId()));
+      }
+      if (lastValidFrom != null && update.validFromSegment() < lastValidFrom) {
+        throw new CryptoException(
+            new CryptoError.InvalidValidFrom(lastValidFrom, update.validFromSegment()));
+      }
+      lastId = update.contentKeyId();
+      lastValidFrom = update.validFromSegment();
+    }
+
+    public Optional<Long> lastId() {
+      return Optional.ofNullable(lastId);
+    }
+
+    public Optional<Long> lastValidFrom() {
+      return Optional.ofNullable(lastValidFrom);
+    }
+
+    public void restore(Optional<Long> lastId, Optional<Long> lastValidFrom) {
+      Objects.requireNonNull(lastId, "lastId");
+      Objects.requireNonNull(lastValidFrom, "lastValidFrom");
+      this.lastId = lastId.orElse(null);
+      this.lastValidFrom = lastValidFrom.orElse(null);
+    }
+
+    public Optional<ContentKeySnapshot> snapshot() {
+      if (lastId == null || lastValidFrom == null) {
+        return Optional.empty();
+      }
+      return Optional.of(new ContentKeySnapshot(lastId, lastValidFrom));
+    }
+
+    public static ContentKeyState fromSnapshot(ContentKeySnapshot snapshot) {
+      Objects.requireNonNull(snapshot, "snapshot");
+      ContentKeyState state = new ContentKeyState();
+      state.restore(Optional.of(snapshot.lastId()), Optional.of(snapshot.lastValidFrom()));
+      return state;
+    }
+  }
+
   public record PrivacyRouteUpdate(
       byte[] routeId,
       byte[] streamId,

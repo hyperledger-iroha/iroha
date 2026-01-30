@@ -1479,12 +1479,134 @@ fn list_filter_query_parameters() -> Vec<Value> {
     params
 }
 
+fn pagination_query_parameters() -> Vec<Value> {
+    vec![
+        integer_query_param("limit", "Optional page size limit.", Some("uint64")),
+        integer_query_param(
+            "offset",
+            "Optional starting offset (default 0).",
+            Some("uint64"),
+        ),
+    ]
+}
+
+fn explorer_pagination_query_parameters() -> Vec<Value> {
+    vec![
+        integer_query_param("page", "Optional page number (default 1).", Some("uint64")),
+        integer_query_param(
+            "per_page",
+            "Optional items per page (default 10).",
+            Some("uint64"),
+        ),
+        address_format_query_param(),
+    ]
+}
+
+fn explorer_assets_query_parameters() -> Vec<Value> {
+    let mut params = explorer_pagination_query_parameters();
+    params.push(string_query_param(
+        "owned_by",
+        "Filter assets by account owner (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+    ));
+    params.push(string_query_param(
+        "definition",
+        "Filter assets by asset definition identifier.",
+    ));
+    params.push(string_query_param(
+        "asset_id",
+        "Filter assets by asset identifier.",
+    ));
+    params
+}
+
+fn explorer_transactions_query_parameters() -> Vec<Value> {
+    let mut params = explorer_pagination_query_parameters();
+    params.push(string_query_param(
+        "authority",
+        "Filter transactions by authority account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+    ));
+    params.push(integer_query_param(
+        "block",
+        "Filter transactions by block height.",
+        Some("uint64"),
+    ));
+    params.push(string_query_param(
+        "status",
+        "Filter transactions by status (`committed` or `rejected`).",
+    ));
+    params.push(string_query_param(
+        "asset_id",
+        "Filter transactions by asset identifier.",
+    ));
+    params
+}
+
+fn explorer_instructions_query_parameters() -> Vec<Value> {
+    let mut params = explorer_pagination_query_parameters();
+    params.push(string_query_param(
+        "authority",
+        "Filter instructions by authority account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
+    ));
+    params.push(string_query_param(
+        "transaction_hash",
+        "Filter instructions by transaction hash.",
+    ));
+    params.push(string_query_param(
+        "transaction_status",
+        "Filter instructions by transaction status (`committed` or `rejected`).",
+    ));
+    params.push(integer_query_param(
+        "block",
+        "Filter instructions by block height.",
+        Some("uint64"),
+    ));
+    params.push(string_query_param(
+        "kind",
+        "Filter instructions by instruction kind (e.g., `transfer`, `mint`, `burn`).",
+    ));
+    params.push(string_query_param(
+        "asset_id",
+        "Filter instructions by asset identifier.",
+    ));
+    params
+}
+
+fn account_assets_list_query_parameters() -> Vec<Value> {
+    let mut params = pagination_query_parameters();
+    params.push(string_query_param(
+        "asset_id",
+        "Filter assets by asset identifier.",
+    ));
+    params
+}
+
+fn account_transactions_list_query_parameters() -> Vec<Value> {
+    let mut params = pagination_query_parameters();
+    params.push(address_format_query_param());
+    params.push(string_query_param(
+        "asset_id",
+        "Filter transactions by asset identifier.",
+    ));
+    params
+}
+
+fn asset_holders_list_query_parameters() -> Vec<Value> {
+    let mut params = pagination_query_parameters();
+    params.push(address_format_query_param());
+    params.push(string_query_param(
+        "asset_id",
+        "Filter holders by asset identifier.",
+    ));
+    params
+}
+
 fn offline_allowance_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
             "Filter allowances by controller account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
         ),
+        string_query_param("asset_id", "Filter allowances by asset identifier."),
         integer_query_param(
             "certificate_expires_before_ms",
             "Only include allowances whose certificate expiry is at or before this unix timestamp (ms).",
@@ -1552,6 +1674,7 @@ fn offline_transfer_query_parameters() -> Vec<Value> {
             "deposit_account_id",
             "Filter bundles by deposit account (accepts IH58 (preferred)/sora (second-best)/public-key literals).",
         ),
+        string_query_param("asset_id", "Filter bundles by asset identifier."),
         string_query_param(
             "certificate_id_hex",
             "Match bundles whose originating certificate id (hex) equals the provided value (case-insensitive).",
@@ -3280,13 +3403,17 @@ fn account_paths() -> Map {
     );
     paths.insert(
         "/v1/accounts/{account_id}/assets".to_owned(),
-        Value::Object(json_get_operation(
-            "Accounts",
-            "List account assets.",
-            "List assets held by an account.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param("account_id", "Account identifier.")],
-        )),
+        Value::Object({
+            let mut params = vec![string_path_param("account_id", "Account identifier.")];
+            params.extend(account_assets_list_query_parameters());
+            json_get_operation(
+                "Accounts",
+                "List account assets.",
+                "List assets held by an account (supports pagination and optional asset_id filtering).",
+                "#/components/schemas/JsonValue",
+                params,
+            )
+        }),
     );
     paths.insert(
         "/v1/accounts/{account_id}/assets/query".to_owned(),
@@ -3311,13 +3438,17 @@ fn account_paths() -> Map {
     );
     paths.insert(
         "/v1/accounts/{account_id}/transactions".to_owned(),
-        Value::Object(json_get_operation(
-            "Accounts",
-            "List account transactions.",
-            "List transactions authored by an account.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param("account_id", "Account identifier.")],
-        )),
+        Value::Object({
+            let mut params = vec![string_path_param("account_id", "Account identifier.")];
+            params.extend(account_transactions_list_query_parameters());
+            json_get_operation(
+                "Accounts",
+                "List account transactions.",
+                "List transactions authored by an account (supports pagination, address_format, and optional asset_id filtering).",
+                "#/components/schemas/JsonValue",
+                params,
+            )
+        }),
     );
     paths.insert(
         "/v1/accounts/{uaid}/portfolio".to_owned(),
@@ -3383,16 +3514,20 @@ fn asset_paths() -> Map {
     );
     paths.insert(
         "/v1/assets/{definition_id}/holders".to_owned(),
-        Value::Object(json_get_operation(
-            "Assets",
-            "List asset holders.",
-            "List holders for an asset definition.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param(
+        Value::Object({
+            let mut params = vec![string_path_param(
                 "definition_id",
                 "Asset definition identifier.",
-            )],
-        )),
+            )];
+            params.extend(asset_holders_list_query_parameters());
+            json_get_operation(
+                "Assets",
+                "List asset holders.",
+                "List holders for an asset definition (supports pagination, address_format, and optional asset_id filtering).",
+                "#/components/schemas/JsonValue",
+                params,
+            )
+        }),
     );
     paths.insert(
         "/v1/assets/{definition_id}/holders/query".to_owned(),
@@ -3685,13 +3820,16 @@ fn explorer_paths() -> Map {
     );
     paths.insert(
         "/v1/explorer/assets".to_owned(),
-        Value::Object(json_get_operation(
-            "Explorer",
-            "List assets (explorer).",
-            "List assets for explorer usage.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object({
+            let params = explorer_assets_query_parameters();
+            json_get_operation(
+                "Explorer",
+                "List assets (explorer).",
+                "List assets for explorer usage (supports pagination and optional owned_by/definition/asset_id filtering).",
+                "#/components/schemas/JsonValue",
+                params,
+            )
+        }),
     );
     paths.insert(
         "/v1/explorer/nfts".to_owned(),
@@ -3715,13 +3853,16 @@ fn explorer_paths() -> Map {
     );
     paths.insert(
         "/v1/explorer/transactions".to_owned(),
-        Value::Object(json_get_operation(
-            "Explorer",
-            "List transactions (explorer).",
-            "List transactions for explorer usage.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object({
+            let params = explorer_transactions_query_parameters();
+            json_get_operation(
+                "Explorer",
+                "List transactions (explorer).",
+                "List transactions for explorer usage (supports pagination and optional authority/block/status/asset_id filtering).",
+                "#/components/schemas/JsonValue",
+                params,
+            )
+        }),
     );
     paths.insert(
         "/v1/explorer/transactions/stream".to_owned(),
@@ -3733,13 +3874,16 @@ fn explorer_paths() -> Map {
     );
     paths.insert(
         "/v1/explorer/instructions".to_owned(),
-        Value::Object(json_get_operation(
-            "Explorer",
-            "List instructions (explorer).",
-            "List instructions for explorer usage.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object({
+            let params = explorer_instructions_query_parameters();
+            json_get_operation(
+                "Explorer",
+                "List instructions (explorer).",
+                "List instructions for explorer usage (supports pagination and optional authority/transaction/block/kind/asset_id filtering).",
+                "#/components/schemas/JsonValue",
+                params,
+            )
+        }),
     );
     paths.insert(
         "/v1/explorer/instructions/stream".to_owned(),
@@ -9825,6 +9969,164 @@ mod tests {
         assert!(paths.contains_key("/v1/soranet/privacy/event"));
         assert!(paths.contains_key("/v1/webhooks"));
         assert!(paths.contains_key("/v1/notify/devices"));
+    }
+
+    #[test]
+    fn account_and_asset_list_params_include_asset_id_filters() {
+        fn params_for(doc: &Value, path: &str) -> Vec<String> {
+            let paths = doc
+                .get("paths")
+                .and_then(Value::as_object)
+                .expect("paths section");
+            let entry = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .expect("path entry");
+            let get_op = entry.get("get").and_then(Value::as_object).expect("get op");
+            get_op
+                .get("parameters")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|param| {
+                    param
+                        .as_object()
+                        .and_then(|obj| obj.get("name"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .collect()
+        }
+
+        let doc = generate_spec();
+        let account_assets = params_for(&doc, "/v1/accounts/{account_id}/assets");
+        assert!(account_assets.contains(&"limit".to_owned()));
+        assert!(account_assets.contains(&"offset".to_owned()));
+        assert!(account_assets.contains(&"asset_id".to_owned()));
+
+        let account_transactions = params_for(&doc, "/v1/accounts/{account_id}/transactions");
+        assert!(account_transactions.contains(&"limit".to_owned()));
+        assert!(account_transactions.contains(&"offset".to_owned()));
+        assert!(account_transactions.contains(&"address_format".to_owned()));
+        assert!(account_transactions.contains(&"asset_id".to_owned()));
+
+        let asset_holders = params_for(&doc, "/v1/assets/{definition_id}/holders");
+        assert!(asset_holders.contains(&"limit".to_owned()));
+        assert!(asset_holders.contains(&"offset".to_owned()));
+        assert!(asset_holders.contains(&"address_format".to_owned()));
+        assert!(asset_holders.contains(&"asset_id".to_owned()));
+    }
+
+    #[test]
+    fn explorer_assets_params_include_asset_id_filter() {
+        fn params_for(doc: &Value, path: &str) -> Vec<String> {
+            let paths = doc
+                .get("paths")
+                .and_then(Value::as_object)
+                .expect("paths section");
+            let entry = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .expect("path entry");
+            let get_op = entry.get("get").and_then(Value::as_object).expect("get op");
+            get_op
+                .get("parameters")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|param| {
+                    param
+                        .as_object()
+                        .and_then(|obj| obj.get("name"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .collect()
+        }
+
+        let doc = generate_spec();
+        let explorer_assets = params_for(&doc, "/v1/explorer/assets");
+        assert!(explorer_assets.contains(&"page".to_owned()));
+        assert!(explorer_assets.contains(&"per_page".to_owned()));
+        assert!(explorer_assets.contains(&"asset_id".to_owned()));
+        assert!(explorer_assets.contains(&"owned_by".to_owned()));
+        assert!(explorer_assets.contains(&"definition".to_owned()));
+    }
+
+    #[test]
+    fn explorer_transactions_params_include_asset_id_filter() {
+        fn params_for(doc: &Value, path: &str) -> Vec<String> {
+            let paths = doc
+                .get("paths")
+                .and_then(Value::as_object)
+                .expect("paths section");
+            let entry = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .expect("path entry");
+            let get_op = entry.get("get").and_then(Value::as_object).expect("get op");
+            get_op
+                .get("parameters")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|param| {
+                    param
+                        .as_object()
+                        .and_then(|obj| obj.get("name"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .collect()
+        }
+
+        let doc = generate_spec();
+        let explorer_transactions = params_for(&doc, "/v1/explorer/transactions");
+        assert!(explorer_transactions.contains(&"page".to_owned()));
+        assert!(explorer_transactions.contains(&"per_page".to_owned()));
+        assert!(explorer_transactions.contains(&"asset_id".to_owned()));
+        assert!(explorer_transactions.contains(&"authority".to_owned()));
+        assert!(explorer_transactions.contains(&"block".to_owned()));
+        assert!(explorer_transactions.contains(&"status".to_owned()));
+    }
+
+    #[test]
+    fn explorer_instructions_params_include_asset_id_filter() {
+        fn params_for(doc: &Value, path: &str) -> Vec<String> {
+            let paths = doc
+                .get("paths")
+                .and_then(Value::as_object)
+                .expect("paths section");
+            let entry = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .expect("path entry");
+            let get_op = entry.get("get").and_then(Value::as_object).expect("get op");
+            get_op
+                .get("parameters")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|param| {
+                    param
+                        .as_object()
+                        .and_then(|obj| obj.get("name"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .collect()
+        }
+
+        let doc = generate_spec();
+        let explorer_instructions = params_for(&doc, "/v1/explorer/instructions");
+        assert!(explorer_instructions.contains(&"page".to_owned()));
+        assert!(explorer_instructions.contains(&"per_page".to_owned()));
+        assert!(explorer_instructions.contains(&"asset_id".to_owned()));
+        assert!(explorer_instructions.contains(&"authority".to_owned()));
+        assert!(explorer_instructions.contains(&"transaction_hash".to_owned()));
+        assert!(explorer_instructions.contains(&"transaction_status".to_owned()));
+        assert!(explorer_instructions.contains(&"block".to_owned()));
+        assert!(explorer_instructions.contains(&"kind".to_owned()));
     }
 
     #[test]

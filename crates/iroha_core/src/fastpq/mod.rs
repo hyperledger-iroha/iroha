@@ -27,8 +27,6 @@ use thiserror::Error;
 const AUTHORITY_DIGEST_DOMAIN: &[u8] = b"iroha:fastpq:v1:authority|";
 const TX_SET_HASH_DOMAIN: &[u8] = b"fastpq:v1:tx_set";
 const PERMISSION_TABLE_NODE_DOMAIN: &[u8] = b"fastpq:v1:poseidon_node";
-// TODO: wire real permission epochs once role permission metadata includes them.
-const PERMISSION_TABLE_EPOCH: u64 = 0;
 /// Metadata key storing the originating entry hash for a batch.
 pub const ENTRY_HASH_METADATA_KEY: &str = "entry_hash";
 /// Metadata key storing the transcript count embedded in a batch.
@@ -144,14 +142,14 @@ where
     I: IntoIterator<Item = (&'a RoleId, &'a Role)>,
 {
     let mut entries = Vec::new();
-    let epoch_bytes = PERMISSION_TABLE_EPOCH.to_le_bytes();
     for (role_id, role) in roles {
         let role_bytes = hash_encoded(role_id);
         for permission in &role.permissions {
+            let epoch = role.permission_epoch(permission).unwrap_or_default();
             entries.push(PermissionTableEntry {
                 role_bytes,
                 permission_bytes: hash_encoded(permission),
-                epoch_bytes,
+                epoch_bytes: epoch.to_le_bytes(),
             });
         }
     }
@@ -548,11 +546,7 @@ fn operation_from_dto(operation: &FastpqOperationKind) -> OperationKind {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{BTreeMap, BTreeSet},
-        num::NonZeroU64,
-        str::FromStr,
-    };
+    use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr};
 
     use iroha_data_model::{
         block::{
@@ -562,6 +556,7 @@ mod tests {
         fastpq::{TransferTranscript, TransferTranscriptBundle},
         permission::Permission,
         role::{Role, RoleId},
+        Registrable,
     };
     use iroha_primitives::{json::Json, numeric::Numeric};
     use iroha_test_samples::{ALICE_ID, BOB_ID};
@@ -608,14 +603,13 @@ mod tests {
         let perm_b = Permission::new("perm_b".to_string(), Json::new(()));
         let role_a: RoleId = "role_a".parse().expect("role id");
         let role_b: RoleId = "role_b".parse().expect("role id");
-        let role_a = Role {
-            id: role_a.clone(),
-            permissions: BTreeSet::from([perm_a.clone(), perm_b]),
-        };
-        let role_b = Role {
-            id: role_b.clone(),
-            permissions: BTreeSet::from([perm_a]),
-        };
+        let role_a = Role::new(role_a.clone(), (*ALICE_ID).clone())
+            .add_permission(perm_a.clone())
+            .add_permission(perm_b)
+            .build(&ALICE_ID);
+        let role_b = Role::new(role_b.clone(), (*ALICE_ID).clone())
+            .add_permission(perm_a)
+            .build(&ALICE_ID);
         let first = [
             (role_b.id.clone(), role_b.clone()),
             (role_a.id.clone(), role_a.clone()),
@@ -628,6 +622,29 @@ mod tests {
         let root_second = permission_table_root(second.iter().map(|(id, role)| (id, role)));
         assert_eq!(root_first, root_second);
         assert_ne!(root_first, [0u8; 32]);
+    }
+
+    #[test]
+    fn permission_table_root_tracks_permission_epochs() {
+        let perm = Permission::new("perm_epoch".to_string(), Json::new(()));
+        let role_id: RoleId = "role_epoch".parse().expect("role id");
+        let role_epoch_0 = Role::new(role_id.clone(), (*ALICE_ID).clone())
+            .add_permission_with_epoch(perm.clone(), 0)
+            .build(&ALICE_ID);
+        let role_epoch_7 = Role::new(role_id.clone(), (*ALICE_ID).clone())
+            .add_permission_with_epoch(perm.clone(), 7)
+            .build(&ALICE_ID);
+        let root_epoch_0 = permission_table_root(
+            [(role_id.clone(), role_epoch_0)]
+                .iter()
+                .map(|(id, role)| (id, role)),
+        );
+        let root_epoch_7 = permission_table_root(
+            [(role_id.clone(), role_epoch_7)]
+                .iter()
+                .map(|(id, role)| (id, role)),
+        );
+        assert_ne!(root_epoch_0, root_epoch_7);
     }
 
     #[test]

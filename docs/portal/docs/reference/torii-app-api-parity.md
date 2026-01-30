@@ -22,6 +22,9 @@ feature-gated route builders. For every `/v1/*` surface in the roadmap we verifi
 - Router registration under the `app_api` or `connect` feature groups.
 - Existing integration/unit tests and the owning team responsible for long-term coverage.
 
+Account assets/transactions and asset-holder listings accept optional `asset_id` query parameters
+for pre-filtering, in addition to the existing pagination/backpressure limits.
+
 ## Auth & canonical signing
 
 - App-facing GET/POST endpoints accept optional canonical request headers (`X-Iroha-Account`, `X-Iroha-Signature`) built from `METHOD\n/path\nsorted_query\nsha256(body)`; Torii wraps them into `QueryRequestWithAuthority` before executor validation so they mirror `/query`.

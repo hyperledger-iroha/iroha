@@ -1246,6 +1246,26 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testGetAssetsEncodesAssetIdFilter() async throws {
+        let owner = try canonicalOwnerLiteral()
+        let assetId = "rose#wonderland#\(owner)"
+        StubURLProtocol.handler = { request in
+            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/alice%40wonderland/assets"))
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let assetFilter = components?.queryItems?.first(where: { $0.name == "asset_id" })?.value
+            XCTAssertEqual(assetFilter, assetId)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            [{"asset_id":"\(assetId)","quantity":"10"}]
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let balances = try await makeClient().getAssets(accountId: "alice@wonderland", assetId: assetId)
+        XCTAssertEqual(balances.count, 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetTransactionsEncodesAccountLiteral() async throws {
         StubURLProtocol.handler = { request in
             // URL.path always returns decoded path. Check absoluteString to verify encoding.
@@ -1258,6 +1278,26 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let transactions = try await makeClient().getTransactions(accountId: "alice@wonderland")
+        XCTAssertEqual(transactions.total, 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetTransactionsEncodesAssetIdFilter() async throws {
+        let owner = try canonicalOwnerLiteral()
+        let assetId = "rose#wonderland#\(owner)"
+        StubURLProtocol.handler = { request in
+            XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/alice%40wonderland/transactions"))
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let assetFilter = components?.queryItems?.first(where: { $0.name == "asset_id" })?.value
+            XCTAssertEqual(assetFilter, assetId)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {"items":[{"entrypoint_hash":"hash","authority":"alice@wonderland","timestamp_ms":1,"result_ok":true}],"total":1}
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let transactions = try await makeClient().getTransactions(accountId: "alice@wonderland", assetId: assetId)
         XCTAssertEqual(transactions.total, 1)
     }
 
@@ -1325,6 +1365,919 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(qr.preferredFormat, .compressed)
         XCTAssertEqual(qr.literal, "soraexample")
         XCTAssertEqual(qr.qrVersion, 6)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerInstructionsEncodesQueryAndDecodesResponse() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let queryItems = components?.queryItems ?? []
+            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(query["page"], "2")
+            XCTAssertEqual(query["per_page"], "25")
+            XCTAssertEqual(query["address_format"], "compressed")
+            XCTAssertEqual(query["authority"], "alice@wonderland")
+            XCTAssertEqual(query["transaction_hash"], "deadbeef")
+            XCTAssertEqual(query["transaction_status"], "Committed")
+            XCTAssertEqual(query["block"], "5")
+            XCTAssertEqual(query["kind"], "Transfer")
+            XCTAssertEqual(query["asset_id"], "rose#wonderland#alice@wonderland")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+                "pagination": {"page":2,"per_page":25,"total_pages":1,"total_items":1},
+                "items": [
+                    {
+                        "authority":"alice@wonderland",
+                        "created_at":"2025-01-01T00:00:00Z",
+                        "kind":"Transfer",
+                        "box":{
+                            "scale":"0xdead",
+                            "json":{
+                                "kind":"Transfer",
+                                "payload":{
+                                    "Asset":{
+                                        "source":"alice@wonderland",
+                                        "destination":"bob@wonderland",
+                                        "object":"rose#wonderland",
+                                        "value":"10"
+                                    }
+                                },
+                                "wire_id":"10",
+                                "encoded":"beef"
+                            }
+                        },
+                        "transaction_hash":"hash",
+                        "transaction_status":"Committed",
+                        "block":5,
+                        "index":0
+                    }
+                ]
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let params = ToriiExplorerInstructionsParams(page: 2,
+                                                     perPage: 25,
+                                                     addressFormat: .compressed,
+                                                     authority: "alice@wonderland",
+                                                     transactionHash: "deadbeef",
+                                                     transactionStatus: "Committed",
+                                                     block: 5,
+                                                     kind: "Transfer",
+                                                     assetId: "rose#wonderland#alice@wonderland")
+        let page = try await makeClient().getExplorerInstructions(params: params)
+        XCTAssertEqual(page.pagination.page, 2)
+        XCTAssertEqual(page.pagination.perPage, 25)
+        XCTAssertEqual(page.pagination.totalItems, 1)
+        XCTAssertEqual(page.items.count, 1)
+        let item = page.items[0]
+        XCTAssertEqual(item.kind, "Transfer")
+        XCTAssertEqual(item.transactionHash, "hash")
+        XCTAssertEqual(item.box.scale, "0xdead")
+        guard case let .object(payload) = item.box.json else {
+            return XCTFail("Expected instruction box json payload to be an object.")
+        }
+        guard case let .string(kind) = payload["kind"] else {
+            return XCTFail("Expected instruction box json to contain a kind string.")
+        }
+        XCTAssertEqual(kind, "Transfer")
+    }
+
+    func testExplorerTransferDetailsParsesAsset() throws {
+        let json = """
+        {
+            "authority":"alice@wonderland",
+            "created_at":"2025-01-01T00:00:00Z",
+            "kind":"Transfer",
+            "box":{
+                "scale":"0x00",
+                "json":{
+                    "kind":"Transfer",
+                    "payload":{
+                        "variant":"Asset",
+                        "value":{
+                            "source":"rose##ih58example@wonderland",
+                            "object":"10",
+                            "destination":"bob@wonderland"
+                        }
+                    },
+                    "wire_id":"10",
+                    "encoded":"beef"
+                }
+            },
+            "transaction_hash":"hash",
+            "transaction_status":"Committed",
+            "block":1,
+            "index":0
+        }
+        """
+        let item = try JSONDecoder().decode(ToriiExplorerInstructionItem.self, from: Data(json.utf8))
+        guard let details = item.transferDetails() else {
+            return XCTFail("Expected transfer details.")
+        }
+        switch details {
+        case .asset(let asset):
+            XCTAssertEqual(asset.sourceAssetId, "rose##ih58example@wonderland")
+            XCTAssertEqual(asset.destinationAccountId, "bob@wonderland")
+            XCTAssertEqual(asset.amount, "10")
+            XCTAssertEqual(asset.senderAccountId, "ih58example@wonderland")
+            XCTAssertEqual(asset.assetDefinitionId, "rose#wonderland")
+            XCTAssertEqual(details.role(for: "ih58example@wonderland"), .sender)
+            XCTAssertEqual(details.role(for: "bob@wonderland"), .receiver)
+            XCTAssertTrue(details.involvesAccount("bob@wonderland"))
+            XCTAssertTrue(details.involvesAssetDefinition("rose#wonderland"))
+            XCTAssertFalse(details.involvesAssetDefinition("tulip#wonderland"))
+        case .assetBatch:
+            XCTFail("Expected asset transfer details.")
+        }
+    }
+
+    func testExplorerTransferDetailsParsesAssetBatch() throws {
+        let json = """
+        {
+            "authority":"alice@wonderland",
+            "created_at":"2025-01-01T00:00:00Z",
+            "kind":"Transfer",
+            "box":{
+                "scale":"0x00",
+                "json":{
+                    "kind":"Transfer",
+                    "payload":{
+                        "variant":"AssetBatch",
+                        "value":{
+                            "entries":[
+                                {
+                                    "from":"alice@wonderland",
+                                    "to":"bob@wonderland",
+                                    "asset_definition":"rose#wonderland",
+                                    "amount":"5"
+                                },
+                                {
+                                    "from":"carol@wonderland",
+                                    "to":"dave@wonderland",
+                                    "asset_definition":"tulip#wonderland",
+                                    "amount":"2"
+                                }
+                            ]
+                        }
+                    },
+                    "wire_id":"10",
+                    "encoded":"beef"
+                }
+            },
+            "transaction_hash":"hash",
+            "transaction_status":"Committed",
+            "block":1,
+            "index":0
+        }
+        """
+        let item = try JSONDecoder().decode(ToriiExplorerInstructionItem.self, from: Data(json.utf8))
+        guard let details = item.transferDetails() else {
+            return XCTFail("Expected transfer details.")
+        }
+        switch details {
+        case .asset:
+            XCTFail("Expected batch transfer details.")
+        case .assetBatch(let entries):
+            XCTAssertEqual(entries.count, 2)
+            XCTAssertEqual(entries[0].senderAccountId, "alice@wonderland")
+            XCTAssertEqual(entries[0].receiverAccountId, "bob@wonderland")
+            XCTAssertEqual(entries[0].assetDefinitionId, "rose#wonderland")
+            XCTAssertEqual(entries[0].amount, "5")
+            XCTAssertEqual(entries[1].senderAccountId, "carol@wonderland")
+            XCTAssertEqual(entries[1].receiverAccountId, "dave@wonderland")
+            XCTAssertEqual(entries[1].assetDefinitionId, "tulip#wonderland")
+            XCTAssertEqual(entries[1].amount, "2")
+            XCTAssertEqual(details.role(for: "alice@wonderland"), .sender)
+            XCTAssertEqual(details.role(for: "bob@wonderland"), .receiver)
+            XCTAssertTrue(details.involvesAccount("dave@wonderland"))
+            XCTAssertTrue(details.involvesAssetDefinition("rose#wonderland"))
+            XCTAssertTrue(details.involvesAssetDefinition("tulip#wonderland"))
+            XCTAssertFalse(details.involvesAssetDefinition("orchid#wonderland"))
+        }
+    }
+
+    func testExplorerTransferRecordsFiltersByAccountAndAssetDefinition() throws {
+        let json = """
+        {
+            "pagination": {"page":1,"per_page":10,"total_pages":1,"total_items":2},
+            "items": [
+                {
+                    "authority":"alice@wonderland",
+                    "created_at":"2025-01-01T00:00:00Z",
+                    "kind":"Transfer",
+                    "box":{
+                        "scale":"0x00",
+                        "json":{
+                            "kind":"Transfer",
+                            "payload":{
+                                "variant":"Asset",
+                                "value":{
+                                    "source":"rose##ih58example@wonderland",
+                                    "object":"10",
+                                    "destination":"bob@wonderland"
+                                }
+                            },
+                            "wire_id":"10",
+                            "encoded":"beef"
+                        }
+                    },
+                    "transaction_hash":"hash1",
+                    "transaction_status":"Committed",
+                    "block":1,
+                    "index":0
+                },
+                {
+                    "authority":"carol@wonderland",
+                    "created_at":"2025-01-01T00:00:00Z",
+                    "kind":"Transfer",
+                    "box":{
+                        "scale":"0x00",
+                        "json":{
+                            "kind":"Transfer",
+                            "payload":{
+                                "variant":"AssetBatch",
+                                "value":{
+                                    "entries":[
+                                        {
+                                            "from":"carol@wonderland",
+                                            "to":"dave@wonderland",
+                                            "asset_definition":"tulip#wonderland",
+                                            "amount":"2"
+                                        }
+                                    ]
+                                }
+                            },
+                            "wire_id":"10",
+                            "encoded":"beef"
+                        }
+                    },
+                    "transaction_hash":"hash2",
+                    "transaction_status":"Committed",
+                    "block":1,
+                    "index":1
+                }
+            ]
+        }
+        """
+        let page = try JSONDecoder().decode(ToriiExplorerInstructionsPage.self, from: Data(json.utf8))
+        XCTAssertEqual(page.transferRecords().count, 2)
+        XCTAssertEqual(page.transferRecords(matchingAccount: "bob@wonderland").count, 1)
+        XCTAssertEqual(page.transferRecords(matchingAccount: "carol@wonderland").count, 1)
+        XCTAssertEqual(page.transferRecords(assetDefinitionId: "tulip#wonderland").count, 1)
+        XCTAssertEqual(page.transferRecords(assetDefinitionId: "rose#wonderland").count, 1)
+        XCTAssertEqual(page.transferRecords(matchingAccount: "bob@wonderland",
+                                            assetDefinitionId: "tulip#wonderland").count, 0)
+    }
+
+    func testExplorerTransferSummariesDeriveDirection() throws {
+        let json = """
+        {
+            "pagination": {"page":1,"per_page":10,"total_pages":1,"total_items":1},
+            "items": [
+                {
+                    "authority":"alice@wonderland",
+                    "created_at":"2025-01-01T00:00:00Z",
+                    "kind":"Transfer",
+                    "box":{
+                        "scale":"0x00",
+                        "json":{
+                            "kind":"Transfer",
+                            "payload":{
+                                "variant":"Asset",
+                                "value":{
+                                    "source":"rose##ih58example@wonderland",
+                                    "object":"10",
+                                    "destination":"bob@wonderland"
+                                }
+                            },
+                            "wire_id":"10",
+                            "encoded":"beef"
+                        }
+                    },
+                    "transaction_hash":"hash1",
+                    "transaction_status":"Committed",
+                    "block":1,
+                    "index":0
+                }
+            ]
+        }
+        """
+        let page = try JSONDecoder().decode(ToriiExplorerInstructionsPage.self, from: Data(json.utf8))
+        let summaries = page.transferSummaries(matchingAccount: "bob@wonderland")
+        XCTAssertEqual(summaries.count, 1)
+        let summary = summaries[0]
+        XCTAssertEqual(summary.direction, .incoming)
+        XCTAssertEqual(summary.senderAccountId, "ih58example@wonderland")
+        XCTAssertEqual(summary.receiverAccountId, "bob@wonderland")
+        XCTAssertEqual(summary.assetDefinitionId, "rose#wonderland")
+        XCTAssertEqual(summary.amount, "10")
+        XCTAssertTrue(summary.isIncoming)
+        XCTAssertFalse(summary.isOutgoing)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerInstructionsCompletion() {
+        let expectation = expectation(description: "explorer-instructions")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            XCTAssertNil(components?.queryItems)
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {"pagination":{"page":1,"per_page":10,"total_pages":0,"total_items":0},"items":[]}
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        _ = makeClient().getExplorerInstructions { result in
+            switch result {
+            case .success(let page):
+                XCTAssertEqual(page.items.count, 0)
+                XCTAssertEqual(page.pagination.totalItems, 0)
+            case .failure(let error):
+                XCTFail("Unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: 2.0)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransfersFiltersByAccount() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+                "pagination": {"page":1,"per_page":10,"total_pages":1,"total_items":2},
+                "items": [
+                    {
+                        "authority":"alice@wonderland",
+                        "created_at":"2025-01-01T00:00:00Z",
+                        "kind":"Transfer",
+                        "box":{
+                            "scale":"0x00",
+                            "json":{
+                                "kind":"Transfer",
+                                "payload":{
+                                    "variant":"Asset",
+                                    "value":{
+                                        "source":"rose##ih58example@wonderland",
+                                        "object":"10",
+                                        "destination":"bob@wonderland"
+                                    }
+                                },
+                                "wire_id":"10",
+                                "encoded":"beef"
+                            }
+                        },
+                        "transaction_hash":"hash1",
+                        "transaction_status":"Committed",
+                        "block":1,
+                        "index":0
+                    },
+                    {
+                        "authority":"carol@wonderland",
+                        "created_at":"2025-01-01T00:00:00Z",
+                        "kind":"Transfer",
+                        "box":{
+                            "scale":"0x00",
+                            "json":{
+                                "kind":"Transfer",
+                                "payload":{
+                                    "variant":"AssetBatch",
+                                    "value":{
+                                        "entries":[
+                                            {
+                                                "from":"carol@wonderland",
+                                                "to":"dave@wonderland",
+                                                "asset_definition":"tulip#wonderland",
+                                                "amount":"2"
+                                            }
+                                        ]
+                                    }
+                                },
+                                "wire_id":"10",
+                                "encoded":"beef"
+                            }
+                        },
+                        "transaction_hash":"hash2",
+                        "transaction_status":"Committed",
+                        "block":1,
+                        "index":1
+                    }
+                ]
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let transfers = try await makeClient().getExplorerTransfers(matchingAccount: "bob@wonderland")
+        XCTAssertEqual(transfers.count, 1)
+        XCTAssertEqual(transfers.first?.instruction.transactionHash, "hash1")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransactionsEncodesQueryAndDecodesResponse() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/transactions")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let queryItems = components?.queryItems ?? []
+            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(query["page"], "2")
+            XCTAssertEqual(query["per_page"], "25")
+            XCTAssertEqual(query["address_format"], "compressed")
+            XCTAssertEqual(query["authority"], "alice@wonderland")
+            XCTAssertEqual(query["block"], "5")
+            XCTAssertEqual(query["status"], "Committed")
+            XCTAssertEqual(query["asset_id"], "rose#wonderland#alice@wonderland")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+                "pagination": {"page":2,"per_page":25,"total_pages":1,"total_items":1},
+                "items": [
+                    {
+                        "authority":"alice@wonderland",
+                        "hash":"deadbeef",
+                        "block":5,
+                        "created_at":"2025-01-01T00:00:00Z",
+                        "executable":"Instructions",
+                        "status":"Committed"
+                    }
+                ]
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let params = ToriiExplorerTransactionsParams(page: 2,
+                                                     perPage: 25,
+                                                     addressFormat: .compressed,
+                                                     authority: "alice@wonderland",
+                                                     block: 5,
+                                                     status: "Committed",
+                                                     assetId: "rose#wonderland#alice@wonderland")
+        let page = try await makeClient().getExplorerTransactions(params: params)
+        XCTAssertEqual(page.pagination.page, 2)
+        XCTAssertEqual(page.pagination.perPage, 25)
+        XCTAssertEqual(page.items.count, 1)
+        XCTAssertEqual(page.items.first?.hash, "deadbeef")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransactionsCompletion() {
+        let expectation = expectation(description: "explorer-transactions")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/transactions")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {"pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":0},"items":[]}
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        _ = makeClient().getExplorerTransactions { result in
+            switch result {
+            case .success(let page):
+                XCTAssertEqual(page.items.count, 0)
+                XCTAssertEqual(page.pagination.totalItems, 0)
+            case .failure(let error):
+                XCTFail("Unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 2.0)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransactionDetailEncodesQueryAndDecodesResponse() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/transactions/deadbeef")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            XCTAssertEqual(components?.queryItems?.first?.name, "address_format")
+            XCTAssertEqual(components?.queryItems?.first?.value, "compressed")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+                "authority":"alice@wonderland",
+                "hash":"deadbeef",
+                "block":5,
+                "created_at":"2025-01-01T00:00:00Z",
+                "executable":"Instructions",
+                "status":"Committed",
+                "rejection_reason": null,
+                "metadata": {"note":"demo"},
+                "nonce": 7,
+                "signature": "0xabc",
+                "time_to_live": {"ms": 60000}
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let detail = try await makeClient().getExplorerTransactionDetail(hashHex: "deadbeef",
+                                                                         addressFormat: .compressed)
+        XCTAssertEqual(detail.hash, "deadbeef")
+        XCTAssertEqual(detail.signature, "0xabc")
+        XCTAssertEqual(detail.timeToLive?.ms, 60000)
+        guard case let .object(meta) = detail.metadata else {
+            return XCTFail("Expected metadata object.")
+        }
+        guard case let .string(note) = meta["note"] else {
+            return XCTFail("Expected metadata.note string.")
+        }
+        XCTAssertEqual(note, "demo")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerInstructionDetailEncodesQueryAndDecodesResponse() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/deadbeef/3")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            XCTAssertEqual(components?.queryItems?.first?.name, "address_format")
+            XCTAssertEqual(components?.queryItems?.first?.value, "compressed")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+                "authority":"alice@wonderland",
+                "created_at":"2025-01-01T00:00:00Z",
+                "kind":"Transfer",
+                "box":{
+                    "scale":"0x00",
+                    "json":{
+                        "kind":"Transfer",
+                        "payload":{
+                            "variant":"Asset",
+                            "value":{
+                                "source":"rose##alice@wonderland",
+                                "object":"5",
+                                "destination":"bob@wonderland"
+                            }
+                        }
+                    }
+                },
+                "transaction_hash":"hash1",
+                "transaction_status":"Committed",
+                "block":10,
+                "index":3
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let item = try await makeClient().getExplorerInstructionDetail(hashHex: "deadbeef",
+                                                                       index: 3,
+                                                                       addressFormat: .compressed)
+        XCTAssertEqual(item.kind, "Transfer")
+        XCTAssertEqual(item.transactionHash, "hash1")
+        XCTAssertEqual(item.index, 3)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransactionDetailCompletion() {
+        let expectation = expectation(description: "explorer-transaction-detail")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/transactions/deadbeef")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+                "authority":"alice@wonderland",
+                "hash":"deadbeef",
+                "block":5,
+                "created_at":"2025-01-01T00:00:00Z",
+                "executable":"Instructions",
+                "status":"Committed",
+                "rejection_reason": null,
+                "metadata": {},
+                "nonce": null,
+                "signature": "0xabc",
+                "time_to_live": null
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        _ = makeClient().getExplorerTransactionDetail(hashHex: "deadbeef") { result in
+            switch result {
+            case .success(let detail):
+                XCTAssertEqual(detail.hash, "deadbeef")
+                XCTAssertEqual(detail.signature, "0xabc")
+            case .failure(let error):
+                XCTFail("Unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 2.0)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerInstructionDetailCompletion() {
+        let expectation = expectation(description: "explorer-instruction-detail")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions/deadbeef/0")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+                "authority":"alice@wonderland",
+                "created_at":"2025-01-01T00:00:00Z",
+                "kind":"Transfer",
+                "box":{
+                    "scale":"0x00",
+                    "json":{
+                        "kind":"Transfer",
+                        "payload":{
+                            "variant":"Asset",
+                            "value":{
+                                "source":"rose##alice@wonderland",
+                                "object":"5",
+                                "destination":"bob@wonderland"
+                            }
+                        }
+                    }
+                },
+                "transaction_hash":"hash1",
+                "transaction_status":"Committed",
+                "block":10,
+                "index":0
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        _ = makeClient().getExplorerInstructionDetail(hashHex: "deadbeef", index: 0) { result in
+            switch result {
+            case .success(let item):
+                XCTAssertEqual(item.transactionHash, "hash1")
+                XCTAssertEqual(item.index, 0)
+            case .failure(let error):
+                XCTFail("Unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 2.0)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransferSummariesFiltersByAccount() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+                "pagination": {"page":1,"per_page":10,"total_pages":1,"total_items":1},
+                "items": [
+                    {
+                        "authority":"alice@wonderland",
+                        "created_at":"2025-01-01T00:00:00Z",
+                        "kind":"Transfer",
+                        "box":{
+                            "scale":"0x00",
+                            "json":{
+                                "kind":"Transfer",
+                                "payload":{
+                                    "variant":"Asset",
+                                    "value":{
+                                        "source":"rose##ih58example@wonderland",
+                                        "object":"10",
+                                        "destination":"bob@wonderland"
+                                    }
+                                },
+                                "wire_id":"10",
+                                "encoded":"beef"
+                            }
+                        },
+                        "transaction_hash":"hash1",
+                        "transaction_status":"Committed",
+                        "block":1,
+                        "index":0
+                    }
+                ]
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let summaries = try await makeClient().getExplorerTransferSummaries(matchingAccount: "bob@wonderland")
+        XCTAssertEqual(summaries.count, 1)
+        XCTAssertEqual(summaries.first?.direction, .incoming)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransferSummariesCompletion() {
+        let expectation = expectation(description: "explorer-transfer-summaries")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {"pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":0},"items":[]}
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        _ = makeClient().getExplorerTransferSummaries { result in
+            switch result {
+            case .success(let summaries):
+                XCTAssertEqual(summaries.count, 0)
+            case .failure(let error):
+                XCTFail("Unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 2.0)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetAccountTransferHistoryBuildsTransferQuery() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let queryItems = components?.queryItems ?? []
+            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(query["kind"], "Transfer")
+            XCTAssertEqual(query["page"], "3")
+            XCTAssertEqual(query["per_page"], "20")
+            XCTAssertEqual(query["address_format"], "compressed")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+                "pagination": {"page":3,"per_page":20,"total_pages":1,"total_items":0},
+                "items": []
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let summaries = try await makeClient().getAccountTransferHistory(accountId: "alice@wonderland",
+                                                                          page: 3,
+                                                                          perPage: 20,
+                                                                          addressFormat: .compressed)
+        XCTAssertEqual(summaries.count, 0)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetAccountTransferHistoryCompletion() {
+        let expectation = expectation(description: "account-transfer-history")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {"pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":0},"items":[]}
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        _ = makeClient().getAccountTransferHistory(accountId: "alice@wonderland") { result in
+            switch result {
+            case .success(let summaries):
+                XCTAssertEqual(summaries.count, 0)
+            case .failure(let error):
+                XCTFail("Unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 2.0)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testIterateAccountTransferHistoryAcrossPages() async throws {
+        var callCount = 0
+        StubURLProtocol.handler = { request in
+            callCount += 1
+            XCTAssertEqual(request.url?.path, "/v1/explorer/instructions")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let queryItems = components?.queryItems ?? []
+            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(query["kind"], "Transfer")
+            let expectedPage = callCount == 1 ? "1" : "2"
+            XCTAssertEqual(query["page"], expectedPage)
+            XCTAssertEqual(query["per_page"], "1")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body: String
+            if callCount == 1 {
+                body = """
+                {
+                    "pagination": {"page":1,"per_page":1,"total_pages":2,"total_items":2},
+                    "items": [
+                        {
+                            "authority":"alice@wonderland",
+                            "created_at":"2025-01-01T00:00:00Z",
+                            "kind":"Transfer",
+                            "box":{
+                                "scale":"0x00",
+                                "json":{
+                                    "kind":"Transfer",
+                                    "payload":{
+                                        "variant":"Asset",
+                                        "value":{
+                                            "source":"rose##ih58example@wonderland",
+                                            "object":"10",
+                                            "destination":"bob@wonderland"
+                                        }
+                                    },
+                                    "wire_id":"10",
+                                    "encoded":"beef"
+                                }
+                            },
+                            "transaction_hash":"hash1",
+                            "transaction_status":"Committed",
+                            "block":1,
+                            "index":0
+                        }
+                    ]
+                }
+                """
+            } else {
+                body = """
+                {
+                    "pagination": {"page":2,"per_page":1,"total_pages":2,"total_items":2},
+                    "items": [
+                        {
+                            "authority":"alice@wonderland",
+                            "created_at":"2025-01-01T00:00:01Z",
+                            "kind":"Transfer",
+                            "box":{
+                                "scale":"0x00",
+                                "json":{
+                                    "kind":"Transfer",
+                                    "payload":{
+                                        "variant":"Asset",
+                                        "value":{
+                                            "source":"tulip##ih58example@wonderland",
+                                            "object":"5",
+                                            "destination":"bob@wonderland"
+                                        }
+                                    },
+                                    "wire_id":"10",
+                                    "encoded":"beef"
+                                }
+                            },
+                            "transaction_hash":"hash2",
+                            "transaction_status":"Committed",
+                            "block":2,
+                            "index":0
+                        }
+                    ]
+                }
+                """
+            }
+            return (response, Data(body.utf8))
+        }
+
+        var summaries: [ToriiExplorerTransferSummary] = []
+        for try await summary in makeClient().iterateAccountTransferHistory(accountId: "bob@wonderland",
+                                                                            perPage: 1) {
+            summaries.append(summary)
+        }
+        XCTAssertEqual(summaries.count, 2)
+        XCTAssertEqual(summaries.first?.transactionHash, "hash1")
+        XCTAssertEqual(summaries.last?.transactionHash, "hash2")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -3081,6 +4034,246 @@ data: {"VerifyingKey":{"Registered":{"id":{"backend":"halo2/ipa","name":"vk_main
         XCTAssertEqual(lastEventIdHeader, "99")
     }
 
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamExplorerTransactionsAsync() async throws {
+        let ssePayload = """
+id: 1
+data: {"authority":"alice@wonderland","hash":"hash1","block":100,"created_at":"2025-01-01T00:00:00Z","executable":"Instructions","status":"Committed"}
+
+data: {"authority":"bob@wonderland","hash":"hash2","block":101,"created_at":"2025-01-02T00:00:00Z","executable":"Instructions","status":"Rejected"}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        let stream = makeClient().streamExplorerTransactions()
+        var iterator = stream.makeAsyncIterator()
+
+        let first = try await iterator.next()
+        XCTAssertEqual(first?.authority, "alice@wonderland")
+        XCTAssertEqual(first?.hash, "hash1")
+        XCTAssertEqual(first?.block, 100)
+        XCTAssertEqual(first?.status, "Committed")
+
+        let second = try await iterator.next()
+        XCTAssertEqual(second?.authority, "bob@wonderland")
+        XCTAssertEqual(second?.hash, "hash2")
+        XCTAssertEqual(second?.block, 101)
+        XCTAssertEqual(second?.status, "Rejected")
+
+        let third = try await iterator.next()
+        XCTAssertNil(third)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamExplorerInstructionsAsync() async throws {
+        let ssePayload = """
+data: {"authority":"alice@wonderland","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"rose##alice@wonderland","object":"5","destination":"bob@wonderland"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        let stream = makeClient().streamExplorerInstructions()
+        var iterator = stream.makeAsyncIterator()
+
+        let first = try await iterator.next()
+        XCTAssertEqual(first?.authority, "alice@wonderland")
+        XCTAssertEqual(first?.kind, "Transfer")
+        XCTAssertEqual(first?.transactionHash, "hash1")
+        XCTAssertEqual(first?.transactionStatus, "Committed")
+        XCTAssertEqual(first?.block, 10)
+        XCTAssertEqual(first?.index, 0)
+        XCTAssertEqual(first?.box.scale, "0x00")
+
+        let second = try await iterator.next()
+        XCTAssertNil(second)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamExplorerTransfersAsync() async throws {
+        let ssePayload = """
+data: {"authority":"alice@wonderland","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"rose##alice@wonderland","object":"5","destination":"bob@wonderland"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
+
+data: {"authority":"alice@wonderland","created_at":"2025-01-01T00:00:01Z","kind":"Mint","box":{"scale":"0x01","json":{"kind":"Mint","payload":{"variant":"Asset","value":{"asset_id":"rose#wonderland","quantity":"1"}}}},"transaction_hash":"hash2","transaction_status":"Committed","block":10,"index":1}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        let stream = makeClient().streamExplorerTransfers(matchingAccount: "bob@wonderland")
+        var iterator = stream.makeAsyncIterator()
+
+        let first = try await iterator.next()
+        XCTAssertEqual(first?.instruction.transactionHash, "hash1")
+        switch first?.details {
+        case .asset(let asset):
+            XCTAssertEqual(asset.senderAccountId, "alice@wonderland")
+            XCTAssertEqual(asset.destinationAccountId, "bob@wonderland")
+            XCTAssertEqual(asset.assetDefinitionId, "rose#wonderland")
+            XCTAssertEqual(asset.amount, "5")
+        default:
+            XCTFail("Expected asset transfer details")
+        }
+
+        let second = try await iterator.next()
+        XCTAssertNil(second)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamExplorerTransferSummariesAsync() async throws {
+        let ssePayload = """
+data: {"authority":"alice@wonderland","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"rose##alice@wonderland","object":"5","destination":"bob@wonderland"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            return (response, ssePayload)
+        }
+
+        let stream = makeClient().streamExplorerTransferSummaries(matchingAccount: "bob@wonderland")
+        var iterator = stream.makeAsyncIterator()
+
+        let summary = try await iterator.next()
+        XCTAssertEqual(summary?.transactionHash, "hash1")
+        XCTAssertEqual(summary?.senderAccountId, "alice@wonderland")
+        XCTAssertEqual(summary?.receiverAccountId, "bob@wonderland")
+        XCTAssertEqual(summary?.assetDefinitionId, "rose#wonderland")
+        XCTAssertEqual(summary?.amount, "5")
+        XCTAssertEqual(summary?.direction, .incoming)
+
+        let second = try await iterator.next()
+        XCTAssertNil(second)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamAccountTransferHistoryCombinesHistoryAndStream() async throws {
+        let historyPayload = """
+        {
+            "pagination": {
+                "page": 1,
+                "per_page": 1,
+                "total_pages": 1,
+                "total_items": 1
+            },
+            "items": [
+                {
+                    "authority": "alice@wonderland",
+                    "created_at": "2025-01-01T00:00:00Z",
+                    "kind": "Transfer",
+                    "box": {
+                        "scale": "0x00",
+                        "json": {
+                            "kind": "Transfer",
+                            "payload": {
+                                "variant": "Asset",
+                                "value": {
+                                    "source": "rose##alice@wonderland",
+                                    "object": "5",
+                                    "destination": "bob@wonderland"
+                                }
+                            }
+                        }
+                    },
+                    "transaction_hash": "hash1",
+                    "transaction_status": "Committed",
+                    "block": 10,
+                    "index": 0
+                }
+            ]
+        }
+        """
+            .data(using: .utf8)!
+
+        let ssePayload = """
+data: {"authority":"alice@wonderland","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"rose##alice@wonderland","object":"5","destination":"bob@wonderland"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
+
+data: {"authority":"alice@wonderland","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"rose##alice@wonderland","object":"7","destination":"bob@wonderland"}}}},"transaction_hash":"hash2","transaction_status":"Committed","block":11,"index":0}
+
+"""
+            .data(using: .utf8)!
+
+        var lastEventIdHeader: String?
+        StubURLProtocol.handler = { request in
+            guard let url = request.url else {
+                throw ToriiClientError.invalidResponse
+            }
+            if url.path == "/v1/explorer/instructions" {
+                let query = url.query ?? ""
+                XCTAssertTrue(query.contains("page=1"))
+                XCTAssertTrue(query.contains("per_page=1"))
+                XCTAssertTrue(query.contains("kind=Transfer"))
+                let response = HTTPURLResponse(url: url,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, historyPayload)
+            }
+            if url.path == "/v1/explorer/instructions/stream" {
+                lastEventIdHeader = request.value(forHTTPHeaderField: "Last-Event-ID")
+                let response = HTTPURLResponse(url: url,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "text/event-stream"])!
+                return (response, ssePayload)
+            }
+            throw ToriiClientError.invalidResponse
+        }
+
+        let stream = makeClient().streamAccountTransferHistory(accountId: "bob@wonderland",
+                                                               perPage: 1,
+                                                               lastEventId: "5")
+        var iterator = stream.makeAsyncIterator()
+
+        let first = try await iterator.next()
+        XCTAssertEqual(first?.transactionHash, "hash1")
+
+        let second = try await iterator.next()
+        XCTAssertEqual(second?.transactionHash, "hash2")
+
+        let third = try await iterator.next()
+        XCTAssertNil(third)
+        XCTAssertEqual(lastEventIdHeader, "5")
+    }
+
 #if canImport(Combine)
     @available(iOS 15.0, macOS 12.0, *)
     func testAssetsPublisherDeliversBalances() throws {
@@ -3191,6 +4384,274 @@ data: {"VerifyingKey":{"Updated":{"id":{"backend":"halo2/ipa","name":"vk_main"},
         XCTAssertEqual(updatedId.backend, "halo2/ipa")
         XCTAssertEqual(updatedId.name, "vk_main")
         XCTAssertEqual(updatedRecord.version, 3)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testExplorerTransactionsPublisherDeliversItems() throws {
+        let ssePayload = """
+data: {"authority":"alice@wonderland","hash":"hash1","block":100,"created_at":"2025-01-01T00:00:00Z","executable":"Instructions","status":"Committed"}
+
+data: {"authority":"bob@wonderland","hash":"hash2","block":101,"created_at":"2025-01-02T00:00:00Z","executable":"Instructions","status":"Rejected"}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "text/event-stream"])!
+            return (response, ssePayload)
+        }
+
+        let client = makeClient()
+        var cancellables: Set<AnyCancellable> = []
+        let valueExpectation = expectation(description: "received transaction events")
+        valueExpectation.expectedFulfillmentCount = 2
+        let completionExpectation = expectation(description: "publisher completed")
+
+        var hashes: [String] = []
+        client.explorerTransactionsPublisher(scheduler: nil)
+            .sink { completion in
+                if case .failure(let error) = completion {
+                    XCTFail("Unexpected failure: \(error)")
+                }
+                completionExpectation.fulfill()
+            } receiveValue: { item in
+                hashes.append(item.hash)
+                valueExpectation.fulfill()
+            }
+            .store(in: &cancellables)
+
+        waitForExpectations(timeout: 2.0)
+        XCTAssertEqual(hashes, ["hash1", "hash2"])
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testExplorerInstructionsPublisherDeliversItems() throws {
+        let ssePayload = """
+data: {"authority":"alice@wonderland","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"rose##alice@wonderland","object":"5","destination":"bob@wonderland"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
+
+"""
+            .data(using: .utf8)!
+
+        var lastEventIdHeader: String?
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+            lastEventIdHeader = request.value(forHTTPHeaderField: "Last-Event-ID")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "text/event-stream"])!
+            return (response, ssePayload)
+        }
+
+        let client = makeClient()
+        var cancellables: Set<AnyCancellable> = []
+        let valueExpectation = expectation(description: "received instruction event")
+        let completionExpectation = expectation(description: "publisher completed")
+
+        var received: [ToriiExplorerInstructionItem] = []
+        client.explorerInstructionsPublisher(lastEventId: "42", scheduler: nil)
+            .sink { completion in
+                if case .failure(let error) = completion {
+                    XCTFail("Unexpected failure: \(error)")
+                }
+                completionExpectation.fulfill()
+            } receiveValue: { item in
+                received.append(item)
+                valueExpectation.fulfill()
+            }
+            .store(in: &cancellables)
+
+        waitForExpectations(timeout: 2.0)
+        XCTAssertEqual(received.first?.transactionHash, "hash1")
+        XCTAssertEqual(lastEventIdHeader, "42")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testExplorerTransfersPublisherDeliversRecords() throws {
+        let ssePayload = """
+data: {"authority":"alice@wonderland","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"rose##alice@wonderland","object":"5","destination":"bob@wonderland"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
+
+data: {"authority":"alice@wonderland","created_at":"2025-01-01T00:00:01Z","kind":"Mint","box":{"scale":"0x01","json":{"kind":"Mint","payload":{"variant":"Asset","value":{"asset_id":"rose#wonderland","quantity":"1"}}}},"transaction_hash":"hash2","transaction_status":"Committed","block":10,"index":1}
+
+"""
+            .data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "text/event-stream"])!
+            return (response, ssePayload)
+        }
+
+        let client = makeClient()
+        var cancellables: Set<AnyCancellable> = []
+        let valueExpectation = expectation(description: "received transfer record")
+        let completionExpectation = expectation(description: "publisher completed")
+
+        var records: [ToriiExplorerTransferRecord] = []
+        client.explorerTransfersPublisher(matchingAccount: "bob@wonderland", scheduler: nil)
+            .sink { completion in
+                if case .failure(let error) = completion {
+                    XCTFail("Unexpected failure: \(error)")
+                }
+                completionExpectation.fulfill()
+            } receiveValue: { record in
+                records.append(record)
+                valueExpectation.fulfill()
+            }
+            .store(in: &cancellables)
+
+        waitForExpectations(timeout: 2.0)
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?.instruction.transactionHash, "hash1")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testExplorerTransferSummariesPublisherDeliversItems() throws {
+        let ssePayload = """
+data: {"authority":"alice@wonderland","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"rose##alice@wonderland","object":"5","destination":"bob@wonderland"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
+
+"""
+            .data(using: .utf8)!
+
+        var lastEventIdHeader: String?
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+            lastEventIdHeader = request.value(forHTTPHeaderField: "Last-Event-ID")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "text/event-stream"])!
+            return (response, ssePayload)
+        }
+
+        let client = makeClient()
+        var cancellables: Set<AnyCancellable> = []
+        let valueExpectation = expectation(description: "received transfer summary")
+        let completionExpectation = expectation(description: "publisher completed")
+
+        var summaries: [ToriiExplorerTransferSummary] = []
+        client.explorerTransferSummariesPublisher(lastEventId: "7",
+                                                   matchingAccount: "bob@wonderland",
+                                                   scheduler: nil)
+            .sink { completion in
+                if case .failure(let error) = completion {
+                    XCTFail("Unexpected failure: \(error)")
+                }
+                completionExpectation.fulfill()
+            } receiveValue: { summary in
+                summaries.append(summary)
+                valueExpectation.fulfill()
+            }
+            .store(in: &cancellables)
+
+        waitForExpectations(timeout: 2.0)
+        XCTAssertEqual(summaries.count, 1)
+        XCTAssertEqual(summaries.first?.transactionHash, "hash1")
+        XCTAssertEqual(lastEventIdHeader, "7")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testAccountTransferHistoryPublisherCombinesHistoryAndStream() throws {
+        let historyPayload = """
+        {
+            "pagination": {
+                "page": 1,
+                "per_page": 1,
+                "total_pages": 1,
+                "total_items": 1
+            },
+            "items": [
+                {
+                    "authority": "alice@wonderland",
+                    "created_at": "2025-01-01T00:00:00Z",
+                    "kind": "Transfer",
+                    "box": {
+                        "scale": "0x00",
+                        "json": {
+                            "kind": "Transfer",
+                            "payload": {
+                                "variant": "Asset",
+                                "value": {
+                                    "source": "rose##alice@wonderland",
+                                    "object": "5",
+                                    "destination": "bob@wonderland"
+                                }
+                            }
+                        }
+                    },
+                    "transaction_hash": "hash1",
+                    "transaction_status": "Committed",
+                    "block": 10,
+                    "index": 0
+                }
+            ]
+        }
+        """
+            .data(using: .utf8)!
+
+        let ssePayload = """
+data: {"authority":"alice@wonderland","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"rose##alice@wonderland","object":"5","destination":"bob@wonderland"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":0}
+
+data: {"authority":"alice@wonderland","created_at":"2025-01-01T00:00:01Z","kind":"Transfer","box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"rose##alice@wonderland","object":"7","destination":"bob@wonderland"}}}},"transaction_hash":"hash2","transaction_status":"Committed","block":11,"index":0}
+
+"""
+            .data(using: .utf8)!
+
+        var lastEventIdHeader: String?
+        StubURLProtocol.handler = { request in
+            guard let url = request.url else {
+                throw ToriiClientError.invalidResponse
+            }
+            if url.path == "/v1/explorer/instructions" {
+                let response = HTTPURLResponse(url: url,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, historyPayload)
+            }
+            if url.path == "/v1/explorer/instructions/stream" {
+                lastEventIdHeader = request.value(forHTTPHeaderField: "Last-Event-ID")
+                let response = HTTPURLResponse(url: url,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "text/event-stream"])!
+                return (response, ssePayload)
+            }
+            throw ToriiClientError.invalidResponse
+        }
+
+        let client = makeClient()
+        var cancellables: Set<AnyCancellable> = []
+        let valueExpectation = expectation(description: "received history + stream items")
+        valueExpectation.expectedFulfillmentCount = 2
+        let completionExpectation = expectation(description: "publisher completed")
+
+        var hashes: [String] = []
+        client.accountTransferHistoryPublisher(accountId: "bob@wonderland",
+                                               perPage: 1,
+                                               lastEventId: "9",
+                                               scheduler: nil)
+            .sink { completion in
+                if case .failure(let error) = completion {
+                    XCTFail("Unexpected failure: \(error)")
+                }
+                completionExpectation.fulfill()
+            } receiveValue: { summary in
+                hashes.append(summary.transactionHash)
+                valueExpectation.fulfill()
+            }
+            .store(in: &cancellables)
+
+        waitForExpectations(timeout: 2.0)
+        XCTAssertEqual(hashes, ["hash1", "hash2"])
+        XCTAssertEqual(lastEventIdHeader, "9")
     }
 #endif
 

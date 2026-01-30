@@ -7634,6 +7634,7 @@ impl DetachedStateTransactionDelta {
             }
 
             // Apply role-permission changes
+            let current_epoch = stx.block_height();
             for (role, perm) in self.role_perm_grants {
                 let affected_accounts = stx.accounts_with_role(&role);
                 let role_ref = stx.world.roles.get_mut(&role).ok_or_else(|| {
@@ -7642,6 +7643,10 @@ impl DetachedStateTransactionDelta {
                     ))
                 })?;
                 let _ = role_ref.permissions.insert(perm.clone());
+                role_ref
+                    .permission_epochs
+                    .entry(perm.clone())
+                    .or_insert(current_epoch);
                 stx.perm_cache.on_role_permission_grant(
                     &stx.world,
                     affected_accounts.iter(),
@@ -7664,6 +7669,7 @@ impl DetachedStateTransactionDelta {
                     ))
                 })?;
                 let _ = role_ref.permissions.remove(&perm);
+                role_ref.permission_epochs.remove(&perm);
                 stx.world.emit_events(Some(RoleEvent::PermissionRemoved(
                     iroha_data_model::events::data::prelude::RolePermissionChanged {
                         role,
@@ -8141,7 +8147,8 @@ impl World {
         R: IntoIterator<Item = Role>,
     {
         let mut world = Self::with_assets(domains, accounts, asset_definitions, assets, nfts);
-        for role in roles {
+        for mut role in roles {
+            role.ensure_permission_epochs(0);
             world.roles.insert(role.id.clone(), role);
         }
         world
@@ -17123,7 +17130,11 @@ mod transfer_transcript_tests {
 
 #[cfg(test)]
 mod fastpq_tx_set_hash_tests {
-    use std::{borrow::Cow, collections::BTreeSet, time::Duration};
+    use std::{
+        borrow::Cow,
+        collections::{BTreeMap, BTreeSet},
+        time::Duration,
+    };
 
     use iroha_crypto::Hash;
     use iroha_data_model::{
@@ -17291,9 +17302,12 @@ mod fastpq_tx_set_hash_tests {
     fn capture_exec_witness_sets_perm_root() {
         let perm = Permission::new("perm_a".to_string(), Json::new(()));
         let role_id: RoleId = "role_a".parse().expect("role id");
+        let permissions = BTreeSet::from([perm.clone()]);
+        let permission_epochs = BTreeMap::from([(perm.clone(), 0)]);
         let role = Role {
             id: role_id.clone(),
-            permissions: BTreeSet::from([perm]),
+            permissions,
+            permission_epochs,
         };
         let entries = [(role_id.clone(), role.clone())];
         let expected =
@@ -31340,6 +31354,7 @@ mod tests {
                 iroha_data_model::role::Role {
                     id: rid.clone(),
                     permissions: BTreeSet::default(),
+                    permission_epochs: BTreeMap::new(),
                 },
             );
             stx.apply();
@@ -31354,7 +31369,8 @@ mod tests {
             "can_read_all_accounts".parse().unwrap(),
             Json::from(norito::json!({})),
         );
-        delta.grant_role_permission(rid.clone(), perm);
+        delta.grant_role_permission(rid.clone(), perm.clone());
+        let expected_epoch = block.as_ref().header().height().get();
 
         // Merge and verify
         let _ = delta
@@ -31380,6 +31396,12 @@ mod tests {
             }
             false
         }));
+        let stored_role = state_block
+            .world
+            .roles
+            .get(&rid)
+            .expect("role remains present");
+        assert_eq!(stored_role.permission_epoch(&perm), Some(expected_epoch));
     }
 
     #[test]

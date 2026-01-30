@@ -6832,8 +6832,9 @@ pub mod codec {
             }
             if *offset + 3 <= bytes.len() && bytes[*offset] == RLE_EOB {
                 *offset += 3;
+                return Ok(coeffs);
             }
-            return Ok(coeffs);
+            return Err(CodecError::MissingEndOfBlock(block_index));
         }
         Ok(coeffs)
     }
@@ -8749,7 +8750,7 @@ pub mod codec {
         }
 
         #[test]
-        fn decode_block_rle_accepts_full_block_without_eob() {
+        fn decode_block_rle_rejects_missing_end_of_block() {
             let mut payload = Vec::new();
             payload.extend_from_slice(&0i16.to_le_bytes());
             for _ in 0..(BLOCK_PIXELS - 1) {
@@ -8758,8 +8759,9 @@ pub mod codec {
             }
             let mut offset = 0usize;
             let mut prev_dc = 0i16;
-            decode_block_rle(&payload, &mut offset, &mut prev_dc, 0)
-                .expect("full block without explicit eob should decode");
+            let err = decode_block_rle(&payload, &mut offset, &mut prev_dc, 0)
+                .expect_err("missing end-of-block should reject");
+            assert!(matches!(err, CodecError::MissingEndOfBlock(0)));
         }
 
         #[test]

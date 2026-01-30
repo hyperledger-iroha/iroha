@@ -1,13 +1,20 @@
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
+    str::FromStr,
 };
 
 use indexmap::{IndexMap, IndexSet};
 use iroha_data_model::{
+    account::AccountId,
     events::{
         EventFilterBox,
+        data::DataEventFilter,
         execute_trigger::ExecuteTriggerEventFilter,
+        pipeline::{
+            BlockEventFilter, MergeLedgerEventFilter, PipelineEventFilterBox,
+            TransactionEventFilter, WitnessEventFilter,
+        },
         time::{ExecutionTime, Schedule, TimeEventFilter},
     },
     metadata::Metadata,
@@ -394,6 +401,29 @@ fn analyze_trigger(
             let id = TriggerId::new(target);
             EventFilterBox::ExecuteTrigger(ExecuteTriggerEventFilter::new().for_trigger(id))
         }
+        TriggerFilter::Data(data) => {
+            let filter = match data {
+                TriggerDataFilter::Any => DataEventFilter::Any,
+            };
+            EventFilterBox::Data(filter)
+        }
+        TriggerFilter::Pipeline(pipeline) => {
+            let filter = match pipeline {
+                TriggerPipelineFilter::Transaction => {
+                    PipelineEventFilterBox::Transaction(TransactionEventFilter::default())
+                }
+                TriggerPipelineFilter::Block => {
+                    PipelineEventFilterBox::Block(BlockEventFilter::default())
+                }
+                TriggerPipelineFilter::Merge => {
+                    PipelineEventFilterBox::Merge(MergeLedgerEventFilter::default())
+                }
+                TriggerPipelineFilter::Witness => {
+                    PipelineEventFilterBox::Witness(WitnessEventFilter::default())
+                }
+            };
+            EventFilterBox::Pipeline(filter)
+        }
     };
 
     let repeats = match trigger
@@ -405,6 +435,13 @@ fn analyze_trigger(
         TriggerRepeats::Exactly(count) => Repeats::Exactly(count),
     };
 
+    let authority = match &trigger.authority {
+        Some(raw) => Some(AccountId::from_str(raw).map_err(|err| SemanticError {
+            message: format!("invalid trigger authority `{raw}`: {err}"),
+        })?),
+        None => None,
+    };
+
     let metadata = trigger_metadata_from_entries(&trigger.metadata)?;
 
     Ok(TypedTrigger {
@@ -412,6 +449,7 @@ fn analyze_trigger(
         call: trigger.call.clone(),
         filter,
         repeats,
+        authority,
         metadata,
     })
 }
@@ -4250,6 +4288,7 @@ pub struct TypedTrigger {
     pub call: TriggerCall,
     pub filter: EventFilterBox,
     pub repeats: Repeats,
+    pub authority: Option<AccountId>,
     pub metadata: Metadata,
 }
 
@@ -5402,6 +5441,10 @@ mod tests {
 
     #[test]
     fn trigger_decl_builds_typed_metadata() {
+        use std::str::FromStr;
+
+        use iroha_data_model::account::AccountId;
+
         let program = parse(
             r#"
             seiyaku C {
@@ -5410,6 +5453,7 @@ mod tests {
                     call run;
                     on time pre_commit;
                     repeats 2;
+                    authority "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland";
                     metadata { tag: "alpha"; count: 1; enabled: true; }
                 }
             }
@@ -5422,7 +5466,79 @@ mod tests {
         assert_eq!(trigger.id.to_string(), "wake");
         assert!(matches!(trigger.filter, EventFilterBox::Time(_)));
         assert_eq!(trigger.repeats, Repeats::Exactly(2));
+        assert_eq!(
+            trigger.authority,
+            Some(
+                AccountId::from_str(
+                    "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@wonderland"
+                )
+                .expect("authority")
+            )
+        );
         assert!(!trigger.metadata.is_empty());
+    }
+
+    #[test]
+    fn trigger_decl_supports_data_filter() {
+        let program = parse(
+            r#"
+            seiyaku C {
+                kotoage fn run() {}
+                register_trigger wake {
+                    call run;
+                    on data any;
+                }
+            }
+            "#,
+        )
+        .expect("parse trigger decl");
+        let typed = analyze(&program).expect("analyze trigger decl");
+        let trigger = &typed.triggers[0];
+        assert!(matches!(
+            trigger.filter,
+            EventFilterBox::Data(DataEventFilter::Any)
+        ));
+    }
+
+    #[test]
+    fn trigger_decl_supports_pipeline_filter() {
+        let program = parse(
+            r#"
+            seiyaku C {
+                kotoage fn run() {}
+                register_trigger wake {
+                    call run;
+                    on pipeline block;
+                }
+            }
+            "#,
+        )
+        .expect("parse trigger decl");
+        let typed = analyze(&program).expect("analyze trigger decl");
+        let trigger = &typed.triggers[0];
+        assert!(matches!(
+            trigger.filter,
+            EventFilterBox::Pipeline(PipelineEventFilterBox::Block(_))
+        ));
+    }
+
+    #[test]
+    fn trigger_decl_rejects_invalid_authority() {
+        let program = parse(
+            r#"
+            seiyaku C {
+                kotoage fn run() {}
+                register_trigger wake {
+                    call run;
+                    on time pre_commit;
+                    authority "not-an-account";
+                }
+            }
+            "#,
+        )
+        .expect("parse trigger decl");
+        let err = analyze(&program).expect_err("invalid authority should error");
+        assert!(err.message.contains("invalid trigger authority"));
     }
 
     #[test]

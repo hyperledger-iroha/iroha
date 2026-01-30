@@ -6132,6 +6132,7 @@ pub(crate) fn por_tracker_error_response(err: PorTrackerError) -> Response {
         | PorTrackerError::ProofDigestMismatch => StatusCode::BAD_REQUEST,
         PorTrackerError::ChallengeConflict => StatusCode::CONFLICT,
         PorTrackerError::UnknownChallenge => StatusCode::NOT_FOUND,
+        PorTrackerError::RepairStore(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(status, err.to_string())
 }

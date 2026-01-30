@@ -2517,6 +2517,7 @@ mod measured_bytes_impls {
             let mut total = size_of::<Role>();
             total = total.saturating_add(self.id.measured_bytes_extra());
             total = total.saturating_add(self.permissions.measured_bytes_extra());
+            total = total.saturating_add(self.permission_epochs.measured_bytes_extra());
             total
         }
     }

@@ -704,9 +704,9 @@ impl RepairManager {
         &self,
         verdict: &AuditVerdictV1,
         failed_samples: u64,
-    ) -> Option<u64> {
+    ) -> Result<Option<u64>, RepairStoreError> {
         if failed_samples == 0 {
-            return None;
+            return Ok(None);
         }
         let history_id = self.store.next_por_history_id();
         let entry = PorHistoryEntry {
@@ -727,10 +727,9 @@ impl RepairManager {
         );
         if let Err(err) = self.store.record_por_history(entry) {
             error!(?err, history_id, "failed to persist PoR repair history");
-            // TODO: propagate store errors once PoR ingestion is permitted to fail hard.
-            return None;
+            return Err(err);
         }
-        Some(history_id)
+        Ok(Some(history_id))
     }
 
     /// Enqueue a repair report submitted by an auditor.
@@ -3273,7 +3272,9 @@ mod tests {
             auditor_signatures: Vec::new(),
             metadata: Vec::new(),
         };
-        manager.register_por_verdict(&verdict, 1);
+        manager
+            .register_por_verdict(&verdict, 1)
+            .expect("register por verdict");
 
         let store_path = temp_dir.path().join("repair").join(REPAIR_STORE_FILE_NAME);
         let bytes = fs::read(&store_path).expect("read repair store");
@@ -3285,6 +3286,36 @@ mod tests {
             snapshot.por_history[0].manifest_digest,
             verdict.manifest_digest
         );
+    }
+
+    #[test]
+    fn register_por_verdict_propagates_store_error() {
+        let dir = tempdir().expect("tempdir");
+        let file_path = dir.path().join("not-a-dir");
+        fs::write(&file_path, b"blocked").expect("write guard file");
+
+        let config = RepairConfig {
+            state_dir: Some(file_path),
+            ..RepairConfig::default()
+        };
+        let manager = RepairManager::new_with_config(config);
+        let verdict = AuditVerdictV1 {
+            version: AUDIT_VERDICT_VERSION_V1,
+            manifest_digest: [0x11; 32],
+            provider_id: [0x22; 32],
+            challenge_id: [0x33; 32],
+            proof_digest: None,
+            outcome: AuditOutcomeV1::Failed,
+            failure_reason: Some("fail".into()),
+            decided_at: 1_700_000_020,
+            auditor_signatures: Vec::new(),
+            metadata: Vec::new(),
+        };
+
+        let err = manager
+            .register_por_verdict(&verdict, 1)
+            .expect_err("expected store error");
+        assert!(matches!(err, RepairStoreError::Other(_)));
     }
 
     #[test]

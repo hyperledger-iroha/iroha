@@ -3,8 +3,8 @@
 Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Apple platforms.
 
 Features:
-- Torii HTTP client (balances, transactions, subscriptions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
-- Offline allowance top-up helper (`ToriiClient.topUpOfflineAllowance`) plus registration/renewal endpoints for `/v1/offline/allowances`
+- Torii HTTP client (balances, transactions, explorer instructions/transactions, subscriptions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
+- Offline allowance top-up helpers (`ToriiClient.topUpOfflineAllowance`, `ToriiClient.topUpOfflineAllowanceRenewal`, `OfflineWallet.topUpAllowance`, `OfflineWallet.topUpAllowanceRenewal`) plus registration/renewal endpoints for `/v1/offline/allowances`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Native NoritoBridge integration (required by default; set `IROHASWIFT_USE_BRIDGE=optional` for the Swift-only fallback) powering transfer/mint/burn builders and JSON inspection helpers
@@ -75,9 +75,10 @@ let sdk = IrohaSDK(baseURL: torii.baseURL)
 // Generate Ed25519 keypair (CryptoKit)
 let kp = try Keypair.generate()
 let accountId = AccountId.make(publicKey: kp.publicKey, domain: "wonderland")
+let assetId = "rose#wonderland#\(accountId)"
 
 // Fetch balances
-sdk.getAssets(accountId: accountId) { result in
+sdk.getAssets(accountId: accountId, assetId: assetId) { result in
     print(result)
 }
 
@@ -202,6 +203,112 @@ headers.forEach { key, value in
 
 > **Roadmap ADDR-5a:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and the matching `IrohaSDK` shortcuts) now accept canonical, IH58 (preferred), or compressed (`sora`, second-best) literals and percent-encode the `/v1/accounts/{account_id}/…` segments automatically, so wallets can forward whatever selector they surface without manually escaping `@` or trimming input.
 
+### Explorer instruction history
+
+Torii explorer endpoints expose instruction-level data, including transfer details.
+Use `getExplorerTransfers` to fetch a page and derive transfer records:
+
+```swift
+if #available(iOS 15.0, macOS 12.0, *) {
+    let params = ToriiExplorerInstructionsParams(page: 1,
+                                                 perPage: 50,
+                                                 kind: "Transfer",
+                                                 assetId: "rose#wonderland#alice@wonderland")
+    let transfers = try await torii.getExplorerTransfers(params: params,
+                                                         matchingAccount: "alice@wonderland")
+    for record in transfers {
+        switch record.details {
+        case .asset(let asset):
+            print("transfer:", asset.amount,
+                  asset.assetDefinitionId ?? asset.sourceAssetId,
+                  "from:", asset.senderAccountId ?? "unknown",
+                  "to:", asset.destinationAccountId)
+        case .assetBatch(let entries):
+            for entry in entries {
+                print("batch transfer:", entry.amount,
+                      entry.assetDefinitionId,
+                      "from:", entry.senderAccountId,
+                      "to:", entry.receiverAccountId)
+            }
+        }
+    }
+}
+```
+
+If you prefer a flattened, UI-ready shape, ask for transfer summaries:
+
+```swift
+if #available(iOS 15.0, macOS 12.0, *) {
+    let summaries = try await torii.getExplorerTransferSummaries(
+        params: ToriiExplorerInstructionsParams(page: 1, perPage: 50, kind: "Transfer"),
+        matchingAccount: "alice@wonderland"
+    )
+    for summary in summaries {
+        print(summary.direction, summary.amount, summary.assetDefinitionId)
+    }
+}
+```
+
+For a one-shot transaction history helper, use `getAccountTransferHistory`:
+
+```swift
+if #available(iOS 15.0, macOS 12.0, *) {
+    let history = try await torii.getAccountTransferHistory(accountId: "alice@wonderland",
+                                                            page: 1,
+                                                            perPage: 50)
+    for item in history {
+        print(item.isIncoming ? "in" : "out", item.amount, item.assetDefinitionId)
+    }
+}
+```
+
+To stream multiple pages, use `iterateAccountTransferHistory`:
+
+```swift
+if #available(iOS 15.0, macOS 12.0, *) {
+    for try await item in torii.iterateAccountTransferHistory(accountId: "alice@wonderland",
+                                                              perPage: 25) {
+        print(item.direction, item.amount, item.assetDefinitionId)
+    }
+}
+```
+
+You can also list transaction summaries or fetch a transaction detail payload:
+
+```swift
+if #available(iOS 15.0, macOS 12.0, *) {
+    let txPage = try await torii.getExplorerTransactions(
+        params: ToriiExplorerTransactionsParams(page: 1, perPage: 25)
+    )
+    if let first = txPage.items.first {
+        let detail = try await torii.getExplorerTransactionDetail(hashHex: first.hash)
+        print("transaction status:", detail.status)
+    }
+}
+```
+
+To fetch a single instruction payload, use `getExplorerInstructionDetail` with the transaction hash
+and instruction index.
+
+To react to new blocks as they commit, subscribe to the explorer SSE streams:
+
+```swift
+if #available(iOS 15.0, macOS 12.0, *) {
+    for try await instruction in torii.streamExplorerInstructions() {
+        if let details = instruction.transferDetails() {
+            print("transfer:", details)
+        }
+    }
+}
+```
+
+Use `streamExplorerTransactions()` if you only need transaction summaries.
+Combine users can call `explorerInstructionsPublisher` / `explorerTransactionsPublisher`.
+For a UI-ready transfer feed, use `streamExplorerTransferSummaries(matchingAccount:)` or
+`explorerTransferSummariesPublisher`.
+If you need history plus live updates in one stream, use `streamAccountTransferHistory`.
+Combine users can call `accountTransferHistoryPublisher` for the same flow.
+
 ### Account addresses
 
 ```swift
@@ -273,7 +380,7 @@ Swift concurrency wrappers are available on iOS 15/macOS 12 and newer:
 ```swift
 if #available(iOS 15, macOS 12, *) {
     Task {
-        let balances = try await torii.getAssets(accountId: accountId)
+        let balances = try await torii.getAssets(accountId: accountId, assetId: assetId)
         print("balances:", balances)
 
         try await sdk.submit(transfer: transfer, keypair: kp)
@@ -1075,7 +1182,9 @@ will decrypt ciphertext frames into `ConnectEnvelope` instances automatically (u
 
 Persist Connect X25519 keys via `ConnectKeyStore` so wallet approvals can include the
 attestation bundle (SHA-256 digest + device label + created-at). The default store writes
-to Application Support; inject a custom directory if you need sandboxed storage.
+to Application Support; inject a custom directory if you need sandboxed storage. Integrity
+checks use a canonical JSON ordering, while legacy orderings remain accepted for backward
+compatibility.
 > After deriving direction keys (e.g., via `ConnectCrypto.deriveDirectionKeys`), call
 > `ConnectSession.setDirectionKeys(_:)` to unlock automatic decryption of encrypted
 > control frames. Use `ConnectEnvelope.decrypt(frame:symmetricKey:)` for direct access

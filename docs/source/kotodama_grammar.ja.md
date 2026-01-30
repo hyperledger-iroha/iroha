@@ -137,7 +137,8 @@ register_trigger wake {
   `namespace::entrypoint` はマニフェストに記録されますが、クロスコントラクトの
   コールバックは現時点では拒否されます（ローカルのみ）。
 - 対応フィルタ: `time pre_commit` と `time schedule(start_ms, period_ms?)`、および
-  `execute trigger <name>`（by-call）。data/pipeline フィルタは未対応です。
+  `execute trigger <name>`（by-call）、`data any`（データイベント）、pipeline
+  フィルタ（`pipeline transaction`, `pipeline block`, `pipeline merge`, `pipeline witness`）。
 - metadata 値は JSON リテラル（`string`, `number`, `bool`, `null`）または `json!(...)`。
 - ランタイムが注入する metadata キー: `contract_namespace`, `contract_id`,
   `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`。

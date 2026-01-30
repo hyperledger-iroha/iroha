@@ -503,8 +503,21 @@ export interface IterableListOptions extends PermissionedIterableOptions {
   signal?: AbortSignal;
 }
 
+export interface AccountAssetListOptions extends IterableListOptions {
+  assetId?: string;
+}
+
+export interface AccountTransactionListOptions extends IterableListOptions {
+  assetId?: string;
+}
+
+export interface AssetHolderListOptions extends IterableListOptions {
+  assetId?: string;
+}
+
 export interface OfflineAllowanceListOptions extends IterableListOptions {
   controllerId?: string;
+  assetId?: string;
   certificateExpiresBeforeMs?: NumericLike;
   certificateExpiresAfterMs?: NumericLike;
   policyExpiresBeforeMs?: NumericLike;
@@ -522,6 +535,7 @@ export interface OfflineTransferListOptions extends IterableListOptions {
   controllerId?: string;
   receiverId?: string;
   depositAccountId?: string;
+  assetId?: string;
   certificateIdHex?: string;
   certificateExpiresBeforeMs?: NumericLike;
   certificateExpiresAfterMs?: NumericLike;
@@ -545,6 +559,18 @@ export interface IterableQueryOptions extends IterableListOptions {
 export interface PaginationIteratorOptions extends IterableListOptions {
   pageSize?: NumericLike;
   maxItems?: NumericLike;
+}
+
+export interface AccountAssetIteratorOptions extends PaginationIteratorOptions {
+  assetId?: string;
+}
+
+export interface AccountTransactionIteratorOptions extends PaginationIteratorOptions {
+  assetId?: string;
+}
+
+export interface AssetHolderIteratorOptions extends PaginationIteratorOptions {
+  assetId?: string;
 }
 
 export interface ExplorerNftListOptions {
@@ -3257,6 +3283,43 @@ export interface ToriiOfflineWalletCertificate extends ToriiOfflineWalletCertifi
 export interface ToriiOfflineCertificateIssueResponse {
   certificate_id_hex: string;
   certificate: ToriiOfflineWalletCertificate;
+}
+
+export interface ToriiOfflineAllowanceRegisterRequest {
+  authority: string;
+  certificate: ToriiOfflineWalletCertificate;
+  privateKey?:
+    | ArrayBufferView
+    | ArrayBuffer
+    | Buffer
+    | ReadonlyArray<number>
+    | string;
+  privateKeyHex?: string;
+  privateKeyMultihash?: string;
+  privateKeyAlgorithm?: string;
+}
+
+export interface ToriiOfflineAllowanceRegisterResponse {
+  certificate_id_hex: string;
+}
+
+export interface ToriiOfflineTopUpRequest {
+  authority: string;
+  certificate: ToriiOfflineWalletCertificateDraft;
+  privateKey?:
+    | ArrayBufferView
+    | ArrayBuffer
+    | Buffer
+    | ReadonlyArray<number>
+    | string;
+  privateKeyHex?: string;
+  privateKeyMultihash?: string;
+  privateKeyAlgorithm?: string;
+}
+
+export interface ToriiOfflineTopUpResponse {
+  certificate: ToriiOfflineCertificateIssueResponse;
+  registration: ToriiOfflineAllowanceRegisterResponse;
 }
 
 export interface ToriiOfflineIntegrityMetadata {
@@ -6003,7 +6066,7 @@ export declare class ToriiClient {
   ): AsyncGenerator<T, void, unknown>;
   listAccountAssets<T = ToriiAccountAssetItem>(
     accountId: string,
-    options?: IterableListOptions,
+    options?: AccountAssetListOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   queryAccountAssets<T = ToriiAccountAssetItem>(
     accountId: string,
@@ -6011,7 +6074,7 @@ export declare class ToriiClient {
   ): Promise<ToriiIterableListResponse<T>>;
   iterateAccountAssets<T = ToriiAccountAssetItem>(
     accountId: string,
-    options?: PaginationIteratorOptions,
+    options?: AccountAssetIteratorOptions,
   ): AsyncGenerator<T, void, unknown>;
   iterateAccountAssetsQuery<T = ToriiAccountAssetItem>(
     accountId: string,
@@ -6019,7 +6082,7 @@ export declare class ToriiClient {
   ): AsyncGenerator<T, void, unknown>;
   listAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
-    options?: IterableListOptions,
+    options?: AccountTransactionListOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   queryAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
@@ -6027,7 +6090,7 @@ export declare class ToriiClient {
   ): Promise<ToriiIterableListResponse<T>>;
   iterateAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
-    options?: PaginationIteratorOptions,
+    options?: AccountTransactionIteratorOptions,
   ): AsyncGenerator<T, void, unknown>;
   iterateAccountTransactionsQuery<T = ToriiAccountTransactionItem>(
     accountId: string,
@@ -6035,7 +6098,7 @@ export declare class ToriiClient {
   ): AsyncGenerator<T, void, unknown>;
   listAssetHolders<T = ToriiAssetHolderItem>(
     assetDefinitionId: string,
-    options?: IterableListOptions,
+    options?: AssetHolderListOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   queryAssetHolders<T = ToriiAssetHolderItem>(
     assetDefinitionId: string,
@@ -6043,7 +6106,7 @@ export declare class ToriiClient {
   ): Promise<ToriiIterableListResponse<T>>;
   iterateAssetHolders<T = ToriiAssetHolderItem>(
     assetDefinitionId: string,
-    options?: PaginationIteratorOptions,
+    options?: AssetHolderIteratorOptions,
   ): AsyncGenerator<T, void, unknown>;
   iterateAssetHoldersQuery<T = ToriiAssetHolderItem>(
     assetDefinitionId: string,
@@ -6772,6 +6835,24 @@ export declare class ToriiClient {
     certificate: ToriiOfflineWalletCertificateDraft,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiOfflineCertificateIssueResponse>;
+  registerOfflineAllowance(
+    request: ToriiOfflineAllowanceRegisterRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineAllowanceRegisterResponse>;
+  renewOfflineAllowance(
+    certificateIdHex: string,
+    request: ToriiOfflineAllowanceRegisterRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineAllowanceRegisterResponse>;
+  topUpOfflineAllowance(
+    request: ToriiOfflineTopUpRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineTopUpResponse>;
+  topUpOfflineAllowanceRenewal(
+    certificateIdHex: string,
+    request: ToriiOfflineTopUpRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineTopUpResponse>;
   getOfflineRejectionStats(options?: {
     telemetryProfile?: string;
     signal?: AbortSignal;

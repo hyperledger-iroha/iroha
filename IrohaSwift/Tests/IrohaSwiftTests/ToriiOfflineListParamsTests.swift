@@ -34,13 +34,15 @@ final class ToriiOfflineListParamsTests: XCTestCase {
         let params = ToriiOfflineListParams(
             controllerId: " alice@wonderland ",
             receiverId: "bob@wonderland",
-            depositAccountId: "  carol@wonderland "
+            depositAccountId: "  carol@wonderland ",
+            assetId: " usd##alice@wonderland "
         )
         let items = try XCTUnwrap(params.queryItems())
         let map = Self.map(from: items)
         XCTAssertEqual(map["controller_id"], "alice@wonderland")
         XCTAssertEqual(map["receiver_id"], "bob@wonderland")
         XCTAssertEqual(map["deposit_account_id"], "carol@wonderland")
+        XCTAssertEqual(map["asset_id"], "usd##alice@wonderland")
     }
 
     func testOnlyMissingVerdictFlag() throws {

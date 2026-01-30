@@ -1463,50 +1463,36 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Align flag naming to avoid collisions with `--output-format` (handshake token `--token-encoding`).
  - [x] Capture CLI output normalization status in `status.md`.
 
-## TODO Inventory (Repo Scan 2026-01-29)
+## TODO Inventory (Repo Scan 2026-01-30)
 
 This appendix tracks open TODO markers discovered in the repository. Items are grouped by area. Reference-only TODO mentions are called out separately so they do not get mistaken for active work items.
 
 ### Code / Runtime TODOs
-- [ ] Trigger DSL: support data/pipeline trigger filters and explicit authorities (`crates/kotodama_lang/src/parser.rs:618`).
-- [ ] Izanami stable recipes: re-enable trigger repetition recipes (`crates/izanami/src/instructions.rs:491`).
-- [ ] Izanami stable recipes: re-enable DeployIvmContract in stable profile (`crates/izanami/src/instructions.rs:492`).
-- [ ] Izanami stable recipes: re-enable DeployKotodamaContract in stable profile (`crates/izanami/src/instructions.rs:493`).
-- [ ] Izanami chaos genesis: provision Nexus staking assets/escrow/sink/validator accounts so `nexus_staking_expect_success` can flip true (`crates/izanami/src/instructions.rs:686`).
-- [ ] SoraFS repair: propagate PoR store errors once ingestion can fail hard (`crates/sorafs_node/src/repair.rs:730`).
-- [ ] SoraFS repair: integrate orchestrator repair pipeline to rehydrate missing chunks (`crates/sorafs_node/src/lib.rs:950`).
-- [ ] Erasure coding SIMD: vectorize `gf_mul` in AVX2 backend (`crates/iroha_primitives/src/erasure/rs16.rs:381`).
-- [ ] Erasure coding SIMD: vectorize `gf_mul` in NEON backend (`crates/iroha_primitives/src/erasure/rs16.rs:439`).
 - [ ] Multisig rekeying: update account controller when rekeying is wired (Add/RemoveSignatory, SetAccountQuorum) (`crates/iroha_core/src/smartcontracts/isi/multisig.rs:63,93,148`).
-- [ ] FASTPQ: wire real permission epochs once role permission metadata includes them (`crates/iroha_core/src/fastpq/mod.rs:30`).
 
 ### SDK TODOs
-- [ ] Swift OfflineNorito: support UAID/opaque account resolution once Swift resolvers are available (`IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift:306`).
+- [x] Android SDK: encode multisig signatures in `SignedTransactionEncoder` once SDK exposes them (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/SignedTransactionEncoder.java:69`).
+- [ ] Android SDK: switch legacy instructions to canonical wire payloads once codegen encoders land (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/TransactionPayloadAdapter.java:123`).
+- [x] Android SDK: support multisig controller payloads once the SDK exposes them (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/TransactionPayloadAdapter.java:156`).
+- [x] Java Norito: implement streaming parity for missing RLE terminators and deterministic resume snapshots (`java/norito_java/CHANGELOG.md:63`).
+- [x] Java Norito: extend columnar helpers for enum/discriminant columns, explore Panama acceleration, and publish Maven/Gradle coordinates (`java/norito_java/DESIGN.md:97`).
 
 ### Test TODOs
-- [ ] Unstable network suite: restore higher `n_rounds` once relay stability improves (5/4/8/9-peer tests) (`integration_tests/tests/extra_functional/unstable_network.rs:1536,1549,1562,1575,1588`).
-- [ ] Unstable network suite: revisit 4-fault coverage once quorum budgets or peer counts change (`integration_tests/tests/extra_functional/unstable_network.rs:1589`).
+- [ ] Android SDK tests: switch fixtures to canonical wire instruction encoding once Java encoders land (`java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixtureTests.java:45`).
 
 ### Docs TODOs (feature gaps)
-- [ ] Nexus lifecycle: per-lane scheduler/DA/RBC rebalance, validator-set propagation, and storage teardown/cleanup (`docs/source/nexus*.md`).
-- [ ] Kotodama state: durable host-backed overlays and conflict tracking (`docs/source/kotodama_grammar*.md`).
-- [ ] Acceleration: add CUDA parity smoke on lab NV hardware (`docs/source/config/acceleration.md:193`).
-- [ ] Rust 1.92 adoption: review `Location::file_as_c_str` opportunities (`docs/source/rust_1_92_adoption.md`).
-
-### Docs TODOs (translation pending)
-- [ ] Account structure docs: `docs/account_structure.{ar,es,fr,he,ja,pt,ru,ur}.md`.
-- [ ] Account structure SDK alignment: `docs/account_structure_sdk_alignment.{ar,es,fr,he,ja,pt,ru,ur}.md`.
-- [ ] Address curve registry refs: `docs/source/references/address_curve_registry.{ar,es,fr,he,ja,pt,ru,ur}.md`.
 
 ### TODO References (non-actionable / informational)
 - Documentation guidance that uses “TODO” as an instruction or historical note, not an open task:
   - `docs/source/da/ingest_plan.md` and `docs/portal/docs/da/ingest-plan.md` (TODO Resolution Summary).
   - `docs/source/dev_workflow.md` (guardrail guidance).
+  - `AGENTS.md`, `AGENTS.ja.md`, `AGENTS.he.md`, `CONTRIBUTING.md`, `ci/check_todo_guard.sh`, `hooks/pre-commit.sample` (policy references).
   - `docs/source/agents/env_var_migration*.md` (policy note for temporary shims).
   - `docs/source/sorafs_gateway_dns_design_runbook.md` (session notes instruction).
   - `docs/source/soranet/pq_rollout_plan.md` plus portal/i18n copies (instruction to log TODOs in rollout tracker).
   - `docs/source/sdk/android/security.md`, `docs/source/sdk/android/samples/operator_console.md`, `docs/source/sdk/android/manifest_codegen_parity.md`, `docs/source/sdk/swift/issues/IOS3-CONNECT-003.md` (references to already-closed TODOs).
-  - `docs/source/rust_1_91_adoption.md` (TODO labels in completed checklist).
+  - `docs/source/rust_1_91_adoption.md`, `docs/source/rust_1_92_adoption.md` (TODO labels in completed checklists).
+  - `docs/source/sns/steward_replacement_playbook.md` (post-mortem instruction to add TODOs if needed).
   - `crates/ivm/README.md` (section header “Status and TODOs”).
   - `docs/source/fastpq_plan.md` (definition note explaining TODO markers).
   - `docs/source/ivm_isi_kotodama_alignment.ja.md` (TODO tracking section already scoped in that document).

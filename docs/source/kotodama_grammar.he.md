@@ -137,7 +137,8 @@ register_trigger wake {
 - `call` חייב להפנות ל-`kotoage fn` ציבורית באותו חוזה; `namespace::entrypoint` אופציונלי
   נרשם במניפסט אך קריאות חוצות-חוזים נדחות כרגע (מקומי בלבד).
 - מסננים נתמכים: `time pre_commit` ו-`time schedule(start_ms, period_ms?)`, וכן
-  `execute trigger <name>` עבור טריגרים לפי קריאה. מסנני data/pipeline עדיין לא נתמכים.
+  `execute trigger <name>` עבור טריגרים לפי קריאה, `data any` עבור אירועי נתונים ומסנני
+  pipeline (`pipeline transaction`, `pipeline block`, `pipeline merge`, `pipeline witness`).
 - ערכי metadata חייבים להיות ליטרלים JSON (`string`, `number`, `bool`, `null`) או `json!(...)`.
 - מפתחות metadata שמוזרקים ע"י הרנטיים: `contract_namespace`, `contract_id`,
   `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`.

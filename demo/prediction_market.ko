@@ -5,7 +5,16 @@ seiyaku PredictionMarket {
   }
 
   // Fixed-size demo market: two bettors (Alice/Bob) and two oracle keys (YES/NO).
-  // TODO: add durable state guards once contract-local persistence is enabled.
+  // Durable state guards prevent double-staking or double-resolution.
+  state bool alice_staked;
+  state bool bob_staked;
+  state bool resolved;
+
+  hajimari() {
+    alice_staked = false;
+    bob_staked = false;
+    resolved = false;
+  }
   kotoage fn main() permission(MarketUser) {
     let caller = authority();
     let asset = asset_definition("xor#sora");
@@ -16,19 +25,31 @@ seiyaku PredictionMarket {
     let oracle_no = account_id("ed0120F07D458B9063399929881FF2A40F3CD3816BBA02C6B9AEF473327B2D3C59A32A@sora");
 
     if (caller == oracle_yes) {
-      transfer_asset(pool, alice, asset, 20);
+      if (!resolved && alice_staked && bob_staked) {
+        transfer_asset(pool, alice, asset, 20);
+        resolved = true;
+      }
       return;
     }
     if (caller == oracle_no) {
-      transfer_asset(pool, bob, asset, 20);
+      if (!resolved && alice_staked && bob_staked) {
+        transfer_asset(pool, bob, asset, 20);
+        resolved = true;
+      }
       return;
     }
     if (caller == alice) {
-      transfer_asset(caller, pool, asset, 10);
+      if (!resolved && !alice_staked) {
+        transfer_asset(caller, pool, asset, 10);
+        alice_staked = true;
+      }
       return;
     }
     if (caller == bob) {
-      transfer_asset(caller, pool, asset, 10);
+      if (!resolved && !bob_staked) {
+        transfer_asset(caller, pool, asset, 10);
+        bob_staked = true;
+      }
       return;
     }
   }

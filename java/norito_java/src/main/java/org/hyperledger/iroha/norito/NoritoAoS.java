@@ -149,6 +149,77 @@ final class NoritoAoS {
     return rows;
   }
 
+  static byte[] encodeU64EnumBool(List<NoritoColumnar.EnumBoolRow> rows) {
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    // Historical enum AoS layout omits the version byte to preserve golden payloads.
+    writeVarint(out, rows.size());
+    for (NoritoColumnar.EnumBoolRow row : rows) {
+      writeLong(out, row.id());
+      NoritoColumnar.EnumValue value = row.value();
+      if (value instanceof NoritoColumnar.EnumName name) {
+        out.write(0);
+        byte[] data = name.name().getBytes(StandardCharsets.UTF_8);
+        writeVarint(out, data.length);
+        out.writeBytes(data);
+      } else if (value instanceof NoritoColumnar.EnumCode code) {
+        out.write(1);
+        writeU32(out, code.code());
+      } else {
+        throw new IllegalArgumentException("Unsupported enum value type: " + value.getClass());
+      }
+      out.write(row.flag() ? 1 : 0);
+    }
+    return out.toByteArray();
+  }
+
+  static List<NoritoColumnar.EnumBoolRow> decodeU64EnumBool(byte[] body) {
+    Varint.DecodeResult lenRes = Varint.decode(body, 0);
+    int length = (int) lenRes.value();
+    int offset = lenRes.nextOffset();
+    List<NoritoColumnar.EnumBoolRow> rows = new ArrayList<>(length);
+    for (int i = 0; i < length; i++) {
+      if (offset + 8 > body.length) {
+        throw new IllegalArgumentException("AoS enum payload truncated (id)");
+      }
+      long id = readLong(body, offset);
+      offset += 8;
+      if (offset >= body.length) {
+        throw new IllegalArgumentException("AoS enum payload truncated (tag)");
+      }
+      int tag = body[offset++] & 0xFF;
+      NoritoColumnar.EnumValue value;
+      if (tag == 0) {
+        Varint.DecodeResult nameRes = Varint.decode(body, offset);
+        int nameLen = (int) nameRes.value();
+        offset = nameRes.nextOffset();
+        if (offset + nameLen > body.length) {
+          throw new IllegalArgumentException("AoS enum payload truncated (name)");
+        }
+        String name = new String(body, offset, nameLen, StandardCharsets.UTF_8);
+        offset += nameLen;
+        value = new NoritoColumnar.EnumName(name);
+      } else if (tag == 1) {
+        if (offset + 4 > body.length) {
+          throw new IllegalArgumentException("AoS enum payload truncated (code)");
+        }
+        long code = Integer.toUnsignedLong(readU32(body, offset));
+        offset += 4;
+        value = new NoritoColumnar.EnumCode(code);
+      } else {
+        throw new IllegalArgumentException("Invalid enum tag: " + tag);
+      }
+      if (offset >= body.length) {
+        throw new IllegalArgumentException("AoS enum payload truncated (flag)");
+      }
+      boolean flag = (body[offset++] & 0xFF) != 0;
+      rows.add(new NoritoColumnar.EnumBoolRow(id, value, flag));
+    }
+    if (offset != body.length) {
+      throw new IllegalArgumentException("Trailing bytes after AoS enum decode");
+    }
+    return rows;
+  }
+
   private static void writeVarint(ByteArrayOutputStream out, int value) {
     out.writeBytes(Varint.encode(value));
   }
@@ -164,11 +235,25 @@ final class NoritoAoS {
     out.write((int) ((value >>> 56) & 0xFF));
   }
 
+  private static void writeU32(ByteArrayOutputStream out, long value) {
+    out.write((int) (value & 0xFF));
+    out.write((int) ((value >>> 8) & 0xFF));
+    out.write((int) ((value >>> 16) & 0xFF));
+    out.write((int) ((value >>> 24) & 0xFF));
+  }
+
   private static long readLong(byte[] data, int offset) {
     long value = 0;
     for (int i = 0; i < 8; i++) {
       value |= (long) (data[offset + i] & 0xFF) << (8 * i);
     }
     return value;
+  }
+
+  private static int readU32(byte[] data, int offset) {
+    return (data[offset] & 0xFF)
+        | ((data[offset + 1] & 0xFF) << 8)
+        | ((data[offset + 2] & 0xFF) << 16)
+        | ((data[offset + 3] & 0xFF) << 24);
   }
 }

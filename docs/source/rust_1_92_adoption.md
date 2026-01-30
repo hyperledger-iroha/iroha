@@ -41,7 +41,7 @@ entries.
 |------|-----------|--------|--------|-------|
 | Language | `never_type_fallback_flowing_into_unsafe`, `dependency_on_unit_never_type_fallback` deny-by-default | Run the 1.92 lint sweep and fix any new findings | DONE | Lint sweep completed; removed unused RBC chunk helpers + redundant base64 import. |
 | Libraries | `RwLockWriteGuard::downgrade` | Replace write-then-read lock handoffs where a downgrade suffices | DONE | Audit complete; no std `RwLock` write→read handoffs found. |
-| Libraries | `Location::file_as_c_str` | Use when feeding caller file paths into FFI or logging C APIs | TODO | Consider for any `Location::caller()` -> C string conversions. |
+| Libraries | `Location::file_as_c_str` | Use when feeding caller file paths into FFI or logging C APIs | DONE | No `Location::caller()` call sites currently feed C-FFI/logging APIs; keep this in mind when new FFI bridges are added. |
 | Libraries | `NonZero::div_ceil` | Adopt in rate/limit conversions that currently rely on `get().div_ceil()` | DONE | Operator auth rate limit conversion updated in this change. |
 | Const APIs | `slice::rotate_left`/`rotate_right` const | Audit const helpers that roll their own rotation | DONE | No const rotation helpers remain; no changes needed. |
 

@@ -43,6 +43,15 @@ pub fn kotodama_program(name: &str) -> Result<IvmBytecode> {
         .map_err(|msg| eyre!("failed to compile Kotodama sample `{validated_name}`: {msg}"))?;
 
     let program = IvmBytecode::from_compiled(bytecode);
+    let metadata = ivm::ProgramMetadata::parse(program.as_ref()).map_err(|err| {
+        eyre!("failed to parse metadata for Kotodama sample `{validated_name}`: {err}")
+    })?;
+    if metadata.metadata.abi_version != 1 {
+        return Err(eyre!(
+            "Kotodama sample `{validated_name}` uses unsupported ABI version {}",
+            metadata.metadata.abi_version
+        ));
+    }
     cache
         .lock()
         .expect("cache poisoned")
@@ -118,6 +127,8 @@ mod tests {
     fn kotodama_program_compiles() {
         let program = kotodama_program("asset_ops").expect("compilation succeeds");
         assert!(program.size_bytes() > 0);
+        let parsed = ivm::ProgramMetadata::parse(program.as_ref()).expect("valid metadata");
+        assert_eq!(parsed.metadata.abi_version, 1);
     }
 
     #[test]

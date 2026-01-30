@@ -23,6 +23,8 @@ description: SDK とプラットフォームチームが公開カバレッジを
 - `app_api` または `connect` の feature グループ配下へのルータ登録。
 - 既存の統合/ユニットテストと長期的なカバレッジの担当チーム。
 
+口座資産/取引の一覧とアセットホルダーの一覧は、既存のページネーション/バックプレッシャー制限に加えて、事前フィルタリング用のオプション `asset_id` クエリパラメータを受け付けます。
+
 ## 認証とカノニカル署名
 
 - アプリ向け GET/POST エンドポイントは、`METHOD\n/path\nsorted_query\nsha256(body)` から構築されるカノニカルリクエストヘッダ（`X-Iroha-Account`, `X-Iroha-Signature`）を任意で受け付けます。Torii は executor 検証前に `QueryRequestWithAuthority` に包み、`/query` と同等にします。

@@ -12,10 +12,13 @@ without native dependencies.
   options (`Optional`), results (`Result.Ok`/`Result.Err`), sequences, maps, and
   packed structs with hybrid bitset layout
 - Schema hashing (type-name and structural descriptors using Norito's canonical JSON rules)
-- Columnar helpers and adaptive AoS layouts for `(u64, String, boolean)` rows
+- Columnar helpers and adaptive AoS layouts for `(u64, String, boolean)`,
+  `(u64, bytes)` (including optional bytes), and `(u64, enum(Name|Code), boolean)` rows
 - Compression profiles (`CompressionConfig.zstdProfile`) that choose Zstandard levels
   automatically for `"fast"`, `"balanced"`, or `"compact"` workloads.
 - CLI inspector `NoritoDump` for quick header introspection
+- Streaming resume helpers (`KeyUpdateState`/`ContentKeyState`) plus baseline RLE
+  block decoding with explicit end-of-block validation.
 
 ## Rust trait parity
 The JVM binding follows the Rust `NoritoSerialize`/`NoritoDeserialize`
@@ -27,8 +30,9 @@ across Rust, Python, and Java.
 ### Limitations (v0.1.0)
 - Optional Zstandard compression requires `com.github.luben:zstd-jni` on the classpath; when
   absent, compression requests raise a clear `UnsupportedOperationException`.
-- Columnar helpers currently cover the `(u64, String, boolean)` telemetry shape. Additional
-  combinations (bytes columns, enums, optional fields) will land in future revisions.
+- Columnar helpers currently cover the `(u64, String, boolean)`, `(u64, bytes)` (optional bytes),
+  and `(u64, enum(Name|Code), boolean)` shapes; optional string/u32 and bytes+bool combos remain
+  to be implemented in the Java binding.
 
 ## Build & Test
 This module avoids external build tools. Compile with `javac` and run the
@@ -60,9 +64,32 @@ java -cp src/main/java org.hyperledger.iroha.norito.NoritoDump contract.to
 ```
 
 ## Packaging
-Future releases will provide Gradle/Maven coordinates once the repository is
-open sourced. For now, compile sources directly or integrate them into your
-build using standard Java tooling.
+Publish the artifact locally via Gradle and reference the Maven coordinates:
+
+```bash
+cd java/norito_java
+./gradlew publishToMavenLocal -PnoritoJavaVersion=0.1.0
+```
+
+Use the published coordinates (group `org.hyperledger.iroha`, artifact `norito-java`):
+
+```kotlin
+repositories {
+    mavenLocal()
+}
+
+dependencies {
+    implementation("org.hyperledger.iroha:norito-java:0.1.0")
+}
+```
+
+```xml
+<dependency>
+  <groupId>org.hyperledger.iroha</groupId>
+  <artifactId>norito-java</artifactId>
+  <version>0.1.0</version>
+</dependency>
+```
 
 ### Bundling `zstd-jni`
 `CompressionConfig.zstdProfile` and `CompressionConfig.zstd(level)` call into
@@ -104,8 +131,8 @@ omit the sync script automatically skip the guard; no manual override is
 available.
 
 > Streaming manifests, control frames, and telemetry adapters now ship under
-> `NoritoStreaming`, mirroring the Rust codec so JVM tooling can build NSC
-> payloads without manual byte handling.
+> `NoritoStreaming`, while baseline RLE decoding and resume state helpers live
+> in `NoritoStreamingCodec` and `NoritoStreaming` respectively.
 
 ### October 2025
 

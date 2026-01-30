@@ -382,6 +382,293 @@ final class TxBuilderTests: XCTestCase {
         waitForExpectations(timeout: 1)
     }
 
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerInstructionsFailsWhenRestClientUnavailable() {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        let expectation = expectation(description: "rest unavailable")
+        sdk.getExplorerInstructions { result in
+            switch result {
+            case .success:
+                XCTFail("expected failure when REST client is missing")
+            case .failure(let error):
+                XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerInstructionsAsyncFailsWhenRestClientUnavailable() async {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        do {
+            _ = try await sdk.getExplorerInstructions()
+            XCTFail("expected failure when REST client is missing")
+        } catch {
+            XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransfersFailsWhenRestClientUnavailable() {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        let expectation = expectation(description: "rest unavailable")
+        sdk.getExplorerTransfers { result in
+            switch result {
+            case .success:
+                XCTFail("expected failure when REST client is missing")
+            case .failure(let error):
+                XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransfersAsyncFailsWhenRestClientUnavailable() async {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        do {
+            _ = try await sdk.getExplorerTransfers()
+            XCTFail("expected failure when REST client is missing")
+        } catch {
+            XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransactionsFailsWhenRestClientUnavailable() {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        let expectation = expectation(description: "rest unavailable")
+        sdk.getExplorerTransactions { result in
+            switch result {
+            case .success:
+                XCTFail("expected failure when REST client is missing")
+            case .failure(let error):
+                XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransactionsAsyncFailsWhenRestClientUnavailable() async {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        do {
+            _ = try await sdk.getExplorerTransactions()
+            XCTFail("expected failure when REST client is missing")
+        } catch {
+            XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransactionDetailFailsWhenRestClientUnavailable() {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        let expectation = expectation(description: "rest unavailable")
+        sdk.getExplorerTransactionDetail(hashHex: "deadbeef") { result in
+            switch result {
+            case .success:
+                XCTFail("expected failure when REST client is missing")
+            case .failure(let error):
+                XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransactionDetailAsyncFailsWhenRestClientUnavailable() async {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        do {
+            _ = try await sdk.getExplorerTransactionDetail(hashHex: "deadbeef")
+            XCTFail("expected failure when REST client is missing")
+        } catch {
+            XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerInstructionDetailFailsWhenRestClientUnavailable() {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        let expectation = expectation(description: "rest unavailable")
+        sdk.getExplorerInstructionDetail(hashHex: "deadbeef", index: 0) { result in
+            switch result {
+            case .success:
+                XCTFail("expected failure when REST client is missing")
+            case .failure(let error):
+                XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerInstructionDetailAsyncFailsWhenRestClientUnavailable() async {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        do {
+            _ = try await sdk.getExplorerInstructionDetail(hashHex: "deadbeef", index: 0)
+            XCTFail("expected failure when REST client is missing")
+        } catch {
+            XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransferSummariesFailsWhenRestClientUnavailable() {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        let expectation = expectation(description: "rest unavailable")
+        sdk.getExplorerTransferSummaries { result in
+            switch result {
+            case .success:
+                XCTFail("expected failure when REST client is missing")
+            case .failure(let error):
+                XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerTransferSummariesAsyncFailsWhenRestClientUnavailable() async {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        do {
+            _ = try await sdk.getExplorerTransferSummaries()
+            XCTFail("expected failure when REST client is missing")
+        } catch {
+            XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetAccountTransferHistoryFailsWhenRestClientUnavailable() {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        let expectation = expectation(description: "rest unavailable")
+        sdk.getAccountTransferHistory(accountId: "alice@wonderland") { result in
+            switch result {
+            case .success:
+                XCTFail("expected failure when REST client is missing")
+            case .failure(let error):
+                XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetAccountTransferHistoryAsyncFailsWhenRestClientUnavailable() async {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        do {
+            _ = try await sdk.getAccountTransferHistory(accountId: "alice@wonderland")
+            XCTFail("expected failure when REST client is missing")
+        } catch {
+            XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testIterateAccountTransferHistoryFailsWhenRestClientUnavailable() async {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        do {
+            for try await _ in sdk.iterateAccountTransferHistory(accountId: "alice@wonderland") {
+                XCTFail("expected no items when REST client is missing")
+            }
+            XCTFail("expected failure when REST client is missing")
+        } catch {
+            XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamExplorerTransactionsFailsWhenRestClientUnavailable() async {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        do {
+            for try await _ in sdk.streamExplorerTransactions() {
+                XCTFail("expected no items when REST client is missing")
+            }
+            XCTFail("expected failure when REST client is missing")
+        } catch {
+            XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamExplorerInstructionsFailsWhenRestClientUnavailable() async {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        do {
+            for try await _ in sdk.streamExplorerInstructions() {
+                XCTFail("expected no items when REST client is missing")
+            }
+            XCTFail("expected failure when REST client is missing")
+        } catch {
+            XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamExplorerTransfersFailsWhenRestClientUnavailable() async {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        do {
+            for try await _ in sdk.streamExplorerTransfers() {
+                XCTFail("expected no items when REST client is missing")
+            }
+            XCTFail("expected failure when REST client is missing")
+        } catch {
+            XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamExplorerTransferSummariesFailsWhenRestClientUnavailable() async {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        do {
+            for try await _ in sdk.streamExplorerTransferSummaries() {
+                XCTFail("expected no items when REST client is missing")
+            }
+            XCTFail("expected failure when REST client is missing")
+        } catch {
+            XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testStreamAccountTransferHistoryFailsWhenRestClientUnavailable() async {
+        let stub = StubPipelineClient()
+        let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)
+        do {
+            for try await _ in sdk.streamAccountTransferHistory(accountId: "alice@wonderland") {
+                XCTFail("expected no items when REST client is missing")
+            }
+            XCTFail("expected failure when REST client is missing")
+        } catch {
+            XCTAssertEqual(error as? IrohaSDKError, .restClientUnavailable)
+        }
+    }
+
     func testGetHealthFailsWhenRestClientUnavailable() {
         let stub = StubPipelineClient()
         let sdk = IrohaSDK(toriiClient: stub, baseURL: URL(string: "https://example.test")!)

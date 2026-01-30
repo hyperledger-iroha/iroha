@@ -127,5 +127,53 @@ The `norito::aos` helpers used by adaptive columnar encoders follow the same
 length prefix rules and honor the active `COMPACT_LEN` flag, so embedded AoS
 payloads stay consistent with their parent Norito headers.
 
-TODO: expand with packed-struct layout, compression negotiation, and schema hash
-details.
+## Packed-Struct Layout
+
+When the `PACKED_STRUCT` flag is set, derive-generated structs/tuples are
+encoded as a single packed payload with one of two layouts:
+
+- Compat packed-struct (no `FIELD_BITSET`): `(field_count + 1)` little-endian
+  `u64` offsets followed by concatenated field payloads. Offsets start at 0,
+  are cumulative byte lengths of each field payload in declaration order, and
+  the final offset equals the total data length. Offsets are fixed-width even
+  when `COMPACT_LEN` is enabled.
+- Hybrid packed-struct (`FIELD_BITSET` + `COMPACT_LEN`): a bitset of length
+  `ceil(field_count / 8)` bytes, followed by size prefixes for fields whose
+  bit is set (varint-encoded per `COMPACT_LEN`), followed by concatenated field
+  payloads in declaration order. Bit 0 of byte 0 refers to field 0, bit 1 to
+  field 1, and so on. Fields that are fixed-size or self-delimiting omit the
+  explicit size header and are decoded sequentially.
+
+Field payloads themselves use the active layout flags (e.g., `PACKED_SEQ`,
+`COMPACT_LEN`) when encoding nested collections or string/blob values.
+
+## Compression Selection and Validation
+
+The header `Compression` byte identifies the payload encoding:
+
+- `0 = None`: payload bytes follow the header (with optional alignment padding).
+- `1 = Zstd`: payload bytes are compressed with Zstandard.
+
+`Payload length` and `CRC64` always describe the uncompressed payload. For
+compressed payloads, the encoded byte stream begins immediately after the
+header with no alignment padding. Decoders must reject unknown compression
+values or unsupported algorithms; builds without the `compression` feature
+accept only `None`.
+
+Encoders choose compression explicitly (`to_compressed_bytes`) or via the
+adaptive helper (`to_bytes_auto`) that applies deterministic heuristics. The
+chosen algorithm is recorded in the header; there is no on-wire negotiation.
+
+## Schema Hash Details
+
+The 16-byte schema hash is computed as:
+
+- Default: FNV-1a 64-bit hash of the fully qualified type name (Rust
+  `core::any::type_name::<T>()`), duplicated to fill 16 bytes.
+- With `schema-structural`: canonical JSON schema produced by
+  `iroha_schema::IntoSchema`, serialized with Norito’s JSON writer and hashed
+  with the same FNV-1a routine.
+
+Typed decoders must reject payloads whose header schema hash does not match the
+expected type. `ArchiveView::decode` enforces this check; `decode_unchecked`
+is reserved for tooling that explicitly opts out of schema validation.

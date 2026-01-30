@@ -1536,6 +1536,53 @@ class OfflineAllowanceListPage:
 
 
 @dataclass(frozen=True)
+class OfflineCertificateIssueResponse:
+    """Issued offline certificate response."""
+
+    certificate_id_hex: str
+    certificate: Dict[str, Any]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineCertificateIssueResponse":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("offline certificate issue response must be an object")
+        certificate_id_hex = payload.get("certificate_id_hex")
+        if not isinstance(certificate_id_hex, str) or not certificate_id_hex:
+            raise RuntimeError("offline certificate issue response missing `certificate_id_hex`")
+        certificate = payload.get("certificate")
+        if not isinstance(certificate, Mapping):
+            raise RuntimeError("offline certificate issue response missing `certificate`")
+        return cls(
+            certificate_id_hex=certificate_id_hex,
+            certificate=dict(certificate),
+        )
+
+
+@dataclass(frozen=True)
+class OfflineAllowanceRegisterResponse:
+    """Response payload for registering or renewing an offline allowance."""
+
+    certificate_id_hex: str
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineAllowanceRegisterResponse":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("offline allowance register response must be an object")
+        certificate_id_hex = payload.get("certificate_id_hex")
+        if not isinstance(certificate_id_hex, str) or not certificate_id_hex:
+            raise RuntimeError("offline allowance register response missing `certificate_id_hex`")
+        return cls(certificate_id_hex=certificate_id_hex)
+
+
+@dataclass(frozen=True)
+class OfflineTopUpResponse:
+    """Aggregated result for offline allowance top-up (issue + register/renew)."""
+
+    certificate: OfflineCertificateIssueResponse
+    registration: OfflineAllowanceRegisterResponse
+
+
+@dataclass(frozen=True)
 class OfflineTransferHistoryEntry:
     """Status transition entry for an offline transfer bundle."""
 
@@ -3646,6 +3693,163 @@ class ToriiClient:
     # ------------------------------------------------------------------
     # Offline allowances and transfers
     # ------------------------------------------------------------------
+    def issue_offline_certificate(
+        self,
+        certificate: Mapping[str, Any],
+    ) -> OfflineCertificateIssueResponse:
+        """Issue a signed offline certificate via ``POST /v1/offline/certificates/issue``."""
+
+        payload = {
+            "certificate": self._clone_json_payload(
+                certificate,
+                context="offline certificate",
+            )
+        }
+        body = self._post_json(
+            "/v1/offline/certificates/issue",
+            payload,
+            context="offline certificate issue response",
+        )
+        return OfflineCertificateIssueResponse.from_payload(body)
+
+    def issue_offline_certificate_renewal(
+        self,
+        certificate_id_hex: str,
+        certificate: Mapping[str, Any],
+    ) -> OfflineCertificateIssueResponse:
+        """Issue a renewal certificate via ``POST /v1/offline/certificates/{id}/renew/issue``."""
+
+        normalized_id = self._require_non_empty_string(
+            certificate_id_hex,
+            "offline certificate renewal id",
+        )
+        payload = {
+            "certificate": self._clone_json_payload(
+                certificate,
+                context="offline certificate renewal",
+            )
+        }
+        body = self._post_json(
+            f"/v1/offline/certificates/{normalized_id}/renew/issue",
+            payload,
+            context="offline certificate renewal response",
+        )
+        return OfflineCertificateIssueResponse.from_payload(body)
+
+    def register_offline_allowance(
+        self,
+        *,
+        certificate: Mapping[str, Any],
+        authority: str,
+        private_key: str,
+    ) -> OfflineAllowanceRegisterResponse:
+        """Register an offline allowance via ``POST /v1/offline/allowances``."""
+
+        payload = {
+            "authority": self._require_non_empty_string(
+                authority,
+                "offline allowance authority",
+            ),
+            "private_key": self._require_non_empty_string(
+                private_key,
+                "offline allowance private_key",
+            ),
+            "certificate": self._clone_json_payload(
+                certificate,
+                context="offline allowance certificate",
+            ),
+        }
+        body = self._post_json(
+            "/v1/offline/allowances",
+            payload,
+            context="offline allowance register response",
+        )
+        return OfflineAllowanceRegisterResponse.from_payload(body)
+
+    def renew_offline_allowance(
+        self,
+        *,
+        certificate_id_hex: str,
+        certificate: Mapping[str, Any],
+        authority: str,
+        private_key: str,
+    ) -> OfflineAllowanceRegisterResponse:
+        """Renew an offline allowance via ``POST /v1/offline/allowances/{id}/renew``."""
+
+        normalized_id = self._require_non_empty_string(
+            certificate_id_hex,
+            "offline allowance renewal id",
+        )
+        payload = {
+            "authority": self._require_non_empty_string(
+                authority,
+                "offline allowance renewal authority",
+            ),
+            "private_key": self._require_non_empty_string(
+                private_key,
+                "offline allowance renewal private_key",
+            ),
+            "certificate": self._clone_json_payload(
+                certificate,
+                context="offline allowance renewal certificate",
+            ),
+        }
+        body = self._post_json(
+            f"/v1/offline/allowances/{normalized_id}/renew",
+            payload,
+            context="offline allowance renewal response",
+        )
+        return OfflineAllowanceRegisterResponse.from_payload(body)
+
+    def top_up_offline_allowance(
+        self,
+        *,
+        certificate: Mapping[str, Any],
+        authority: str,
+        private_key: str,
+    ) -> OfflineTopUpResponse:
+        """Issue and register an offline allowance in one call."""
+
+        issued = self.issue_offline_certificate(certificate)
+        registration = self.register_offline_allowance(
+            certificate=issued.certificate,
+            authority=authority,
+            private_key=private_key,
+        )
+        if issued.certificate_id_hex.strip().lower() != registration.certificate_id_hex.strip().lower():
+            raise RuntimeError(
+                "offline top-up certificate mismatch "
+                f"(issued {issued.certificate_id_hex}, registered {registration.certificate_id_hex})"
+            )
+        return OfflineTopUpResponse(certificate=issued, registration=registration)
+
+    def top_up_offline_allowance_renewal(
+        self,
+        *,
+        certificate_id_hex: str,
+        certificate: Mapping[str, Any],
+        authority: str,
+        private_key: str,
+    ) -> OfflineTopUpResponse:
+        """Issue and register a renewed offline allowance in one call."""
+
+        issued = self.issue_offline_certificate_renewal(
+            certificate_id_hex,
+            certificate,
+        )
+        registration = self.renew_offline_allowance(
+            certificate_id_hex=certificate_id_hex,
+            certificate=issued.certificate,
+            authority=authority,
+            private_key=private_key,
+        )
+        if issued.certificate_id_hex.strip().lower() != registration.certificate_id_hex.strip().lower():
+            raise RuntimeError(
+                "offline top-up renewal certificate mismatch "
+                f"(issued {issued.certificate_id_hex}, registered {registration.certificate_id_hex})"
+            )
+        return OfflineTopUpResponse(certificate=issued, registration=registration)
+
     def list_offline_allowances(self, **params: Any) -> OfflineAllowanceListPage:
         """List offline allowances via ``GET /v1/offline/allowances``."""
 

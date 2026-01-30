@@ -117,7 +117,7 @@ seiyaku Name {
 Semántica
 - `meta { ... }` anula los valores por defecto del compilador para el encabezado IVM emitido: `abi_version`, `vector_length` (0 significa sin establecer), `max_cycles` (0 significa el valor por defecto del compilador), `features` activa bits de características del encabezado (trazado ZK, anuncio de vector). Las características no soportadas se ignoran con una advertencia. Cuando se omite `meta {}`, el compilador emite `abi_version = 1` y usa los valores por defecto de las opciones para los demás campos del encabezado.
 - `features: ["zk", "simd"]` (alias: `"vector"`) solicita explícitamente los bits de encabezado correspondientes. Las cadenas de características desconocidas ahora producen un error de parser en lugar de ignorarse.
-- `state` declara variables de contrato. Hoy el compilador las reduce a almacenamiento efímero por ejecución (asignado en la entrada de función); las superposiciones durables respaldadas por el host y el seguimiento de conflictos siguen siendo TODO. Para lecturas/escrituras respaldadas por el host, usa los helpers explícitos `state_get/state_set/state_del` y los helpers de mapa `get_or_insert_default`; estos pasan por TLVs Norito y mantienen nombres/orden de campos estables para persistencia futura.
+- `state` declara variables de contrato durables. El compilador baja los accesos a syscalls `STATE_GET/STATE_SET/STATE_DEL` y el host los guarda en un overlay por transaccion (checkpoint/restore para rollback, flush en el commit hacia WSV). Se emiten access hints para rutas literales; las claves dinamicas caen a conflictos a nivel de mapa. Para lecturas/escrituras explicitas del host, usa los helpers `state_get/state_set/state_del` y los helpers de mapa `get_or_insert_default`; pasan por TLVs Norito y mantienen nombres/orden de campos estables.
 - Los identificadores `state` están reservados; sombrear un nombre de `state` en parámetros o `let` se rechaza (`E_STATE_SHADOWED`).
 - Los valores de mapas de estado no son de primera clase: usa el identificador de estado directamente para operaciones de mapa e iteración. Enlazar o pasar mapas de estado a funciones definidas por el usuario se rechaza (`E_STATE_MAP_ALIAS`).
 - Los mapas de estado durables actualmente admiten solo tipos de clave `int` y pointer-ABI; otros tipos de clave se rechazan en compilación.
@@ -144,8 +144,8 @@ Notas
   opcional se registra en el manifiesto pero los callbacks entre contratos se rechazan por ahora
   (solo callbacks locales).
 - Filtros soportados: `time pre_commit` y `time schedule(start_ms, period_ms?)`, más
-  `execute trigger <name>` para triggers por llamada. Los filtros de datos/pipeline aún no están
-  soportados.
+  `execute trigger <name>` para triggers por llamada, `data any` para eventos de datos y filtros
+  de pipeline (`pipeline transaction`, `pipeline block`, `pipeline merge`, `pipeline witness`).
 - Los valores de metadata deben ser literales JSON (`string`, `number`, `bool`, `null`) o
   `json!(...)`.
 - Claves de metadata inyectadas por el runtime: `contract_namespace`, `contract_id`,

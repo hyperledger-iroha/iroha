@@ -121,7 +121,7 @@ seiyaku Name {
 Semantics
 - `meta { ... }` emitted IVM header کے لیے compiler defaults کو override کرتا ہے: `abi_version`, `vector_length` (0 کا مطلب unset)، `max_cycles` (0 کا مطلب compiler default)، `features` header feature bits (ZK tracing, vector announce) کو toggle کرتا ہے۔ unsupported features warning کے ساتھ ignore ہوتے ہیں۔ جب `meta {}` موجود نہ ہو تو compiler `abi_version = 1` emit کرتا ہے اور باقی fields کے لیے option defaults استعمال کرتا ہے۔
 - `features: ["zk", "simd"]` (aliases: `"vector"`) متعلقہ header bits کی صریح درخواست ہے۔ نامعلوم feature strings اب ignore ہونے کے بجائے parser error دیتی ہیں۔
-- `state` contract variables declare کرتا ہے۔ فی الحال compiler انہیں per‑run ephemeral storage میں لوئر کرتا ہے (function entry پر allocate)؛ host‑backed durable overlays اور conflict tracking TODO ہیں۔ host‑backed reads/writes کے لیے `state_get/state_set/state_del` اور map helpers `get_or_insert_default` استعمال کریں؛ یہ Norito TLVs سے گزرتے ہیں اور نام/فیلڈ آرڈر کو مستقبل کی persistence کے لیے مستحکم رکھتے ہیں۔
+- `state` contract variables durable declare کرتا ہے۔ compiler accesses کو `STATE_GET/STATE_SET/STATE_DEL` syscalls میں lower کرتا ہے اور host انہیں per-transaction overlay میں stage کرتا ہے (rollback کیلئے checkpoint/restore، اور commit پر WSV میں flush). literal paths کیلئے access hints emit ہوتے ہیں؛ dynamic keys map-level conflict keys پر fall back ہوتے ہیں۔ explicit host reads/writes کیلئے `state_get/state_set/state_del` اور map helpers `get_or_insert_default` استعمال کریں؛ یہ Norito TLVs سے گزرتے ہیں اور نام/فیلڈ آرڈر کو stable رکھتے ہیں۔
 - `state` identifiers reserved ہیں؛ parameters یا `let` bindings میں `state` نام کو shadow کرنا مسترد ہے (`E_STATE_SHADOWED`)۔
 - State map values first‑class نہیں ہیں: map operations اور iteration کے لیے state identifier کو براہِ راست استعمال کریں۔ user‑defined functions کو state maps bind یا pass کرنا مسترد ہے (`E_STATE_MAP_ALIAS`)۔
 - Durable state maps فی الحال صرف `int` اور pointer‑ABI key types کو سپورٹ کرتے ہیں؛ دیگر key types compile‑time پر reject ہوتے ہیں۔
@@ -148,7 +148,8 @@ Notes
   optional `namespace::entrypoint` manifest میں record ہوتا ہے مگر cross‑contract callbacks
   فی الحال runtime میں reject ہوتے ہیں (صرف local callbacks)۔
 - Supported filters: `time pre_commit` اور `time schedule(start_ms, period_ms?)`, نیز
-  by-call triggers کے لیے `execute trigger <name>`۔ data/pipeline filters ابھی supported نہیں۔
+  by-call triggers کے لیے `execute trigger <name>`, `data any` ڈیٹا ایونٹس کے لیے، اور
+  pipeline filters (`pipeline transaction`, `pipeline block`, `pipeline merge`, `pipeline witness`)۔
 - Metadata values JSON literals (`string`, `number`, `bool`, `null`) یا `json!(...)` ہونی چاہئیں۔
 - Runtime-injected metadata keys: `contract_namespace`, `contract_id`, `contract_entrypoint`,
   `contract_code_hash`, `contract_trigger_id`۔
