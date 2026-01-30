@@ -14,7 +14,9 @@ use futures_util::{StreamExt, stream::FuturesUnordered};
 use integration_tests::sandbox;
 use iroha_config::parameters::defaults;
 use iroha_config_base::toml::WriteExt;
-use iroha_core::sumeragi::network_topology::{Topology, commit_quorum_from_len};
+use iroha_core::sumeragi::network_topology::{
+    Topology, commit_quorum_from_len, redundant_send_r_from_len,
+};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     ChainId, Level,
@@ -384,6 +386,23 @@ enum GenesisPeer {
 
 const COLLECTORS_K: u16 = 3;
 const REDUNDANT_SEND_R: u8 = 2;
+
+fn collectors_k_for_peers(peer_count: usize) -> u16 {
+    if peer_count <= 1 {
+        return 0;
+    }
+    let fault_budget = peer_count.saturating_sub(commit_quorum_from_len(peer_count));
+    let desired = fault_budget.saturating_add(1);
+    let min_k = usize::from(COLLECTORS_K).max(1);
+    let k = desired.max(min_k).min(peer_count.saturating_sub(1));
+    u16::try_from(k).unwrap_or(u16::MAX)
+}
+
+fn redundant_send_r_for_peers(peer_count: usize) -> u8 {
+    let desired = u8::try_from(collectors_k_for_peers(peer_count)).unwrap_or(u8::MAX);
+    let baseline = REDUNDANT_SEND_R.max(redundant_send_r_from_len(peer_count));
+    baseline.max(desired)
+}
 
 fn scaled_timeout(base: Duration, peer_count: usize) -> Duration {
     let scale = ((peer_count + 3) / 4).max(1) as u32;
@@ -908,6 +927,7 @@ impl UnstableNetwork {
         round_index: usize,
         chain_id: &ChainId,
         height: u64,
+        collectors_k: u16,
     ) -> Vec<PeerId> {
         if n_faulty_peers == 0 {
             return Vec::new();
@@ -918,11 +938,15 @@ impl UnstableNetwork {
             rotated.get(commit_quorum..).unwrap_or(&[]).to_vec()
         } else {
             let mut collector_ids = HashSet::new();
-            if rotated.len() > 1 && COLLECTORS_K > 0 {
+            if rotated.len() > 1 && collectors_k > 0 {
                 let seed = permissioned_prf_seed(chain_id);
                 let topology = Topology::new(rotated.clone());
-                for idx in
-                    topology.collector_indices_k_prf(usize::from(COLLECTORS_K), seed, height, 0)
+                for idx in topology.collector_indices_k_prf(
+                    usize::from(collectors_k),
+                    seed,
+                    height,
+                    0,
+                )
                 {
                     if let Some(peer) = topology.as_ref().get(idx) {
                         collector_ids.insert(peer.clone());
@@ -987,20 +1011,22 @@ impl UnstableNetwork {
             )));
 
         if self.n_peers > 4 {
+            let collectors_k = collectors_k_for_peers(self.n_peers);
+            let redundant_send_r = redundant_send_r_for_peers(self.n_peers);
             builder = builder
                 .with_config_layer(|layer| {
                     layer
-                        .write(["sumeragi", "collectors", "k"], i64::from(COLLECTORS_K))
+                        .write(["sumeragi", "collectors", "k"], i64::from(collectors_k))
                         .write(
                             ["sumeragi", "collectors", "redundant_send_r"],
-                            i64::from(REDUNDANT_SEND_R),
+                            i64::from(redundant_send_r),
                         );
                 })
                 .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::CollectorsK(COLLECTORS_K),
+                    SumeragiParameter::CollectorsK(collectors_k),
                 )))
                 .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-                    SumeragiParameter::RedundantSendR(REDUNDANT_SEND_R),
+                    SumeragiParameter::RedundantSendR(redundant_send_r),
                 )));
         }
 
@@ -1050,12 +1076,14 @@ impl UnstableNetwork {
             .first()
             .cloned()
             .expect("topology always has a leader");
+        let collectors_k = collectors_k_for_peers(self.n_peers);
         let faulty_ids: HashSet<_> = Self::select_faulty_peer_ids(
             &peer_ids,
             self.n_faulty_peers,
             round_index,
             &chain_id,
             target_height,
+            collectors_k,
         )
         .into_iter()
         .collect();
@@ -1474,20 +1502,34 @@ mod tests {
         let rotated = topology_for_permissioned_round(&peer_ids, &chain_id, height, 0);
         let commit_quorum = commit_quorum_from_len(rotated.len());
         let expected_tail: BTreeSet<_> = rotated[commit_quorum..].iter().cloned().collect();
-        let selected_single =
-            UnstableNetwork::select_faulty_peer_ids(&peer_ids, 1, 0, &chain_id, height);
+        let collectors_k = collectors_k_for_peers(peer_ids.len());
+        let selected_single = UnstableNetwork::select_faulty_peer_ids(
+            &peer_ids,
+            1,
+            0,
+            &chain_id,
+            height,
+            collectors_k,
+        );
         assert_eq!(selected_single.len(), 1);
         assert!(expected_tail.contains(&selected_single[0]));
 
         let topology = Topology::new(rotated.clone());
         let seed = permissioned_prf_seed(&chain_id);
         let collector_ids: BTreeSet<_> = topology
-            .collector_indices_k_prf(usize::from(COLLECTORS_K), seed, height, 0)
+            .collector_indices_k_prf(usize::from(collectors_k), seed, height, 0)
             .into_iter()
             .filter_map(|idx| topology.as_ref().get(idx).cloned())
             .collect();
         let selected_multi: BTreeSet<_> =
-            UnstableNetwork::select_faulty_peer_ids(&peer_ids, 3, 0, &chain_id, height)
+            UnstableNetwork::select_faulty_peer_ids(
+                &peer_ids,
+                3,
+                0,
+                &chain_id,
+                height,
+                collectors_k,
+            )
                 .into_iter()
                 .collect();
         assert_eq!(selected_multi.len(), 3);
