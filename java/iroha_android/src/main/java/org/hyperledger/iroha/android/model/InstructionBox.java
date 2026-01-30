@@ -85,6 +85,9 @@ import org.hyperledger.iroha.android.model.instructions.UpsertProviderCreditInst
  */
 public final class InstructionBox {
 
+  private static final String ARG_WIRE_NAME = "wire_name";
+  private static final String ARG_PAYLOAD_BASE64 = "payload_base64";
+
   private final InstructionPayload payload;
 
   private InstructionBox(final InstructionPayload payload) {
@@ -165,6 +168,21 @@ public final class InstructionBox {
       final InstructionKind kind, final Map<String, String> arguments) {
     Objects.requireNonNull(kind, "kind");
     Objects.requireNonNull(arguments, "arguments");
+    final String wireName = arguments.get(ARG_WIRE_NAME);
+    final String payloadBase64 = arguments.get(ARG_PAYLOAD_BASE64);
+    if (wireName != null || payloadBase64 != null) {
+      if (wireName == null || payloadBase64 == null) {
+        throw new IllegalArgumentException(
+            "wire payload requires both wire_name and payload_base64 fields");
+      }
+      final byte[] payloadBytes;
+      try {
+        payloadBytes = Base64.getDecoder().decode(payloadBase64);
+      } catch (final IllegalArgumentException ex) {
+        throw new IllegalArgumentException("wire payload base64 is invalid", ex);
+      }
+      return new WireInstructionPayload(wireName, payloadBytes);
+    }
     if (kind == InstructionKind.REGISTER) {
       final String action = arguments.get("action");
       if ("RegisterDomain".equals(action)) {
@@ -490,9 +508,6 @@ public final class InstructionBox {
   }
 
   private static final class WireInstructionPayload implements WirePayload {
-    private static final String ARG_WIRE_NAME = "wire_name";
-    private static final String ARG_PAYLOAD_BASE64 = "payload_base64";
-
     private final InstructionKind kind;
     private final String wireName;
     private final byte[] payloadBytes;

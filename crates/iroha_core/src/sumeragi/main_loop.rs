@@ -6779,6 +6779,24 @@ impl Actor {
                     }
                     return;
                 }
+                if self
+                    .subsystems
+                    .da_rbc
+                    .rbc
+                    .sessions
+                    .get(&key)
+                    .is_some_and(|session| session.delivered)
+                {
+                    debug!(
+                        block = %key.0,
+                        height = key.1,
+                        view = key.2,
+                        existing_source = ?existing_source,
+                        incoming_source = ?source,
+                        "ignoring RBC roster update for delivered session"
+                    );
+                    return;
+                }
                 if source.is_authoritative() && !existing_source.is_authoritative() {
                     entry.insert(roster);
                     self.subsystems
@@ -14474,6 +14492,9 @@ impl RbcSession {
     }
 
     pub(crate) fn record_ready(&mut self, sender: u32, signature: Vec<u8>) -> bool {
+        if self.delivered {
+            return false;
+        }
         if let Some(existing) = self
             .ready_signatures
             .iter()

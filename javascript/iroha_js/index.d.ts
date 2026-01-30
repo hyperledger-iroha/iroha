@@ -5459,6 +5459,11 @@ export interface UaidPortfolioResponse {
   dataspaces: ReadonlyArray<UaidPortfolioDataspace>;
 }
 
+export interface UaidPortfolioQueryOptions {
+  assetId?: string;
+  signal?: AbortSignal;
+}
+
 export interface UaidBindingsDataspace {
   dataspace_id: number;
   dataspace_alias: string | null;
@@ -6278,7 +6283,7 @@ export declare class ToriiClient {
   ): Promise<Buffer>;
   getUaidPortfolio(
     uaid: string,
-    options?: { signal?: AbortSignal },
+    options?: UaidPortfolioQueryOptions,
   ): Promise<UaidPortfolioResponse>;
   getUaidBindings(
     uaid: string,

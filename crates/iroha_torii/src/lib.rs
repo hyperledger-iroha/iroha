@@ -2810,16 +2810,29 @@ async fn handler_accounts_onboard(
 }
 
 #[cfg(feature = "app_api")]
+#[derive(JsonDeserialize)]
+struct AccountsPortfolioQuery {
+    #[norito(default)]
+    asset_id: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_accounts_portfolio(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     AxPath(uaid_literal): AxPath<String>,
+    AxQuery(query): AxQuery<AccountsPortfolioQuery>,
 ) -> Result<impl IntoResponse, Error> {
+    let asset_id = match query.asset_id {
+        Some(raw) => Some(parse_asset_id(&raw)?),
+        None => None,
+    };
     if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
         return routing::handle_v1_accounts_portfolio(
             app.state.clone(),
             AxPath(uaid_literal),
+            asset_id,
             app.telemetry.clone(),
         )
         .await;
@@ -2839,6 +2852,7 @@ async fn handler_accounts_portfolio(
     routing::handle_v1_accounts_portfolio(
         app.state.clone(),
         AxPath(uaid_literal),
+        asset_id,
         app.telemetry.clone(),
     )
     .await

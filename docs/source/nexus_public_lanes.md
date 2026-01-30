@@ -257,6 +257,10 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
       `staker`, bonded amount) plus pending unbond timers. Optional
       `?validator=ih58...` filters the response for dashboards that focus
       on a single validator; `address_format` applies to all literals.
+    - `GET /v1/nexus/public_lanes/{lane}/rewards/pending` – pending rewards per
+      asset for the requested account. Requires `account=ih58...` and accepts
+      optional `asset_id` and `upto_epoch` filters; `address_format` applies to
+      the account literal in the response.
   - Lifecycle ISIs use the standard transaction path (Torii
     `/v1/transactions` or the CLI instruction pipeline). Example Norito JSON
     payloads:

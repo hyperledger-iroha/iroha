@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -167,6 +168,25 @@ final class TransactionPayloadFixtures {
         final List<InstructionBox> instructions = new ArrayList<>(instructionsRaw.size());
         for (Object entry : instructionsRaw) {
           final Map<String, Object> instructionMap = asMap(entry, "instruction", name);
+          final Object wireNameRaw = instructionMap.get("wire_name");
+          final Object wirePayloadRaw = instructionMap.get("payload_base64");
+          if (wireNameRaw != null || wirePayloadRaw != null) {
+            if (wireNameRaw == null || wirePayloadRaw == null) {
+              throw new IllegalStateException(
+                  name + ": instruction wire payload requires wire_name and payload_base64");
+            }
+            final String wireName = Objects.toString(wireNameRaw);
+            final String payloadBase64 = Objects.toString(wirePayloadRaw);
+            final byte[] wirePayload;
+            try {
+              wirePayload = Base64.getDecoder().decode(payloadBase64);
+            } catch (final IllegalArgumentException ex) {
+              throw new IllegalStateException(
+                  name + ": instruction payload_base64 is not valid base64", ex);
+            }
+            instructions.add(InstructionBox.fromWirePayload(wireName, wirePayload));
+            continue;
+          }
           InstructionKind kind = InstructionKind.CUSTOM;
           if (instructionMap.containsKey("kind")) {
             kind =

@@ -3452,13 +3452,20 @@ fn account_paths() -> Map {
     );
     paths.insert(
         "/v1/accounts/{uaid}/portfolio".to_owned(),
-        Value::Object(json_get_operation(
-            "Accounts",
-            "Fetch account portfolio.",
-            "Fetch the asset portfolio for an account identifier.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param("uaid", "User account identifier.")],
-        )),
+        Value::Object({
+            let mut params = vec![string_path_param("uaid", "User account identifier.")];
+            params.push(string_query_param(
+                "asset_id",
+                "Filter portfolio positions by asset identifier.",
+            ));
+            json_get_operation(
+                "Accounts",
+                "Fetch account portfolio.",
+                "Fetch the asset portfolio for an account identifier (supports optional asset_id filtering).",
+                "#/components/schemas/JsonValue",
+                params,
+            )
+        }),
     );
     paths
 }
@@ -5982,7 +5989,7 @@ fn nexus_public_lane_rewards_operation() -> Map {
         Value::String(
             "Returns the unclaimed reward amount per asset for the requested account in the \
              given public lane. Requires an `account` query parameter (IH58 (preferred)/sora (second-best)) and \
-             accepts an optional `upto_epoch` upper bound."
+             accepts optional `asset_id` and `upto_epoch` filters."
                 .to_owned(),
         ),
     );
@@ -6010,6 +6017,10 @@ fn nexus_public_lane_rewards_operation() -> Map {
             string_query_param(
                 "account",
                 "Account literal to evaluate pending rewards for (IH58 (preferred)/sora (second-best)).",
+            ),
+            string_query_param(
+                "asset_id",
+                "Filter pending rewards by asset identifier.",
             ),
             Value::Object(upto_epoch_param),
         ]),
@@ -10015,6 +10026,71 @@ mod tests {
         assert!(asset_holders.contains(&"offset".to_owned()));
         assert!(asset_holders.contains(&"address_format".to_owned()));
         assert!(asset_holders.contains(&"asset_id".to_owned()));
+    }
+
+    #[test]
+    fn portfolio_params_include_asset_id_filter() {
+        fn params_for(doc: &Value, path: &str) -> Vec<String> {
+            let paths = doc
+                .get("paths")
+                .and_then(Value::as_object)
+                .expect("paths section");
+            let entry = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .expect("path entry");
+            let get_op = entry.get("get").and_then(Value::as_object).expect("get op");
+            get_op
+                .get("parameters")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|param| {
+                    param
+                        .as_object()
+                        .and_then(|obj| obj.get("name"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .collect()
+        }
+
+        let doc = generate_spec();
+        let portfolio = params_for(&doc, "/v1/accounts/{uaid}/portfolio");
+        assert!(portfolio.contains(&"asset_id".to_owned()));
+    }
+
+    #[test]
+    fn public_lane_rewards_params_include_asset_id_filter() {
+        fn params_for(doc: &Value, path: &str) -> Vec<String> {
+            let paths = doc
+                .get("paths")
+                .and_then(Value::as_object)
+                .expect("paths section");
+            let entry = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .expect("path entry");
+            let get_op = entry.get("get").and_then(Value::as_object).expect("get op");
+            get_op
+                .get("parameters")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|param| {
+                    param
+                        .as_object()
+                        .and_then(|obj| obj.get("name"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .collect()
+        }
+
+        let doc = generate_spec();
+        let rewards = params_for(&doc, "/v1/nexus/public_lanes/{lane_id}/rewards/pending");
+        assert!(rewards.contains(&"asset_id".to_owned()));
+        assert!(rewards.contains(&"account".to_owned()));
     }
 
     #[test]

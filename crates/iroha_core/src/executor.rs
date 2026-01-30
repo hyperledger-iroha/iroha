@@ -1457,7 +1457,16 @@ impl Executor {
             ));
         };
 
-        format!("{last}@{}", init.trim_matches(DELIMITER))
+        let domain_hint = init.trim_matches(DELIMITER);
+        if let Ok(account) = last.parse::<AccountId>() {
+            if account.domain().to_string() != domain_hint {
+                return Err(ValidationFail::NotPermitted(
+                    "violates multisig role name format".to_owned(),
+                ));
+            }
+            return Ok(Some(account));
+        }
+        format!("{last}@{domain_hint}")
             .parse()
             .map(Some)
             .map_err(|_| {

@@ -1469,19 +1469,17 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 This appendix tracks open TODO markers discovered in the repository. Items are grouped by area. Reference-only TODO mentions are called out separately so they do not get mistaken for active work items.
 
 ### Code / Runtime TODOs
-- [ ] Multisig rekeying: update account controller when rekeying is wired (Add/RemoveSignatory, SetAccountQuorum) (`crates/iroha_core/src/smartcontracts/isi/multisig.rs:63,93,148`).
+- [ ] Multisig rekeying: migrate multisig accounts to a controller derived from spec once account-based members are supported (`crates/iroha_core/src/smartcontracts/isi/multisig.rs:188`).
 
 ### SDK TODOs
-- [x] Android SDK: encode multisig signatures in `SignedTransactionEncoder` once SDK exposes them (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/SignedTransactionEncoder.java:69`).
 - [ ] Android SDK: switch legacy instructions to canonical wire payloads once codegen encoders land (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/TransactionPayloadAdapter.java:123`).
-- [x] Android SDK: support multisig controller payloads once the SDK exposes them (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/TransactionPayloadAdapter.java:156`).
-- [x] Java Norito: implement streaming parity for missing RLE terminators and deterministic resume snapshots (`java/norito_java/CHANGELOG.md:63`).
-- [x] Java Norito: extend columnar helpers for enum/discriminant columns, explore Panama acceleration, and publish Maven/Gradle coordinates (`java/norito_java/DESIGN.md:97`).
+- [ ] Java Norito: implement Panama-based acceleration once the FFM API stabilizes (`java/norito_java/DESIGN.md:113`).
 
 ### Test TODOs
-- [ ] Android SDK tests: switch fixtures to canonical wire instruction encoding once Java encoders land (`java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixtureTests.java:45`).
+- [ ] Android SDK tests: switch fixtures to canonical wire instruction encoding once Java encoders land (`java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionPayloadFixtureTests.java:99`).
 
 ### Docs TODOs (feature gaps)
+- None in current scan.
 
 ### TODO References (non-actionable / informational)
 - Documentation guidance that uses “TODO” as an instruction or historical note, not an open task:

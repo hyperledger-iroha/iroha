@@ -96,6 +96,41 @@ async fn accounts_portfolio_snapshot_matches_fixture() {
     assert_eq!(value, fixture);
 }
 
+#[tokio::test]
+async fn accounts_portfolio_filters_by_asset_id() {
+    let (app, uaid) = setup_portfolio_app(|state| {
+        let (uaid, _accounts) = seed_portfolio_accounts(state);
+        uaid
+    });
+    let uaid_hex = hex::encode(uaid.as_hash().as_ref());
+    let domain_id: DomainId = "portfolio".parse().unwrap();
+    let cash_def: AssetDefinitionId = format!("cash#{domain_id}").parse().unwrap();
+    let account_id = account_id_from_signatory(domain_id, ACCOUNT_SIGNATORY);
+    let asset_id = AssetId::new(cash_def, account_id).to_string();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/accounts/uaid:{uaid_hex}/portfolio?asset_id={}",
+                    urlencoding::encode(&asset_id)
+                ))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let value: Value = json::from_slice(&body).expect("valid portfolio payload");
+    assert_eq!(value["totals"]["accounts"], Value::from(1));
+    assert_eq!(value["totals"]["positions"], Value::from(1));
+    let assets = value["dataspaces"][0]["accounts"][0]["assets"]
+        .as_array()
+        .expect("assets array");
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0]["asset_id"].as_str(), Some(asset_id.as_str()));
+}
+
 fn setup_portfolio_app<SeedFn>(seed_fn: SeedFn) -> (Router, UniversalAccountId)
 where
     SeedFn: FnOnce(&Arc<State>) -> UniversalAccountId,

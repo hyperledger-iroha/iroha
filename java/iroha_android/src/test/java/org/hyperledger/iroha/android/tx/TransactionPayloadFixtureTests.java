@@ -1,12 +1,20 @@
 package org.hyperledger.iroha.android.tx;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoException;
+import org.hyperledger.iroha.norito.NoritoAdapters;
+import org.hyperledger.iroha.norito.NoritoCodec;
 import org.junit.Test;
 
 public final class TransactionPayloadFixtureTests {
@@ -14,6 +22,48 @@ public final class TransactionPayloadFixtureTests {
   @Test
   public void validatePayloadFixtures() throws Exception {
     runFixtures();
+  }
+
+  @Test
+  public void fixtureLoaderAcceptsWireInstructionEntries() {
+    final byte[] wirePayload =
+        NoritoCodec.encode("wire-fixture", "iroha.test.WirePayload", NoritoAdapters.stringAdapter());
+    final String payloadBase64 = Base64.getEncoder().encodeToString(wirePayload);
+
+    final Map<String, Object> instruction = new LinkedHashMap<>();
+    instruction.put("wire_name", "iroha.custom");
+    instruction.put("payload_base64", payloadBase64);
+    final List<Object> instructions = new ArrayList<>();
+    instructions.add(instruction);
+
+    final Map<String, Object> executable = new LinkedHashMap<>();
+    executable.put("Instructions", instructions);
+
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("chain", "00000001");
+    payload.put("authority", "alice@wonderland");
+    payload.put("creation_time_ms", 0L);
+    payload.put("executable", executable);
+    payload.put("metadata", Collections.emptyMap());
+
+    final Map<String, Object> fixtureMap = new LinkedHashMap<>();
+    fixtureMap.put("name", "wire_instruction_fixture");
+    fixtureMap.put("chain", "00000001");
+    fixtureMap.put("authority", "alice@wonderland");
+    fixtureMap.put("creation_time_ms", 0L);
+    fixtureMap.put("payload", payload);
+
+    final TransactionPayloadFixtures.Fixture fixture =
+        TransactionPayloadFixtures.Fixture.fromObject(fixtureMap);
+    final TransactionPayload decoded = fixture.toPayload();
+    assert decoded.executable().isInstructions() : "Expected instruction executable";
+    final List<InstructionBox> boxes = decoded.executable().instructions();
+    assert boxes.size() == 1 : "Expected one instruction";
+    final InstructionBox box = boxes.get(0);
+    assert box.payload() instanceof InstructionBox.WirePayload : "Expected wire payload";
+    final InstructionBox.WirePayload wire = (InstructionBox.WirePayload) box.payload();
+    assert "iroha.custom".equals(wire.wireName()) : "Wire name should round-trip";
+    assert Arrays.equals(wirePayload, wire.payloadBytes()) : "Wire payload bytes should round-trip";
   }
 
   public static void main(final String[] args) throws Exception {
@@ -42,17 +92,23 @@ public final class TransactionPayloadFixtureTests {
       final byte[] encoded = adapter.encodeTransaction(payload);
       fixture.encoded().ifPresent(expected -> {
         if (payload.executable().isInstructions()) {
-          // TODO: Switch to canonical wire instruction encoding once Java encoders land.
-          try {
-            final byte[] expectedBytes = Base64.getDecoder().decode(expected);
-            final TransactionPayload canonical = adapter.decodeTransaction(expectedBytes);
-            final byte[] reencoded = adapter.encodeTransaction(canonical);
-            final String reencodedBase64 = Base64.getEncoder().encodeToString(reencoded);
-            assert expected.equals(reencodedBase64)
-                : name + ": encoded fixture not stable after Android re-encode";
-          } catch (final NoritoException ex) {
-            throw new IllegalStateException(
-                name + ": failed to re-encode canonical instruction fixture", ex);
+          if (allInstructionsWire(payload)) {
+            final String actual = Base64.getEncoder().encodeToString(encoded);
+            assert expected.equals(actual) : name + ": encoded payload mismatch";
+          } else {
+            // TODO: Switch legacy instructions to canonical wire encoding once Java encoders land.
+            // Fixture loader now accepts wire_name/payload_base64 for future wire fixtures.
+            try {
+              final byte[] expectedBytes = Base64.getDecoder().decode(expected);
+              final TransactionPayload canonical = adapter.decodeTransaction(expectedBytes);
+              final byte[] reencoded = adapter.encodeTransaction(canonical);
+              final String reencodedBase64 = Base64.getEncoder().encodeToString(reencoded);
+              assert expected.equals(reencodedBase64)
+                  : name + ": encoded fixture not stable after Android re-encode";
+            } catch (final NoritoException ex) {
+              throw new IllegalStateException(
+                  name + ": failed to re-encode canonical instruction fixture", ex);
+            }
           }
           return;
         }
@@ -101,7 +157,19 @@ public final class TransactionPayloadFixtureTests {
         : name + ": TTL mismatch";
     assert Objects.equals(expected.nonce(), actual.nonce())
         : name + ": nonce mismatch";
-    assert Objects.equals(expected.metadata(), actual.metadata())
+      assert Objects.equals(expected.metadata(), actual.metadata())
         : name + ": metadata mismatch";
+  }
+
+  private static boolean allInstructionsWire(final TransactionPayload payload) {
+    if (!payload.executable().isInstructions()) {
+      return false;
+    }
+    for (InstructionBox box : payload.executable().instructions()) {
+      if (!(box.payload() instanceof InstructionBox.WirePayload)) {
+        return false;
+      }
+    }
+    return true;
   }
 }

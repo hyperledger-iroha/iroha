@@ -919,10 +919,17 @@ For higher-level walkthroughs, see:
   `ToriiExplorerInstructionsParams`/`ToriiExplorerTransactionsParams` filters (including
   optional `assetId` scoping). Fetch a single
   transaction with `getExplorerTransactionDetail(hashHex:)` or a single instruction with
-  `getExplorerInstructionDetail(hashHex:index:)`. For transfer history, use
+  `getExplorerInstructionDetail(hashHex:index:)`. Use
+  `getExplorerTransactionTransfers`/`getExplorerTransactionTransferSummaries` to derive transfer
+  details for a single transaction, or `streamTransactionTransferSummaries` for history+live
+  streaming of a single transaction. For transfer history, use
   `getExplorerTransfers`/`getExplorerTransferSummaries`, or the convenience helpers
   `getAccountTransferHistory` and `iterateAccountTransferHistory` (iOS 15/macOS 12+) which page
   instructions with `kind: "Transfer"` and emit UI-ready `ToriiExplorerTransferSummary` records.
+  These helpers accept `assetDefinitionId` or `assetId` filters (the asset-id filter matches the
+  source asset literal in transfer payloads). Transfer summaries also expose `sourceAssetId` and
+  `destinationAssetId` convenience accessors when they can be derived from the asset definition and
+  account ids.
   Live updates are available via `streamExplorerInstructions` and `streamExplorerTransactions`
   (SSE, iOS 15/macOS 12+). Combine callers can use
   `explorerInstructionsPublisher`/`explorerTransactionsPublisher`. Use

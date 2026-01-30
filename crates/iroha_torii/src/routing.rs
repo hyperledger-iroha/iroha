@@ -13725,6 +13725,9 @@ pub struct PublicLaneRewardsQueryParams {
     pub address_format: Option<String>,
     #[norito(default)]
     pub account: Option<String>,
+    /// Optional asset identifier filter.
+    #[norito(default)]
+    pub asset_id: Option<String>,
     #[norito(default)]
     pub upto_epoch: Option<u64>,
 }
@@ -29558,10 +29561,14 @@ pub async fn handle_v1_accounts_query(
 pub async fn handle_v1_accounts_portfolio(
     state: Arc<CoreState>,
     axum::extract::Path(raw_uaid): axum::extract::Path<String>,
+    asset_id: Option<iroha_data_model::asset::AssetId>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let uaid = parse_uaid_literal(&raw_uaid)?;
-    let snapshot = portfolio::collect_portfolio(&state.view(), uaid);
+    let mut snapshot = portfolio::collect_portfolio(&state.view(), uaid);
+    if let Some(expected) = asset_id.as_ref() {
+        filter_portfolio_by_asset_id(&mut snapshot, expected);
+    }
     let body = norito::json::to_json_pretty(&snapshot).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
             err.to_string(),
@@ -29574,6 +29581,28 @@ pub async fn handle_v1_accounts_portfolio(
         header::HeaderValue::from_static("application/json"),
     );
     Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
+fn filter_portfolio_by_asset_id(
+    snapshot: &mut iroha_data_model::nexus::portfolio::UniversalPortfolio,
+    asset_id: &iroha_data_model::asset::AssetId,
+) {
+    let mut accounts = 0u64;
+    let mut positions = 0u64;
+    for dataspace in &mut snapshot.dataspaces {
+        for account in &mut dataspace.accounts {
+            account.assets.retain(|asset| &asset.asset_id == asset_id);
+            if !account.assets.is_empty() {
+                accounts = accounts.saturating_add(1);
+                positions = positions.saturating_add(account.assets.len() as u64);
+            }
+        }
+        dataspace.accounts.retain(|account| !account.assets.is_empty());
+    }
+    snapshot.dataspaces.retain(|dataspace| !dataspace.accounts.is_empty());
+    snapshot.totals.accounts = accounts;
+    snapshot.totals.positions = positions;
 }
 
 #[cfg(feature = "app_api")]
@@ -33493,13 +33522,10 @@ pub async fn handle_v1_nexus_public_lane_rewards(
     params: PublicLaneRewardsQueryParams,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use std::collections::BTreeMap;
-
     use iroha_data_model::{
         ValidationFail, account::AccountId, asset::AssetId, nexus::PublicLanePendingReward,
         query::error::QueryExecutionFail,
     };
-    use iroha_primitives::numeric::Numeric;
 
     let canonical_account = canonicalize_query_account_literal(
         "account",
@@ -33517,6 +33543,13 @@ pub async fn handle_v1_nexus_public_lane_rewards(
             format!("invalid account literal `{account_literal}`: {err}"),
         )))
     })?;
+    let asset_filter = match params.asset_id.as_deref() {
+        Some(raw) => Some(
+            raw.parse::<AssetId>()
+                .map_err(|_| conversion_error("asset_id must be a valid asset id".to_owned()))?,
+        ),
+        None => None,
+    };
     let address_format = AddressFormatPreference::from_param(params.address_format.as_deref())?;
     record_address_format_selection(
         &telemetry,
@@ -33526,26 +33559,89 @@ pub async fn handle_v1_nexus_public_lane_rewards(
     let upto_epoch = params.upto_epoch.unwrap_or(u64::MAX);
 
     let view = state.view();
+    let rewards = collect_pending_public_lane_rewards(
+        lane_id,
+        &account_id,
+        upto_epoch,
+        asset_filter.as_ref(),
+        view.world.public_lane_reward_claims().iter(),
+        view.world.public_lane_rewards().iter(),
+    )?;
+    let mut entries = rewards
+        .into_iter()
+        .filter(|reward| !reward.amount.is_zero())
+        .map(|reward| pending_reward_to_json(reward, address_format))
+        .collect::<Vec<_>>();
+    entries.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
+
+    let payload = build_lane_items_payload(
+        lane_id,
+        entries.into_iter().map(|(_, value)| value).collect(),
+    );
+    let body = norito::json::to_json_pretty(&payload).map_err(norito_internal_error)?;
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
+fn collect_pending_public_lane_rewards<'a>(
+    lane_id: LaneId,
+    account_id: &iroha_data_model::account::AccountId,
+    upto_epoch: u64,
+    asset_filter: Option<&iroha_data_model::asset::AssetId>,
+    reward_claims: impl Iterator<
+        Item = (
+            &'a (LaneId, iroha_data_model::account::AccountId, iroha_data_model::asset::AssetId),
+            &'a u64,
+        ),
+    >,
+    rewards: impl Iterator<Item = (&'a (LaneId, u64), &'a PublicLaneRewardRecord)>,
+) -> Result<Vec<iroha_data_model::nexus::PublicLanePendingReward>, Error> {
+    use std::collections::BTreeMap;
+
+    use iroha_data_model::{
+        asset::AssetId,
+        nexus::PublicLanePendingReward,
+        query::error::QueryExecutionFail,
+        ValidationFail,
+    };
+    use iroha_primitives::numeric::Numeric;
+
     let mut last_claimed: BTreeMap<AssetId, u64> = BTreeMap::new();
-    for ((lane, account, asset), epoch) in view.world.public_lane_reward_claims().iter() {
-        if *lane == lane_id && account == &account_id {
-            last_claimed.insert(asset.clone(), *epoch);
+    for ((lane, account, asset), epoch) in reward_claims {
+        if *lane != lane_id || account != account_id {
+            continue;
         }
+        if let Some(filter) = asset_filter {
+            if asset != filter {
+                continue;
+            }
+        }
+        last_claimed.insert(asset.clone(), *epoch);
     }
 
     let mut totals: BTreeMap<AssetId, (Numeric, u64)> = BTreeMap::new();
-    for ((lane, epoch), record) in view.world.public_lane_rewards().iter() {
+    for ((lane, epoch), record) in rewards {
         if *lane != lane_id {
             continue;
         }
         if *epoch > upto_epoch {
             break;
         }
+        if let Some(filter) = asset_filter {
+            if &record.asset != filter {
+                continue;
+            }
+        }
         let last = *last_claimed.get(&record.asset).unwrap_or(&0);
         if *epoch <= last {
             continue;
         }
-        for share in record.shares.iter().filter(|s| s.account == account_id) {
+        for share in record.shares.iter().filter(|s| &s.account == account_id) {
             let entry = totals
                 .entry(record.asset.clone())
                 .or_insert_with(|| (Numeric::zero(), last));
@@ -33562,36 +33658,17 @@ pub async fn handle_v1_nexus_public_lane_rewards(
         }
     }
 
-    let mut entries = Vec::new();
-    for (asset_id, (amount, pending_epoch)) in totals {
-        if amount.is_zero() {
-            continue;
-        }
-        entries.push(pending_reward_to_json(
-            PublicLanePendingReward {
-                lane_id,
-                account: account_id.clone(),
-                asset: asset_id.clone(),
-                last_claimed_epoch: last_claimed.get(&asset_id).copied().unwrap_or(0),
-                pending_through_epoch: pending_epoch,
-                amount,
-            },
-            address_format,
-        ));
-    }
-    entries.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
-
-    let payload = build_lane_items_payload(
-        lane_id,
-        entries.into_iter().map(|(_, value)| value).collect(),
-    );
-    let body = norito::json::to_json_pretty(&payload).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(totals
+        .into_iter()
+        .map(|(asset_id, (amount, pending_epoch))| PublicLanePendingReward {
+            lane_id,
+            account: account_id.clone(),
+            asset: asset_id.clone(),
+            last_claimed_epoch: last_claimed.get(&asset_id).copied().unwrap_or(0),
+            pending_through_epoch: pending_epoch,
+            amount,
+        })
+        .collect())
 }
 
 #[cfg(feature = "app_api")]
@@ -33749,11 +33826,16 @@ fn public_lane_unbonding_to_json(unbonding: &PublicLaneUnbonding) -> Value {
 #[cfg(all(test, feature = "app_api"))]
 mod public_lane_tests {
     use iroha_data_model::{
+        account::AccountId,
         asset::{AssetDefinitionId, AssetId},
-        nexus::PublicLanePendingReward,
+        metadata::Metadata,
+        nexus::{
+            PublicLanePendingReward, PublicLaneRewardRecord, PublicLaneRewardRole,
+            PublicLaneRewardShare,
+        },
     };
     use iroha_primitives::numeric::Numeric;
-    use iroha_test_samples::{ALICE_ID, BOB_ID};
+    use iroha_test_samples::ALICE_ID;
 
     use super::*;
 
@@ -33817,6 +33899,59 @@ mod public_lane_tests {
             obj.get("account").and_then(Value::as_str),
             Some(expected_account.as_str())
         );
+    }
+
+    #[test]
+    fn pending_rewards_filter_by_asset_id() {
+        let lane_id = LaneId::new(1);
+        let asset_def_a: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+        let asset_def_b: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_a = AssetId::new(asset_def_a, ALICE_ID.clone());
+        let asset_b = AssetId::new(asset_def_b, ALICE_ID.clone());
+
+        let share_a = PublicLaneRewardShare {
+            account: ALICE_ID.clone(),
+            role: PublicLaneRewardRole::Validator,
+            amount: Numeric::from(10_u32),
+        };
+        let share_b = PublicLaneRewardShare {
+            account: ALICE_ID.clone(),
+            role: PublicLaneRewardRole::Validator,
+            amount: Numeric::from(5_u32),
+        };
+
+        let record_a = PublicLaneRewardRecord {
+            lane_id,
+            epoch: 1,
+            asset: asset_a.clone(),
+            total_reward: Numeric::from(10_u32),
+            shares: vec![share_a],
+            metadata: Metadata::default(),
+        };
+        let record_b = PublicLaneRewardRecord {
+            lane_id,
+            epoch: 2,
+            asset: asset_b.clone(),
+            total_reward: Numeric::from(5_u32),
+            shares: vec![share_b],
+            metadata: Metadata::default(),
+        };
+
+        let rewards = vec![((lane_id, 1), record_a), ((lane_id, 2), record_b)];
+        let claims: Vec<((LaneId, AccountId, AssetId), u64)> = Vec::new();
+
+        let filtered = collect_pending_public_lane_rewards(
+            lane_id,
+            &ALICE_ID,
+            u64::MAX,
+            Some(&asset_a),
+            claims.iter().map(|(key, value)| (key, value)),
+            rewards.iter().map(|(key, value)| (key, value)),
+        )
+        .expect("collect pending rewards");
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].asset, asset_a);
     }
 }
 

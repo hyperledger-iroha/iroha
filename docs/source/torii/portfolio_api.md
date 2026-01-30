@@ -21,6 +21,12 @@ GET /v1/accounts/{uaid}/portfolio
 |------|-------------|
 | `uaid` | UAID literal. Accepts either the `uaid:<hex>` form or a raw 64-character hex digest (LSB=1). |
 
+## Query parameters
+
+| Name | Description |
+|------|-------------|
+| `asset_id` | Optional filter that limits the response to positions for the specified asset identifier. |
+
 ## Response schema
 
 ```jsonc
@@ -92,6 +98,8 @@ GET /v1/accounts/{uaid}/portfolio
   Directory has not yet bound an account, the entry falls back to the routing
   policy’s `default_dataspace`.
 - The aggregator ignores zero-valued placeholders to keep the output concise.
+- When `asset_id` is supplied, the response payload (including totals) only
+  includes positions that match the requested asset identifier.
 - UAID literals are validated before execution; malformed inputs return
   `400 Bad Request` with `QueryExecutionFail::InvalidSingularParameters`.
 - This endpoint is gated by the standard Torii access controls and inherits the
