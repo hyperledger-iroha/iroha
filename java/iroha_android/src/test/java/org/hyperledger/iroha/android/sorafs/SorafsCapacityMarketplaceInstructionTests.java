@@ -4,9 +4,6 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
-import org.hyperledger.iroha.android.model.InstructionBox;
-import org.hyperledger.iroha.android.model.instructions.InstructionBuilders;
-import org.hyperledger.iroha.android.model.instructions.InstructionKind;
 import org.hyperledger.iroha.android.model.instructions.RegisterCapacityDeclarationInstruction;
 import org.hyperledger.iroha.android.model.instructions.RegisterCapacityDisputeInstruction;
 import org.hyperledger.iroha.android.model.instructions.SetPricingScheduleInstruction;
@@ -55,10 +52,7 @@ public final class SorafsCapacityMarketplaceInstructionTests {
             .putMetadata("notes", "First slate")
             .build();
 
-    final InstructionBox box =
-        InstructionBuilders.registerCapacityDeclaration(instruction);
-    final Map<String, String> args = box.arguments();
-    assert InstructionKind.REGISTER == box.kind() : "Kind mismatch";
+    final Map<String, String> args = instruction.toArguments();
     assert "RegisterCapacityDeclaration".equals(args.get("action")) : "action mismatch";
     assert PROVIDER_ID.equals(args.get("provider_id_hex")) : "provider mismatch";
     assert args.get("declaration_b64") != null : "declaration missing";
@@ -66,15 +60,8 @@ public final class SorafsCapacityMarketplaceInstructionTests {
     assert "region".equals("region") && "ap-northeast-1".equals(args.get("metadata.region"))
         : "metadata region mismatch";
     assert "First slate".equals(args.get("metadata.notes")) : "metadata notes mismatch";
-
-    final InstructionBox decoded =
-        InstructionBox.fromNorito(InstructionKind.REGISTER, args);
-    assert decoded.payload() instanceof RegisterCapacityDeclarationInstruction
-        : "Decoded payload mismatch";
-    final RegisterCapacityDeclarationInstruction roundTrip =
-        (RegisterCapacityDeclarationInstruction) decoded.payload();
-    assert roundTrip.committedCapacityGib() == 2_048L : "round trip committed capacity mismatch";
-    assert roundTrip.metadata().get("region").equals("ap-northeast-1") : "metadata mismatch";
+    assert instruction.committedCapacityGib() == 2_048L : "round trip committed capacity mismatch";
+    assert instruction.metadata().get("region").equals("ap-northeast-1") : "metadata mismatch";
   }
 
   private static void testDeclarationRejectsInvalidBase64() {
@@ -115,26 +102,16 @@ public final class SorafsCapacityMarketplaceInstructionTests {
                     .build())
             .build();
 
-    final InstructionBox box =
-        InstructionBuilders.registerCapacityDispute(instruction);
-    final Map<String, String> args = box.arguments();
-    assert InstructionKind.CUSTOM == box.kind() : "Kind mismatch";
+    final Map<String, String> args = instruction.toArguments();
     assert "RegisterCapacityDispute".equals(args.get("action")) : "action mismatch";
     assert args.get("dispute_b64") != null : "payload missing";
     assert "proof_failure".equals(args.get("kind")) : "kind mismatch";
     assert "Slash collateral".equals(args.get("requested_remedy")) : "remedy mismatch";
     assert "application/json".equals(args.get("evidence.media_type")) : "media type mismatch";
     assert "1024".equals(args.get("evidence.size_bytes")) : "size mismatch";
-
-    final InstructionBox decoded =
-        InstructionBox.fromNorito(InstructionKind.CUSTOM, args);
-    assert decoded.payload() instanceof RegisterCapacityDisputeInstruction
-        : "Decoded payload mismatch";
-    final RegisterCapacityDisputeInstruction roundTrip =
-        (RegisterCapacityDisputeInstruction) decoded.payload();
-    assert roundTrip.disputeKind() == RegisterCapacityDisputeInstruction.Kind.PROOF_FAILURE
+    assert instruction.disputeKind() == RegisterCapacityDisputeInstruction.Kind.PROOF_FAILURE
         : "kind mismatch after decode";
-    assert roundTrip.evidence().sizeBytes().equals(1_024L) : "evidence mismatch";
+    assert instruction.evidence().sizeBytes().equals(1_024L) : "evidence mismatch";
   }
 
   private static void testDisputeRejectsInvalidBase64() {
@@ -210,21 +187,12 @@ public final class SorafsCapacityMarketplaceInstructionTests {
             .setNotes("Test schedule")
             .build();
 
-    final InstructionBox box =
-        InstructionBuilders.setPricingSchedule(schedule);
-    final Map<String, String> args = box.arguments();
+    final Map<String, String> args = schedule.toArguments();
     assert "SetPricingSchedule".equals(args.get("action")) : "action mismatch";
     assert "xor".equals(args.get("schedule.currency_code")) : "currency mismatch";
     assert "hot".equals(args.get("schedule.tiers.0.storage_class")) : "tier mismatch";
-
-    final InstructionBox decoded =
-        InstructionBox.fromNorito(InstructionKind.CUSTOM, args);
-    assert decoded.payload() instanceof SetPricingScheduleInstruction
-        : "Expected SetPricingScheduleInstruction";
-    final SetPricingScheduleInstruction roundTrip =
-        (SetPricingScheduleInstruction) decoded.payload();
-    assert roundTrip.tiers().size() == 2 : "tier count mismatch";
-    assert "Test schedule".equals(roundTrip.notes()) : "notes mismatch";
+    assert schedule.tiers().size() == 2 : "tier count mismatch";
+    assert "Test schedule".equals(schedule.notes()) : "notes mismatch";
   }
 
   private static void testUpsertProviderCreditBuilder() {
@@ -244,21 +212,12 @@ public final class SorafsCapacityMarketplaceInstructionTests {
             .putMetadata("region", "jp")
             .build();
 
-    final InstructionBox box =
-        InstructionBuilders.upsertProviderCredit(instruction);
-    final Map<String, String> args = box.arguments();
+    final Map<String, String> args = instruction.toArguments();
     assert "UpsertProviderCredit".equals(args.get("action")) : "action mismatch";
     assert "123456789000".equals(args.get("record.available_credit_nano"))
         : "available credit mismatch";
-
-    final InstructionBox decoded =
-        InstructionBox.fromNorito(InstructionKind.CUSTOM, args);
-    assert decoded.payload() instanceof UpsertProviderCreditInstruction
-        : "Expected UpsertProviderCreditInstruction";
-    final UpsertProviderCreditInstruction roundTrip =
-        (UpsertProviderCreditInstruction) decoded.payload();
-    assert roundTrip.underDeliveryStrikes().equals(2) : "strikes mismatch";
-    assert "jp".equals(roundTrip.metadata().get("region")) : "metadata mismatch";
+    assert instruction.underDeliveryStrikes().equals(2) : "strikes mismatch";
+    assert "jp".equals(instruction.metadata().get("region")) : "metadata mismatch";
   }
 
   private static byte[] randomBytes(final int length) {

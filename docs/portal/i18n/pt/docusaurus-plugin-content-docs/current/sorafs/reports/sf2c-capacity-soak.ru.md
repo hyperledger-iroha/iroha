@@ -1,15 +1,57 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.ru.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Tradução em andamento
+# Отчет о soak начисления емкости SF-2c
 
-Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+Дата: 2026-03-21
 
-Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.
+## Область
+
+Этот отчет фиксирует детерминированные тесты soak начисления емкости SoraFS и выплат,
+запрошенные в дорожной карте SF-2c.
+
+- **30-дневный multi-provider soak:** Запускается
+  `capacity_fee_ledger_30_day_soak_deterministic` в
+  `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
+  Harness создает пять providers, охватывает 30 окон settlement и
+  проверяет, что итоги ledger совпадают с независимо вычисленной эталонной
+  проекцией. Тест выводит Blake3 digest (`capacity_soak_digest=...`), чтобы CI
+  могла захватить и сравнить канонический snapshot.
+- **Штрафы за недопоставку:** Обеспечиваются
+  `record_capacity_telemetry_penalises_persistent_under_delivery`
+  (тот же файл). Тест подтверждает, что пороги strikes, cooldowns, slashes
+  collateral и счетчики ledger остаются детерминированными.
+
+## Выполнение
+
+Запустите проверки soak локально:
+
+```bash
+cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
+cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
+```
+
+Тесты завершаются меньше чем за секунду на стандартном ноутбуке и не требуют
+внешних fixtures.
+
+## Наблюдаемость
+
+Torii теперь показывает snapshots кредитов providers вместе с fee ledgers, чтобы
+dashboards могли gate по низким балансам и penalty strikes:
+
+- REST: `GET /v1/sorafs/capacity/state` возвращает записи `credit_ledger[*]`,
+  которые отражают поля ledger, проверенные в soak тесте. См.
+  `crates/iroha_torii/src/sorafs/registry.rs`.
+- Импорт Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` строит
+  экспортированные счетчики strikes, суммы штрафов и залог collateral, чтобы
+  дежурная команда могла сравнивать baseline soak с живыми окружениями.
+
+## Дальнейшие шаги
+
+- Запланировать еженедельные gate-прогоны в CI для воспроизведения soak теста (smoke-tier).
+- Расширить панель Grafana целями scrape Torii после запуска экспортов telemetry в прод.

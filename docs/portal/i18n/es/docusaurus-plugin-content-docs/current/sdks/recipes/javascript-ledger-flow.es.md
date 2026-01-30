@@ -1,15 +1,94 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/portal/docs/sdks/recipes/javascript-ledger-flow.es.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Traducción en curso
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/sdks/recipes/javascript-ledger-flow.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: fce6fbde7987c30354be74cb32984189b4bdb91341c052012eec37cf78730b32
+source_last_modified: "2025-11-11T10:22:54.086603+00:00"
+translation_last_reviewed: 2026-01-30
+---
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+---
+title: Receta del flujo del libro mayor en JavaScript
+description: Registra un activo, acuña, transfiere y consulta saldos con `@iroha2/torii-client`.
+slug: /sdks/recipes/javascript-ledger-flow
+---
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+import SampleDownload from '@site/src/components/SampleDownload';
+
+Esta receta usa los paquetes de Node.js `@iroha2/torii-client` y `@iroha2/crypto-target-node` para reproducir el recorrido del libro mayor de la CLI.
+
+<SampleDownload
+  href="/sdk-recipes/javascript/ledger-flow.mjs"
+  filename="ledger-flow.mjs"
+  description="Descarga el script exacto de JavaScript usado en este recorrido del libro mayor."
+/>
+
+## Prerequisitos
+
+```bash
+npm install @iroha2/torii-client @iroha2/crypto-target-node
+export ADMIN_ACCOUNT="ih58..."
+export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+```
+
+## Script de ejemplo
+
+```ts title="ledger-flow.mjs"
+import {ToriiClient, buildTransaction} from '@iroha2/torii-client';
+import {createKeyPairFromHex} from '@iroha2/crypto-target-node';
+
+const adminAccount = process.env.ADMIN_ACCOUNT!;
+const receiverAccount = process.env.RECEIVER_ACCOUNT!;
+const adminPrivateKey = process.env.ADMIN_PRIVATE_KEY!;
+
+const client = ToriiClient.create({
+  apiUrl: 'http://127.0.0.1:8080',
+});
+
+const {publicKey, privateKey} = createKeyPairFromHex(adminPrivateKey);
+
+const tx = buildTransaction({
+  chain: '00000000-0000-0000-0000-000000000000',
+  authority: adminAccount,
+  instructions: [
+    {Register: {assetDefinition: {numeric: {id: 'coffee#wonderland'}}}},
+    {Mint: {asset: {id: `coffee#wonderland##${adminAccount}`}, value: {quantity: '250'}}},
+    {Transfer: {
+      asset: {id: `coffee#wonderland##${adminAccount}`},
+      destination: receiverAccount,
+      value: {quantity: '50'},
+    }},
+  ],
+});
+
+tx.sign({publicKey, privateKey});
+const receipt = await client.submitTransaction(tx);
+const txHash = receipt?.payload?.tx_hash ?? "<pending>";
+console.log('Submitted tx', txHash);
+
+const balances = await client.listAccountAssets(receiverAccount, {limit: 10});
+for (const asset of balances.items) {
+  if (asset.id.definition === 'coffee#wonderland') {
+    console.log('Receiver holds', asset.value, 'units of', asset.id.definition);
+  }
+}
+```
+
+Ejecuta `node --env-file=.env ledger-flow.mjs` (o exporta las variables de entorno manualmente). El log debe mostrar el hash de la transacción (del payload del recibo) y el saldo actualizado del receptor.
+
+## Verifica la paridad
+
+- Obtén los detalles de la transacción mediante `iroha --config defaults/client.toml transaction get --hash <hash>`.
+- Contrasta los saldos con `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- Compara el hash emitido con las recetas de Rust y Python para garantizar la paridad de los SDK.

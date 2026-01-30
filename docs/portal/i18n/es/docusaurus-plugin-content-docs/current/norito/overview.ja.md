@@ -1,18 +1,56 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/norito/overview.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6d1f28f594b2e578a62c56ae8fcf1ea4b45c1f1df6e7d6f60835ca7405def7b6
-source_last_modified: "2025-11-14T04:43:20.882375+00:00"
-translation_last_reviewed: null
+source_hash: 2b8e62a81d4f9ab2f506f3e71df76c381b43dd93cd3ca546f234119c167f4c86
+source_last_modified: "2026-01-03T18:07:58+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/norito/overview.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+# Resumen de Norito
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+Norito es la capa de serializacion binaria utilizada en todo Iroha: define como se codifican las estructuras de datos en la red, se persisten en disco y se intercambian entre contratos y hosts. Cada crate del workspace depende de Norito en lugar de `serde` para que los peers en hardware diferente produzcan bytes identicos.
+
+Este resumen sintetiza las piezas centrales y enlaza a las referencias canonicas.
+
+## Arquitectura de un vistazo
+
+- **Cabecera + payload** - Cada mensaje Norito comienza con una cabecera de negociacion de features (flags, checksum) seguida del payload sin envolver. Los layouts empaquetados y la compresion se negocian mediante bits de la cabecera.
+- **Codificacion determinista** - `norito::codec::{Encode, Decode}` implementan la codificacion base. El mismo layout se reutiliza al envolver payloads en cabeceras para que el hashing y la firma se mantengan deterministas.
+- **Esquema + derives** - `norito_derive` genera implementaciones de `Encode`, `Decode` y `IntoSchema`. Los structs/secuencias empaquetados estan habilitados por defecto y documentados en `norito.md`.
+- **Registro multicodec** - Los identificadores de hashes, tipos de clave y descriptores de payload viven en `norito::multicodec`. La tabla autorizada se mantiene en `multicodec.md`.
+
+## Herramientas
+
+| Tarea | Comando / API | Notas |
+| --- | --- | --- |
+| Inspeccionar cabecera/secciones | `ivm_tool inspect <file>.to` | Muestra la version de ABI, flags y entrypoints. |
+| Codificar/decodificar en Rust | `norito::codec::{Encode, Decode}` | Implementado para todos los tipos principales del data model. |
+| Interop JSON | `norito::json::{to_json_pretty, from_json}` | JSON determinista respaldado por valores Norito. |
+| Generar docs/especificaciones | `norito.md`, `multicodec.md` | Documentacion fuente de verdad en la raiz del repo. |
+
+## Flujo de trabajo de desarrollo
+
+1. **Agregar derives** - Prefiere `#[derive(Encode, Decode, IntoSchema)]` para nuevas estructuras de datos. Evita serializadores escritos a mano salvo que sea absolutamente necesario.
+2. **Validar layouts empaquetados** - Usa `cargo test -p norito` (y la matriz de features empaquetadas en `scripts/run_norito_feature_matrix.sh`) para asegurar que los nuevos layouts se mantengan estables.
+3. **Regenerar docs** - Cuando cambie la codificacion, actualiza `norito.md` y la tabla multicodec, luego refresca las paginas del portal (`/reference/norito-codec` y este resumen).
+4. **Mantener pruebas Norito-first** - Las pruebas de integracion deben usar los helpers JSON de Norito en lugar de `serde_json` para ejercitar las mismas rutas que produccion.
+
+## Enlaces rapidos
+
+- Especificacion: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
+- Asignaciones multicodec: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
+- Script de matriz de features: `scripts/run_norito_feature_matrix.sh`
+- Ejemplos de layout empaquetado: `crates/norito/tests/`
+
+Acompana este resumen con la guia de inicio rapido (`/norito/getting-started`) para un recorrido practico de compilar y ejecutar bytecode que usa payloads Norito.

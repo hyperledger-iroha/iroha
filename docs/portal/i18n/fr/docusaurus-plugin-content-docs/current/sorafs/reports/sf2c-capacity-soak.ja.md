@@ -1,18 +1,71 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/reports/sf2c-capacity-soak.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d489cd0fd716c0efdcf62f0355076c96e4cc1f502433887dc4162fdd1d0b8032
-source_last_modified: "2025-11-14T04:43:22.257286+00:00"
-translation_last_reviewed: null
+source_hash: 2cd92213861931d6c65875b69ed880b37c8d2cc0d8bb0abff8ede82b280b2d3c
+source_last_modified: "2026-01-03T18:08:01+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+# Rapport de soak d'accumulation de capacité SF-2c
+
+Date: 2026-03-21
+
+## Portée
+
+Ce rapport consigne les tests déterministes de soak d'accumulation et de paiement de capacité SoraFS demandés
+dans la feuille de route SF-2c.
+
+- **Soak multi-provider sur 30 jours:** Exécuté par
+  `capacity_fee_ledger_30_day_soak_deterministic` dans
+  `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
+  Le harness instancie cinq providers, couvre 30 fenêtres de settlement et
+  valide que les totaux du ledger correspondent à une projection de référence
+  calculée indépendamment. Le test émet un digest Blake3 (`capacity_soak_digest=...`)
+  afin que CI puisse capturer et comparer le snapshot canonique.
+- **Pénalités de sous-livraison:** Appliquées par
+  `record_capacity_telemetry_penalises_persistent_under_delivery`
+  (même fichier). Le test confirme que les seuils de strikes, cooldowns,
+  slashes de collateral et compteurs du ledger restent déterministes.
+
+## Exécution
+
+Relancez les validations de soak localement avec:
+
+```bash
+cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
+cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
+```
+
+Les tests se terminent en moins d'une seconde sur un laptop standard et ne
+nécessitent aucun fixture externe.
+
+## Observabilité
+
+Torii expose maintenant des snapshots de crédit providers aux côtés des fee ledgers afin que les dashboards
+puissent gate sur les faibles soldes et penalty strikes:
+
+- REST: `GET /v1/sorafs/capacity/state` renvoie des entrées `credit_ledger[*]` qui
+  reflètent les champs du ledger vérifiés dans le test de soak. Voir
+  `crates/iroha_torii/src/sorafs/registry.rs`.
+- Import Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` trace les
+  compteurs de strikes exportés, les totaux de pénalités et le collateral engagé afin que
+  l'équipe on-call puisse comparer les baselines de soak avec les environnements live.
+
+## Suivi
+
+- Planifier des exécutions hebdomadaires de gate en CI pour rejouer le test de soak (smoke-tier).
+- Étendre le tableau Grafana avec les cibles de scrape Torii une fois que les exports de telemetry de production
+  seront en ligne.

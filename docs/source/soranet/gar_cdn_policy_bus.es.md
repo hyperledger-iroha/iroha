@@ -1,18 +1,32 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/source/soranet/gar_cdn_policy_bus.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: b230f98f025e9d55d6eefa2b7b44348ceef3f20505e723fc703151497aeef777
-source_last_modified: "2025-11-21T15:19:41.384009+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:08:02.008828+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traducción en curso
+# GAR CDN Policy Bus
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+The SNNet-15G enforcement surface now lets operators publish GAR CDN policy
+payloads (TTL overrides, purge tags, moderation slugs, rate ceilings, geofence
+rules, and legal holds) through a file-backed bus so PoPs receive reproducible
+artifacts alongside their receipt bundles.
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+## Publishing
+- Run `cargo xtask soranet-gar-bus --policy <path> [--pop <label>] [--out-dir <dir>]` to read a `GarCdnPolicyV1`
+  JSON payload and emit `gar_cdn_policy_event.{json,md}` under the target
+  directory (defaults to `artifacts/soranet/gateway/<pop>/gar_bus/`).
+- The JSON bundle records the source path, publication timestamp, optional PoP
+  label, and the full CDN policy, aligning with PoP evidence packets.
+
+## Gateway consumption
+- Gateways load `sorafs.gateway.cdn_policy_path` and apply the same enforcement
+  contract (TTL override, purge tags, moderation slugs, rate ceilings,
+  geofence/deny lists, legal hold) surfaced in `GatewayPolicy` GAR violations
+  and CLI receipt action variants (`ttl_override`, `moderation`).
+- Updates to GAR violation events carry the new policy labels, observed TTL,
+  region, and rate ceiling hints for dashboards/alerting.

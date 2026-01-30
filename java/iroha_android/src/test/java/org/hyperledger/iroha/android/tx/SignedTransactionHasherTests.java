@@ -5,6 +5,7 @@ import java.util.Collections;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 
 public final class SignedTransactionHasherTests {
 
@@ -14,6 +15,7 @@ public final class SignedTransactionHasherTests {
     hashHexMatchesCanonicalBytes();
     hashIgnoresExportedKeyBundle();
     hashRejectsInvalidPayload();
+    canonicalBytesWrapsEntrypoint();
     System.out.println("[IrohaAndroid] Signed transaction hasher tests passed.");
   }
 
@@ -58,6 +60,24 @@ public final class SignedTransactionHasherTests {
       assert ex.getMessage().contains("Failed to encode signed transaction")
           : "Invalid payloads should surface encoding failures";
     }
+  }
+
+  private static void canonicalBytesWrapsEntrypoint() throws Exception {
+    final SignedTransaction transaction = newTransaction((byte) 0x33);
+    final byte[] encoded = SignedTransactionEncoder.encode(transaction);
+    final byte[] canonical = SignedTransactionHasher.canonicalBytes(transaction);
+    assert canonical.length == encoded.length + 12
+        : "Canonical bytes must include entrypoint wrapper";
+    for (int i = 0; i < 4; i++) {
+      assert canonical[i] == 0 : "Entrypoint discriminant must be zero";
+    }
+    long length = 0L;
+    for (int i = 0; i < 8; i++) {
+      length |= (long) (canonical[4 + i] & 0xFF) << (i * 8);
+    }
+    assert length == encoded.length : "Entrypoint length must match encoded payload length";
+    final byte[] payload = Arrays.copyOfRange(canonical, 12, canonical.length);
+    assert Arrays.equals(payload, encoded) : "Entrypoint payload must match signed transaction";
   }
 
   private static SignedTransaction newTransaction(final byte seed) throws NoritoException {

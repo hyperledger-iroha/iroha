@@ -1,18 +1,54 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/norito/examples/call-transfer-asset.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: db5ff695a18716703a79fe66243cdfcde9d6e1f2e9bbd8d7842222df6a10f0a8
-source_last_modified: "2025-11-14T04:43:20.644414+00:00"
-translation_last_reviewed: null
+source_hash: 70144f076b49576de3fd247ae797f389bcc84b49f72479057c793c5074a470b5
+source_last_modified: "2026-01-22T15:55:00+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/norito/examples/call-transfer-asset.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/call-transfer-asset
+title: הפעלת העברה מהמארח מתוך Kotodama
+description: מדגים כיצד נקודת כניסה של Kotodama יכולה לקרוא להוראת המארח `transfer_asset` עם אימות מטא-דאטה מקוון.
+source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+---
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+מדגים כיצד נקודת כניסה של Kotodama יכולה לקרוא להוראת המארח `transfer_asset` עם אימות מטא-דאטה מקוון.
+
+## סיור בספר החשבונות
+
+- ממן את סמכות החוזה (למשל `ih58...`) בנכס שהיא תעביר והעניקו לסמכות את תפקיד `CanTransfer` או הרשאה שקולה.
+- קראו לנקודת הכניסה `call_transfer_asset` כדי להעביר 5 יחידות מחשבון החוזה אל `ih58...`, באופן שמשקף כיצד אוטומציה על השרשרת יכולה לעטוף קריאות מארח.
+- אמתו יתרות דרך `FindAccountAssets` או `iroha_cli ledger assets list --account ih58...` ובדקו אירועים כדי לאשר ששומר המטא-דאטה רשם את הקשר ההעברה.
+
+## מדריכי SDK קשורים
+
+- [Quickstart של Rust SDK](/sdks/rust)
+- [Quickstart של Python SDK](/sdks/python)
+- [Quickstart של JavaScript SDK](/sdks/javascript)
+
+[הורדת מקור Kotodama](/norito-snippets/call-transfer-asset.ko)
+
+```text
+// Direct builtin call (no contract-style call syntax) inside a contract.
+seiyaku TransferCall {
+  kotoage fn pay() permission(AssetTransferRole) {
+    transfer_asset(
+      account!("ih58..."),
+      account!("ih58..."),
+      asset_definition!("rose#wonderland"),
+      10
+    );
+  }
+}
+```

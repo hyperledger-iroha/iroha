@@ -8560,13 +8560,28 @@ class ToriiClient(_BaseToriiClient):
     # UAID portfolio & Space Directory surfaces
     # ------------------------------------------------------------------
 
-    def get_uaid_portfolio(self, uaid: str) -> Dict[str, Any]:
-        """Fetch the aggregated UAID portfolio (`GET /v1/accounts/{uaid}/portfolio`)."""
+    def get_uaid_portfolio(
+        self,
+        uaid: str,
+        *,
+        asset_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Fetch the aggregated UAID portfolio (`GET /v1/accounts/{uaid}/portfolio`).
+
+        Use ``asset_id`` to filter the response to a specific asset identifier.
+        """
 
         literal = _normalize_uaid_literal(uaid)
+        params: Dict[str, Any] = {}
+        asset_id_value = _normalize_optional_string(
+            asset_id, "get_uaid_portfolio.asset_id"
+        )
+        if asset_id_value is not None:
+            params["asset_id"] = asset_id_value
         response = self._request(
             "GET",
             f"/v1/accounts/{literal}/portfolio",
+            params=_clean_params(params),
         )
         self._expect_status(response, {200})
         payload = self._maybe_json(response)
@@ -8574,10 +8589,15 @@ class ToriiClient(_BaseToriiClient):
             raise RuntimeError("unexpected UAID portfolio response")
         return payload
 
-    def get_uaid_portfolio_typed(self, uaid: str) -> UaidPortfolioSnapshot:
+    def get_uaid_portfolio_typed(
+        self,
+        uaid: str,
+        *,
+        asset_id: Optional[str] = None,
+    ) -> UaidPortfolioSnapshot:
         """Typed wrapper for :meth:`get_uaid_portfolio`."""
 
-        payload = self.get_uaid_portfolio(uaid)
+        payload = self.get_uaid_portfolio(uaid, asset_id=asset_id)
         return UaidPortfolioSnapshot.from_payload(payload)
 
     def get_uaid_bindings(

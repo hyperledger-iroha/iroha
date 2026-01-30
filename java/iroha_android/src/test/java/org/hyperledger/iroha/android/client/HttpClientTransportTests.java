@@ -27,6 +27,7 @@ import org.hyperledger.iroha.android.nexus.UaidManifestQuery.UaidManifestStatusF
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse.UaidManifestRecord;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse.UaidManifestStatus;
+import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
@@ -70,6 +71,7 @@ public final class HttpClientTransportTests {
     waitForTransactionStatusEmitsTelemetrySignals();
     pipelineStatusRedactionFailureUsesSignalId();
     uaidPortfolioRequestParsesResponse();
+    uaidPortfolioRequestSupportsQuery();
     uaidRequestsRespectBasePath();
     uaidBindingsRequestParsesResponse();
     uaidManifestsRequestSupportsQuery();
@@ -765,6 +767,41 @@ public final class HttpClientTransportTests {
         .toString()
         .equals("https://torii.example/v1/accounts/uaid%3A" + hex + "/portfolio")
         : "Request URI must percent-encode UAID literal";
+  }
+
+  private static void uaidPortfolioRequestSupportsQuery() {
+    final String hex =
+        "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff0102030405060708090a0b0c0d0e0f11";
+    final String json =
+        "{"
+            + "\"uaid\":\"uaid:"
+            + hex
+            + "\","
+            + "\"totals\":{\"accounts\":0,\"positions\":0},"
+            + "\"dataspaces\":[]"
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final ClientConfig config =
+        ClientConfig.builder()
+            .setBaseUri(URI.create("https://torii.example"))
+            .build();
+    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
+
+    final UaidPortfolioQuery query =
+        UaidPortfolioQuery.builder().setAssetId("xor#wonderland").build();
+    transport.getUaidPortfolio("uaid:" + hex.toUpperCase(), query).join();
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "UAID request must be captured";
+    assert request
+        .uri()
+        .toString()
+        .equals(
+            "https://torii.example/v1/accounts/uaid%3A"
+                + hex
+                + "/portfolio?asset_id=xor%23wonderland")
+        : "UAID portfolio query must include asset_id filter";
   }
 
   private static void uaidRequestsRespectBasePath() {

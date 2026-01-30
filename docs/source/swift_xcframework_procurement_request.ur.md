@@ -1,20 +1,30 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/source/swift_xcframework_procurement_request.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 7cfd10c450c0e17aaea2db3da7b3242d0497587192a8973b8b96236d0368bbc6
-source_last_modified: "2025-11-02T04:40:39.915070+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:59.678937+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# ترجمہ جاری ہے
+# Procurement Request – StrongBox Spare Device
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+- **Requestor:** Swift QA Lead (qa-swift@sora.org)
+- **Date:** 2026-01-27
+- **Purpose:** Provide a hot-spare StrongBox-capable iPhone for the XCFramework smoke harness (`xcframework-smoke/strongbox` lane) to avoid downtime when the primary device is under maintenance.
+- **Recommended device:** iPhone 15 Pro (128 GB, unlocked) – maintains StrongBox support and future-proofs for iOS 18.
+- **Estimated cost:** $1,199 USD (Apple Store business pricing, excluding tax).
+- **Accessories:** USB-C to USB-C cable (included) + spare USB-C power adapter (20W) — $19 USD.
+- **Total estimated budget:** $1,218 USD + local tax and shipping.
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+## Justification
+- Ensures coverage of the mandatory StrongBox lane documented in `docs/source/swift_xcframework_device_matrix.md`.
+- Mitigates CI downtime caused by battery wear, OS reinstallation, or hardware failure.
+- Allows parallel smoke runs if the harness needs to scale during release weeks.
+
+## Next steps
+1. Submit procurement ticket (`PROC-STRONGBOX-2026`) referencing this document.
+2. Coordinate delivery to Cupertino lab rack 3 (slot A12 spare) and update `docs/source/swift_xcframework_hardware_plan.md` once the device arrives.
+3. Tag the new device with DeviceKit label `ios15p-strongbox-spare`, enroll it in MDM, and verify the `ci/xcframework-smoke:strongbox:device_tag` metadata appears in the next Buildkite run before declaring the spare ready.

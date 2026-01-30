@@ -11,7 +11,7 @@ config-changes:
   - all:
     - base-branch: 'main'
     - changed-files:
-      # TODO have templates actually reflect configurations #4288
       - any-glob-to-any-file:
-        - 'defaults/*'
+        - 'configs/**'
+        - 'defaults/**'
         - 'docs/source/references/*.template.*'

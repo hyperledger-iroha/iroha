@@ -833,92 +833,23 @@ mod tests {
     }
 
     #[test]
-    fn should_run_tick_when_queues_not_exhausted() {
+    fn should_run_tick_when_gap_exceeds_min() {
         let now = Instant::now();
         let last_tick = backdate(now, Duration::from_millis(250));
         assert!(should_run_tick(
             now,
             last_tick,
-            false,
-            false,
-            false,
-            false,
-            status::WorkerQueueDepthSnapshot::default(),
-            Duration::from_millis(200),
-            Duration::from_secs(1)
-        ));
-    }
-
-    #[test]
-    fn should_skip_tick_when_idle_and_gap_small() {
-        let now = Instant::now();
-        let last_tick = backdate(now, Duration::from_millis(50));
-        assert!(!should_run_tick(
-            now,
-            last_tick,
-            false,
-            false,
-            false,
-            false,
-            status::WorkerQueueDepthSnapshot::default(),
-            Duration::from_millis(200),
-            Duration::from_secs(1)
-        ));
-    }
-
-    #[test]
-    fn should_run_tick_when_gap_exceeds_max() {
-        let now = Instant::now();
-        let last_tick = backdate(now, Duration::from_millis(500));
-        assert!(should_run_tick(
-            now,
-            last_tick,
-            true,
-            true,
-            true,
-            true,
-            status::WorkerQueueDepthSnapshot {
-                vote_rx: 1,
-                ..status::WorkerQueueDepthSnapshot::default()
-            },
-            Duration::from_millis(100),
             Duration::from_millis(200)
         ));
     }
 
     #[test]
-    fn should_skip_tick_when_exhausted_and_gap_small() {
+    fn should_skip_tick_when_gap_small() {
         let now = Instant::now();
         let last_tick = backdate(now, Duration::from_millis(50));
         assert!(!should_run_tick(
             now,
             last_tick,
-            true,
-            true,
-            true,
-            true,
-            status::WorkerQueueDepthSnapshot::default(),
-            Duration::from_millis(100),
-            Duration::from_millis(200)
-        ));
-    }
-
-    #[test]
-    fn should_skip_tick_when_queue_busy_and_gap_small() {
-        let now = Instant::now();
-        let last_tick = backdate(now, Duration::from_millis(50));
-        assert!(!should_run_tick(
-            now,
-            last_tick,
-            false,
-            false,
-            false,
-            false,
-            status::WorkerQueueDepthSnapshot {
-                block_payload_rx: 1,
-                ..status::WorkerQueueDepthSnapshot::default()
-            },
-            Duration::from_millis(100),
             Duration::from_millis(200)
         ));
     }
@@ -5700,6 +5631,84 @@ mod tests {
     }
 
     #[test]
+    fn run_worker_iteration_ticks_when_backlogged_before_max_gap() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        for _ in 0..2 {
+            let vote = Vote {
+                phase: Phase::Prepare,
+                block_hash,
+                parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+                post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: None,
+                signer: 0,
+                bls_sig: Vec::new(),
+            };
+            vote_tx
+                .send(inbound(BlockMessage::QcVote(vote)))
+                .expect("send prevote");
+            status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
+        }
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 1,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(100),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let now = Instant::now();
+        let past = backdate(now, Duration::from_millis(200));
+        let mut loop_state = WorkerLoopState {
+            last_tick: past,
+            last_served: [past; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = RecordingActorWithTick::default();
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(actor.tick_calls, 1);
+        assert!(stats.vote_rx_budget_exhausted);
+        assert!(actor.events.contains(&"tick"));
+    }
+
+    #[test]
     fn run_worker_iteration_skips_tick_when_actor_disables_tick() {
         status::reset_worker_loop_snapshot_for_tests();
 
@@ -9109,28 +9118,13 @@ struct SumeragiWorker {
     rbc_status_handle: rbc_status::Handle,
 }
 
-/// Skip ticks when message queues are saturated or pending, while enforcing a periodic tick cadence.
-#[allow(clippy::fn_params_excessive_bools, clippy::too_many_arguments)]
+/// Rate-limit ticks by the minimum gap so queue backlogs do not throttle consensus progress.
 fn should_run_tick(
     now: Instant,
     last_tick: Instant,
-    vote_rx_budget_exhausted: bool,
-    block_payload_rx_budget_exhausted: bool,
-    rbc_chunk_rx_budget_exhausted: bool,
-    block_rx_budget_exhausted: bool,
-    queue_depths: status::WorkerQueueDepthSnapshot,
     min_tick_gap: Duration,
-    max_tick_gap: Duration,
 ) -> bool {
-    let queues_saturated = vote_rx_budget_exhausted
-        || block_payload_rx_budget_exhausted
-        || rbc_chunk_rx_budget_exhausted
-        || block_rx_budget_exhausted;
-    let queues_pending = has_pending_queue_depths(queue_depths);
-    if !queues_saturated && !queues_pending {
-        return now.saturating_duration_since(last_tick) >= min_tick_gap;
-    }
-    now.saturating_duration_since(last_tick) >= max_tick_gap
+    now.saturating_duration_since(last_tick) >= min_tick_gap
 }
 
 fn idle_wait_duration(
@@ -10034,13 +10028,7 @@ fn run_worker_iteration<A: WorkerActor>(
         && should_run_tick(
             tick_now,
             *last_tick,
-            stats.vote_rx_budget_exhausted,
-            stats.block_payload_rx_budget_exhausted,
-            stats.rbc_chunk_rx_budget_exhausted,
-            stats.block_rx_budget_exhausted,
-            pre_tick_depths,
             cfg.tick_min_gap,
-            cfg.tick_max_gap,
         )
     {
         status::set_worker_stage(status::WorkerLoopStage::Tick);

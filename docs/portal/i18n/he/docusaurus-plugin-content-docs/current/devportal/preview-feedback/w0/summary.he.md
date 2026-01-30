@@ -1,20 +1,67 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w0/summary.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 84d4eaf33a97c6953510521af0f84c601d5d90dcd3ba77fdcc449e128113d2e2
-source_last_modified: "2025-11-14T04:43:19.818626+00:00"
-translation_last_reviewed: null
+source_hash: 2524164ae1dacfc76768094c83e312f41e4c61aaa5a51a057079f20d66331a26
+source_last_modified: "2026-01-03T18:07:59+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# בתהליך תרגום
+---
+id: preview-feedback-w0-summary
+lang: he
+direction: rtl
+source: docs/portal/docs/devportal/preview-feedback/w0/summary.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+| פריט | פרטים |
+| --- | --- |
+| גל | W0 - מתחזקי ליבה |
+| תאריך התקציר | 2025-03-27 |
+| חלון סקירה | 2025-03-25 -> 2025-04-08 |
+| משתתפים | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
+| תג ארטיפקט | `preview-2025-03-24` |
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+## נקודות בולטות
+
+1. **תהליך checksum** - כל הסוקרים אישרו ש-`scripts/preview_verify.sh`
+   הצליח מול זוג ה-descriptor/archive המשותף. לא נדרשו עקיפות ידניות.
+2. **משוב ניווט** - דווחו שתי תקלות קטנות בסדר השדה הצדדי
+   (`docs-preview/w0 #1-#2`). שתיהן הופנו ל-Docs/DevRel ואינן חוסמות את
+   הגל.
+3. **תאימות runbook של SoraFS** - sorafs-ops-01 ביקש קישורים צולבים ברורים יותר
+   בין `sorafs/orchestrator-ops` ל-`sorafs/multi-source-rollout`. נפתחה משימת
+   המשך; לטפל לפני W1.
+4. **סקירת טלמטריה** - observability-01 אישר ש-`docs.preview.integrity`,
+   `TryItProxyErrors` ולוגי ה-proxy של Try-it נשארו ירוקים; לא הופעלו התראות.
+
+## פריטי פעולה
+
+| מזהה | תיאור | בעלים | סטטוס |
+| --- | --- | --- | --- |
+| W0-A1 | לסדר מחדש את ערכי ה-sidebar של devportal כדי להבליט מסמכים לריוויורים (`preview-invite-*` בקבוצה אחת). | Docs-core-01 | הושלם - ה-sidebar מציג כעת את מסמכי הריוויורים ברצף (`docs/portal/sidebars.js`). |
+| W0-A2 | להוסיף קישור צולב מפורש בין `sorafs/orchestrator-ops` ל-`sorafs/multi-source-rollout`. | Sorafs-ops-01 | הושלם - כל runbook מקשר כעת לשני כדי שמפעילים יראו את שני המדריכים בזמן rollouts. |
+| W0-A3 | לשתף צילומי טלמטריה + חבילת שאילתות עם ה-tracker של governance. | Observability-01 | הושלם - החבילה צורפה ל-`DOCS-SORA-Preview-W0`. |
+
+## סיכום סיום (2025-04-08)
+
+- כל חמשת הסוקרים אישרו סיום, ניקו בניות מקומיות ויצאו מחלון ה-preview;
+  ביטולי הגישה נרשמו ב-`DOCS-SORA-Preview-W0`.
+- לא היו אירועים או התראות במהלך הגל; לוחות הטלמטריה נשארו ירוקים לכל התקופה.
+- פעולות ניווט + קישורים צולבים (W0-A1/A2) מיושמות ומשתקפות במסמכים לעיל;
+  ראיות הטלמטריה (W0-A3) מצורפות ל-tracker.
+- חבילת ראיות נשמרה: צילומי מסך של טלמטריה, אישורי הזמנה ותקציר זה
+  מקושרים מה-issue של ה-tracker.
+
+## הצעדים הבאים
+
+- להשלים את פריטי הפעולה של W0 לפני פתיחת W1.
+- להשיג אישור משפטי וסלוט staging לפרוקסי, ואז לבצע את צעדי ה-preflight של
+  גל השותפים המפורטים ב-[preview invite flow](../../preview-invite-flow.md).
+
+_תקציר זה מקושר מתוך [preview invite tracker](../../preview-invite-tracker.md) כדי
+לשמור על עקיבות ה-roadmap DOCS-SORA._

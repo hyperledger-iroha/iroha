@@ -42,6 +42,7 @@ mod error;
 pub mod field;
 pub mod field_dispatch;
 pub mod gas;
+pub mod limits;
 mod gpu_manager;
 pub mod halo2;
 pub mod host;

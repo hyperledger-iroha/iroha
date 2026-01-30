@@ -893,7 +893,7 @@ if transport and transport.streaming and transport.streaming.soranet:
 
 The `NX-16` roadmap introduces UAID-level portfolio, bindings, and Space Directory manifest APIs.
 The Torii client exposes typed helpers so wallets and automation scripts can hit the endpoints
-without bespoke parsing:
+without bespoke parsing, including optional `asset_id` filtering for portfolio reads:
 
 ```python
 from iroha_python import ToriiClient
@@ -901,7 +901,7 @@ from iroha_python import ToriiClient
 client = ToriiClient("http://127.0.0.1:8080", auth_token="admin-token")
 uaid_literal = "aabb" * 16  # raw hex (LSB=1) accepted; helper normalises to `uaid:<hex>`
 
-portfolio = client.get_uaid_portfolio_typed(uaid_literal)
+portfolio = client.get_uaid_portfolio_typed(uaid_literal, asset_id="cash#global::holder@global")
 print("UAID", portfolio.uaid, "positions", portfolio.total_positions)
 for dataspace in portfolio.dataspaces:
     for account in dataspace.accounts:

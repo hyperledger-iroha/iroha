@@ -22,9 +22,10 @@ import org.hyperledger.iroha.android.crypto.keystore.KeyGenerationResult;
 import org.hyperledger.iroha.android.crypto.keystore.KeystoreBackend;
 import org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProvider;
 import org.hyperledger.iroha.android.model.TransactionPayload;
-import org.hyperledger.iroha.android.model.instructions.InstructionBuilders;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.norito.NoritoAdapters;
+import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.android.tx.offline.OfflineEnvelopeOptions;
 import org.hyperledger.iroha.android.tx.offline.OfflineTransactionBundle;
 
@@ -119,13 +120,17 @@ public final class TransactionBuilderTests {
   }
 
   private static void instructionsVariantRoundTrips() throws Exception {
+    final byte[] wirePayloadA =
+        NoritoCodec.encode("wire-A", "iroha.test.WirePayload", NoritoAdapters.stringAdapter());
+    final byte[] wirePayloadB =
+        NoritoCodec.encode("wire-B", "iroha.test.WirePayload", NoritoAdapters.stringAdapter());
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setExecutable(
                 Executable.instructions(
                     List.of(
-                        InstructionBuilders.registerDomainTemplate("test-domain").toInstructionBox(),
-                        InstructionBuilders.registerAccountTemplate("alice@test").toInstructionBox())))
+                        InstructionBox.fromWirePayload("iroha.register.domain", wirePayloadA),
+                        InstructionBox.fromWirePayload("iroha.register.account", wirePayloadB))))
             .build();
     final TransactionBuilder builder =
         new TransactionBuilder(new NoritoJavaCodecAdapter(), IrohaKeyManager.withSoftwareFallback());

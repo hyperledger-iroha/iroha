@@ -68,6 +68,7 @@ enum Field {
     Tps,
     MaxInflight,
     WorkloadProfile,
+    AllowContractDeployInStable,
     LogFilter,
     FaultMin,
     FaultMax,
@@ -90,6 +91,7 @@ impl Field {
             Field::Tps => "Tx/s Target",
             Field::MaxInflight => "Max Inflight",
             Field::WorkloadProfile => "Workload Profile",
+            Field::AllowContractDeployInStable => "Stable Contract Deploys",
             Field::LogFilter => "Log Filter",
             Field::FaultMin => "Fault Interval Min",
             Field::FaultMax => "Fault Interval Max",
@@ -112,6 +114,7 @@ impl Field {
             Field::Tps,
             Field::MaxInflight,
             Field::WorkloadProfile,
+            Field::AllowContractDeployInStable,
             Field::LogFilter,
             Field::FaultMin,
             Field::FaultMax,
@@ -505,6 +508,18 @@ impl App {
                     }
                 };
             }
+            Field::AllowContractDeployInStable => {
+                let normalized = buffer.trim().to_ascii_lowercase();
+                self.args.allow_contract_deploy_in_stable = match normalized.as_str() {
+                    "1" | "true" | "yes" | "on" | "y" => true,
+                    "0" | "false" | "no" | "off" | "n" => false,
+                    other => {
+                        return Err(format!(
+                            "Stable contract deploys must be true/false (received `{other}`)"
+                        ));
+                    }
+                };
+            }
             Field::LogFilter => {
                 self.args.log_filter = buffer.trim().to_string();
             }
@@ -605,6 +620,13 @@ impl App {
                 WorkloadProfile::Stable => "stable".to_string(),
                 WorkloadProfile::Chaos => "chaos".to_string(),
             },
+            Field::AllowContractDeployInStable => {
+                if self.args.allow_contract_deploy_in_stable {
+                    "enabled".to_string()
+                } else {
+                    "disabled".to_string()
+                }
+            }
             Field::LogFilter => self.args.log_filter.clone(),
             Field::FaultMin => format_duration(self.args.fault_interval_min).to_string(),
             Field::FaultMax => format_duration(self.args.fault_interval_max).to_string(),
@@ -638,6 +660,9 @@ impl App {
                 WorkloadProfile::Stable => "stable".to_string(),
                 WorkloadProfile::Chaos => "chaos".to_string(),
             },
+            Field::AllowContractDeployInStable => {
+                self.args.allow_contract_deploy_in_stable.to_string()
+            }
             Field::LogFilter => self.args.log_filter.clone(),
             Field::FaultMin => format_duration(self.args.fault_interval_min).to_string(),
             Field::FaultMax => format_duration(self.args.fault_interval_max).to_string(),
@@ -683,5 +708,14 @@ mod tests {
             err.contains("Pipeline time must be at least"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn apply_input_accepts_contract_deploy_toggle() {
+        let args = IzanamiArgs::defaults();
+        let mut app = App::new(args);
+        app.apply_input(Field::AllowContractDeployInStable, "true")
+            .expect("toggle should parse");
+        assert!(app.args.allow_contract_deploy_in_stable);
     }
 }

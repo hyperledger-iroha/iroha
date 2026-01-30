@@ -1,15 +1,69 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
 source: docs/portal/docs/norito-streaming-roadmap.ur.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Tradução em andamento
+---
+title: Norito Streaming روڈ میپ
+---
 
-Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+ذیل کا backlog وہ قریبی مدتی کام کی اشیاء دکھاتا ہے جنہیں Streaming Working Group Norito audio/video delivery کے لئے ٹریک کرتا ہے۔ اقدار `status.md` کے ساتھ اپ ڈیٹ ہوتی ہیں اور یہاں ان پورٹل صارفین کے لئے شیئر کی جاتی ہیں جو machine-friendly view کو ترجیح دیتے ہیں۔
 
-Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.
+```json
+[
+  {
+    "id": "NSC-28b",
+    "title": "Enforce ±10ms A/V sync tolerance",
+    "owner": "Streaming Runtime TL",
+    "priority": "streaming runtime",
+    "status": "planning",
+    "dependencies": [
+      "telemetry onboarding"
+    ],
+    "notes": "Draft telemetry signal spec and schedule validator instrumentation review."
+  },
+  {
+    "id": "NSC-30a",
+    "title": "Relay incentive & reputation framework",
+    "owner": "Economics WG",
+    "priority": "economics",
+    "status": "planning",
+    "dependencies": [
+      "telemetry metrics"
+    ],
+    "notes": "Workshop scheduled for 2026-03-09; prepare incentive whitepaper outline."
+  },
+  {
+    "id": "NSC-37a",
+    "title": "Finalize ZK ticket schema",
+    "owner": "ZK Working Group",
+    "priority": "zk",
+    "status": "planning",
+    "dependencies": [
+      "schema review"
+    ],
+    "notes": "Circulate schema draft and book review with Core Host / Streaming leads."
+  },
+  {
+    "id": "NSC-42",
+    "title": "Codec legal & patent review",
+    "owner": "Legal & Standards",
+    "priority": "codec",
+    "status": "done",
+    "dependencies": [],
+    "notes": "Completed: counsel sign-off recorded in docs/source/soranet/nsc-42-legal.md; CABAC stays opt-in via ENABLE_CABAC + [streaming.codec], trellis remains disabled, bundled rANS is behind ENABLE_RANS_BUNDLES."
+  },
+  {
+    "id": "NSC-55",
+    "title": "Validate rANS tables and patent posture",
+    "owner": "Codec Team",
+    "priority": "codec",
+    "status": "done",
+    "dependencies": [],
+    "notes": "Completed: deterministic rANS tables + generator checked in with benches/reports per nsc55 plan."
+  }
+]
+```

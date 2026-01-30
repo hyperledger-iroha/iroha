@@ -1,18 +1,29 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/reference/README.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fcdac983e6f2595a98fb3920c0d4054617cd67efd86469ba9fca0b58d2a0faea
-source_last_modified: "2025-11-04T12:12:52.308426+00:00"
-translation_last_reviewed: null
+source_hash: 1fbf38f14e6e5b4b90d31b072e189035b463e3a3dd2559b8b347fe57b524c55a
+source_last_modified: "2026-01-03T18:07:58+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traducción en curso
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/reference/README.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: אינדקס רפרנס
+slug: /reference
+---
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+הסעיף הזה מרכז את חומרי "קראו זאת כמפרט" עבור Iroha. הדפים הללו נשארים יציבים גם כשהמדריכים והטוטוריאלים מתפתחים.
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+## זמין היום
+
+- **סקירת codec Norito** - `reference/norito-codec.md` מקשר ישירות למפרט הקנוני `norito.md` בזמן שטבלת הפורטל מתמלאת.
+- **Torii OpenAPI** - `/reference/torii-openapi` מציג את מפרט ה-REST העדכני של Torii באמצעות Redoc. אפשר לייצר מחדש את ה-spec עם `npm run sync-openapi -- --version=current --latest` (הוסיפו `--mirror=<label>` כדי להעתיק את ה-snapshot לגרסאות היסטוריות נוספות).
+- **טבלאות תצורה** - קטלוג הפרמטרים המלא נמצא ב-`docs/source/references/configuration.md`. עד שהפורטל יספק auto-import, עיינו בקובץ Markdown הזה לערכי ברירת מחדל מדויקים ולהחלפות סביבה.
+- **גרסאות docs** - תפריט הגרסה בסרגל הניווט מציג snapshots קפואים שנוצרו עם `npm run docs:version -- <label>`, כך שקל להשוות הנחיות בין releases.

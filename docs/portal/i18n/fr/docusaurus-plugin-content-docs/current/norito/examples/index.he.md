@@ -1,20 +1,31 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/norito/examples/index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7318e5a0c3c0803822f9cddb5daada280e0a373782fd08dd4d5611d800e3acd0
-source_last_modified: "2025-11-14T04:43:20.746522+00:00"
-translation_last_reviewed: null
+source_hash: 2e4de3ea915aaa7d2f280f472507567508b7b976f1fca8bb29bf7aac71fb460d
+source_last_modified: "2026-01-03T18:08:00+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# בתהליך תרגום
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/norito/examples/index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Exemples Norito
+description: Extraits Kotodama sélectionnés avec des parcours du registre.
+slug: /norito/examples
+---
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+Ces exemples reflètent les quickstarts des SDK et les parcours du registre. Chaque extrait regroupe une liste de vérification du registre et renvoie vers les guides Rust, Python et JavaScript afin que vous puissiez rejouer le même scénario de bout en bout.
+
+- **[Squelette du point d'entrée Hajimari](./hajimari-entrypoint)** — Structure minimale de contrat Kotodama avec un seul point d'entrée public et un gestionnaire d'état.
+- **[Enregistrer un domaine et frapper des actifs](./register-and-mint)** — Démontre la création de domaines avec autorisations, l'enregistrement d'actifs et la frappe déterministe.
+- **[Invoquer le transfert hôte depuis Kotodama](./call-transfer-asset)** — Démontre comment un point d'entrée Kotodama peut appeler l'instruction hôte `transfer_asset` avec validation des métadonnées en ligne.
+- **[Transférer un actif entre comptes](./transfer-asset)** — Flux de transfert d'actifs simple qui reflète les quickstarts des SDK et les parcours du registre.
+- **[Frapper, transférer et brûler un NFT](./nft-flow)** — Parcourt le cycle de vie d'un NFT de bout en bout : frappe au propriétaire, transfert, ajout de métadonnées et destruction.

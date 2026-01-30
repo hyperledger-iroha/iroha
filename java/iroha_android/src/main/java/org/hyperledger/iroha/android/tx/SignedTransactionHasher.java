@@ -33,10 +33,24 @@ public final class SignedTransactionHasher {
     return toHex(hashCanonicalBytes(canonicalSignedTransaction));
   }
 
-  /** Returns the canonical Norito bytes for the signed transaction. */
+  /**
+   * Returns the canonical Norito bytes for the signed transaction.
+   *
+   * <p>Iroha hashes the {@code TransactionEntrypoint::External} enum wrapper around the signed
+   * transaction, not the signed transaction directly. The encoding is:
+   * {@code u32_LE(0) + u64_LE(payload.length) + payload}.
+   */
   public static byte[] canonicalBytes(final SignedTransaction transaction) {
     try {
-      return SignedTransactionEncoder.encode(transaction);
+      final byte[] encoded = SignedTransactionEncoder.encode(transaction);
+      final byte[] result = new byte[12 + encoded.length];
+      // u32 LE discriminant = 0 (External variant) — result[0..3] already zeroed
+      final long length = encoded.length;
+      for (int i = 0; i < 8; i++) {
+        result[4 + i] = (byte) (length >>> (i * 8));
+      }
+      System.arraycopy(encoded, 0, result, 12, encoded.length);
+      return result;
     } catch (NoritoException ex) {
       throw new IllegalStateException("Failed to encode signed transaction", ex);
     }

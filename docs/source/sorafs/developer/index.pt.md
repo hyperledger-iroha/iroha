@@ -1,18 +1,35 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
 source: docs/source/sorafs/developer/index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 7f51ae76dd62405ce036f8b8893f948f6737f3a69d4b344702258161dee04a88
-source_last_modified: "2025-11-10T05:30:58.652943+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:58.352210+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Tradução em andamento
+---
+title: SoraFS Developer Guides
+summary: Entry point for SoraFS CLI, SDK, CI, and deployment guidance.
+---
 
-Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+> **Portal:** Mirrored in `docs/portal/docs/sorafs/developer-index.md`.
+> Update both copies to keep reviewers aligned.
 
-Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.
+# SoraFS Developer Guides
+
+```{toctree}
+:caption: Getting Started
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

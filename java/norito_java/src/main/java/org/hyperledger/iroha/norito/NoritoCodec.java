@@ -3,6 +3,7 @@
 
 package org.hyperledger.iroha.norito;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Deque;
@@ -285,6 +286,48 @@ public final class NoritoCodec {
     return value;
   }
 
+  public static <T> T decode(
+      ByteBuffer data, TypeAdapter<T> adapter, String schemaPath) {
+    Objects.requireNonNull(data);
+    Objects.requireNonNull(adapter);
+    byte[] expectedHash = schemaPath == null ? null : SchemaHash.hash16(schemaPath);
+    NoritoHeader.DecodeView result = NoritoHeader.decodeView(data, expectedHash);
+    NoritoHeader header = result.header();
+    ByteBuffer payload = result.payload();
+    if (header.compression() == NoritoHeader.COMPRESSION_ZSTD) {
+      byte[] compressed = new byte[payload.remaining()];
+      payload.get(compressed);
+      byte[] decodedPayload = NoritoCompression.decompressZstd(compressed, header.payloadLength());
+      header.validateChecksum(decodedPayload);
+      T value;
+      try (RootGuard guard = new RootGuard(decodedPayload, header.flags(), header.minor())) {
+        guard.keepAlive();
+        NoritoDecoder decoder =
+            new NoritoDecoder(decodedPayload, header.flags(), header.minor());
+        value = adapter.decode(decoder);
+        if (decoder.remaining() != 0) {
+          throw new IllegalArgumentException("Trailing bytes after Norito decode");
+        }
+      }
+      return value;
+    }
+    if (header.compression() != NoritoHeader.COMPRESSION_NONE) {
+      throw new IllegalArgumentException("Unsupported compression tag: " + header.compression());
+    }
+    header.validateChecksum(payload);
+    T value;
+    try (RootGuard guard = new RootGuard(payload, header.flags(), header.minor())) {
+      guard.keepAlive();
+      NoritoDecoder decoder = new NoritoDecoder(payload, header.flags(), header.minor());
+      value = adapter.decode(decoder);
+      if (decoder.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after Norito decode");
+      }
+    }
+    return value;
+  }
+
+
   /**
    * Fallible decode helper mirroring Rust's {@code NoritoDeserialize::try_deserialize}.
    *
@@ -300,6 +343,16 @@ public final class NoritoCodec {
       return new Result.Err<>(ex);
     }
   }
+
+  public static <T> Result<T, RuntimeException> tryDecode(
+      ByteBuffer data, TypeAdapter<T> adapter, String schemaPath) {
+    try {
+      return new Result.Ok<>(decode(data, adapter, schemaPath));
+    } catch (RuntimeException ex) {
+      return new Result.Err<>(ex);
+    }
+  }
+
 
   public static final class CompressionConfig {
     private static final int ZSTD_MIN_LEVEL = 1;
@@ -417,6 +470,28 @@ public final class NoritoCodec {
       Objects.requireNonNull(payload, "payload");
       if (DECODE_ROOT_PAYLOAD.get() == null) {
         DECODE_ROOT_PAYLOAD.set(Arrays.copyOf(payload, payload.length));
+        installed = true;
+      } else {
+        installed = false;
+      }
+      if (flags != null) {
+        int normalizedHint = hint == null ? NoritoHeader.MINOR_VERSION : hint & 0xFF;
+        ACTIVE_DECODE_CONTEXTS
+            .get()
+            .addLast(new ContextFlags(flags & 0xFF, normalizedHint));
+        contextPushed = true;
+      } else {
+        contextPushed = false;
+      }
+    }
+
+    RootGuard(ByteBuffer payload, Integer flags, Integer hint) {
+      Objects.requireNonNull(payload, "payload");
+      if (DECODE_ROOT_PAYLOAD.get() == null) {
+        ByteBuffer view = payload.slice();
+        byte[] bytes = new byte[view.remaining()];
+        view.get(bytes);
+        DECODE_ROOT_PAYLOAD.set(bytes);
         installed = true;
       } else {
         installed = false;

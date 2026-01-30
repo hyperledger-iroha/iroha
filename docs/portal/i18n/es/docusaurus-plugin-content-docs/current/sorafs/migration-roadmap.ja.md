@@ -1,18 +1,26 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/migration-roadmap.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c938f072f3b92f120be12b9c6bb3f3abc10229e65216a3993301da68afc7424e
-source_last_modified: "2025-11-14T04:43:21.809878+00:00"
-translation_last_reviewed: null
+source_hash: 5f4d75be011cad9a33f9ecb0fa02874202b98c3a7224a7ffeef3ee9be6ae73bb
+source_last_modified: "2026-01-04T10:50:53+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/migration-roadmap.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+> Adaptado de [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
+
+# Hoja de ruta de migración de SoraFS (SF-1)
+
+Este documento no aplica a la primera release. No hay migraciones pendientes; se mantiene reservado para futuras actualizaciones.

@@ -563,6 +563,16 @@ fn resolve_target_dir(repo: &Path) -> PathBuf {
     repo.join("target").join(IROHA_TEST_TARGET_SUBDIR)
 }
 
+fn default_build_profile() -> String {
+    std::env::var("PROFILE").unwrap_or_else(|_| {
+        if cfg!(debug_assertions) {
+            "debug".to_string()
+        } else {
+            "release".to_string()
+        }
+    })
+}
+
 fn build_cache_dir(target_dir: &Path) -> PathBuf {
     target_dir.join(BUILD_CACHE_DIR)
 }
@@ -1256,7 +1266,7 @@ impl Program {
             .and_then(|p| PathBuf::from(p).canonicalize().ok());
 
         // 3) Prepare candidate locations under the current target directory
-        let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+        let profile = default_build_profile();
         let target_dir = resolve_target_dir(&repo);
         let primary_binary = target_dir.join(format!("{profile}/{bin}"));
 
@@ -7659,6 +7669,21 @@ mod tests {
 
         let _test_guard = EnvVarRestore::set(IROHA_TEST_TARGET_DIR_ENV, "test-target");
         assert_eq!(resolve_target_dir(root), root.join("test-target"));
+    }
+
+    #[test]
+    fn default_build_profile_respects_env_override() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let _clear = EnvVarGuard::cleared("PROFILE");
+        let default_profile = default_build_profile();
+        if cfg!(debug_assertions) {
+            assert_eq!(default_profile, "debug");
+        } else {
+            assert_eq!(default_profile, "release");
+        }
+
+        let _override_guard = EnvVarRestore::set("PROFILE", "release");
+        assert_eq!(default_build_profile(), "release");
     }
 
     #[cfg(unix)]

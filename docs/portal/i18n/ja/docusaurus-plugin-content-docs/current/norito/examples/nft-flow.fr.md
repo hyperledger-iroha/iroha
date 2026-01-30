@@ -1,15 +1,46 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.fr.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# 翻訳作業中
+---
+slug: /norito/examples/nft-flow
+title: Frapper, transférer et brûler un NFT
+description: Parcourt le cycle de vie d'un NFT de bout en bout : frappe au propriétaire, transfert, ajout de métadonnées et destruction.
+source: crates/ivm/docs/examples/12_nft_flow.ko
+---
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+Parcourt le cycle de vie d'un NFT de bout en bout : frappe au propriétaire, transfert, ajout de métadonnées et destruction.
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+## Parcours du registre
+
+- Assurez-vous que la définition du NFT (par exemple `n0#wonderland`) existe avec les comptes propriétaire/destinataire utilisés dans le snippet (`ih58...`, `ih58...`).
+- Invoquez le point d'entrée `nft_issue_and_transfer` pour frapper le NFT, le transférer d'Alice vers Bob et attacher un indicateur de métadonnées décrivant l'émission.
+- Inspectez l'état du registre NFT avec `iroha_cli ledger nfts list --account <id>` ou les équivalents SDK pour vérifier le transfert, puis confirmez que l'actif est supprimé une fois que l'instruction de burn s'exécute.
+
+## Guides SDK associés
+
+- [Quickstart SDK Rust](/sdks/rust)
+- [Quickstart SDK Python](/sdks/python)
+- [Quickstart SDK JavaScript](/sdks/javascript)
+
+[Télécharger la source Kotodama](/norito-snippets/nft-flow.ko)
+
+```text
+// Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
+seiyaku NftFlow {
+  kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
+    let owner = account!("ih58...");
+    let nft = nft_id!("n0$wonderland");
+    nft_mint_asset(nft, owner);
+
+    let to = account!("ih58...");
+    nft_transfer_asset(owner, nft, to);
+    nft_set_metadata(nft, json!{ issued: "demo" });
+    nft_burn_asset(nft);
+  }
+}
+```

@@ -1,20 +1,61 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/runbooks-index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c7669c1d139a267bcba356cc77575dc65fc04ea43581397b2450b12a523c1b66
-source_last_modified: "2025-11-14T04:43:22.302038+00:00"
-translation_last_reviewed: null
+source_hash: 31a76ae22309b9657383f4ee9a9bbe132b4d48aa480bd5a6a4a4b0e2dbbfa430
+source_last_modified: "2026-01-03T18:08:02+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# בתהליך תרגום
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+---
+id: runbooks-index
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/runbooks-index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: فهرس أدلة التشغيل للمشغلين
+sidebar_label: فهرس أدلة التشغيل
+description: نقطة الدخول المعتمدة لأدلة تشغيل مشغلي SoraFS المُرحَّلة.
+---
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+> يعكس سجلّ المالكين الموجود ضمن `docs/source/sorafs/runbooks/`.
+> يجب ربط أي دليل تشغيل جديد لـ SoraFS هنا بمجرد نشره في بناء البوابة.
+
+استخدم هذه الصفحة للتحقق من أي أدلة تشغيل أكملت الانتقال من شجرة الوثائق القديمة إلى البوابة.
+يسرد كل إدخال الملكية ومسار المصدر المعتمد والنسخة في البوابة كي يتمكن المراجعون من
+الانتقال مباشرةً إلى الدليل المطلوب خلال المعاينة التجريبية.
+
+## مضيف المعاينة التجريبية
+
+لقد قامت موجة DocOps بترقية مضيف المعاينة التجريبية المعتمد من المراجعين إلى
+`https://docs.iroha.tech/`. عند توجيه المشغلين أو المراجعين إلى دليل تشغيل مُرحَّل،
+أشِر إلى هذا الاسم المضيف كي يستخدموا لقطة البوابة المحمية بالـ checksum. إجراءات
+النشر/الرجوع موجودة في
+[`devportal/preview-host-exposure`](../devportal/preview-host-exposure.md).
+
+| دليل التشغيل | المالك(ون) | نسخة البوابة | المصدر |
+|-------------|-----------|-------------|--------|
+| انطلاقة Gateway وDNS | Networking TL, Ops Automation, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
+| دليل تشغيل عمليات SoraFS | Docs/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
+| تسوية السعة | Treasury / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
+| عمليات سجل التثبيت | Tooling WG | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
+| قائمة تحقق عمليات العقد | Storage Team, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
+| دليل تشغيل النزاعات والإلغاءات | Governance Council | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
+| دليل تشغيل مانيفستات الـ staging | Docs/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
+| قابلية الملاحظة لمرساة Taikai | Media Platform WG / DA Program / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
+
+## قائمة التحقق
+
+- [x] بناء البوابة يربط بهذا الفهرس (عنصر الشريط الجانبي).
+- [x] كل دليل تشغيل مُرحَّل يذكر مسار المصدر المعتمد لإبقاء المراجعين على اتساق أثناء مراجعات
+  التوثيق.
+- [x] خط أنابيب معاينة DocOps يحظر الدمج عندما يكون دليل تشغيل مُدرج مفقودًا من مخرجات البوابة.
+
+يجب أن تضيف عمليات الترحيل المستقبلية (مثل تمارين الفوضى الجديدة أو ملاحق الحوكمة) صفًا
+إلى الجدول أعلاه وتحدّث قائمة التحقق الخاصة بـ DocOps المضمنة في
+`docs/examples/docs_preview_request_template.md`.

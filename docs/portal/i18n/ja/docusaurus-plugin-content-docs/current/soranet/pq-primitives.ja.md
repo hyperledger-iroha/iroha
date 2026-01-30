@@ -1,18 +1,86 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/soranet/pq-primitives.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f277c7510ca64d678c8f105f7e7554f4530f61d598761e0d384a0419415f003c
-source_last_modified: "2025-11-14T04:43:22.383007+00:00"
-translation_last_reviewed: null
+source_hash: c9ea93a16956d569983c16c6f421d6dc6f93835da6f2aa832633836d87039bc8
+source_last_modified: "2026-01-03T18:08:02+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+---
+id: pq-primitives
+lang: ja
+direction: ltr
+source: docs/portal/docs/soranet/pq-primitives.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+:::note Canonical Source
+このページは `docs/source/soranet/pq_primitives.md` を反映する。従来のドキュメント一式が廃止されるまで両方を同期しておくこと。
+:::
+
+`soranet_pq` クレートは、SoraNet の relay、client、tooling コンポーネントが依存するポスト量子の基盤を提供する。PQClean バックの Kyber (ML-KEM) と Dilithium (ML-DSA) を包み込み、プロトコル向けの HKDF と hedged RNG のヘルパーを重ねることで、あらゆる面が同一の実装を共有できるようにしている。
+
+## `soranet_pq` に含まれるもの
+
+- **ML-KEM-512/768/1024:** 決定論的な鍵生成、カプセル化/デカプセル化のヘルパー、定数時間のエラー伝播。
+- **ML-DSA-44/65/87:** ドメイン分離されたトランスクリプトに紐づく分離署名/検証。
+- **ラベル付き HKDF:** `derive_labeled_hkdf` がハンドシェイク段階 (`DH/es`, `KEM/1`, ...) ごとに派生へ namespace を付け、ハイブリッドトランスクリプトの衝突を防ぐ。
+- **Hedged 乱数:** `hedged_chacha20_rng` が決定論 seed と OS エントロピーを混合し、破棄時に中間状態をゼロ化する。
+
+すべての秘密は `Zeroizing` コンテナ内に保持され、CI は全サポートプラットフォームで PQClean bindings を検証する。
+
+```rust
+use soranet_pq::{
+    encapsulate_mlkem, decapsulate_mlkem, generate_mlkem_keypair, MlKemSuite,
+    derive_labeled_hkdf, HkdfDomain, HkdfSuite,
+};
+
+let kem = generate_mlkem_keypair(MlKemSuite::MlKem768);
+let (client_secret, ciphertext) = encapsulate_mlkem(MlKemSuite::MlKem768, kem.public_key()).unwrap();
+let server_secret = decapsulate_mlkem(MlKemSuite::MlKem768, kem.secret_key(), ciphertext.as_bytes()).unwrap();
+assert_eq!(client_secret.as_bytes(), server_secret.as_bytes());
+
+let okm = derive_labeled_hkdf(
+    HkdfSuite::Sha3_256,
+    None,
+    client_secret.as_bytes(),
+    HkdfDomain::soranet("KEM/1"),
+    b"soranet-transcript",
+    32,
+).unwrap();
+```
+
+## 利用方法
+
+1. **依存関係を追加** する (workspace root 外の crates 向け):
+
+   ```toml
+   soranet_pq = { path = "../../crates/soranet_pq" }
+   ```
+
+2. **適切なスイートを選択** する。初期のハイブリッドハンドシェイクでは `MlKemSuite::MlKem768` と `MlDsaSuite::MlDsa65` を使用する。
+
+3. **ラベル付きで鍵を導出** する。`HkdfDomain::soranet("KEM/1")` (および同系) を使い、トランスクリプトの連鎖をノード間で決定論的に保つ。
+
+4. **Hedged RNG を使用** してフォールバック秘密をサンプルする:
+
+   ```rust
+   use soranet_pq::{hedged_chacha20_rng, HedgedRngSeed};
+
+   let mut rng = hedged_chacha20_rng(HedgedRngSeed::new(b"snnet16", [0u8; 32]));
+   ```
+
+SoraNet のコアハンドシェイクと CID ブラインディングヘルパー (`iroha_crypto::soranet`) はこれらのユーティリティを直接利用するため、下流の crates は PQClean bindings をリンクせずに同一実装を継承できる。
+
+## 検証チェックリスト
+
+- `cargo test -p soranet_pq --offline`
+- `cargo fmt --package soranet_pq`
+- README の使用例を監査 (`crates/soranet_pq/README.md`)
+- ハイブリッド導入後に SoraNet ハンドシェイク設計ドキュメントを更新

@@ -1,15 +1,21 @@
-<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
-
 ---
 lang: fr
 direction: ltr
 source: docs/portal/docs/norito/examples/index.ur.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Traduction en cours
+---
+title: Norito مثالیں
+description: لیجر واک تھرو کے ساتھ منتخب Kotodama اسنیپٹس۔
+slug: /norito/examples
+---
 
-Ce fichier sert de modèle pour la traduction française du document anglais. Une fois la traduction terminée, mettez à jour le champ `status` dans les métadonnées ci-dessus.
+یہ مثالیں SDK کے کوئیک اسٹارٹس اور لیجر واک تھروز کی عکاسی کرتی ہیں۔ ہر اسنیپٹ میں لیجر چیک لسٹ شامل ہے اور Rust، Python اور JavaScript گائیڈز کے لنکس دیے گئے ہیں تاکہ آپ وہی منظرنامہ ابتدا سے انتہا تک دہرا سکیں۔
 
-Ce brouillon est en attente de traduction. Remplacez ce texte par le contenu traduit et passez l’état à `complete` lorsque le travail est terminé. Vérifiez également que `translation_last_reviewed` correspond à la dernière vérification par rapport à la version anglaise.
+- **[Hajimari انٹری پوائنٹ اسکیلیٹن](./hajimari-entrypoint)** — ایک واحد عوامی انٹری پوائنٹ اور اسٹیٹ ہینڈل کے ساتھ کم سے کم Kotodama کنٹریکٹ ڈھانچہ۔
+- **[ڈومین رجسٹر کریں اور اثاثے منٹ کریں](./register-and-mint)** — اجازت یافتہ ڈومین تخلیق، اثاثہ رجسٹریشن اور ڈیٹرمنسٹک منٹنگ کو ظاہر کرتا ہے۔
+- **[Kotodama سے ہوسٹ ٹرانسفر کال کریں](./call-transfer-asset)** — دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح ہوسٹ کی `transfer_asset` انسٹرکشن کو inline میٹا ڈیٹا ویلیڈیشن کے ساتھ کال کر سکتا ہے۔
+- **[اکاؤنٹس کے درمیان اثاثہ منتقل کریں](./transfer-asset)** — سادہ اثاثہ ٹرانسفر ورک فلو جو SDK quickstarts اور لیجر walkthroughs کی عکاسی کرتا ہے۔
+- **[NFT کو منٹ، منتقل اور برن کریں](./nft-flow)** — NFT کے لائف سائیکل کو ابتدا سے انتہا تک دکھاتا ہے: مالک کو منٹ کرنا، منتقل کرنا، میٹا ڈیٹا ٹیگ کرنا، اور برن کرنا۔

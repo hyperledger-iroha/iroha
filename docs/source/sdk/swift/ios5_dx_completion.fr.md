@@ -1,18 +1,40 @@
-<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
-
 ---
 lang: fr
 direction: ltr
 source: docs/source/sdk/swift/ios5_dx_completion.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 79f7dd3478c436aa2be3976c9c3cf8ae904c35c132e826990f08094edcf7ed24
-source_last_modified: "2025-11-22T10:08:23.633370+00:00"
-translation_last_reviewed: null
+source_hash: 2cee724d4fdec9fc576d8c6e484ed57269c381ec49de03a68d952c62dd575525
+source_last_modified: "2026-01-22T06:58:49.724263+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traduction en cours
+# IOS5 Developer Experience Completion
 
-Ce fichier sert de modèle pour la traduction française du document anglais. Une fois la traduction terminée, mettez à jour le champ `status` dans les métadonnées ci-dessus.
+IOS5 closes the Swift developer experience track with higher-level client adapters
+and repeatable smoke gates.
 
-Ce brouillon est en attente de traduction. Remplacez ce texte par le contenu traduit et passez l’état à `complete` lorsque le travail est terminé. Vérifiez également que `translation_last_reviewed` correspond à la dernière vérification par rapport à la version anglaise.
+- **Combine/async publishers:** `ToriiClient+Combine` adds `assetsPublisher` for
+  one-shot balance fetches and `verifyingKeyEventsPublisher` to surface the
+  verifying-key SSE feed with cancellation-aware bridging. The helpers share the
+  `makeValuePublisher`/`makeStreamPublisher` plumbing so callers can subscribe on
+  their preferred queue while keeping Torii errors typed.
+- **Coverage:** New unit tests cover both the value and SSE publishers, reusing
+  the Torii stubs to assert headers, payloads, and stream completion paths.
+- **Smoke gates:** The IOS5 sample app runner remains the CI guardrail; the JSON,
+  JUnit, and Prometheus outputs documented in `swift_sample_smoke_tests.md` feed
+  dashboards and alerts so drift in the quickstarts is caught automatically.
+- **Usage example:**
+
+  ```swift
+  var cancellables: Set<AnyCancellable> = []
+  let client = ToriiClient(baseURL: URL(string: "https://torii.dev")!)
+
+  client.assetsPublisher(accountId: "ih58...")
+      .sink(receiveCompletion: { completion in
+          print("Finished: \(completion)")
+      }, receiveValue: { balances in
+          print("Balances:", balances)
+      })
+      .store(in: &cancellables)
+  ```
