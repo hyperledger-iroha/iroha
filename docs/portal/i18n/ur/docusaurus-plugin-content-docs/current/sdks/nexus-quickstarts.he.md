@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sdks/nexus-quickstarts.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6235cafa45a69d1adb7b40f347e7a743c52de4558934ffa81a7e1727d90fc077
-source_last_modified: "2025-11-14T04:43:21.096771+00:00"
+source_hash: c594cb9037b19d41b548ead5d5831716ea6d4a13ec14214d7e2ecc93bc8c7f8a
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/sdks/nexus-quickstarts.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 مکمل quickstart `docs/source/nexus_sdk_quickstarts.md` میں موجود ہے۔ یہ پورٹل خلاصہ مشترکہ پیشگی تقاضوں اور ہر SDK کے کمانڈز کو نمایاں کرتا ہے تاکہ ڈویلپرز اپنی سیٹ اپ جلدی جانچ سکیں۔

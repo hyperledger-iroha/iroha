@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/nexus/nexus-routed-trace-audit-2026q1.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8b6fe47cc94cdab04105792ed474fda3246e7eede95514311f9157ff716f2af5
-source_last_modified: "2025-11-14T04:43:20.483894+00:00"
+source_hash: 145b62ecf0a33324e738d3f3c2215a7a90c8228cd3cb43398db11cbb8c54766c
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/nexus/nexus-routed-trace-audit-2026q1.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-routed-trace-audit-2026q1
+title: Отчет аудита routed-trace за Q1 2026 (B1)
+description: Зеркало `docs/source/nexus_routed_trace_audit_report_2026q1.md`, охватывающее итоги квартальных репетиций телеметрии.
 ---
 
 <!--

@@ -89,7 +89,6 @@ rsync -a --delete --prune-empty-dirs \
   --include '*/' \
   --include '*.norito' \
   --include '*transaction_payload*.json' \
-  --include '*instruction_schema*.json' \
   --include '*transaction_fixtures*.manifest.json' \
   --include '*trigger_instructions*.json' \
   --exclude '*' \

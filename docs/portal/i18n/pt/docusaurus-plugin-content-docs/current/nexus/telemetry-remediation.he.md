@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/nexus/telemetry-remediation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1cdad8d6bc42f49bef1d8093411e2ed2e5082b36f323335794482b632129b91f
-source_last_modified: "2025-11-14T04:43:20.588838+00:00"
+source_hash: e78ea7212611d110ee5f3cf1bd9e3e011a70bde1ebfdd31387ca009e33f7db08
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/nexus/telemetry-remediation.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-telemetry-remediation
+title: Plano de remediacao de telemetria do Nexus (B2)
+description: Espelho de `docs/source/nexus_telemetry_remediation_plan.md`, documentando a matriz de lacunas de telemetria e o fluxo operacional.
 ---
 
 # Visao geral

@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/developer-sdk-index.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 97c0e6df9ab57c1f18c8eebf16b7ecb2d0c4cdfec0fef9f69d901d17bfd0e676
-source_last_modified: "2025-11-14T04:43:21.669806+00:00"
+source_hash: 286a9c05d9c9244f0b54fa2783345cdec4b29a22b64df7be43dabcae2ae1c89e
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: developer-sdk-index
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/developer-sdk-index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Fonte canonica
 Esta pagina espelha `docs/source/sorafs/developer/sdk/index.md`. Mantenha ambas as copias sincronizadas.

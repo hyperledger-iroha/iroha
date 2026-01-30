@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/norito/examples/transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ecd5cd63fd38efc80026bf9795c910fa9f45c329a71e9a5ef39671d12bb738b8
-source_last_modified: "2025-11-14T04:43:20.812983+00:00"
+source_hash: 1691cf0cfab41319cc25af477eb00d46cb6a5e1082e2b52c3d182d9536eb7fec
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/norito/examples/transfer-asset.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/transfer-asset
+title: اکاؤنٹس کے درمیان اثاثہ منتقل کریں
+description: سادہ اثاثہ ٹرانسفر ورک فلو جو SDK quickstarts اور لیجر walkthroughs کی عکاسی کرتا ہے۔
+source: examples/transfer/transfer.ko
 ---
 
 سادہ اثاثہ ٹرانسفر ورک فلو جو SDK quickstarts اور لیجر walkthroughs کی عکاسی کرتا ہے۔

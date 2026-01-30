@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/orchestrator-config.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5b389ac0026b3d08973b085cf595449769cec6d26e8994e936bde24dea1172ee
-source_last_modified: "2025-11-14T04:43:21.973593+00:00"
+source_hash: 8c874d5f5e86754a77a42635ff83088308e15b6007d13f749d7e4688294874b8
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-config
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/orchestrator-config.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note المصدر المعتمد
 تعكس هذه الصفحة `docs/source/sorafs/developer/orchestrator.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم سحب مجموعة التوثيق القديمة.

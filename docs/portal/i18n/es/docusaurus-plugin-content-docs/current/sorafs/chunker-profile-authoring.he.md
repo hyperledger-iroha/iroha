@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/chunker-profile-authoring.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6aed03c726a6938e4cacfc88deb898af7f3d943843b8b2450d867036fba09637
-source_last_modified: "2025-11-14T04:43:21.480854+00:00"
+source_hash: 2e869129107c985451e2b432f0b7b17706bbd1aa336d6d07843a797a63d41a6b
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-profile-authoring
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/chunker-profile-authoring.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Fuente canónica
 Esta página refleja `docs/source/sorafs/chunker_profile_authoring.md`. Mantén ambas copias sincronizadas hasta que se retire el conjunto de documentación Sphinx heredado.

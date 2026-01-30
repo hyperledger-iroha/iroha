@@ -4,9 +4,18 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w1/log.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3e62c97e2037ea69228757449151ab3ac068897b158243300a9df23c0b65d594
-source_last_modified: "2025-11-14T04:43:19.845908+00:00"
+source_hash: e28ef199d81216bb48a42e77d5e445e7d520603d584c707508daacfd57040c4a
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: preview-feedback-w1-log
+lang: fr
+direction: ltr
+source: docs/portal/docs/devportal/preview-feedback/w1/log.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 Ce journal conserve le roster des invitations, les checkpoints de telemetrie et le feedback reviewers pour le

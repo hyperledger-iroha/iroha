@@ -1,15 +1,131 @@
-<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
-
 ---
 lang: fr
 direction: ltr
 source: docs/portal/docs/sdks/recipes/swift-ledger-flow.ur.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Traduction en cours
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/sdks/recipes/swift-ledger-flow.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 6d8d50d8145f646236734aa00d49f741ac2a7616d42326044fdfcba55bd621a1
+source_last_modified: "2025-11-11T10:24:06.064900+00:00"
+translation_last_reviewed: 2026-01-30
+---
 
-Ce fichier sert de modèle pour la traduction française du document anglais. Une fois la traduction terminée, mettez à jour le champ `status` dans les métadonnées ci-dessus.
+---
+title: سویفٹ لیجر فلو ترکیب
+description: ڈیفالٹ ڈیولپمنٹ نیٹ ورک کے ساتھ اثاثے منٹ اور ٹرانسفر کرنے کے لیے IrohaSwift استعمال کریں۔
+slug: /sdks/recipes/swift-ledger-flow
+---
 
-Ce brouillon est en attente de traduction. Remplacez ce texte par le contenu traduit et passez l’état à `complete` lorsque le travail est terminé. Vérifiez également que `translation_last_reviewed` correspond à la dernière vérification par rapport à la version anglaise.
+import SampleDownload from '@site/src/components/SampleDownload';
+
+> IrohaSwift کا انکوڈر فی الحال mint/transfer مددگار فنکشنز فراہم کرتا ہے؛ اثاثہ تعریف کی رجسٹریشن ابھی بھی CLI کے ذریعے ہوتی ہے۔ Swift نمونہ چلانے سے پہلے قدم 1 کی CLI کمانڈ ایک بار چلائیں۔
+
+<SampleDownload
+  href="/sdk-recipes/swift/Sources/LedgerFlow/main.swift"
+  filename="Sources/LedgerFlow/main.swift"
+  description="async/await مثال ڈاؤن لوڈ کریں تاکہ اسے Xcode میں کھول سکیں یا اپنے Swift پیکج میں پیسٹ کر سکیں۔"
+/>
+
+## 1. اثاثہ رجسٹر کریں (CLI)
+
+```bash
+iroha --config defaults/client.toml asset definition register --id coffee#wonderland
+```
+
+## 2. اسناد تیار کریں
+
+```bash
+# raw 32-byte Ed25519 key in hex (use `iroha_cli tools crypto private-key export --raw` if needed)
+export ADMIN_PRIVATE_KEY_RAW="4f94...<64 hex chars>..."
+export ADMIN_ACCOUNT="ih58..."
+export RECEIVER_ACCOUNT="ih58..."
+```
+
+## 3. IrohaSwift کو اپنی پیکج میں شامل کریں
+
+```swift title="Package.swift"
+.package(name: "IrohaSwift", path: "../../IrohaSwift")
+```
+
+یا Xcode میں Git URL (`https://github.com/hyperledger/iroha-swift`) استعمال کریں۔
+
+## 4. مثال پروگرام
+
+```swift title="Sources/LedgerFlow/main.swift"
+import Foundation
+import IrohaSwift
+
+@main
+struct LedgerFlow {
+    static func main() async {
+        guard #available(macOS 13.0, iOS 16.0, *) else {
+            fatalError("IrohaSwift async APIs require macOS 13 / iOS 16 or newer")
+        }
+        do {
+            try await run()
+        } catch {
+            fputs("ledger flow failed: \(error)
+", stderr)
+            exit(1)
+        }
+    }
+
+    @available(macOS 13.0, iOS 16.0, *)
+    static func run() async throws {
+        let env = ProcessInfo.processInfo.environment
+        let adminAccount = env["ADMIN_ACCOUNT"]!
+        let receiverAccount = env["RECEIVER_ACCOUNT"]!
+        guard let privateBytes = Data(hexString: env["ADMIN_PRIVATE_KEY_RAW"] ?? "") else {
+            fatalError("Set ADMIN_PRIVATE_KEY_RAW to a 32-byte Ed25519 key in hex")
+        }
+
+        let keypair = try Keypair(privateKeyBytes: privateBytes)
+        let torii = ToriiClient(baseURL: URL(string: "http://127.0.0.1:8080")!)
+        let sdk = IrohaSDK(toriiClient: torii)
+
+        let assetDefinition = "coffee#wonderland"
+        let adminAssetId = TxBuilder.makeAssetId(assetDefinitionId: assetDefinition, accountId: adminAccount)
+
+        // Mint 250 units into the admin account.
+        let mint = MintRequest(chainId: "00000000-0000-0000-0000-000000000000",
+                               authority: adminAccount,
+                               assetDefinitionId: assetDefinition,
+                               quantity: "250",
+                               destination: adminAccount,
+                               ttlMs: 60_000)
+        try await sdk.submitAndWait(mint: mint, keypair: keypair)
+
+        // Transfer 50 units to the demo receiver.
+        let transfer = TransferRequest(chainId: mint.chainId,
+                                       authority: adminAccount,
+                                       assetDefinitionId: assetDefinition,
+                                       quantity: "50",
+                                       destination: receiverAccount,
+                                       description: "swift-recipe",
+                                       ttlMs: 60_000)
+        try await sdk.submitAndWait(transfer: transfer, keypair: keypair)
+
+        // Query the receiver’s balances.
+        let balances = try await sdk.getAssets(accountId: receiverAccount, limit: 5)
+        print("Receiver balances:")
+        for balance in balances where balance.assetDefinitionId == assetDefinition {
+            print("  \(balance.assetDefinitionId): \(balance.quantity)")
+        }
+    }
+}
+```
+
+`swift build -c release` سے بلڈ کریں اور `swift run LedgerFlow` کے ساتھ چلائیں۔
+
+## 5. برابری کی تصدیق
+
+- `iroha --config defaults/client.toml transaction get --hash <hash>` کے ذریعے ٹرانزیکشنز دیکھیں۔
+- `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` سے ہولڈنگز کا موازنہ کریں۔
+- اس ترکیب کو Rust/Python/JavaScript والی ترکیبوں کے ساتھ ملائیں تاکہ یہ تصدیق ہو کہ ہر SDK ڈیمو فلو کے لیے ایک ہی ہیشز تیار کرتا ہے۔

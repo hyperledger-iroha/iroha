@@ -4,9 +4,18 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/devportal/deploy-guide.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 36a3c83c6ba04188db597e5224331a875d0fdcb069a16dd81f939b0edf0a1217
-source_last_modified: "2025-11-14T04:43:19.774636+00:00"
+source_hash: 1a8779f125dc666e735e514ca472f36bbbbcdd7336f53bb9e57846266c0bf5f7
+source_last_modified: "2026-01-22T15:57:55+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: deploy-guide
+lang: ar
+direction: rtl
+source: docs/portal/docs/devportal/deploy-guide.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 ## نظرة عامة

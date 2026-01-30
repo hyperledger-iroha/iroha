@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/orchestrator-ops.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e4901ce4c1d16e73884842327e5ab4174eff64b60f1ed8c798d5fcfe8dec13d6
-source_last_modified: "2025-11-14T04:43:21.992720+00:00"
+source_hash: 34c89188f939242b95fc98d718d3e2ffbc63ef2b75319e4944494bf35c34fb71
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-ops
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/orchestrator-ops.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: دليل تشغيل مُنسِّق SoraFS
+sidebar_label: دليل تشغيل المُنسِّق
+description: دليل تشغيلي خطوة بخطوة لنشر المُنسِّق متعدد المصادر ومراقبته والرجوع عنه.
 ---
 
 :::note المصدر المعتمد

@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/developer-cli.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e61047b305dc4f3dd3c666bdf493cab08eab14c78e2304681241c8f4d1bca709
-source_last_modified: "2025-11-14T04:43:21.601396+00:00"
+source_hash: 72415ff982ee98f2feab04a11d8d760e727c65c1848178ee8f3baee26d20fe9c
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: developer-cli
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/developer-cli.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Fonte canonica
 Esta pagina espelha `docs/source/sorafs/developer/cli.md`. Mantenha ambas as copias sincronizadas.

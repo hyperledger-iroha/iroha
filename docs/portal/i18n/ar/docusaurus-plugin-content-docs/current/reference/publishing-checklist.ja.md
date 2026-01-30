@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/reference/publishing-checklist.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6fd4864a26c39080525c2373e6e38024ae617f8bcf870a2db633fcb1dbe13a38
-source_last_modified: "2025-11-14T04:43:20.995733+00:00"
+source_hash: bb8064439991043a18889d59d68e0ba501720f1f641a83b8220a60bcddb75b17
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/reference/publishing-checklist.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # قائمة التحقق للنشر

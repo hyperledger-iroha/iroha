@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/nexus/nexus-refactor-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5ff1a9d3afd5a28564d02d6ba4f145f1a9239ff38d4cd2556c36919e3b372b16
-source_last_modified: "2025-11-14T04:43:20.465123+00:00"
+source_hash: e993671f88cf80acab3f5b3a5b96d57546a16606e4fe1f97098e00cbd1281e58
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/nexus/nexus-refactor-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-refactor-plan
+title: Sora Nexus لیجر ری فیکٹر پلان
+description: `docs/source/nexus_refactor_plan.md` کا آئینہ، جو Iroha 3 کوڈ بیس کی مرحلہ وار صفائی کے کام کی تفصیل دیتا ہے۔
 ---
 
 :::note کینونیکل ماخذ

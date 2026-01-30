@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/developer-releases.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 19b37601dd3b5c9e8393c9f54b6c97f82f07f1c050c49459b90f08c3bf9651ef
-source_last_modified: "2025-11-14T04:43:21.652313+00:00"
+source_hash: 35037f125b9f9e211b772ca209f7096e034ebbcb37db8e5a0aafc6d67261090c
+source_last_modified: "2026-01-04T17:33:51+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: developer-releases
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/developer-releases.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 # Proceso de lanzamiento
 

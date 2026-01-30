@@ -1,18 +1,47 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/source/ministry/red_team_status.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: f4a2e50e18749f64212dee5186bfd3a3d034ac906d1a506d420cdcb1b5117517
-source_last_modified: "2025-11-20T16:36:27.964339+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:57.719802+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traducción en curso
+---
+title: Ministry Red-Team Status (MINFO-9)
+summary: Snapshot of the chaos drill program covering upcoming runs, last completed scenario, and remediation items.
+---
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+# Ministry Red-Team Status
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+This page complements the [Moderation Red-Team Plan](moderation_red_team_plan.md)
+by tracking the near-term drill calendar, evidence bundles, and remediation
+status. Update it after every run alongside the artefacts captured under
+`artifacts/ministry/red-team/<YYYY-MM>/<scenario>/`.
+
+## Upcoming Drills
+
+| Date (UTC) | Scenario | Owner(s) | Evidence Prep | Notes |
+|------------|---------|----------|---------------|-------|
+| 2026-11-12 | **Operation Blindfold** — Taikai mixed-mode smuggling rehearsal with gateway downgrade attempts | Security Engineering (Miyu Sato), Ministry Ops (Liam O’Connor) | `scripts/ministry/scaffold_red_team_drill.py` bundle `docs/source/ministry/reports/red_team/2026-11-operation-blindfold.md` + staging directory `artifacts/ministry/red-team/2026-11/operation-blindfold/` | Exercises GAR/Taikai overlap plus DNS failover; requires denylist Merkle snapshot before start and `export_red_team_evidence.py` run after dashboards are captured. |
+
+## Last Drill Snapshot
+
+| Date (UTC) | Scenario | Evidence Bundle | Remediation & Follow-Ups |
+|------------|---------|-----------------|--------------------------|
+| 2026-08-18 | **Operation SeaGlass** — Gateway smuggling, governance replay, and alert brownout rehearsal | `artifacts/ministry/red-team/2026-08/operation-seaglass/` (Grafana exports, Alertmanager logs, `seaglass_evidence_manifest.json`) | **Open:** replay seal automation (`MINFO-RT-17`, owner: Governance Ops, due 2026-09-05); pin dashboard freeze to SoraFS (`MINFO-RT-18`, Observability, due 2026-08-25). **Closed:** logbook template updated to carry Norito manifest hashes. |
+
+## Tracking & Tooling
+
+- Use `scripts/ministry/moderation_payload_tool.py` to package injectible
+  payloads and denylist patches per scenario.
+- Record dashboard/log captures via `scripts/ministry/export_red_team_evidence.py`
+  immediately after each drill so the evidence manifest contains signed hashes.
+- CI guard `ci/check_ministry_red_team.sh` enforces that committed drill reports
+  do not contain placeholder text and that referenced artefacts exist before
+  merging.
+
+See `status.md` (§ *Ministry red-team status*) for the live summary referenced
+in weekly coordination calls.

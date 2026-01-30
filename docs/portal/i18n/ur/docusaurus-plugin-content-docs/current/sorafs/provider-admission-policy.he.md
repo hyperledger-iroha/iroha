@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/provider-admission-policy.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 55e7a8d91f454b105a8ad7661e74294295c88558fd616159c3c2f310af1e59ad
-source_last_modified: "2025-11-14T04:43:22.112212+00:00"
+source_hash: eb2b7787e303d0abec1b52d30fcee137ae5cc0d4a357aba4bf97ce46ae8f0b52
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: provider-admission-policy
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/provider-admission-policy.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 > [`docs/source/sorafs/provider_admission_policy.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_admission_policy.md) سے ماخوذ۔
 

@@ -4,9 +4,18 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w2/plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f5e89a82a4ac1255296341880c29cabfbcc9be331bdcb80d920ed190c36c4116
-source_last_modified: "2025-11-14T04:43:19.935288+00:00"
+source_hash: 06304f52b6673aca9fafbd67e7001edc056ed188d4a343d782ac867b46f9af38
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: preview-feedback-w2-plan
+lang: he
+direction: rtl
+source: docs/portal/docs/devportal/preview-feedback/w2/plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 | פריט | פרטים |

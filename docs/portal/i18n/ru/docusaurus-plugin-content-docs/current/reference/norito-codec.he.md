@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/reference/norito-codec.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bb667d190e36778c144f8c0304706e0bde63dd518a9604aa883559d5ed3e84f7
-source_last_modified: "2025-11-14T04:43:20.977970+00:00"
+source_hash: 49a06610dc8ec1025fb104897ed3af0b97c35c3159d39da7539ffb3af4c7da04
+source_last_modified: "2026-01-18T05:31:56+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/reference/norito-codec.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Справочник кодека Norito

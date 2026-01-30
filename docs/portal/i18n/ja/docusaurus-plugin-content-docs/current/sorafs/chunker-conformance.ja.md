@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/chunker-conformance.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b86a680d72e313260a0e4343e47c0a7eba8dfabce9d8c4a266ca92a937de9465
-source_last_modified: "2025-11-14T04:43:21.460805+00:00"
+source_hash: eefe6bd546009d9e3506a51ef5ba5337391eb741da85128cff76f93906aac050
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-conformance
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/chunker-conformance.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note 正規ソース
 `docs/source/sorafs/chunker_conformance.md` を反映しています。レガシー docs が退役するまで両方の版を同期してください。

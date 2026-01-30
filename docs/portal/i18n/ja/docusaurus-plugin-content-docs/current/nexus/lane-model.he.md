@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/nexus/lane-model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3f465b6b2e74cf69535c003059bb54db493f34da16c47d4a8b21a29381f84249
-source_last_modified: "2025-11-14T04:43:20.340387+00:00"
+source_hash: cb1ab398c4299e5a9a2e4a0b29b3505e2c73b8e85c00350db7521554417f511d
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/nexus/lane-model.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-lane-model
+title: Nexus レーンモデル
+description: Sora Nexus の論理レーン分類、設定ジオメトリ、world-state マージ規則。
 ---
 
 # Nexus レーンモデルと WSV パーティション

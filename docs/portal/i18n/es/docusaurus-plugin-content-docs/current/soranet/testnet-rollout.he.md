@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/soranet/testnet-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 08da9fb57683856ee34eb08550ffca6302e6592d0cdaf459e025c8d9824418ba
-source_last_modified: "2025-11-14T04:43:22.507215+00:00"
+source_hash: 8eaeac10e4f2fd4527931682bb2f26826543bfd51212c51fa87d9bcfb9a15a2f
+source_last_modified: "2026-01-03T18:07:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: testnet-rollout
+lang: es
+direction: ltr
+source: docs/portal/docs/soranet/testnet-rollout.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fuente canonica

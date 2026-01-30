@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/soranet/pq-ratchet-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c3115eb0bb26feef6c05bc6e1fa4ff948e4bfe425b1e3947cd0ef62f8e8a75dd
-source_last_modified: "2025-11-14T04:43:22.408651+00:00"
+source_hash: 1c5262042092d8e5b18857236cd8d84fed244a301f55fc8017b7be6800f43064
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: pq-ratchet-runbook
+lang: ur
+direction: rtl
+source: docs/portal/docs/soranet/pq-ratchet-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Canonical Source

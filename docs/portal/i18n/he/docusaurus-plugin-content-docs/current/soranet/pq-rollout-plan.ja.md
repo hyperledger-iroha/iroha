@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/soranet/pq-rollout-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4f4faec526c9bd19db874562674af31b06a027795d925331e072dbcc20bc496b
-source_last_modified: "2025-11-14T04:43:22.428244+00:00"
+source_hash: a0e75240811808dbbfee5367ecc52ba182be2ece25c3bb19588c63acaadac23f
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: pq-rollout-plan
+lang: he
+direction: rtl
+source: docs/portal/docs/soranet/pq-rollout-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note מקור קנוני

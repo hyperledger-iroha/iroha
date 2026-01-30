@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/norito/examples/register-and-mint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 50ca8178960700e4f999c5d921f1e2b1e36c9c6f26e2de93d89f3b96006354e7
-source_last_modified: "2025-11-14T04:43:20.791684+00:00"
+source_hash: 406d52aebc6f4067d9fd30d45acfa75054997567cf3754d33e28a910ca6fe9d4
+source_last_modified: "2026-01-22T15:55:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/norito/examples/register-and-mint.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/register-and-mint
+title: Зарегистрировать домен и выпустить активы
+description: Показывает создание доменов с разрешениями, регистрацию активов и детерминированный выпуск.
+source: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
 Показывает создание доменов с разрешениями, регистрацию активов и детерминированный выпуск.

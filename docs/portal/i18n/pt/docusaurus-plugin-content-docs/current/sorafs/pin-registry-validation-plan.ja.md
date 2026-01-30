@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/pin-registry-validation-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d39860b1ec6a0c4018a63daef358ea3907a92b495701b589fb956238e6c971ab
-source_last_modified: "2025-11-14T04:43:22.070489+00:00"
+source_hash: 042cd612f20ab6fdbdf734b52f9accfea865a1c222629b54ae5d5fcc20ddff99
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: pin-registry-validation-plan
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/pin-registry-validation-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica

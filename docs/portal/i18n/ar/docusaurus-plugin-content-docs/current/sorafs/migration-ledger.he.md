@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/migration-ledger.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 83dc988cc664096805ed5e972b9baf015507e06568c7494ac2ff42d30856d65d
-source_last_modified: "2025-11-14T04:43:21.794034+00:00"
+source_hash: 99429e3228ed9df5905877db9bff5debd72a5a23e791acf3cb605ba682c8c4ad
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: migration-ledger
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/migration-ledger.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 > مقتبس من [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
 

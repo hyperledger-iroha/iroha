@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/devportal/preview-invite-tracker.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 318ea4506a81771f0c25b25a677a448e5bd803b7ebd91e3c619f9d3caea4d2c6
-source_last_modified: "2025-11-14T04:43:20.070610+00:00"
+source_hash: f8c8f0a2e846941b86db8f765f39f82169fe389eef19cbbf52e59552dc50c130
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/devportal/preview-invite-tracker.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # متعقب دعوات المعاينة

@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/deal-engine.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 32954729bae4c830b6ea250ea8390335f828d3e6531360e8bbdbf2166d32edd8
-source_last_modified: "2025-11-14T04:43:21.562521+00:00"
+source_hash: 1814939d21850f49553b43be5b0c790f0982add5ecb7e8a122c77eb5e7e84098
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: deal-engine
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/deal-engine.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Канонический источник
 :::

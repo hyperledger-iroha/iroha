@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/developer-sdk-rust.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: cbe692254c59a3bb265ffb2b6d99100b1df65c88333123e7af4f73f99924bd24
-source_last_modified: "2025-11-14T04:43:21.685434+00:00"
+source_hash: 2953ef3d77e7d045b0e714b8a57b19214f4a31ee39e9047a7dff96d7ce00deba
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: developer-sdk-rust
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/developer-sdk-rust.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Канонический источник
 :::

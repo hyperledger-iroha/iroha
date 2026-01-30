@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/nexus/overview.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f4991cc43684e050d546101d46f003fcd96ecab0ce9cfb3190b8229c15664f56
-source_last_modified: "2025-11-14T04:43:20.540604+00:00"
+source_hash: 7dc755ec10234f08cf57eb17f6ae6bd004f969e7a4863e4b34acb809154f2404
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/nexus/overview.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-overview
+title: نظرة عامة على Sora Nexus
+description: ملخص عالي المستوى لمعمارية Iroha 3 (Sora Nexus) مع مؤشرات إلى وثائق المستودع الأحادي المعيارية.
 ---
 
 توسع Nexus (Iroha 3) Iroha 2 بتنفيذ متعدد المسارات، ومساحات بيانات محددة بالحوكمة، وأدوات مشتركة عبر كل SDK. تعكس هذه الصفحة الملخص الجديد `docs/source/nexus_overview.md` في المستودع الأحادي حتى يتمكن قراء البوابة من فهم كيفية ترابط أجزاء المعمارية بسرعة.

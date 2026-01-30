@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/gateway-dns-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: db5f133ba939b6dbc9bc8c60edb064d912108a928cdcacd5f4262ab006b35774
-source_last_modified: "2025-11-14T04:43:21.735016+00:00"
+source_hash: 9146a6f7f3a3be32317b6d397367a671abcf6c66553479e2fbc7d0370211c958
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/gateway-dns-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Runbook de lancement Gateway & DNS SoraFS

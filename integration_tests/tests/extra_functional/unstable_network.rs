@@ -1633,7 +1633,7 @@ async fn unstable_network_12_peers_4_faults() -> Result<()> {
     UnstableNetwork {
         n_peers: 12,
         n_faulty_peers: 4,
-        n_rounds: 2,
+        n_rounds: 3,
         force_soft_fork: false,
     }
     .run()

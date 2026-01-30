@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/chunker-profile-authoring.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b02d2c49b88d467b8ca77000367a8e42d143b4d863616e8e0816f7e52fc0cd13
-source_last_modified: "2025-11-14T04:43:21.481359+00:00"
+source_hash: b17f166fe4667d222c96f96926a1c944b7d0582d3cd0b980abbfc94903f5c44b
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-profile-authoring
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/chunker-profile-authoring.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Fonte canonica
 Esta pagina espelha `docs/source/sorafs/chunker_profile_authoring.md`. Mantenha ambas as copias sincronizadas.

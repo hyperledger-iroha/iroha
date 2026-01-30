@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/capacity-simulation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5a06cbda18951428d1c119130ec3a46cd7cc370ec499b6b95adf5878501fe226
-source_last_modified: "2025-11-14T04:43:21.442330+00:00"
+source_hash: b1c6723cbc4f1416b17c64525975de2cc91a768259e8b13431f67c96ab7c7741
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: capacity-simulation
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/capacity-simulation.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: SoraFS 容量シミュレーション・ランブック
+sidebar_label: 容量シミュレーション・ランブック
+description: 再現可能なフィクスチャ、Prometheus エクスポート、Grafana ダッシュボードを用いて SF-2c 容量マーケットプレイスのシミュレーションツールキットを実行する。
 ---
 
 :::note 正典のソース

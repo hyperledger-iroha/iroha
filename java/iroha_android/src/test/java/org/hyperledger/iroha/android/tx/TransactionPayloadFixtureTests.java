@@ -66,7 +66,7 @@ public final class TransactionPayloadFixtureTests {
   }
 
   @Test
-  public void fixtureLoaderAcceptsWireInstructionArguments() {
+  public void fixtureLoaderRejectsWireInstructionArguments() {
     final byte[] wirePayload =
         NoritoCodec.encode("wire-arguments", "iroha.test.WirePayload", NoritoAdapters.stringAdapter());
     final String payloadBase64 = Base64.getEncoder().encodeToString(wirePayload);
@@ -99,15 +99,9 @@ public final class TransactionPayloadFixtureTests {
 
     final TransactionPayloadFixtures.Fixture fixture =
         TransactionPayloadFixtures.Fixture.fromObject(fixtureMap);
-    final TransactionPayload decoded = fixture.toPayload();
-    assert decoded.executable().isInstructions() : "Expected instruction executable";
-    final List<InstructionBox> boxes = decoded.executable().instructions();
-    assert boxes.size() == 1 : "Expected one instruction";
-    final InstructionBox box = boxes.get(0);
-    assert box.payload() instanceof InstructionBox.WirePayload : "Expected wire payload";
-    final InstructionBox.WirePayload wire = (InstructionBox.WirePayload) box.payload();
-    assert "iroha.custom".equals(wire.wireName()) : "Wire name should round-trip";
-    assert Arrays.equals(wirePayload, wire.payloadBytes()) : "Wire payload bytes should round-trip";
+    assertThrows(
+        fixture::toPayload,
+        "expected wire payload arguments to be rejected");
   }
 
   public static void main(final String[] args) throws Exception {
@@ -201,5 +195,14 @@ public final class TransactionPayloadFixtureTests {
       }
     }
     return true;
+  }
+
+  private static void assertThrows(final Runnable runnable, final String message) {
+    try {
+      runnable.run();
+    } catch (final RuntimeException ex) {
+      return;
+    }
+    throw new AssertionError(message);
   }
 }

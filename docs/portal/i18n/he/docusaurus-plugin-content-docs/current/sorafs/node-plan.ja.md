@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/node-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 13cb6fc389c40d641c252112f6d687c16c25eb89922b7a7bbdc8e985efdd5075
-source_last_modified: "2025-11-14T04:43:21.892889+00:00"
+source_hash: 8be6a405b11492edce5d408d78d258f97fbe0c0ca19ad76ead9b1583df7f8296
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: node-plan
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/node-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note מקור קנוני
 עמוד זה משקף את `docs/source/sorafs/sorafs_node_plan.md`. שמרו על שתי הגרסאות מסונכרנות עד שהמסמכים הישנים של Sphinx יופסקו.

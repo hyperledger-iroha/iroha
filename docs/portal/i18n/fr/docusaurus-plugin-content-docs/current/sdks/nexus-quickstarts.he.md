@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sdks/nexus-quickstarts.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bc9918906186759a6f4bb2ff9955f2f2da523c8b7ceb894982e2f6eab7a2869c
-source_last_modified: "2025-11-14T04:43:21.096044+00:00"
+source_hash: 73eed78b8e9eabff487398ffbd705a121e85c5e380fa1cf21b8271ac734e16fa
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/sdks/nexus-quickstarts.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 Le guide complet se trouve dans `docs/source/nexus_sdk_quickstarts.md`. Ce resume du portail met en avant les prerequis communs et les commandes par SDK pour que les developpeurs verifient rapidement leur configuration.

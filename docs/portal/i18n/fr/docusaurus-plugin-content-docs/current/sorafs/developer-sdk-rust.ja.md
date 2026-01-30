@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/developer-sdk-rust.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 801e128938c19be709b9790d2ef918c21f32cb28bdfe1fbd00ae9fbd90d12d92
-source_last_modified: "2025-11-14T04:43:21.685274+00:00"
+source_hash: 7e2f52d9bd3c195ab635b7cf7df4e079213373d6e19bde455debaa5c1f793776
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: developer-sdk-rust
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/developer-sdk-rust.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Source canonique
 :::

@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/runbooks-index.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b1221ca760e19b06a5bfebc8893000b8a4d69ff9a15d3575235e027f6601f8d5
-source_last_modified: "2025-11-14T04:43:22.300681+00:00"
+source_hash: b9a79f84fb72f6fc3240d71de51d85bf8206155fe6583e5e72e7b0a72e7b6a86
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: runbooks-index
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/runbooks-index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Índice de runbooks de operadores
+sidebar_label: Índice de runbooks
+description: Ponto de entrada canônico para os runbooks de operadores do SoraFS migrados.
 ---
 
 > Reflete o registro de responsáveis que fica em `docs/source/sorafs/runbooks/`.

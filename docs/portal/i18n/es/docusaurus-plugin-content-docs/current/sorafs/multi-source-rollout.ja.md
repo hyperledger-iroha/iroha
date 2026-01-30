@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/multi-source-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 0c865b3130520742fa6583ceb0316f5e4ca1e64945c555c2940f6c76c3475cfd
-source_last_modified: "2025-11-14T04:43:21.827781+00:00"
+source_hash: a8dc76ebb43430fa45bc684a449a67bb922282be02e08cbcb0a3dbf1336e08b4
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: multi-source-rollout
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/multi-source-rollout.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Fuente canónica
 Esta página refleja `docs/source/sorafs/runbooks/multi_source_rollout.md`. Mantén ambas copias alineadas hasta que se retire el conjunto de documentación heredado.

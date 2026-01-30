@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/reports/capacity-marketplace-validation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d63e0c50f215ac1f9fe01411228ae6ab7c5bbf1215a8fc4a2a30d5c149b9462f
-source_last_modified: "2025-11-14T04:43:22.198434+00:00"
+source_hash: fba495449f9a93f77a457db2d582f88a83251cfa9d077db8a00c81e735e59008
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/reports/capacity-marketplace-validation.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # قائمة تحقق التحقق من سوق سعة SoraFS

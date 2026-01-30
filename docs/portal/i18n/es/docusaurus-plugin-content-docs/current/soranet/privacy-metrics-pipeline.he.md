@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/soranet/privacy-metrics-pipeline.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 79a8d525f6c1d2a35262ebb4a74d8ff7fc22b0f7d8849a7848836add3bf82aed
-source_last_modified: "2025-11-14T04:43:22.468465+00:00"
+source_hash: 1d1434a56d7895f8d87b19bd611a1e15a3b9f1b54736373c2d36d2f04ee6fcb5
+source_last_modified: "2026-01-03T18:07:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: privacy-metrics-pipeline
+lang: es
+direction: ltr
+source: docs/portal/docs/soranet/privacy-metrics-pipeline.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fuente canonica

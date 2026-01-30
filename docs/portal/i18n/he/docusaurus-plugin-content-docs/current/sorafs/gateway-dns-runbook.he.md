@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/gateway-dns-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5fa84af0622cfd0d6bf4d2b16d1a93465a143d5abd840b4ad971391459d0baa7
-source_last_modified: "2025-11-14T04:43:21.733607+00:00"
+source_hash: 918ad5626dc82497794853124c16b534e5e24acc6b74ac26653e0939be552eac
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/gateway-dns-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # ראנבוק השקת Gateway ו-DNS של SoraFS

@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/nexus/transition-notes.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: efeb6d84181fc72ab46b661b66736fe85fd59f414ba0d6c53b6b0980b95d6e75
-source_last_modified: "2025-11-14T04:43:20.614148+00:00"
+source_hash: 5b59762c682aea082448fe5d87effe5f30cd92fc25170e7ad404cbf55652de24
+source_last_modified: "2026-01-06T06:54:55+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/nexus/transition-notes.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-transition-notes
+title: Nexus ٹرانزیشن نوٹس
+description: `docs/source/nexus_transition_notes.md` کا آئینہ، جو Phase B ٹرانزیشن ثبوت، آڈٹ شیڈول، اور میٹیگیشنز کو کور کرتا ہے۔
 ---
 
 <!--

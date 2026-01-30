@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/nexus/confidential-assets.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c1f8a1a4777ff3b4acd39d807e81b35dec3fef7871ffb4a4d0ccb8215f3b3ee6
-source_last_modified: "2025-11-14T04:43:20.305289+00:00"
+source_hash: 862e886a5c44553c38f5f41c27b365f2d16e508d05744db5c5d2a4477ac404da
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/nexus/confidential-assets.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: נכסים חסויים והעברות ZK
+description: תכנית Phase C למחזור shielded, רגיסטרים ובקרות אופרטור.
+slug: /nexus/confidential-assets
 ---
 
 <!--

@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/norito/examples/hajimari-entrypoint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b8b803529f877a5acc92b74a3355eee1c4f76a0abfe20bff3d15a382a2054696
-source_last_modified: "2025-11-14T04:43:20.712946+00:00"
+source_hash: 110e3c769bf905e2632f1ad64f65a9ae6fae2a6b7872e69479597bee02619b35
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/norito/examples/hajimari-entrypoint.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/hajimari-entrypoint
+title: Esqueleto do entrypoint Hajimari
+description: Estrutura minima de contrato Kotodama com um unico entrypoint publico e um handle de estado.
+source: crates/ivm/docs/examples/01_hajimari.ko
 ---
 
 Estrutura minima de contrato Kotodama com um unico entrypoint publico e um handle de estado.

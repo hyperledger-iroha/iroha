@@ -25,9 +25,7 @@ rsync -a --delete --prune-empty-dirs \
   --include '*.norito' \
   --include '*transaction_payload*.json' \
   --include '*transaction_fixtures*.json' \
-  --include '*instruction_schema*.json' \
   --include '*trigger_instructions.json' \
-  --include 'instructions_double_payment.json' \
   --exclude '*' \
   "${SOURCE_DIR}/" "${TARGET_DIR}/"
 

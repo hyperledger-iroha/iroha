@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/reference/account-address-status.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 670458250486817efd265411657b322fc53d0fc26af888d932dd0b998ffb51b0
-source_last_modified: "2025-11-14T04:43:20.947440+00:00"
+source_hash: df89f27851ca9aec42399d59c7b52747c9c56ceb31287e640794198762501127
+source_last_modified: "2026-01-28T17:58:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/reference/account-address-status.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: account-address-status
+title: امتثال عنوان الحساب
+description: ملخص سير عمل fixture ADDR-2 وكيف تبقى فرق SDK متزامنة.
 ---
 
 الحزمة القياسية ADDR-2 (`fixtures/account/address_vectors.json`) تلتقط fixtures IH58 و compressed (`sora`, second-best; half/full width) و multisignature و negative. تعتمد كل واجهة SDK + Torii على نفس JSON حتى نرصد اي انحراف في codec قبل وصوله الى الانتاج. تعكس هذه الصفحة المذكرة الداخلية للحالة (`docs/source/account_address_status.md` في جذر المستودع) حتى يتمكن قراء البوابة من الرجوع الى سير العمل دون التنقيب في الـ mono-repo.

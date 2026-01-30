@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/norito/examples/register-and-mint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e254192c8ec186c3e66e7487df2b06502e73696ec7d4bd694ce398f52b07c1e0
-source_last_modified: "2025-11-04T12:26:02.941680+00:00"
+source_hash: d4e1bb0709a0153f0fb88796326fd3d3fec20857869fdcd8466cc64a39719980
+source_last_modified: "2026-01-22T15:55:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/norito/examples/register-and-mint.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/register-and-mint
+title: ドメイン登録と資産のミント
+description: 権限付きドメインの作成、資産登録、決定論的ミントを実演します。
+source: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
 権限付きドメインの作成、資産登録、決定論的ミントを実演します。

@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/soranet/privacy-metrics-pipeline.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ece9e45e399177a3f189cac55d44425165c5855209df886bde1dee2d6568a4b2
-source_last_modified: "2025-11-14T04:43:22.470740+00:00"
+source_hash: 9c64d186e94ac001a3a7479ae15de1daed59ac7f7e4c7437dff6ca0d841b9242
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: privacy-metrics-pipeline
+lang: ar
+direction: rtl
+source: docs/portal/docs/soranet/privacy-metrics-pipeline.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note المصدر القياسي

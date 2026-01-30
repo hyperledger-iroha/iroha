@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/norito/examples/nft-flow.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 21f5bd15fbe8d24bb4d4e8297a2bfdd34dd301a0061d0f86a27e28ddf4c2538b
-source_last_modified: "2025-11-14T04:43:20.772448+00:00"
+source_hash: c6e37604c86ab7f877d7695c89f48ca8896967e9e60abe0994dad3e50c0e54d8
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/norito/examples/nft-flow.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/nft-flow
+title: سك ونقل وحرق NFT
+description: يسرد دورة حياة NFT من البداية إلى النهاية: السك للمالك، النقل، ووسم بيانات التعريف، والحرق.
+source: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
 يسرد دورة حياة NFT من البداية إلى النهاية: السك للمالك، النقل، ووسم بيانات التعريف، والحرق.

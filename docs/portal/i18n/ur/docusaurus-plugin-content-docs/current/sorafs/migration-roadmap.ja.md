@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/migration-roadmap.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: cdd4cc83af9a5b3cae089d57bab01ad063c231916af2838d3bf93dc302460cf7
-source_last_modified: "2025-11-14T04:43:21.811462+00:00"
+source_hash: 28236e0c61448e68d1853112f348505c57ffbb1b41e64047130d1fcee0bdb91d
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/migration-roadmap.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md) سے ماخوذ۔

@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/developer-ci.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5e9c0efcd17918dd09c54c328e21328c8b1f9ffd7328680de4376dc383d53f74
-source_last_modified: "2025-11-14T04:43:21.581673+00:00"
+source_hash: caf2508834aae073d914438632db5ae933182df0bee4aaeed9b7e45e40cb0a5b
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: developer-ci
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/developer-ci.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note מקור קנוני
 עמוד זה משקף את `docs/source/sorafs/developer/ci.md`. שמרו על שתי הגרסאות מסונכרנות עד שהמסמכים הישנים ייצאו משימוש.

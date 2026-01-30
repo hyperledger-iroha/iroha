@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/nexus/telemetry-remediation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 26e80a4e74a5720d28e0dad15c128c11a911dc51568e706b3d513930f1799fa2
-source_last_modified: "2025-11-14T04:43:20.587597+00:00"
+source_hash: 6ddf0b67e0690cf6d344419d45e36b5ccb28b92001577ad5de5e3636cd795320
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/nexus/telemetry-remediation.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-telemetry-remediation
+title: תוכנית שיקום טלמטריה של Nexus (B2)
+description: מראה של `docs/source/nexus_telemetry_remediation_plan.md`, המתעד מטריצת פערי טלמטריה וזרימת עבודה תפעולית.
 ---
 
 # סקירה

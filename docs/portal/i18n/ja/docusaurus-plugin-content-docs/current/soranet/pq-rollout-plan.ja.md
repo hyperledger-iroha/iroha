@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/soranet/pq-rollout-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 30db77b6ec7133911cdec36b3bb0b475fb531b76a5c990c4c32e9a6ea3ef25db
-source_last_modified: "2025-11-14T04:43:22.427918+00:00"
+source_hash: f67ca1f212983f0c8f2fe720531bd1b504aa683656784b3162e18f2534536038
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: pq-rollout-plan
+lang: ja
+direction: ltr
+source: docs/portal/docs/soranet/pq-rollout-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Canonical Source

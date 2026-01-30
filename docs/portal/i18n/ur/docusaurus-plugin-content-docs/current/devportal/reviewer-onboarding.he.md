@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/devportal/reviewer-onboarding.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 72707241614e2e9cae0651e964677e31e567e4493725de8fbf5b7407a9d8d7cd
-source_last_modified: "2025-11-14T04:43:20.137568+00:00"
+source_hash: 6005bb51372a05afec1f6d693990b7c6b2541e40dad3680d44d50c4dd72a5b07
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/devportal/reviewer-onboarding.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # پریویو ریویور آن بورڈنگ

@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/devportal/reviewer-onboarding.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: cb136d4b93910870d6420243bfd7bb5ac772ba17c8476ab3016e92bd16a4ada5
-source_last_modified: "2025-11-14T04:43:20.137367+00:00"
+source_hash: 29c1889e3cee912666ae16a995b44b045ce363f4ad13ea98e812cba7ca98b445
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/devportal/reviewer-onboarding.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # تأهيل مراجعي المعاينة

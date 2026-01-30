@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/nexus/lane-model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a3042e733bdc3eb0756c9db822aaac05667f226944ef028c1ed8e98705ef52f8
-source_last_modified: "2025-11-14T04:43:20.342399+00:00"
+source_hash: e1fad3b41c0db0c7428c1b2828bf1d279fa9f61635bcd06e125599f44b60921d
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/nexus/lane-model.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-lane-model
+title: نموذج lanes في Nexus
+description: تصنيف منطقي للـ lanes، هندسة التهيئة، وقواعد دمج world-state لـ Sora Nexus.
 ---
 
 # نموذج lanes في Nexus وتقسيم WSV

@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/norito/examples/nft-flow.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 87afdf2102ed3a68977e01c763cc62f6d6f6fc1621f5c920c392b35c4b1095d1
-source_last_modified: "2025-11-14T04:43:20.769793+00:00"
+source_hash: ab9ab484b2586e01e1af65bf125de14be97fe5b613f8036882928494942b82fb
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/norito/examples/nft-flow.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/nft-flow
+title: NFT のミント、移転、バーン
+description: NFT のライフサイクルを端から端までたどります: オーナーへのミント、移転、メタデータのタグ付け、バーン。
+source: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
 NFT のライフサイクルを端から端までたどります: オーナーへのミント、移転、メタデータのタグ付け、バーン。

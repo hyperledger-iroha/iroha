@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/da/ingest-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4d999266917aa0c7017cc8cc02d9587a25af2eec39b0eff6bd019a4b9b2c83c0
-source_last_modified: "2025-11-14T04:43:19.734092+00:00"
+source_hash: b5f0994d79d46b35f7d22dda44d22dc9b85c363dd23f82bd9bc19e629d4a44eb
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/da/ingest-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fuente canonica

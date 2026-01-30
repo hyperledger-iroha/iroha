@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/norito/overview.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ca4384b7cbb26f3d02ff3bf179b34135a209bf9563fc83daa9132fa1bd6d256f
-source_last_modified: "2025-11-04T12:03:18.010093+00:00"
+source_hash: 78244617c92b12b60ecbeb3de4aff8346c6f38d2cc72c01cbfedb2d6af65d982
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/norito/overview.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Norito 概要

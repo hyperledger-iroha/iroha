@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/devportal/public-preview-invite.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7c8a82d3fd54e1d978079d4f93f2bee146984d1004455cfa374356793d070c07
-source_last_modified: "2025-11-14T04:43:20.114724+00:00"
+source_hash: c7899ffa591645ebe2120b3b65d4276e935c4f1f19fca15e2b4c041061693793
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/devportal/public-preview-invite.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Плейбук приглашений на public preview

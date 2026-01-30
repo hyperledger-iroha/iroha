@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/chunker-registry-rollout-checklist.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f0f64a826d364c6cd65a81d4bd24a567d36073bde90e577a26afc96bfdc72fb0
-source_last_modified: "2025-11-14T04:43:21.517720+00:00"
+source_hash: 47b4c4ce16c9e9e1b743b76800559e6154f4e4941067db41b54604af27bddf6d
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-registry-rollout-checklist
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/chunker-registry-rollout-checklist.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note מקור קנוני

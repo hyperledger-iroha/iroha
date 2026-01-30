@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/nexus/nexus-routed-trace-audit-2026q1.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 0f8d552799485ff2835f7782b4b8d743ff8a6f250ebfe89352cdcd44a0c0d3fb
-source_last_modified: "2025-11-14T04:43:20.482650+00:00"
+source_hash: 7cf84b1b7c844155c4fa2e25dfb8162bc0f0de387414dae94c97f16850349fe3
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/nexus/nexus-routed-trace-audit-2026q1.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-routed-trace-audit-2026q1
+title: דוח ביקורת routed-trace לרבעון Q1 2026 (B1)
+description: מראה של `docs/source/nexus_routed_trace_audit_report_2026q1.md`, המכסה את תוצאות חזרות הטלמטריה הרבעוניות.
 ---
 
 <!--

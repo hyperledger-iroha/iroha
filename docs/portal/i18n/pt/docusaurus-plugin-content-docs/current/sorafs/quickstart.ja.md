@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 51fef187141a57f1527940cd8958144cc9dec88966f4c9e4615c4914a77a69e6
-source_last_modified: "2025-11-14T04:43:22.154702+00:00"
+source_hash: 46da15d2867b0fadc050477297c80c998e0b29e586b3f7704189b2960385953e
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/quickstart.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Início rápido do SoraFS

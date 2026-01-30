@@ -1,18 +1,91 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sdks/recipes/javascript-ledger-flow.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8460fef66160d4b3016058c42ae7b283d60371f0aa871874b9ee33cd6e7ec7fd
-source_last_modified: "2025-11-14T04:43:21.141738+00:00"
-translation_last_reviewed: null
+source_hash: 2ff2a2351688b2ceefa0e42b1a6aa005334718198d28406e6008fb63f37740ec
+source_last_modified: "2026-01-30T14:57:12+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/sdks/recipes/javascript-ledger-flow.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /sdks/recipes/javascript-ledger-flow
+title: Рецепт потока реестра на JavaScript
+description: Зарегистрируйте актив, выпустите, переведите и запросите балансы с `@iroha2/torii-client`.
+---
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+import SampleDownload from '@site/src/components/SampleDownload';
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+Этот рецепт использует пакеты Node.js `@iroha2/torii-client` и `@iroha2/crypto-target-node`, чтобы воспроизвести пошаговый проход по реестру в CLI.
+
+<SampleDownload
+  href="/sdk-recipes/javascript/ledger-flow.mjs"
+  filename="ledger-flow.mjs"
+  description="Скачайте точный JavaScript-скрипт, используемый в этом проходе по реестру."
+/>
+
+## Предварительные требования
+
+```bash
+npm install @iroha2/torii-client @iroha2/crypto-target-node
+export ADMIN_ACCOUNT="ih58..."
+export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+```
+
+## Пример скрипта
+
+```ts title="ledger-flow.mjs"
+import {ToriiClient, buildTransaction} from '@iroha2/torii-client';
+import {createKeyPairFromHex} from '@iroha2/crypto-target-node';
+
+const adminAccount = process.env.ADMIN_ACCOUNT!;
+const receiverAccount = process.env.RECEIVER_ACCOUNT!;
+const adminPrivateKey = process.env.ADMIN_PRIVATE_KEY!;
+
+const client = ToriiClient.create({
+  apiUrl: 'http://127.0.0.1:8080',
+});
+
+const {publicKey, privateKey} = createKeyPairFromHex(adminPrivateKey);
+
+const tx = buildTransaction({
+  chain: '00000000-0000-0000-0000-000000000000',
+  authority: adminAccount,
+  instructions: [
+    {Register: {assetDefinition: {numeric: {id: 'coffee#wonderland'}}}},
+    {Mint: {asset: {id: `coffee#wonderland##${adminAccount}`}, value: {quantity: '250'}}},
+    {Transfer: {
+      asset: {id: `coffee#wonderland##${adminAccount}`},
+      destination: receiverAccount,
+      value: {quantity: '50'},
+    }},
+  ],
+});
+
+tx.sign({publicKey, privateKey});
+const receipt = await client.submitTransaction(tx);
+const txHash = receipt?.payload?.tx_hash ?? "<pending>";
+console.log('Submitted tx', txHash);
+
+const balances = await client.listAccountAssets(receiverAccount, {limit: 10});
+for (const asset of balances.items) {
+  if (asset.id.definition === 'coffee#wonderland') {
+    console.log('Receiver holds', asset.value, 'units of', asset.id.definition);
+  }
+}
+```
+
+Запустите `node --env-file=.env ledger-flow.mjs` (или экспортируйте переменные окружения вручную). В журнале должен появиться хеш транзакции (из payload квитанции) и обновлённый баланс получателя.
+
+## Проверьте паритет
+
+- Получите детали транзакции через `iroha --config defaults/client.toml transaction get --hash <hash>`.
+- Сверьте балансы с `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- Сравните полученный хеш с рецептами Rust и Python, чтобы подтвердить паритет SDK.

@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sns/local-to-global-toolkit.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fb6ea70459729b056c4409806a6e8cb734d26843d31eb8871d90b5d7afd7c9e8
-source_last_modified: "2025-11-14T04:43:21.356395+00:00"
+source_hash: fd71880ee8e021ed1b75c42c9df33a981440b186ada9b292f6a93ee9e4eab594
+source_last_modified: "2026-01-28T17:58:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/sns/local-to-global-toolkit.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Kit de enderecos Local -> Global

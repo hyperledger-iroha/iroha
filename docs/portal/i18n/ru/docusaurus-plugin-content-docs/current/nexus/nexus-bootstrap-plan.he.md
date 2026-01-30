@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6eeab40516204edeaf85ec9d25bac405656536a7b140ed0ff5de4c794d0c3461
-source_last_modified: "2025-11-14T04:43:20.365693+00:00"
+source_hash: 7b28e744b37c1ee32a6d0c84652eee40f83bf7e8d1cceee42a420d14f0f26336
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-bootstrap-plan
+title: Bootstrap и наблюдаемость Sora Nexus
+description: Операционный план вывода базового кластера валидаторов Nexus перед подключением сервисов SoraFS и SoraNet.
 ---
 
 :::note Канонический источник

@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/norito/ledger-walkthrough.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2de1b64679e8175db252686eb79e1997e9989d2fa3f71747a315a01a857c29f9
-source_last_modified: "2025-11-14T04:43:20.856557+00:00"
+source_hash: d160279c47557ddfc96e66c14b1efeaa9f7be392e74c2189276224a3cf046393
+source_last_modified: "2026-01-22T06:58:48+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/norito/ledger-walkthrough.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: لیجر واک تھرو
+description: `iroha` CLI کے ساتھ deterministic register -> mint -> transfer فلو دوبارہ بنائیں اور نتیجے میں لیجر اسٹیٹ کی تصدیق کریں۔
+slug: /norito/ledger-walkthrough
 ---
 
 یہ walkthrough [Norito quickstart](./quickstart.md) کی تکمیل کرتا ہے اور دکھاتا ہے کہ `iroha` CLI کے ساتھ لیجر اسٹیٹ کو کیسے بدلیں اور چیک کریں۔ آپ ایک نئی asset definition رجسٹر کریں گے، ڈیفالٹ آپریٹر اکاؤنٹ میں units mint کریں گے، بیلنس کا کچھ حصہ دوسرے اکاؤنٹ کو ٹرانسفر کریں گے، اور نتیجے میں آنے والی transactions اور holdings کی تصدیق کریں گے۔ ہر قدم Rust/Python/JavaScript SDK quickstarts میں کورڈ فلو کی عکاسی کرتا ہے تاکہ آپ CLI اور SDK کے درمیان parity کی تصدیق کر سکیں۔

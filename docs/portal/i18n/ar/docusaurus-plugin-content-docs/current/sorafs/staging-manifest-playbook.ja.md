@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/staging-manifest-playbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4e970d8105b741ba1515b30390acd9607d2e627fef5d3ea428b1cb122c861a4b
-source_last_modified: "2025-11-14T04:43:22.340529+00:00"
+source_hash: 0f168351fabbd55ee1400aaf51e4329b0c268a4ea07c58094a0f943be48d3baf
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: staging-manifest-playbook
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/staging-manifest-playbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note المصدر المعتمد

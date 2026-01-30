@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/developer-sdk-index.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: eaaf55f24482c6db5f59ee15a5679397b52c3dae80ec52b8baf8032cc5cd4463
-source_last_modified: "2025-11-14T04:43:21.670154+00:00"
+source_hash: 7f0d25817b8e079fc52435254254124d4b82f4e0a8aba02ff22b68c61a06ce83
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: developer-sdk-index
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/developer-sdk-index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Канонический источник
 :::

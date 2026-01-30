@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/developer-ci.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 24845eaaa02ecdd7eb420ecd9a22c538347b912725e48d78a8d12a9b3a97d4df
-source_last_modified: "2025-11-14T04:43:21.583102+00:00"
+source_hash: 5399742e81519913d1c477317442b9ded8d65506e61deaed1929299508956833
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: developer-ci
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/developer-ci.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note المصدر المعتمد
 تعكس هذه الصفحة `docs/source/sorafs/developer/ci.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة.

@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/devportal/security-hardening.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 21b96d7db3a5a215735b5951cb8a3bb16d6d490377bd6d05140b09a1cc74fdec
-source_last_modified: "2025-11-08T11:41:06.507683+00:00"
+source_hash: b5cca877f2bb3a67a766ae5330c0473c658f251d9f7ef424b2e90ae9f10d9121
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/devportal/security-hardening.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # הקשחת אבטחה וצ'קליסט בדיקות חדירה

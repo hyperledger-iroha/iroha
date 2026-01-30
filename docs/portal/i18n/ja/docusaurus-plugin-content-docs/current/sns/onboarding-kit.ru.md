@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sns/onboarding-kit.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 34dd16f729aac4f0bcf62f80dd5b2f47c08dc8c04cdcdc507e13cd3fd093c010
-source_last_modified: "2025-11-15T09:38:35.658907+00:00"
+source_hash: eb63024e2f0a7984022c5608da70f3496ff9f61a7d48fba45666469fd746cf0a
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/sns/onboarding-kit.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # SNS Metrics & Onboarding Kit

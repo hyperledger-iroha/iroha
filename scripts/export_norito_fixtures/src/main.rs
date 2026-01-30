@@ -30,7 +30,7 @@ use iroha_data_model::{
     isi::{
         Burn, ExecuteTrigger, Grant, Instruction, InstructionBox, Mint, Register,
         RemoveAssetKeyValue, RemoveKeyValue, Revoke, SetAssetKeyValue, SetKeyValue, SetParameter,
-        Transfer, Unregister, frame_instruction_payload,
+        Transfer, Unregister, decode_instruction_from_pair, frame_instruction_payload,
         Upgrade,
         register::RegisterPeerWithPop,
         repo::{RepoIsi, ReverseRepoIsi},
@@ -194,6 +194,8 @@ enum RawExecutable {
 struct RawInstruction {
     kind: String,
     arguments: BTreeMap<String, String>,
+    wire_name: Option<String>,
+    payload_base64: Option<String>,
 }
 
 struct Fixture {
@@ -944,18 +946,48 @@ fn parse_instruction(value: &Value) -> Result<RawInstruction> {
     let obj = value
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("instruction entries must be objects"))?;
-    let kind = expect_string(obj, "kind")?.to_owned();
-    let args_value = obj
-        .get("arguments")
-        .ok_or_else(|| anyhow::anyhow!("instruction arguments missing"))?;
-    let args_obj = args_value
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("instruction arguments must be objects"))?;
-    let mut arguments = BTreeMap::new();
-    for (key, value) in args_obj {
-        arguments.insert(key.clone(), value_to_string(value));
+    let wire_name = obj
+        .get("wire_name")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let payload_base64 = obj
+        .get("payload_base64")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if wire_name.is_some() ^ payload_base64.is_some() {
+        bail!("instruction wire payload requires wire_name and payload_base64");
     }
-    Ok(RawInstruction { kind, arguments })
+    let kind = obj.get("kind").and_then(Value::as_str).map(str::to_owned);
+    if wire_name.is_some() && (kind.is_some() || obj.contains_key("arguments")) {
+        bail!("instruction wire payload must not include legacy kind/arguments");
+    }
+    let mut arguments = BTreeMap::new();
+    if let Some(args_value) = obj.get("arguments") {
+        let args_obj = args_value
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("instruction arguments must be objects"))?;
+        for (key, value) in args_obj {
+            arguments.insert(key.clone(), value_to_string(value));
+        }
+    }
+    let kind = match kind {
+        Some(kind) => kind,
+        None => {
+            if wire_name.is_none() {
+                bail!("instruction kind missing");
+            }
+            String::new()
+        }
+    };
+    if wire_name.is_none() && arguments.is_empty() {
+        bail!("instruction arguments missing");
+    }
+    Ok(RawInstruction {
+        kind,
+        arguments,
+        wire_name,
+        payload_base64,
+    })
 }
 
 fn parse_metadata_object(value: &Value) -> Result<Vec<(Name, Json)>> {
@@ -973,6 +1005,19 @@ fn parse_metadata_object(value: &Value) -> Result<Vec<(Name, Json)>> {
 }
 
 fn build_instruction(raw: &RawInstruction) -> Result<InstructionBox> {
+    if let (Some(wire_name), Some(payload_base64)) =
+        (raw.wire_name.as_deref(), raw.payload_base64.as_deref())
+    {
+        let payload_bytes = BASE64
+            .decode(payload_base64.as_bytes())
+            .context("invalid instruction payload_base64")?;
+        if payload_bytes.is_empty() {
+            bail!("instruction payload_base64 must not decode to empty bytes");
+        }
+        return decode_instruction_from_pair(wire_name, &payload_bytes)
+            .map_err(|err| anyhow::anyhow!(err.to_string()))
+            .with_context(|| format!("failed to decode wire instruction '{wire_name}'"));
+    }
     let action = raw
         .arguments
         .get("action")
@@ -1968,7 +2013,12 @@ fn parse_trigger_instructions(raw: &RawInstruction) -> Result<Vec<InstructionBox
         let kind = kind_opt.ok_or_else(|| {
             anyhow::anyhow!("instruction.{index}.kind missing for trigger registration")
         })?;
-        let raw_nested = RawInstruction { kind, arguments };
+        let raw_nested = RawInstruction {
+            kind,
+            arguments,
+            wire_name: None,
+            payload_base64: None,
+        };
         instructions.push(build_instruction(&raw_nested)?);
     }
     Ok(instructions)
@@ -2565,6 +2615,8 @@ fn apply_wire_payloads_to_payload_json(
             "payload_base64".into(),
             Value::String(wire.payload_base64.clone()),
         );
+        obj.remove("kind");
+        obj.remove("arguments");
     }
     Ok(())
 }
@@ -2788,6 +2840,8 @@ mod tests {
         let raw_instruction = RawInstruction {
             kind: "Register".to_string(),
             arguments: args,
+            wire_name: None,
+            payload_base64: None,
         };
         let raw_payload = RawPayload {
             chain: "00000002".to_string(),
@@ -2866,8 +2920,52 @@ mod tests {
             .get("payload_base64")
             .and_then(Value::as_str)
             .expect("payload_base64 must be present");
+        assert!(
+            !instruction.contains_key("kind"),
+            "legacy kind should be stripped from fixture instructions"
+        );
+        assert!(
+            !instruction.contains_key("arguments"),
+            "legacy arguments should be stripped from fixture instructions"
+        );
         assert_eq!(wire_name, expected_wire[0].wire_name);
         assert_eq!(payload_base64, expected_wire[0].payload_base64);
+    }
+
+    #[test]
+    fn parse_instruction_rejects_legacy_fields_when_wire_present() {
+        let mut args_value = Map::new();
+        args_value.insert("action".into(), Value::String("RegisterDomain".into()));
+        args_value.insert("domain".into(), Value::String("wonderland".into()));
+        let mut instruction_value = Map::new();
+        instruction_value.insert("wire_name".into(), Value::String("iroha.register".into()));
+        instruction_value.insert("payload_base64".into(), Value::String("AQ==".into()));
+        instruction_value.insert("arguments".into(), Value::Object(args_value));
+        let err = parse_instruction(&Value::Object(instruction_value))
+            .expect_err("legacy arguments should be rejected for wire payloads");
+        assert!(
+            err.to_string().contains("wire payload"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn build_instruction_accepts_wire_payload() {
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let instruction: InstructionBox = Register::domain(Domain::new(domain)).into();
+        let type_name = Instruction::id(&*instruction);
+        let registry = iroha_data_model::instruction_registry::default();
+        let wire_name = registry.wire_id(type_name).unwrap_or(type_name);
+        let payload = Instruction::dyn_encode(&*instruction);
+        let framed = frame_instruction_payload(type_name, &payload).expect("framed payload");
+        let raw = RawInstruction {
+            kind: String::new(),
+            arguments: BTreeMap::new(),
+            wire_name: Some(wire_name.to_string()),
+            payload_base64: Some(BASE64.encode(framed)),
+        };
+        let built = build_instruction(&raw).expect("wire payload decodes");
+        assert_eq!(Instruction::id(&*built), type_name);
     }
 
     #[test]
@@ -2963,6 +3061,8 @@ mod tests {
         RawInstruction {
             kind: "Custom".to_string(),
             arguments: args,
+            wire_name: None,
+            payload_base64: None,
         }
     }
 

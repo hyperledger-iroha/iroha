@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/nexus/confidential-gas-calibration.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bc4bb277e7a7e06b21a9cd82fad53f6894189ff4ef32b7ef05f152d5a680c3dd
-source_last_modified: "2025-11-14T04:43:20.323974+00:00"
+source_hash: a10d5357fa12873a4e206b5adf55a30fa53b05b597036ee4df5c5be5c8ff37bf
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/nexus/confidential-gas-calibration.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: سجل معايرة الغاز السري
+description: قياسات بجودة الاصدار تدعم جدول الغاز السري.
+slug: /nexus/confidential-gas-calibration
 ---
 
 # خطوط اساس لمعايرة الغاز السري

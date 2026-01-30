@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/soranet/transport.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 925fd0e13993d8b78014907a5d7d6b648d28a67ece5abefd1a9fb50812de6d2c
-source_last_modified: "2025-11-07T12:18:53.874697+00:00"
+source_hash: 658c8cb512811861fd937c9e54be42fe270b3d32c0a81b08be15785169725db1
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: transport
+lang: ja
+direction: ltr
+source: docs/portal/docs/soranet/transport.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Canonical Source

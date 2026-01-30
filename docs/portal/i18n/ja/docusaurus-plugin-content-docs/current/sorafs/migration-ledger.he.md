@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/migration-ledger.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 97345b1dc3c73a7acead8002307849bdecdf3ce53be82ec9dd9817c51843db61
-source_last_modified: "2025-11-14T04:43:21.789006+00:00"
+source_hash: c19db6518840b140ff18a34d988523dd513e47dbae9768ffeddd80545e8ad002
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: migration-ledger
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/migration-ledger.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 > 次の文書を基に作成: [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
 

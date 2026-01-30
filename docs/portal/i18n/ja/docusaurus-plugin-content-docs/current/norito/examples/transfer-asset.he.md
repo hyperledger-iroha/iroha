@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/norito/examples/transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 44f492a78fdaef451a024dd9b6ca6dbe2112d2fb2ba4e26729823c216403976b
-source_last_modified: "2025-11-04T12:26:02.942847+00:00"
+source_hash: 7005e90da7c34cd4be858cffa98ceb50e46c37fa39b7f9763eb104a1c7e828ba
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/norito/examples/transfer-asset.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/transfer-asset
+title: アカウント間の資産移転
+description: SDK クイックスタートと台帳ウォークスルーを反映した、わかりやすい資産移転フローです。
+source: examples/transfer/transfer.ko
 ---
 
 SDK クイックスタートと台帳ウォークスルーを反映した、わかりやすい資産移転フローです。

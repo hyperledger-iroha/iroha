@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/reference/account-address-status.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4fec09aa4776cef4033e50c1fe57d16abaefd8a4aa4b7ace7fe22c13a9cf2113
-source_last_modified: "2025-11-07T10:33:21.915737+00:00"
+source_hash: a35c753eb296375dc6136050d0151480a457bb637f18a526d2608cef51254f65
+source_last_modified: "2026-01-28T17:58:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/reference/account-address-status.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: account-address-status
+title: アカウントアドレス準拠
+description: ADDR-2 フィクスチャのワークフロー概要と SDK チームの同期方法のまとめ。
 ---
 
 カノニカルな ADDR-2 バンドル（`fixtures/account/address_vectors.json`）には、IH58、compressed (`sora`, second-best; half/full width)、multisignature、negative の fixtures が含まれます。すべての SDK + Torii のサーフェスは同じ JSON に依存しており、本番に到達する前に codec のドリフトを検知できます。このページは内部のステータス・ブリーフ（リポジトリルートの `docs/source/account_address_status.md`）を反映しており、ポータル読者が mono-repo を掘らずにワークフローを参照できます。

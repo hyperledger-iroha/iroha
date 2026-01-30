@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/devportal/try-it.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c4787402a9151ca50bcb494d1de62973736cedae5c3e05db412d882c171b385c
-source_last_modified: "2025-11-14T04:43:20.197029+00:00"
+source_hash: e2418e602cc2de4adfdf3cd82805204ae5dd6cffeb0902b72f64d9c03eae9e80
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/devportal/try-it.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # بيئة Try It التجريبية

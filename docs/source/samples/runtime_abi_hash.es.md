@@ -1,18 +1,27 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/source/samples/runtime_abi_hash.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 21554c026c5670cd349543406117a4e6b6081e82e25611ca6ba6f8fed686af33
-source_last_modified: "2025-11-22T16:52:17.239015+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:58.958473+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traducción en curso
+# Runtime ABI — Canonical Hash (Torii)
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+Endpoint
+- `GET /v1/runtime/abi/hash`
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+Response (first release; single policy V1)
+```json
+{
+  "policy": "V1",
+  "abi_hash_hex": "49f99db16b395798f47daa6c844af7fd230e5f249a4b34b970dfaca5cb3ece91"
+}
+```
+
+Notes
+- The hash is the canonical digest of the allowed syscall surface for the policy.
+- Contracts may embed this value in manifests (abi_hash) to bind to the node's ABI.

@@ -4,9 +4,21 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/nexus/nexus-elastic-lane.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 68f160cf2d4ebc52b44c93a64a4ff2ea628bd9884aca56ab1aec3c7f02dd664e
-source_last_modified: "2025-11-14T04:43:20.408858+00:00"
+source_hash: 8fb412eb32a7b30d4e8c825b221f6e024a78106e6d26dfd29f5515b4727dece2
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/nexus/nexus-elastic-lane.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-elastic-lane
+title: لچکدار lane پروویژنگ (NX-7)
+sidebar_label: لچکدار lane پروویژنگ
+description: Nexus lane manifests، catalog entries، اور rollout evidence بنانے کے لئے bootstrap ورک فلو۔
 ---
 
 :::note Canonical Source

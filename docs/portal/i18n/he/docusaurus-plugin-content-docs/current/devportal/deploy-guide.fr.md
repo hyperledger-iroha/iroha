@@ -4,11 +4,19 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/devportal/deploy-guide.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6c8cbcb556fc4a33d8395551eccad5fe13e6d71bf83abc9bcc43c7ab840d2c99
-source_last_modified: "2025-11-08T11:41:06.506450+00:00"
+source_hash: 7b03e665c74ac0ee26aef43ef185afb6a108f118037f293455ccfd98c661ab9d
+source_last_modified: "2026-01-22T15:57:55+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
+---
+id: deploy-guide
+lang: he
+direction: rtl
+source: docs/portal/docs/devportal/deploy-guide.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
 ## סקירה כללית
 
 הפלייבוק הזה ממיר את פריטי מפת הדרכים **DOCS-7** (פרסום SoraFS) ו-**DOCS-8**

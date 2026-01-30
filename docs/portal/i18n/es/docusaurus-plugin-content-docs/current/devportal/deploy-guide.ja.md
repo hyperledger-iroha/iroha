@@ -4,9 +4,18 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/devportal/deploy-guide.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b9ff76a12f83c2a0bc574f355b424a52a0f77eebcac98761e0f4a8d2d1edd650
-source_last_modified: "2025-11-14T04:43:19.773500+00:00"
+source_hash: 8686d7ca8eba3eb2031c6a7f4ea2827a334e8a4cfd60878ab666d01ec4af5c3e
+source_last_modified: "2026-01-22T15:57:55+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: deploy-guide
+lang: es
+direction: ltr
+source: docs/portal/docs/devportal/deploy-guide.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 ## Panorama general

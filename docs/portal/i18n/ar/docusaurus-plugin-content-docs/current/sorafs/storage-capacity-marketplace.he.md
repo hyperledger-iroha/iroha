@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/storage-capacity-marketplace.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bd1bc017bf83b5306aed6040aa8b465701b74cd153396e17bfd73b733b0834e0
-source_last_modified: "2025-11-14T04:43:22.363319+00:00"
+source_hash: 9a6ace39ffa9bb83f82e2f1d927cb24587dce1995cabc43cf5a6b6817cf18c3c
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: storage-capacity-marketplace
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/storage-capacity-marketplace.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note المصدر المعتمد

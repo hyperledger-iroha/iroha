@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/deal-engine.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 210fd34dea7b875d1900bc5d4e67d461f43be10c83e06931b55a1d9bbbef9aea
-source_last_modified: "2025-11-14T04:43:21.560727+00:00"
+source_hash: 44c6f654b208f2c271c9067d83bfd7c5e7d5e27c95cd016d2964afb2a313af31
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: deal-engine
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/deal-engine.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note 正規ソース
 このページは `docs/source/sorafs/deal_engine.md` を反映しています。レガシーのドキュメントが有効な間は両方を整合させてください。

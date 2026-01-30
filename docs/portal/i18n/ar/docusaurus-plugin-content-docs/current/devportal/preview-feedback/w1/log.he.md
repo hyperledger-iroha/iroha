@@ -4,9 +4,18 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w1/log.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 10531569c66e6775e8ca8848c0e738a99287d11be3d473a46a81ad25ca21a6dd
-source_last_modified: "2025-11-14T04:43:19.848936+00:00"
+source_hash: aa66ad94970f93965038f549245a7d1e96cc065cbe3d5d226994148c7196f18e
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: preview-feedback-w1-log
+lang: ar
+direction: rtl
+source: docs/portal/docs/devportal/preview-feedback/w1/log.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 يحفظ هذا السجل قائمة الدعوات ونقاط القياس وملاحظات المراجعين لموجة **معاينة الشركاء W1**

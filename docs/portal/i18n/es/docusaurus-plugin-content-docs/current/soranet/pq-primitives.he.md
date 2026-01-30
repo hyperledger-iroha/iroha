@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/soranet/pq-primitives.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3ecb319ef666c8c11d71015b5a94140b3d84368ceeae25f30c7c5fa2ea0f9f5b
-source_last_modified: "2025-11-14T04:43:22.384092+00:00"
+source_hash: ab016e0a5a7ac87ab306a09206a45900fd57235022dce688f3d0fa4274cfc416
+source_last_modified: "2026-01-03T18:07:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: pq-primitives
+lang: es
+direction: ltr
+source: docs/portal/docs/soranet/pq-primitives.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fuente canonica

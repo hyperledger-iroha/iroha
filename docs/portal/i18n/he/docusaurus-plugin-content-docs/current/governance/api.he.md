@@ -4,9 +4,18 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/governance/api.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9ec4aad72ab69aea5d9c052cdeca8b2c2509b355755105cf94369f73ff310961
-source_last_modified: "2025-11-14T04:43:20.236410+00:00"
+source_hash: 1d01dcdd905ef3ea4ee935bd14100e4b9a9e2ee6862c42637fc9e393c5a24a4b
+source_last_modified: "2026-01-22T16:09:51+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: api
+lang: he
+direction: rtl
+source: docs/portal/docs/governance/api.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 סטטוס: טיוטה/סקיצה לליווי משימות מימוש הממשל. המבנים יכולים להשתנות במהלך המימוש. דטרמיניזם ומדיניות RBAC הם אילוצים נורמטיביים; Torii יכולה לחתום/להגיש עסקאות כאשר `authority` ו-`private_key` מסופקים, אחרת הלקוחות בונים ומגישים אל `/transaction`.

@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/developer-cli.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b4aeac0ddab9e0a966b322c94b168bf28e650591a57be2e3c675dfe208ec37d7
-source_last_modified: "2025-11-09T09:31:16.809269+00:00"
+source_hash: 3b189b9fd08acfa2726602385e722bef89a2356262a448f224c63c6d1f8a914e
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: developer-cli
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/developer-cli.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note מקור קנוני
 עמוד זה משקף את `docs/source/sorafs/developer/cli.md`. שמרו על שתי הגרסאות מסונכרנות עד שהסט הישן של Sphinx יופסק.

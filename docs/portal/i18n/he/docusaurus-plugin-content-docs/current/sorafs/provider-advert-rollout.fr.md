@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/provider-advert-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3fb724f72e3d9039852ede25da6305ab31851e300ba635f54f642720b47be14b
-source_last_modified: "2025-11-07T10:33:21.927148+00:00"
+source_hash: 76519822e11f76abf12d346e5541b4e721c7ef6c59db6ba46385ce2588bd5cb6
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/provider-advert-rollout.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > מותאם מ- [`docs/source/sorafs/provider_advert_rollout.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md).

@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/devportal/public-preview-invite.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c507adb7745ab5e4930a9d693293529a24e604a8a6a1bc150ec8b05ab44b80a1
-source_last_modified: "2025-11-14T04:43:20.114289+00:00"
+source_hash: 42d69240d801670a853359a4bdc582f05e8e97a69a48559eaf02ae583554a5d6
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/devportal/public-preview-invite.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Playbook de convites do preview publico

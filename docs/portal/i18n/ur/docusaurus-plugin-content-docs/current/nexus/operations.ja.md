@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/nexus/operations.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d4d69634bf19351355b9c6ecfe28ed48d0a196720b0894094a3cf8de68e8ff17
-source_last_modified: "2025-11-14T04:43:20.524059+00:00"
+source_hash: dde921968f65613d757870a97d4c4820bd0010464138e635e7d484fbe58cccae
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/nexus/operations.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-operations
+title: Nexus آپریشنز رن بُک
+description: Nexus آپریٹر ورک فلو کا فیلڈ کے لئے تیار خلاصہ، جو `docs/source/nexus_operations.md` کی عکاسی کرتا ہے۔
 ---
 
 اس صفحے کو `docs/source/nexus_operations.md` کے تیز ریفرنس کے طور پر استعمال کریں۔ یہ آپریشنل چیک لسٹ، تبدیلی کے انتظام کے hooks، اور ٹیلیمیٹری کوریج کی ضروریات کو سمیٹتا ہے جن پر Nexus آپریٹرز کو عمل کرنا ہوتا ہے۔

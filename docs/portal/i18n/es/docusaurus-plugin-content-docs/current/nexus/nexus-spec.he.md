@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/nexus/nexus-spec.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2bb47d3b27b92d572aeb40c04ede880656e3d691df8197e0348bcd54888ce219
-source_last_modified: "2025-11-14T04:43:20.502640+00:00"
+source_hash: ffaf98d77d5a420fe7bf1ce230c6ec95e363d1642feaf00e9b4aca7829bda03d
+source_last_modified: "2026-01-03T18:07:58+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/nexus/nexus-spec.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-spec
+title: Especificacion tecnica de Sora Nexus
+description: Espejo completo de `docs/source/nexus.md`, que cubre la arquitectura y las restricciones de diseno para el ledger Iroha 3 (Sora Nexus).
 ---
 
 :::note Fuente canonica

@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/devportal/torii-rpc-overview.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 81598b692837f3f69097e8747be4b7e507023daa73cd41c6313b0d4be294462f
-source_last_modified: "2025-11-14T04:43:20.180283+00:00"
+source_hash: 976f3b1921fdd49fef6a4e62091d4bccf5dcbe891999e5c885aeb0d21a32bff0
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/devportal/torii-rpc-overview.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # نظرة عامة على Norito-RPC

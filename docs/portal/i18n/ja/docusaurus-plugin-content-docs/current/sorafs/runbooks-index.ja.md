@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/runbooks-index.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 73141ba1408059ad1c5517440afe3c1e33c32d0abb70ce1d964437a4f5ad66bd
-source_last_modified: "2025-11-14T04:43:22.299059+00:00"
+source_hash: 74157d2a39fd5b0738b5807ef3eb3b6fda46fe1081082224ad6701fb654ec4d9
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: runbooks-index
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/runbooks-index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: オペレーター向けランブック索引
+sidebar_label: ランブック索引
+description: 移行済み SoraFS オペレーターランブックの正規エントリーポイント。
 ---
 
 > `docs/source/sorafs/runbooks/` にあるオーナー台帳を反映します。

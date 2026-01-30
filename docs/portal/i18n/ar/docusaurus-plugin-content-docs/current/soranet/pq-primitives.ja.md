@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/soranet/pq-primitives.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ed14922c04cbd0bbfc7cfd24df30634f2b223f5b99550c40cd9edd6d91eb54a0
-source_last_modified: "2025-11-14T04:43:22.385557+00:00"
+source_hash: 20d0c01560608cce04b95ecf6fb8017ac9e4afe62c8f00f3e993c45cdc4ee6b4
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: pq-primitives
+lang: ar
+direction: rtl
+source: docs/portal/docs/soranet/pq-primitives.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note المصدر القياسي

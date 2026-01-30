@@ -4,9 +4,18 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sns/registrar-api.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ebbef3a207ae9dcd1823fafa56ab68fa036385dd647b891116fb382eda608647
-source_last_modified: "2025-11-14T04:43:21.376575+00:00"
+source_hash: 7e68b202ebcb6e0a8a6253b8491750b218c8920b267970f81743bfecb4fad9af
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: registrar-api
+lang: pt
+direction: ltr
+source: docs/portal/docs/sns/registrar-api.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica

@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/reports/sf2c-capacity-soak.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d489cd0fd716c0efdcf62f0355076c96e4cc1f502433887dc4162fdd1d0b8032
-source_last_modified: "2025-11-14T04:43:22.257286+00:00"
+source_hash: 2cd92213861931d6c65875b69ed880b37c8d2cc0d8bb0abff8ede82b280b2d3c
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Rapport de soak d'accumulation de capacité SF-2c

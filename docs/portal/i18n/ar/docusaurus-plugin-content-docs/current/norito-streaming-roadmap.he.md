@@ -4,9 +4,18 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/norito-streaming-roadmap.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a0185ba15aa9337ce80b992bdfcc6a15108d89f515ef78e403ea6e801780be94
-source_last_modified: "2025-11-14T04:43:20.919016+00:00"
+source_hash: 3a3be10e948ba0a48f5c6e907dd7ca7070bca54f2ad21c54bd2dccfdd3f75ef4
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/norito-streaming-roadmap.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: خارطة طريق Norito Streaming
 ---
 
 يلخص سجل الاعمال التالي بنود العمل القريبة التي يتابعها Streaming Working Group لتسليم الصوت/الفيديو في Norito. يتم تحديث القيم مع `status.md` وتشارك هنا لمستخدمي البوابة الذين يفضلون عرضا ملائما للالات.

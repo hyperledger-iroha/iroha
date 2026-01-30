@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/devportal/preview-invite-flow.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d27742dc34d4d59df5b83af7e254dde6e55c68812ed94b944f9638630a4038a5
-source_last_modified: "2025-11-14T04:43:20.047068+00:00"
+source_hash: 4f3982a4ac99465d67dfd67bc2d4bc8b901014b69d45052744b0c77cdc8da9fa
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/devportal/preview-invite-flow.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # پریویو دعوتی فلو

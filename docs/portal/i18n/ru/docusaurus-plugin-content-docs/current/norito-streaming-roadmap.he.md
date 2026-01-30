@@ -4,9 +4,18 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/norito-streaming-roadmap.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93cbb80810d1d0e66548b5f7d27694790bda539592462eaa32ab8d0a080f2cfa
-source_last_modified: "2025-11-14T04:43:20.918744+00:00"
+source_hash: ab62610db9060d437c869fc73f83c30f094accc9be4d3a50885f416900c2c17b
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/norito-streaming-roadmap.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Дорожная карта Norito Streaming
 ---
 
 Следующий backlog фиксирует ближайшие задачи, которые Streaming Working Group отслеживает для доставки аудио/видео Norito. Значения обновляются вместе с `status.md` и публикуются здесь для пользователей портала, которые предпочитают машиночитаемое представление.

@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/nexus/nexus-fee-model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 78510c1ead27eb5d23159de8dab3d06847e4671b5c94a6efccd6f1ec277f7448
-source_last_modified: "2025-11-14T04:43:20.430180+00:00"
+source_hash: 2149217741551627f892df3af28a573a24ec460233527bd8489acd3245ef5cfd
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/nexus/nexus-fee-model.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-fee-model
+title: Mises a jour du modele de frais Nexus
+description: Miroir de `docs/source/nexus_fee_model.md`, documentant les recus de reglement de lanes et les surfaces de reconciliation.
 ---
 
 :::note Source canonique

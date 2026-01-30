@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/provider-advert-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c07a4c6b8844b7df6cad8088923a4cf1ff98a07a4f7eeb3f95fb8c7921aa9851
-source_last_modified: "2025-11-14T04:43:22.144049+00:00"
+source_hash: c2f7fa881ff3ed5e5e70a3b3075b1493ec1c580eb67237c7a41df8049cd66131
+source_last_modified: "2026-01-04T17:34:40+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/provider-advert-rollout.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > Adaptado de [`docs/source/sorafs/provider_advert_rollout.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md).

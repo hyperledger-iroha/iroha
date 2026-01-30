@@ -4,9 +4,21 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/nexus/nexus-elastic-lane.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9f96b2e89f98924e1ccb90ecb8d62aefc5d5d72418f14d69674ff46e90a674aa
-source_last_modified: "2025-11-14T04:43:20.407831+00:00"
+source_hash: 4dd795704b314435fc5d94be48c36aea7205396e71d3d81c49fdcc25137d09d8
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/nexus/nexus-elastic-lane.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-elastic-lane
+title: Эластичное выделение lane (NX-7)
+sidebar_label: Эластичное выделение lane
+description: Bootstrap-процесс для создания манифестов lane Nexus, записей каталога и доказательств rollout.
 ---
 
 :::note Канонический источник

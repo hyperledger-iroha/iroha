@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/nexus/nexus-routed-trace-audit-2026q1.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93b0694b339b989469fc55d4e51199fa4f706bab98a6960d475ca39030437710
-source_last_modified: "2025-11-14T04:43:20.482208+00:00"
+source_hash: 63079a25584c7c2f19753685f59e3c504545756ad78965a4ba4d3760e2ec2d3d
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/nexus/nexus-routed-trace-audit-2026q1.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-routed-trace-audit-2026q1
+title: 2026 Q1 routed-trace 監査レポート (B1)
+description: `docs/source/nexus_routed_trace_audit_report_2026q1.md` のミラーで、四半期テレメトリリハーサルの結果をまとめます。
 ---
 
 <!--

@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/deal-engine.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fe632583b9fdaee923ef5bdf09367bdfe8a0e92b6bac3839a724a49959092a41
-source_last_modified: "2025-11-14T04:43:21.561640+00:00"
+source_hash: fefa2a1119e2f7992ce592f9b4f118b129a4f65774c6986ed0c41dfef6c989b0
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: deal-engine
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/deal-engine.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Fonte canonica
 Esta pagina espelha `docs/source/sorafs/deal_engine.md`. Mantenha ambos os locais alinhados enquanto a documentacao alternativa permanecer ativa.

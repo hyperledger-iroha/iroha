@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/nexus/nexus-routed-trace-audit-2026q1.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2cc56bc9ff38c807d69bc5ac72ec1dd08a072a1d0c138fc8b31f7cc5c0d0e88d
-source_last_modified: "2025-11-14T04:43:20.483589+00:00"
+source_hash: a0d3eedce3fad76270e7f22e65e436110867b0a3d64734e5ca682308ce039eb1
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/nexus/nexus-routed-trace-audit-2026q1.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-routed-trace-audit-2026q1
+title: Rapport d'audit routed-trace 2026 Q1 (B1)
+description: Miroir de `docs/source/nexus_routed_trace_audit_report_2026q1.md`, couvrant les resultats trimestriels des repetitions de telemetrie.
 ---
 
 <!--

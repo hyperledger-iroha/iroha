@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/reference/README.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9358a8523eb8d5f99888d49de0c65bec7d7dee3d4559e1705f2bdff1229a8763
-source_last_modified: "2025-11-14T04:43:20.931365+00:00"
+source_hash: da08a0666d27f68f76f8b0cbf1c866cbcb17880aed7b8f96b90b70af96bd4dd7
+source_last_modified: "2026-01-03T18:07:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/reference/README.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Indice de referencia
+slug: /reference
 ---
 
 Esta seccion reune el material de "leelo como especificacion" para Iroha. Estas paginas se mantienen estables incluso cuando evolucionan las guias y los tutoriales.

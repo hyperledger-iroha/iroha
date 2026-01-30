@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/nexus/confidential-assets.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4b7518ff1bf3f0d27b75a713e8460e486cade554a3eb801f55caf6c5cfe809c2
-source_last_modified: "2025-11-14T04:43:20.307079+00:00"
+source_hash: f25dc0341e37b54da4e59147cf566159f8ceea0652575993ec60bc66ef40a36f
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/nexus/confidential-assets.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: الاصول السرية وتحويلات ZK
+description: مخطط Phase C للدوران shielded والسجلات وضوابط المشغلين.
+slug: /nexus/confidential-assets
 ---
 
 <!--

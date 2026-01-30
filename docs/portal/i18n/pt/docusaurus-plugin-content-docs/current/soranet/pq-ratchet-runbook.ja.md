@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/soranet/pq-ratchet-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b44bdad0db16a264f2c82098de5adfa69affa762396367fffd5391fb105994fe
-source_last_modified: "2025-11-14T04:43:22.407466+00:00"
+source_hash: a2382eafbfebb7102edeb035ab8d3f897cee6fb049a9bf42d3baf8abf1d83958
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: pq-ratchet-runbook
+lang: pt
+direction: ltr
+source: docs/portal/docs/soranet/pq-ratchet-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica

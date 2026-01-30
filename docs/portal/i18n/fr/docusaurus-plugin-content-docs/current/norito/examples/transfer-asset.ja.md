@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/norito/examples/transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2a2fbdfc5be37616559849fc023bd2627a373b591ea9fea21be2b00168144a16
-source_last_modified: "2025-11-14T04:43:20.812073+00:00"
+source_hash: 81232ce6310dee53ac2eefc0e596372d6849b311c96de57cdbe3df1d9d64d075
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/norito/examples/transfer-asset.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/transfer-asset
+title: Transférer un actif entre comptes
+description: Flux de transfert d'actifs simple qui reflète les quickstarts SDK et les parcours du registre.
+source: examples/transfer/transfer.ko
 ---
 
 Flux de transfert d'actifs simple qui reflète les quickstarts SDK et les parcours du registre.

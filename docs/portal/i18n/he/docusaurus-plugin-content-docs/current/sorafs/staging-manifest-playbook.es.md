@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/staging-manifest-playbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b724e09de1d3881c6536e68f9cea5c6fcb7fca6345773371316fc50271376ceb
-source_last_modified: "2025-11-07T10:33:21.927773+00:00"
+source_hash: 00108e84bfd5dc9bce6f4d32724d4b51439067072ee450d8834967a15d17db8b
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: staging-manifest-playbook
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/staging-manifest-playbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note מקור קנוני

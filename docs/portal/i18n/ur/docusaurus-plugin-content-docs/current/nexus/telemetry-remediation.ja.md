@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/nexus/telemetry-remediation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ac75753a199fd6a57a970a16b33d3aca0c2f54de30a72af1f5a099bb7bad17ba
-source_last_modified: "2025-11-14T04:43:20.590890+00:00"
+source_hash: 114e1c69ffeefa104ae28689c2abb4234757b042e271f99db69fa0a4c978d083
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/nexus/telemetry-remediation.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-telemetry-remediation
+title: Nexus ٹیلیمیٹری ریمیڈی ایشن پلان (B2)
+description: `docs/source/nexus_telemetry_remediation_plan.md` کا آئینہ، جو ٹیلیمیٹری گیپ میٹرکس اور آپریشنل ورک فلو دستاویز کرتا ہے۔
 ---
 
 # جائزہ

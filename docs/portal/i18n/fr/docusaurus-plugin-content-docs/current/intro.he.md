@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/intro.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 37a9d4fa5d7d6c6c0bbbcd4479701efc4c4e564c2d9c5d615951b09cdbd9ab33
-source_last_modified: "2025-11-14T04:43:20.256950+00:00"
+source_hash: ddc7ff0c9dc3bbedcaa089acfc2c7ccb04b53086f763b1d59a49935af4f834ef
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/intro.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Bienvenue sur le portail developpeur SORA Nexus

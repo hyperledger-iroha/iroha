@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/node-operations.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8b56c6a3db066e995bccdea29f442dfc4bdd0be579d2ffc362e3009ce1f82f29
-source_last_modified: "2025-11-07T10:33:21.921536+00:00"
+source_hash: 3862ed7ad88363629294782cc24ba791bfadc76b3522b2bbb30f0b9f0946c01b
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: node-operations
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/node-operations.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note מקור קנוני

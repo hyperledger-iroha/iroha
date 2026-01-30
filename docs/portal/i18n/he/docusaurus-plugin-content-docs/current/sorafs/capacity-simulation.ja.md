@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/capacity-simulation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7721d65e223b99b39861cbf7d191a17f687d132ddf9957de88ae0036665bb4ef
-source_last_modified: "2025-11-14T04:43:21.442829+00:00"
+source_hash: 7074151fb4e8b1bd54e65c07523e27f7aa4bf2b9c83f6c17a375b261816a0734
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: capacity-simulation
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/capacity-simulation.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: ראנבוק סימולציית קיבולת של SoraFS
+sidebar_label: ראנבוק סימולציית קיבולת
+description: הפעלת ערכת הסימולציה של שוק הקיבולת SF-2c עם fixtures ניתנים לשחזור, ייצואי Prometheus ולוחות Grafana.
 ---
 
 :::note מקור קנוני

@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/provider-advert-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e74573539aeb75cb0a4002541851d5a7e8c4926eb1bfc32f6916fa859cf2e6f8
-source_last_modified: "2025-11-14T04:43:22.145198+00:00"
+source_hash: a41414d1c16e68fc650a7268c2aeb806fc84a7e8ecdb65cf63fb003a67bce392
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/provider-advert-rollout.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > مقتبس من [`docs/source/sorafs/provider_advert_rollout.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md).

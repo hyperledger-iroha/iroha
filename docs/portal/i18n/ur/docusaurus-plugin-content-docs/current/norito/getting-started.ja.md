@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/norito/getting-started.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 776943ef4b9f928b4daf952f65b417d33195b083f69ba5c3eabd99ae7bebdc8d
-source_last_modified: "2025-11-14T04:43:20.835015+00:00"
+source_hash: 1f5fc3fbeb5265e7be7bde13a658c662706e6d4c30d4385675eda93892513de3
+source_last_modified: "2026-01-22T15:55:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/norito/getting-started.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Norito کا آغاز

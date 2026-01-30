@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/operations-playbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4476f481c0cd07bd65283331f0eb2e9acca91f6db8a86035a5a8cc9d3d7ddc43
-source_last_modified: "2025-11-07T10:33:21.923120+00:00"
+source_hash: b9e6c880827f8eb6333d452ae57dce45e0830adda2435bee1139fc6abb8d0ef6
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: operations-playbook
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/operations-playbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note 正規ソース

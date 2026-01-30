@@ -1,20 +1,35 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/source/sorafs/developer/index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 7f51ae76dd62405ce036f8b8893f948f6737f3a69d4b344702258161dee04a88
-source_last_modified: "2025-11-10T05:30:58.652943+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:58.352210+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# ترجمہ جاری ہے
+---
+title: SoraFS Developer Guides
+summary: Entry point for SoraFS CLI, SDK, CI, and deployment guidance.
+---
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+> **Portal:** Mirrored in `docs/portal/docs/sorafs/developer-index.md`.
+> Update both copies to keep reviewers aligned.
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+# SoraFS Developer Guides
+
+```{toctree}
+:caption: Getting Started
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

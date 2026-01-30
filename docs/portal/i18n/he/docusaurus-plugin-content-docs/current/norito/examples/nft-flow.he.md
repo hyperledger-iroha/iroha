@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/norito/examples/nft-flow.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 91a42a9207079bdf93e86d496db7d2d5eabde008975587ee98c9a1c26e4d62c4
-source_last_modified: "2025-11-14T04:43:20.770074+00:00"
+source_hash: e23e082d7c2fdbef72ad5e6b987deaee60ebc457aa57aabeab1f1b3be2c22f93
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/norito/examples/nft-flow.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/nft-flow
+title: הטבעה, העברה ושריפה של NFT
+description: מוביל דרך מחזור החיים של NFT מקצה לקצה: הטבעה לבעלים, העברה, תיוג מטא-דאטה ושריפה.
+source: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
 מוביל דרך מחזור החיים של NFT מקצה לקצה: הטבעה לבעלים, העברה, תיוג מטא-דאטה ושריפה.

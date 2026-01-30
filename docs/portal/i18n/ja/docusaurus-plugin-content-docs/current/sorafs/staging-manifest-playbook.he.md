@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/staging-manifest-playbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c4997f21e0ccff583f11caca7988800e6195b62363284e45e488380e2a4752ab
-source_last_modified: "2025-11-07T10:33:21.927470+00:00"
+source_hash: 0065888efeec93e8d83c37055f5c5232c6917424f64252a74cb1217a6dcceaf6
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: staging-manifest-playbook
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/staging-manifest-playbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note 正規ソース

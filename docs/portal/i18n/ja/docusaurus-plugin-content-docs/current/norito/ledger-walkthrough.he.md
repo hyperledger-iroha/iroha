@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/norito/ledger-walkthrough.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 78e77eb708bdf8ee1039449b2e62b4f5a8502aed6b878f318b179262130e875c
-source_last_modified: "2025-11-14T04:43:20.853684+00:00"
+source_hash: b0735074b71bd1f3685b8e78fc22c4c91aab311153fa15899dead74617c680f3
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/norito/ledger-walkthrough.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: 台帳ウォークスルー
+description: `iroha` CLI で決定的な register -> mint -> transfer フローを再現し、結果の台帳状態を検証します。
+slug: /norito/ledger-walkthrough
 ---
 
 このウォークスルーは [Norito クイックスタート](./quickstart.md) を補完し、`iroha` CLI を使って台帳状態を更新・確認する方法を示します。新しい資産定義を登録し、既定のオペレーターアカウントに単位をミントし、残高の一部を別アカウントへ転送し、結果のトランザクションと保有を確認します。各ステップは Rust/Python/JavaScript SDK のクイックスタートで扱うフローと対応しており、CLI と SDK の挙動が一致することを確認できます。

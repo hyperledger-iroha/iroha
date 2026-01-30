@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/dispute-revocation-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7b12a923b63eb12dc515016b81e462d34bdb14db0f1979fe6d2b79e2c3c3be5a
-source_last_modified: "2025-11-14T04:43:21.711267+00:00"
+source_hash: 9eddda7331e0b00d24cbe5f1131a02246d79f3dc15232fcda1672be788046caf
+source_last_modified: "2026-01-22T15:55:18+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: dispute-revocation-runbook
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/dispute-revocation-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note مستند ماخذ

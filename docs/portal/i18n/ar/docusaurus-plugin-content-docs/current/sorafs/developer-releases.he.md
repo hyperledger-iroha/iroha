@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/developer-releases.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 0b33d2666d43d4b43ce9c6658d7208c64d69c657c2eb22f2715e5e9e6da27e8a
-source_last_modified: "2025-11-14T04:43:21.653401+00:00"
+source_hash: 0f9c20606cff1777f2c1cf4eff48fd0ec2d965317ac139a47195bc02f8d4acbe
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: developer-releases
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/developer-releases.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 # عملية الإصدار
 

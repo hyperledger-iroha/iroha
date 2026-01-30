@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/multi-source-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7041c29c8909a8489aa3e58b264497d5932853331059c9405899a1104914826e
-source_last_modified: "2025-11-14T04:43:21.830133+00:00"
+source_hash: c4e9d0c05cdfee0ff3d837973023a4878d4c496836371e20033299cf138cb485
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: multi-source-rollout
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/multi-source-rollout.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note مستند ماخذ
 یہ صفحہ `docs/source/sorafs/runbooks/multi_source_rollout.md` کی عکاسی کرتا ہے۔ جب تک پرانا ڈاکیومنٹیشن سیٹ ریٹائر نہ ہو جائے، دونوں نقول کو ہم آہنگ رکھیں۔

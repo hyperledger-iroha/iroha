@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/node-client-protocol.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e4f757a38aac2616aa799383cd38837efd8e4060f045e4f49536f584c309499b
-source_last_modified: "2025-11-14T04:43:21.847017+00:00"
+source_hash: 8fe2fc007993e815b1025c0655a520899e5a1dcf8cbcf0d007d9882c6ad3edd5
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/node-client-protocol.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Protocole nœud ↔ client SoraFS

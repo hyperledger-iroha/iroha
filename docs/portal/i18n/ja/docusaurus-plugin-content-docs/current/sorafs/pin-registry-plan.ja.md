@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/pin-registry-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e2f2cbdcd984ccf579a30386c340177bf73107a0b7c5b340284ce17e0487a3d2
-source_last_modified: "2025-11-14T04:43:22.046430+00:00"
+source_hash: 439d418cf6dbd9d4fe47b9df50d7062993b17987aecea6547ea6c51383192039
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: pin-registry-plan
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/pin-registry-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note 正規ソース

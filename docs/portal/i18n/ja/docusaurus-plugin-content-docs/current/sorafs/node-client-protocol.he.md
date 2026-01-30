@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/node-client-protocol.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b10c75155398b87ac41349bb4db936be1fe61f9be23cb3f588eec40300c18da0
-source_last_modified: "2025-11-14T04:43:21.845906+00:00"
+source_hash: e67fffcf10cef2e3f960cca7a9f0e9ea378960426bea5f23a25dce2bc05aa910
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/node-client-protocol.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # SoraFS ノード ↔ クライアントプロトコル

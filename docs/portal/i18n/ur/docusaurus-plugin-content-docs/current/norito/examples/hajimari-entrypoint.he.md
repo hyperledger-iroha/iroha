@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/norito/examples/hajimari-entrypoint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 83a543dfbedf0f4bc98c74fccf50e26dbc8209c256e3a02191d6dbe8f7943eb5
-source_last_modified: "2025-11-14T04:43:20.719218+00:00"
+source_hash: cd083bdf6ff74fc3dc52d6d19fd184c8283f9fe736950558b596f758bd1cdec4
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/norito/examples/hajimari-entrypoint.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/hajimari-entrypoint
+title: Hajimari انٹری پوائنٹ اسکیلیٹن
+description: ایک واحد عوامی انٹری پوائنٹ اور اسٹیٹ ہینڈل کے ساتھ کم سے کم Kotodama کنٹریکٹ ڈھانچہ۔
+source: crates/ivm/docs/examples/01_hajimari.ko
 ---
 
 ایک واحد عوامی انٹری پوائنٹ اور اسٹیٹ ہینڈل کے ساتھ کم سے کم Kotodama کنٹریکٹ ڈھانچہ۔

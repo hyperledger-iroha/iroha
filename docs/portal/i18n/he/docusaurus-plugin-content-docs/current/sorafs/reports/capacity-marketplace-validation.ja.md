@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/reports/capacity-marketplace-validation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ddac427f949f9ba6fd2dcae6864a816c250ac13db1d444110c5e9e06b0bc63ec
-source_last_modified: "2025-11-14T04:43:22.195932+00:00"
+source_hash: 2bd30fbc7480c2cf8df27f6c0e4ad6aa03daae8e896dff2e12dd5c2d64121467
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/reports/capacity-marketplace-validation.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # צ'קליסט אימות שוק קיבולת SoraFS

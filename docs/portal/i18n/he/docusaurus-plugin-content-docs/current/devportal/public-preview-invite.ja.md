@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/devportal/public-preview-invite.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 99ff2997675858478be66f33cd12c30c06daa85cb3ac71433d00b55eb8b4605d
-source_last_modified: "2025-11-14T04:43:20.113947+00:00"
+source_hash: 4f4183db0fcf98f0c2f8d88ef725c981278ebfcec335ac67ecaefaad766eca85
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/devportal/public-preview-invite.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # פלייבוק הזמנות לפריוויו ציבורי

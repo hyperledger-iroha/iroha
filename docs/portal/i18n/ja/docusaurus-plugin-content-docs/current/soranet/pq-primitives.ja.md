@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/soranet/pq-primitives.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f277c7510ca64d678c8f105f7e7554f4530f61d598761e0d384a0419415f003c
-source_last_modified: "2025-11-14T04:43:22.383007+00:00"
+source_hash: c9ea93a16956d569983c16c6f421d6dc6f93835da6f2aa832633836d87039bc8
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: pq-primitives
+lang: ja
+direction: ltr
+source: docs/portal/docs/soranet/pq-primitives.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Canonical Source

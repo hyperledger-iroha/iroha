@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/norito/examples/call-transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: db5ff695a18716703a79fe66243cdfcde9d6e1f2e9bbd8d7842222df6a10f0a8
-source_last_modified: "2025-11-14T04:43:20.644414+00:00"
+source_hash: 70144f076b49576de3fd247ae797f389bcc84b49f72479057c793c5074a470b5
+source_last_modified: "2026-01-22T15:55:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/norito/examples/call-transfer-asset.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/call-transfer-asset
+title: הפעלת העברה מהמארח מתוך Kotodama
+description: מדגים כיצד נקודת כניסה של Kotodama יכולה לקרוא להוראת המארח `transfer_asset` עם אימות מטא-דאטה מקוון.
+source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
 מדגים כיצד נקודת כניסה של Kotodama יכולה לקרוא להוראת המארח `transfer_asset` עם אימות מטא-דאטה מקוון.

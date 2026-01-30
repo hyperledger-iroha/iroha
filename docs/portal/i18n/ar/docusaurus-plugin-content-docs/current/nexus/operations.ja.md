@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/nexus/operations.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d92c574d7736f7fb0d5650deffac5893787af7ec18fb91b84fdc022c53c2ae5c
-source_last_modified: "2025-11-14T04:43:20.523792+00:00"
+source_hash: 4b109ae7d943fe20af493121166c0e25044d45eadae0f05d1afed5cabf5b31e0
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/nexus/operations.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-operations
+title: دليل تشغيل Nexus
+description: ملخص عملي لخطوات تشغيل مشغل Nexus، يعكس `docs/source/nexus_operations.md`.
 ---
 
 استخدم هذه الصفحة كمرجع سريع موازي لـ `docs/source/nexus_operations.md`. فهي تلخص قائمة التشغيل، ونقاط إدارة التغيير، ومتطلبات تغطية القياس التي يجب على مشغلي Nexus اتباعها.

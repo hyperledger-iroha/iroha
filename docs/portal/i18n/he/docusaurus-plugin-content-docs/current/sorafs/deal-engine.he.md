@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/deal-engine.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9090ffd03c7d04f4b3166176daf3de5c2e07ddfbb0851e7ac78b0dd434d37e14
-source_last_modified: "2025-11-14T04:43:21.560986+00:00"
+source_hash: c45aded7f3c5ed61ae729b581fe7d64b4ff269edc1fad12f1cd530da92cd975c
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: deal-engine
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/deal-engine.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note מקור קנוני
 עמוד זה משקף את `docs/source/sorafs/deal_engine.md`. שמרו על שני המיקומים מיושרים כל עוד התיעוד הישן פעיל.

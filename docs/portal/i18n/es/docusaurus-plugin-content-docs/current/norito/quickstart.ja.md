@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 30681ee98574a2788717fa6163003f57aac98d78f5b06e8d33a69ef63fcfba6a
-source_last_modified: "2025-11-14T04:43:20.901662+00:00"
+source_hash: b1b2092e7eaa7a76e68f57f57baa5f807c40a9a812c37636e6bf8128504cc1a4
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/norito/quickstart.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Inicio rapido de Norito
+description: Crea, valida y despliega un contrato Kotodama con las herramientas de release y la red predeterminada de un solo peer.
+slug: /norito/quickstart
 ---
 
 Este recorrido refleja el flujo que esperamos que sigan los desarrolladores al aprender Norito y Kotodama por primera vez: arrancar una red determinista de un solo peer, compilar un contrato, hacer un dry-run local y luego enviarlo por Torii con el CLI de referencia.

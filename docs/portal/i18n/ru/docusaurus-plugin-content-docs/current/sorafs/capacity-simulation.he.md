@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/capacity-simulation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: efea2bc7288b799add9628fc787469b5c29fc1be4077ed89252ff6255cfede59
-source_last_modified: "2025-11-14T04:43:21.444478+00:00"
+source_hash: b7b444014ec05563a4c00ff126cbd30b5abd549503fe26a03f1fe074d7b2eefc
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: capacity-simulation
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/capacity-simulation.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Ранбук симуляции емкости SoraFS
+sidebar_label: Ранбук симуляции емкости
+description: Запуск набора симуляции рынка емкости SF-2c с воспроизводимыми фикстурами, экспортами Prometheus и дашбордами Grafana.
 ---
 
 :::note Канонический источник

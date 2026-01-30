@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/nexus/overview.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7b7bb2e3279ac3264bdb1f3f8fe5adfed79288c8ce11e48e8a5dfa8e431f1187
-source_last_modified: "2025-11-14T04:43:20.539427+00:00"
+source_hash: 951cef619091836657eaf1704329069bfec14f7e8a1eca561e1a69733dd7a7d7
+source_last_modified: "2026-01-03T18:07:58+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/nexus/overview.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-overview
+title: Resumen de Sora Nexus
+description: Resumen de alto nivel de la arquitectura de Iroha 3 (Sora Nexus) con enlaces a los documentos canonicos del mono-repo.
 ---
 
 Nexus (Iroha 3) amplia Iroha 2 con ejecucion multi-lane, espacios de datos acotados por gobernanza y herramientas compartidas en cada SDK. Esta pagina refleja el nuevo resumen `docs/source/nexus_overview.md` del mono-repo para que los lectores del portal entiendan rapidamente como encajan las piezas de la arquitectura.

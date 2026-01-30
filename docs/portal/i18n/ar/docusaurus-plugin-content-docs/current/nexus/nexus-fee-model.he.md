@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/nexus/nexus-fee-model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9e21a145cad72030249933499539022824ca5159cdd7eecb837e74b016e6e080
-source_last_modified: "2025-11-14T04:43:20.431043+00:00"
+source_hash: a157e8a84b59d5b24f50ef92dbc9b9f64fc251c504a18150c25d8d9ce94758d4
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/nexus/nexus-fee-model.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-fee-model
+title: تحديثات نموذج رسوم Nexus
+description: نسخة مطابقة لـ `docs/source/nexus_fee_model.md` توثق ايصالات تسوية الـ lane وواجهات المطابقة.
 ---
 
 :::note المصدر القانوني

@@ -4,9 +4,18 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/devportal/deploy-guide.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9b9928dfdce3cb94e0961baac69519b8584ff2632135ba0e76c4517577580119
-source_last_modified: "2025-11-14T04:43:19.773718+00:00"
+source_hash: 4b229520dcf8c5d2f45248dd9f382a8c61638de561bdef770e10730efc263003
+source_last_modified: "2026-01-22T15:57:55+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: deploy-guide
+lang: pt
+direction: ltr
+source: docs/portal/docs/devportal/deploy-guide.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 ## Visao geral

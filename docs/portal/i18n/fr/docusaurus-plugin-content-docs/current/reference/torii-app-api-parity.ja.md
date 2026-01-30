@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/reference/torii-app-api-parity.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 50c8608471e3e1227072e469dfb45b0d1f85076b8316234533e3a13dbbeb32d1
-source_last_modified: "2025-11-14T04:43:21.010114+00:00"
+source_hash: 94162d6d8d5c0e22f942d8a6328cd8c7d00f8c1b4972a9c023ff96392f080c60
+source_last_modified: "2026-01-30T09:29:51+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/reference/torii-app-api-parity.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: torii-app-api-parity
+title: Audit de parite de l'API d'application Torii
+description: Miroir de la revue TORII-APP-1 pour que les equipes SDK et plateforme confirment la couverture publique.
 ---
 
 Statut: Termine 2026-03-21  

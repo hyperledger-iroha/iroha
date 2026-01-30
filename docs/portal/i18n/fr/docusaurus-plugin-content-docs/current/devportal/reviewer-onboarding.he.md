@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/devportal/reviewer-onboarding.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 933b22a747a02f5434d4cfcb73effdf16d2e8c83a57c0c3214226f82bb41fd81
-source_last_modified: "2025-11-14T04:43:20.136921+00:00"
+source_hash: ddbc83a7def63278b69d4b0d4c63a3b7fd6a7cac066b07c0bf7656220e0d271c
+source_last_modified: "2026-01-03T18:07:58+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/devportal/reviewer-onboarding.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Onboarding des relecteurs de preview

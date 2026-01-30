@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/provider-advert-multisource.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6f36c9398551627b7061595591c7982905027f1faca1bfa4625ae91c17058636
-source_last_modified: "2025-11-14T04:43:22.128797+00:00"
+source_hash: 28f14d7796bb33fea2240d4ba9e2fbba9a54dd85cf732a31a245aa9b9daafb59
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: provider-advert-multisource
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/provider-advert-multisource.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 # マルチソースのプロバイダー広告とスケジューリング
 

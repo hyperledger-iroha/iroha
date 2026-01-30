@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/da/threat-model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 79d10407ae7b6171425b7410315ed652c824dba2d0572fef20e77856c5d575c9
-source_last_modified: "2025-11-14T04:43:19.761886+00:00"
+source_hash: 6f07c71ffdddde616b0bd6175473d4511d2eb874558b85d35857f1421637a484
+source_last_modified: "2026-01-19T07:28:06+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/da/threat-model.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica

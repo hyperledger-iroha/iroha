@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/devportal/security-hardening.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b8d70498ed217eda2e75db16c04fc4e18ecd01509de50a599e57d1e74c4d44c3
-source_last_modified: "2025-11-14T04:43:20.161499+00:00"
+source_hash: 64c595ff02ebdb473513733a4c7e54c0cb94a339a82571a9295fe2e1e6182d71
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/devportal/security-hardening.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Усиление безопасности и чеклист пен-теста

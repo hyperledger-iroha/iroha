@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/nexus/overview.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3590520d9b721f03f419216fabe723dcf48eb423f04edffd9e447f62244c9e26
-source_last_modified: "2025-11-14T04:43:20.538826+00:00"
+source_hash: 32926b582017bdd7cb6b661a9cc025d40796742e62964afa373ae7a2f8a67c0e
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/nexus/overview.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-overview
+title: Sora Nexus 概要
+description: Iroha 3 (Sora Nexus) アーキテクチャの高レベル概要と、モノレポの正本ドキュメントへの参照。
 ---
 
 Nexus (Iroha 3) は Iroha 2 を multi-lane 実行、ガバナンスでスコープされたデータスペース、全 SDK で共有されるツール群で拡張します。このページはモノレポの新しい概要 `docs/source/nexus_overview.md` を反映し、ポータル読者がアーキテクチャの要素がどう噛み合うかを素早く理解できるようにしています。

@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/soranet/pq-primitives.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 48045e889a236ca0dfa6d0651cc5272861ee6a79c23ba5e1688c8f079470b2c0
-source_last_modified: "2025-11-14T04:43:22.383569+00:00"
+source_hash: cc4055613fa90b02d2fbc9b11dbd5a5a50d3b40af3ce349a5213fa80595240a4
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: pq-primitives
+lang: he
+direction: rtl
+source: docs/portal/docs/soranet/pq-primitives.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note מקור קנוני

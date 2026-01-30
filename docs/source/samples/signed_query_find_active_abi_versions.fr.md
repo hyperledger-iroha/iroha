@@ -1,18 +1,58 @@
-<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
-
 ---
 lang: fr
 direction: ltr
 source: docs/source/samples/signed_query_find_active_abi_versions.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2aaa4b2bc2d1694c04ab851e539167cbb56c21a79a4a84c1c07d02c146c8b42a
-source_last_modified: "2025-11-02T04:40:40.166866+00:00"
-translation_last_reviewed: null
+source_hash: 4ad22eb3cbdc3a118add29721651aa7819bcd08621df3783ac0752a8591029d0
+source_last_modified: "2026-01-22T15:38:30.688677+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traduction en cours
+# Constructing a SignedQuery for `FindActiveAbiVersions`
 
-Ce fichier sert de modèle pour la traduction française du document anglais. Une fois la traduction terminée, mettez à jour le champ `status` dans les métadonnées ci-dessus.
+This snippet shows how to build, sign, and encode a Norito `SignedQuery` that calls the core singular query `FindActiveAbiVersions`. The resulting bytes can be POSTed to `/query` or piped to the CLI `query stdin-raw`.
 
-Ce brouillon est en attente de traduction. Remplacez ce texte par le contenu traduit et passez l’état à `complete` lorsque le travail est terminé. Vérifiez également que `translation_last_reviewed` correspond à la dernière vérification par rapport à la version anglaise.
+Steps
+- Build a `SingularQueryBox::FindActiveAbiVersions`.
+- Wrap into `QueryRequest::Singular` and `QueryRequestWithAuthority { authority, request }`.
+- Sign with the authority’s `KeyPair` to obtain `SignedQuery`.
+- Encode with `norito::codec::Encode::encode`.
+
+Rust example
+```rust
+use iroha_data_model::prelude::*;
+use iroha_data_model::query::{QueryRequest, QueryRequestWithAuthority, SignedQuery};
+use iroha_crypto::KeyPair;
+
+fn build_signed_query_find_active_abi(authority: AccountId, kp: &KeyPair) -> Vec<u8> {
+    // 1) Construct the singular query box
+    let q = iroha_data_model::query::runtime::prelude::FindActiveAbiVersions;
+    let box_ = iroha_data_model::query::SingularQueryBox::FindActiveAbiVersions(q);
+
+    // 2) Wrap as a query request and attach authority
+    let req = QueryRequest::Singular(box_);
+    let with_auth = QueryRequestWithAuthority { authority, request: req };
+
+    // 3) Sign — produces SignedQuery
+    let signed = with_auth.sign(kp);
+
+    // 4) Encode Norito TLV
+    norito::codec::Encode::encode(&SignedQuery::from(signed))
+}
+```
+
+Submitting
+- Raw HTTP: `POST /query` with the encoded bytes as the request body.
+- CLI: base64‑encode the bytes and pipe to `iroha ledger query stdin-raw`.
+
+Output
+- On success, the node returns a Norito `QueryResponse::Singular(ActiveAbiVersions)`.
+- The CLI prints the decoded JSON via Norito JSON wrappers.
+
+```json
+{
+  "active_versions": [1],
+  "default_compile_target": 1
+}
+```

@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d66146c03f002b23a01c9e65e2f16c8fabab3d3d8f148c12044b0d74636f9c6a
-source_last_modified: "2025-11-14T04:43:22.156198+00:00"
+source_hash: a4f316bda49a8215d3e2cdafa41cebd790210d445decf285dffee2bea1d51cf8
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/quickstart.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # SoraFS کا فوری آغاز

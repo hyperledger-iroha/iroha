@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/nexus/transition-notes.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fc01532861b2ddcb58ca446522beb9cc185842caeb375e62be2cc46e39f89b3a
-source_last_modified: "2025-11-14T04:43:20.613597+00:00"
+source_hash: 99fcbcf1687a1cbc6a96f1a9e13d2fc8668bab7375f767d2e629189df7d22765
+source_last_modified: "2026-01-06T06:54:55+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/nexus/transition-notes.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-transition-notes
+title: ملاحظات انتقال Nexus
+description: نسخة مطابقة لـ `docs/source/nexus_transition_notes.md`، تغطي ادلة انتقال Phase B وجدول التدقيق وخطط التخفيف.
 ---
 
 <!--

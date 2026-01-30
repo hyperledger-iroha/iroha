@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/orchestrator-tuning.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3b14c4111f2566d4aee3201ae0494809d4efacd3ade6408ef3b807208fb6d71d
-source_last_modified: "2025-11-07T10:33:21.925159+00:00"
+source_hash: 066131598223253073cf980da8ae72b87b9ccc7bbeaa7e678d3c92819acc4e2f
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-tuning
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/orchestrator-tuning.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note מקור קנוני

@@ -12380,15 +12380,10 @@ mod tests {
     fn state_commit_view_lock_metrics_recorded() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
-        telemetry.observe_state_commit_view_lock(Duration::from_millis(12), Duration::from_millis(34));
-        assert_eq!(
-            metrics.state_commit_view_lock_wait_ms.get_sample_count(),
-            1
-        );
-        assert_eq!(
-            metrics.state_commit_view_lock_hold_ms.get_sample_count(),
-            1
-        );
+        telemetry
+            .observe_state_commit_view_lock(Duration::from_millis(12), Duration::from_millis(34));
+        assert_eq!(metrics.state_commit_view_lock_wait_ms.get_sample_count(), 1);
+        assert_eq!(metrics.state_commit_view_lock_hold_ms.get_sample_count(), 1);
     }
 
     #[test]

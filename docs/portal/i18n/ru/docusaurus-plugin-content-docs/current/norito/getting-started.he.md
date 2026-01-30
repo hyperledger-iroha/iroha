@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/norito/getting-started.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a6b2d8bc94f213749a77bdc766a7f309297d5d8fcb0a117e744d35d26a173522
-source_last_modified: "2025-11-14T04:43:20.834255+00:00"
+source_hash: 4d73cad6ea2caae2ab976c68e9d7f88c6d96c6d2c8ec64b88640c4f4032dade4
+source_last_modified: "2026-01-22T15:55:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/norito/getting-started.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Начало работы с Norito

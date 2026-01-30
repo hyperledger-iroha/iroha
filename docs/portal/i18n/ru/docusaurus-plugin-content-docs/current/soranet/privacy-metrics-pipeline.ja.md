@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/soranet/privacy-metrics-pipeline.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2994cb64af87fd9db8af04a72b4d9788955bb82071accad1b4e83397760199ba
-source_last_modified: "2025-11-14T04:43:22.470496+00:00"
+source_hash: 5ec9f1d09c4ec1f3f963e44fc9b12e21ac5c25d4b9ca896b8b35fc4c66b35c51
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: privacy-metrics-pipeline
+lang: ru
+direction: ltr
+source: docs/portal/docs/soranet/privacy-metrics-pipeline.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Канонический источник

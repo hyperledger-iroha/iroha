@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6908b8715b2af52be6205a6345edd9b81249274f21debeda72ce93f87e552ba7
-source_last_modified: "2025-11-14T04:43:22.155224+00:00"
+source_hash: cde88803089b9cbd87b68b77db1bda1c525f6f657593a7f148611f2e9aab6180
+source_last_modified: "2026-01-04T17:38:36+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/quickstart.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Démarrage rapide SoraFS

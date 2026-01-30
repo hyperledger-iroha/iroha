@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/reference/torii-app-api-parity.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b513207532d662ee30a5b16322b677e81ff55a497c0fc821a4b09672e6536524
-source_last_modified: "2025-11-14T04:43:21.010657+00:00"
+source_hash: f445158dc1c80fde9131e24efb63f1edca01d572cc8b789bb3467c26e4804ac3
+source_last_modified: "2026-01-30T09:29:51+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/reference/torii-app-api-parity.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: torii-app-api-parity
+title: تدقيق تكافؤ واجهة تطبيق Torii
+description: نسخة مرآة لمراجعة TORII-APP-1 حتى تتمكن فرق SDK والمنصة من تأكيد التغطية العامة.
 ---
 
 الحالة: مكتمل 2026-03-21  

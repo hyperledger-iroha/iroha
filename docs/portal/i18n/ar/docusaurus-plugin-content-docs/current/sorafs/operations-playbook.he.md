@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/operations-playbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5ff8a9361855c0911370f2601d7b9800886c73c2c546ac4cd7350121b1c9e744
-source_last_modified: "2025-11-14T04:43:21.952636+00:00"
+source_hash: dd3e362ff13dc0c4d9acef501d1455f9dbf494d33b090e84cc7ad466ce12bada
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: operations-playbook
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/operations-playbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note المصدر المعتمد

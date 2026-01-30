@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8e894f23498dada63f5312751b5bbfb56fa5c1fd493cffd13323a5b9e9cfc762
-source_last_modified: "2025-11-14T04:43:20.902549+00:00"
+source_hash: 516e5f965bba1da289240c6899f9ade348d4de888a024db1a4e25f70c172837a
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/norito/quickstart.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Быстрый старт Norito
+description: Соберите, проверьте и задеплойте контракт Kotodama с релизным инструментарием и дефолтной одноузловой сетью.
+slug: /norito/quickstart
 ---
 
 Этот walkthrough отражает процесс, которому мы ожидаем следовать разработчиков при первом знакомстве с Norito и Kotodama: поднять детерминированную одноузловую сеть, скомпилировать контракт, сделать локальный dry-run, затем отправить его через Torii с эталонным CLI.

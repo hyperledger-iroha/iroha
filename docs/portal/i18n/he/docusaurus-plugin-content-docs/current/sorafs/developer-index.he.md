@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/developer-index.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9ecf132f75f76c040bc9d8217e8d59fe5e8147ec611614fc7e4e5332f5a71c10
-source_last_modified: "2025-11-14T04:43:21.636754+00:00"
+source_hash: 8a4554ac2eaf217772b73d42268be7059bab7a77a98bb0acb94cd56a75dcc9ec
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: developer-index
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/developer-index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note מקור קנוני
 עמוד זה משקף את `docs/source/sorafs/developer/index.md`. שמרו על שתי הגרסאות מסונכרנות עד שהמסמכים הישנים ייצאו משימוש.

@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/nexus/nexus-refactor-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 60a8ef09464b59a6d8eead02e6bf31d9c81e7d66ac926fa51c1521b41eb40549
-source_last_modified: "2025-11-14T04:43:20.464606+00:00"
+source_hash: 8376f4dd0a7626ff3c374994370071bab4c4073a97171d7152b1a977e760a64a
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/nexus/nexus-refactor-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-refactor-plan
+title: Plan de refactorisation du ledger Sora Nexus
+description: Miroir de `docs/source/nexus_refactor_plan.md`, detaillant le travail de nettoyage par phases pour la base de code Iroha 3.
 ---
 
 :::note Source canonique

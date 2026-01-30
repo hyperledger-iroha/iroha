@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/norito/examples/transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: dc90249ee45cc5c8dc1f1cbdbf97647fe282258c4528ccb3b4d95d5a4bf9ff62
-source_last_modified: "2025-11-14T04:43:20.811628+00:00"
+source_hash: a0fed4a2a1427064a9d94d0fd08cd223f7e75fe3394d662f5716fd6b1405543d
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/norito/examples/transfer-asset.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/transfer-asset
+title: Transferir ativo entre contas
+description: Fluxo direto de transferencia de ativos que espelha os quickstarts do SDK e os roteiros do livro razao.
+source: examples/transfer/transfer.ko
 ---
 
 Fluxo direto de transferencia de ativos que espelha os quickstarts do SDK e os roteiros do livro razao.

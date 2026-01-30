@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/devportal/preview-invite-tracker.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b28f13d7b5aedad9f4b5f83beef38e8b5e5fd10cd3ecd4e6ab6ec8eb199c690f
-source_last_modified: "2025-11-14T04:43:20.068730+00:00"
+source_hash: c984866497c2c0379f868629cb58ece2de199452bc734e043bc9ea873b4d482e
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/devportal/preview-invite-tracker.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # מעקב הזמנות preview

@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/orchestrator-tuning.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5125e29c1a1a2a3c7eef812fb58fd441bda00997a40160364f929843d8404fb6
-source_last_modified: "2025-11-14T04:43:22.009747+00:00"
+source_hash: dedf65c9144f2bf3453715332c9d5fe61d678431bbfc43c429aa888771945483
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-tuning
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/orchestrator-tuning.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note مستند ماخذ

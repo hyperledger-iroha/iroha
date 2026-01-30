@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/reference/README.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 60da1ea7900a63eccb79218f69231d106ca8a0ee23f33cbbbb466d4c0e861849
-source_last_modified: "2025-11-14T04:43:20.932481+00:00"
+source_hash: 29c6cd50c571800cdd9e9170db685880652681514b26bbd357dfa95561bd0580
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/reference/README.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: ریفرنس انڈیکس
+slug: /reference
 ---
 
 یہ سیکشن Iroha کے لئے "spec کے طور پر پڑھیں" مواد اکٹھا کرتا ہے۔ یہ صفحات مستحکم رہتے ہیں چاہے گائیڈز اور ٹیوٹوریلز ترقی کریں۔

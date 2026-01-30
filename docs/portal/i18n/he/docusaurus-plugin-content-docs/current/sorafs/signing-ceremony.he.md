@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/signing-ceremony.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6a300b14409f1f2ee90c9c039e4d07a9aa452648b9c5b3cf5661fc5d8c27115c
-source_last_modified: "2025-11-14T04:43:22.321818+00:00"
+source_hash: 9985f8c6996ec00466957c68944447e73adc5da80bd0f6f232dadb77362c63db
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for he translation. Replace this content with the full translation. -->
+
+---
+id: signing-ceremony
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/signing-ceremony.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > Roadmap: **SF-1b — אישורי fixtures של פרלמנט סורה.**

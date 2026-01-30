@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/provider-advert-multisource.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fe0b1cc6c32f8a778b34f116436cbfc9d10d4c0a5f871d2f466a531daf97f6a9
-source_last_modified: "2025-11-14T04:43:22.130772+00:00"
+source_hash: a55577807739daed3869e4aaf76ab3c76962fed8f5138b63d222b73493d77e69
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: provider-advert-multisource
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/provider-advert-multisource.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 # Мульти-источниковые объявления провайдеров и планирование
 

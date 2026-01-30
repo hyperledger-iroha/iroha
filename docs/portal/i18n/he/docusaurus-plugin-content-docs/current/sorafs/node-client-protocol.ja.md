@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/node-client-protocol.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 89f90b3fff17226fb21e86371ba014da876d6c5b0e2b6d2a29b90cc5542ab9f3
-source_last_modified: "2025-11-14T04:43:21.846117+00:00"
+source_hash: cc0a2508fa1e68ff92c6ba8372ce1d40a88845071e090f8f557c6ed117583062
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/node-client-protocol.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # פרוטוקול צומת ↔ לקוח SoraFS

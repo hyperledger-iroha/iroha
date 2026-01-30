@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/reference/address-safety.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f1dffcc6a7829b17589cae020b7563772612e8877b8d8b89a198fd43b134137f
-source_last_modified: "2025-11-14T04:43:20.964164+00:00"
+source_hash: aacb778729b6a378d7c925c40a5c0b3d1d3e9c28d850f6f4b90d24b824d78567
+source_last_modified: "2026-01-28T17:58:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/reference/address-safety.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 ---

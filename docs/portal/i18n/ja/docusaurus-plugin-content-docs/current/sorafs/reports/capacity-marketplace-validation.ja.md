@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/reports/capacity-marketplace-validation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 370ba5a43909431eb5e9d8ef39dacdbe0e7c69ee45676e9017c2707b082a2cce
-source_last_modified: "2025-11-14T04:43:22.195407+00:00"
+source_hash: 2c52b07d1bdeeb9db3015b5da3cbcc8326e3f23d1a360c65f2c31e872081eac6
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/reports/capacity-marketplace-validation.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # SoraFS 容量マーケットプレイス検証チェックリスト

@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/reference/account-address-status.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3959c0a64897023929982ca7c7e15f44582698232b28768e318755bf079ad2d2
-source_last_modified: "2025-11-07T10:33:21.916035+00:00"
+source_hash: e1c2593468841e039292580f749784bfa44b47f0cb56f711c1c4a6ea6406b71a
+source_last_modified: "2026-01-28T17:58:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/reference/account-address-status.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: account-address-status
+title: ציות כתובת חשבון
+description: סיכום זרימת העבודה של fixture ADDR-2 וכיצד צוותי SDK נשארים מסונכרנים.
 ---
 
 חבילת ה-ADDR-2 הקנונית (`fixtures/account/address_vectors.json`) כוללת fixtures של IH58 (preferred), compressed (`sora`, second-best; half/full width), multisignature ו-negative. כל משטח SDK + Torii מסתמך על אותו JSON כדי לזהות כל סטייה של codec לפני הגעה לפרודקשן. דף זה משקף את תקציר הסטטוס הפנימי (`docs/source/account_address_status.md` בשורש המאגר) כדי שקוראי הפורטל יוכלו לעיין בזרימה בלי לחפור ב-mono-repo.

@@ -4,9 +4,18 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/governance/api.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 29994a9993e9648bd85497fe45233f9d70d91a3e6d1e072179991ed96ab8f608
-source_last_modified: "2025-11-14T04:43:20.236207+00:00"
+source_hash: 80ad5a47d1efdd6812db64758e5b9b56385c7efce01db04786b3561217b393e9
+source_last_modified: "2026-01-22T16:09:51+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: api
+lang: ja
+direction: ltr
+source: docs/portal/docs/governance/api.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 ステータス: ガバナンス実装タスクに伴うドラフト/スケッチ。実装中に形は変更される可能性があります。決定性とRBACポリシーは規範制約です。`authority` と `private_key` が提供される場合、Torii はトランザクションに署名して送信できます。それ以外はクライアントが組み立てて `/transaction` に送信します。

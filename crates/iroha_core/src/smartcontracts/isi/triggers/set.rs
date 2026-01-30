@@ -1286,10 +1286,8 @@ mod tests {
     fn replace_account_id_updates_trigger_authority_and_filter() {
         let set = Set::default();
         let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
-        let old =
-            AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
-        let new =
-            AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+        let old = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+        let new = AccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
 
         let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
         let executable = Executable::Instructions(ConstVec::from(vec![instruction.clone()]));
@@ -1311,10 +1309,16 @@ mod tests {
 
         let mut block = set.block();
         let mut tx = block.transaction();
-        tx.add_time_trigger(SpecializedTrigger::new(time_trigger_id.clone(), time_action))
-            .expect("add time trigger");
-        tx.add_by_call_trigger(SpecializedTrigger::new(call_trigger_id.clone(), call_action))
-            .expect("add call trigger");
+        tx.add_time_trigger(SpecializedTrigger::new(
+            time_trigger_id.clone(),
+            time_action,
+        ))
+        .expect("add time trigger");
+        tx.add_by_call_trigger(SpecializedTrigger::new(
+            call_trigger_id.clone(),
+            call_action,
+        ))
+        .expect("add call trigger");
         tx.replace_account_id(&old, &new);
         tx.apply();
         block.commit();

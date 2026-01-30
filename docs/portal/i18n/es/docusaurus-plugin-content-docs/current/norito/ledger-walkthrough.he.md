@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/norito/ledger-walkthrough.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5197a6cec23274051cbaab8cf839ab10c768d8f85b7a76042c18464aa27f9a1e
-source_last_modified: "2025-11-14T04:43:20.854721+00:00"
+source_hash: 321829d5d2a6b8c640b9a2ad69976e26ae5884fe0135fcb02fd16ce3030a335c
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/norito/ledger-walkthrough.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Recorrido del libro mayor
+description: Reproduce un flujo determinista de register -> mint -> transfer con el CLI `iroha` y verifica el estado resultante del ledger.
+slug: /norito/ledger-walkthrough
 ---
 
 Este recorrido complementa el [inicio rapido de Norito](./quickstart.md) mostrando como mutar e inspeccionar el estado del ledger con el CLI `iroha`. Registraras una nueva definicion de activo, acunaras unidades en la cuenta de operador por defecto, transferiras parte del balance a otra cuenta y verificaras las transacciones y tenencias resultantes. Cada paso refleja los flujos cubiertos en los quickstarts de SDK de Rust/Python/JavaScript para que puedas confirmar la paridad entre CLI y SDK.

@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/storage-capacity-marketplace.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 619efb6e059bed96a728979688f2d5cb30b55db0f80d7457201c02cad5ffd312
-source_last_modified: "2025-11-14T04:43:22.363543+00:00"
+source_hash: c70d5aa1325d1c75f7df790a6f6101fd7780c73e016d6fe4c4773fc941739499
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: storage-capacity-marketplace
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/storage-capacity-marketplace.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note مستند ماخذ

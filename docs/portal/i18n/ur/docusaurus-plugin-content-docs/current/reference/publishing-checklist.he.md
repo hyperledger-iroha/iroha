@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/reference/publishing-checklist.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fbe85e1208200723224af417eb2430fd5905fa6d834729ccc7142506b88236ad
-source_last_modified: "2025-11-14T04:43:20.996020+00:00"
+source_hash: 51ec7ab0dc06bee9cd991cf863eb595bbd13152751dccbea075186dfe9fb88bd
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/reference/publishing-checklist.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Publishing checklist

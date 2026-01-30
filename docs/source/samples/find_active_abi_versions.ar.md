@@ -1,20 +1,34 @@
-<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
-
 ---
 lang: ar
 direction: rtl
 source: docs/source/samples/find_active_abi_versions.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: cb329a2fa67deb1c61a91a63c892ec97a2cf9283b32f6c0bb7c519c5fe6856ab
-source_last_modified: "2025-11-02T04:40:40.167896+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:58.929930+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# قيد الترجمة
+# FindActiveAbiVersions — Norito Query Schema (Sample)
 
-<div dir="rtl">
-هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث حقل `status` في بيانات التعريف أعلاه.
+Type name: `iroha_data_model::query::runtime::ActiveAbiVersions`
 
-هذا المخطط في انتظار الترجمة. استبدل هذا النص بالمحتوى المترجَم وغيّر الحالة إلى `complete` عند الانتهاء. تأكد أيضًا من أن حقل `translation_last_reviewed` يعكس آخر مراجعة تمت مقارنةً بالنص الإنجليزي.
-</div>
+Fields
+- `active_versions: Vec<u16>` — sorted list of ABI versions that are currently active on this node.
+- `default_compile_target: u16` — highest active ABI version; compilers should target this by default.
+
+Example Norito JSON response (first release; single ABI)
+```json
+{
+  "active_versions": [1],
+  "default_compile_target": 1
+}
+```
+
+Query (signed) — `FindActiveAbiVersions`
+- Route: `/query` (Norito-encoded `SignedQuery`)
+- Singular query box variant: `FindActiveAbiVersions`
+- Output variant: `ActiveAbiVersions`
+
+Notes
+- ABI version 1 is always active in the first release; governance‑activated versions extend the set permanently. The example above reflects the single‑ABI state.

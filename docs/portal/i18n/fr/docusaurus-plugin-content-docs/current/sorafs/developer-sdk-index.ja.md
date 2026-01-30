@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/developer-sdk-index.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c8eeb991e7a798932d158d2afdd3e954b524da68f7aee3d4f4f3e42071b766c7
-source_last_modified: "2025-11-14T04:43:21.669991+00:00"
+source_hash: fb4b6bcedc3629411edca3abfe123f8acc295db13b641bb9b5ea8630c1618032
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: developer-sdk-index
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/developer-sdk-index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Source canonique
 :::

@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/devportal/public-preview-invite.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b1fbaf26b7550c36273fa3cbfffa1e33d6aa7055b8b234e09a73c8ed1f6d5b12
-source_last_modified: "2025-11-14T04:43:20.114916+00:00"
+source_hash: e291902bfef56c565914c82ab17979753d511f56dafa5c4fc204850232d1c062
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/devportal/public-preview-invite.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # دليل دعوات المعاينة العامة

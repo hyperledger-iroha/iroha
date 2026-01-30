@@ -4,9 +4,21 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/nexus/nexus-default-lane-quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 022c2f66b85dee14e4354f097ce843a685636ca1fc4fa812b7c6afeb4f888864
-source_last_modified: "2025-11-14T04:43:20.386225+00:00"
+source_hash: 13e3927d99a4495f0e7de4f3d8e942c7ae06a4f43b2c956eb008c3dd6663ca3c
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/nexus/nexus-default-lane-quickstart.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-default-lane-quickstart
+title: Быстрый старт default lane (NX-5)
+sidebar_label: Быстрый старт default lane
+description: Настройте и проверьте fallback default lane в Nexus, чтобы Torii и SDK могли опускать lane_id в public lanes.
 ---
 
 :::note Канонический источник

@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/norito/getting-started.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9f1b8b244b92c0dfd750665545757f6e10df2bd4646965f4207dec5cf8110ded
-source_last_modified: "2025-11-14T04:43:20.833473+00:00"
+source_hash: 56c8920a7b09e9536b6777807520958c064ad6bb2890d40af964719565ebc2ed
+source_last_modified: "2026-01-22T15:55:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/norito/getting-started.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Primeiros passos com Norito

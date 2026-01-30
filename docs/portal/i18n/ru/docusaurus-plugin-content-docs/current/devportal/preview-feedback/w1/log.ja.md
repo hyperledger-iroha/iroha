@@ -4,9 +4,18 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w1/log.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1c5ccf57220514217fd1dd671657cb16bf3baea84dc06f209a7ae334856f69d2
-source_last_modified: "2025-11-14T04:43:19.846570+00:00"
+source_hash: d80e16d13aa80fb0d3a97a5ac001f5ed4c164e003db08f9a9172be2c37350ee8
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: preview-feedback-w1-log
+lang: ru
+direction: ltr
+source: docs/portal/docs/devportal/preview-feedback/w1/log.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 Этот лог хранит roster приглашений, телеметрические checkpoints и отзывы reviewers для

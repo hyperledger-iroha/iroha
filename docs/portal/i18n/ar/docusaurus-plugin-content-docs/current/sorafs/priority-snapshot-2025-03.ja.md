@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/priority-snapshot-2025-03.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f8585e4acbe29c62883cee5bae6e069859cf22533a9ffed9211acd133c1fc36a
-source_last_modified: "2025-11-14T04:43:22.092284+00:00"
+source_hash: a82f7d16241718ead957a22dd1dc1ff59ae01e95ba345ea1c2d05822f1d7010f
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: priority-snapshot-2025-03
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/priority-snapshot-2025-03.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > المصدر المعتمد: `docs/source/sorafs/priority_snapshot_2025-03.md`

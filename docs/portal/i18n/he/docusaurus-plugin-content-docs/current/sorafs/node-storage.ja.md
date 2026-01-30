@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/node-storage.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 835cd82dec02ade0b6d09534c65e4d83b508d194979d8f310351b0998826000e
-source_last_modified: "2025-11-14T04:43:21.912323+00:00"
+source_hash: 21b9f002538d3df19e057f1b6b672a6c2cfcdd632300ea8422269d57645ab879
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: node-storage
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/node-storage.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note מקור קנוני
 עמוד זה משקף את `docs/source/sorafs/sorafs_node_storage.md`. שמרו על שתי הגרסאות מסונכרנות עד שהסט הישן של תיעוד Sphinx יופסק.

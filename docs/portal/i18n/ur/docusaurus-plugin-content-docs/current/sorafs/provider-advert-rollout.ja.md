@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/provider-advert-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1665ff83bab270a6181e7f876f998a399b883abdd376b7daf530d3d43c18442d
-source_last_modified: "2025-11-14T04:43:22.145457+00:00"
+source_hash: 5c3a15832877c2b5441ca2be71fe308dc98eeb9ab99fd34d0ab0cc6d971697c5
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/provider-advert-rollout.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > [`docs/source/sorafs/provider_advert_rollout.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_rollout.md) سے ماخوذ۔

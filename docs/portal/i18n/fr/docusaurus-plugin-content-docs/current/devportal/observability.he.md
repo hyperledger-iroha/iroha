@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/devportal/observability.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 66b44f2b6863f11c38dbaa83a7f30b7d72f7c0f9dff415e399a2aa17a77c1a71
-source_last_modified: "2025-11-14T04:43:19.797409+00:00"
+source_hash: c99870a1ba25977a13a652c8bc6bb1cbd2cf1ad17cc5e668dd909ed6022715c7
+source_last_modified: "2026-01-03T18:07:58+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/devportal/observability.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Observabilite et analytics du portail

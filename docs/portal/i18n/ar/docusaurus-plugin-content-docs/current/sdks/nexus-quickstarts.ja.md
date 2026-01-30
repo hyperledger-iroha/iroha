@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sdks/nexus-quickstarts.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6675f680feee60aa71881e3a5883599370a31fc663b2a935a36dd9305d1d6acd
-source_last_modified: "2025-11-14T04:43:21.096631+00:00"
+source_hash: 8aeeca9dbfbc0f308fa05f9dcf27e4ecfb8d7867849975cc4f54cdfe4b86f718
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/sdks/nexus-quickstarts.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 الدليل الكامل موجود في `docs/source/nexus_sdk_quickstarts.md`. يسلط هذا الملخص في البوابة الضوء على المتطلبات المشتركة والاوامر لكل SDK حتى يتمكن المطورون من التحقق من اعداداتهم بسرعة.

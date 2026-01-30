@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/deal-engine.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7687e034611c71f3a9e449454c8655b9a41fadee9f1891652121267a52a28c1d
-source_last_modified: "2025-11-14T04:43:21.563865+00:00"
+source_hash: a1bb5c6afd063cbd36a451dc9f84d46297bc26b68a8d66f13c9b386dd3ecaa72
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: deal-engine
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/deal-engine.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note مستند ماخذ
 :::

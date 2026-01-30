@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/devportal/incident-runbooks.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e15f79395819ba6e3e1573e5f42f19b6ab2aaed2be5cd3edba4452f3ffd02b7f
-source_last_modified: "2025-11-14T04:43:19.784736+00:00"
+source_hash: 3a549ad6690b7cb1988d4ba7c94df9148d11c55754bfadd2e34137bff86d4e6e
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/devportal/incident-runbooks.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # נהלי חירום ותירגולי rollback

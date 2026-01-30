@@ -1,8 +1,10 @@
+use iroha_crypto::Hash;
 use iroha_data_model::{
     isi::error::{InstructionExecutionError as Error, InvalidParameterError},
     parameter::CustomParameterId,
     prelude::*,
 };
+use ivm::limits::GasScheduleEntry;
 
 use crate::state::StateTransaction;
 
@@ -39,4 +41,16 @@ pub fn enforce_json_size(
         ));
     }
     Ok(())
+}
+
+/// Return the canonical IVM gas schedule entries in opcode order.
+#[must_use]
+pub fn ivm_gas_schedule_entries() -> Vec<GasScheduleEntry> {
+    ivm::limits::gas_schedule_entries()
+}
+
+/// Return the deterministic hash of the canonical IVM gas schedule.
+#[must_use]
+pub fn ivm_gas_schedule_hash() -> Hash {
+    ivm::limits::schedule_hash()
 }

@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/manifest-pipeline.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a2a32556a62e8b43f10f896bad8647303926e059357be61cbe179f79e46ba547
-source_last_modified: "2025-11-04T12:03:18.013794+00:00"
+source_hash: d532e56e27673c6adc5544305e77634a9c0b3af3639bd3d754baaa0b894c7a3b
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/manifest-pipeline.md
+status: complete
+generator: scripts/sync_docs_i18n.py
 ---
 
 # SoraFS チャンク化 → マニフェストパイプライン

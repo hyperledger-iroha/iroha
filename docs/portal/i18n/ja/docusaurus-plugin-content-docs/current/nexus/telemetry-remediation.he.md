@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/nexus/telemetry-remediation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: df6d0c02a15a525d87a4f3bba53f3a97b18d76270332680625c8d203399176ff
-source_last_modified: "2025-11-14T04:43:20.587026+00:00"
+source_hash: 7273e04656ed8c2380122e0bb664806158a33ead499556d63bfb89027c3c81cd
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/nexus/telemetry-remediation.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-telemetry-remediation
+title: Nexusテレメトリ是正計画 (B2)
+description: `docs/source/nexus_telemetry_remediation_plan.md` のミラーで、テレメトリギャップ行列と運用フローを文書化します。
 ---
 
 # 概要

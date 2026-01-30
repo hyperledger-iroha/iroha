@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/orchestrator-config.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 12e7facd95f270633d8a658fe94bcfb8160a4ccc472e7ef79ca4f59646e23b81
-source_last_modified: "2025-11-14T04:43:21.973315+00:00"
+source_hash: e3e44efe2bc2fcf0550c412ef10804f57b6f7c94ab39323901879fad4bb55404
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-config
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/orchestrator-config.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Канонический источник
 Эта страница отражает `docs/source/sorafs/developer/orchestrator.md`. Держите обе копии синхронизированными, пока устаревшая документация не будет выведена из обращения.

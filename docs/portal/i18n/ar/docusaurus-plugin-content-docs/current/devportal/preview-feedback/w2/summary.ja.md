@@ -4,9 +4,18 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w2/summary.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 95277254d27aac5a47cf02d06446d38c0963f5e01a4219cec0aa9090c944c71c
-source_last_modified: "2025-11-14T04:43:19.967396+00:00"
+source_hash: af7a87188ff681c37e2bfa110775722b97a0e27ac31c6cfa57a88b356c4d9897
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: preview-feedback-w2-summary
+lang: ar
+direction: rtl
+source: docs/portal/docs/devportal/preview-feedback/w2/summary.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 | البند | التفاصيل |

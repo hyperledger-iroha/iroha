@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/pin-registry-ops.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 84506809e4ff47bf2cacda2afe4c41cb5659425433021ca19bca750472076e71
-source_last_modified: "2025-11-14T04:43:22.028182+00:00"
+source_hash: 80bc7b939264e64466b3fe1395be868f4717df5a811c62e14af2f030540c9862
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: pin-registry-ops
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/pin-registry-ops.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note المصدر المعتمد

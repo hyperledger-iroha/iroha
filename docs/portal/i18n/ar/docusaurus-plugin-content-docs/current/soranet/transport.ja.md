@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/soranet/transport.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 36a634beaec6fb971c6f31148d1983951d8853b132966b1d5c4e385d1517ab7b
-source_last_modified: "2025-11-14T04:43:22.520743+00:00"
+source_hash: c0feaa6e0f6a904f17795191ef3d0c59b8fd2b2eefa6291d76ef74383d7aff86
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: transport
+lang: ar
+direction: rtl
+source: docs/portal/docs/soranet/transport.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note المصدر القياسي

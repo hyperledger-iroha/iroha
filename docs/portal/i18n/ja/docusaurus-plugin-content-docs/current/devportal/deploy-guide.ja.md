@@ -4,9 +4,18 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/devportal/deploy-guide.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e014bafd8a43049039273464cab791ead00ef5e0fc0a73e0423c2ab588e92d70
-source_last_modified: "2025-11-08T11:41:06.506064+00:00"
+source_hash: cda4202ed8ea960b6263c4f6f226d1cbda2a980acb932a6b39e122cf32629ea4
+source_last_modified: "2026-01-22T15:57:55+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: deploy-guide
+lang: ja
+direction: ltr
+source: docs/portal/docs/devportal/deploy-guide.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 ## 概要

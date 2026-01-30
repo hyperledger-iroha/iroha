@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/devportal/security-hardening.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2c8b6b5f59c9a9271e5a9e592ecf0082eabd52bd31924009da2a641ad811018d
-source_last_modified: "2025-11-14T04:43:20.160825+00:00"
+source_hash: 90e66415f50946b40f80099175b840428ed636c493e2e33ecba7636197012f6a
+source_last_modified: "2026-01-03T18:07:58+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/devportal/security-hardening.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Durcissement securite et checklist de pen-test

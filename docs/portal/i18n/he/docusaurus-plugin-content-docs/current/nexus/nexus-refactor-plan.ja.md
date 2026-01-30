@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/nexus/nexus-refactor-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6670a48836cddc39f2f61b57a80fa6a1bd3254396f6f0b3440baf80e62e07aa3
-source_last_modified: "2025-11-14T04:43:20.463888+00:00"
+source_hash: 4d6e994501933bb04a57adc865de3b3d337548471fb3e0ac7c2b21b09f6ec3ca
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/nexus/nexus-refactor-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-refactor-plan
+title: תוכנית רפקטור ללדג'ר Sora Nexus
+description: מראה של `docs/source/nexus_refactor_plan.md`, המפרטת את עבודת הניקוי המדורגת לבסיס הקוד של Iroha 3.
 ---
 
 :::note מקור קנוני

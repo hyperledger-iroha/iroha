@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/observability-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 32ce8db65a7b7e319de952a49704a95fbaa1deb728f8746fc1bf526c1ae8d91d
-source_last_modified: "2025-11-14T04:43:21.936111+00:00"
+source_hash: 5e170c4e3d9f63a896cd026ea91570da98f406c6906a690a043494ebdb925771
+source_last_modified: "2026-01-21T07:38:35+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: observability-plan
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/observability-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note المصدر المعتمد

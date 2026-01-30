@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/norito/examples/register-and-mint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 080ad72682ecd7a36331df33e86fbe4dc39d5ec0bed1da89872db6a60a312a53
-source_last_modified: "2025-11-14T04:43:20.790675+00:00"
+source_hash: 119aad656e94db1c4d93a11626a49b5a87c844fd1f01e0ced18ec97625358579
+source_last_modified: "2026-01-22T15:55:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/norito/examples/register-and-mint.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/register-and-mint
+title: Registrar dominio y acuñar activos
+description: Demuestra la creación de dominios con permisos, el registro de activos y la acuñación determinista.
+source: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
 Demuestra la creación de dominios con permisos, el registro de activos y la acuñación determinista.

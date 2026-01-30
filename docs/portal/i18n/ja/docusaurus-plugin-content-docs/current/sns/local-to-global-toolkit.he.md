@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sns/local-to-global-toolkit.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: cff9d867ab27648c62786af17742eccba6cb75333f6160be99a7643a24ad78ae
-source_last_modified: "2025-11-14T04:43:21.354775+00:00"
+source_hash: 879073e8e080b5519eff2cead907cd5089b28155becde7bd12a885804d354653
+source_last_modified: "2026-01-28T17:58:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/sns/local-to-global-toolkit.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Local -> Global アドレスツールキット

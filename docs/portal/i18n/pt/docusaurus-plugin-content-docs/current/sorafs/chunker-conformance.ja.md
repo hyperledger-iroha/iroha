@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/chunker-conformance.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f044ff436bcd5c0f664f6443327564294c08dfc08ff7d039c60e9a6fa233dfac
-source_last_modified: "2025-11-14T04:43:21.461733+00:00"
+source_hash: 568d6db0d8077ae1087006c3918c7fc882daccd4584d55b2b1223d4e4a0ab7c4
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-conformance
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/chunker-conformance.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Fonte canonica
 Esta pagina espelha `docs/source/sorafs/chunker_conformance.md`. Mantenha ambas as copias sincronizadas.

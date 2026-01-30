@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/norito/ledger-walkthrough.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4a14e58813bb56c1f0325f01d6776dd57ef15ceda07bd82a5b5755ac18d2a3db
-source_last_modified: "2025-11-14T04:43:20.854162+00:00"
+source_hash: 9debcd36d54c1e2ba641d7ca4f9c5853ead0f55a94e6f2b0f66fb33550a02e1b
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/norito/ledger-walkthrough.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: סיור בלדג'ר
+description: שחזרו זרימה דטרמיניסטית register -> mint -> transfer עם CLI `iroha` ואמתו את מצב הלדג'ר המתקבל.
+slug: /norito/ledger-walkthrough
 ---
 
 הסיור הזה משלים את [Norito quickstart](./quickstart.md) בכך שהוא מראה כיצד לשנות ולבדוק את מצב הלדג'ר עם CLI `iroha`. תרשמו הגדרת נכס חדשה, תבצעו mint של יחידות לחשבון המפעיל ברירת המחדל, תעבירו חלק מהיתרה לחשבון אחר ותאמתו את העסקאות וההחזקות שנוצרו. כל שלב משקף את הזרימות שמכוסות ב-quickstarts של Rust/Python/JavaScript SDK כדי שתוכלו לאשר התאמה בין CLI להתנהגות ה-SDK.

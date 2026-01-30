@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/chunker-registry-charter.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: db8f5abb5fe0b02665abe026a24ecc99778446758bbb6929fbb0df1499a7f062
-source_last_modified: "2025-11-14T04:43:21.499878+00:00"
+source_hash: 543ad9b0298e311683e59ac9e1f99bbe9e02534439e0788c262c3b432ceae8ae
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-registry-charter
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/chunker-registry-charter.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Fuente canónica
 Esta página refleja `docs/source/sorafs/chunker_registry_charter.md`. Mantén ambas copias sincronizadas hasta que se retire el conjunto de documentación Sphinx heredado.

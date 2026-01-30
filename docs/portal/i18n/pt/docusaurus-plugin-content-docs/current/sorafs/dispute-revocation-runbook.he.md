@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/dispute-revocation-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e4d442f271d4be5ee0a15515a7ea00683a9dd75ac602a35381da04bf89e3eda3
-source_last_modified: "2025-11-14T04:43:21.709805+00:00"
+source_hash: 041673bed38d2a7f1643db45312e0dd1766facc5cd68bf678ac5ae88d3ec7ebe
+source_last_modified: "2026-01-22T15:55:18+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: dispute-revocation-runbook
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/dispute-revocation-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica

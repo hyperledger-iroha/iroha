@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/provider-admission-policy.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c404fc07c0f39c7e44a79a0d1eccfa1044def2ec22e0d41b1e7e6a8f026c1245
-source_last_modified: "2025-11-07T10:33:21.926522+00:00"
+source_hash: 9ffe54617f5c5f7c3220bd07a1b3ce7d7cb09eb13d98413c072283d2bb7a8068
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: provider-admission-policy
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/provider-admission-policy.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 > מותאם מ- [`docs/source/sorafs/provider_admission_policy.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_admission_policy.md).
 

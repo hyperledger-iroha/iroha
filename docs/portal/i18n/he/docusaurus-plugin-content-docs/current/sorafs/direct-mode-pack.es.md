@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/direct-mode-pack.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 823f0f2887b12b13eab45ffca3f18c3e10f5d7e9068eeb931ff05dc80e62ab4c
-source_last_modified: "2025-11-07T10:33:21.918348+00:00"
+source_hash: 7db0d27dca98e898c72392821239379336970b2daa37820dfbf1ca18b142d251
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: direct-mode-pack
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/direct-mode-pack.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note מקור קנוני
 עמוד זה משקף את `docs/source/sorafs/direct_mode_pack.md`. שמרו על שתי הגרסאות מסונכרנות עד שהסט הישן של Sphinx יופסק.

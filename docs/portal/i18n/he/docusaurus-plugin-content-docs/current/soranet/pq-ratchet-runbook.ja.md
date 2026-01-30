@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/soranet/pq-ratchet-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fcaf80a1aecd4e3f0fdea51748539eaf52d00eaa771e63ef96f021c8a644804a
-source_last_modified: "2025-11-14T04:43:22.406843+00:00"
+source_hash: e0f9d0442b880d90aa91ecab746c9a42313290f7d8d02eba7e7287e297e56bf8
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: pq-ratchet-runbook
+lang: he
+direction: rtl
+source: docs/portal/docs/soranet/pq-ratchet-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note מקור קנוני

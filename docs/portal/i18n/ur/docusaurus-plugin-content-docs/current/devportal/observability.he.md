@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/devportal/observability.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 00be3cc29ae11d9e1194c1d0afc50af3e1808e9eeafaf64b1c2482e3fe09938f
-source_last_modified: "2025-11-14T04:43:19.798058+00:00"
+source_hash: ada8bcbf8b63f9ee16037d3139911d96c171fc46731b3191cf49a49e774d3890
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/devportal/observability.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # پورٹل آبزرویبیلٹی اور اینالٹکس

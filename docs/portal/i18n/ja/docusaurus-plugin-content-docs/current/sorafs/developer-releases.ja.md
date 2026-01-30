@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/developer-releases.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e02d1ef21c570755c17c7cb391e014a054a158ea741da4946c218ea7e15a9713
-source_last_modified: "2025-11-14T04:43:21.651906+00:00"
+source_hash: 4bb528d5395666ed52d8bd0125a9c0a81e771e205795459b2d0e2096c1aeac42
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: developer-releases
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/developer-releases.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 # リリースプロセス
 

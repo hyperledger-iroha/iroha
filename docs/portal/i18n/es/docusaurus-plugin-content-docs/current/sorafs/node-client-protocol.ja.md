@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/node-client-protocol.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a3a4999d7d695a4e2a29d00c9075ea23d9ae116c5f2f099102db12571afe3849
-source_last_modified: "2025-11-14T04:43:21.846332+00:00"
+source_hash: 2ec212eee3a3f1fd2b152cc4455024e382efe3e9a920056bbdcbf0e76ee1d0bf
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/node-client-protocol.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Protocolo de nodo ↔ cliente de SoraFS

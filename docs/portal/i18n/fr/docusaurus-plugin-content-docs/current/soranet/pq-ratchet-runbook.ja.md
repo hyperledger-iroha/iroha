@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/soranet/pq-ratchet-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ab9f3f8d6554e95ca3da5f98cf21cada67e2200adb8de46f1f163db3b5045f06
-source_last_modified: "2025-11-14T04:43:22.407695+00:00"
+source_hash: 3b5c62c6babfbe5b2663ec5bbe7a88e1334b79e2dbc8aaa12ded65c217be8db4
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: pq-ratchet-runbook
+lang: fr
+direction: ltr
+source: docs/portal/docs/soranet/pq-ratchet-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Source canonique

@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/soranet/pq-rollout-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b292bf101cad3e2613c067699b5af0a720df967882fea2f53048830e897f51d1
-source_last_modified: "2025-11-14T04:43:22.431113+00:00"
+source_hash: a238c8bb8c998b6add41f0e9c7c95baccc9ba839efc8d270040bde367ff57c78
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: pq-rollout-plan
+lang: ur
+direction: rtl
+source: docs/portal/docs/soranet/pq-rollout-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Canonical Source

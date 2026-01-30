@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a0351611b53b99741fff3526a13e09779cfe3aa83ea28aa8a057ba2202005bcc
-source_last_modified: "2025-11-14T04:43:20.363699+00:00"
+source_hash: 4d631099e67566c330802fd34642c5f62e36ea1b6ecca9d68534c04108c0fe91
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-bootstrap-plan
+title: Sora Nexus ブートストラップと可観測性
+description: SoraFS/SoraNet サービスを重ねる前に Nexus の中核バリデータクラスタを立ち上げるための運用計画。
 ---
 
 :::note 正本

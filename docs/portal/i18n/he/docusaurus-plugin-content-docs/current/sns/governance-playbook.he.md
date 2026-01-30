@@ -4,9 +4,18 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sns/governance-playbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c99da6048485316759fcf4b926c06d627b3d9ea538dbd337454e070a4b70e42c
-source_last_modified: "2025-11-14T04:43:21.335987+00:00"
+source_hash: 66baa457e66d31ea97563b96e7984c50667491b623ab25672afcde1aca863f6f
+source_last_modified: "2026-01-20T13:32:38+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: governance-playbook
+lang: he
+direction: rtl
+source: docs/portal/docs/sns/governance-playbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note מקור קנוני

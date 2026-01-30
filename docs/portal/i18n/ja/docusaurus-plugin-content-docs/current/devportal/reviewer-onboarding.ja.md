@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/devportal/reviewer-onboarding.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 927f211a7dd60ed9d365682b43424f4599e6e2fc7203a7dee31c0fd3e42ba626
-source_last_modified: "2025-11-14T04:43:20.134854+00:00"
+source_hash: 84685f7aa13f2bb3d925916dbec515494ca87b63f4e980fb4cbd61f6c712a8b2
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/devportal/reviewer-onboarding.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # プレビューレビュアーのオンボーディング

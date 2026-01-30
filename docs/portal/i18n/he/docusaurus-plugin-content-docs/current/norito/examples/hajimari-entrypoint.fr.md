@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/norito/examples/hajimari-entrypoint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8e070301537006e5463f5b94c6876dd1edc4d2c4d48955b6f7ca9e133b30751e
-source_last_modified: "2025-11-04T12:26:02.940076+00:00"
+source_hash: 195b70e63ccabb93a8dd88b699e0a96d9460e9da13a63ec8dce792b1ebc3b437
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/norito/examples/hajimari-entrypoint.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/hajimari-entrypoint
+title: שלד נקודת כניסה Hajimari
+description: שלד חוזה Kotodama מינימלי עם נקודת כניסה ציבורית אחת וידית מצב.
+source: crates/ivm/docs/examples/01_hajimari.ko
 ---
 
 שלד חוזה Kotodama מינימלי עם נקודת כניסה ציבורית אחת וידית מצב.

@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/soranet/puzzle-service-operations.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 18e761f8334382cb4422fe835d0fd4b342b77ba858028c876edd5b366c6abe18
-source_last_modified: "2025-11-14T04:43:22.491583+00:00"
+source_hash: b68dfed31c90b5eeb3e55104ddb4ecdef8cf9cb3556723984078fd5332b9cf23
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: puzzle-service-operations
+lang: pt
+direction: ltr
+source: docs/portal/docs/soranet/puzzle-service-operations.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica

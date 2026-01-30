@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/runbooks-index.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: db656ad4610608f62ed18d4046012eb1cc2f566ed145a4f6841fa1be1bdf4c48
-source_last_modified: "2025-11-14T04:43:22.302507+00:00"
+source_hash: 91332ce9d3421a9c524855bd6dc6a46fd9b13aa19bbc5dc425735f2027631170
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: runbooks-index
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/runbooks-index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: آپریٹر رن بکس کا اشاریہ
+sidebar_label: رن بک اشاریہ
+description: منتقل شدہ SoraFS آپریٹر رن بکس کے لیے مستند نقطۂ آغاز.
 ---
 
 > `docs/source/sorafs/runbooks/` میں موجود ذمہ داران کے رجسٹر کی عکاسی کرتا ہے۔

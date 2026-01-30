@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/soranet/puzzle-service-operations.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: af62c1871e1d449b90b22c1c5d22444ff29a3d1376d5f437c851d59768e04c4b
-source_last_modified: "2025-11-14T04:43:22.492680+00:00"
+source_hash: 2f1671f1f001c9560c2392ea7121cca82a199cf91d5ee21d9816a11745845c4d
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: puzzle-service-operations
+lang: ar
+direction: rtl
+source: docs/portal/docs/soranet/puzzle-service-operations.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note المصدر القياسي

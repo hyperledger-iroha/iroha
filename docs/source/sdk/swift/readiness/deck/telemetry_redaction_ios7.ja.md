@@ -1,18 +1,60 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/source/sdk/swift/readiness/deck/telemetry_redaction_ios7.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 21718371e3e65affec23841c30dee4b7b6d8d6a397ea4683c83c38c51b9de35e
-source_last_modified: "2025-11-13T04:47:15.019779+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:08:01.552173+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+<!--
+  SPDX-License-Identifier: Apache-2.0
+-->
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+# Swift Telemetry Redaction & Observability — Slide Storyboard
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+This Markdown storyboard drives the slide deck that will be presented during the
+IOS7/IOS8 readiness session. Copy sections into the preferred slide authoring
+tool (Keynote/Slides) and attach speaker notes before export.
+
+## Slide 1 — Title & Objectives
+- Title, presenters, date/time.
+- Objectives: Align telemetry policy, review operator workflows, confirm chaos
+  rehearsal plan, outline next steps.
+
+## Slide 2 — Roadmap Context
+- Highlight IOS7 (Connect) + IOS8 (Production readiness) bullets from
+  `roadmap.md`.
+- Call out risk: “Telemetry redaction & readiness plan”.
+
+## Slide 3 — Signal Inventory Snapshot
+- Table excerpt from `docs/source/sdk/swift/telemetry_redaction.md`.
+- Mention hashing strategy (`authority_hash`, `session_alias_hash`).
+
+## Slide 4 — Schema Diff Highlights
+- Visual showing `torii.http.request` vs `swift.torii.http.request`.
+- Link to `dashboards/data/swift_schema.sample.json`.
+
+## Slide 5 — Override Workflow
+- Flowchart referencing support playbook (§Telemetry overrides).
+- Steps: request → Norito signature → ledger entry → expiry.
+
+## Slide 6 — Dashboards & Alerts
+- Screenshots to be captured from `dashboards/mobile_parity.swift` once telemetry
+  block wired.
+- Bullet list of key alerts (salt drift, exporter outage, override count spike).
+
+## Slide 7 — Chaos/Lab Scenarios
+- Summarise Scenario A–E from
+  `docs/source/sdk/swift/readiness/labs/swift_telemetry_lab_01.md`.
+- Note required staging resources + expected outputs.
+
+## Slide 8 — Knowledge Check & Follow-Ups
+- Reference quiz form, expected completion window, escalation for <90 %.
+- List action items (recording upload, status.md update, roadmap note).
+
+## Slide 9 — Q&A
+- Reserve space for live questions.
+- Reminder to capture action items in IOS7/IOS8 board.

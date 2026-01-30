@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/nexus/confidential-gas-calibration.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e601d5698d51dbb34e0cfe4033021791a074093d03e916666752328b280abafc
-source_last_modified: "2025-11-14T04:43:20.322363+00:00"
+source_hash: bde1236c24270aafef53488c6c2b81454ed978ea551f9eb0fe98fd8e1b238608
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/nexus/confidential-gas-calibration.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: 機密ガス校正レジャー
+description: 機密ガススケジュールを裏付けるリリース品質の測定値。
+slug: /nexus/confidential-gas-calibration
 ---
 
 # 機密ガス校正ベースライン

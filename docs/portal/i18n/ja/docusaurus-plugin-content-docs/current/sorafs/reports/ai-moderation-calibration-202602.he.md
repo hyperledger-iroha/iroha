@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/reports/ai-moderation-calibration-202602.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fb5ace5acddc31fd9721cea5d539677ebdf307094e319ec444c227f12e1597f0
-source_last_modified: "2025-11-14T04:43:22.174556+00:00"
+source_hash: 327f32a0531c457b492d41405f8c80a983ee0d5a25f089deae80d93aa2048b02
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/reports/ai-moderation-calibration-202602.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # AI モデレーション校正レポート - 2026年2月

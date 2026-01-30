@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/orchestrator-config.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1647a1f271afed8101b0e81e2f05b8bb213c9cc7a01817a8978a06563d39a660
-source_last_modified: "2025-11-14T04:43:21.973851+00:00"
+source_hash: e25d2e81d8db6bffa785cf7844636b6af18f3ef1ec73c554a4b3e6f2e6ce16c6
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-config
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/orchestrator-config.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note مستند ماخذ
 یہ صفحہ `docs/source/sorafs/developer/orchestrator.md` کی عکاسی کرتا ہے۔ جب تک پرانی ڈاکیومنٹیشن ریٹائر نہ ہو جائے، دونوں نقول کو ہم آہنگ رکھیں۔

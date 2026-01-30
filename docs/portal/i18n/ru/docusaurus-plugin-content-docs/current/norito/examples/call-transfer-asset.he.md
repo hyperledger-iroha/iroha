@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/norito/examples/call-transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5acc643bab9440b1a8ec1cbd651e092bea239f07fba9ab1b7ba84ed5b9173a80
-source_last_modified: "2025-11-14T04:43:20.646008+00:00"
+source_hash: 85d38764425843d13b1fe0fdb9b2b85cf04580fff2848210d57d570236210bdb
+source_last_modified: "2026-01-22T15:55:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/norito/examples/call-transfer-asset.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/call-transfer-asset
+title: Вызвать перенос с хоста из Kotodama
+description: Показывает, как точка входа Kotodama может вызвать инструкцию хоста `transfer_asset` с встроенной проверкой метаданных.
+source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
 Показывает, как точка входа Kotodama может вызвать инструкцию хоста `transfer_asset` с встроенной проверкой метаданных.

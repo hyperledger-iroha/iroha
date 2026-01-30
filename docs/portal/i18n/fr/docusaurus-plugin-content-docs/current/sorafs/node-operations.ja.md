@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/node-operations.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b231a712e604ef36bc0ed72c0a040822b4cfb2dae0c8c72c7b40a6aac6bd15bc
-source_last_modified: "2025-11-14T04:43:21.864256+00:00"
+source_hash: ecb5814c26615f416b5b0027883ee24b19cae050cf44df7f906220176b899312
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: node-operations
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/node-operations.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Source canonique

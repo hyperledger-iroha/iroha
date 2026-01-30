@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/chunker-conformance.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e4f75824d4ed60e4da17f4994982ac7dd13442b89f0641cafd383c8bb985990f
-source_last_modified: "2025-11-14T04:43:21.462825+00:00"
+source_hash: 716f21925e638ab71f2b536e5b4899302f76514b5cf07a0c6cce9ebe17dac069
+source_last_modified: "2026-01-04T01:54:29+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-conformance
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/chunker-conformance.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note المصدر المعتمد
 تعكس هذه الصفحة `docs/source/sorafs/chunker_conformance.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة.

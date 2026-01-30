@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/node-operations.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: babc7c34011c3dfa59972130f81810ed71da629fd0bf1a572c88e8158de53b07
-source_last_modified: "2025-11-14T04:43:21.863672+00:00"
+source_hash: 76bc260f4ded8db1d71077f5da60831396d42cf7b63a6998b7e4b11e523b380a
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: node-operations
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/node-operations.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica

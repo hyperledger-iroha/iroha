@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/reference/README.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fcdac983e6f2595a98fb3920c0d4054617cd67efd86469ba9fca0b58d2a0faea
-source_last_modified: "2025-11-04T12:12:52.308426+00:00"
+source_hash: 1fbf38f14e6e5b4b90d31b072e189035b463e3a3dd2559b8b347fe57b524c55a
+source_last_modified: "2026-01-03T18:07:58+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/reference/README.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: אינדקס רפרנס
+slug: /reference
 ---
 
 הסעיף הזה מרכז את חומרי "קראו זאת כמפרט" עבור Iroha. הדפים הללו נשארים יציבים גם כשהמדריכים והטוטוריאלים מתפתחים.

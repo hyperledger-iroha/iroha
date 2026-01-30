@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/nexus/settlement-faq.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7476b62b035ace9ce4f520ceb9acdc1d64c176046943b22fcb48276e6b491089
-source_last_modified: "2025-11-14T04:43:20.567852+00:00"
+source_hash: ca53cb86a6a60d3093581e2b2f45d3544a6288aea0360e82379b88a6704aab5b
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/nexus/settlement-faq.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-settlement-faq
+title: FAQ по settlement
+description: Ответы для операторов о маршрутизации settlement, конвертации в XOR, телеметрии и аудиторских доказательствах.
 ---
 
 Эта страница зеркалирует внутренний FAQ по settlement (`docs/source/nexus_settlement_faq.md`), чтобы читатели портала могли изучать те же рекомендации без поиска в mono-repo. Здесь объясняется, как Settlement Router обрабатывает выплаты, какие метрики отслеживать и как SDK должны интегрировать полезные нагрузки Norito.

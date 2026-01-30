@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/devportal/observability.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7a1ee1d75978292ac9476da1f0e274c32c586dfbaa713c25225142693f94a8a4
-source_last_modified: "2025-11-14T04:43:19.796941+00:00"
+source_hash: 18174be96c38e96897849e84688805c5afef1e99e24b41966f6eb059dd8249e0
+source_last_modified: "2026-01-03T18:07:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/devportal/observability.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Observabilidad y analitica del portal

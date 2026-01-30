@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/nexus/nexus-spec.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 095b970a331ec424f5cbecd0711a2986f0b6bfe0fe27d22da5f41d0f86c557ab
-source_last_modified: "2025-11-14T04:43:20.503624+00:00"
+source_hash: 999ddf47f6a16fd57d8c1a7c6db04b123c6961bf3b366e4a12fc4e243884e472
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/nexus/nexus-spec.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-spec
+title: Sora Nexus کی تکنیکی اسپیسفیکیشن
+description: `docs/source/nexus.md` کی مکمل عکاسی، جو Iroha 3 (Sora Nexus) لیجر کی معماری اور ڈیزائن پابندیوں کا احاطہ کرتی ہے۔
 ---
 
 :::note کینونیکل ماخذ

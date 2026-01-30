@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/soranet/privacy-metrics-pipeline.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ac94afb0b9ca7f9c094134a43ca0d0b284febc90b59824a3ec37a7845d95925b
-source_last_modified: "2025-11-14T04:43:22.468269+00:00"
+source_hash: dc1e35bea66186b98ba7e637fb41e1cfb55df6f61ac4c555359265cc09012d11
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: privacy-metrics-pipeline
+lang: he
+direction: rtl
+source: docs/portal/docs/soranet/privacy-metrics-pipeline.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note מקור קנוני

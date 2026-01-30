@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/soranet/puzzle-service-operations.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4ee21ae6629b662d10abe1166b47b2f6f7535aaea6177d9cdd2455f3c704d80a
-source_last_modified: "2025-11-14T04:43:22.492903+00:00"
+source_hash: e6839913857d9b35b2830a0fc75ce0e9eda705521a4a611ef018b3f87e5a7f44
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: puzzle-service-operations
+lang: ur
+direction: rtl
+source: docs/portal/docs/soranet/puzzle-service-operations.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Canonical Source

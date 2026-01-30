@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/priority-snapshot-2025-03.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c96469964efe27ccba44af095b077980813b462c06445dadaec66eb4d284157b
-source_last_modified: "2025-11-14T04:43:22.090484+00:00"
+source_hash: 5d25bdfa5d71a902e35b15a425aeab976f60369a291081e167d2774427d2c652
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: priority-snapshot-2025-03
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/priority-snapshot-2025-03.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > 正規ソース: `docs/source/sorafs/priority_snapshot_2025-03.md`

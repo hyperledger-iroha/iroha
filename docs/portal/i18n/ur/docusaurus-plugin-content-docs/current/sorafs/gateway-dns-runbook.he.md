@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/gateway-dns-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: de98f64109e93ef3a639adbf7064e70f5c7667f2c0524dc22ab441eb0010bc08
-source_last_modified: "2025-11-14T04:43:21.736367+00:00"
+source_hash: e402d75bdfe92c8e7f9c687baaef18628407e033aca5580334e02182e63779f1
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/gateway-dns-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # SoraFS گیٹ وے اور DNS کک آف رن بک

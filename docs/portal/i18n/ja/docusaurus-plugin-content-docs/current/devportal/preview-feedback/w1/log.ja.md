@@ -4,9 +4,18 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w1/log.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5ecce3d37cafac7943fd0e061dc15ace5f8b2e7f6f099a652ee79c3d7c20592b
-source_last_modified: "2025-11-14T04:43:19.844634+00:00"
+source_hash: 7470bd5478f2e2ebf5e930dc8a9e525ef915e2763023f9ebdd84dfb3ec9c9b1a
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: preview-feedback-w1-log
+lang: ja
+direction: ltr
+source: docs/portal/docs/devportal/preview-feedback/w1/log.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 このログは **W1 パートナープレビュー** の招待 roster、テレメトリー checkpoint、レビュー担当のフィードバックを保持します。

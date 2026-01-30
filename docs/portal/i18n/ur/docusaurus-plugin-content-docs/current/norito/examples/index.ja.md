@@ -4,9 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/norito/examples/index.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 38710f8b8a3c9cee01524fb21d9f14e9777c7b070331a05184dd4f0ab59247df
-source_last_modified: "2025-11-14T04:43:20.748484+00:00"
+source_hash: 8b31195767817f4c41d1a31e4f80f9d9dfef6a58ed3d63efa87ba7449cfc6d10
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/norito/examples/index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Norito مثالیں
+description: لیجر واک تھرو کے ساتھ منتخب Kotodama اسنیپٹس۔
+slug: /norito/examples
 ---
 
 یہ مثالیں SDK کے کوئیک اسٹارٹس اور لیجر واک تھروز کی عکاسی کرتی ہیں۔ ہر اسنیپٹ میں لیجر چیک لسٹ شامل ہے اور Rust، Python اور JavaScript گائیڈز کے لنکس دیے گئے ہیں تاکہ آپ وہی منظرنامہ ابتدا سے انتہا تک دہرا سکیں۔

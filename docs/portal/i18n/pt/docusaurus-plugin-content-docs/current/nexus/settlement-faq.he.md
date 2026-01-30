@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/nexus/settlement-faq.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d0b5214ee3ec54f3ec6d288908110e116b85971fdd5e405c981a722d62bbc564
-source_last_modified: "2025-11-14T04:43:20.567205+00:00"
+source_hash: d7966a2fb6b94b46e457bcf34e49b5e3447c158a11e1a7915ba4c772e7bc10c7
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/nexus/settlement-faq.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-settlement-faq
+title: FAQ de Settlement
+description: Respostas para operadores cobrindo roteamento de settlement, conversao XOR, telemetria e evidencia de auditoria.
 ---
 
 Esta pagina espelha o FAQ interno de settlement (`docs/source/nexus_settlement_faq.md`) para que os leitores do portal revisem a mesma orientacao sem vasculhar o mono-repo. Explica como o Settlement Router processa pagamentos, quais metricas monitorar e como os SDKs devem integrar os payloads Norito.

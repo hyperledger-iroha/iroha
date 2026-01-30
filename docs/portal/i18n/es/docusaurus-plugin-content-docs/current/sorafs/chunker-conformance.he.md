@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/chunker-conformance.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2656e9f871ca8cb487a25e279b05514b04972720b209df8d88e34b21a1126f00
-source_last_modified: "2025-11-14T04:43:21.461340+00:00"
+source_hash: 303cf077d7ff2d9d798b33346558ae22dbd20d50a2a6f96156374258160b3148
+source_last_modified: "2026-01-04T17:34:26+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-conformance
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/chunker-conformance.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Fuente canónica
 Esta página refleja `docs/source/sorafs/chunker_conformance.md`. Mantén ambas versiones sincronizadas hasta que se retiren los docs heredados.

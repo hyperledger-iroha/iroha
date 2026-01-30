@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/reference/README.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b715cfbd3b6a415a3f5a459a8f355cb3f9e5c2fd2003b4c867004a88ea410303
-source_last_modified: "2025-11-14T04:43:20.931716+00:00"
+source_hash: 993082fb57aa9bc3d600d9da3757961f569ba2e13a1dabb803f075a51ec4b8cc
+source_last_modified: "2026-01-03T18:07:58+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/reference/README.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Index de reference
+slug: /reference
 ---
 
 Cette section regroupe le materiel  a lire comme une specification  pour Iroha. Ces pages restent stables meme lorsque les guides et tutoriels evoluent.

@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/nexus/nexus-operator-onboarding.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9ac0f2b4a29915efbb06043a4e67bbeac953eefb81e5186909822b68d57b58c7
-source_last_modified: "2025-11-14T04:43:20.447955+00:00"
+source_hash: 52e37340ac09710e38319c0873e341292cd058620db85c74edd113de97122ecc
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/nexus/nexus-operator-onboarding.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-operator-onboarding
+title: Sora Nexus data-space オペレーターのオンボーディング
+description: `docs/source/sora_nexus_operator_onboarding.md` のミラーで、Nexusオペレーター向けのエンドツーエンド release checklist を追跡します。
 ---
 
 :::note 正本

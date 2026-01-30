@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/da/commitments-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fff989a9bd0b000bb341ccfc7512d8b2ab3fb2243ec9bda907adc11f218760ad
-source_last_modified: "2025-11-14T04:43:19.714839+00:00"
+source_hash: 819e58e445a7d20cd85cc9738ea77a4d81aa3c330c232b76d1826d79d1221b58
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/da/commitments-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Source canonique

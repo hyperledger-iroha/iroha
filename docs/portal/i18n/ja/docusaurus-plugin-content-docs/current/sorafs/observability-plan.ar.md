@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/observability-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a9e59dde212de62e8a0e529fcfb1b4eb219ba3e63c56e0e7072c74c0dbfc9a14
-source_last_modified: "2025-11-07T10:33:21.921917+00:00"
+source_hash: a7b1bf9505b55d6a599406bfce76a3511c7a4972af05215f0abf39335e37bb18
+source_last_modified: "2026-01-21T07:37:45+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: observability-plan
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/observability-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note 正規ソース

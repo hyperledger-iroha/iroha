@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/devportal/preview-host-exposure.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3b851abfdfc78c43c207586ebac3fc0e9f52456954207b71d5f5bd2f7e0863bd
-source_last_modified: "2025-11-14T04:43:19.994499+00:00"
+source_hash: 1c6cf02c8b2229699fadd96b904e67d4c45c350ce996b81668da3e94f4eb5090
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/devportal/preview-host-exposure.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # プレビュー ホスト公開ガイド

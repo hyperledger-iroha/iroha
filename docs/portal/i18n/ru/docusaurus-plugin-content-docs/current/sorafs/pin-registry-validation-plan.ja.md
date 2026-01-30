@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/pin-registry-validation-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 21bf04bcf7b01b56ecdd918be4efd0394cddf19292ca0fa157543d579fbdf9b2
-source_last_modified: "2025-11-14T04:43:22.071544+00:00"
+source_hash: 2ab99b1bdd90e19d22a0954cc2f40b0c5c567b5eef40bcbb028a5e7479496da5
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: pin-registry-validation-plan
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/pin-registry-validation-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Канонический источник

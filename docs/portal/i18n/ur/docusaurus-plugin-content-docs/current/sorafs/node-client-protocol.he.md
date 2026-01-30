@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/node-client-protocol.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8b46a20aaa136db2f19054c7d451bf0d9fdd4f647e2dcb1ef0f7285572d135e0
-source_last_modified: "2025-11-14T04:43:21.848583+00:00"
+source_hash: c7815f98c4df381c635e3466e665b1d7b9e8e885bb8f80fdda77929410150f6a
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/node-client-protocol.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # SoraFS نوڈ ↔ کلائنٹ پروٹوکول

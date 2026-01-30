@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/gateway-dns-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: daea1194d781913c3482625652da78341c6072fbf4983baab4a868cc8877e389
-source_last_modified: "2025-11-14T04:43:21.733324+00:00"
+source_hash: b67f5b6e15207d543465cee6733e2f847023d82f301cb0e8f4aed0bac9dcbd5f
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/gateway-dns-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # SoraFS Gateway & DNS キックオフ・ランブック

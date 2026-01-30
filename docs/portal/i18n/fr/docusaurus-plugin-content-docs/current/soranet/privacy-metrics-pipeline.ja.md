@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/soranet/privacy-metrics-pipeline.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1c1422ba8dc588f6911b34c40374bae2fe908b99bacc97634ec8ead75380a804
-source_last_modified: "2025-11-14T04:43:22.470179+00:00"
+source_hash: a46cea0c9b8b59ed379d698c31182bbe8f40d9e688d7b4593f8398421922565f
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: privacy-metrics-pipeline
+lang: fr
+direction: ltr
+source: docs/portal/docs/soranet/privacy-metrics-pipeline.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Source canonique

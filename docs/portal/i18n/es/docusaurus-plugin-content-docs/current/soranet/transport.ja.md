@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/soranet/transport.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 78cb4236afe2dd43e0f4e24c1bba89654a22340bf39e2b3f321bb5ff867bfa4d
-source_last_modified: "2025-11-14T04:43:22.520226+00:00"
+source_hash: 2fa9d112bbe26782f59d5d47afa1300410e2030e5717af79e83fb8fac097e33d
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: transport
+lang: es
+direction: ltr
+source: docs/portal/docs/soranet/transport.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fuente canonica

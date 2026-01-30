@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/storage-capacity-marketplace.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 22b0a08b6d44781b62343eb507d080d728039f15bda2ad7037905e5bc1ba1bc8
-source_last_modified: "2025-11-14T04:43:22.362265+00:00"
+source_hash: 66cd153546f48050dcc8adbb3214e1a954e20bd31ee0aff6c3e56240dbe5d5dc
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: storage-capacity-marketplace
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/storage-capacity-marketplace.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica

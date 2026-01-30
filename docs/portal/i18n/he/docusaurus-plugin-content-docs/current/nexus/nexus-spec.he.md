@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/nexus/nexus-spec.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ec6236b5ca01247034dcc597d30edf0a0d9ef7f348c82ada05b0d47920482109
-source_last_modified: "2025-11-14T04:43:20.502447+00:00"
+source_hash: 2ce1d8e4711c90db1e5c2cc61cf454555a19263ddfba73f8a85e83d7f8b40f2f
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/nexus/nexus-spec.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-spec
+title: מפרט טכני של Sora Nexus
+description: מראה מלאה של `docs/source/nexus.md`, המכסה את הארכיטקטורה ומגבלות התכנון ל‑Iroha 3 (Sora Nexus).
 ---
 
 :::note מקור קנוני

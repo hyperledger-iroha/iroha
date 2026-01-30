@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/developer-deployment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1f112d3b383fdc3e8e1ae410c619558638327f66b15034ef1249c7073a7a7ee8
-source_last_modified: "2025-11-14T04:43:21.618958+00:00"
+source_hash: b605bbfb1cefd3aefb02a63f586a5c1a1021097358daba2350c5f26f7c9b7513
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: developer-deployment
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/developer-deployment.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note المصدر المعتمد
 تعكس هذه الصفحة `docs/source/sorafs/developer/deployment.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة.

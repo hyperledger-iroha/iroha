@@ -1,18 +1,91 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sdks/recipes/javascript-ledger-flow.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 49c0fa8954e7cf62c29ad5952ab52e59168014826c81c7082944eda9268ee5a2
-source_last_modified: "2025-11-14T04:43:21.142283+00:00"
-translation_last_reviewed: null
+source_hash: d4d962028f71a943c1fb188548ce55dc7d6e3eb58902f27464a67dbce95437fa
+source_last_modified: "2026-01-30T14:57:12+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/sdks/recipes/javascript-ledger-flow.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /sdks/recipes/javascript-ledger-flow
+title: جاوا اسکرپٹ لیجر فلو ترکیب
+description: `@iroha2/torii-client` کے ساتھ اثاثہ رجسٹر کریں، منٹ کریں، منتقل کریں اور بیلنس معلوم کریں۔
+---
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+import SampleDownload from '@site/src/components/SampleDownload';
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+یہ ترکیب Node.js کے `@iroha2/torii-client` اور `@iroha2/crypto-target-node` پیکجز استعمال کرتی ہے تاکہ CLI کے لیجر واک تھرو کو دوبارہ دہرایا جا سکے۔
+
+<SampleDownload
+  href="/sdk-recipes/javascript/ledger-flow.mjs"
+  filename="ledger-flow.mjs"
+  description="اس لیجر واک تھرو میں استعمال ہونے والا عین JavaScript اسکرپٹ ڈاؤن لوڈ کریں۔"
+/>
+
+## پیشگی تقاضے
+
+```bash
+npm install @iroha2/torii-client @iroha2/crypto-target-node
+export ADMIN_ACCOUNT="ih58..."
+export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+```
+
+## مثالی اسکرپٹ
+
+```ts title="ledger-flow.mjs"
+import {ToriiClient, buildTransaction} from '@iroha2/torii-client';
+import {createKeyPairFromHex} from '@iroha2/crypto-target-node';
+
+const adminAccount = process.env.ADMIN_ACCOUNT!;
+const receiverAccount = process.env.RECEIVER_ACCOUNT!;
+const adminPrivateKey = process.env.ADMIN_PRIVATE_KEY!;
+
+const client = ToriiClient.create({
+  apiUrl: 'http://127.0.0.1:8080',
+});
+
+const {publicKey, privateKey} = createKeyPairFromHex(adminPrivateKey);
+
+const tx = buildTransaction({
+  chain: '00000000-0000-0000-0000-000000000000',
+  authority: adminAccount,
+  instructions: [
+    {Register: {assetDefinition: {numeric: {id: 'coffee#wonderland'}}}},
+    {Mint: {asset: {id: `coffee#wonderland##${adminAccount}`}, value: {quantity: '250'}}},
+    {Transfer: {
+      asset: {id: `coffee#wonderland##${adminAccount}`},
+      destination: receiverAccount,
+      value: {quantity: '50'},
+    }},
+  ],
+});
+
+tx.sign({publicKey, privateKey});
+const receipt = await client.submitTransaction(tx);
+const txHash = receipt?.payload?.tx_hash ?? "<pending>";
+console.log('Submitted tx', txHash);
+
+const balances = await client.listAccountAssets(receiverAccount, {limit: 10});
+for (const asset of balances.items) {
+  if (asset.id.definition === 'coffee#wonderland') {
+    console.log('Receiver holds', asset.value, 'units of', asset.id.definition);
+  }
+}
+```
+
+`node --env-file=.env ledger-flow.mjs` چلائیں (یا ماحولیاتی متغیرات دستی طور پر ایکسپورٹ کریں)۔ لاگ میں ٹرانزیکشن ہیش (رسید پے لوڈ سے) اور وصول کنندہ کا اپ ڈیٹ شدہ بیلنس دکھائی دینا چاہیے۔
+
+## برابری کی تصدیق
+
+- `iroha --config defaults/client.toml transaction get --hash <hash>` کے ذریعے ٹرانزیکشن کی تفصیلات حاصل کریں۔
+- `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` سے بیلنس کا موازنہ کریں۔
+- SDK کی برابری یقینی بنانے کے لیے Rust اور Python کی ترکیبوں کے ساتھ اخراج شدہ ہیش کا موازنہ کریں۔

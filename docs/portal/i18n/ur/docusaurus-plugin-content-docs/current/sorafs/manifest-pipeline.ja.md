@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/manifest-pipeline.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1564d4cb31bceeeca07ce611f386a53e77b1f2aa8e488249e5dc46946b7c2496
-source_last_modified: "2025-11-14T04:43:21.768474+00:00"
+source_hash: 39455c6097acfad3713cb4c31cbfa19bd728fab33468688cdfb91e837a1d56e2
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/manifest-pipeline.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # SoraFS chunking → manifest pipeline

@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/devportal/preview-host-exposure.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 827ce2b6207ffba9c8f18bef21d19413b82f5c3f3824f435eb5afc6a62456846
-source_last_modified: "2025-11-14T04:43:19.996261+00:00"
+source_hash: 783e6601bac7821d4f8d7f81b14b1b5e3095adcbd35a7d1a030f6b98b0de7894
+source_last_modified: "2026-01-03T18:07:58+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/devportal/preview-host-exposure.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Guide d'exposition de l'hote de preview

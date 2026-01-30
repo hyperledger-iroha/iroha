@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/reports/sf2c-capacity-soak.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 0a84343edeae33a2990029d8e070fec76c0b9720e32b8fe0489b648792a0302c
-source_last_modified: "2025-11-14T04:43:22.257940+00:00"
+source_hash: 0159c2a8392a1e39ccb55b56862e34a5c2afebd0eeb7640396f55232d71541ec
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Отчет о soak начисления емкости SF-2c

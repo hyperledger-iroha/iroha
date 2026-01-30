@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/nexus/nexus-operator-onboarding.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a1b9623f4ac2ea7a9ec82ea1f8a645acce98136d7e1646768792e13cfebef8e0
-source_last_modified: "2025-11-14T04:43:20.448503+00:00"
+source_hash: 9224b69afbd10e72f9776ebd4955f694a5ead05af70500dc5f209e98a8fcaac5
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/nexus/nexus-operator-onboarding.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-operator-onboarding
+title: קליטת מפעילי data-space של Sora Nexus
+description: מראה של `docs/source/sora_nexus_operator_onboarding.md`, העוקב אחר צ'קליסט release מקצה לקצה למפעילי Nexus.
 ---
 
 :::note מקור קנוני

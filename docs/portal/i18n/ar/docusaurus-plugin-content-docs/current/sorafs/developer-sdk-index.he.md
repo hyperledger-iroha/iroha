@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/developer-sdk-index.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bbb90c49a528d91bd7cd3a94e81069cb06e65bd369bf13cdd278cb91f9eb51f4
-source_last_modified: "2025-11-14T04:43:21.670303+00:00"
+source_hash: d66018dc5ad7bec4040c027ee68b541feef5f4803d22bcaea559504253eb8a1c
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: developer-sdk-index
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/developer-sdk-index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note المصدر المعتمد
 تعكس هذه الصفحة `docs/source/sorafs/developer/sdk/index.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة Sphinx القديمة.

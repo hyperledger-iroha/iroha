@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/norito/examples/transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8526c81175a83a1376dacb11d9928992f477a8324cbb530829369063adabf3fc
-source_last_modified: "2025-11-14T04:43:20.811115+00:00"
+source_hash: de40edc3d49d11f950b91c099108cc9aaf4d8d82462510a67c0d04323b33324f
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/norito/examples/transfer-asset.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/transfer-asset
+title: Transferir activo entre cuentas
+description: Flujo directo de transferencia de activos que refleja los quickstarts de los SDK y los recorridos del libro mayor.
+source: examples/transfer/transfer.ko
 ---
 
 Flujo directo de transferencia de activos que refleja los quickstarts de los SDK y los recorridos del libro mayor.

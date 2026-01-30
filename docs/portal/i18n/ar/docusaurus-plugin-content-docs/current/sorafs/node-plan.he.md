@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/node-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 0a8ffa8b48b563adaf0eb5227e3f9a79994cc3c5393e1cf0b26c9800f33bfd6e
-source_last_modified: "2025-11-14T04:43:21.894756+00:00"
+source_hash: 779fb99e814c8b24be909eb4b0ad49db2eb02d1d60cba0b7f8612a7f6729267b
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: node-plan
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/node-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note المصدر المعتمد
 تعكس هذه الصفحة `docs/source/sorafs/sorafs_node_plan.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف وثائق Sphinx القديمة.

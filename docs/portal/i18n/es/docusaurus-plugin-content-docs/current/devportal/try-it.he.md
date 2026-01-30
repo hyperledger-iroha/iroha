@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/devportal/try-it.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2fec08d2e599c483a56b1dd5f17f3141bad32988575e1c448781db94fffdecc3
-source_last_modified: "2025-11-14T04:43:20.195024+00:00"
+source_hash: 6d16f600599420eb6c50a8110962bb97435f0cc4d51ef2fdef372cdd74ece281
+source_last_modified: "2026-01-03T18:07:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/devportal/try-it.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Sandbox de Try It

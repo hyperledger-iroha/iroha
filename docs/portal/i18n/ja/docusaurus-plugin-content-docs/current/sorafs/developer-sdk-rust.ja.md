@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/developer-sdk-rust.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4d6399fb41fe69f11cf3e8b03fca5aefd72b108e6faa8408a07b5c94934ae4ed
-source_last_modified: "2025-11-14T04:43:21.684283+00:00"
+source_hash: 5523126b97c4e64d2f63830d496d36fd00df696070e3a3126ddb961def6f5157
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: developer-sdk-rust
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/developer-sdk-rust.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note 正規ソース
 このページは `docs/source/sorafs/developer/sdk/rust.md` を反映しています。レガシーの Sphinx セットが退役するまで両方を同期してください。

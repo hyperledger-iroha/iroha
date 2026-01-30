@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/manifest-pipeline.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 05890f887a29bdb0597e2560a475e84cba8356c670dd92fa34aec3c4b815fd1c
-source_last_modified: "2025-11-04T12:03:18.020139+00:00"
+source_hash: 592fd6d9649c79ba16b61d019b2193ba7cd49d10cb4a8b0d7ae93ba19e5b7482
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/manifest-pipeline.md
+status: complete
+generator: scripts/sync_docs_i18n.py
 ---
 
 # Chunking של SoraFS → Pipeline של מניפסטים

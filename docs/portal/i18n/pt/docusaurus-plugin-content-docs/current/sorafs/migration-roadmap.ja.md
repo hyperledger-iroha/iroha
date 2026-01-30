@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/migration-roadmap.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c707024a45f702a064b10e3f88b41d409691d22e1489a51634b93feadf043cf1
-source_last_modified: "2025-11-14T04:43:21.810356+00:00"
+source_hash: 1b9c6e71bb42fe84cbe9807849db30cc1a5c1bfe060b7717e5dac905b60120f9
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/migration-roadmap.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > Adaptado de [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).

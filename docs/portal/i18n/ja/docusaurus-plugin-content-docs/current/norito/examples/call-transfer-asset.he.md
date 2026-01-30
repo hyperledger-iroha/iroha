@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/norito/examples/call-transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 07e03f581da55e64cf305223d914cb9efe5cea8c002a27fdf33891f11b7256f7
-source_last_modified: "2025-11-14T04:43:20.643925+00:00"
+source_hash: 09faa38009213d29d57d63e4f56a4b83463eb5e2a83476eeeff87b77c86e8eb3
+source_last_modified: "2026-01-22T15:55:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/norito/examples/call-transfer-asset.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/call-transfer-asset
+title: Kotodama からホスト転送を呼び出す
+description: Kotodama のエントリポイントがホストの `transfer_asset` 命令を、インラインのメタデータ検証付きで呼び出せることを示します。
+source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
 Kotodama のエントリポイントがホストの `transfer_asset` 命令を、インラインのメタデータ検証付きで呼び出せることを示します。

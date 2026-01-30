@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/priority-snapshot-2025-03.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 86f8971f54b39c4aee3b0f19561592fada68a99d18dd9b48bcd3cefc8aa224d1
-source_last_modified: "2025-11-14T04:43:22.091033+00:00"
+source_hash: 32915a2c57608a9e1ec2e9eca49c07d8875389ac5bd29d652bd90826a4533a56
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: priority-snapshot-2025-03
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/priority-snapshot-2025-03.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > Fuente canonica: `docs/source/sorafs/priority_snapshot_2025-03.md`

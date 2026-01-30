@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/direct-mode-pack.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 86c29718f9634a2c60db96df3995f1a371243e2c814b1bb4e1d04e2d3a71eba6
-source_last_modified: "2025-11-14T04:43:21.697798+00:00"
+source_hash: a9657229069fa9118f75cdbe7fc9d23dee235adf42a9ffd7bc696c4e24c2327d
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: direct-mode-pack
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/direct-mode-pack.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Fonte canonica
 Esta pagina espelha `docs/source/sorafs/direct_mode_pack.md`. Mantenha ambas as copias sincronizadas.

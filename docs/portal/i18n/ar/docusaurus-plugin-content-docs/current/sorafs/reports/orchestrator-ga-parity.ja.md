@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/reports/orchestrator-ga-parity.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 224b774e7f332c219891cbf100a62c51c849ca675b7bf21f83eeddd8d26e7c96
-source_last_modified: "2025-11-14T04:43:22.219275+00:00"
+source_hash: 13b023d0ac69fdb575fde5638f0bce4aadd02f591c725c82629ec8b1a4114a16
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/reports/orchestrator-ga-parity.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # تقرير تكافؤ GA لمنسق SoraFS

@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/priority-snapshot-2025-03.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 439220d0c36d3cb3ec0cbf47d1a58dbdeb8d934dd441105024cbd28d43e7ddb9
-source_last_modified: "2025-11-14T04:43:22.092083+00:00"
+source_hash: ae26f934a280df3651b29137b3cb7a71bf063a6244177212d92c1edf8f2dd6c5
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: priority-snapshot-2025-03
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/priority-snapshot-2025-03.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > Канонический источник: `docs/source/sorafs/priority_snapshot_2025-03.md`

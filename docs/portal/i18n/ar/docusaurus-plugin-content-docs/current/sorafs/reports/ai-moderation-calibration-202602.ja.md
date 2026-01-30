@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/reports/ai-moderation-calibration-202602.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 48d5e3c40d3e6639530ce647616bbe935926423b2796732d565f233836d120ac
-source_last_modified: "2025-11-14T04:43:22.176714+00:00"
+source_hash: c3438b22eae9c447e461666656cfdb9d8a1dbd236226ca1cfa4c7dabbd092917
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/reports/ai-moderation-calibration-202602.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # تقرير معايرة إشراف الذكاء الاصطناعي - فبراير 2026

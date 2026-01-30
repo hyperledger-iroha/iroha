@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/staging-manifest-playbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 888e10f1d1fb3bf5459b1a14ec84c4e2d5067ad7caf8d91bc44c03e49853dc07
-source_last_modified: "2025-11-14T04:43:22.340996+00:00"
+source_hash: 8ced1d035b2e2a3daa547ad077b3c1f879ad9038436efc68d9fa1e8e7bb9e860
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: staging-manifest-playbook
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/staging-manifest-playbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note مستند ماخذ

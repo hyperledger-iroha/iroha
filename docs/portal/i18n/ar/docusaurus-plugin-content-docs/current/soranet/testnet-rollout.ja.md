@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/soranet/testnet-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5a6008e59fbf9a026f771a6260840ec02f22a27e3ea99ad44d3e15060bbec815
-source_last_modified: "2025-11-14T04:43:22.508512+00:00"
+source_hash: 3ef0f46017f1b72fcdcc705158d94e851d212b20506a98bf299f240385193920
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: testnet-rollout
+lang: ar
+direction: rtl
+source: docs/portal/docs/soranet/testnet-rollout.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note المصدر القياسي

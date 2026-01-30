@@ -4,9 +4,18 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sns/bulk-onboarding-toolkit.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 53894e889f5d7281013ce8832d940a7b88c0ad78ddea173de7c0ad2409105f81
-source_last_modified: "2025-11-14T04:43:21.249907+00:00"
+source_hash: cf8f5b2d560dd72c519f4ff52582bcd8f04fe0f399d6118a5d0d446fcf1c84e2
+source_last_modified: "2026-01-22T15:55:18+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: bulk-onboarding-toolkit
+lang: he
+direction: rtl
+source: docs/portal/docs/sns/bulk-onboarding-toolkit.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note מקור קנוני

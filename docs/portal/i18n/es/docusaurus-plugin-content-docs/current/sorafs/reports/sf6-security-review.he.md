@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/reports/sf6-security-review.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a13f35073f9cfafe6a40e10a747c92af26f905efed2a4ed95878ff9dabe66a2b
-source_last_modified: "2025-11-14T04:43:22.276268+00:00"
+source_hash: 886c4cc19e613808147742ffc7d380b01cbc9180c33c50327b59f31ef01af29e
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/reports/sf6-security-review.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Revision de seguridad SF-6

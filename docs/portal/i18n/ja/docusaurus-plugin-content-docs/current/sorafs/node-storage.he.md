@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/node-storage.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3e8abdc0324e8fe1c8f3b506f77aa1de5b26364c2d5498031cf37fbfc0f4bca7
-source_last_modified: "2025-11-14T04:43:21.912095+00:00"
+source_hash: fd9d251e6f5d911a9938a7e39c5d06e170858726a12f21b14b64feb0cff58467
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: node-storage
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/node-storage.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note 正規ソース
 このページは `docs/source/sorafs/sorafs_node_storage.md` を反映しています。レガシーの Sphinx ドキュメントセットが退役するまで両方を同期してください。

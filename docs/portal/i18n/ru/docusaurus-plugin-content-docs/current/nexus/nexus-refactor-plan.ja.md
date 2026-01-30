@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/nexus/nexus-refactor-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 46919e1b0a2c022e5d9fb53718c6489154740c48c477c71db713faa7e31bfb55
-source_last_modified: "2025-11-14T04:43:20.464783+00:00"
+source_hash: 2cec2dfcef38b7dded96d7bfb154aefbca840545e9b890e83706a91191f91579
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/nexus/nexus-refactor-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-refactor-plan
+title: План рефакторинга Sora Nexus Ledger
+description: Зеркало `docs/source/nexus_refactor_plan.md`, описывающее поэтапную зачистку кодовой базы Iroha 3.
 ---
 
 :::note Канонический источник

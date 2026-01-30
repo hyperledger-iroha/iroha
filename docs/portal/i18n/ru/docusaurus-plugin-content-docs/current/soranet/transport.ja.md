@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/soranet/transport.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 43b18acd34a69d5a92f73e0c67a3b6c495f33f4a77645a4edc93f4390deeb834
-source_last_modified: "2025-11-14T04:43:22.520623+00:00"
+source_hash: d852af78ceea67b8a6153a9fa444deee2c93b8024937cc108e88f090f48178c7
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: transport
+lang: ru
+direction: ltr
+source: docs/portal/docs/soranet/transport.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Канонический источник

@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/node-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 34eea65a2e75f00d2653faccd34479cac26475659ec0a1ab7c883353f3db5c88
-source_last_modified: "2025-11-14T04:43:21.892324+00:00"
+source_hash: 3b64cd60d892db1241f6091716407374578939f5d9feddeaae9e558ad654a208
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: node-plan
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/node-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note 正規ソース
 このページは `docs/source/sorafs/sorafs_node_plan.md` を反映しています。レガシーの Sphinx ドキュメントが退役するまで両方を同期してください。

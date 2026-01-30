@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/nexus/nexus-refactor-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e59198036b5cf19c54f8f42f2fb8dbad87376261ea4f5a18ce33f7e4e70fdb45
-source_last_modified: "2025-11-14T04:43:20.464960+00:00"
+source_hash: cebce57e72e0cef0c4812944eca11cc61336fab63fa4246160d6485388aa1485
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/nexus/nexus-refactor-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-refactor-plan
+title: خطة اعادة هيكلة دفتر Sora Nexus
+description: نسخة مطابقة لـ `docs/source/nexus_refactor_plan.md` توضح اعمال التنظيف المرحلية لقاعدة شفرة Iroha 3.
 ---
 
 :::note المصدر القانوني

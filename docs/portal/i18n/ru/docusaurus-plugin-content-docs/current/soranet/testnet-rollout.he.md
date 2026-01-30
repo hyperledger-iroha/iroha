@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/soranet/testnet-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4fe1583a7c43c4f1054f1d690c91a4c391524f1cc1d9b07bc2ae5d3cb50e6ee4
-source_last_modified: "2025-11-14T04:43:22.508199+00:00"
+source_hash: be030e306b030e89ff34900448b1e40d52cbd71dd7f2715fdc1a0aa6585c5c05
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: testnet-rollout
+lang: ru
+direction: ltr
+source: docs/portal/docs/soranet/testnet-rollout.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Канонический источник

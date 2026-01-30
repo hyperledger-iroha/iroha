@@ -97,7 +97,7 @@ import org.hyperledger.iroha.android.model.InstructionBox;
 InstructionBox registerMultisig =
     InstructionBox.fromWirePayload(
         "<WIRE_NAME_REGISTER_MULTISIG>",
-        Base64.getDecoder().decode("<WIRE_PAYLOAD_BASE64>"));
+        Base64.getDecoder().decode("<WIRE_PAYLOAD_BASE64>")); // Replace with wire payload bytes.
 ```
 
 ## Subscriptions

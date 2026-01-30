@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/devportal/security-hardening.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: db115d4cba1b0b4a5bf818f5d78608efb5ce969433c62977b402a061f5a86c50
-source_last_modified: "2025-11-14T04:43:20.162571+00:00"
+source_hash: 7a7ce5f6f6eb9eaae619a6f29c30f8af3e88ed2c9b21de9e314458f2fa8d9502
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/devportal/security-hardening.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # سیکیورٹی ہارڈننگ اور pen-test چیک لسٹ

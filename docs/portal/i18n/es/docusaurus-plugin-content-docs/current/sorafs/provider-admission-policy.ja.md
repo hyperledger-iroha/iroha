@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/provider-admission-policy.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a3a9140cbb21a4cb25a52afb7a4591f1cb963aa683adf7b43a38803cd224b3b2
-source_last_modified: "2025-11-14T04:43:22.111310+00:00"
+source_hash: b0e16a55bf64f5f650ba91fcf2767750f69457c018a0cf38686988f9a6d0bba8
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: provider-admission-policy
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/provider-admission-policy.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 > Adaptado de [`docs/source/sorafs/provider_admission_policy.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_admission_policy.md).
 

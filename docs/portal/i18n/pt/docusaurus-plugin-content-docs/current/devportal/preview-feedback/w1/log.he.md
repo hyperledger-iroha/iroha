@@ -4,9 +4,18 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w1/log.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 84e9eb102367b42f3eb65ab35197d320856e46965925a1dd49aef5baa69bc6e0
-source_last_modified: "2025-11-14T04:43:19.845737+00:00"
+source_hash: 22bbfd6fbcb208a632fcd24ad1478a68a0c679f5ec0c9415994ca95196a46300
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: preview-feedback-w1-log
+lang: pt
+direction: ltr
+source: docs/portal/docs/devportal/preview-feedback/w1/log.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 Este log mantem o roster de convites, checkpoints de telemetria e feedback de reviewers para o

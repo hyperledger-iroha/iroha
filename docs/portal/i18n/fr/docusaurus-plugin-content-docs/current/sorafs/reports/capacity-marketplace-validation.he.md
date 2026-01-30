@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/reports/capacity-marketplace-validation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: abc60363a2dc441ee1f537529439efd2395d56cd377d0b05436bdc2ff61022e8
-source_last_modified: "2025-11-14T04:43:22.197648+00:00"
+source_hash: e2c87bc1691e8e88ad28942e7b1d63a832aac8306dc58cceaa895f1db6efe528
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/reports/capacity-marketplace-validation.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Checklist de validation du marche de capacite SoraFS

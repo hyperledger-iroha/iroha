@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sns/registry-schema.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e87993c03e1c4523cdaa284ca2ffc4b2ae28d1318be0327c5a12bcd7bbbead13
-source_last_modified: "2025-11-14T04:43:21.399263+00:00"
+source_hash: 6b25ccc328ac7c0df40f1afa91f1694cda9167b17b9c2aa0d0114410ad7c1aae
+source_last_modified: "2026-01-28T17:58:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/sns/registry-schema.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Канонический источник

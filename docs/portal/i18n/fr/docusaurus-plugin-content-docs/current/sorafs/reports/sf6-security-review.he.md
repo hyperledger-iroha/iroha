@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/reports/sf6-security-review.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c423df367c9ae64dd8c8d3051c3765da37627bf9972dba0cf64b9e6801f79af4
-source_last_modified: "2025-11-14T04:43:22.277345+00:00"
+source_hash: ceede603382e41b37a3de0d9d6abe1b6391356c49ca05327dfe2d169e3f20a02
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/reports/sf6-security-review.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Revue de sécurité SF-6

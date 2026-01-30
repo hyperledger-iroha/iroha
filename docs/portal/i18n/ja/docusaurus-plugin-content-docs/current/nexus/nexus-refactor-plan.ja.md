@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/nexus/nexus-refactor-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c9ff8dcab0f1a2783d4277669a773b29e33056bd084ae17d33c241ec29850cd2
-source_last_modified: "2025-11-14T04:43:20.463711+00:00"
+source_hash: 5004eefed28cd92f9162a206af374c921bb7dff11bf413d80f23f0283bf5f5fd
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/nexus/nexus-refactor-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-refactor-plan
+title: Sora Nexus Ledger リファクタ計画
+description: `docs/source/nexus_refactor_plan.md` のミラーで、Iroha 3 コードベースの段階的なクリーンアップ作業を詳述します。
 ---
 
 :::note 正本

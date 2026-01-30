@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/nexus/nexus-operator-onboarding.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7de94113494816700958da473aaffc233539abb27072ed5e4b30965a850f73e0
-source_last_modified: "2025-11-14T04:43:20.450290+00:00"
+source_hash: a7cd08993cc0c8705e2bfdec4d5b8ef4918464f9a6133b57f7e6c4eb9e603ab0
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/nexus/nexus-operator-onboarding.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-operator-onboarding
+title: Sora Nexus data-space آپریٹر آن بورڈنگ
+description: `docs/source/sora_nexus_operator_onboarding.md` کا آئینہ، جو Nexus آپریٹرز کے لئے end-to-end ریلیز چیک لسٹ کو ٹریک کرتا ہے۔
 ---
 
 :::note کینونیکل ماخذ

@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/pin-registry-validation-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 77f1f33f4dc98782e0734f1fefad06200125f3905b3b38e9779b5cd4f2f57d57
-source_last_modified: "2025-11-14T04:43:22.071687+00:00"
+source_hash: 7668c2acd73c14c32941f76b8f62c6a88d312aebdbae462b44d8ccb2a2cdf678
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: pin-registry-validation-plan
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/pin-registry-validation-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note المصدر المعتمد

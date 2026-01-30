@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/chunker-registry-charter.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 42062b4913bd6c6edefe21eedc7c997aab91e104ed47d26df3d5fd7cb0451d33
-source_last_modified: "2025-11-14T04:43:21.501270+00:00"
+source_hash: 1e741cb21e3206949cee7e9e1d5746846c4b516924fa33b27dea61f0db12e742
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-registry-charter
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/chunker-registry-charter.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note المصدر المعتمد
 تعكس هذه الصفحة `docs/source/sorafs/chunker_registry_charter.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة توثيق Sphinx القديمة.
