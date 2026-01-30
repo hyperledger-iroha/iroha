@@ -1524,8 +1524,11 @@ impl Actor {
             );
         }
         if committed {
-            // Commit finished; drop any RBC state for the committed block to avoid replaying READY/DELIVER.
-            self.clean_rbc_sessions_for_block(block_hash, pending_height);
+            if !self.should_retain_rbc_sessions_after_commit(block_hash, pending_height) {
+                // Commit finished; drop any RBC state for the committed block to avoid replaying
+                // READY/DELIVER once availability is settled.
+                self.clean_rbc_sessions_for_block(block_hash, pending_height);
+            }
             if let Some(witness) = exec_witness_to_emit {
                 self.emit_exec_artifacts(block_hash, pending_height, pending_view, witness);
             }
@@ -4451,6 +4454,27 @@ impl Actor {
         }
 
         self.publish_rbc_backlog_snapshot();
+    }
+
+    pub(super) fn should_retain_rbc_sessions_after_commit(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+    ) -> bool {
+        if !self.runtime_da_enabled() {
+            return false;
+        }
+        self.subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .iter()
+            .any(|(key, session)| {
+                key.0 == block_hash
+                    && key.1 == height
+                    && !session.is_invalid()
+                    && !session.delivered
+            })
     }
 
     pub(super) fn refresh_npos_seed(

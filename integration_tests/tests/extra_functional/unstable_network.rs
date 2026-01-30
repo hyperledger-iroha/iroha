@@ -941,12 +941,8 @@ impl UnstableNetwork {
             if rotated.len() > 1 && collectors_k > 0 {
                 let seed = permissioned_prf_seed(chain_id);
                 let topology = Topology::new(rotated.clone());
-                for idx in topology.collector_indices_k_prf(
-                    usize::from(collectors_k),
-                    seed,
-                    height,
-                    0,
-                )
+                for idx in
+                    topology.collector_indices_k_prf(usize::from(collectors_k), seed, height, 0)
                 {
                     if let Some(peer) = topology.as_ref().get(idx) {
                         collector_ids.insert(peer.clone());
@@ -1521,17 +1517,16 @@ mod tests {
             .into_iter()
             .filter_map(|idx| topology.as_ref().get(idx).cloned())
             .collect();
-        let selected_multi: BTreeSet<_> =
-            UnstableNetwork::select_faulty_peer_ids(
-                &peer_ids,
-                3,
-                0,
-                &chain_id,
-                height,
-                collectors_k,
-            )
-                .into_iter()
-                .collect();
+        let selected_multi: BTreeSet<_> = UnstableNetwork::select_faulty_peer_ids(
+            &peer_ids,
+            3,
+            0,
+            &chain_id,
+            height,
+            collectors_k,
+        )
+        .into_iter()
+        .collect();
         assert_eq!(selected_multi.len(), 3);
         assert!(collector_ids.is_disjoint(&selected_multi));
     }
