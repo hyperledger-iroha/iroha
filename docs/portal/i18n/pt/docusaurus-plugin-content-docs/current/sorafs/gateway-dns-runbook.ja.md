@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/gateway-dns-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 77eb4575a9db3a744993a57d086a9cf0705e609d2ff1a62e8f06a1959d131b09
-source_last_modified: "2025-11-14T04:43:21.734478+00:00"
+source_hash: 44c19aab1533f2ddc58765ff0b985a55ab9f22f037288c5eee44b8478ef81835
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/gateway-dns-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Runbook de kickoff de Gateway e DNS da SoraFS

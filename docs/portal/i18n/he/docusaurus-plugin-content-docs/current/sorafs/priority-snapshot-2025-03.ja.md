@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/priority-snapshot-2025-03.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c9e6e9d77ab4fc9aae3f3a46fc0dc99602b3f8b6467908e186ee311779ffd4d7
-source_last_modified: "2025-11-14T04:43:22.090620+00:00"
+source_hash: 280dd64a70598a6f80eea05d857f79dd14e3f2680345aeaeaf365af51c27004b
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: priority-snapshot-2025-03
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/priority-snapshot-2025-03.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > מקור קנוני: `docs/source/sorafs/priority_snapshot_2025-03.md`

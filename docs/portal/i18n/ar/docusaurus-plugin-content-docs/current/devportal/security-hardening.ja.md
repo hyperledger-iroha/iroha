@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/devportal/security-hardening.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 669019ae870419d97c355cc7bf4656b95a59690890bd3fc4cff17c1611db0ed3
-source_last_modified: "2025-11-14T04:43:20.162101+00:00"
+source_hash: 6843442cded6d3d6f02cd04b17db3de07cad08f9b168187dec6393a699a7d552
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/devportal/security-hardening.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # تشديد الامن وقائمة فحص pen-test

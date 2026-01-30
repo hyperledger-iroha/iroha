@@ -4,9 +4,18 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w2/plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c266d13fa397eb60b24ef865ab9caf52262c6e298899bf92ac35d1515b5dbd10
-source_last_modified: "2025-11-14T04:43:19.937208+00:00"
+source_hash: 5d5ba1ac221c7fd03ecbcf5c83d8a40e4705f7e42338f99b88092f60423ccc95
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: preview-feedback-w2-plan
+lang: ru
+direction: ltr
+source: docs/portal/docs/devportal/preview-feedback/w2/plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 | Пункт | Детали |

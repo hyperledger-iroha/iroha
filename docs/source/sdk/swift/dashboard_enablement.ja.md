@@ -1,18 +1,80 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/source/sdk/swift/dashboard_enablement.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 04dec2f1ad05e589cbaf96da6c0afccc98b0b1b689848743c7ca0f7ad437d9dd
-source_last_modified: "2025-11-21T14:39:36.523346+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:08:01.281345+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+<!--
+  SPDX-License-Identifier: Apache-2.0
+-->
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+---
+title: Swift Dashboard Enablement Runbook
+summary: How to feed, render, and publish the Swift parity/CI dashboards with live telemetry.
+---
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+# Swift Dashboard Enablement Runbook
+
+This runbook closes the "Stand up iOS parity/CI dashboards" coordination action
+by describing how to feed live telemetry into the Swift dashboards, render the
+summaries, and publish evidence bundles for roadmap/status updates.
+
+## Inputs
+
+- **Parity feed:** JSON matching `mobile_parity` (see
+  `dashboards/data/mobile_parity.sample.json` for shape).
+- **CI feed:** JSON matching `mobile_ci` (see
+  `dashboards/data/mobile_ci.sample.json`).
+- **Pipeline metadata:** optional job/test timing block consumed by both
+  dashboards (`dashboards/data/mobile_pipeline_metadata.sample.json`).
+- **Telemetry enrichment:** optional salt/override/profile data injected via
+  `scripts/swift_enrich_parity_feed.py` or the status exporter.
+
+## Rendering
+
+Run locally or in CI:
+
+```bash
+SWIFT_PARITY_FEED=/path/to/parity.json \
+SWIFT_CI_FEED=/path/to/ci.json \
+SWIFT_PIPELINE_METADATA_FEED=/path/to/pipeline_metadata.json \
+make swift-dashboards
+```
+
+This validates schemas, enforces thresholds, and renders summaries via
+`scripts/render_swift_dashboards.sh`. CI uses `ci/check_swift_dashboards.sh`,
+which wraps the same target with repository defaults.
+
+## Publishing
+
+1. Drop the rendered summaries and the raw feeds into
+   `artifacts/swift_dashboards/<date>/`.
+2. If Buildkite is available, set `SWIFT_PARITY_FEED_URL` /
+   `SWIFT_CI_FEED_URL` to artifact URLs and invoke
+   `scripts/swift_status_export.py --parity-url ... --ci-url ... --format markdown`
+   to generate the weekly digest snippet for `status.md`.
+3. Attach the digest plus raw feeds to the roadmap/status bundle so the gating
+   evidence is replayable.
+
+## Telemetry Wiring Notes
+
+- The parity feed should already include regen SLO state and optional salt
+  redaction metadata; use `scripts/swift_collect_redaction_status.py` to build
+  the telemetry block when exporting from OTLP collectors.
+- Buildkite lanes must emit `device_tag` metadata; the CI feed carries the tags
+  so dashboards can flag lane-specific regressions.
+- Acceleration gating is enabled by default (`SWIFT_PARITY_ACCEL_REQUIRE` and
+  `SWIFT_PARITY_ACCEL_REQUIRE_ENABLED`), ensuring Metal/NEON paths stay enabled
+  and pass parity before promotion.
+
+## Evidence Checklist
+
+- Latest parity and CI JSON feeds (or URLs) plus rendered summaries.
+- Schema validation logs (`make swift-dashboards` output).
+- Status exporter digest (Markdown/JSON) attached to `status.md` update.
+- Escalations (threshold breach or missing telemetry) logged with owners/dates.

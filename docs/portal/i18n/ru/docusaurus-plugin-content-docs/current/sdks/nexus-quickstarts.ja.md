@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sdks/nexus-quickstarts.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: df870d5fa5a2a8c0f11136acacb4224cb91d629869bfd637d0e19e2b8b58fd89
-source_last_modified: "2025-11-14T04:43:21.096431+00:00"
+source_hash: bca996f6a94d6cd63f5355b1df224e9449642930bc2facb1ff42d0b0b61e6e02
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/sdks/nexus-quickstarts.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 Полный quickstart находится в `docs/source/nexus_sdk_quickstarts.md`. Этот обзор портала подчеркивает общие предпосылки и команды для каждого SDK, чтобы разработчики могли быстро проверить настройку.

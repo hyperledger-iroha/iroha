@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/orchestrator-config.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e97f85aaef5b3b2b6ef0d15c43b03c3782a2181abadca09a97527ede80d4f346
-source_last_modified: "2025-11-14T04:43:21.972013+00:00"
+source_hash: 5337a7140e93bc4645747a4946f60e6908c693b7f8cd8aea87976f394eaa885e
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-config
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/orchestrator-config.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note מקור קנוני
 עמוד זה משקף את `docs/source/sorafs/developer/orchestrator.md`. שמרו על סנכרון שתי הגרסאות עד שהסט הישן של התיעוד יוסר.

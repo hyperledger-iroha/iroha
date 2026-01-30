@@ -4,9 +4,18 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w1/log.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 0eac46bbc2df19725e8227bd9ab384a43ad512298254e49256dd2e7de22c9222
-source_last_modified: "2025-11-14T04:43:19.849628+00:00"
+source_hash: b07b74fa24e3d38c2f7f41418bc99bbf0ed5e8763130b0b6954f787439df1f52
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: preview-feedback-w1-log
+lang: ur
+direction: rtl
+source: docs/portal/docs/devportal/preview-feedback/w1/log.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 یہ لاگ **W1 پارٹنر preview** کے لئے invite roster، ٹیلیمیٹری checkpoints، اور reviewer feedback محفوظ کرتا ہے

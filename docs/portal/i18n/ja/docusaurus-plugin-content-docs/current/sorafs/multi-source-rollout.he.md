@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/multi-source-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4952a64311d41c13021d42f933248ea00968dc4ec44b6c30a0d8ff8b195bfde9
-source_last_modified: "2025-11-07T10:33:21.920200+00:00"
+source_hash: aad86e56a181c5ca2f75b52118f3f6259006e4340dc0809f5403f27d0d1c23b0
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: multi-source-rollout
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/multi-source-rollout.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note 正規ソース
 このページは `docs/source/sorafs/runbooks/multi_source_rollout.md` を反映しています。レガシーのドキュメントセットが退役するまで、両方のコピーを同期したままにしてください。

@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/norito/overview.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 72be1d55ea20628762c82792d16895b19e6b3dbbce5e20c748d9ceb88cc1bbdc
-source_last_modified: "2025-11-14T04:43:20.884146+00:00"
+source_hash: 7a9a8ee1d2475edfbd451a34fe03faec4a6992bcbcf69962ff841454ce018d6e
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/norito/overview.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Norito کا جائزہ

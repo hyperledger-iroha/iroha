@@ -172,9 +172,7 @@ fn proposal_key(hash: &HashOf<Vec<InstructionBox>>) -> Name {
 
 fn multisig_role_for(account: &AccountId) -> RoleId {
     let suffix = match account.controller() {
-        iroha_data_model::account::AccountController::Single(_) => {
-            account.signatory().to_string()
-        }
+        iroha_data_model::account::AccountController::Single(_) => account.signatory().to_string(),
         iroha_data_model::account::AccountController::Multisig(_) => account.to_string(),
     };
     format!(
@@ -229,9 +227,8 @@ fn multisig_policy_from_spec(
         })?;
         members.push(member);
     }
-    MultisigPolicy::new(spec.quorum.get(), members).map_err(|err| {
-        InstructionExecutionError::InvariantViolation(format!("{err}").into())
-    })
+    MultisigPolicy::new(spec.quorum.get(), members)
+        .map_err(|err| InstructionExecutionError::InvariantViolation(format!("{err}").into()))
 }
 
 fn rekey_account_id(
@@ -272,7 +269,11 @@ fn rekey_account_id(
         state_transaction.rebuild_space_directory_bindings(uaid);
     }
 
-    if let Some(sequence) = state_transaction.world.tx_sequences.remove(old_account.clone()) {
+    if let Some(sequence) = state_transaction
+        .world
+        .tx_sequences
+        .remove(old_account.clone())
+    {
         state_transaction
             .world
             .tx_sequences
@@ -305,9 +306,16 @@ fn rekey_account_id(
     }
 
     if old_multisig_role != new_multisig_role {
-        if let Some(mut role) = state_transaction.world.roles.remove(old_multisig_role.clone()) {
+        if let Some(mut role) = state_transaction
+            .world
+            .roles
+            .remove(old_multisig_role.clone())
+        {
             role.id = new_multisig_role.clone();
-            state_transaction.world.roles.insert(new_multisig_role.clone(), role);
+            state_transaction
+                .world
+                .roles
+                .insert(new_multisig_role.clone(), role);
         }
     }
 
@@ -345,7 +353,10 @@ fn rekey_account_id(
             ));
         }
         if let Some(value) = state_transaction.world.assets.remove(asset_id.clone()) {
-            state_transaction.world.assets.insert(new_asset_id.clone(), value);
+            state_transaction
+                .world
+                .assets
+                .insert(new_asset_id.clone(), value);
         }
         if let Some(meta) = state_transaction
             .world
@@ -393,7 +404,11 @@ fn rekey_account_id(
         .map(|(id, _)| id.clone())
         .collect();
     for asset_def_id in asset_def_ids {
-        if let Some(definition) = state_transaction.world.asset_definitions.get_mut(&asset_def_id) {
+        if let Some(definition) = state_transaction
+            .world
+            .asset_definitions
+            .get_mut(&asset_def_id)
+        {
             definition.owned_by = new_account.clone();
         }
     }
@@ -459,11 +474,7 @@ fn replace_account_id_in_vec(accounts: &mut Vec<AccountId>, old: &AccountId, new
     }
 }
 
-fn replace_account_id_in_set(
-    accounts: &mut BTreeSet<AccountId>,
-    old: &AccountId,
-    new: &AccountId,
-) {
+fn replace_account_id_in_set(accounts: &mut BTreeSet<AccountId>, old: &AccountId, new: &AccountId) {
     if accounts.remove(old) {
         accounts.insert(new.clone());
     }
@@ -623,7 +634,11 @@ fn replace_account_id_in_public_lane(
         }
     }
     for (old_key, new_key) in validator_updates {
-        if let Some(mut record) = state_transaction.world.public_lane_validators.remove(old_key) {
+        if let Some(mut record) = state_transaction
+            .world
+            .public_lane_validators
+            .remove(old_key)
+        {
             replace_account_id(&mut record.validator, old, new);
             replace_account_id(&mut record.stake_account, old, new);
             state_transaction
@@ -707,11 +722,18 @@ fn replace_account_id_in_public_lane(
             updated = true;
         }
         if updated {
-            claim_updates.push((key.clone(), (lane_id.clone(), updated_account, updated_asset), *value));
+            claim_updates.push((
+                key.clone(),
+                (lane_id.clone(), updated_account, updated_asset),
+                *value,
+            ));
         }
     }
     for (old_key, new_key, value) in claim_updates {
-        state_transaction.world.public_lane_reward_claims.remove(old_key);
+        state_transaction
+            .world
+            .public_lane_reward_claims
+            .remove(old_key);
         state_transaction
             .world
             .public_lane_reward_claims
@@ -731,7 +753,11 @@ fn replace_account_id_in_repo_agreements(
         .map(|(id, _)| id.clone())
         .collect();
     for agreement_id in agreement_ids {
-        if let Some(agreement) = state_transaction.world.repo_agreements.get_mut(&agreement_id) {
+        if let Some(agreement) = state_transaction
+            .world
+            .repo_agreements
+            .get_mut(&agreement_id)
+        {
             replace_account_id(&mut agreement.initiator, old, new);
             replace_account_id(&mut agreement.counterparty, old, new);
             if let Some(custodian) = agreement.custodian.as_mut() {
@@ -776,10 +802,7 @@ fn replace_account_id_in_citizens(
 ) {
     if let Some(mut record) = state_transaction.world.citizens.remove(old.clone()) {
         replace_account_id(&mut record.owner, old, new);
-        state_transaction
-            .world
-            .citizens
-            .insert(new.clone(), record);
+        state_transaction.world.citizens.insert(new.clone(), record);
     }
 
     let citizen_ids: Vec<_> = state_transaction
@@ -966,7 +989,10 @@ fn replace_account_id_in_oracle(
         }
     }
     for (old_key, new_key, value) in provider_updates {
-        state_transaction.world.oracle_provider_stats.remove(old_key);
+        state_transaction
+            .world
+            .oracle_provider_stats
+            .remove(old_key);
         state_transaction
             .world
             .oracle_provider_stats

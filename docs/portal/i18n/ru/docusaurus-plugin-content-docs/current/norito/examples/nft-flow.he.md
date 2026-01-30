@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/norito/examples/nft-flow.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 846dae0a3966ec788c4d42885ae1d59a624e08d07ba76a337543caf89b7608ce
-source_last_modified: "2025-11-14T04:43:20.771797+00:00"
+source_hash: 66e6f2298a1b8bcf752374482c6a5d6bb3774929dc1dc6793345eb44b7d3b797
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/norito/examples/nft-flow.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/nft-flow
+title: Выпустить, перевести и сжечь NFT
+description: Проводит по жизненному циклу NFT от начала до конца: выпуск владельцу, перевод, добавление метаданных и сжигание.
+source: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
 Проводит по жизненному циклу NFT от начала до конца: выпуск владельцу, перевод, добавление метаданных и сжигание.

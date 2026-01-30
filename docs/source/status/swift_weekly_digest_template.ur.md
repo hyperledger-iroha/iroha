@@ -1,20 +1,66 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/source/status/swift_weekly_digest_template.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: cd6642ba877e3f6732a8488141c6252a65e2b08f31a243c7c70c48fbb7717739
-source_last_modified: "2025-11-19T15:15:49.041551+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:58.602631+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# ترجمہ جاری ہے
+---
+title: Swift SDK Weekly Digest Template
+summary: Template for the weekly Swift parity/CI status export.
+---
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+# Swift SDK Weekly Digest — Week of {{ week_start }}
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+Run `python3 scripts/swift_status_export.py --parity <parity-feed.json> --ci <ci-feed.json>`
+(or use `--parity-url`/`--ci-url` for remote feeds) to generate the Markdown snippet for
+**Metrics Snapshot** below. The command defaults to the sample feeds checked into
+`dashboards/data/`.
+
+## Metrics Snapshot
+
+{{ swift_metrics_snippet }}
+
+> `scripts/swift_status_export.py` now emits a **Fixture Drift Summary** table
+> plus the CI Signals block automatically; rerun the exporter whenever parity
+> feeds update so downstream readers get the refreshed snapshot.
+
+## Highlights
+
+- {{ highlight_one }}
+- {{ highlight_two }}
+
+## Risks & Mitigations
+
+| Risk | Owner | Status | Notes |
+|------|-------|--------|-------|
+| {{ risk_one }} | {{ owner_one }} | {{ status_one }} | {{ notes_one }} |
+| {{ risk_two }} | {{ owner_two }} | {{ status_two }} | {{ notes_two }} |
+
+## Governance Watchers
+
+ Summarise the `/v1/pipeline` rollout status, telemetry readiness, and
+ governance checkpoints that the council tracks each week. Keep entries short
+ and link to `status.md` sections or RFCs for deeper context.
+
+| Item | Owner | Status | Notes |
+|------|-------|--------|-------|
+| `/v1/pipeline` adoption | {{ pipeline_owner }} | {{ pipeline_status }} | {{ pipeline_notes }} |
+| Telemetry readiness (`connect.queue_*`) | {{ telemetry_owner }} | {{ telemetry_status }} | {{ telemetry_notes }} |
+| Governance vote / readiness review | {{ vote_owner }} | {{ vote_status }} | {{ vote_notes }} |
+| Risk owner spotlight | {{ risk_owner }} | {{ risk_status }} | {{ risk_notes }} |
+
+## Upcoming Actions
+
+1. {{ action_one }}
+2. {{ action_two }}
+
+## Links & Artefacts
+
+- Parity feed: {{ parity_feed_url }}
+- CI feed: {{ ci_feed_url }}
+- Dashboards: `dashboards/mobile_parity.swift`, `dashboards/mobile_ci.swift`

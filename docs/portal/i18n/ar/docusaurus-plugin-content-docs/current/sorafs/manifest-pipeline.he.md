@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/manifest-pipeline.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8459fea08685e5608927f9bc85e69b83c3ebeba6deba2cc715ed10d5785bd4ca
-source_last_modified: "2025-11-14T04:43:21.768177+00:00"
+source_hash: d4db4e5621343074cf3b99346b26245cdf896f25ac5b4e1560e59d8a3fd332bc
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/manifest-pipeline.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # تجزئة SoraFS → مسار المانيفست

@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/pin-registry-ops.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8fe27458019913c17da7bc63ffb94e0d675e34316e22eff5e3b96bc52f349e23
-source_last_modified: "2025-11-14T04:43:22.027660+00:00"
+source_hash: 1402c9893e5f529653109d003e8e226941a2647161e3204c2337163076083d40
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: pin-registry-ops
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/pin-registry-ops.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Канонический источник

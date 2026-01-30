@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/nexus/nexus-fee-model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ddf7f93cea6ecaeeaa346db427a43e3faa10d80c9bac44aa6ea2450e469371f1
-source_last_modified: "2025-11-14T04:43:20.430820+00:00"
+source_hash: 5bc68932cbe7a470efabbcaae3c55752137f8bd2f9bb3017cc179a3db0671768
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/nexus/nexus-fee-model.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-fee-model
+title: Обновления модели комиссий Nexus
+description: Зеркало `docs/source/nexus_fee_model.md`, документирующее квитанции расчетов по lane и поверхности согласования.
 ---
 
 :::note Канонический источник

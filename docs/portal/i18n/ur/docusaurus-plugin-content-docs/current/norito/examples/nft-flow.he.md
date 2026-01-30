@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/norito/examples/nft-flow.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8536c27becb1b6a08b2502caceb9c839abd30ead4a74ef9775b5fa4f3be9f6aa
-source_last_modified: "2025-11-14T04:43:20.772671+00:00"
+source_hash: fc406f0ad166be1a45c103c01efb7fa7765eebe1fba1ecc25a7e694a84ca44f9
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/norito/examples/nft-flow.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/nft-flow
+title: NFT کو منٹ، منتقل اور برن کریں
+description: NFT کے لائف سائیکل کو ابتدا سے انتہا تک دکھاتا ہے: مالک کو منٹ کرنا، منتقل کرنا، میٹا ڈیٹا ٹیگ کرنا، اور برن کرنا۔
+source: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
 NFT کے لائف سائیکل کو ابتدا سے انتہا تک دکھاتا ہے: مالک کو منٹ کرنا، منتقل کرنا، میٹا ڈیٹا ٹیگ کرنا، اور برن کرنا۔

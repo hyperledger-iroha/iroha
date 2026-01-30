@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/chunker-profile-authoring.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4732abb0a119464473695df46524081d824ab1b22d9a2f816f3cce4888328076
-source_last_modified: "2025-11-14T04:43:21.479399+00:00"
+source_hash: f9364da505f67dac8814e89979ab2eccae119e583690fe2a883a7e8cf79a64a5
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-profile-authoring
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/chunker-profile-authoring.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note 正規ソース
 `docs/source/sorafs/chunker_profile_authoring.md` を反映しています。レガシーの Sphinx ドキュメントセットが退役するまで、両方のコピーを同期してください。

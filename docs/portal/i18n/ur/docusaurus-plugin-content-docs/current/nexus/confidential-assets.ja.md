@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/nexus/confidential-assets.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 20469c72168f88d4c383073b4f1077f69c0b5843893818d1843eef1d2e09f8f6
-source_last_modified: "2025-11-14T04:43:20.307455+00:00"
+source_hash: 3253fc7ae8cdfed81aa7e13d1582c3e85954803908a61be3e9d3b0365772b7d3
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/nexus/confidential-assets.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Confidential assets اور ZK transfers
+description: shielded circulation، registries اور operator controls کے لئے Phase C کا blueprint۔
+slug: /nexus/confidential-assets
 ---
 
 <!--

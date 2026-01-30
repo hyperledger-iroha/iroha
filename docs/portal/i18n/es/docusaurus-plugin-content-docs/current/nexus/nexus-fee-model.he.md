@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/nexus/nexus-fee-model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2eaf08648b2ef3c6db8dc552da08c4aace5dc0f456803fc53e0999db063194d4
-source_last_modified: "2025-11-14T04:43:20.429401+00:00"
+source_hash: 571da55df6f2bc6655d6b3df2a16a3d6513f176a4a0e5a14dcdfcb3944790c12
+source_last_modified: "2026-01-03T18:07:58+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/nexus/nexus-fee-model.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-fee-model
+title: Actualizaciones del modelo de tarifas de Nexus
+description: Espejo de `docs/source/nexus_fee_model.md`, que documenta los recibos de liquidacion de lanes y las superficies de conciliacion.
 ---
 
 :::note Fuente canonica

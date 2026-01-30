@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/norito/examples/hajimari-entrypoint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7eaf8a500a8d18d5061ee27bb71b90254bdfcd7e833b4da092c7cf416f8868fd
-source_last_modified: "2025-11-14T04:43:20.715009+00:00"
+source_hash: 096adbcf0ae89bd26b39b413d85d02f1e27e96b9b0d90460eba689f6ee5aa409
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/norito/examples/hajimari-entrypoint.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/hajimari-entrypoint
+title: هيكل نقطة دخول Hajimari
+description: هيكل عقد Kotodama بسيط بنقطة دخول عامة واحدة ومقبض حالة.
+source: crates/ivm/docs/examples/01_hajimari.ko
 ---
 
 هيكل عقد Kotodama بسيط بنقطة دخول عامة واحدة ومقبض حالة.

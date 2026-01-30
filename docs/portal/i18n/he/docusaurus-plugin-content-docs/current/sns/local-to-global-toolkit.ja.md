@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sns/local-to-global-toolkit.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: eab70b967e2bb03e52b127d57c15c031262ccae116551668af46145bfd337741
-source_last_modified: "2025-11-14T04:43:21.355190+00:00"
+source_hash: a1a76c1fa49afdd9aa5ec0a894547dfbfd12813e90079981a27ecc79d812e07f
+source_last_modified: "2026-01-28T17:58:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/sns/local-to-global-toolkit.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # ערכת כלים לכתובות Local -> Global

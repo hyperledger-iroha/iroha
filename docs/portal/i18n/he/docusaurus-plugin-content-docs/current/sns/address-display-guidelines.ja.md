@@ -4,11 +4,19 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sns/address-display-guidelines.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 351bcc23313b6a65e70d4c33e2f9f2032a871da4f906ad8db909a004ff774a40
-source_last_modified: "2025-11-14T04:43:21.229863+00:00"
+source_hash: 18f48260ee913c9f65b16d9cc4beae4e22fb0116558bd81cbeb555db351a99af
+source_last_modified: "2026-01-28T17:58:57+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
+---
+id: address-display-guidelines
+lang: he
+direction: rtl
+source: docs/portal/docs/sns/address-display-guidelines.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
 import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 
 :::note מקור קנוני

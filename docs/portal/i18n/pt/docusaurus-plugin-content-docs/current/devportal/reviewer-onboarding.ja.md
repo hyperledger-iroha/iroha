@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/devportal/reviewer-onboarding.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5f3428d34cb92b6e5e13752497f919cf4baf628f26d669b4ce399b86f37cc20a
-source_last_modified: "2025-11-14T04:43:20.136105+00:00"
+source_hash: f5179c5da3ea11075aeaadede6fcdce25a8d23bfa2de904a97ad2c3fa7cdcc13
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/devportal/reviewer-onboarding.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Onboarding de revisores do preview

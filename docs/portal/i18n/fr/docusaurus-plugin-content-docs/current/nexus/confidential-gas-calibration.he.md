@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/nexus/confidential-gas-calibration.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d97f5b9d1b9d71c680776c2e2d810dfddf5c463559a266100699917a0e8d3b99
-source_last_modified: "2025-11-14T04:43:20.323368+00:00"
+source_hash: fe3e72fe954210c91b18bea91f28acceb2bcb2e8bcd1b241d58236fd36886924
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/nexus/confidential-gas-calibration.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Registre de calibration du gas confidentiel
+description: Mesures de qualite release qui etayent le calendrier de gas confidentiel.
+slug: /nexus/confidential-gas-calibration
 ---
 
 # Lignes de base de calibration du gas confidentiel

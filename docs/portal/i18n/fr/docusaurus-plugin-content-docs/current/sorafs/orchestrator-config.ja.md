@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/orchestrator-config.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5bb9d501615a6d2f6f619db88e354d30e37f54e0d811dafb55e3b503f57e49bc
-source_last_modified: "2025-11-14T04:43:21.973088+00:00"
+source_hash: 355a1565122d4ae9ed7724401605ffe27037c0e2f4e7cf65ae18f79508fd0ccd
+source_last_modified: "2026-01-04T15:32:24+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-config
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/orchestrator-config.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Source canonique
 Cette page reflète `docs/source/sorafs/developer/orchestrator.md`. Gardez les deux copies synchronisées jusqu’à ce que la documentation héritée soit retirée.

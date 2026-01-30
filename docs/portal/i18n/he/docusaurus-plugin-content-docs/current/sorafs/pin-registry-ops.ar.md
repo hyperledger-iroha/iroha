@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/pin-registry-ops.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 12d7bf8340044a7113992c4905bedf5a5a400a1dc7cceece899c62667848bc6b
-source_last_modified: "2025-11-07T10:33:21.925918+00:00"
+source_hash: 07d6ef09263e940b5c77e8676948cbc04de52e9b85a241438064ec5d97a28213
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: pin-registry-ops
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/pin-registry-ops.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note מקור קנוני

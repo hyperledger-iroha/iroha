@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/migration-roadmap.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 127cbf07e89bd425149cdbeeca83153127f3f9c9b250acfeb3f88a40b05d26ca
-source_last_modified: "2025-11-14T04:43:21.810867+00:00"
+source_hash: 67c1d49a42a8946a3798f29fa7451e0a2e86d89609ef37e5dbea409975f92d41
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/migration-roadmap.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > Адаптировано из [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).

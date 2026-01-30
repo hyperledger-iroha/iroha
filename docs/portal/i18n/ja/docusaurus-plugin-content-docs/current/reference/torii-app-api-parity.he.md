@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/reference/torii-app-api-parity.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 32372593cb764d436481c400359b2d2d1bdedb2663ce7351b545a41412a0a0e4
-source_last_modified: "2025-11-14T04:43:21.009462+00:00"
+source_hash: 976f25172c2d2537978e1e8307a38d08e513ff6edf01e107b33d33d3b38ece80
+source_last_modified: "2026-01-30T09:29:51+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/reference/torii-app-api-parity.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: torii-app-api-parity
+title: Torii アプリ API パリティ監査
+description: SDK とプラットフォームチームが公開カバレッジを確認できるように TORII-APP-1 レビューをミラーしたもの。
 ---
 
 ステータス: 完了 2026-03-21  

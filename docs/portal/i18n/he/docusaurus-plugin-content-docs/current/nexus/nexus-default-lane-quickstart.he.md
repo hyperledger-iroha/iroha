@@ -4,9 +4,21 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/nexus/nexus-default-lane-quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b6a200e5dd9846bc568dbfee1727b378d2ef77dbd4ca61e3b56176fba0f6fdde
-source_last_modified: "2025-11-14T04:43:20.384579+00:00"
+source_hash: a4f1c00877eff2a761e7cb489ea0aa1685dad02a0d649a01af60e4c1f0ec7797
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/nexus/nexus-default-lane-quickstart.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-default-lane-quickstart
+title: התחלה מהירה ל-default lane (NX-5)
+sidebar_label: התחלה מהירה ל-default lane
+description: הגדרה ואימות של fallback ל-default lane ב-Nexus כדי ש-Torii ו-SDK יוכלו להשמיט lane_id ב-lanes ציבוריים.
 ---
 
 :::note מקור קנוני
@@ -167,4 +179,3 @@ curl -s http://127.0.0.1:8080/status \
 - `/status` מפרסם גם `nexus_lane_governance_sealed_total` ו-`nexus_lane_governance_sealed_aliases` כדי ש-Alertmanager יוכל להתריע כאשר lane מאבד manifest. שמרו על ההתראות פעילות גם ב-devnets.
 - מפת הטלמטריה של ה-scheduler ולוח ה-governance של lanes (`dashboards/grafana/nexus_lanes.json`) מצפים לשדות alias/slug מהקטלוג. אם אתם משנים alias, תגיות מחדש את תיקיות Kura המתאימות כדי שהמבקרים ישמרו על מסלולים דטרמיניסטיים (מעקב תחת NX-1).
 - אישורי הפרלמנט עבור default lanes צריכים לכלול תוכנית rollback. רשמו את hash ה-manifest והעדויות ל-governance לצד ה-quickstart הזה ב-runbook האופרטורי שלכם כדי שסבבים עתידיים לא ינחשו את המצב הנדרש.
-

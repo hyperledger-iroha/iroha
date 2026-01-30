@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/soranet/pq-primitives.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 67cf69979cbcd9333c718d838976d05f2d8908c59bcd22d3017a398f73831d0d
-source_last_modified: "2025-11-14T04:43:22.385878+00:00"
+source_hash: e47131415aac2bfd81fae8e4cf6b4c6498347e16786aa23131f1842a02e0c721
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: pq-primitives
+lang: ur
+direction: rtl
+source: docs/portal/docs/soranet/pq-primitives.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Canonical Source

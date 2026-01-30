@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/node-storage.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9fb91a34be4c840193d24daaae08171f550045f23c6d930fd802cbb917bec9b8
-source_last_modified: "2025-11-14T04:43:21.913806+00:00"
+source_hash: ba19f8679246db446ee58ee457333e295390800c1eb951de3f9f617ff3fc1f57
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: node-storage
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/node-storage.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Source canonique
 Cette page reflète `docs/source/sorafs/sorafs_node_storage.md`. Gardez les deux copies synchronisées jusqu'au retrait de la documentation Sphinx historique.

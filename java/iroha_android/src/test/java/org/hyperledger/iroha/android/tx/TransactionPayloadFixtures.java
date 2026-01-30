@@ -169,54 +169,24 @@ final class TransactionPayloadFixtures {
           final Map<String, Object> instructionMap = asMap(entry, "instruction", name);
           final Object wireNameRaw = instructionMap.get("wire_name");
           final Object wirePayloadRaw = instructionMap.get("payload_base64");
-          final Map<String, Object> args =
-              instructionMap.get("arguments") == null
-                  ? Collections.emptyMap()
-                  : asMap(instructionMap.get("arguments"), "instruction.arguments", name);
-          final Object wireNameArg = args.get("wire_name");
-          final Object wirePayloadArg = args.get("payload_base64");
-          final boolean wireFromArgs = wireNameRaw == null && wirePayloadRaw == null
-              && (wireNameArg != null || wirePayloadArg != null);
-          if (wireFromArgs && args.size() > 2) {
+          if (wireNameRaw == null || wirePayloadRaw == null) {
             throw new IllegalStateException(
-                name + ": wire payload arguments must not include extra keys");
+                name + ": instruction payload requires wire_name and payload_base64");
           }
-          if (wireNameRaw != null || wirePayloadRaw != null) {
-            if (wireNameRaw == null || wirePayloadRaw == null) {
-              throw new IllegalStateException(
-                  name + ": instruction wire payload requires wire_name and payload_base64");
-            }
-            final String wireName = Objects.toString(wireNameRaw);
-            final String payloadBase64 = Objects.toString(wirePayloadRaw);
-            final byte[] wirePayload;
-            try {
-              wirePayload = Base64.getDecoder().decode(payloadBase64);
-            } catch (final IllegalArgumentException ex) {
-              throw new IllegalStateException(
-                  name + ": instruction payload_base64 is not valid base64", ex);
-            }
-            instructions.add(InstructionBox.fromWirePayload(wireName, wirePayload));
-            continue;
+          if (instructionMap.size() != 2) {
+            throw new IllegalStateException(
+                name + ": instruction entries must only include wire_name and payload_base64");
           }
-          if (wireFromArgs) {
-            if (wireNameArg == null || wirePayloadArg == null) {
-              throw new IllegalStateException(
-                  name + ": instruction wire payload requires wire_name and payload_base64");
-            }
-            final String wireName = Objects.toString(wireNameArg);
-            final String payloadBase64 = Objects.toString(wirePayloadArg);
-            final byte[] wirePayload;
-            try {
-              wirePayload = Base64.getDecoder().decode(payloadBase64);
-            } catch (final IllegalArgumentException ex) {
-              throw new IllegalStateException(
-                  name + ": instruction payload_base64 is not valid base64", ex);
-            }
-            instructions.add(InstructionBox.fromWirePayload(wireName, wirePayload));
-            continue;
+          final String wireName = Objects.toString(wireNameRaw);
+          final String payloadBase64 = Objects.toString(wirePayloadRaw);
+          final byte[] wirePayload;
+          try {
+            wirePayload = Base64.getDecoder().decode(payloadBase64);
+          } catch (final IllegalArgumentException ex) {
+            throw new IllegalStateException(
+                name + ": instruction payload_base64 is not valid base64", ex);
           }
-          throw new IllegalStateException(
-              name + ": instruction payload requires wire_name and payload_base64");
+          instructions.add(InstructionBox.fromWirePayload(wireName, wirePayload));
         }
         builder.setExecutable(Executable.instructions(instructions));
       } else {

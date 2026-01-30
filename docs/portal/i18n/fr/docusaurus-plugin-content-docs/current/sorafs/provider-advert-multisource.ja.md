@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/provider-advert-multisource.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 08d1e47bddafa007b67d80414f11bc55b7ccb75dfe8907826c9de67137240b0d
-source_last_modified: "2025-11-14T04:43:22.130540+00:00"
+source_hash: 95ac5aeb41ab1481e2fc16cf46369bd30dcbdb8a46211c7d7e76ee458c1154f1
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: provider-advert-multisource
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/provider-advert-multisource.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 # Annonces de fournisseurs multi-source et planification
 

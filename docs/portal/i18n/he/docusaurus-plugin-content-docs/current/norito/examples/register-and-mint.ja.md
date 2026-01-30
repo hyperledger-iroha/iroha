@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/norito/examples/register-and-mint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d99cffa2fe0ac7fbc1e48f7d1448603b8bc80e952f2f4d87c6131c4ed41ecf88
-source_last_modified: "2025-11-04T12:26:02.942266+00:00"
+source_hash: 1c8549d25011eaef5421391728b59c0c653efc03d88883b17aa8932f4dcf7d0b
+source_last_modified: "2026-01-22T15:55:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/norito/examples/register-and-mint.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/register-and-mint
+title: רישום דומיין והטבעת נכסים
+description: מדגים יצירת דומיינים עם הרשאה, רישום נכסים והטבעה דטרמיניסטית.
+source: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
 מדגים יצירת דומיינים עם הרשאה, רישום נכסים והטבעה דטרמיניסטית.

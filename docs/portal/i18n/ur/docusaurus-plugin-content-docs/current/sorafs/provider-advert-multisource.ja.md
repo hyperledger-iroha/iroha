@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/provider-advert-multisource.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3cb84c66d2c2b9bcac3c9798e72c4757affef198931ea4f471c2c76d8134cfd5
-source_last_modified: "2025-11-14T04:43:22.131362+00:00"
+source_hash: 1b565d230815984d306de6cca217bc532145e9ee73b0db25522347a36dfdbecc
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: provider-advert-multisource
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/provider-advert-multisource.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 # ملٹی سورس پرووائیڈر adverts اور شیڈولنگ
 

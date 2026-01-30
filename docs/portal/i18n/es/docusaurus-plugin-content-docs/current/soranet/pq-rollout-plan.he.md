@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/soranet/pq-rollout-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2daaf5a4ef33d021407e1d5da4a7c8a043dbc14ca920c30a5cd0b2970240b385
-source_last_modified: "2025-11-14T04:43:22.428771+00:00"
+source_hash: 948bbc4a7569af49f93f1c8ab1f378eded5c5a77837c14a73dcd2c73a4656823
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: pq-rollout-plan
+lang: es
+direction: ltr
+source: docs/portal/docs/soranet/pq-rollout-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fuente canonica

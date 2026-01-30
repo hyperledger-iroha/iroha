@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/chunker-conformance.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 650e6a3a543d919b41403bf2a8abfee989f8e53009c092ff4f9c1fa74f378f4d
-source_last_modified: "2025-11-14T04:43:21.462365+00:00"
+source_hash: 912d699781a63f81ee091b38af3c50f5da91ca17d0123bd91c0bc63a46cab1f0
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-conformance
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/chunker-conformance.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Канонический источник
 :::

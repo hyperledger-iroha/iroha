@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/gateway-dns-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fb2dc34101d89b52e19ede36155a98f92c8e12f3d4b809611ffdb573cb98c6c1
-source_last_modified: "2025-11-14T04:43:21.735198+00:00"
+source_hash: be60ee4d682b2c6ac72bff579521a82ec0c70e2ae7e4e67bf3f08cd86cf41f8c
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/gateway-dns-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Ранбук запуска Gateway и DNS SoraFS

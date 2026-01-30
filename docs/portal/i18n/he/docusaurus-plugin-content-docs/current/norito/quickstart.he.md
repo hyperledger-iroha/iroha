@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ca0c9eab469747134ddc9e74e893922f4e18ce22935c87181602da8696bda762
-source_last_modified: "2025-11-14T04:43:20.901358+00:00"
+source_hash: 0d3c69fd324ef227fb25a4304a5cf6675fa51c3e1fcc396cd147849e1e099c88
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/norito/quickstart.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: התחלה מהירה של Norito
+description: בנו, אמתו ופרסו חוזה Kotodama עם כלי ה-release והרשת ברירת המחדל של צומת יחיד.
+slug: /norito/quickstart
 ---
 
 המדריך הזה משקף את הזרימה שאנו מצפים שמפתחים יבצעו כאשר הם לומדים Norito ו-Kotodama בפעם הראשונה: להרים רשת דטרמיניסטית עם צומת יחיד, לקמפל חוזה, להריץ אותו מקומית כ-dry-run ואז לשלוח אותו דרך Torii עם ה-CLI הייחוסי.

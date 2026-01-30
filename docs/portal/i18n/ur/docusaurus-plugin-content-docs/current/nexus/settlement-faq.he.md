@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/nexus/settlement-faq.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a4eef3b6b06b5f3735310c8a4d2dc8d9d2e97aeb897af876a73cfe19f51fdc69
-source_last_modified: "2025-11-14T04:43:20.568892+00:00"
+source_hash: bdbadc57fbd01d5d04fd593edfd00c6a2d7973aeb62a6f8e8db507d3a72642fa
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/nexus/settlement-faq.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-settlement-faq
+title: Settlement FAQ
+description: آپریٹرز کے لیے جوابات جو settlement routing، XOR conversion، ٹیلی میٹری، اور آڈٹ ثبوت کا احاطہ کرتے ہیں۔
 ---
 
 یہ صفحہ اندرونی settlement FAQ (`docs/source/nexus_settlement_faq.md`) کی عکاسی کرتا ہے تاکہ پورٹل کے قارئین اسی رہنمائی کو mono-repo میں تلاش کیے بغیر دیکھ سکیں۔ یہ وضاحت کرتا ہے کہ Settlement Router ادائیگیوں کو کیسے پروسیس کرتا ہے، کن میٹرکس کی نگرانی کرنی ہے، اور SDKs کو Norito payloads کیسے ضم کرنے چاہیئیں۔

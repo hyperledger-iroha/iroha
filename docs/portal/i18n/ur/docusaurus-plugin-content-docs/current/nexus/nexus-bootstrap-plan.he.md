@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 781d3a578788d9f945a735c10abda1782aca796e084701dd2476bb5c7e5c2952
-source_last_modified: "2025-11-14T04:43:20.366295+00:00"
+source_hash: d42801bb14a4b47f97d22981063fdf4777faa9418cb0cc4bd352380be791cfb6
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-bootstrap-plan
+title: Sora Nexus بوٹ اسٹریپ اور آبزرویبیلٹی
+description: Nexus کے بنیادی validator cluster کو آن لائن لانے سے پہلے SoraFS اور SoraNet خدمات شامل کرنے کا آپریشنل پلان۔
 ---
 
 :::note کینونیکل ماخذ

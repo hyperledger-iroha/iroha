@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/staging-manifest-playbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d4cee710913f5cfd7d810355b22f66f3b6598f4645a14ad5344faf445de5c3e1
-source_last_modified: "2025-11-14T04:43:22.339313+00:00"
+source_hash: 49f61f47fbcd360b9c1f02aee5548749586974d369c41213723dc5c984e75db0
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: staging-manifest-playbook
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/staging-manifest-playbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica

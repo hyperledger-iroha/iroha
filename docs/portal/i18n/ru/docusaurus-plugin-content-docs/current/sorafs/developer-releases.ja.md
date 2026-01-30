@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/developer-releases.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ba23a67738cd7fa782b0b31f0b24fc023603f90c9d2dbff5f18cb8772c30fe17
-source_last_modified: "2025-11-14T04:43:21.653158+00:00"
+source_hash: b2f5ff0d9e72743f894c4553003bdd3466fafa5c4047c4bfa6bec999c9228fc4
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: developer-releases
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/developer-releases.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 # Процесс релиза
 

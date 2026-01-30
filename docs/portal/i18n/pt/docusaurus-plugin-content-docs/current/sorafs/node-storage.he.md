@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/node-storage.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 422f3edccc247a003ac89e28793aee2e2a62e5a565a01fda34a5a29c8651dd8a
-source_last_modified: "2025-11-14T04:43:21.913538+00:00"
+source_hash: 422de5f5bec0342f03aac8d8c7aedb42205ff51fd39bc2744563b56e7f60bf42
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: node-storage
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/node-storage.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Fonte canonica
 Esta pagina espelha `docs/source/sorafs/sorafs_node_storage.md`. Mantenha ambas as copias sincronizadas.

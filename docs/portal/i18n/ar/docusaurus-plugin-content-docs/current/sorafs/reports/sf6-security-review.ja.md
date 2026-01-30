@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/reports/sf6-security-review.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 066bc9ab06d067504b36ef7e1d58fdbeade95512f02ee09d9f04f94654421171
-source_last_modified: "2025-11-14T04:43:22.277923+00:00"
+source_hash: 1e13cdcf18cfe376b01b299735021db28ab8060baf8e0da20e30139050f46602
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/reports/sf6-security-review.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # مراجعة أمان SF-6

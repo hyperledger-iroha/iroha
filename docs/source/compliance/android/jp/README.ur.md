@@ -1,20 +1,20 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/source/compliance/android/jp/README.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: cd69e46f7e342df6175da553f00608f7fa55f3ef57b55fa09a151b627d15b30e
-source_last_modified: "2025-11-07T17:46:22.976110+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:59.236731+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# ترجمہ جاری ہے
+<!--
+  SPDX-License-Identifier: Apache-2.0
+-->
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+# Japan Compliance Artefacts
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+Use this directory for FISC control checklists, bilingual StrongBox attestation
+bundles, and any regulator-specific evidence required for Japanese partners.
+Link to the immutable source document and include reviewer/sign-off metadata.

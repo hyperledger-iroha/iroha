@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/soranet/pq-ratchet-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ecb411a1d4819f6bf7fb754fcb0856d5d9ef4cba9234503cf232c0492439f0e6
-source_last_modified: "2025-11-14T04:43:22.406706+00:00"
+source_hash: 8554c71fdbf335d3f85cfa2b0a04f7b865172c58ceb5ec422ee30a07fe7212c3
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: pq-ratchet-runbook
+lang: ja
+direction: ltr
+source: docs/portal/docs/soranet/pq-ratchet-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Canonical Source

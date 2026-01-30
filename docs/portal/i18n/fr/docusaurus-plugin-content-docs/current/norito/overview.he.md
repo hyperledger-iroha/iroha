@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/norito/overview.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ea8eccc2d9d2836966986fe54a4e019fc14218946ee74a797d949aaf38aabd12
-source_last_modified: "2025-11-14T04:43:20.883031+00:00"
+source_hash: 4c518b7c3d18f9fc42f9b77c64181ec5f77bf957d19a8ed9671fe11db3e74431
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/norito/overview.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Vue d'ensemble de Norito

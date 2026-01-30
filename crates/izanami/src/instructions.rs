@@ -106,6 +106,74 @@ pub struct TransactionPlan {
     pub instructions: Vec<InstructionBox>,
     pub signer: AccountRecord,
     pub expect_success: bool,
+    pub(crate) state_updates: Vec<PlanUpdate>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum PlanUpdate {
+    RegisterTrigger(TriggerId),
+    RegisterCallTrigger(TriggerId),
+    TrackRepeatableTrigger(TriggerId),
+    MintTriggerRepetitions { trigger_id: TriggerId, amount: u32 },
+    BurnTriggerRepetitions { trigger_id: TriggerId, amount: u32 },
+    SetTriggerMetadata { trigger_id: TriggerId, key: Name },
+    ClearTriggerMetadata(TriggerId),
+}
+
+impl PlanUpdate {
+    fn apply(&self, state: &mut ChaosState) {
+        match self {
+            PlanUpdate::RegisterTrigger(trigger_id) => {
+                if !state.registered_triggers.contains(trigger_id) {
+                    state.registered_triggers.push(trigger_id.clone());
+                }
+            }
+            PlanUpdate::RegisterCallTrigger(trigger_id) => {
+                if !state.call_triggers.contains(trigger_id) {
+                    state.call_triggers.push(trigger_id.clone());
+                }
+            }
+            PlanUpdate::TrackRepeatableTrigger(trigger_id) => {
+                state.track_repeatable_trigger(trigger_id.clone());
+            }
+            PlanUpdate::MintTriggerRepetitions { trigger_id, amount } => {
+                state.track_repeatable_trigger(trigger_id.clone());
+                let entry = state
+                    .trigger_repetitions
+                    .entry(trigger_id.clone())
+                    .or_default();
+                *entry = entry.saturating_add(*amount);
+            }
+            PlanUpdate::BurnTriggerRepetitions { trigger_id, amount } => {
+                let Some(entry) = state.trigger_repetitions.get_mut(trigger_id) else {
+                    return;
+                };
+                *entry = entry.saturating_sub(*amount);
+                if *entry == 0 {
+                    state.trigger_repetitions.remove(trigger_id);
+                    state.repeatable_triggers.retain(|id| id != trigger_id);
+                }
+            }
+            PlanUpdate::SetTriggerMetadata { trigger_id, key } => {
+                state
+                    .trigger_metadata
+                    .entry(trigger_id.clone())
+                    .or_default()
+                    .insert(key.clone());
+            }
+            PlanUpdate::ClearTriggerMetadata(trigger_id) => {
+                state.trigger_metadata.remove(trigger_id);
+            }
+        }
+    }
+}
+
+impl TransactionPlan {
+    fn apply_updates(&self, state: &mut ChaosState) {
+        for update in &self.state_updates {
+            update.apply(state);
+        }
+    }
 }
 
 fn json_pair<K, V>(key: K, value: V) -> JsonValue
@@ -572,6 +640,14 @@ impl WorkloadEngine {
         guard.produce_plan(kind, rng)
     }
 
+    pub async fn record_result(&self, plan: &TransactionPlan, succeeded: bool) {
+        if !succeeded || plan.state_updates.is_empty() {
+            return;
+        }
+        let mut guard = self.state.lock().await;
+        plan.apply_updates(&mut guard);
+    }
+
     #[cfg(test)]
     fn set_recipe_override(&self, recipe: Option<RecipeKind>) {
         *self
@@ -1001,6 +1077,7 @@ impl ChaosState {
             .map_err(|_| eyre!("failed to build new domain id"))?;
         self.created_domains.insert(domain_id.clone());
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "register_domain",
             instructions: vec![InstructionBox::from(Register::domain(Domain::new(
                 domain_id,
@@ -1018,6 +1095,7 @@ impl ChaosState {
             .cloned()
             .unwrap_or_else(|| self.base_domain.clone());
         TransactionPlan {
+            state_updates: Vec::new(),
             label: "duplicate_domain",
             instructions: vec![InstructionBox::from(Register::domain(Domain::new(target)))],
             signer: self.treasury.clone(),
@@ -1036,6 +1114,7 @@ impl ChaosState {
         };
         self.track_account(record.clone());
         TransactionPlan {
+            state_updates: Vec::new(),
             label: "register_account",
             instructions: vec![InstructionBox::from(Register::account(Account::new(
                 account_id,
@@ -1048,6 +1127,7 @@ impl ChaosState {
     fn plan_duplicate_account(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
         let candidate = self.random_user(rng)?.clone();
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "duplicate_account",
             instructions: vec![InstructionBox::from(Register::account(Account::new(
                 candidate.id.clone(),
@@ -1062,6 +1142,7 @@ impl ChaosState {
         let account = account_from_record(&record);
         self.track_account(record.clone());
         TransactionPlan {
+            state_updates: Vec::new(),
             label: "register_uaid_account",
             instructions: vec![InstructionBox::from(Register::account(account))],
             signer: self.treasury.clone(),
@@ -1075,6 +1156,7 @@ impl ChaosState {
         let asset_id = AssetId::new(self.asset_numeric.clone(), beneficiary.id.clone());
         self.asset_instances.insert(asset_id.clone());
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "mint_asset",
             instructions: vec![InstructionBox::from(Mint::asset_numeric(amount, asset_id))],
             signer: self.treasury.clone(),
@@ -1098,6 +1180,7 @@ impl ChaosState {
             )),
         ];
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "transfer_asset",
             instructions,
             signer: self.treasury.clone(),
@@ -1114,6 +1197,7 @@ impl ChaosState {
             InstructionBox::from(Burn::asset_numeric(amount, treasury_asset)),
         ];
         TransactionPlan {
+            state_updates: Vec::new(),
             label: "burn_asset",
             instructions,
             signer: self.treasury.clone(),
@@ -1132,6 +1216,7 @@ impl ChaosState {
             .or_default()
             .insert(key.clone());
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "set_account_kv",
             instructions: vec![InstructionBox::from(SetKeyValue::account(
                 target.id.clone(),
@@ -1165,6 +1250,7 @@ impl ChaosState {
             InstructionBox::from(RemoveKeyValue::account(target.id.clone(), key)),
         ];
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "remove_account_kv",
             instructions,
             signer: target,
@@ -1183,6 +1269,7 @@ impl ChaosState {
         self.asset_definitions_unclaimed
             .insert(definition_id.clone());
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "register_asset_definition",
             instructions: vec![InstructionBox::from(Register::asset_definition(
                 asset_definition,
@@ -1198,6 +1285,7 @@ impl ChaosState {
             self.asset_definitions.remove(&candidate);
             self.asset_definition_metadata.remove(&candidate);
             return TransactionPlan {
+                state_updates: Vec::new(),
                 label: "unregister_asset_definition",
                 instructions: vec![InstructionBox::from(Unregister::asset_definition(
                     candidate,
@@ -1212,6 +1300,7 @@ impl ChaosState {
                 .parse()
                 .expect("ghost asset definition id should parse");
         TransactionPlan {
+            state_updates: Vec::new(),
             label: "unregister_asset_definition",
             instructions: vec![InstructionBox::from(Unregister::asset_definition(fallback))],
             signer: self.treasury.clone(),
@@ -1229,6 +1318,7 @@ impl ChaosState {
             .or_default()
             .insert(key.clone());
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "set_domain_kv",
             instructions: vec![InstructionBox::from(SetKeyValue::domain(
                 domain,
@@ -1262,6 +1352,7 @@ impl ChaosState {
             InstructionBox::from(RemoveKeyValue::domain(domain, key)),
         ];
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "remove_domain_kv",
             instructions,
             signer: self.treasury.clone(),
@@ -1279,6 +1370,7 @@ impl ChaosState {
             .or_default()
             .insert(key.clone());
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "set_asset_definition_kv",
             instructions: vec![InstructionBox::from(SetKeyValue::asset_definition(
                 definition,
@@ -1312,6 +1404,7 @@ impl ChaosState {
             InstructionBox::from(RemoveKeyValue::asset_definition(definition, key)),
         ];
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "remove_asset_definition_kv",
             instructions,
             signer: self.treasury.clone(),
@@ -1332,6 +1425,7 @@ impl ChaosState {
             .insert(key.clone());
         let amount: Numeric = 1_u32.into();
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "set_asset_kv",
             instructions: vec![
                 InstructionBox::from(Mint::asset_numeric(amount, asset.clone())),
@@ -1372,6 +1466,7 @@ impl ChaosState {
             InstructionBox::from(RemoveAssetKeyValue::new(asset, key)),
         ];
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "remove_asset_kv",
             instructions,
             signer: self.treasury.clone(),
@@ -1389,6 +1484,7 @@ impl ChaosState {
         self.nft_holdings
             .insert(nft_id.clone(), self.treasury.id.clone());
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "register_nft",
             instructions: vec![InstructionBox::from(Register::nft(nft))],
             signer: self.treasury.clone(),
@@ -1414,6 +1510,7 @@ impl ChaosState {
         ];
         self.nft_holdings.insert(nft_id, receiver.id.clone());
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "transfer_nft",
             instructions,
             signer: self.treasury.clone(),
@@ -1439,21 +1536,24 @@ impl ChaosState {
             trigger_id.clone(),
             action,
         ))));
-        self.registered_triggers.push(trigger_id.clone());
 
         let key: Name = format!("trigger_flag_{}", self.bump_metadata())
             .parse()
             .map_err(|_| eyre!("failed to parse trigger metadata key"))?;
-        self.trigger_metadata
-            .entry(trigger_id.clone())
-            .or_default()
-            .insert(key.clone());
         instructions.push(InstructionBox::from(SetKeyValue::trigger(
             trigger_id.clone(),
-            key,
+            key.clone(),
             json_pair("trigger", "chaos"),
         )));
+        let state_updates = vec![
+            PlanUpdate::RegisterTrigger(trigger_id.clone()),
+            PlanUpdate::SetTriggerMetadata {
+                trigger_id: trigger_id.clone(),
+                key,
+            },
+        ];
         Ok(TransactionPlan {
+            state_updates,
             label: "set_trigger_kv",
             instructions,
             signer: self.treasury.clone(),
@@ -1479,15 +1579,10 @@ impl ChaosState {
             trigger_id.clone(),
             action,
         ))));
-        self.registered_triggers.push(trigger_id.clone());
 
         let key: Name = format!("trigger_flag_{}", self.bump_metadata())
             .parse()
             .map_err(|_| eyre!("failed to parse fallback trigger key"))?;
-        self.trigger_metadata
-            .entry(trigger_id.clone())
-            .or_default()
-            .insert(key.clone());
         instructions.push(InstructionBox::from(SetKeyValue::trigger(
             trigger_id.clone(),
             key.clone(),
@@ -1497,8 +1592,12 @@ impl ChaosState {
             trigger_id.clone(),
             key,
         )));
-        self.trigger_metadata.remove(&trigger_id);
+        let state_updates = vec![
+            PlanUpdate::RegisterTrigger(trigger_id.clone()),
+            PlanUpdate::ClearTriggerMetadata(trigger_id.clone()),
+        ];
         Ok(TransactionPlan {
+            state_updates,
             label: "remove_trigger_kv",
             instructions,
             signer: self.treasury.clone(),
@@ -1529,8 +1628,9 @@ impl ChaosState {
                 trigger_id.clone(),
                 action,
             ))));
-            self.track_repeatable_trigger(trigger_id.clone());
+            let updates = vec![PlanUpdate::TrackRepeatableTrigger(trigger_id.clone())];
             return Ok(TransactionPlan {
+                state_updates: updates,
                 label: "mint_trigger_repetitions",
                 instructions,
                 signer: self.treasury.clone(),
@@ -1538,15 +1638,13 @@ impl ChaosState {
             });
         };
         let amount = rng.random_range(1_u32..=3_u32);
-        *self
-            .trigger_repetitions
-            .entry(trigger_id.clone())
-            .or_default() += amount;
         instructions.push(InstructionBox::from(Mint::trigger_repetitions(
             amount,
             trigger_id.clone(),
         )));
+        let state_updates = vec![PlanUpdate::MintTriggerRepetitions { trigger_id, amount }];
         Ok(TransactionPlan {
+            state_updates,
             label: "mint_trigger_repetitions",
             instructions,
             signer: self.treasury.clone(),
@@ -1570,19 +1668,12 @@ impl ChaosState {
             burn_amount,
             trigger_id.clone(),
         )));
-        let remaining = {
-            let entry = self
-                .trigger_repetitions
-                .entry(trigger_id.clone())
-                .or_default();
-            *entry = entry.saturating_sub(burn_amount);
-            *entry
-        };
-        if remaining == 0 {
-            self.trigger_repetitions.remove(&trigger_id);
-            self.repeatable_triggers.retain(|id| id != &trigger_id);
-        }
+        let state_updates = vec![PlanUpdate::BurnTriggerRepetitions {
+            trigger_id,
+            amount: burn_amount,
+        }];
         Ok(TransactionPlan {
+            state_updates,
             label: "burn_trigger_repetitions",
             instructions,
             signer: self.treasury.clone(),
@@ -1604,6 +1695,7 @@ impl ChaosState {
             .or_default()
             .insert(self.treasury.id.clone());
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "register_role",
             instructions: vec![InstructionBox::from(Register::role(role))],
             signer: self.treasury.clone(),
@@ -1638,6 +1730,7 @@ impl ChaosState {
                 .or_default()
                 .insert(account_id.clone());
             return Ok(TransactionPlan {
+                state_updates: Vec::new(),
                 label: "grant_role",
                 instructions: vec![InstructionBox::from(Grant::account_role(role, account_id))],
                 signer: self.treasury.clone(),
@@ -1652,6 +1745,7 @@ impl ChaosState {
             self.random_user(rng)?.id.clone()
         };
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "grant_role",
             instructions: vec![InstructionBox::from(Grant::account_role(
                 role,
@@ -1693,6 +1787,7 @@ impl ChaosState {
                 self.role_memberships.remove(&role);
             }
             return Ok(TransactionPlan {
+                state_updates: Vec::new(),
                 label: "revoke_role",
                 instructions: vec![InstructionBox::from(Revoke::account_role(role, account_id))],
                 signer: self.treasury.clone(),
@@ -1713,6 +1808,7 @@ impl ChaosState {
             self.role_memberships.remove(&role);
         }
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "revoke_role",
             instructions,
             signer: self.treasury.clone(),
@@ -1739,6 +1835,7 @@ impl ChaosState {
             TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
         );
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "register_time_trigger",
             instructions: vec![InstructionBox::from(Register::trigger(Trigger::new(
                 trigger_id, action,
@@ -1764,8 +1861,9 @@ impl ChaosState {
             self.treasury.id.clone(),
             DataEventFilter::Account(filter),
         );
-        self.registered_triggers.push(trigger_id.clone());
+        let state_updates = vec![PlanUpdate::RegisterTrigger(trigger_id.clone())];
         Ok(TransactionPlan {
+            state_updates,
             label: "register_data_trigger",
             instructions: vec![InstructionBox::from(Register::trigger(Trigger::new(
                 trigger_id, action,
@@ -1788,8 +1886,9 @@ impl ChaosState {
                 TransactionEventFilter::new(),
             )),
         );
-        self.registered_triggers.push(trigger_id.clone());
+        let state_updates = vec![PlanUpdate::RegisterTrigger(trigger_id.clone())];
         Ok(TransactionPlan {
+            state_updates,
             label: "register_pipeline_trigger",
             instructions: vec![InstructionBox::from(Register::trigger(Trigger::new(
                 trigger_id, action,
@@ -1813,9 +1912,12 @@ impl ChaosState {
             ),
         );
         let trigger = Trigger::new(trigger_id.clone(), action);
-        self.registered_triggers.push(trigger_id.clone());
-        self.call_triggers.push(trigger_id.clone());
+        let state_updates = vec![
+            PlanUpdate::RegisterTrigger(trigger_id.clone()),
+            PlanUpdate::RegisterCallTrigger(trigger_id.clone()),
+        ];
         Ok(TransactionPlan {
+            state_updates,
             label: "execute_trigger",
             instructions: vec![
                 InstructionBox::from(Register::trigger(trigger)),
@@ -1831,6 +1933,7 @@ impl ChaosState {
             .parse()
             .map_err(|_| eyre!("failed to parse ghost trigger id"))?;
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "execute_missing_trigger",
             instructions: vec![InstructionBox::from(ExecuteTrigger::new(trigger_id))],
             signer: self.treasury.clone(),
@@ -1850,6 +1953,7 @@ impl ChaosState {
             TimeEventFilter::new(ExecutionTime::PreCommit),
         );
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "deploy_ivm_contract",
             instructions: vec![InstructionBox::from(Register::trigger(Trigger::new(
                 trigger_id, action,
@@ -1879,8 +1983,9 @@ impl ChaosState {
             self.treasury.id.clone(),
             DataEventFilter::Any,
         );
-        self.registered_triggers.push(trigger_id.clone());
+        let state_updates = vec![PlanUpdate::RegisterTrigger(trigger_id.clone())];
         Ok(TransactionPlan {
+            state_updates,
             label: "deploy_kotodama_contract",
             instructions: vec![InstructionBox::from(Register::trigger(Trigger::new(
                 trigger_id, action,
@@ -1940,6 +2045,7 @@ impl ChaosState {
             .insert(dataspace);
 
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "publish_space_directory_manifest",
             instructions,
             signer: self.treasury.clone(),
@@ -1952,6 +2058,7 @@ impl ChaosState {
         let Some(uaid) = self.pick_manifest_for_dataspace(dataspace, rng) else {
             let missing = UniversalAccountId::from_hash(Hash::new(b"izanami-missing-manifest"));
             return Ok(TransactionPlan {
+                state_updates: Vec::new(),
                 label: "revoke_space_directory_manifest",
                 instructions: vec![InstructionBox::from(RevokeSpaceDirectoryManifest {
                     uaid: missing,
@@ -1966,6 +2073,7 @@ impl ChaosState {
 
         self.mark_manifest_removed(uaid, dataspace);
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "revoke_space_directory_manifest",
             instructions: vec![InstructionBox::from(RevokeSpaceDirectoryManifest {
                 uaid,
@@ -1983,6 +2091,7 @@ impl ChaosState {
         let Some(uaid) = self.pick_manifest_for_dataspace(dataspace, rng) else {
             let missing = UniversalAccountId::from_hash(Hash::new(b"izanami-missing-expiry"));
             return Ok(TransactionPlan {
+                state_updates: Vec::new(),
                 label: "expire_space_directory_manifest",
                 instructions: vec![InstructionBox::from(ExpireSpaceDirectoryManifest {
                     uaid: missing,
@@ -1996,6 +2105,7 @@ impl ChaosState {
 
         self.mark_manifest_removed(uaid, dataspace);
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "expire_space_directory_manifest",
             instructions: vec![InstructionBox::from(ExpireSpaceDirectoryManifest {
                 uaid,
@@ -2064,6 +2174,7 @@ impl ChaosState {
         }
 
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "register_public_lane_validator",
             instructions,
             signer: self.treasury.clone(),
@@ -2077,6 +2188,7 @@ impl ChaosState {
             let staker = self.random_user(rng)?.clone();
             let amount: Numeric = rng.random_range(1_u32..=5_u32).into();
             return Ok(TransactionPlan {
+                state_updates: Vec::new(),
                 label: "bond_public_lane_stake",
                 instructions: vec![InstructionBox::from(BondPublicLaneStake {
                     lane_id: fallback_lane,
@@ -2119,6 +2231,7 @@ impl ChaosState {
         }
 
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "bond_public_lane_stake",
             instructions,
             signer: self.treasury.clone(),
@@ -2131,6 +2244,7 @@ impl ChaosState {
             let request_id = Hash::new(b"izanami-missing-unbond");
             let staker = self.random_user(rng)?.clone();
             return Ok(TransactionPlan {
+                state_updates: Vec::new(),
                 label: "schedule_public_lane_unbond",
                 instructions: vec![InstructionBox::from(SchedulePublicLaneUnbond {
                     lane_id: LaneId::SINGLE,
@@ -2176,6 +2290,7 @@ impl ChaosState {
         }
 
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "schedule_public_lane_unbond",
             instructions: vec![InstructionBox::from(SchedulePublicLaneUnbond {
                 lane_id: lane,
@@ -2202,6 +2317,7 @@ impl ChaosState {
                 .retain(|entry| entry.request_id != pending.request_id);
         }
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "finalize_public_lane_unbond",
             instructions: vec![InstructionBox::from(FinalizePublicLaneUnbond {
                 lane_id: pending.lane,
@@ -2219,6 +2335,7 @@ impl ChaosState {
             let slash_id = Hash::new(b"izanami-missing-slash");
             let staker = self.random_user(rng)?.clone();
             return Ok(TransactionPlan {
+                state_updates: Vec::new(),
                 label: "slash_public_lane_validator",
                 instructions: vec![InstructionBox::from(SlashPublicLaneValidator {
                     lane_id: LaneId::SINGLE,
@@ -2236,6 +2353,7 @@ impl ChaosState {
         let amount: Numeric = rng.random_range(1_u32..=20_u32).into();
         let slash_id = Hash::new(format!("izanami-slash-{}", self.bump_staking()).as_bytes());
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "slash_public_lane_validator",
             instructions: vec![InstructionBox::from(SlashPublicLaneValidator {
                 lane_id: lane,
@@ -2256,6 +2374,7 @@ impl ChaosState {
             let (reward_asset_def, reward_sink) = self.fee_asset_and_sink();
             let reward_asset = AssetId::new(reward_asset_def, reward_sink);
             return Ok(TransactionPlan {
+                state_updates: Vec::new(),
                 label: "record_public_lane_rewards",
                 instructions: vec![InstructionBox::from(RecordPublicLaneRewards {
                     lane_id: LaneId::SINGLE,
@@ -2284,6 +2403,7 @@ impl ChaosState {
         let epoch = self.bump_staking();
         let mint = InstructionBox::from(Mint::asset_numeric(reward.clone(), reward_asset.clone()));
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "record_public_lane_rewards",
             instructions: vec![
                 mint,
@@ -2344,6 +2464,7 @@ impl ChaosState {
         ));
 
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "dvp_settlement",
             instructions: vec![delivery_mint, payment_mint, InstructionBox::from(dvp)],
             signer: self.treasury.clone(),
@@ -2389,6 +2510,7 @@ impl ChaosState {
         ];
         self.sorafs_replication_ready = true;
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "seed_replication_manifest",
             instructions,
             signer: self.treasury.clone(),
@@ -2445,6 +2567,7 @@ impl ChaosState {
         let order_id = ReplicationOrderId::new(order_id_bytes);
         self.pending_replication_orders.push(order_id);
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "issue_replication_order",
             instructions: vec![InstructionBox::from(IssueReplicationOrder {
                 order_id,
@@ -2464,6 +2587,7 @@ impl ChaosState {
         let order_index = rng.random_range(0..self.pending_replication_orders.len());
         let order_id = self.pending_replication_orders.swap_remove(order_index);
         Ok(TransactionPlan {
+            state_updates: Vec::new(),
             label: "complete_replication_order",
             instructions: vec![InstructionBox::from(CompleteReplicationOrder {
                 order_id,
@@ -3408,6 +3532,7 @@ mod tests {
             .plan_mint_trigger_repetitions(&mut rng)
             .expect("mint repetitions");
         assert_eq!(mint_plan.label, "mint_trigger_repetitions");
+        mint_plan.apply_updates(&mut state);
         if state
             .trigger_repetitions
             .values()
@@ -3417,6 +3542,7 @@ mod tests {
                 .plan_mint_trigger_repetitions(&mut rng)
                 .expect("mint repetitions after register");
             assert_eq!(mint_plan.label, "mint_trigger_repetitions");
+            mint_plan.apply_updates(&mut state);
         }
         let (trigger_id, minted) = state
             .trigger_repetitions
@@ -3429,6 +3555,7 @@ mod tests {
             .plan_burn_trigger_repetitions(&mut rng)
             .expect("burn repetitions");
         assert_eq!(burn_plan.label, "burn_trigger_repetitions");
+        burn_plan.apply_updates(&mut state);
         let remaining = state
             .trigger_repetitions
             .get(&trigger_id)
@@ -3471,6 +3598,43 @@ mod tests {
         ));
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn workload_record_result_applies_updates_on_success() {
+        let PreparedChaos {
+            state,
+            genesis: _,
+            recipes,
+        } = prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let engine = WorkloadEngine::new(state, recipes);
+        engine.set_recipe_override(Some(RecipeKind::SetTriggerKeyValue));
+        let mut rng = StdRng::seed_from_u64(211);
+        let plan = engine.next_plan(&mut rng).await.expect("plan built");
+        {
+            let guard = engine.state.lock().await;
+            assert!(
+                guard.registered_triggers.is_empty(),
+                "plans should not mutate trigger state before success"
+            );
+        }
+        engine.record_result(&plan, false).await;
+        {
+            let guard = engine.state.lock().await;
+            assert!(
+                guard.registered_triggers.is_empty(),
+                "failed submissions should not update trigger state"
+            );
+        }
+        engine.record_result(&plan, true).await;
+        {
+            let guard = engine.state.lock().await;
+            assert_eq!(
+                guard.registered_triggers.len(),
+                1,
+                "successful submissions should apply trigger updates"
+            );
+        }
+    }
+
     #[test]
     fn repeatable_trigger_tracking_dedupes_ids() {
         let PreparedChaos { mut state, .. } =
@@ -3492,9 +3656,10 @@ mod tests {
         let PreparedChaos { mut state, .. } =
             prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(141);
-        let _ = state
+        let mint_plan = state
             .plan_mint_trigger_repetitions(&mut rng)
             .expect("mint plan");
+        mint_plan.apply_updates(&mut state);
         let trigger_id = state
             .repeatable_triggers
             .first()
@@ -3506,6 +3671,7 @@ mod tests {
             .plan_burn_trigger_repetitions(&mut rng)
             .expect("burn plan");
         assert_eq!(burn.label, "burn_trigger_repetitions");
+        burn.apply_updates(&mut state);
         assert!(
             !state.repeatable_triggers.contains(&trigger_id),
             "depleted trigger should be removed from repeatable list"
@@ -3525,6 +3691,7 @@ mod tests {
             .plan_set_trigger_key(&mut rng)
             .expect("set trigger metadata");
         assert_eq!(set_plan.label, "set_trigger_kv");
+        set_plan.apply_updates(&mut state);
         let trigger = set_plan
             .instructions
             .iter()
@@ -3555,6 +3722,7 @@ mod tests {
             .plan_remove_trigger_key(&mut rng)
             .expect("remove trigger metadata");
         assert_eq!(remove_plan.label, "remove_trigger_kv");
+        remove_plan.apply_updates(&mut state);
         assert!(
             state.repeatable_triggers.is_empty(),
             "metadata trigger should not be tracked as repeatable"
@@ -3596,6 +3764,7 @@ mod tests {
             .plan_execute_trigger(&mut rng)
             .expect("execute trigger");
         assert_eq!(plan.label, "execute_trigger");
+        plan.apply_updates(&mut state);
         let registered = plan
             .instructions
             .iter()

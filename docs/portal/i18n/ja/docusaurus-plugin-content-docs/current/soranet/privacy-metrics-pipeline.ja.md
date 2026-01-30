@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/soranet/privacy-metrics-pipeline.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3b4064966fb15f1f376812c2515cfc842445c1d5bfa0299cfcc86eb19158a150
-source_last_modified: "2025-11-14T04:43:22.467717+00:00"
+source_hash: 865de5090cf90fef11b89317d9c17804a769f85871b51c8e1e5b6448aa22640a
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: privacy-metrics-pipeline
+lang: ja
+direction: ltr
+source: docs/portal/docs/soranet/privacy-metrics-pipeline.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note 公式ソース

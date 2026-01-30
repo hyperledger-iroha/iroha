@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/provider-advert-multisource.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8f0913d7e2c7aeffc14cfa338853d34ab3bd33755438c803c034c5b53736ecf1
-source_last_modified: "2025-11-14T04:43:22.129381+00:00"
+source_hash: 4570861b21f58eaa0ae0f30ef9c9adbb3682d4b8d1082d0ae57e68a13ab8fba5
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: provider-advert-multisource
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/provider-advert-multisource.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 # Anuncios de proveedores multi-origen y planificación
 

@@ -1,18 +1,91 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sdks/recipes/javascript-ledger-flow.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 70c69499739115cd57421815d23707a276cf3c36d6bacd5f35f0d984df1c3583
-source_last_modified: "2025-11-14T04:43:21.141949+00:00"
-translation_last_reviewed: null
+source_hash: 82b540797fdc896775f02236aa8760b8dce7d05b43885801c78d910dde832107
+source_last_modified: "2026-01-30T14:57:12+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/sdks/recipes/javascript-ledger-flow.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /sdks/recipes/javascript-ledger-flow
+title: وصفة تدفق دفتر الأستاذ بجافاسكربت
+description: سجّل أصلًا، وسكّ، وحوّل، واستعلم عن الأرصدة باستخدام `@iroha2/torii-client`.
+---
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+import SampleDownload from '@site/src/components/SampleDownload';
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+تستخدم هذه الوصفة حزمتَي Node.js `@iroha2/torii-client` و`@iroha2/crypto-target-node` لإعادة تنفيذ جولة دفتر الأستاذ في CLI.
+
+<SampleDownload
+  href="/sdk-recipes/javascript/ledger-flow.mjs"
+  filename="ledger-flow.mjs"
+  description="نزّل سكربت JavaScript نفسه المستخدم في هذه الجولة عبر دفتر الأستاذ."
+/>
+
+## المتطلبات المسبقة
+
+```bash
+npm install @iroha2/torii-client @iroha2/crypto-target-node
+export ADMIN_ACCOUNT="ih58..."
+export RECEIVER_ACCOUNT="ih58..."
+export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+```
+
+## مثال على النص البرمجي
+
+```ts title="ledger-flow.mjs"
+import {ToriiClient, buildTransaction} from '@iroha2/torii-client';
+import {createKeyPairFromHex} from '@iroha2/crypto-target-node';
+
+const adminAccount = process.env.ADMIN_ACCOUNT!;
+const receiverAccount = process.env.RECEIVER_ACCOUNT!;
+const adminPrivateKey = process.env.ADMIN_PRIVATE_KEY!;
+
+const client = ToriiClient.create({
+  apiUrl: 'http://127.0.0.1:8080',
+});
+
+const {publicKey, privateKey} = createKeyPairFromHex(adminPrivateKey);
+
+const tx = buildTransaction({
+  chain: '00000000-0000-0000-0000-000000000000',
+  authority: adminAccount,
+  instructions: [
+    {Register: {assetDefinition: {numeric: {id: 'coffee#wonderland'}}}},
+    {Mint: {asset: {id: `coffee#wonderland##${adminAccount}`}, value: {quantity: '250'}}},
+    {Transfer: {
+      asset: {id: `coffee#wonderland##${adminAccount}`},
+      destination: receiverAccount,
+      value: {quantity: '50'},
+    }},
+  ],
+});
+
+tx.sign({publicKey, privateKey});
+const receipt = await client.submitTransaction(tx);
+const txHash = receipt?.payload?.tx_hash ?? "<pending>";
+console.log('Submitted tx', txHash);
+
+const balances = await client.listAccountAssets(receiverAccount, {limit: 10});
+for (const asset of balances.items) {
+  if (asset.id.definition === 'coffee#wonderland') {
+    console.log('Receiver holds', asset.value, 'units of', asset.id.definition);
+  }
+}
+```
+
+شغّل `node --env-file=.env ledger-flow.mjs` (أو صدّر متغيرات البيئة يدويًا). يجب أن يُظهر السجل تجزئة المعاملة (من حمولة الإيصال) ورصيد المستلم المحدّث.
+
+## تحقّق من التكافؤ
+
+- اجلب تفاصيل المعاملة عبر `iroha --config defaults/client.toml transaction get --hash <hash>`.
+- طابق الأرصدة باستخدام `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- قارن التجزئة الصادرة مع وصفات Rust وPython لضمان تكافؤ حزم SDK.

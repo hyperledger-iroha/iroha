@@ -1,18 +1,50 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/source/soranet_handshake_review_plan.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 94ab415bdfea089c91bb166fc3820ceced589a2d2d89d3725ea70a3f15bca2da
-source_last_modified: "2025-11-02T04:40:39.997039+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:08:00.653113+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+# SoraNet Handshake Working Group Prep
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+This note packages the current draft (`docs/source/soranet_handshake.md`) into a
+meeting-ready agenda.
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+## Goals
+- Lock the transport selection (QUIC+Noise XX vs PQ-ready TLS 1.3).
+- Approve transcript hashing inputs, downgrade policy, and logging requirements.
+- Finalise capability TLV registry (type IDs, semantics, GREASE policy).
+- Ratify SaltAnnouncementV1 governance workflow and signature envelope.
+- Agree on circuit padding parameters and acceptable overhead.
+- Confirm directory consensus publishing cadence / diff format.
+- Define telemetry schema, alert thresholds, and governance escalation.
+- Identify fixtures required for CI (cap vectors, salt announcements, transcript hashes).
+
+## Suggested Agenda (60 min)
+1. Recap draft highlights (10 min)
+2. Transport decision & transcript binding (15 min)
+3. Capability TLV registry review (10 min)
+4. Salt rotation & governance policy (10 min)
+5. Circuit padding + telemetry hooks (10 min)
+6. Next steps / owners / timelines (5 min)
+
+## Pre-reading
+- `docs/source/soranet_handshake.md`
+- `roadmap.md` SNNet-1 section
+
+## Proposed Outcomes
+- Documented decisions captured back in `soranet_handshake.md`
+- Action items assigned with owners and target dates (tracked in roadmap/status)
+- Green light to draft full RFC text and generate signed fixtures
+
+## Outcomes (Feb 2026)
+- Chosen transport: QUIC + Noise XX with mandatory ML-KEM-768 key shares.
+- Capability TLV registry finalised (0x0101 pqkem, 0x0102 pqsig, 0x0103 descriptor commit, 0x0201 role, 0x0202 padding).
+- Dual Dilithium3 + Ed25519 signatures required for governance artefacts.
+- Salt governance: 3-of-5 Dilithium3 council with emergency ticket logging.
+- Padding/telemetry targets accepted (1024-byte cells, 18% cover-traffic budget, hourly SoraNetTelemetryV1 reports).
+- Action items: draft RFC by Mar 15, 2026; reference harness by Apr 1; fixture bundle by Apr 15.

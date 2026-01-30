@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/migration-ledger.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3195f703a37c62247c4a379440acb7e3665eb5311bccc91e32a3fba0a9ba93a3
-source_last_modified: "2025-11-14T04:43:21.791318+00:00"
+source_hash: 06bc541a676a6c541c8cd6d76674193d00006d79694ecdb6c566bc921bf9ab44
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: migration-ledger
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/migration-ledger.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 > Adaptado de [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
 

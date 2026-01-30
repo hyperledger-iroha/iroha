@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/nexus/operations.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 335c42c5352650e1d4168947f8a86fdc70b63ef8c146501248697b72fdd59a9c
-source_last_modified: "2025-11-14T04:43:20.522710+00:00"
+source_hash: 6866c0c8d2d58023b5ba57e28f5b43d7795a20c679a7c98649941a1cb8d63c7f
+source_last_modified: "2026-01-03T18:07:58+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/nexus/operations.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-operations
+title: Runbook de operaciones de Nexus
+description: Resumen listo para el campo del flujo de trabajo del operador de Nexus, que refleja `docs/source/nexus_operations.md`.
 ---
 
 Usa esta pagina como el hermano de referencia rapida de `docs/source/nexus_operations.md`. Resume la lista operativa, los ganchos de gestion de cambios y los requisitos de cobertura de telemetria que los operadores de Nexus deben seguir.

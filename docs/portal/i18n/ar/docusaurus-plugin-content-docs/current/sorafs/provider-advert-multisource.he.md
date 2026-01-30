@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/provider-advert-multisource.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2031e4fd6098a9c50ded76f96fe4b4b7454564db564bc2b2b6221700d38e13d9
-source_last_modified: "2025-11-14T04:43:22.131042+00:00"
+source_hash: 9a3e5faa12c76b99266a472a499728fff9b998719cc1ccd52f2adb329795197b
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: provider-advert-multisource
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/provider-advert-multisource.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 # إعلانات مزودي متعدد المصادر والجدولة
 

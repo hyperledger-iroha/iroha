@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 804387015f1a7a4307d98c7701185aedc9e390506c4c9c60c8d34700b7cb9655
-source_last_modified: "2025-11-14T04:43:20.902325+00:00"
+source_hash: e751e26055ef5f081fa3248d1f46e3c8f97f96db65942bfb930a56bdb55c4be4
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/norito/quickstart.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Demarrage Norito
+description: Construisez, validez et deployez un contrat Kotodama avec l'outillage de release et le reseau mono-pair par defaut.
+slug: /norito/quickstart
 ---
 
 Ce walkthrough reprend le workflow que nous attendons des developpeurs lorsqu'ils decouvrent Norito et Kotodama pour la premiere fois : demarrer un reseau deterministe mono-pair, compiler un contrat, le dry-run localement, puis l'envoyer via Torii avec le CLI de reference.

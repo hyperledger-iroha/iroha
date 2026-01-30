@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/nexus/nexus-operator-onboarding.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 67048af2bfd544076c93f6abf60a413376f004b981fe9d6d30063c019df34d8a
-source_last_modified: "2025-11-14T04:43:20.449704+00:00"
+source_hash: 2e15727de492a09d294044ccecb7be29400e516351b35b276dc6c41973099ed7
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/nexus/nexus-operator-onboarding.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-operator-onboarding
+title: Онбординг операторов data-space Sora Nexus
+description: Зеркало `docs/source/sora_nexus_operator_onboarding.md`, отслеживающее end-to-end чеклист релиза для операторов Nexus.
 ---
 
 :::note Канонический источник

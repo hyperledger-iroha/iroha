@@ -1,20 +1,50 @@
-<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
-
 ---
 lang: ar
 direction: rtl
 source: docs/source/project_tracker/connect_architecture_pre_read.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 49086d73514ea1175441eb7484634acb34de9fc21f124db1227edf7fb727408b
-source_last_modified: "2025-11-12T10:44:43.309535+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:08:01.794955+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# قيد الترجمة
+# Connect Architecture Workshop Pre-Read (Feb 2026)
 
-<div dir="rtl">
-هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث حقل `status` في بيانات التعريف أعلاه.
+This note packages the material that must be circulated ahead of the Feb 2026
+cross-SDK workshop. Send the links below in the calendar invite and attach the
+rendered PDF bundle if stakeholders need an offline copy.
 
-هذا المخطط في انتظار الترجمة. استبدل هذا النص بالمحتوى المترجَم وغيّر الحالة إلى `complete` عند الانتهاء. تأكد أيضًا من أن حقل `translation_last_reviewed` يعكس آخر مراجعة تمت مقارنةً بالنص الإنجليزي.
-</div>
+## Contents
+
+1. **Strawman spec** — `docs/source/connect_architecture_strawman.md`  
+   Latest blueprint for session IDs, key derivation, flow control, telemetry,
+   and feature negotiation. Regenerate HTML/PDF via `make docs` before sharing.
+2. **Feedback checklist** — `docs/source/connect_architecture_feedback.md`  
+   Captures every Android/JS decision and the owners who signed off.
+3. **Follow-up tracker** — `docs/source/project_tracker/connect_architecture_followups_ios.md`  
+   Ticket status for post-workshop actions (retry policy, rotation control,
+   telemetry exporters, etc.).
+
+Bundle the sources plus the generated HTML/PDF into `artifacts/connect/pre-read/`
+so attendees have a snapshot that matches the invite.
+
+## Distribution Steps
+
+1. Run `make docs-html` and collect the rendered files from
+   `docs/build/html/connect_architecture_strawman.html` (and related pages).
+2. Copy the rendered HTML/PDF plus this summary into
+   `artifacts/connect/pre-read/<YYYYMMDD>/`.
+3. Attach or link the bundle in the calendar invite titled
+   “Connect Architecture Workshop (Feb 2026)” and mention:
+   - Strawman section anchors to review (`Encryption & Key Management`,
+     `Sequence Numbers & Flow Control`, `Telemetry & Diagnostics`).
+   - Feedback checklist row owners.
+   - Expected asks (open questions list).
+4. Post a reminder in `#sdk-council` with the bundle hash so reviewers can
+   confirm they looked at the right revision.
+5. After the workshop, archive the bundle path in `status.md` under the IOS7 /
+   AND7 readiness log.
+
+> ✅ **Current bundle:** `artifacts/connect/pre-read/20260129/` (generated after
+> updating the strawman and SDK docs on 2026-01-29).

@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/multi-source-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b6d8ee30b9e2f9d91d5e8b911db43059937b7688477c596da34f1ed5d4e48951
-source_last_modified: "2025-11-07T10:33:21.920557+00:00"
+source_hash: fe5e140c5ada2ac6adfd2e1ba2c2cbb058040f49fee32b3015954989538b3a2f
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: multi-source-rollout
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/multi-source-rollout.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note מקור קנוני
 עמוד זה משקף את `docs/source/sorafs/runbooks/multi_source_rollout.md`. שמרו על סנכרון שתי הגרסאות עד שהסט הישן של התיעוד יוסר.

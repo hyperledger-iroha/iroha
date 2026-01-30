@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/nexus/nexus-fee-model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7f8991118dcb8309f136503ce30f147a2033bc421507eeed042c0c607d272b32
-source_last_modified: "2025-11-14T04:43:20.428772+00:00"
+source_hash: 71a2c0e9894d9057f5c9f030ff316c707a8b094967b55d13fc046a2fc2cb5a82
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/nexus/nexus-fee-model.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-fee-model
+title: Nexus料金モデルの更新
+description: `docs/source/nexus_fee_model.md` のミラーで、lane決済レシートと照合サーフェスを文書化します。
 ---
 
 :::note 正本

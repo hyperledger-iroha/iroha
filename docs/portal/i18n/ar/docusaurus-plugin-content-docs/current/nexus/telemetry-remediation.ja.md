@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/nexus/telemetry-remediation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c9bb6fc1735a74c3022405ccd8fc9e4b104ee5bf60d56003c3fee8335a05bfe3
-source_last_modified: "2025-11-14T04:43:20.590497+00:00"
+source_hash: e0d7723722c7c0bebd3935cd760a0737e85f8a1427f2a31936a1baa2ceec0335
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/nexus/telemetry-remediation.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-telemetry-remediation
+title: خطة معالجة تيليمترية Nexus (B2)
+description: نسخة مطابقة لـ `docs/source/nexus_telemetry_remediation_plan.md` توثق مصفوفة فجوات القياس ومسار العمل التشغيلي.
 ---
 
 # نظرة عامة

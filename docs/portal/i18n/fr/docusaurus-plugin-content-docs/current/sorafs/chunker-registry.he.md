@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/chunker-registry.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e9d973b40a3e9c218660566814b64e36e80ae235e37ddc14ea328123e8944a72
-source_last_modified: "2025-11-14T04:43:21.540128+00:00"
+source_hash: 337f4901440181a9be6bfd1c1df9b6c54d4b944ada6c803d86250a053101c012
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-registry
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/chunker-registry.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Source canonique
 Cette page reflète `docs/source/sorafs/chunker_registry.md`. Gardez les deux copies synchronisées jusqu'à la retraite complète du set Sphinx hérité.

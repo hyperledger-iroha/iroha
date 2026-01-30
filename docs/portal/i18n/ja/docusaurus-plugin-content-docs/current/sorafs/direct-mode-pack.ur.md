@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/direct-mode-pack.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4e200c21fceb03de598cf4c91ca306121afa2cdf2f5c0d7a00f8f34855804838
-source_last_modified: "2025-11-07T10:33:21.917878+00:00"
+source_hash: 26556efa46bbaf1ae212ad73fa21c1b2a0100397c707b7e2d6089c732ffb7433
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: direct-mode-pack
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/direct-mode-pack.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note 正規ソース
 このページは `docs/source/sorafs/direct_mode_pack.md` を反映しています。レガシーの Sphinx セットが退役するまで両方を同期してください。

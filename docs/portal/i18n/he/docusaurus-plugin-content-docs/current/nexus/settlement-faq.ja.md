@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/nexus/settlement-faq.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ec6a9d458c43fee10193ea7eda68d3d1b151113fd15f9cb3f518af77e94e76ef
-source_last_modified: "2025-11-14T04:43:20.566836+00:00"
+source_hash: c2d3c8946b2104cad1a5b5abe170ead2c37de081399afada75f207676a72600a
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/nexus/settlement-faq.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-settlement-faq
+title: שאלות נפוצות על Settlement
+description: תשובות למפעילים המכסות ניתוב settlement, המרת XOR, טלמטריה וראיות ביקורת.
 ---
 
 העמוד הזה משקף את ה-FAQ הפנימי של settlement (`docs/source/nexus_settlement_faq.md`) כדי שקוראי הפורטל יוכלו לעיין באותה הנחיה בלי לחפש במונו-רפו. הוא מסביר כיצד Settlement Router מטפל בתשלומים, אילו מדדים לנטר, וכיצד ה-SDK צריכים לשלב את מטעני Norito.

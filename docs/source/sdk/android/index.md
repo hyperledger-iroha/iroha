@@ -84,7 +84,8 @@ transport.submitTransaction(tx).join();
 - For instruction lists, populate `TransactionPayload.setInstructions(...)`
   with `InstructionBox.fromWirePayload(...)` entries. Each payload must already
   include the Norito header/checksum; legacy argument-map instruction payloads
-  are rejected by the encoder.
+  are rejected by the encoder. Trigger registration instructions also require
+  wire-framed nested instructions (`wire_name` + `payload_base64` only).
 - `HttpClientTransport.submitTransaction` returns a `CompletableFuture`; use
   `waitForTransactionStatus` to poll `/v1/pipeline/transactions/status` for the
   resulting hash, or configure a `PendingTransactionQueue` so failed submissions

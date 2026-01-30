@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/nexus/overview.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c2b89adf1ec25af739af783e05cc88a633c06e5bdcf6ec03e80ac6ba8e6c2008
-source_last_modified: "2025-11-14T04:43:20.540742+00:00"
+source_hash: 459dece56be55f2cd3b0eeca388f1e384c2965954da059c9224e918353413103
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/nexus/overview.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-overview
+title: Sora Nexus کا جائزہ
+description: Iroha 3 (Sora Nexus) کی معماری کا اعلی سطحی خلاصہ اور مونو ریپو کی کینونیکل دستاویزات کے حوالے۔
 ---
 
 Nexus (Iroha 3) Iroha 2 کو multi-lane اجرا، گورننس کے دائرہ کار میں ڈیٹا اسپیسز، اور ہر SDK میں مشترکہ ٹولنگ کے ساتھ توسیع دیتا ہے۔ یہ صفحہ مونو ریپو میں نئے خلاصے `docs/source/nexus_overview.md` کی عکاسی کرتا ہے تاکہ پورٹل کے قارئین جلد سمجھ سکیں کہ معماری کے اجزا کیسے جڑتے ہیں۔

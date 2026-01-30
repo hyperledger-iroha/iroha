@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/nexus/transition-notes.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: efdf1b0dcc034a613b956245b156fb913c63d117805df4f9dadacd2f13b24a2d
-source_last_modified: "2025-11-14T04:43:20.611515+00:00"
+source_hash: 56391cc27cb8868f875839990ce4daeac4812bc767d3a067d846026ec9948b26
+source_last_modified: "2026-01-06T06:54:55+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/nexus/transition-notes.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-transition-notes
+title: Notas de transicion de Nexus
+description: Espejo de `docs/source/nexus_transition_notes.md`, que cubre evidencia de transicion de Phase B, el calendario de auditoria y las mitigaciones.
 ---
 
 <!--

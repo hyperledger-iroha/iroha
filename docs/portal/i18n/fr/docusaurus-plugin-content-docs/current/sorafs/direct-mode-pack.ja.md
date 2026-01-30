@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/direct-mode-pack.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d4785c22d9925ba62f64d94edb90eb888f5e66d9d6243d3e4e066a6fe8e9c6a2
-source_last_modified: "2025-11-14T04:43:21.698078+00:00"
+source_hash: e87e132a5aaad65c40efb9c6ebeb47bacaff403ff2facfd9cd2a0a808f31c213
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: direct-mode-pack
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/direct-mode-pack.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Source canonique
 Cette page reflète `docs/source/sorafs/direct_mode_pack.md`. Gardez les deux copies synchronisées jusqu'au retrait de l'ensemble Sphinx historique.

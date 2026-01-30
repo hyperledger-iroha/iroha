@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/reports/capacity-marketplace-validation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 87752f3e4a9d13463941f8bb5bf25388e892e192b1f96844bc6ea320f5ab0ca5
-source_last_modified: "2025-11-14T04:43:22.196418+00:00"
+source_hash: 6b980d966ef2ed6ed38f95534e90d19d6e6feb936ead0d3988aa5e3c6d5a02c8
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/reports/capacity-marketplace-validation.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Lista de verificacion de validacion del mercado de capacidad SoraFS

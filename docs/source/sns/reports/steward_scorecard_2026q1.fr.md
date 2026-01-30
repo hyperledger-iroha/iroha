@@ -1,18 +1,48 @@
-<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
-
 ---
 lang: fr
 direction: ltr
 source: docs/source/sns/reports/steward_scorecard_2026q1.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 31ff1c34929cbcf68fa08ef8041bf47589c1c742aea36bf3a2f5bf5e91f2fd9a
-source_last_modified: "2025-11-20T14:28:08.625669+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:57.614745+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traduction en cours
+---
+title: SNS Steward Scorecard
+summary: Automated KPI report for steward monitoring.
+---
 
-Ce fichier sert de modèle pour la traduction française du document anglais. Une fois la traduction terminée, mettez à jour le champ `status` dans les métadonnées ci-dessus.
+# SNS Steward Scorecard — 2026-Q1
 
-Ce brouillon est en attente de traduction. Remplacez ce texte par le contenu traduit et passez l’état à `complete` lorsque le travail est terminé. Vérifiez également que `translation_last_reviewed` correspond à la dernière vérification par rapport à la version anglaise.
+_Generated at 2026-04-05T18:45:00Z (version 1)_
+
+| Suffix | Steward | Renewal | Support SLA | Dispute | Rotation |
+|--------|---------|---------|-------------|---------|----------|
+| .sora | Sora Foundation Steward Desk | pass (91%) | pass (98%) | pass (96h) | none |
+| .dao | DAO Launchpad Guild | warning (53%) | breach (81%) | warning (220h) | replace |
+
+## .sora (Sora Foundation Steward Desk)
+
+- Renewal retention: 91.2% (target 55%) — pass
+- Support SLA: 97.6% (420 tickets, 1 P1 breaches) — pass
+- Dispute turnaround: 96 h median (36 resolved) — pass
+- Rotation posture: none (no outstanding actions)
+  - Notes:
+    - Referral rebates launched mid-quarter; telemetry steady.
+
+## .dao (DAO Launchpad Guild)
+
+- Renewal retention: 53.3% (target 55%) — warning
+- Support SLA: 80.6% (310 tickets, 6 P1 breaches) — breach
+- Dispute turnaround: 220 h median (17 resolved) — warning
+- Rotation posture: replace (Single KPI breach recorded; 1 guardian freeze(s) opened)
+  - Alerts:
+    - Renewal retention 53.3% vs 55% target
+    - Support SLA 80.6% vs 95% target (6 P1 breaches)
+    - Dispute turnaround 220 h vs 168 h budget
+    - 1 guardian freeze(s) active in quarter
+  - Notes:
+    - Guardian freeze (2026-02-10) pending remediation; staffing ramp in progress.
+

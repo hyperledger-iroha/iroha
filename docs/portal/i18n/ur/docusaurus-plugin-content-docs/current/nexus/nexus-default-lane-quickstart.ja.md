@@ -4,9 +4,21 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/nexus/nexus-default-lane-quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1564f276b901970a7567bd2914158cc3e943e95aaef86e1b227ed6f793e0f88d
-source_last_modified: "2025-11-14T04:43:20.387493+00:00"
+source_hash: 2787e8a59ee1eb08598d0f026f131a156938d7b4a5c2097298af1ec9bb203af9
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/nexus/nexus-default-lane-quickstart.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-default-lane-quickstart
+title: default lane کوئیک اسٹارٹ (NX-5)
+sidebar_label: default lane کوئیک اسٹارٹ
+description: Nexus کے default lane fallback کو configure اور verify کریں تاکہ Torii اور SDKs public lanes میں lane_id omit کر سکیں۔
 ---
 
 :::note Canonical Source
@@ -166,4 +178,3 @@ curl -s http://127.0.0.1:8080/status \
 - `/status` `nexus_lane_governance_sealed_total` اور `nexus_lane_governance_sealed_aliases` بھی publish کرتا ہے تاکہ Alertmanager warn کر سکے جب کوئی lane اپنا manifest کھو دے۔ ان alerts کو devnets میں بھی enabled رکھیں۔
 - scheduler telemetry map اور lane governance dashboard (`dashboards/grafana/nexus_lanes.json`) catalog کے alias/slug fields expect کرتے ہیں۔ اگر آپ alias rename کریں تو متعلقہ Kura directories کو relabel کریں تاکہ auditors deterministic paths رکھ سکیں (NX-1 کے تحت track ہوتا ہے)۔
 - default lanes کے لئے parliament approvals میں rollback plan شامل ہونا چاہیے۔ manifest hash اور governance evidence کو اس quickstart کے ساتھ اپنے operator runbook میں record کریں تاکہ future rotations مطلوبہ state کا اندازہ نہ لگائیں۔
-

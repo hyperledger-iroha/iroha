@@ -4,9 +4,18 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w1/log.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d9a4e09025f8a37b3828ed148352f512c07d5c70c3b0139f6a4a17fc6b44e1bc
-source_last_modified: "2025-11-14T04:43:19.845011+00:00"
+source_hash: 7382897e4cfe737004238769025efed6ea2ff2beec72267c727584c477042125
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: preview-feedback-w1-log
+lang: he
+direction: rtl
+source: docs/portal/docs/devportal/preview-feedback/w1/log.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 הלוג הזה שומר את roster ההזמנות, checkpoints טלמטריה ומשוב reviewers עבור

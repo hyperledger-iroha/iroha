@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/soranet/puzzle-service-operations.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ca49ec189bc450bbe3f4e947489c382c49c878adc58e152efd5f1d5449b5d186
-source_last_modified: "2025-11-14T04:43:22.490364+00:00"
+source_hash: 357595875d699080d71e7fbf545087f20536f7a42dd13ac32d7bbcd927343d8c
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: puzzle-service-operations
+lang: he
+direction: rtl
+source: docs/portal/docs/soranet/puzzle-service-operations.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note מקור קנוני

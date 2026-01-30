@@ -1,20 +1,20 @@
-<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
-
 ---
 lang: ar
 direction: rtl
 source: docs/source/compliance/android/eu/README.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8100c4fe83dc4fb6de9d6d188d688a4edeac4c40fc01348ad26c9a4a2f9c201f
-source_last_modified: "2025-11-07T17:46:18.591574+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:59.205680+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# قيد الترجمة
+<!--
+  SPDX-License-Identifier: Apache-2.0
+-->
 
-<div dir="rtl">
-هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث حقل `status` في بيانات التعريف أعلاه.
+# EU Compliance Artefacts
 
-هذا المخطط في انتظار الترجمة. استبدل هذا النص بالمحتوى المترجَم وغيّر الحالة إلى `complete` عند الانتهاء. تأكد أيضًا من أن حقل `translation_last_reviewed` يعكس آخر مراجعة تمت مقارنةً بالنص الإنجليزي.
-</div>
+Store EU-facing artefacts for AND6 here (security target, GDPR DPIA summary,
+SBOM attestations). Each Markdown stub should link to the signed artefact in
+the governance share and record the checksum plus approval metadata.

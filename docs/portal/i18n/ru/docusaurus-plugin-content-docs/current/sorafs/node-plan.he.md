@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/node-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4368827ffd99aa2b9e8c07427a46ba7699e85be590a655f0eb388bd6de531d1f
-source_last_modified: "2025-11-14T04:43:21.894140+00:00"
+source_hash: 33a407103168392391cd8efbc6f9895aea47319717d3f36df1d7b43c277d2104
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: node-plan
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/node-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Канонический источник
 :::

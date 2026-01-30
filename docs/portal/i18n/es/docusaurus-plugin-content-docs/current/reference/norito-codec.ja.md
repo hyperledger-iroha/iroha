@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/reference/norito-codec.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d4fc672641a8b65a9e6398e57eb495edac4189238fb894af9846eebc72edc2b1
-source_last_modified: "2025-11-14T04:43:20.977040+00:00"
+source_hash: 27da4048dbfed4247c6232e74bcfa4c07c86f4bbcfba9999d57180805f0e038c
+source_last_modified: "2026-01-18T05:31:56+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/reference/norito-codec.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Referencia del codec Norito

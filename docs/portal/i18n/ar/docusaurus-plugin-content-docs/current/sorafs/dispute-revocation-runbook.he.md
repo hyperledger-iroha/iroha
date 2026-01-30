@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/dispute-revocation-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 00943c4a2ab69c26a43eac32fc3e3c68836ffbd9a968287b6be837a95a497fb0
-source_last_modified: "2025-11-14T04:43:21.710960+00:00"
+source_hash: 8a69f1268c3e53b1f193ee53e2038bedd88edf63e307f94b44d3fe2ee3e594c6
+source_last_modified: "2026-01-22T15:55:18+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: dispute-revocation-runbook
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/dispute-revocation-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note المصدر المعتمد

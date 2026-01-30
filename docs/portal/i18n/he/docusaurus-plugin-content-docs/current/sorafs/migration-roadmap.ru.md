@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/migration-roadmap.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a07336dfff19b5badafadc8f716faa4fe3790f144c4855687a9bd8b6d7e1a8bf
-source_last_modified: "2025-11-07T10:33:21.919832+00:00"
+source_hash: 713edfd67ba471ce3384804f28e0dd97a260101c8fd52d97dc29f00a78e93b3f
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/migration-roadmap.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > מותאם מ-[`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).

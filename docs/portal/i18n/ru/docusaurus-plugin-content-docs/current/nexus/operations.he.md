@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/nexus/operations.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fd4b498be0089a6fcdf26b63e2e43098e3160b8398c0de6d2cf5b4375e49d62b
-source_last_modified: "2025-11-14T04:43:20.523635+00:00"
+source_hash: 24ec9c8b0f4d4b8373153138c2e9b601388bb6010e04b3bc724b075b2bda4d1c
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/nexus/operations.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-operations
+title: Runbook по операциям Nexus
+description: Практичный полевой обзор рабочего процесса оператора Nexus, отражающий `docs/source/nexus_operations.md`.
 ---
 
 Используйте эту страницу как быстрый справочник к `docs/source/nexus_operations.md`. Она концентрирует операционный чек-лист, точки управления изменениями и требования к телеметрии, которым должны следовать операторы Nexus.

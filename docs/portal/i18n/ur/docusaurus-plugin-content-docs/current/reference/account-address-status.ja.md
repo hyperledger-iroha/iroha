@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/reference/account-address-status.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7818255af32ccfd6e46af4453ddcc998e315da8417da1a8b1fa7ee3ae5758beb
-source_last_modified: "2025-11-14T04:43:20.947710+00:00"
+source_hash: fffc30fdb2319255a376399a6244e67cf2c46a2824ca323e841eac512c191f05
+source_last_modified: "2026-01-28T17:58:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/reference/account-address-status.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: account-address-status
+title: اکاؤنٹ ایڈریس تعمیل
+description: ADDR-2 fixture ورک فلو کا خلاصہ اور SDK ٹیموں کی ہم آہنگی کیسے برقرار رہتی ہے۔
 ---
 
 canonical ADDR-2 bundle (`fixtures/account/address_vectors.json`) IH58 (preferred), compressed (`sora`, second-best; half/full width), multisignature, اور negative fixtures کو capture کرتا ہے۔ ہر SDK + Torii surface اسی JSON پر انحصار کرتی ہے تاکہ codec drift پروڈکشن تک پہنچنے سے پہلے پکڑا جا سکے۔ یہ صفحہ اندرونی status brief (`docs/source/account_address_status.md` ریپوزٹری روٹ میں) کو mirror کرتا ہے تاکہ portal readers بغیر mono-repo میں کھوج لگائے workflow دیکھ سکیں۔

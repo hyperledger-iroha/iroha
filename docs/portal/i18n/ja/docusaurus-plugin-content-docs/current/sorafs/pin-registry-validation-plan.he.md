@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/pin-registry-validation-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 094576f81473bb0f3ea81f467d15dc671bda0b00127690998a4457e7ba26e60a
-source_last_modified: "2025-11-14T04:43:22.069831+00:00"
+source_hash: c0ff45e5053f3010d5b42128c856a42419edad0ff8453b155c4b0a1ea4f202c7
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: pin-registry-validation-plan
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/pin-registry-validation-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note 正規ソース

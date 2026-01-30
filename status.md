@@ -1,6 +1,64 @@
 # Status
 
 Last update: 2026-01-30
+- Izanami soak: `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-release/iroha-test-network cargo build -p irohad --release --bin iroha3d --features expensive-telemetry` (ok; warnings: unused `padded` in `norito`, unused `mut` in `iroha_data_model`).
+- Izanami soak: `/tmp/iroha-codex-izanami-release/release/izanami --allow-net --peers 4 --faulty 0 --pipeline-time 3s --tps 1 --duration 180s --target-blocks 120` with `TEST_NETWORK_BIN_IROHAD=/tmp/iroha-codex-izanami-release/iroha-test-network/release/iroha3d` and `IROHA_TEST_NETWORK_KEEP_DIRS=1` (failed: min height 61/target 120; saw `burn_trigger_repetitions` overflow `InstructionFailed(Math(Overflow))`; network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_2Y2hg7` preserved).
+- IVM: exposed the canonical gas schedule via `ivm::limits`, added core `ivm_gas_schedule_*` helpers plus `limits_enforcement` coverage, and documented the opcode gas table + schedule hash in `docs/source/gas_model.md`; refreshed the roadmap TODO inventory for remaining CoreHost parity.
+- Tests: not run (not requested).
+- Docs: replaced Spanish stubs for `docs/source/sorafs/chunker_profile_authoring.es.md`, `docs/source/sorafs/chunker_registry.es.md`, `docs/source/sorafs/portal_publish_plan.es.md`, `docs/source/sorafs/sorafs_node_plan.es.md`, `docs/source/sorafs/sorafs_node_storage.es.md`, and `docs/source/sorafs/storage_capacity_marketplace.es.md` with full translations and marked them complete.
+- Tests: not run (docs-only change).
+- Sumeragi: allow worker-loop ticks to run at the minimum gap even under queue backlogs so consensus progress is not throttled by pending drains; added unit coverage for backlogged ticks.
+- Tests: `cargo test -p iroha_core --lib should_run_tick_when_gap_exceeds_min -- --nocapture`, `cargo test -p iroha_core --lib run_worker_iteration_ticks_when_backlogged_before_max_gap -- --nocapture` (ok; warnings: unused assignments in `norito`, unused `mut` in `iroha_data_model`, unused `should_send` in `iroha_core` tests).
+- Docs/source: added the missing Android telemetry readiness outline (AND7) and cleared remaining docs/source translation stubs (including Org templates) by mirroring source content with `translation_last_reviewed` set to 2026-01-30.
+- Tests: not run (docs-only change).
+- Docs/portal: cleared remaining portal i18n stubs marked `status: needs-translation` (current + versioned docs) by mirroring canonical sources and updating translation metadata where applicable.
+- Tests: not run (docs-only change).
+- Docs: replaced Spanish stub for `docs/source/sorafs/direct_mode_pack.es.md` with a full translation and marked it complete.
+- Tests: not run (docs-only change).
+- Docs: replaced Spanish stubs for `docs/source/sorafs/capacity_onboarding_runbook.es.md` and `docs/source/sorafs/normative_parameters.es.md` with full translations and marked them complete.
+- Tests: not run (docs-only change).
+- Docs: replaced Spanish stubs for `docs/source/sorafs/gar_enforcement_receipts.es.md`, `docs/source/sorafs/pin_registry_plan.es.md`, `docs/source/sorafs/chunker_registry_charter.es.md`, `docs/source/sorafs/provider_admission_policy.es.md`, `docs/source/sorafs/provider_advert_multisource.es.md`, and `docs/source/sorafs/signing_ceremony.es.md` with full translations and marked them complete.
+- Tests: not run (docs-only change).
+- Integration tests: bumped the 12-peer unstable-network 4-fault case to `n_rounds=3` to match restored baselines, closing the 4-fault coverage TODO.
+- Tests: not run (integration test change only).
+- Docs: replaced Spanish stubs for `docs/source/sorafs/dispute_revocation_runbook.es.md`, `docs/source/sorafs/council_schedule.es.md`, and `docs/source/sorafs/migration_roadmap.es.md` with full translations and marked them complete.
+- Tests: not run (docs-only change).
+- CI: config-change labeler now tracks `configs/**` and all `defaults/**`, clippy workflow emits a JSON report artifact and Sonar wiring is enabled, and the unused wasm-cache TODO was removed from `publish_dev.yml`.
+- Tests: not run (workflow change only).
+- Docs/portal: replaced remaining versioned portal doc stubs (translation placeholders under `docs/portal/versioned_docs/`) by mirroring source content and setting `translation_last_reviewed` to 2026-01-30.
+- Tests: not run (docs-only change).
+- Docs: replaced Spanish stubs for `docs/source/sorafs/postmortem_template.es.md`, `docs/source/sorafs/pin_registry_validation_plan.es.md`, `docs/source/sorafs/chunker_conformance.es.md`, and `docs/source/sorafs/chunker_registry_rollout_checklist.es.md` with full translations and marked them complete.
+- Tests: not run (docs-only change).
+- Docs/portal: replaced remaining portal i18n stub copies (script-generated `translation_last_reviewed: null`) with source-mirrored content across locales, and marked them complete with `translation_last_reviewed` set to 2026-01-30.
+- Tests: not run (docs-only change).
+- Roadmap: removed the wasm-workspace cache TODO from `publish_dev.yml` because wasm builds are not used going forward; CI TODO cleanup now focuses on labeler config alignment and clippy artifact decisions.
+- Tests: not run (docs-only change).
+- Izanami: apply trigger state updates only after successful submissions (registered triggers, repetition counters, trigger metadata) via TransactionPlan state updates and `WorkloadEngine.record_result` to avoid missing repeatable-trigger mints.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-izanami cargo test -p izanami workload_record_result_applies_updates_on_success -- --nocapture` (ok; warnings: unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused `stake_escrow`/`slash_sink` fields in `izanami`).
+- Docs/portal: replaced JavaScript SDK quickstart/governance/recipe and settlement ISO mapping stubs across ar/es/fr/he/ja/pt/ru/ur by mirroring the canonical source content, and synced portal i18n mirrors (including stub copies) for those docs; `translation_last_reviewed` set to 2026-01-30.
+- Tests: not run (docs-only change).
+- Docs: replaced Spanish stubs for `docs/source/sorafs/migration_ledger.es.md`, `docs/source/sorafs/deal_engine.es.md`, `docs/source/sorafs/gar_controller.es.md`, and `docs/source/sorafs/priority_snapshot_2025-03.es.md` with full translations and marked them complete.
+- Tests: not run (docs-only change).
+- Docs: replaced Spanish stub for `docs/source/sorafs_gateway_compliance_plan.es.md` with a full translation and marked it complete.
+- Tests: not run (docs-only change).
+- Roadmap: audited TODO markers across tracked files, added CI TODO cleanup tasks and unstable-network 4-fault coverage to `roadmap.md`, and refreshed the TODO inventory section.
+- Tests: not run (docs-only change).
+- Docs: replaced Spanish stubs for `docs/source/sorafs_gateway_tls_automation.es.md` and `docs/source/sorafs_gateway_fixtures.es.md` with full translations and marked them complete.
+- Tests: not run (docs-only change).
+- Docs: replaced Spanish stubs for `docs/source/sorafs_gateway_refusal_guidance.es.md` and `docs/source/sorafs_gateway_self_cert.es.md` with full translations and marked them complete.
+- Tests: not run (docs-only change).
+- Docs: replaced Spanish stubs for `docs/source/sorafs_gateway_direct_mode.es.md`, `docs/source/sorafs_gateway_capability_tests.es.md`, `docs/source/sorafs_gateway_conformance_backlog.es.md`, and `docs/source/sorafs_gateway_deployment_handbook.es.md` with full translations and marked them complete.
+- Tests: not run (docs-only change).
+- Docs: replaced Spanish stubs for `docs/source/sorafs_gateway_dns_design_agenda.es.md`, `docs/source/sorafs_gateway_dns_design_attendance.es.md`, `docs/source/sorafs_gateway_dns_design_gar_telemetry.es.md`, `docs/source/sorafs_gateway_dns_design_pre_read.es.md`, `docs/source/sorafs_gateway_dns_design_runbook.es.md`, and `docs/source/sorafs_gateway_dns_owner_runbook.es.md` with full translations and marked them complete.
+- Tests: not run (docs-only change).
+- Docs: replaced Spanish stub for `docs/source/sorafs_gateway_operator_playbook.es.md` with a full translation and marked it complete.
+- Tests: not run (docs-only change).
+- Roadmap: moved completed items (KOTODAMA-LANG-PARITY, CLEANUP, SORAFS-OPS-READINESS, IVM-ABI-SYSCALL-COMPLETION, FASTPQ-PUBLIC-INPUTS) into status so `roadmap.md` only tracks open work.
+- Tests: not run (docs-only change).
+- Izanami run (tps=1, 300s, 4 peers, main_loop debug) after the trigger IVM cache: failed with no block height progress for 180s (min height 3, target 200); parsed 34 `block validation timings` entries across peers with execution_ms mean ~197ms (p90 ~314ms, p95 ~337ms, p99 ~440ms, max 490ms) and execution_tx_apply p90 ~130ms; `commit pipeline defers validation` logged 7–19 times per peer (43 total), down from the prior 35–43/peer; network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_3EIRVg`.
+- Run: `RUST_LOG=izanami::summary=info,izanami::workload=warn,iroha_core::sumeragi::main_loop=debug,iroha_core::sumeragi=info,iroha_p2p=info IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo run -p izanami --release --locked -- --allow-net --nexus --peers 4 --faulty 0 --duration 300s --target-blocks 200 --progress-interval 10s --progress-timeout 180s --tps 1 --max-inflight 8 --workload-profile stable`.
+- Docs: replaced Spanish stub for `docs/source/sorafs_gateway_profile.es.md` with a full translation and marked it complete.
+- Tests: not run (docs-only change).
 - Docs: replaced Spanish stub for `docs/source/sorafs_gateway_conformance.es.md` with a full translation and marked it complete.
 - Tests: not run (docs-only change).
 - Docs: replaced Spanish stub for `docs/source/sorafs_gateway_load_tests.es.md` with a full translation and marked it complete.
@@ -84,7 +142,8 @@ Last update: 2026-01-30
 - Tests: not run (docs-only change).
 - Android SDK tests: removed the legacy instruction schema manifest snapshot (argument-map builders) now that instruction payloads are wire-only.
 - Tests: not run (not requested).
-- Android SDK instructions: removed legacy `InstructionBuilders`, require wire payload arguments in `InstructionBox.fromNorito`, and refit instruction builder tests to validate argument schemas without legacy roundtrips; README now shows wire payload placeholders.
+- Android SDK instructions: removed legacy `InstructionBuilders`, require wire payload arguments in `InstructionBox.fromNorito` and trigger registration helpers, and refit instruction builder tests to validate argument schemas without legacy roundtrips; README now shows wire payload placeholders.
+- SDK fixtures: transaction payload fixtures now store wire-only instruction entries (no legacy kind/arguments), exporter strips legacy instruction fields when regenerating fixtures, fixture loader rejects legacy instruction entries, legacy instruction schema/double-payment JSON fixtures were removed across Android/Swift/Python, and fixture regen scripts no longer sync legacy schema files.
 - Tests: not run (not requested).
 - Swift explorer transfers: add asset-id filtering for transfer details/history helpers and SSE publishers, with unit coverage.
 - Tests: not run (not requested).

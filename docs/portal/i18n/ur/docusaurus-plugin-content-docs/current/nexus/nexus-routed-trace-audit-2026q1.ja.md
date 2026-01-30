@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/nexus/nexus-routed-trace-audit-2026q1.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c577d9dc49348966b03dc4c2093a8e0f235e2b3aa230d2ced4321c5990d4aee8
-source_last_modified: "2025-11-14T04:43:20.484236+00:00"
+source_hash: 4f8b435164d16e21b5776247afbaedc751be96ecb0085565bc646709a322a801
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/nexus/nexus-routed-trace-audit-2026q1.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-routed-trace-audit-2026q1
+title: 2026 Q1 routed-trace آڈٹ رپورٹ (B1)
+description: `docs/source/nexus_routed_trace_audit_report_2026q1.md` کا آئینہ، جو سہ ماہی ٹیلیمیٹری ریہرسل کے نتائج کا احاطہ کرتا ہے۔
 ---
 
 <!--

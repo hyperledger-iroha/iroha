@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/manifest-pipeline.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8d1849af2bb535fceb7e0e55e87afdadf4bec8f66f006e9b326f38c13dbe71c1
-source_last_modified: "2025-11-14T04:43:21.767492+00:00"
+source_hash: f447417d0021136734e1bf4b7dafa722115c2e690aebdfdefab1e8988df4d094
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/manifest-pipeline.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Чанкинг SoraFS → Pipeline манифестов

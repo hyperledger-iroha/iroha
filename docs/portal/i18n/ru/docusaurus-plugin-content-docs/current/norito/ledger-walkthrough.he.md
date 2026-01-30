@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/norito/ledger-walkthrough.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 83fb021c6c381587dd8eff02681ce2701e62496c5e8d1f887075a03e99d1ec22
-source_last_modified: "2025-11-14T04:43:20.855635+00:00"
+source_hash: 8cdfd010c75d54cf80ef9ed67bae6565fdbcd24c8b7d15ba361762f92a58c29b
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/norito/ledger-walkthrough.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Пошаговый разбор реестра
+description: Воспроизведите детерминированный поток register -> mint -> transfer с CLI `iroha` и проверьте итоговое состояние реестра.
+slug: /norito/ledger-walkthrough
 ---
 
 Этот walkthrough дополняет [Norito quickstart](./quickstart.md), показывая, как менять и проверять состояние реестра с помощью CLI `iroha`. Вы зарегистрируете новую дефиницию актива, заминтите единицы на дефолтный операторский аккаунт, переведете часть баланса на другой аккаунт и проверите итоговые транзакции и владения. Каждый шаг отражает потоки, покрытые в quickstart SDK Rust/Python/JavaScript, чтобы вы могли подтвердить паритет между CLI и поведением SDK.

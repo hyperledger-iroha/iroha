@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/developer-deployment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c12b0c2a6ee3255dcaccaeb623747f0bd49b6f7d1df1c17f0ff94754c67aaafe
-source_last_modified: "2025-11-14T04:43:21.616952+00:00"
+source_hash: 90fef8cfaf5551b40d6959a45e60a181d7e1fdb13914b0b8ac77f5ad3d576146
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: developer-deployment
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/developer-deployment.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note 正規ソース
 このページは `docs/source/sorafs/developer/deployment.md` を反映しています。レガシー docs が退役するまで両方を同期してください。

@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/da/commitments-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c8f5f28f5ebd0c946d6de1775fef39c3cddefb601562e9f42f7d70b219e1294c
-source_last_modified: "2025-11-14T04:43:19.713786+00:00"
+source_hash: 00a8ec8c6396f75a6829e3ba38a5d8073c91417d69de187f4fec79e9f83d90b9
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/da/commitments-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note מקור קנוני

@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/devportal/public-preview-invite.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1bb3bcbcfd932a031518034de56cb89de642770f53f4fda98e0f1820aca0040d
-source_last_modified: "2025-11-14T04:43:20.113656+00:00"
+source_hash: 01def69ec16e88c8827714a8abbcad6d6b481ce045876f718277115fd89d0445
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/devportal/public-preview-invite.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # 公開プレビュー招待プレイブック

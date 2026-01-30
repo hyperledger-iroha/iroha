@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/priority-snapshot-2025-03.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 165b2d85c7b6e84fe3d7e2c52fb155d0756ca2cd8d25f4abb5041f6a6e9ff451
-source_last_modified: "2025-11-14T04:43:22.092586+00:00"
+source_hash: 6520abf93bb691e10c454222caafa2f90c27da6bb27e829e7046a6c5f51edb56
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: priority-snapshot-2025-03
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/priority-snapshot-2025-03.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > مستند ماخذ: `docs/source/sorafs/priority_snapshot_2025-03.md`

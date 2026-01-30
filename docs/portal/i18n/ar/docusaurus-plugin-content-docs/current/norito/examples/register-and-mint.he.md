@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/norito/examples/register-and-mint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 66ddbf3d1f0fb8f49b26c6ba62ce2a031f272f0ae08b8eb6a480f48ba7e70e4e
-source_last_modified: "2025-11-14T04:43:20.791896+00:00"
+source_hash: d6072ef0529d52f1ce6d31cf9d981b9cdbd4aa0ef06565e406f143c81f4a7442
+source_last_modified: "2026-01-22T15:55:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/norito/examples/register-and-mint.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/register-and-mint
+title: تسجيل نطاق وسك الأصول
+description: يوضح إنشاء النطاقات المصرح بها وتسجيل الأصول والسك الحتمي.
+source: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
 يوضح إنشاء النطاقات المصرح بها وتسجيل الأصول والسك الحتمي.

@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sns/registry-schema.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 65967c6c7c57f471bc532dd9891ce007431fbac4667244d3023e395c288f9cd9
-source_last_modified: "2025-11-14T04:43:21.397011+00:00"
+source_hash: 2c0a8a0bbb7af9f78774904c2044f3983a87ef4ff17c9c41c41ca4b51c3c4e36
+source_last_modified: "2026-01-28T17:58:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/sns/registry-schema.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note 公式ソース

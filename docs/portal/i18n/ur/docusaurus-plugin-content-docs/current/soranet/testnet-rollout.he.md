@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/soranet/testnet-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 790b0e19b7514e424827fa289fd35049c0c1d15c88ac92363e201c8898f908fb
-source_last_modified: "2025-11-14T04:43:22.508779+00:00"
+source_hash: 84c020c157c557d5e4bbabae2596108df85274e1ec1d78fff25b4254d8de5312
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: testnet-rollout
+lang: ur
+direction: rtl
+source: docs/portal/docs/soranet/testnet-rollout.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Canonical Source

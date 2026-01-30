@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/norito/examples/register-and-mint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1d21b5602be418c1154d18c287c408bcae8f9ca110811a59e48cdf539e270cdf
-source_last_modified: "2025-11-14T04:43:20.791089+00:00"
+source_hash: 77321a3ff75e7eca71874304ccc365d2b272ab038784c3fa34b6425f3b0660c2
+source_last_modified: "2026-01-22T15:55:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/norito/examples/register-and-mint.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/register-and-mint
+title: Registrar dominio e cunhar ativos
+description: Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
+source: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
 Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.

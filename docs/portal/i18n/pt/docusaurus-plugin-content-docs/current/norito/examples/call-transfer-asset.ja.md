@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/norito/examples/call-transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2b3e6f3f7bb01b70497929c7724085c6ad0799d4245cae4dd6e5e121eb855615
-source_last_modified: "2025-11-14T04:43:20.645200+00:00"
+source_hash: 657b9dc1693197788af13c37c007c5001ef222b7c0d4c522f627d66a95ac08b7
+source_last_modified: "2026-01-22T15:55:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/norito/examples/call-transfer-asset.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/call-transfer-asset
+title: Invocar transferencia do host a partir de Kotodama
+description: Mostra como um entrypoint Kotodama pode chamar a instrucao do host `transfer_asset` com validacao inline de metadados.
+source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
 Mostra como um entrypoint Kotodama pode chamar a instrucao do host `transfer_asset` com validacao inline de metadados.

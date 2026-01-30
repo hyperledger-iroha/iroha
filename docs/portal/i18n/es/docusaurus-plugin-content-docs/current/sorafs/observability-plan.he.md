@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/observability-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f0918335ac789798c06a0d49355f54ce5f2b4461f7b4f41b291b5f1a8dc80edc
-source_last_modified: "2025-11-14T04:43:21.935066+00:00"
+source_hash: 66ea1686f16afbc6d0daf75f2663f95bd064f9434405e782b471f4123fa52dd3
+source_last_modified: "2026-01-21T07:39:06+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: observability-plan
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/observability-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fuente canónica

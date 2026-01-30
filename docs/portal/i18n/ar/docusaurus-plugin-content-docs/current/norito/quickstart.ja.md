@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b58e57649a3638153c0058f56a0fca3191d50e86008d6094afc6ef1ee3d0ed6d
-source_last_modified: "2025-11-14T04:43:20.903071+00:00"
+source_hash: f923fea24939c866d1e3ca7bb6add9728b62e89d6c0d8bf9f27543fe28114518
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/norito/quickstart.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: بدء سريع ل Norito
+description: ابن وتحقق وانشر عقد Kotodama باستخدام ادوات الاصدار والشبكة الافتراضية ذات العقدة الواحدة.
+slug: /norito/quickstart
 ---
 
 يعكس هذا الدليل العملي سير العمل الذي نتوقع ان يتبعه المطورون عند تعلم Norito و Kotodama لاول مرة: تشغيل شبكة حتمية بعقدة واحدة، تجميع عقد، اجراء dry-run محلي، ثم ارساله عبر Torii باستخدام CLI المرجعي.

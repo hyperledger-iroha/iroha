@@ -4,9 +4,18 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sns/bulk-onboarding-toolkit.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4c68648cf5373dc811825c9134965f175deed5053387fceed462b4090163ebe5
-source_last_modified: "2025-11-14T04:43:21.251213+00:00"
+source_hash: 9e3793efb69a67fa10cc16bdf7a6925d0319dc494d7e8922403aae70efdbf406
+source_last_modified: "2026-01-22T15:55:18+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: bulk-onboarding-toolkit
+lang: pt
+direction: ltr
+source: docs/portal/docs/sns/bulk-onboarding-toolkit.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica

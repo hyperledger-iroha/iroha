@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/nexus/lane-model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1040f9bb9123b35d212d79f7ff0bd0f55a2381f97654edcc33ee8e3f272c4780
-source_last_modified: "2025-11-14T04:43:20.342942+00:00"
+source_hash: 209e485136bbb0dd16756a0252c86ff8487d67a4f9b66758729bdf91ddceb5c9
+source_last_modified: "2026-01-04T17:41:35+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/nexus/lane-model.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-lane-model
+title: Nexus lane model
+description: Sora Nexus کے لئے lanes کی منطقی taxonomy، configuration geometry، اور world-state merge کے اصول۔
 ---
 
 # Nexus lane model اور WSV partitioning

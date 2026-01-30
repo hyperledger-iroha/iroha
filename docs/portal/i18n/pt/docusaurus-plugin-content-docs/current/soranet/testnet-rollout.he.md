@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/soranet/testnet-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 45b6f886dfdaba2802cee63bf102c3bcf7dd94d6b0f3d8d1ca7eac3f1fbcd731
-source_last_modified: "2025-11-14T04:43:22.507413+00:00"
+source_hash: 2d109317c5d31193369a8cecb3d90675ef39124499f7e1621230eb12272bd14b
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: testnet-rollout
+lang: pt
+direction: ltr
+source: docs/portal/docs/soranet/testnet-rollout.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica

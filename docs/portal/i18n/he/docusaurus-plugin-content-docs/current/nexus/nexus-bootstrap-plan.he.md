@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fc03e6bd9335385c639041a9cc3b41b4f3191aeefda7a77e03d4225d48c26204
-source_last_modified: "2025-11-14T04:43:20.363899+00:00"
+source_hash: 4660cd234882d8c074248026b9fdcb05c7dee545e442e41c469eb6550a0261e3
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-bootstrap-plan
+title: Bootstrap ו-Observability של Sora Nexus
+description: תוכנית תפעולית להעלאת אשכול הוולידטורים המרכזי של Nexus לפני הוספת שירותי SoraFS ו-SoraNet.
 ---
 
 :::note מקור קנוני

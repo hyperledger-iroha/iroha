@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/devportal/public-preview-invite.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 78b102319c44cc098edb77a0bf356ba139f448316fe088eaeba604cc5b58139a
-source_last_modified: "2025-11-14T04:43:20.115453+00:00"
+source_hash: 5b571a4090be46e9d481fb27df3d7eef7840a0b4fa76cca680147a43b9081ee2
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/devportal/public-preview-invite.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # پبلک پریویو دعوتی پلے بک

@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/chunker-registry-charter.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 0f0137e3d5940b9cbdc6997c13d27ae9351d673de0ae74e225b4f93577d3c1ee
-source_last_modified: "2025-11-14T04:43:21.500073+00:00"
+source_hash: 4a3c65672ab8f09af427dede41c396a9bea3098552714c7da372819cf5870d8f
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-registry-charter
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/chunker-registry-charter.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Fonte canonica
 Esta pagina espelha `docs/source/sorafs/chunker_registry_charter.md`. Mantenha ambas as copias sincronizadas.

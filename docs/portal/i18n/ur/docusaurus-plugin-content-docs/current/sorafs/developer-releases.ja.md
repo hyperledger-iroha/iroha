@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/developer-releases.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 11f761dfc6bbf0bcbbecce23993845736248f8b6575b68b26e6f9e522805cbd1
-source_last_modified: "2025-11-14T04:43:21.653527+00:00"
+source_hash: 3867b052d4e7f72d4ffc7886451b6cf79a518aaf9a293fd115fe5376f3e6c4b8
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: developer-releases
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/developer-releases.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 # Release process
 

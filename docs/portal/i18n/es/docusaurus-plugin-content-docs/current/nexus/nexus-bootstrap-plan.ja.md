@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1c28e8a63882578d0a738fe32dd2a7a86fc34f4b6bc45b2deaf918770ec00f88
-source_last_modified: "2025-11-14T04:43:20.364253+00:00"
+source_hash: b432b52e1d22434ddedbcf1b20002503559539e874c3daf55a5fe5514ba95698
+source_last_modified: "2026-01-03T18:07:58+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-bootstrap-plan
+title: Bootstrap y observabilidad de Sora Nexus
+description: Plan operativo para poner en linea el cluster central de validadores Nexus antes de agregar servicios SoraFS y SoraNet.
 ---
 
 :::note Fuente canonica

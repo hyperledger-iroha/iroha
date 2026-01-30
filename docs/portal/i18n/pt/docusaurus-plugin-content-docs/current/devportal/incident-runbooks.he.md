@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/devportal/incident-runbooks.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 947a20435c523a494d7abe0965f5780ba1fd55cd4c4ae200912ebad1129a733e
-source_last_modified: "2025-11-14T04:43:19.785028+00:00"
+source_hash: 7e7585cad709556cc6b48ebae4248bb3a3416762c2a33ca1c37ad70128d6f9e8
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/devportal/incident-runbooks.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Runbooks de incidentes e drills de rollback

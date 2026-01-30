@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/pin-registry-ops.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 989cba502dd166ae51bb63c6ec9d09c9f875ee955b49050c78be4aacf879699e
-source_last_modified: "2025-11-14T04:43:22.026874+00:00"
+source_hash: f23e555e9317bfff0a4d7163c8c42ea029dcf98d231d21822a39f80c039ffa92
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: pin-registry-ops
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/pin-registry-ops.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fuente canónica

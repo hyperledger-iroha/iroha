@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/orchestrator-tuning.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4962b6c7a7538ff44a93197cc19ae5cb1e8af44b21b3ff6d2f8cdc69b795ad1d
-source_last_modified: "2025-11-14T04:43:22.008730+00:00"
+source_hash: 2519e56dc2e20e307bc0eeb6ff3d010fbf0ac623982f5840584f43d9eba38bd0
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-tuning
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/orchestrator-tuning.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canônica

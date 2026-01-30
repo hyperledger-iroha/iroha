@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sdks/nexus-quickstarts.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 39d444f75cb7742ca21648a4aad03815dac32cc35f0824395b8c9e2e5fd95535
-source_last_modified: "2025-11-14T04:43:21.095156+00:00"
+source_hash: eeea9edc91ca4b2183f0361b2db9bed545ce427be5860ec04584362ca08b47b9
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/sdks/nexus-quickstarts.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 完全なクイックスタートは `docs/source/nexus_sdk_quickstarts.md` にあります。このポータルの要約は、共通の前提条件とSDK別のコマンドを示し、開発者が設定を素早く確認できるようにします。

@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/runbooks-index.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c7669c1d139a267bcba356cc77575dc65fc04ea43581397b2450b12a523c1b66
-source_last_modified: "2025-11-14T04:43:22.302038+00:00"
+source_hash: 31a76ae22309b9657383f4ee9a9bbe132b4d48aa480bd5a6a4a4b0e2dbbfa430
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: runbooks-index
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/runbooks-index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: فهرس أدلة التشغيل للمشغلين
+sidebar_label: فهرس أدلة التشغيل
+description: نقطة الدخول المعتمدة لأدلة تشغيل مشغلي SoraFS المُرحَّلة.
 ---
 
 > يعكس سجلّ المالكين الموجود ضمن `docs/source/sorafs/runbooks/`.

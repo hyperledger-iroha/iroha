@@ -4,9 +4,18 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sns/registrar-api.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 0e8aaf911d9a4f806f4f0b7b695dc7015842c7b8194e70ec729d73309b16d777
-source_last_modified: "2025-11-14T04:43:21.378381+00:00"
+source_hash: f0d5b4309217b9ad3547a93c0f06713a35c76cd8b072f94ff33842265e684d90
+source_last_modified: "2026-01-28T17:58:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: registrar-api
+lang: ur
+direction: rtl
+source: docs/portal/docs/sns/registrar-api.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note مستند ماخذ

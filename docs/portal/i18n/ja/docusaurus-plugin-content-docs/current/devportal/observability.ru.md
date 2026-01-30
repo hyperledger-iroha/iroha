@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/devportal/observability.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 108e5baee6836aeff3908d2013a6afa4a76830c1a8b16f1e1b9792b6b4b1d635
-source_last_modified: "2025-11-07T10:33:21.911864+00:00"
+source_hash: 99978cfbbb7852dd4ca6770ffdade28c89fe9d59ecbd3411079fdae261b4aaa3
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/devportal/observability.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # ポータルのオブザーバビリティとアナリティクス

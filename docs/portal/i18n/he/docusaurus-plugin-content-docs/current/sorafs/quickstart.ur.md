@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f6b897530e03dfb3dff739e78de7abb600064bf7f4f0296a0b6eae32b98cdb86
-source_last_modified: "2025-11-04T12:03:18.020308+00:00"
+source_hash: 34d18f4fd945a1081c8b3ee8c12576b5eac6c76f79e51a6e123e84c41449f5b3
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/quickstart.md
+status: complete
+generator: scripts/sync_docs_i18n.py
 ---
 
 # מדריך התחלה מהירה ל‑SoraFS

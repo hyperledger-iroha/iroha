@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/signing-ceremony.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 06a4ced2565c1d4d744fe975e1f45b98f39f5702249dd3d0b09f810949c279dc
-source_last_modified: "2025-11-14T04:43:22.323219+00:00"
+source_hash: 427be184640e04453f2759ff9730f549e17b6bab4c88200f266dbd12950ee1c9
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for ar translation. Replace this content with the full translation. -->
+
+---
+id: signing-ceremony
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/signing-ceremony.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > خارطة الطريق: **SF-1b — موافقات fixtures برلمان سورا.**

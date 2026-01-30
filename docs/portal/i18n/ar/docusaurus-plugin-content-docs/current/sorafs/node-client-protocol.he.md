@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/node-client-protocol.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f859d2434e35d55cd4751e71865663ce03aaba1c656719676edac28cc5e303db
-source_last_modified: "2025-11-14T04:43:21.848173+00:00"
+source_hash: a3e0faa06d44ef46534f3ada2f85fb9b8521f12e23daa42abdf056f709c8f710
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/node-client-protocol.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # بروتوكول عقدة ↔ عميل SoraFS

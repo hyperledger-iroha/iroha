@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/developer-deployment.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f1daefc2f6469c76ca86ef675a24409c799f9c6804d711f96078532e96b26924
-source_last_modified: "2025-11-14T04:43:21.617488+00:00"
+source_hash: a841cc644d47f734e3a6eb77f53c39bdf5ce49ad748e5e2cbad9178f959afd64
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: developer-deployment
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/developer-deployment.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Fuente canónica
 Esta página refleja `docs/source/sorafs/developer/deployment.md`. Mantén ambas versiones sincronizadas hasta que los docs heredados se retiren.

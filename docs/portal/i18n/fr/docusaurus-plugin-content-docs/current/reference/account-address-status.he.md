@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/reference/account-address-status.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b9fca1511ef2548176ce15577d1d40b988ce2ef8ae7e168db4eac77e7e51163b
-source_last_modified: "2025-11-14T04:43:20.946964+00:00"
+source_hash: 56d820b8f976b561f2a28333ad55ed673c3fbfe58fc5152811099774bef85caf
+source_last_modified: "2026-01-28T17:58:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/reference/account-address-status.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: account-address-status
+title: Conformite des adresses de compte
+description: Resume du workflow du fixture ADDR-2 et de la synchronisation des equipes SDK.
 ---
 
 Le bundle canonique ADDR-2 (`fixtures/account/address_vectors.json`) capture des fixtures IH58 (preferred), compressed (`sora`, second-best; half/full width), multisignature et negatifs. Chaque surface SDK + Torii s'appuie sur le meme JSON afin de detecter toute derive de codec avant la production. Cette page reflete le brief de statut interne (`docs/source/account_address_status.md` dans le depot racine) pour que les lecteurs du portail puissent consulter le workflow sans fouiller le mono-repo.

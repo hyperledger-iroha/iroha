@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/da/threat-model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 583b56dbc274e5418aa7302699ea357b5a3ea0ece16223f5fd790326b8c7e488
-source_last_modified: "2025-11-14T04:43:19.761143+00:00"
+source_hash: 68108d945e915fe9d12cf1a3a353c1eb862dbe70024951915afb707ca781f655
+source_last_modified: "2026-01-19T07:28:06+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/da/threat-model.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note 正規ソース

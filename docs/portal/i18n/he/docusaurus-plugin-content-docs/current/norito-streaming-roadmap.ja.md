@@ -4,9 +4,18 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/norito-streaming-roadmap.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 78a8397e813ab0347a71a1603db99e23c0c18afb19141864fb6a084fb8e40afd
-source_last_modified: "2025-11-04T12:03:18.018160+00:00"
+source_hash: 2450e9d3ee0a7ce15ba95078fba2f2b8742d17fba46329713bc5dd699fd8a0ed
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/norito-streaming-roadmap.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: מפת דרכים של Norito Streaming
 ---
 
 רשימת ה-backlog הבאה מרכזת את פריטי העבודה לטווח הקרוב ש-Streaming Working Group עוקב אחריהם עבור אספקת אודיו/וידאו של Norito. הערכים מתעדכנים לצד `status.md` ומשותפים כאן עבור משתמשי הפורטל שמעדיפים תצוגה ידידותית למכונה.

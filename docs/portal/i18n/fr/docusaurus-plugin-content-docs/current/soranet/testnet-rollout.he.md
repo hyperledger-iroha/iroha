@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/soranet/testnet-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 09747c3cbcf61354c9e208252e4d6c0fbd6753c1f2774ed1d3098f5a7b6058cc
-source_last_modified: "2025-11-14T04:43:22.507827+00:00"
+source_hash: e00eb8f7857a526e92bb5e5953027c58062ea15df4032bc2f7be878bab770abe
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: testnet-rollout
+lang: fr
+direction: ltr
+source: docs/portal/docs/soranet/testnet-rollout.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Source canonique

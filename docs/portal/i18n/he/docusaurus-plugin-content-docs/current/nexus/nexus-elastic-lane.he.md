@@ -4,9 +4,21 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/nexus/nexus-elastic-lane.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 021a04651db2a24877c5ca89a4cf36b051b9c17fdb2ea0d4f531ad56423624ed
-source_last_modified: "2025-11-14T04:43:20.406876+00:00"
+source_hash: bd5e56947cf480b976997e91c13208562bb78b3d5f9aa2c9ab67a4f1494943bb
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/nexus/nexus-elastic-lane.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-elastic-lane
+title: הקצאה אלסטית של lane (NX-7)
+sidebar_label: הקצאה אלסטית של lane
+description: תהליך bootstrap ליצירת manifests של Nexus lane, ערכי קטלוג וראיות rollout.
 ---
 
 :::note מקור קנוני

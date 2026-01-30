@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/reports/ai-moderation-calibration-202602.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 00ce70c8911173764eabaf969cab10d49073e2be9a407202af03bf5f3bd69b20
-source_last_modified: "2025-11-14T04:43:22.175504+00:00"
+source_hash: 31fe86afc1471673471393db8dafa7a921de50635508bf68b311dd2d5f44e6c4
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/reports/ai-moderation-calibration-202602.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Informe de calibración de moderación de IA - Febrero 2026

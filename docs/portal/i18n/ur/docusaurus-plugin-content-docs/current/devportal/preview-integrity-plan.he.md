@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/devportal/preview-integrity-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3096c1b1cb3ceaaab8fdd4cf326a3b657f15be5ad95f30c69d89fb19425145f7
-source_last_modified: "2025-11-14T04:43:20.020066+00:00"
+source_hash: 7c3bf9c53b37b6050dd1ced61265370a920eab04efe2fa6078da09c4eff19d68
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/devportal/preview-integrity-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # checksum سے مشروط پریویو پلان

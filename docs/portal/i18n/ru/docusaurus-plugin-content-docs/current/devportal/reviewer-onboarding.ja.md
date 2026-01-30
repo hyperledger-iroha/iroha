@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/devportal/reviewer-onboarding.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: eedec12ca3339d2deaabafa07c68d2a7e211d461b22980cef7a0972de37c72e2
-source_last_modified: "2025-11-14T04:43:20.137230+00:00"
+source_hash: e7a654ea2944de3b22a485e09606de1f11695a43ef3dae699599ac38e68385a6
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/devportal/reviewer-onboarding.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Онбординг ревьюеров preview

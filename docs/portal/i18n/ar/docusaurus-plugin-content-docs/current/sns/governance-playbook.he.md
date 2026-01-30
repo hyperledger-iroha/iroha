@@ -4,9 +4,18 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sns/governance-playbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f8cc0f5f3dd97083e6739e28bbeaabef24632badf323d06d0bd880f329121dd7
-source_last_modified: "2025-11-14T04:43:21.337497+00:00"
+source_hash: 275059232323a70e1d1a4eb3763057d7e36da2f198806f4a97d31a77c2963c80
+source_last_modified: "2026-01-20T13:32:56+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: governance-playbook
+lang: ar
+direction: rtl
+source: docs/portal/docs/sns/governance-playbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note المصدر القياسي

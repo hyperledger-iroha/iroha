@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/direct-mode-pack.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a5f72eb4e9d074c5621913935a7c0b5e79e3b2a4dfa86b21f9e4d341930618fc
-source_last_modified: "2025-11-14T04:43:21.698656+00:00"
+source_hash: 8790d92e24f3bf6ba680038016525988ab01c48df782236da01456138490d363
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: direct-mode-pack
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/direct-mode-pack.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note المصدر المعتمد
 تعكس هذه الصفحة `docs/source/sorafs/direct_mode_pack.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة Sphinx القديمة.

@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/orchestrator-tuning.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d47ea812a3812c3c969d9fb91006e9dca21fcdf37c36aa1c1f51faf4d2d1d747
-source_last_modified: "2025-11-07T10:33:21.924808+00:00"
+source_hash: d706c86cc381574eb7a5db23895e5534d1f5ecaf1c7770f7b9785df81f2f6e09
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-tuning
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/orchestrator-tuning.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note 正規ソース

@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/provider-admission-policy.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b52a39f15408705f7633f315eb6e5daae049f57ba2a06e908d81551d6fa94a22
-source_last_modified: "2025-11-07T10:33:21.926309+00:00"
+source_hash: 6fedd953881d8d4d68d35708f8f89d0681af0e9e0e0c8b6fe54a72e1e691a034
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: provider-admission-policy
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/provider-admission-policy.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 > 次の文書を基に作成: [`docs/source/sorafs/provider_admission_policy.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_admission_policy.md).
 

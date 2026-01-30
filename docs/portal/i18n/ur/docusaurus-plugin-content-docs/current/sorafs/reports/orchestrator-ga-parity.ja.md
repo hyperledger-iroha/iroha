@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/reports/orchestrator-ga-parity.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e34a6691b3978b6787497536d4a3fa5ab07a3c7fe1003bec9e3c69353baf235a
-source_last_modified: "2025-11-14T04:43:22.219555+00:00"
+source_hash: 8db1133f288e508f9209ff97764b848f691d7b5fef4b050760a0181cd092c2e8
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/reports/orchestrator-ga-parity.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # SoraFS Orchestrator GA برابری رپورٹ

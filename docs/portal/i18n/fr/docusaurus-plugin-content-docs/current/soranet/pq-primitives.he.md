@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/soranet/pq-primitives.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d907a8653776f0e9abd6a4b93baa3ebddec1e50fd2fc3b4a7e7d10cf6f5c676c
-source_last_modified: "2025-11-14T04:43:22.385002+00:00"
+source_hash: 808616bb6a3ef9bf7c0d79cc75576e640ff880d21c29856bfc20a5fc5d5dadbc
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: pq-primitives
+lang: fr
+direction: ltr
+source: docs/portal/docs/soranet/pq-primitives.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Source canonique

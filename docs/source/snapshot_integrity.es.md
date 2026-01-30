@@ -1,18 +1,54 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/source/snapshot_integrity.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5ce654468abceb3537747822f7864b8eb4d537adfb045449905a3b08773a46dc
-source_last_modified: "2025-11-23T06:01:22.854786+00:00"
-translation_last_reviewed: null
+source_hash: 7886c43b5b8a5afcbdf9a39e4e89959c172d7265fdb34f9d955a95cf57d2f82a
+source_last_modified: "2026-01-04T16:16:53.598159+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traducción en curso
+# Snapshot Integrity
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+Iroha nodes now emit signed, Merkle-attested snapshots and refuse to restore
+from sidecars that fail integrity checks. Snapshot creation writes four files
+under `snapshot.store_dir`:
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+- `snapshot.data` — Norito JSON dump of the world state
+- `snapshot.sha256` — SHA-256 digest of `snapshot.data`
+- `snapshot.sig` — signature of the digest using the node identity key
+- `snapshot.merkle.json` — Norito JSON metadata with `chunk_size_bytes`,
+  `total_len_bytes`, `root_hex`, and per-chunk SHA-256 leaf hashes
+- Snapshot writers use temp files, fsync payloads, then rename and fsync the
+  snapshot directory so the bundle is crash-safe. Snapshot readers will accept
+  the `.tmp` bundle when the final files are missing and promote the temp files
+  after successful validation.
+
+## Configuration
+
+- `snapshot.merkle_chunk_size_bytes` controls the chunk size used to derive the
+  Merkle tree (default: 1 MiB). Change it only when generating a fresh snapshot,
+  since restores validate that metadata and runtime expectations match.
+- Snapshot writing is enabled when `snapshot.mode = "read_write"`. Signature
+  sidecars always use the node identity key.
+
+## Restore and gating
+
+- `irohad` now fails startup if any sidecar is missing or mismatched. Restore
+  verifies the digest, the signature over the digest, the Merkle root over the
+  chunked payload, chunk size/length parity, leaf counts, and metadata
+  self-consistency, then confirms the snapshot `chain_id` matches the
+  configured chain before deserializing the world state. Only the `NotFound`
+  case falls back to a fresh genesis state.
+- Error surfaces map to dedicated `TryReadError` variants (`ChecksumMissing`,
+  `SignatureMissing`, `MerkleMissing`, `MerkleMismatch`,
+  `MerkleChunkSizeMismatch`, `MerkleLengthMismatch`, `MerkleProofInvalid`,
+  `ChainIdMismatch`), keeping CI/startup logs explicit about the failure mode.
+
+## Chunk proofs and provenance
+
+- `snapshot.merkle.json` carries per-chunk digests so chunk proofs can be
+  reconstructed (`SnapshotMerkleMetadata::verify_chunk`) for streaming/remote
+  restore flows. The recorded `root_hex` is suitable for on-chain provenance or
+  governance packets when operators need to pin a specific snapshot payload.

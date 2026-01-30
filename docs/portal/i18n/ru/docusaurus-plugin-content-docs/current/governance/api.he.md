@@ -4,9 +4,18 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/governance/api.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 34399ac0fe42856dbe5fcadb8792809bf0940118274e906f78bd2a040f5e44fd
-source_last_modified: "2025-11-14T04:43:20.237760+00:00"
+source_hash: c63f8b04df16f8bde0a372db323e1aa7f1ab3626124890e9d048966ad0602d01
+source_last_modified: "2026-01-22T16:09:51+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: api
+lang: ru
+direction: ltr
+source: docs/portal/docs/governance/api.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 Статус: черновик/набросок для сопровождения задач по реализации governance. Формы могут меняться в ходе разработки. Детерминизм и политика RBAC являются нормативными ограничениями; Torii может подписывать/отправлять транзакции при наличии `authority` и `private_key`, иначе клиенты собирают и отправляют в `/transaction`.

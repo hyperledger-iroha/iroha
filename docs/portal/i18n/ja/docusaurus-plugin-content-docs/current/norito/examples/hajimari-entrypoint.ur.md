@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/norito/examples/hajimari-entrypoint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: faf4993886d577a814cddb4dee2f4ccd0b47fbea4d3d54b769db86d861a8ca95
-source_last_modified: "2025-11-04T12:26:02.939454+00:00"
+source_hash: c33abe543fae272fc71f0465ed8655e3ea07ab16e3510d6b8a749fe5c9adeba1
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/norito/examples/hajimari-entrypoint.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/hajimari-entrypoint
+title: Hajimari エントリポイントの骨組み
+description: 単一の公開エントリポイントと状態ハンドルを備えた、最小構成の Kotodama コントラクトの足場。
+source: crates/ivm/docs/examples/01_hajimari.ko
 ---
 
 単一の公開エントリポイントと状態ハンドルを備えた、最小構成の Kotodama コントラクトの足場。

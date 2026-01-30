@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/developer-releases.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f56e6494da8e600fbce7dfb285a706e3855ec3d7332b0baad7146e7652643a6e
-source_last_modified: "2025-11-14T04:43:21.652107+00:00"
+source_hash: 5af9275262d327866a96e8dc77c52b478d676494cedaff4fb9c50167473b4aa3
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: developer-releases
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/developer-releases.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 # תהליך שחרור
 

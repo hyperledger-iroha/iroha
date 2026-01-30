@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/node-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 11c53f20f465c01facab69eb3f0c3bc52d4bd6b3b261bbfc0c4176fa52137956
-source_last_modified: "2025-11-14T04:43:21.893931+00:00"
+source_hash: 001fd7744242a6faa11b6769b22aaa84490dd112cf907b0b221688bd415d0385
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: node-plan
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/node-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Source canonique
 Cette page reflète `docs/source/sorafs/sorafs_node_plan.md`. Gardez les deux copies synchronisées jusqu'au retrait de la documentation Sphinx historique.

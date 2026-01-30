@@ -4,9 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/norito/examples/index.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6cde638f0f747363d04e512c7de809196f4016612b6b364bd1174f8369c3e2f8
-source_last_modified: "2025-11-14T04:43:20.748097+00:00"
+source_hash: 57843d0b339c763e2a680e184c1399c08f024691eed4e4bcd362ab0c381339d2
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/norito/examples/index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: أمثلة Norito
+description: مقتطفات Kotodama مختارة مع جولات في دفتر الأستاذ.
+slug: /norito/examples
 ---
 
 تعكس هذه الأمثلة بدايات SDK السريعة وجولات دفتر الأستاذ. كل مقتطف يتضمن قائمة تحقق للدفتر ويعود إلى أدلة Rust وPython وJavaScript حتى تتمكن من إعادة نفس السيناريو من البداية إلى النهاية.

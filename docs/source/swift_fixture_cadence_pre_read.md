@@ -29,7 +29,7 @@ Add translations once localisation staffing is available.
 
 ## Background
 
-- Norito fixtures (signed transactions, instruction schemas, manifest payloads)
+- Norito fixtures (signed transactions, manifest payloads)
   ensure SDK encoders stay byte-for-byte aligned with the Rust reference
   implementation.
 - Android currently publishes the canonical fixtures; Swift mirrors them via

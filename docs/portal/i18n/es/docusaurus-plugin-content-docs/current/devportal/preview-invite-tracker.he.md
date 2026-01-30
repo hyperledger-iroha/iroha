@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/devportal/preview-invite-tracker.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 535dd70ade878c1d3c0f2fecf9c4b1416db9f9eb6cc6216d02b3f087caf2e850
-source_last_modified: "2025-11-14T04:43:20.068973+00:00"
+source_hash: 2982b1b2ddc0728997302baa858ee9071b37f171db65e901ec50cc4babe7cf5d
+source_last_modified: "2026-01-03T18:07:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/devportal/preview-invite-tracker.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Tracker de invitaciones de preview

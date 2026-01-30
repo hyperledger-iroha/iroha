@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/reference/README.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c82723b3555009a3348e409e0614e7cf2dde682b74cc7bf116be05885e65a691
-source_last_modified: "2025-11-04T12:12:47.580487+00:00"
+source_hash: 2fa56557b2b47084d96ef526d2796dcc38dceda2fd9cde1eba9144984ebb7db6
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/reference/README.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: リファレンス インデックス
+slug: /reference
 ---
 
 このセクションは、Iroha の「仕様として読む」資料を集約します。これらのページは、ガイドやチュートリアルが進化しても安定したままです。

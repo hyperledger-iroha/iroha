@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/nexus/transition-notes.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: da67c038e6a1b2433910311c1ae1a9c82eba8baf80bf9a345dd7b70bd13449c4
-source_last_modified: "2025-11-14T04:43:20.613091+00:00"
+source_hash: 0d1d1b7e948915964ac6d7480b2d4204d924e605a6b5f925a07879a981c79e08
+source_last_modified: "2026-01-06T06:54:55+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/nexus/transition-notes.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-transition-notes
+title: Заметки о переходе Nexus
+description: Зеркало `docs/source/nexus_transition_notes.md`, охватывающее доказательства перехода Phase B, график аудита и митигации.
 ---
 
 <!--

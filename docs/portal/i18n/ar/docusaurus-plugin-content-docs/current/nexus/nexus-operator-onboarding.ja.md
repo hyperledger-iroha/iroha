@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/nexus/nexus-operator-onboarding.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c82e8d76d1efdce18c3919c6dc598f83800f854fc69f5c86cc36e2b65031c82b
-source_last_modified: "2025-11-14T04:43:20.450065+00:00"
+source_hash: fcc330f127731eb1f094a480170bb00819c9cc630a3bc0a544271b58654ac9e9
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/nexus/nexus-operator-onboarding.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-operator-onboarding
+title: تاهيل مشغلي data-space في Sora Nexus
+description: نسخة مطابقة لـ `docs/source/sora_nexus_operator_onboarding.md` تتبع قائمة تدقيق الاصدار الشاملة لمشغلي Nexus.
 ---
 
 :::note المصدر القانوني

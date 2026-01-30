@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/reports/sf1-determinism.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 18e6b0a898e4c4b4619ce8365e12533d304693e64d5df0a699ef7262b8852c1c
-source_last_modified: "2025-11-14T04:43:22.239203+00:00"
+source_hash: 816c7411ae5820d9a239670f6d6d626ac79f6ace63ee9694c9c10aa461be9cba
+source_last_modified: "2026-01-04T01:54:29+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/reports/sf1-determinism.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # التشغيل التجريبي للحتمية SF1 في SoraFS

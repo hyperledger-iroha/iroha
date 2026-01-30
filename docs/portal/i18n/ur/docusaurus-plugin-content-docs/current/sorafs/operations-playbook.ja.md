@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/operations-playbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a6205015dc7cb520a04a7a89d296dba063e92d01a3becf50231f2b36ff8ff3ad
-source_last_modified: "2025-11-14T04:43:21.953110+00:00"
+source_hash: 05ea20e4f5e71c5ef4fbda055ad9b255788d4a1fb3c5a0fd81bf0678bd67806c
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: operations-playbook
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/operations-playbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note مستند ماخذ

@@ -4,9 +4,22 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/norito/examples/index.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 98582588f0dc99bd1b5aca706f51cb443bbc09264301d121b0f1f3ba22d194dc
-source_last_modified: "2025-11-14T04:43:20.745928+00:00"
+source_hash: 609fd0ec5a123cb0d322a2f0fb490a5dbac93107845b096aa7e12026fcb17474
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/norito/examples/index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Exemplos de Norito
+description: Trechos Kotodama selecionados com roteiros do livro razao.
+slug: /norito/examples
 ---
 
 Estes exemplos espelham os quickstarts do SDK e os roteiros do livro razao. Cada trecho inclui uma lista de verificacao do livro razao e aponta para os guias de Rust, Python e JavaScript para que voce possa repetir o mesmo cenario do inicio ao fim.

@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/orchestrator-config.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f2cc8b60d11b1243e8834fdff88881668e8775acc6234b925d4c085ccc363759
-source_last_modified: "2025-11-14T04:43:21.971656+00:00"
+source_hash: 679b05638ff936a1286ae087a631652b8524b7dc8e30795bb2ad11f50cd7e10c
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-config
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/orchestrator-config.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note 正規ソース
 このページは `docs/source/sorafs/developer/orchestrator.md` を反映しています。レガシーのドキュメントが退役するまで、両方のコピーを同期したままにしてください。

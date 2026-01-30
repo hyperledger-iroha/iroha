@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/nexus/nexus-routed-trace-audit-2026q1.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bd1997084f67dc9c3a9bbe2b02d6ba1168513b9dca75fb1d8169f34684ed3329
-source_last_modified: "2025-11-14T04:43:20.484079+00:00"
+source_hash: 59a74c0c6e5fdab6308d4a66c2ce8e0cae7945b2bb1a47aa737b89bae05a773f
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/nexus/nexus-routed-trace-audit-2026q1.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-routed-trace-audit-2026q1
+title: تقرير تدقيق routed-trace للربع Q1 2026 (B1)
+description: نسخة مطابقة لـ `docs/source/nexus_routed_trace_audit_report_2026q1.md` تغطي نتائج تدريبات التليمتري الفصلية.
 ---
 
 <!--

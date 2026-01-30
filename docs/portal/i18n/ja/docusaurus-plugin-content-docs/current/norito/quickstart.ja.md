@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: cc65ac9e2f70bc1a374969afded1aab9843834958fc0d9f5a94843aea5f7f880
-source_last_modified: "2025-11-14T04:43:20.901058+00:00"
+source_hash: 3179668a5936829c843004e11645172b0843e160e3a86303510115dd29efcf1f
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/norito/quickstart.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Norito クイックスタート
+description: リリース用ツールとデフォルトの単一ピアネットワークで Kotodama コントラクトを構築、検証、デプロイします。
+slug: /norito/quickstart
 ---
 
 このウォークスルーは、初めて Norito と Kotodama を学ぶ開発者に期待するワークフローを反映しています。決定的な単一ピアネットワークを起動し、コントラクトをコンパイルし、ローカルでドライランしてから、参照 CLI で Torii に送信します。

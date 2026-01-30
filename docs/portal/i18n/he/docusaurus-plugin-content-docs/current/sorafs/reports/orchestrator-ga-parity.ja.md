@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/reports/orchestrator-ga-parity.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4e30f43006fa6a6a56780595c6c10764e2b736583591f2631490c9df900f8c14
-source_last_modified: "2025-11-14T04:43:22.217931+00:00"
+source_hash: 70a4c349a726ba56dd222c5b410b1ac0a6cdcec880118ce9fa4a44d1c6851148
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/reports/orchestrator-ga-parity.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # דוח תאימות GA של Orchestrator SoraFS

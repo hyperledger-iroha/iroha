@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/orchestrator-ops.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d444add964eb48d584d347ec6468c808d452801a172e7d0967264f79c7c896cd
-source_last_modified: "2025-11-14T04:43:21.992049+00:00"
+source_hash: a36d9867ab298262223e3441a0a2f5c83867420c8703b0ac59a71bb4372b725e
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-ops
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/orchestrator-ops.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Runbook d’exploitation de l’orchestrateur SoraFS
+sidebar_label: Runbook orchestrateur
+description: Guide opérationnel pas à pas pour déployer, surveiller et revenir en arrière sur l’orchestrateur multi-source.
 ---
 
 :::note Source canonique

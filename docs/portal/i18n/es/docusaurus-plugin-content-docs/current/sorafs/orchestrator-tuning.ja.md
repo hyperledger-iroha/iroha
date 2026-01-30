@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/orchestrator-tuning.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fd06c442319dd43823b4a18e17ee818398d8dc3c6b7d28f1e981aca94c3dac53
-source_last_modified: "2025-11-14T04:43:22.008443+00:00"
+source_hash: 8267cdb956cbb274cae38b92d130f3fafb0e77cb9f09831fc4cb03cc628edc1b
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-tuning
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/orchestrator-tuning.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fuente canónica

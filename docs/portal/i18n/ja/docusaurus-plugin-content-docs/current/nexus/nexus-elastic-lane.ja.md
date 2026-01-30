@@ -4,9 +4,21 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/nexus/nexus-elastic-lane.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b40987df65bd6e3d5198170956b330d744839f837912e458ae266d0e7b89bd6d
-source_last_modified: "2025-11-14T04:43:20.406733+00:00"
+source_hash: d171219cb52bca3bbef8376557cad3e762ae2ab87c5c13379a83b58fa3715ee1
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/nexus/nexus-elastic-lane.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-elastic-lane
+title: エラスティックレーンのプロビジョニング (NX-7)
+sidebar_label: エラスティックレーンのプロビジョニング
+description: Nexus レーンのマニフェスト、カタログエントリ、ロールアウト証跡を作成するためのブートストラップ手順。
 ---
 
 :::note 正本ソース

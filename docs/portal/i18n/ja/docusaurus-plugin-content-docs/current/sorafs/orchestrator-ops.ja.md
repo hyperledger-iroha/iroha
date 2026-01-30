@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/orchestrator-ops.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 47c14fd3d07096458be822db4ed68956adacb5d579b16fdca9c29fde7fee0c8e
-source_last_modified: "2025-11-07T10:33:21.924371+00:00"
+source_hash: 5fe9c779de558f351b4775ee8dcbb2614fb8c5ca13629a52861a998db5df1781
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-ops
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/orchestrator-ops.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: SoraFS オーケストレーター運用ランブック
+sidebar_label: オーケストレーター運用
+description: マルチソース・オーケストレーターの展開、監視、ロールバック手順をまとめたガイド。
 ---
 
 :::note 正規ソース

@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/orchestrator-tuning.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9cfcdc245aea96ecdd6d9b61c93cb17348cd26e30b38f056bdd760f147d83507
-source_last_modified: "2025-11-14T04:43:22.009610+00:00"
+source_hash: 0356d5632f15a5c32b4bbe3dbe49b198036944041731d098ca03a4f48a3dcb28
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-tuning
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/orchestrator-tuning.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note المصدر المعتمد

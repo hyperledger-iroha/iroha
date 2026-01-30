@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/nexus/overview.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 27a850a0de16bd3a9854ea2d064bb0466a1aa225df7f6d7451659367d42cfce1
-source_last_modified: "2025-11-14T04:43:20.539255+00:00"
+source_hash: 3a58f511cf45f1e21a0df81381c93b0ff31cb0623f8fe4fcdc3466354913283e
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/nexus/overview.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-overview
+title: סקירת Sora Nexus
+description: סיכום ברמה גבוהה של ארכיטקטורת Iroha 3 (Sora Nexus) עם הפניות למסמכי המונו-ריפו הקנוניים.
 ---
 
 Nexus (Iroha 3) מרחיב את Iroha 2 עם ביצוע multi-lane, מרחבי נתונים תחומי-ממשל וכלי עבודה משותפים בכל SDK. דף זה משקף את התקציר החדש `docs/source/nexus_overview.md` במונו-ריפו כדי שקוראי הפורטל יבינו במהירות כיצד חלקי הארכיטקטורה משתלבים.

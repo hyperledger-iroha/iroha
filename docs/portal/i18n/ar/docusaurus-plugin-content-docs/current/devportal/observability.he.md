@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/devportal/observability.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a94a984ce96000508dd4257538a68db36f9cc0e49fcc81acc4b3b7bf615f965f
-source_last_modified: "2025-11-14T04:43:19.797892+00:00"
+source_hash: 238bd8276808d9d5b0d09f7a20fdfd4cfb62df98ec2812218100b30f8c4fb5e1
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/devportal/observability.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # مراقبة البوابة والتحليلات

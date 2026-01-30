@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/nexus/nexus-fee-model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3d30beb39bfbb659105954d035108da08a7876250caa4098d23efb32e4a34cf8
-source_last_modified: "2025-11-14T04:43:20.431270+00:00"
+source_hash: cfb3321b47e1aaf19702344ac529ab9c84927a55368892afc29cbc01f573b19b
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/nexus/nexus-fee-model.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-fee-model
+title: Nexus فیس ماڈل اپ ڈیٹس
+description: `docs/source/nexus_fee_model.md` کا آئینہ، جو lane settlement receipts اور reconciliation surfaces کی دستاویز کرتا ہے۔
 ---
 
 :::note کینونیکل ماخذ

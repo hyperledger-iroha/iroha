@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/provider-admission-policy.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 519c9aa14e9627d067d82aa9ef2d123984f0b79944114249f7bea14ea0b149c7
-source_last_modified: "2025-11-14T04:43:22.111718+00:00"
+source_hash: 93c6e7f7e22a71a703f2f69a1a8ec1351349e6b6ecd6fc621029d1e7d3c96b4e
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: provider-admission-policy
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/provider-admission-policy.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 > Adapté de [`docs/source/sorafs/provider_admission_policy.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_admission_policy.md).
 

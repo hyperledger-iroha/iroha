@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/chunker-registry-charter.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6c6aee4d9bde145f0fce414d8da7c7f6df50db4a3c198ca29478ce68dbc0656c
-source_last_modified: "2025-11-14T04:43:21.499595+00:00"
+source_hash: 646fac1d32af1f09684676598ee5baa8c782e78666ddcc23b7e991d90f286e40
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-registry-charter
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/chunker-registry-charter.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note מקור קנוני
 עמוד זה משקף את `docs/source/sorafs/chunker_registry_charter.md`. שמרו על שתי העתקות מסונכרנות עד שמערכת התיעוד הישנה של Sphinx תופסק לחלוטין.

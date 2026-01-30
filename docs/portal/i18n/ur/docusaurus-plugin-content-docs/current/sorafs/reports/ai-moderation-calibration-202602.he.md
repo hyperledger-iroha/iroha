@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/reports/ai-moderation-calibration-202602.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 52c0ce0959f9cbe565767b85ad718e4f1580009f0163d45adea21b6699d38324
-source_last_modified: "2025-11-14T04:43:22.176970+00:00"
+source_hash: c5600f4c1fc18b3d951219208da8aadbea52141135b5731662e9d575798eb557
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/reports/ai-moderation-calibration-202602.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # AI Moderation Calibration Report - فروری 2026

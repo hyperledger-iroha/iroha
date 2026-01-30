@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/reports/ai-moderation-calibration-202602.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a55aaa9bd22a7470f92f3bc86fe5d3cb04dccdf72d921c116fd974d436fbb7c2
-source_last_modified: "2025-11-14T04:43:22.175122+00:00"
+source_hash: c79ed0939763c12a69ef1cfdb748b6ee3cd967afa40a511af6e4fa5dceb17fd1
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/reports/ai-moderation-calibration-202602.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # דוח כיול למודרציה של AI - פברואר 2026

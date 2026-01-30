@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/reference/norito-codec.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6a3c464ea814033da16f50b808041186a8967457edeacb3b5804374d29e35b39
-source_last_modified: "2025-11-14T04:43:20.978206+00:00"
+source_hash: ba62195b82ad565c52eec14c5a7adfd7166fe66263dc5c3af4bc54c72ead256c
+source_last_modified: "2026-01-18T05:31:56+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/reference/norito-codec.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # مرجع ترميز Norito

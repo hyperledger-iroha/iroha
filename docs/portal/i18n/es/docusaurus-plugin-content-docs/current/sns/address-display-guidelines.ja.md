@@ -4,11 +4,19 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sns/address-display-guidelines.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8985265df89a3bf8e72a5c30e67810b3f85d0ea2a3ab91684e80844a71e6cd35
-source_last_modified: "2025-11-14T04:43:21.230100+00:00"
+source_hash: f923e1c8308471aac313cbd011858261f7e42ebaf42c4948a4b6aa20ca8d8332
+source_last_modified: "2026-01-28T17:58:57+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
+---
+id: address-display-guidelines
+lang: es
+direction: ltr
+source: docs/portal/docs/sns/address-display-guidelines.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
 import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 
 :::note Fuente canonica

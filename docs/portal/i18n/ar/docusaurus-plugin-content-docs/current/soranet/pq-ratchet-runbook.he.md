@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/soranet/pq-ratchet-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 72fbd21bdfd9f2f6da570ee72f98e75b9fb75179cb4e37efddcd54414bb56c05
-source_last_modified: "2025-11-14T04:43:22.408498+00:00"
+source_hash: 76ea18212ed744e54f1aa1f5d2df7e441cebc5b53904b0c1ce0c9a696254dfff
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: pq-ratchet-runbook
+lang: ar
+direction: rtl
+source: docs/portal/docs/soranet/pq-ratchet-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note المصدر القياسي

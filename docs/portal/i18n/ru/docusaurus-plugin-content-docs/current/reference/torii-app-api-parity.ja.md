@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/reference/torii-app-api-parity.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f17e9ea4094de90d827d510af33825dcc773cb578c2f7fed4a72add9ef7d741c
-source_last_modified: "2025-11-14T04:43:21.010473+00:00"
+source_hash: f42e3fcd7fd61e4633bd26ec53d55dee9ccadaee84c4d0f1d990c9e271787b62
+source_last_modified: "2026-01-30T09:29:51+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/reference/torii-app-api-parity.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: torii-app-api-parity
+title: Аудит паритета API приложения Torii
+description: Зеркало обзора TORII-APP-1, чтобы команды SDK и платформы могли подтвердить публичное покрытие.
 ---
 
 Статус: Завершено 2026-03-21  

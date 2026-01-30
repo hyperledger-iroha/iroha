@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/devportal/preview-invite-flow.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 03f18bd4800f4b100d465fb4c86d7c07367926b230f5c3ea2eed87ba0b6e0ed0
-source_last_modified: "2025-11-14T04:43:20.044076+00:00"
+source_hash: 0ffb27e9caaf9e492ce534d3845f4da28d7bf0ec8c60c8e91f8319de157b27af
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/devportal/preview-invite-flow.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # זרימת הזמנות לפריוויו

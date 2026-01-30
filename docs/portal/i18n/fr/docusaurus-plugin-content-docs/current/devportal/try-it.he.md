@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/devportal/try-it.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2d257c43a643ae11cfa11031373f60ae84c3fa10fea821f546f4de47bce4d9ee
-source_last_modified: "2025-11-14T04:43:20.195996+00:00"
+source_hash: 407d000a88cd9ff232a2358bbd82b25ba7b4c5360533b2f09cea7ba19d6a2a5d
+source_last_modified: "2026-01-03T18:07:58+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/devportal/try-it.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Bac a sable Try It

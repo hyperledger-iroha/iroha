@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/norito/examples/nft-flow.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2c5e845a26e736e3e8620964fb6e416b9b96ce50fd836dca1d51a2538bf0bf6a
-source_last_modified: "2025-11-14T04:43:20.770595+00:00"
+source_hash: 5a6f0ca3d971138b4d6384676a1d23db930f3825153fb89171f3107f2cfa6ea6
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/norito/examples/nft-flow.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/nft-flow
+title: Acuñar, transferir y quemar un NFT
+description: Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propietario, transferencia, etiquetado de metadatos y quema.
+source: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
 Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propietario, transferencia, etiquetado de metadatos y quema.

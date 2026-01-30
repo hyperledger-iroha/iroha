@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/intro.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 49986499dd4c83fa25f2e30fe16f06d73553ac3cb3ef769e7bd3fcf36955a8d5
-source_last_modified: "2025-11-14T04:43:20.258005+00:00"
+source_hash: 6c7bff6208a914c157d7c8f1c45536ae74728f3fb4f728f6bb9b275224f895f4
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/intro.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # مرحبا بكم في بوابة مطوري SORA Nexus

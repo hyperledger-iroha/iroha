@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/reference/torii-app-api-parity.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e99a6815465edbda092bf1a7d41dbf4ab4d1b7964c1c298fa121043be267072c
-source_last_modified: "2025-11-14T04:43:21.010803+00:00"
+source_hash: 355ef2d2908bb8e59337fbe367493e0b1adcfd8501cfad43e8666fb398c768bb
+source_last_modified: "2026-01-30T09:29:51+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/reference/torii-app-api-parity.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: torii-app-api-parity
+title: Torii ایپ API برابری کا آڈٹ
+description: TORII-APP-1 جائزے کی نقل تاکہ SDK اور پلیٹ فارم ٹیمیں عوامی کوریج کی تصدیق کر سکیں۔
 ---
 
 حیثیت: مکمل 2026-03-21  

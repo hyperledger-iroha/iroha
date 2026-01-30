@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/reports/sf6-security-review.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ab3042aeecf4d91814410f4eeed045727251ae774e66d85365561e21130d4868
-source_last_modified: "2025-11-14T04:43:22.277640+00:00"
+source_hash: 0242cdae3c514af2a1a5d2df95bfc12dcaf46b84119434a34c5cdab8ce8a2da4
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/reports/sf6-security-review.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Отчет по безопасности SF-6

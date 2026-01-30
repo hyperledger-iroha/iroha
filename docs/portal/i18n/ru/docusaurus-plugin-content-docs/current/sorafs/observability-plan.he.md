@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/observability-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f5cc08addfb3b8cede1e9c21ba63098367fa0f8bc1c613a8759ca24a9286b551
-source_last_modified: "2025-11-14T04:43:21.935662+00:00"
+source_hash: c9b950177659acd4a9b77ad8e65ebbd95ec598b7ee5f98f338259feca9ddd8cf
+source_last_modified: "2026-01-21T07:41:19+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: observability-plan
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/observability-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Канонический источник

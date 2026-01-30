@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/developer-ci.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4af8e69e7b84e00d75dfa46d6d4ce41232c4c4a135738f82ee4f00245a9bf060
-source_last_modified: "2025-11-14T04:43:21.582107+00:00"
+source_hash: fad0ae6f4c9907319d93344a6f9960a13322800075c8a28e576b6599acf983f9
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: developer-ci
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/developer-ci.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Fonte canonica
 Esta pagina espelha `docs/source/sorafs/developer/ci.md`. Mantenha ambas as copias sincronizadas.

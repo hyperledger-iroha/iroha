@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/nexus/nexus-spec.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b1263a421c002fb24f17a51a71ed277752ba4055ea726aeced5c5a2be6f2b622
-source_last_modified: "2025-11-14T04:43:20.503494+00:00"
+source_hash: f7a3a54fbf3fd591b1da46441b7f7ec9f580bb33c4f0dfc2527f84e16e51f5ee
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/nexus/nexus-spec.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-spec
+title: المواصفات التقنية لسورا نيكسس
+description: مرآة كاملة لـ `docs/source/nexus.md` تغطي معمارية وقيود التصميم لدفتر Iroha 3 (Sora Nexus).
 ---
 
 :::note المصدر الرسمي

@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/chunker-registry-rollout-checklist.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: feaba4f9352a18cae8091d511151b5c546bd6b91c0441950e6a4ce5e6b931040
-source_last_modified: "2025-11-14T04:43:21.518293+00:00"
+source_hash: e0dc602bdde7ab3d50dccc4908a7dc51dede04be6dc6e66ba361fe8b5c4dffba
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-registry-rollout-checklist
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/chunker-registry-rollout-checklist.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fuente canónica

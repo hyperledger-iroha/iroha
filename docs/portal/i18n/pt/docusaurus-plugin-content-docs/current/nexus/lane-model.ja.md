@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/nexus/lane-model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 64db867c2b630b21912d17794406cb7bad1e1ed0fcf538cfe0c27d2ea3e99524
-source_last_modified: "2025-11-14T04:43:20.341416+00:00"
+source_hash: 3d50a1db28c9f22140e238d0dd2e705c1dcbdb070abaa95065ee54a2b996ca88
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/nexus/lane-model.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-lane-model
+title: Modelo de lanes do Nexus
+description: Taxonomia logica de lanes, geometria de configuracao e regras de merge de world-state para Sora Nexus.
 ---
 
 # Modelo de lanes do Nexus e particionamento de WSV

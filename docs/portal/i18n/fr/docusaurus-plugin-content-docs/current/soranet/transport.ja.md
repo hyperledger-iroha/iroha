@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/soranet/transport.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d9a8f9a513775088fdc9e06fd67053c0efec310ea96478a5961325dfc7763e35
-source_last_modified: "2025-11-14T04:43:22.520482+00:00"
+source_hash: 17f4ffa699cd00ae038de9fd5be495c4f017402dac5c4490983c4968082906da
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: transport
+lang: fr
+direction: ltr
+source: docs/portal/docs/soranet/transport.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Source canonique

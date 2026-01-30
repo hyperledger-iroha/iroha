@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/chunker-registry-charter.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b296c765c8bb21b2a2ba091cffee680a987a82a85a5bf1e8391a5cc9e51f5599
-source_last_modified: "2025-11-14T04:43:21.500878+00:00"
+source_hash: 3bd5f613f69dd8d031b14d2de33332ab05c11db547dcf8b5ca2d8c56f688003e
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-registry-charter
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/chunker-registry-charter.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Канонический источник
 Эта страница отражает `docs/source/sorafs/chunker_registry_charter.md`. Держите обе копии синхронизированными, пока старый набор Sphinx не будет выведен из эксплуатации.

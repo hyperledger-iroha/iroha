@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/runbooks-index.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a6ade73fb5cb5522d345a78ba8dce5be88025a950502ee633560d6e564939015
-source_last_modified: "2025-11-14T04:43:22.299901+00:00"
+source_hash: eed1c1063d29e029a237e9c5c209772c1e297ab5ab057a57d97d8508d1c6c88c
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: runbooks-index
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/runbooks-index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: אינדקס ראנבוקים למפעילים
+sidebar_label: אינדקס ראנבוקים
+description: נקודת כניסה קנונית לראנבוקים של מפעילי SoraFS שעברו מיגרציה.
 ---
 
 > משקף את רישום הבעלים שנמצא תחת `docs/source/sorafs/runbooks/`.

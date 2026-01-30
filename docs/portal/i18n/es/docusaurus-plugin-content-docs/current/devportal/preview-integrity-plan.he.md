@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/devportal/preview-integrity-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ca2a67bfeb6caa8476ba23f4cb90086c5d3b38d86b661a713b0eb9599c1fa80c
-source_last_modified: "2025-11-14T04:43:20.017197+00:00"
+source_hash: bf6cb06692c224f25a9034badd5bc43927e3e7d893851fedf09beb51ddc6857b
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/devportal/preview-integrity-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Plan de previsualizacion con checksum

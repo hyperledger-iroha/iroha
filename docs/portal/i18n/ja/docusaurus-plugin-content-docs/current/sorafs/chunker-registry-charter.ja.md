@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/chunker-registry-charter.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3fed03fcd5132a8346f4c4a0f4c58be39509e9db92064b694d28fe6f0b97fa6d
-source_last_modified: "2025-11-14T04:43:21.499345+00:00"
+source_hash: cb3d1cec933b2d64f0a0e4e8be9651d868b743c22d8e66048eff91da536c56ab
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-registry-charter
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/chunker-registry-charter.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note 正規ソース
 `docs/source/sorafs/chunker_registry_charter.md` を反映しています。レガシーの Sphinx ドキュメントセットが退役するまで、両方のコピーを同期してください。

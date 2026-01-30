@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/reports/sf6-security-review.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2af2d053110d1b18c0431bb51f84acb518c98bd7b92758d0fd95f0b2f6618c26
-source_last_modified: "2025-11-14T04:43:22.275342+00:00"
+source_hash: 6f13e19bcff89607282ec1b1f354678d6398610741bd251b8dd313c0374da774
+source_last_modified: "2026-01-03T18:08:03+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/reports/sf6-security-review.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # SF-6 セキュリティレビュー

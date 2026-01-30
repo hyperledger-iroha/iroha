@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/da/ingest-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8df119756f20008f38679c478ef5f9fcbe0a2ff76acc20b3e490b1a932ba58ad
-source_last_modified: "2025-11-14T04:43:19.733928+00:00"
+source_hash: 3cdf19adcf88eb75e8a66b62251aa5e9538d2b5bae061d960e753413e0927959
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/da/ingest-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note מקור קנוני

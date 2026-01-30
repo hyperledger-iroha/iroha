@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/devportal/preview-integrity-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6e424a08e39c19455c3a63712577b3916b9bb53384bd08da92cfa1ae307ca36e
-source_last_modified: "2025-11-14T04:43:20.019450+00:00"
+source_hash: d1af6babc7cc7af2508b6fb811ad97e39187176aa131bd7e156d3520d2a6fcd3
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/devportal/preview-integrity-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # خطة المعاينة المحكومة بالتحقق من checksum

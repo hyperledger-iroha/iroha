@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/devportal/preview-invite-flow.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9b77c8bb984de9d4a9222f2d4eca5d5de5d47f8a7131fe59ec8b5a369ba9add8
-source_last_modified: "2025-11-14T04:43:20.043603+00:00"
+source_hash: 453c88859674500d87b95991faf83caf63c62d5ad6e0f3b3be6e25274dab478d
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/devportal/preview-invite-flow.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # プレビュー招待フロー

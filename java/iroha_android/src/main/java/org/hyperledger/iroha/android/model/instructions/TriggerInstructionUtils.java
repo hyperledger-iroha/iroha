@@ -98,6 +98,16 @@ final class TriggerInstructionUtils {
             "instruction." + entry.getKey() + ".kind is required for trigger registration");
       }
       final InstructionKind nestedKind = InstructionKind.fromDisplayName(parts.kind);
+      if (!parts.arguments.containsKey("wire_name")
+          || !parts.arguments.containsKey("payload_base64")) {
+        throw new IllegalArgumentException(
+            "instruction." + entry.getKey() + " must include wire_name and payload_base64");
+      }
+      if (parts.arguments.size() != 2) {
+        throw new IllegalArgumentException(
+            "instruction." + entry.getKey()
+                + " must not include extra arguments when using wire payloads");
+      }
       instructions.add(
           InstructionBox.fromNorito(
               nestedKind,

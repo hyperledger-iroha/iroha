@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/soranet/pq-rollout-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c90cfe2d66768516ac2b4876c4416c527802b8c18664f709ac3a0597f90a52a8
-source_last_modified: "2025-11-14T04:43:22.429620+00:00"
+source_hash: 19526aad13bbe177769ed49268e86380fbee8a15c35c57f320217cd4586887e0
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: pq-rollout-plan
+lang: fr
+direction: ltr
+source: docs/portal/docs/soranet/pq-rollout-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Source canonique

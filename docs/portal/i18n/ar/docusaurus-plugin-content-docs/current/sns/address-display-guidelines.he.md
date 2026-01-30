@@ -4,11 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sns/address-display-guidelines.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: adb3b04ded82571ed3070d86458aa520d5179b0e48f6f059e6d69696260c44d4
-source_last_modified: "2025-11-14T04:43:21.231445+00:00"
+source_hash: b0acbfd6d6e581c26725d1afe6c516d1549f5e424b0115507b2542b782e3c753
+source_last_modified: "2026-01-28T17:58:57+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
+---
+id: address-display-guidelines
+lang: ar
+direction: rtl
+source: docs/portal/docs/sns/address-display-guidelines.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
 import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 
 :::note المصدر القياسي

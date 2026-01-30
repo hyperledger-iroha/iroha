@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/chunker-profile-authoring.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 31d2bdae45b4e05c080283d6756b4ed87f78797a0704ff99f8350a87044d18be
-source_last_modified: "2025-11-14T04:43:21.482821+00:00"
+source_hash: 9c9ee151879e08f7160aba921a3fe4a3f8f217e5b758e94d409a373064ba9ba3
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: chunker-profile-authoring
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/chunker-profile-authoring.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note مستند ماخذ
 :::

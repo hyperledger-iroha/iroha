@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/nexus/telemetry-remediation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5bf157e3ba090d0eeea72182887a5b581726bdef4c7e9ec0ddafbad850e53456
-source_last_modified: "2025-11-14T04:43:20.589658+00:00"
+source_hash: 84b0d5c48cf89d4c0cf4e7994eed38fe976924ff6f2626a8ca15ffdb0f734e32
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/nexus/telemetry-remediation.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-telemetry-remediation
+title: План устранения пробелов телеметрии Nexus (B2)
+description: Зеркало `docs/source/nexus_telemetry_remediation_plan.md`, документирующее матрицу пробелов телеметрии и операционный рабочий процесс.
 ---
 
 # Обзор

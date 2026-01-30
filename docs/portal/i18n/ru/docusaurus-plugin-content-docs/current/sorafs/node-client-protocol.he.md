@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/node-client-protocol.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7dc236663d089df58a91d0c6747b6c18d6c628591873d34d0df42e75458e3890
-source_last_modified: "2025-11-14T04:43:21.847763+00:00"
+source_hash: e6f977314f77e6833484053024a876dadaa206c5f056fd27b4628c21dc29fa72
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/node-client-protocol.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Протокол SoraFS узел ↔ клиент

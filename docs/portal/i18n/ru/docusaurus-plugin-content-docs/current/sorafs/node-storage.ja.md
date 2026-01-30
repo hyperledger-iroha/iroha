@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/node-storage.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b634937fd6fdd8a275f07347d85dc113c752ee790ef76187610667a7376c7162
-source_last_modified: "2025-11-14T04:43:21.914046+00:00"
+source_hash: 76ed37d99a3d8e6279afe6de59b6dae15e58ab323e962eba667c7a4c6167d09a
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: node-storage
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/node-storage.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note Канонический источник
 :::

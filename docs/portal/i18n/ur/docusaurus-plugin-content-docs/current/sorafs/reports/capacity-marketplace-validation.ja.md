@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/reports/capacity-marketplace-validation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d8ca4b3a18d8c6d1e2470d65b00777f251cdf9bd3459eb76c49cecdcb23e0d47
-source_last_modified: "2025-11-14T04:43:22.198842+00:00"
+source_hash: e551d2a854c25d7939a00f6461e01e748fbcd0c79abdb03d0fea9f2d97107c0c
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/reports/capacity-marketplace-validation.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # SoraFS Capacity Marketplace Validation Checklist

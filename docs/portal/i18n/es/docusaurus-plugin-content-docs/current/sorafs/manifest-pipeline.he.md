@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/manifest-pipeline.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8d67007d3e831ed53b2d5eefe7da6be0ac02cf64a3162c0c530ad2e100db1b9a
-source_last_modified: "2025-11-14T04:43:21.765271+00:00"
+source_hash: a48389bf50a2bf151ec58afcb7db16ec8f6227afa52362a1853771301711172b
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/sorafs/manifest-pipeline.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Chunking de SoraFS → Pipeline de manifiestos

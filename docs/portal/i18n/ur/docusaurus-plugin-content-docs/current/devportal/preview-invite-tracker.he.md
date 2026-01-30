@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/devportal/preview-invite-tracker.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2e96c99a065f7e0ec52c990b0f6b12612decaed30f1e308c73269509d50b64b1
-source_last_modified: "2025-11-14T04:43:20.071002+00:00"
+source_hash: 862ce83089b381961b037d5593e44ba4cf2a5ead35dca205162cefbdd7b5c50d
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/devportal/preview-invite-tracker.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # پریویو دعوت ٹریکر

@@ -4,9 +4,18 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sns/registrar-api.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f42fcba69e19c354ba2fe5e1c1478a08a85e4b3bc1ba37026bd7834efaaa4cff
-source_last_modified: "2025-11-14T04:43:21.376095+00:00"
+source_hash: ffa1fbe79bcb2ec8bfc336b853d1dece00f47e72df33ce68d5dacdd91bc8c677
+source_last_modified: "2026-01-22T06:58:49+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: registrar-api
+lang: he
+direction: rtl
+source: docs/portal/docs/sns/registrar-api.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note מקור קנוני

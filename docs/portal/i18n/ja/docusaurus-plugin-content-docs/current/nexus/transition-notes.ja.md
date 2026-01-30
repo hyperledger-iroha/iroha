@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/nexus/transition-notes.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ac91176643e89fc627a82a2a41368c7beab8070db89be763c01ed96302fad632
-source_last_modified: "2025-11-14T04:43:20.610425+00:00"
+source_hash: 75f6335f4ddd5d98304abe24a20013fdf328e07efd60a1fe44f0ab3fa94593e7
+source_last_modified: "2026-01-06T06:54:55+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/nexus/transition-notes.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-transition-notes
+title: Nexus 移行ノート
+description: `docs/source/nexus_transition_notes.md` のミラーで、Phase B の移行証跡、監査スケジュール、緩和策を扱います。
 ---
 
 <!--

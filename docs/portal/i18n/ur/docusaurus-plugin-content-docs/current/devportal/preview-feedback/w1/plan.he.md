@@ -4,9 +4,18 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w1/plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 853979c5b7baa1f659f84965e1c23593508dd0b7b4dea534ec4dd0416c885cb9
-source_last_modified: "2025-11-14T04:43:19.881213+00:00"
+source_hash: 8084f98ff6816be548d0feba1687b1358a58beac74d77b6eca380f415fd68ef5
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: preview-feedback-w1-plan
+lang: ur
+direction: rtl
+source: docs/portal/docs/devportal/preview-feedback/w1/plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 | آئٹم | تفصیل |

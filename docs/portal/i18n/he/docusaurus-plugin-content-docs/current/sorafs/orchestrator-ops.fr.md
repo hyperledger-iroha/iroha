@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/orchestrator-ops.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: cc0937cfa70682d26cceafea01a70d8980c4310c47ef1e0c2142ad8a357a2e28
-source_last_modified: "2025-11-07T10:33:21.924584+00:00"
+source_hash: e3010b539abaaa013cde87638b3313cd538ad4e3b2479cf8b2128577f365e8db
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-ops
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/orchestrator-ops.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: ראנבוק תפעול לאורקסטרטור של SoraFS
+sidebar_label: ראנבוק אורקסטרטור
+description: מדריך תפעולי צעד-אחר-צעד לפריסה, ניטור וגלגול אחורה של אורקסטרטור רב-מקורות.
 ---
 
 :::note מקור קנוני

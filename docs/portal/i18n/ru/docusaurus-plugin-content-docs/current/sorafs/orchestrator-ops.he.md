@@ -4,9 +4,23 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/orchestrator-ops.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: dd548a398921c9b62b55d893bca314938a6183f4855ce246c9170bd3559bebb9
-source_last_modified: "2025-11-14T04:43:21.992425+00:00"
+source_hash: 56d6cd0ec538422e5ce7c0be4fe00bcf5e72ac0e9ae688b0652f693141a9f628
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-ops
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/orchestrator-ops.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Runbook по эксплуатации оркестратора SoraFS
+sidebar_label: Runbook оркестратора
+description: Пошаговое операционное руководство по развёртыванию, мониторингу и откату мульти-источникового оркестратора.
 ---
 
 :::note Канонический источник

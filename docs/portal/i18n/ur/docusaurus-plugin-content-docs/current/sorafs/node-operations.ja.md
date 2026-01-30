@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/node-operations.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 27bc6ac223a04af4caa80c988c213e07223ae665f237507721d3846355d1dc31
-source_last_modified: "2025-11-14T04:43:21.865183+00:00"
+source_hash: c9211dc8496aca3caf63105d80a1f26a5e17f73fd7df259373a31d9bbb6dfa7d
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: node-operations
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/node-operations.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note مستند ماخذ

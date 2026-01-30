@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/devportal/incident-runbooks.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e85ec4f1419ae8d61bf26b144985f0a474d907f673ab7a216f0612aafe083251
-source_last_modified: "2025-11-14T04:43:19.784560+00:00"
+source_hash: 54fec7e975aa353802bc141c626f870d376d163c1be970385b329506c08b3ae4
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/devportal/incident-runbooks.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # インシデント・ランブックとロールバック演習

@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/orchestrator-ops.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ba3a318cb450eb913c4faf83c936dd5c629cc8c2cb62eb5f20572bac3eaa1bce
-source_last_modified: "2025-11-14T04:43:21.994060+00:00"
+source_hash: 060aa4e5322264d9dc1c9349ff69e41dece42115f21ed259398d4849c01c40a0
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-ops
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/orchestrator-ops.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: SoraFS آرکسٹریٹر آپریشنز رن بک
+sidebar_label: آرکسٹریٹر رن بک
+description: ملٹی سورس آرکسٹریٹر کے رول آؤٹ، نگرانی اور رول بیک کے لیے مرحلہ وار آپریشنل گائیڈ۔
 ---
 
 :::note مستند ماخذ

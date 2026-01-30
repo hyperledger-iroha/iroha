@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/reports/sf1-determinism.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 456007e0cbbac3d7fc0e73b78f8c7df438becd76bd436720d4ce30e1bded6ed0
-source_last_modified: "2025-11-14T04:43:22.238718+00:00"
+source_hash: 0ec2d7eba8192b999fe6e0286298860c74550f580a0334d74262559339198dbf
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/reports/sf1-determinism.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # SoraFS SF1 Determinism Dry-Run

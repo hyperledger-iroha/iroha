@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/provider-advert-multisource.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 761c44e95c55c5b9e0f418b8a426a28d8f4269c1bc7fa2d81367b60da1570daf
-source_last_modified: "2025-11-14T04:43:22.128967+00:00"
+source_hash: 9f39a96a469d621d3c1e940dc37451d3dc9f94ccd91989829bc3a01837d36094
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+id: provider-advert-multisource
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/provider-advert-multisource.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 # מודעות ספקים מרובי-מקורות ותזמון
 

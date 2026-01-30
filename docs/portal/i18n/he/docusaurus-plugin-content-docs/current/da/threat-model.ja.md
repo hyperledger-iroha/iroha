@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/da/threat-model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6f88c7ecdabb036b63235948a1e684a15a4896a1314193495f6a00216724257d
-source_last_modified: "2025-11-14T04:43:19.761413+00:00"
+source_hash: aa720bd35225edd8d53d3d652fe6104d44d759a7f7b3c50165c1c392051aa6b3
+source_last_modified: "2026-01-19T07:28:06+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/da/threat-model.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note מקור קנוני

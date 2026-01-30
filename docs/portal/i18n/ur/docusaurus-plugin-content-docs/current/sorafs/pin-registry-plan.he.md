@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/pin-registry-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d7ef8896b1a64fb31fd9e3c4cce8f72771f940f693740ed6578ca3298137c17b
-source_last_modified: "2025-11-14T04:43:22.049132+00:00"
+source_hash: 2ede2caf753a381139467f00048f8f12d41ae7e26ef6d0838af789f864a8362d
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: pin-registry-plan
+lang: ur
+direction: rtl
+source: docs/portal/docs/sorafs/pin-registry-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note مستند ماخذ

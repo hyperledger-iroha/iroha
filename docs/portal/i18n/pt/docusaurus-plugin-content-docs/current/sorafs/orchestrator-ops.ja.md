@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/orchestrator-ops.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: dd56aaf442c33890ef9f0509274e42d76d027dd71c95c9a05bce433ecdea76be
-source_last_modified: "2025-11-14T04:43:21.991795+00:00"
+source_hash: 9b6b6b8425096702ed11b053a664f2c996685eccfc6bea4da6811930bb46ff4d
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: orchestrator-ops
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/orchestrator-ops.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Runbook de operações do orquestrador SoraFS
+sidebar_label: Runbook do orquestrador
+description: Guia operacional passo a passo para implantar, monitorar e reverter o orquestrador multi-origem.
 ---
 
 :::note Fonte canônica

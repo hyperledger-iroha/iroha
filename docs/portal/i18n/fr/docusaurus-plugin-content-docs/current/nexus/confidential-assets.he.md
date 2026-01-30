@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/nexus/confidential-assets.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: edb35e018669b24e887d9d848d506110a902ae78ecb6e2bbc68079cfab76ef55
-source_last_modified: "2025-11-14T04:43:20.306332+00:00"
+source_hash: ba0a9a0b5076673ea823af92c168db1af0639317389dd97b3cf8e1bdc1bac5de
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/nexus/confidential-assets.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Actifs confidentiels et transferts ZK
+description: Blueprint Phase C pour la circulation blindee, les registres et les controles operateur.
+slug: /nexus/confidential-assets
 ---
 
 <!--

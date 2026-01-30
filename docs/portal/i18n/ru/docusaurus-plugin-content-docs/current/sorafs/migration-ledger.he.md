@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/migration-ledger.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d459bf514a9c88935910a44605fa533c7916e8cfdf7cb93cce56cc3360ad7112
-source_last_modified: "2025-11-14T04:43:21.793504+00:00"
+source_hash: 8a3b53c1f20a438b60760d2b9e0938a251dea6b6f064f52ba73483ee93fe7e9c
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: migration-ledger
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/migration-ledger.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 > Адаптировано из [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
 

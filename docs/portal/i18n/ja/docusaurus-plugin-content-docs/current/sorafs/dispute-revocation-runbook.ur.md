@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/sorafs/dispute-revocation-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 21225c012fbd17100d67393864c5b023cf1e2bc6a948b3f93b9520d1f1a82152
-source_last_modified: "2025-11-07T10:33:21.918675+00:00"
+source_hash: 5fabaac6014e0e67dca1a417354399b08d9e35fe54ce8465ec0eef5038f9f58e
+source_last_modified: "2026-01-22T15:55:18+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: dispute-revocation-runbook
+lang: ja
+direction: ltr
+source: docs/portal/docs/sorafs/dispute-revocation-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note 正規ソース

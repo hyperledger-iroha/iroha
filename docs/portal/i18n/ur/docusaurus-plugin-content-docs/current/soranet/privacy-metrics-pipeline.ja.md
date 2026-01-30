@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/soranet/privacy-metrics-pipeline.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2503bb9959f8d45b62399fe7d6366080fb8b32b304ddc07e34503b245a1607d0
-source_last_modified: "2025-11-14T04:43:22.470867+00:00"
+source_hash: 93ea3f0f10689a53d91d24e7d3a13cd1f581692e4f78971522f25295697fff9e
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: privacy-metrics-pipeline
+lang: ur
+direction: rtl
+source: docs/portal/docs/soranet/privacy-metrics-pipeline.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note مستند ماخذ

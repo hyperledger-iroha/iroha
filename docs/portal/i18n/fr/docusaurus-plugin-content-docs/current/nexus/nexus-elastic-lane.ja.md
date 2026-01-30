@@ -4,9 +4,21 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/nexus/nexus-elastic-lane.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9fe76626b3ec8e09dcdfef241db9e4acda5bffff676c4ff25f7b8c674e57a43e
-source_last_modified: "2025-11-14T04:43:20.407684+00:00"
+source_hash: 1ff004bcd543385eb5500bdfe9c674312afffa06dd7cbd4856fe06c1da2ae1bd
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/nexus/nexus-elastic-lane.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-elastic-lane
+title: Provisionnement de lane elastique (NX-7)
+sidebar_label: Provisionnement de lane elastique
+description: Workflow de bootstrap pour creer des manifests de lane Nexus, des entrees de catalogue et des preuves de rollout.
 ---
 
 :::note Source canonique

@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/nexus/nexus-spec.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: dbae2d2adc07010633013c1725335a986e7f84844aa5f1fcee4afb1cc9d31bc7
-source_last_modified: "2025-11-14T04:43:20.503322+00:00"
+source_hash: bd29d89dc518d9f4fb43092e4940b98d6d4206246225c9307f467cd3422e3fa7
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/nexus/nexus-spec.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-spec
+title: Техническая спецификация Sora Nexus
+description: Полное отражение `docs/source/nexus.md`, охватывающее архитектуру и ограничения проектирования для Iroha 3 (Sora Nexus).
 ---
 
 :::note Канонический источник

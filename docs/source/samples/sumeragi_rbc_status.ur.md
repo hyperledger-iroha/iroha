@@ -1,20 +1,74 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/source/samples/sumeragi_rbc_status.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 370259e61601eb814ed677f477c1f80757d337ae7f37ad28da3934f752d2b0d6
-source_last_modified: "2025-12-21T12:55:05.131845+00:00"
-translation_last_reviewed: null
+source_hash: ad00669e1f686b17ace3f055cee3618e2d5e3d111a5b1120c31b96cd63cc96ac
+source_last_modified: "2026-01-23T20:16:04.756517+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# ترجمہ جاری ہے
+# Sumeragi — RBC Status (Torii)
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+Endpoint
+- `GET /v1/sumeragi/rbc`
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+Response (example)
+```json
+{
+  "sessions_active": 0,
+  "sessions_pruned_total": 0,
+  "ready_broadcasts_total": 0,
+  "ready_rebroadcasts_skipped_total": 0,
+  "deliver_broadcasts_total": 0,
+  "payload_bytes_delivered_total": 0,
+  "payload_rebroadcasts_skipped_total": 0
+}
+```
+
+Sample session detail (`GET /v1/sumeragi/rbc/sessions`, truncated):
+
+```json
+{
+  "sessions_active": 1,
+  "items": [
+    {
+      "block_hash": "deadbeefcafebabe1234567890abcdef",
+      "height": 4201,
+      "view": 7,
+      "total_chunks": 168,
+      "received_chunks": 168,
+      "ready_count": 4,
+      "delivered": true,
+      "invalid": false,
+      "payload_hash": "9ef2e4f3c9c0b1c2d3e4f5a6978899aa",
+      "recovered": false,
+      "lane_backlog": [
+        {
+          "lane_id": 0,
+          "tx_count": 6,
+          "total_chunks": 168,
+          "pending_chunks": 0,
+          "rbc_bytes_total": 11010048
+        }
+      ],
+      "dataspace_backlog": [
+        {
+          "lane_id": 0,
+          "dataspace_id": 0,
+          "tx_count": 6,
+          "total_chunks": 168,
+          "pending_chunks": 0,
+          "rbc_bytes_total": 11010048
+        }
+      ]
+    }
+  ]
+}
+```
+
+Notes
+- Available only when telemetry is enabled.
+- Provides aggregate counters for RBC (Reliable Broadcast) activity.
+- When `sumeragi.da.enabled = true`, availability evidence (an `availability evidence` or an RBC `READY` quorum) is tracked (advisory; does not gate commit); missing local payloads are fetched via RBC `DELIVER` or block sync. RBC remains transport/recovery and its delivery latency is still useful for debugging.

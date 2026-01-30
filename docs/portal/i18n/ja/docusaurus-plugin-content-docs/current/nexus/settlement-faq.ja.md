@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/nexus/settlement-faq.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c2c870a31f96c4fe7c64412cbda2280094dbe33f8f096a55a8ea550bfde56281
-source_last_modified: "2025-11-14T04:43:20.566610+00:00"
+source_hash: 221ab9f2529072fb3fbcdf0c7f511ab565cef7439e4b2bb810fd90886342a8a2
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/nexus/settlement-faq.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-settlement-faq
+title: Settlement FAQ
+description: Settlementのルーティング、XOR変換、テレメトリ、監査証跡を扱うオペレーター向けの回答。
 ---
 
 このページは社内のSettlement FAQ（`docs/source/nexus_settlement_faq.md`）を反映し、ポータルの読者がmono-repoを探さず同じガイダンスを確認できるようにしています。Settlement Routerが支払いを処理する方法、監視すべきメトリクス、SDKがNoritoペイロードを統合する方法を説明します。

@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/nexus/transition-notes.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1329d1f7908f59e0b4fb198f11b99094f3ab4ad6a2105987615f7c0d139b85e1
-source_last_modified: "2025-11-14T04:43:20.610842+00:00"
+source_hash: da3a59083a4f219e1614695b94d340450b97bfecd658beebdbe32c7c3fadc14a
+source_last_modified: "2026-01-06T06:54:55+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/nexus/transition-notes.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-transition-notes
+title: הערות מעבר של Nexus
+description: מראה של `docs/source/nexus_transition_notes.md`, המכסה ראיות מעבר של Phase B, לוח ביקורת ומיתונים.
 ---
 
 <!--

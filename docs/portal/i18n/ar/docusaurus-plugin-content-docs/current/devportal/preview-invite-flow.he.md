@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/devportal/preview-invite-flow.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 00407da98cb7170e64442d6900c1c15316ea75a6cf5f1ff97c087974b9bf5da4
-source_last_modified: "2025-11-14T04:43:20.046897+00:00"
+source_hash: 5f6df37650294fa413efbc2751d35c4fc79ee81e9a26012ddc12a3c3b63e032a
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/devportal/preview-invite-flow.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # مسار دعوات المعاينة

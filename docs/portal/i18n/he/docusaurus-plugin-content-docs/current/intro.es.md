@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/intro.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b46ac88f830de9b8072ed35af419b249ba1488a5672a24e2a59cd4ae275a55ed
-source_last_modified: "2025-11-04T12:03:18.015849+00:00"
+source_hash: 4767e58dc0377d6178e7181f45923a8e1ef824549cf521720b587f47dcf65d49
+source_last_modified: "2026-01-03T18:07:58+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/intro.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # ברוכים הבאים לפורטל המפתחים של SORA Nexus

@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/devportal/incident-runbooks.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d50f5b4ad59b15905dc169d6ce39923141a4e659000a66a20f23dce1b64c47ec
-source_last_modified: "2025-11-14T04:43:19.785337+00:00"
+source_hash: 78437d302e0ac816784faef9dd7d29ac81054cbd7321a35901cebb5a579f4764
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/devportal/incident-runbooks.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Ранбуки инцидентов и тренировки rollback

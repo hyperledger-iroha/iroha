@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/devportal/preview-host-exposure.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5389affca73982cdb805daacb00771636e286123662ab84b2d880d4882233186
-source_last_modified: "2025-11-14T04:43:19.994948+00:00"
+source_hash: 82a2a94c8c958c5ee7816a8d7f2531cc5117a9192c87cec940074b22a0c68980
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/devportal/preview-host-exposure.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # מדריך חשיפת מארח תצוגה מקדימה

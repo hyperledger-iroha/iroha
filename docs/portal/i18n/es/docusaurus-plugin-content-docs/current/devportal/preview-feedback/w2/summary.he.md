@@ -4,9 +4,18 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w2/summary.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 444cd36f8204df4ac1ece730f33cf3aeb845bee999936e62386689767e727c1d
-source_last_modified: "2025-11-14T04:43:19.965085+00:00"
+source_hash: b438434d5c889e920e693ee5601eaf3a9dcf30b483dd77f79d17dd8dc9c3ebbd
+source_last_modified: "2026-01-03T18:07:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: preview-feedback-w2-summary
+lang: es
+direction: ltr
+source: docs/portal/docs/devportal/preview-feedback/w2/summary.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 | Item | Detalles |

@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/devportal/torii-rpc-overview.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e23d1bc9e14c225b26f6948f350cf84802a306a766a6c4502818410db53b3f6d
-source_last_modified: "2025-11-14T04:43:20.179245+00:00"
+source_hash: 8453213a067ed1a1851ed67e27921a79ab178d8ac0736a9f2a51772f24749ee1
+source_last_modified: "2026-01-03T18:07:57+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/devportal/torii-rpc-overview.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Resumen de Norito-RPC

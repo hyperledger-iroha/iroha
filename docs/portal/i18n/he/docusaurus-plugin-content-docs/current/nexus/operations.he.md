@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/nexus/operations.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: dba21cc1ae318ef0a779dbc5503cc4661d106b5ac28f968d17c35413c0c18140
-source_last_modified: "2025-11-14T04:43:20.522288+00:00"
+source_hash: 429297c84c8a996c906665e513239cd86c30d5b2164167e61db788e364668296
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/nexus/operations.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-operations
+title: Runbook לתפעול Nexus
+description: סיכום תפעולי לשטח של תהליך העבודה למפעיל Nexus, המשקף את `docs/source/nexus_operations.md`.
 ---
 
 השתמשו בעמוד זה כאח מהיר-עיון ל-`docs/source/nexus_operations.md`. הוא מזקק את רשימת הבדיקה התפעולית, נקודות החיבור לניהול שינויים ודרישות כיסוי הטלמטריה שעל מפעילי Nexus לעקוב אחריהן.

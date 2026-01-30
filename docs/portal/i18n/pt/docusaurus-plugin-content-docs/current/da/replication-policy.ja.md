@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/da/replication-policy.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d11478f47f7049673437f4890996170add2015db880b13156be254bb6195f531
-source_last_modified: "2025-11-14T04:43:19.750598+00:00"
+source_hash: 4d1262a33c965539921fe1e85fb9222117df4d680bae656e59d67ea4e42507c3
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/da/replication-policy.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica

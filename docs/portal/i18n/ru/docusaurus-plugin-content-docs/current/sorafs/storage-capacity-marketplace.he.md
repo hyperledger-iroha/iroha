@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/storage-capacity-marketplace.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 346c0a2f811b43b6621ab3f97bfdf2b4bd21365dc0f28aa1f4ada8bb17644261
-source_last_modified: "2025-11-14T04:43:22.362823+00:00"
+source_hash: 5e4fa7cc8c358d28e0c141864620392dc6ad84221d2a8455b67863a4fbb11bd5
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: storage-capacity-marketplace
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/storage-capacity-marketplace.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Канонический источник

@@ -4,9 +4,21 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/nexus/nexus-elastic-lane.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f0a8497466c6e3cf2472601f89e915320fd9631bb4c50f6f6951bfaf8a2ce5a9
-source_last_modified: "2025-11-14T04:43:20.408338+00:00"
+source_hash: 2cd00f61a69f3fcd95baafb58f979dc4a590bd81e48b2217195f898be03cbee8
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/nexus/nexus-elastic-lane.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-elastic-lane
+title: تجهيز lane المرن (NX-7)
+sidebar_label: تجهيز lane المرن
+description: سير عمل bootstrap لانشاء manifests لـ Nexus lane ومدخلات الكتالوج وادلة rollout.
 ---
 
 :::note المصدر الرسمي

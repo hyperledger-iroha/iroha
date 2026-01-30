@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/nexus/nexus-spec.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 97782472bb55341ea68040437769152530f72112d9e35c8007a640781b7109fc
-source_last_modified: "2025-11-14T04:43:20.502188+00:00"
+source_hash: 32db0375725cb2fd058893f590cf5f7aec6021208718f6afb4859fed23a49234
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/nexus/nexus-spec.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-spec
+title: Sora Nexus 技術仕様
+description: Iroha 3 (Sora Nexus) のアーキテクチャと設計制約を扱う `docs/source/nexus.md` の完全ミラー。
 ---
 
 :::note 正本ソース

@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/manifest-pipeline.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8b05d12d68a5a1baa29f89bf63f3b5d09e55ac7ac46981455764f8d367afea91
-source_last_modified: "2025-11-14T04:43:21.766715+00:00"
+source_hash: d3959fc0bc863b99d8b62055f70fff07735530825ef272f7e0ca5390d8c0004d
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/manifest-pipeline.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Chunking SoraFS → Pipeline de manifeste

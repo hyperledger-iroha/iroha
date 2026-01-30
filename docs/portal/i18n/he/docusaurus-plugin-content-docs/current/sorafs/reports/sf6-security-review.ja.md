@@ -4,9 +4,19 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/sorafs/reports/sf6-security-review.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9e3c58e8c9a46363c275d5aaf714a5a82bee9c4fb62fa93e0e720f2d4702bed5
-source_last_modified: "2025-11-14T04:43:22.275553+00:00"
+source_hash: b826108d418ac78474c91beab84f07f59be91fbea6548d483bc81e04fc147c0f
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/sorafs/reports/sf6-security-review.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # סקירת אבטחה SF-6

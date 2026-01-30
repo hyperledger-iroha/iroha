@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/nexus/nexus-fee-model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d8166d5a5f50e7cf540a99c27b15744aae75b94810b4dcd724008b207f47b68d
-source_last_modified: "2025-11-14T04:43:20.428937+00:00"
+source_hash: 55530e10b21db0841a80ac7ee9c05044e6ee2eab0e2f64110faf50fcd47b529b
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/nexus/nexus-fee-model.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-fee-model
+title: עדכוני מודל העמלות של Nexus
+description: מראה של `docs/source/nexus_fee_model.md`, המתעד קבלות סליקה של lanes ומשטחי פיוס.
 ---
 
 :::note מקור קנוני

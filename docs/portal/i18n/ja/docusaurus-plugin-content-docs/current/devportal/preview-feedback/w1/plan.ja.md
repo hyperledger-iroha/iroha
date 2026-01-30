@@ -4,9 +4,18 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w1/plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4618ae4e606abc0b701ffaea7842eb8303c86983ebc102a0f48281c036505cf5
-source_last_modified: "2025-11-14T04:43:19.876506+00:00"
+source_hash: ab4f33dd345da0643859e04f7471bd289e6e562fe5c320f194d57a1b64e3f15a
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: preview-feedback-w1-plan
+lang: ja
+direction: ltr
+source: docs/portal/docs/devportal/preview-feedback/w1/plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 | 項目 | 詳細 |

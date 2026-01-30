@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/reference/torii-app-api-parity.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 07d55245f1421a068fa6f9483e3e79e5821cdbf00ebf75e23d4cb61114469139
-source_last_modified: "2025-11-14T04:43:21.009584+00:00"
+source_hash: 0732dd94166eb79e0203a7cb406407a45c45038e389378bc57368516e32406a0
+source_last_modified: "2026-01-30T09:29:51+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/reference/torii-app-api-parity.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: torii-app-api-parity
+title: בדיקת תאימות API של אפליקציית Torii
+description: שיקוף של סקירת TORII-APP-1 כדי שצוותי SDK והפלטפורמה יוכלו לאשר את הכיסוי הציבורי.
 ---
 
 סטטוס: הושלם 2026-03-21  

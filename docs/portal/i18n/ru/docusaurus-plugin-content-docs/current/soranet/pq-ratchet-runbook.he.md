@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/soranet/pq-ratchet-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e1a58f17d6c947060f6695b62b5d441c216fccbb998b52239c015605a6c8a558
-source_last_modified: "2025-11-14T04:43:22.407990+00:00"
+source_hash: 989598781072a061e0fc661231de4c2bd5539abd804602cf7738467b844069f8
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: pq-ratchet-runbook
+lang: ru
+direction: ltr
+source: docs/portal/docs/soranet/pq-ratchet-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Канонический источник

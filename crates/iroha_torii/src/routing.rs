@@ -29598,9 +29598,13 @@ fn filter_portfolio_by_asset_id(
                 positions = positions.saturating_add(account.assets.len() as u64);
             }
         }
-        dataspace.accounts.retain(|account| !account.assets.is_empty());
+        dataspace
+            .accounts
+            .retain(|account| !account.assets.is_empty());
     }
-    snapshot.dataspaces.retain(|dataspace| !dataspace.accounts.is_empty());
+    snapshot
+        .dataspaces
+        .retain(|dataspace| !dataspace.accounts.is_empty());
     snapshot.totals.accounts = accounts;
     snapshot.totals.positions = positions;
 }
@@ -33595,7 +33599,11 @@ fn collect_pending_public_lane_rewards<'a>(
     asset_filter: Option<&iroha_data_model::asset::AssetId>,
     reward_claims: impl Iterator<
         Item = (
-            &'a (LaneId, iroha_data_model::account::AccountId, iroha_data_model::asset::AssetId),
+            &'a (
+                LaneId,
+                iroha_data_model::account::AccountId,
+                iroha_data_model::asset::AssetId,
+            ),
             &'a u64,
         ),
     >,
@@ -33604,10 +33612,8 @@ fn collect_pending_public_lane_rewards<'a>(
     use std::collections::BTreeMap;
 
     use iroha_data_model::{
-        asset::AssetId,
-        nexus::PublicLanePendingReward,
+        ValidationFail, asset::AssetId, nexus::PublicLanePendingReward,
         query::error::QueryExecutionFail,
-        ValidationFail,
     };
     use iroha_primitives::numeric::Numeric;
 
@@ -33660,14 +33666,16 @@ fn collect_pending_public_lane_rewards<'a>(
 
     Ok(totals
         .into_iter()
-        .map(|(asset_id, (amount, pending_epoch))| PublicLanePendingReward {
-            lane_id,
-            account: account_id.clone(),
-            asset: asset_id.clone(),
-            last_claimed_epoch: last_claimed.get(&asset_id).copied().unwrap_or(0),
-            pending_through_epoch: pending_epoch,
-            amount,
-        })
+        .map(
+            |(asset_id, (amount, pending_epoch))| PublicLanePendingReward {
+                lane_id,
+                account: account_id.clone(),
+                asset: asset_id.clone(),
+                last_claimed_epoch: last_claimed.get(&asset_id).copied().unwrap_or(0),
+                pending_through_epoch: pending_epoch,
+                amount,
+            },
+        )
         .collect())
 }
 

@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/nexus/nexus-operator-onboarding.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 20ce2f8a1af60374c2940fead080ecfb45530297c02d5df17f0314dda13d46f7
-source_last_modified: "2025-11-14T04:43:20.448670+00:00"
+source_hash: 4e70cb2ecadd5df2d5c9df34c8d8b05769359b430ef48dcf538aba7a39c2f389
+source_last_modified: "2026-01-03T18:07:58+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/nexus/nexus-operator-onboarding.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-operator-onboarding
+title: Incorporacion de operadores de data-space de Sora Nexus
+description: Espejo de `docs/source/sora_nexus_operator_onboarding.md`, que sigue la checklist de release end-to-end para operadores de Nexus.
 ---
 
 :::note Fuente canonica

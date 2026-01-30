@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/norito/examples/call-transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f6c486027b7d6f7239bc0209b67bc8d2504f773c83da00317cd473ddb7fa5429
-source_last_modified: "2025-11-14T04:43:20.645684+00:00"
+source_hash: ca547bc673684a35eaa1ba6d2d96616bcc453a0baa5ece4c8fd0a629deb1ca84
+source_last_modified: "2026-01-22T15:55:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/norito/examples/call-transfer-asset.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /norito/examples/call-transfer-asset
+title: Invoquer le transfert hôte depuis Kotodama
+description: Démontre comment un point d'entrée Kotodama peut appeler l'instruction hôte `transfer_asset` avec validation des métadonnées en ligne.
+source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
 Démontre comment un point d'entrée Kotodama peut appeler l'instruction hôte `transfer_asset` avec validation des métadonnées en ligne.

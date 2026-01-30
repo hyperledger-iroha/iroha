@@ -4,10 +4,22 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/node-storage.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4bc7585bbc9755db1b15f46cd2b9c664410762cd962ed216d9b8f8c37a3898fd
-source_last_modified: "2025-11-14T04:43:21.914440+00:00"
+source_hash: 54d5fd7f77b39007f99a6d80ea15a373dd35a159cb8ff9021f2c1003b87f86f2
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+id: node-storage
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/node-storage.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 :::note المصدر المعتمد
 تعكس هذه الصفحة `docs/source/sorafs/sorafs_node_storage.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف مجموعة وثائق Sphinx القديمة.

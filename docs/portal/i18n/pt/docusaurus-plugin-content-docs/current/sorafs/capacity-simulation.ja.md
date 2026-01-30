@@ -4,9 +4,23 @@ direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/capacity-simulation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3df2d586e21a9c482edb620a6dae5d99cb81daf533db3f921ad44179ccb15e85
-source_last_modified: "2025-11-14T04:43:21.443537+00:00"
+source_hash: 330699b9f57146d978e2424d0f72b27c8dcc7bf217c74353c200e0f849991f97
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: capacity-simulation
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/capacity-simulation.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Runbook de simulação de capacidade do SoraFS
+sidebar_label: Runbook de simulação de capacidade
+description: Executar o toolkit de simulação do marketplace de capacidade SF-2c com fixtures reproduzíveis, exports do Prometheus e dashboards do Grafana.
 ---
 
 :::note Fonte canônica

@@ -4,10 +4,22 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sorafs/developer-releases.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8dbae5f69eaada4d3853e196aa31eb966bca923d7f587a4043dab8f664c22c5f
-source_last_modified: "2025-11-14T04:43:21.652947+00:00"
+source_hash: a6bf07c6027cd6ceb4edbd7a348875ab0c6388d8eee60ab7e1b62af09978e488
+source_last_modified: "2026-01-04T15:32:06+00:00"
 translation_last_reviewed: 2026-01-30
 ---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+id: developer-releases
+lang: fr
+direction: ltr
+source: docs/portal/docs/sorafs/developer-releases.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
 
 # Processus de release
 

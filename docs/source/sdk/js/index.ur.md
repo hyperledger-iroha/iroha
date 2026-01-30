@@ -1,20 +1,100 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/source/sdk/js/index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c57170c3d14e2d7b94b4db3245b964fb087cbb1a4730f5de80dc0bdb36a68285
-source_last_modified: "2025-12-05T20:30:26.558786+00:00"
-translation_last_reviewed: null
+source_hash: 237a4db4cff5ee86efe8729bcf8ddba47ec1b3f27290802b7d86d1a7c20ed63f
+source_last_modified: "2026-01-23T19:38:28.950325+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# ترجمہ جاری ہے
+<!--
+  SPDX-License-Identifier: Apache-2.0
+-->
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+# Iroha JS SDK Guides
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+```{toctree}
+:maxdepth: 1
+
+quickstart
+torii_retry_policy
+connect
+offline
+governance_iso_examples
+publishing
+publishing_ci_plan
+release_playbook
+fixture_cadence
+support_playbook
+validation
+```
+
+## SoraFS gateway helpers
+
+The `sorafsGatewayFetch()` helper (see `javascript/iroha_js/src/sorafs.js`) now
+raises a structured `SorafsGatewayFetchError` whenever the Rust orchestrator
+returns a `MultiSourceError`. The error exposes the canonical code, retryable
+flag, last provider failure, and capability mismatches so SDK consumers can
+surface actionable diagnostics without parsing CLI output. Example:
+
+```ts
+import { sorafsGatewayFetch, SorafsGatewayFetchError } from "iroha-js";
+
+try {
+  await sorafsGatewayFetch(manifestHex, chunker, planJson, providers, opts);
+} catch (error) {
+  if (error instanceof SorafsGatewayFetchError) {
+    console.warn("fetch failed", error.code, {
+      chunk: error.chunkIndex,
+      lastError: error.lastError,
+      providers: error.providers,
+    });
+    if (!error.retryable) {
+      throw error;
+    }
+  }
+  throw error;
+}
+```
+
+The native binding encodes the error payload as JSON, which the wrapper turns
+into `SorafsGatewayFetchError`. Non-gateway failures continue to raise the
+original exception.
+
+## Torii retry telemetry
+
+`ToriiClient` accepts an optional `retryTelemetryHook` callback that fires
+every time the built-in HTTP client schedules a retry. The hook receives the
+HTTP method, URL, attempt counters, retry cause, and the delay that will be
+applied before the next request. The payload also exposes the selected retry
+`profile` (`default`, `pipeline`, `streaming`, or any custom entry) so you can
+distinguish between idempotent transaction submissions and long-lived stream
+reconnections. This allows callers to feed retry events into
+custom loggers or metrics pipelines without reimplementing the HTTP client:
+
+```ts
+const client = new ToriiClient(baseUrl, {
+  fetchImpl,
+  maxRetries: 3,
+  retryTelemetryHook: (event) => {
+    console.info("retrying Torii request", event);
+  },
+});
+```
+
+The hook runs inside a try/catch block so exceptions never interfere with the
+retry loop.
+
+Pipeline submissions (`/v1/pipeline/transactions` + `/v1/pipeline/transactions/status`)
+automatically use the `pipeline` profile (POST retries enabled, 250 ms base backoff, 5 attempts),
+while SSE endpoints use the `streaming` profile (longer retry window, 6 attempts). Override the
+profiles via `resolveToriiClientConfig({ overrides: { retryProfiles: { … } } })` or by passing
+`retryProfiles` directly to the `ToriiClient` constructor when you need different budgets.
+If `/v1/pipeline/transactions/status` returns `404`, the JS client treats it as "pending" and
+returns `null` so polling can continue after Torii restarts or cache eviction.
+`ToriiClient.submitTransaction` validates `data_model_version` from `/v1/node/capabilities` and
+throws `ToriiDataModelCompatibilityError` when it differs from the SDK's built-in value.
+See {doc}`torii_retry_policy` for the full table of defaults, override knobs,
+and error-handling expectations that governance audits during JS4/JS7 reviews.

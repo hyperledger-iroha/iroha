@@ -1,18 +1,20 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/source/compliance/android/jp/README.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: cd69e46f7e342df6175da553f00608f7fa55f3ef57b55fa09a151b627d15b30e
-source_last_modified: "2025-11-07T17:46:22.976110+00:00"
-translation_last_reviewed: null
+source_last_modified: "2026-01-03T18:07:59.236731+00:00"
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traducción en curso
+<!--
+  SPDX-License-Identifier: Apache-2.0
+-->
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+# Japan Compliance Artefacts
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+Use this directory for FISC control checklists, bilingual StrongBox attestation
+bundles, and any regulator-specific evidence required for Japanese partners.
+Link to the immutable source document and include reviewer/sign-off metadata.

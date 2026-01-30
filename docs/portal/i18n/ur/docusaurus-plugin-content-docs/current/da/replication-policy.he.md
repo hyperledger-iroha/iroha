@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/da/replication-policy.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8b03aed5aa489e00744239710ae0f000b159a53396e4d9398d677dbae1a6bf9c
-source_last_modified: "2025-11-14T04:43:19.751535+00:00"
+source_hash: 162b53c194119fd1857ee778e9eaab9f31438c494433a53b66f4bb8165d67285
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ur
+direction: rtl
+source: docs/portal/docs/da/replication-policy.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note مستند ماخذ

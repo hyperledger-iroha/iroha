@@ -4,9 +4,17 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/devportal/try-it.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 432bbd3dfdbbf767e136a513385f39c4670b53955710ce8f38857728226fc1ab
-source_last_modified: "2025-11-04T12:08:01.411528+00:00"
+source_hash: ba569c84c112c3a50e489d13dcd17029832aac39c1a6404a07977e326bbe8ffa
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/devportal/try-it.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Try It サンドボックス

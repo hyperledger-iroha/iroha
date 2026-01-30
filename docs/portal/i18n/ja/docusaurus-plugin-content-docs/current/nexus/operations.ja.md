@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/nexus/operations.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b69abea94ffb032bc0a2f18ef7ec824795da48a5df6cce699a31d614d9882b98
-source_last_modified: "2025-11-14T04:43:20.522106+00:00"
+source_hash: e1e51ba9c531626e2a907b0425c19b364d424e0cf953ec1874c259ac542560e6
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/nexus/operations.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-operations
+title: Nexus 運用ランブック
+description: Nexus オペレーターのワークフローを現場向けに要約したもので、`docs/source/nexus_operations.md` を反映します。
 ---
 
 このページは `docs/source/nexus_operations.md` のクイックリファレンス版です。運用チェックリスト、変更管理のフック、Nexus オペレーターが守るべきテレメトリカバレッジ要件を要約しています。

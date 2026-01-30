@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/soranet/pq-primitives.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6e77b64e98f799024249fde9a032e1baaae534f8eaaed5df3bb320fe7ee12972
-source_last_modified: "2025-11-14T04:43:22.385209+00:00"
+source_hash: 01351029f584005760e9e1d83917c20f94df31d1dc0a9d4c600a7729c1e0169d
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: pq-primitives
+lang: ru
+direction: ltr
+source: docs/portal/docs/soranet/pq-primitives.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Канонический источник

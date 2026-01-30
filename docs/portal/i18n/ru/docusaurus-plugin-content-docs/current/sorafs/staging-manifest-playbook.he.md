@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/staging-manifest-playbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 575e83c0a93e7bde28001b282ecc071b6a0f69c628deaa65951f13612b4cca09
-source_last_modified: "2025-11-14T04:43:22.339786+00:00"
+source_hash: 45850b658b5ae8cfb1ab2541e226e3674c66e32ae7b377d1d50ddd2ef168a4f6
+source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: staging-manifest-playbook
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/staging-manifest-playbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Канонический источник

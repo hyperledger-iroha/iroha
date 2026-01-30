@@ -4,9 +4,22 @@ direction: rtl
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/norito/examples/index.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7318e5a0c3c0803822f9cddb5daada280e0a373782fd08dd4d5611d800e3acd0
-source_last_modified: "2025-11-14T04:43:20.746522+00:00"
+source_hash: 2e4de3ea915aaa7d2f280f472507567508b7b976f1fca8bb29bf7aac71fb460d
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/norito/examples/index.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Exemples Norito
+description: Extraits Kotodama sélectionnés avec des parcours du registre.
+slug: /norito/examples
 ---
 
 Ces exemples reflètent les quickstarts des SDK et les parcours du registre. Chaque extrait regroupe une liste de vérification du registre et renvoie vers les guides Rust, Python et JavaScript afin que vous puissiez rejouer le même scénario de bout en bout.

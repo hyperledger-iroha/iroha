@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/reports/orchestrator-ga-parity.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 6ee826f8870a68bdbeed43674661a2d89dd76b74250f82945e738514e8b403ac
-source_last_modified: "2025-11-14T04:43:22.218390+00:00"
+source_hash: e51f8871208775913150d16d12f5b513f9f759743f0120fe9cd2e18c960d3176
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/reports/orchestrator-ga-parity.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # Relatorio de paridade GA do Orchestrator SoraFS

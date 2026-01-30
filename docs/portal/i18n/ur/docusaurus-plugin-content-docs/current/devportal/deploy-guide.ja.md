@@ -4,11 +4,19 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/devportal/deploy-guide.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1ede4afb4f4bbed437a9d329b55ec570d8139af2512138fa2c4a403fda314408
-source_last_modified: "2025-11-14T04:43:19.774929+00:00"
+source_hash: 806cf13103519484d5fdbd576479ddc7c58439d6860fc1469ba624d4fd26afc7
+source_last_modified: "2026-01-22T15:57:55+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
+---
+id: deploy-guide
+lang: ur
+direction: rtl
+source: docs/portal/docs/devportal/deploy-guide.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
 ## جائزہ
 
 یہ پلی بک روڈ میپ آئٹمز **DOCS-7** (SoraFS اشاعت) اور **DOCS-8**

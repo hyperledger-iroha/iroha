@@ -4,9 +4,21 @@ direction: ltr
 source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/nexus/nexus-default-lane-quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 223ee04bc761f950f62ab381de26414295171d1f3e9df33bdfc7bc0901848a24
-source_last_modified: "2025-11-14T04:43:20.385903+00:00"
+source_hash: d3a5cb3367e61c79fd9bae24fe8f50136c8dc71277d63ddd7359890cf18328f6
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/nexus/nexus-default-lane-quickstart.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-default-lane-quickstart
+title: Guide rapide de la lane par defaut (NX-5)
+sidebar_label: Guide rapide de la lane par defaut
+description: Configurer et verifier le fallback de la lane par defaut de Nexus afin que Torii et les SDK puissent omettre lane_id sur les lanes publiques.
 ---
 
 :::note Source canonique

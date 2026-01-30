@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/soranet/transport.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 50b9a71eea6b2ecd41c21c11f041ff58f3608f45d306593fa3e9c208f2bc685b
-source_last_modified: "2025-11-14T04:43:22.521000+00:00"
+source_hash: 12016c82653f537c6cf0223f32a5cbd0be8c4099760eb8e8b2b1ec348b2c37d9
+source_last_modified: "2026-01-03T18:08:00+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
+
+---
+id: transport
+lang: ur
+direction: rtl
+source: docs/portal/docs/soranet/transport.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Canonical Source

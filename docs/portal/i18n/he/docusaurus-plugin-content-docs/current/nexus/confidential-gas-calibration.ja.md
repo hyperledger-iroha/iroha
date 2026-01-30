@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/nexus/confidential-gas-calibration.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1bb4ff674c64756bd438cc5aca9f800c4e1c223954992e0e8c3e305aac746d55
-source_last_modified: "2025-11-14T04:43:20.322583+00:00"
+source_hash: b80eea870e08ec56c81c68d6a36b72d9827b93c86f8850aeb8616d75c58fe3b8
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/nexus/confidential-gas-calibration.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: יומן כיול גז חסוי
+description: מדידות ברמת שחרור התומכות בלוח הזמנים של הגז החסוי.
+slug: /nexus/confidential-gas-calibration
 ---
 
 # קווי בסיס לכיול גז חסוי

@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/signing-ceremony.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 08ad11a2080eb1f5a7920bceb295363331ef16668b7add390676a14b7974bd69
-source_last_modified: "2025-11-14T04:43:22.322404+00:00"
+source_hash: bb9379a6527ca42c4cf60d166df6858a7f844425712656e3c4155ac36739c65f
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for pt translation. Replace this content with the full translation. -->
+
+---
+id: signing-ceremony
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/signing-ceremony.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 > Roadmap: **SF-1b - aprovacoes de fixtures do Parlamento Sora.**

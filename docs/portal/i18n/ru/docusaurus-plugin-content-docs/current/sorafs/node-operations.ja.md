@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/node-operations.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 97293510578f35ed968f89ba34524ac1e3b8ded1e20b4b416bbe9577947a2274
-source_last_modified: "2025-11-14T04:43:21.864850+00:00"
+source_hash: 7bbb45cbfcd85a03dddccb844b4433fcecc54338bc647ae1e7fd09d18a3e369d
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: node-operations
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/node-operations.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Канонический источник

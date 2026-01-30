@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/nexus/nexus-bootstrap-plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b913e65830d348d0b5480d7958427f9b1d23de2fc33de0e4786c17d330e054b5
-source_last_modified: "2025-11-14T04:43:20.366126+00:00"
+source_hash: 312f239689ed84aff1c914819df5a1c8e5473b64d15482e62462fc9b901510bf
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/nexus/nexus-bootstrap-plan.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+id: nexus-bootstrap-plan
+title: اقلاع Sora Nexus والمراقبة
+description: خطة تشغيلية لتشغيل عنقود المدققين الاساسي لـ Nexus قبل اضافة خدمات SoraFS وSoraNet.
 ---
 
 :::note المصدر القانوني

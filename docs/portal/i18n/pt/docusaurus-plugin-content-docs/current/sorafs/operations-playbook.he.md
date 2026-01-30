@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/operations-playbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: dcca50bf87925485aade3510d748c190ae1b824483eb711b302e4673bdec9144
-source_last_modified: "2025-11-14T04:43:21.951433+00:00"
+source_hash: 1445f42475acb84df0207c6f63b41a39685eccb1bfb5e2c1fcaf666ff5631cc5
+source_last_modified: "2026-01-03T18:08:01+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
+---
+id: operations-playbook
+lang: pt
+direction: ltr
+source: docs/portal/docs/sorafs/operations-playbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Fonte canonica

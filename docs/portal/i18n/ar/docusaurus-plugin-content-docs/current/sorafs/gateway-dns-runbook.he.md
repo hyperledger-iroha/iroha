@@ -4,9 +4,19 @@ direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/sorafs/gateway-dns-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d3dda37ec8b2effd240452f780368ebdfaa813d84daa5b46bfbfea587f6715fb
-source_last_modified: "2025-11-14T04:43:21.735486+00:00"
+source_hash: ca3a7739080a12fa3f97639c3f25735716357218c924ae1d7ee6e23625f87c80
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
+---
+lang: ar
+direction: rtl
+source: docs/portal/docs/sorafs/gateway-dns-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # دليل تشغيل انطلاقة Gateway وDNS في SoraFS

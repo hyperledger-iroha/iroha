@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/dispute-revocation-runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e151e377b930b77820e6698837c356caadce37450a03069819ab12820a8c052e
-source_last_modified: "2025-11-14T04:43:21.710409+00:00"
+source_hash: 184ee564b00ce990dcaf9b6e29c77b92b040c20eb128e905d10a63327c50a6ea
+source_last_modified: "2026-01-22T15:55:18+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
+---
+id: dispute-revocation-runbook
+lang: ru
+direction: ltr
+source: docs/portal/docs/sorafs/dispute-revocation-runbook.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Канонический источник

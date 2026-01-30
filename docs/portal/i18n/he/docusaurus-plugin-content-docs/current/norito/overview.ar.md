@@ -4,9 +4,17 @@ direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/norito/overview.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2e1bd3b5102498088da1dcf75eadfa62b20cb29ce73343e74a2659c93fe5ab87
-source_last_modified: "2025-11-04T12:03:18.017835+00:00"
+source_hash: b195ce9171c2fb7d7c70ff38943744754095b26e0fc36355906eaa329e1adbc6
+source_last_modified: "2026-01-03T18:07:59+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/norito/overview.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # סקירה כללית של Norito

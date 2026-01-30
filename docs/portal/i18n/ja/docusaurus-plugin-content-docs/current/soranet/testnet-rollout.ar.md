@@ -4,9 +4,20 @@ direction: rtl
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/soranet/testnet-rollout.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f49d254477cf4192287cb04ae4f19f343741e4d770bac91b52305e01d4d53347
-source_last_modified: "2025-11-07T12:19:02.797408+00:00"
+source_hash: 55d3ae00e6d7fb2e93be7bf75f68f63825f343224c8dea1544b75a3265412cd4
+source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
+
+---
+id: testnet-rollout
+lang: ja
+direction: ltr
+source: docs/portal/docs/soranet/testnet-rollout.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 :::note Canonical Source

@@ -4,9 +4,20 @@ direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/nexus/confidential-assets.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a12ec63cff7a69d0934b300297c17927f82553c19bf0d8d185c1a4566f207f3c
-source_last_modified: "2025-11-14T04:43:20.305676+00:00"
+source_hash: 615362bc50379e6e4bb68a3926d65677df3a084880bb6d476a6fb35ea5b64876
+source_last_modified: "2026-01-22T15:38:30+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: es
+direction: ltr
+source: docs/portal/docs/nexus/confidential-assets.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Activos confidenciales y transferencias ZK
+description: Plano de Phase C para circulacion blindada, registros y controles de operador.
+slug: /nexus/confidential-assets
 ---
 
 <!--

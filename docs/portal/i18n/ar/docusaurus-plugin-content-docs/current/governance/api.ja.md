@@ -4,9 +4,18 @@ direction: ltr
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/governance/api.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bdb433a663697c67f6fefe192ceee5a7d65036dc8c2d18d31364bff592361aa6
-source_last_modified: "2025-11-14T04:43:20.238853+00:00"
+source_hash: f022a7eda18a6c37626d8c2e5a51fa2bd8e3858704a509624837eb97867ced27
+source_last_modified: "2026-01-22T16:09:51+00:00"
 translation_last_reviewed: 2026-01-30
+---
+
+---
+id: api
+lang: ar
+direction: rtl
+source: docs/portal/docs/governance/api.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 الحالة: مسودة/تصور لمرافقة مهام تنفيذ الحوكمة. قد تتغير الصيغ اثناء التنفيذ. الحتمية وسياسة RBAC قيود معيارية؛ يمكن لتوريي توقيع/ارسال المعاملات عندما يتم توفير `authority` و`private_key`، والا يبني العملاء المعاملة ويقدمونها الى `/transaction`.
