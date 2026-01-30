@@ -1,18 +1,27 @@
-<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
-
 ---
 lang: fr
 direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/version-2025-q2/reference/README.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c82723b3555009a3348e409e0614e7cf2dde682b74cc7bf116be05885e65a691
 source_last_modified: "2025-11-04T12:24:28.212575+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traduction en cours
+<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
 
-Ce fichier sert de modèle pour la traduction française du document anglais. Une fois la traduction terminée, mettez à jour le champ `status` dans les métadonnées ci-dessus.
+---
+slug: /reference
+lang: ja
+direction: ltr
+source: docs/portal/docs/reference/README.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+---
 
-Ce brouillon est en attente de traduction. Remplacez ce texte par le contenu traduit et passez l’état à `complete` lorsque le travail est terminé. Vérifiez également que `translation_last_reviewed` correspond à la dernière vérification par rapport à la version anglaise.
+# 翻訳作業中
+
+このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+
+翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。

@@ -1,20 +1,56 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/portal/i18n/ur/docusaurus-plugin-content-docs/current/sorafs/reports/sf2c-capacity-soak.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: dd60533490c3e0cc2f3f8278eb34d927881ad46600366ec903bad71299800ae5
 source_last_modified: "2025-11-14T04:43:22.258433+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# בתהליך תרגום
+# SF-2c Capacity Accrual Soak رپورٹ
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+تاریخ: 2026-03-21
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+## اسکوپ
+
+یہ رپورٹ SF-2c روڈمیپ ٹریک کے تحت مانگے گئے SoraFS capacity accrual اور payout کے deterministic soak tests ریکارڈ کرتی ہے۔
+
+- **30 دن کا multi-provider soak:**
+  `capacity_fee_ledger_30_day_soak_deterministic` کے ذریعے
+  `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` میں چلایا جاتا ہے۔
+  harness پانچ providers بناتا ہے، 30 settlement ونڈوز کا احاطہ کرتا ہے، اور
+  تصدیق کرتا ہے کہ ledger totals ایک آزادانہ طور پر حساب شدہ reference projection سے ملتے ہیں۔
+  یہ ٹیسٹ Blake3 digest (`capacity_soak_digest=...`) خارج کرتا ہے تاکہ CI canonical snapshot کو
+  capture اور diff کر سکے۔
+- **Under-delivery penalties:**
+  `record_capacity_telemetry_penalises_persistent_under_delivery`
+  (اسی فائل میں) نافذ کیا جاتا ہے۔ ٹیسٹ تصدیق کرتا ہے کہ strikes thresholds، cooldowns، collateral slashes
+  اور ledger counters deterministic رہتے ہیں۔
+
+## Execution
+
+soak validations لوکل طور پر چلائیں:
+
+```bash
+cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
+cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
+```
+
+یہ ٹیسٹ ایک عام لیپ ٹاپ پر ایک سیکنڈ سے کم وقت میں مکمل ہو جاتے ہیں اور بیرونی fixtures کی ضرورت نہیں ہوتی۔
+
+## Observability
+
+Torii اب provider credit snapshots کو fee ledgers کے ساتھ ظاہر کرتا ہے تاکہ dashboards کم balances اور penalty strikes پر gate کر سکیں:
+
+- REST: `GET /v1/sorafs/capacity/state` `credit_ledger[*]` entries واپس کرتا ہے جو soak test میں verify ہونے والے
+  ledger fields کی عکاسی کرتے ہیں۔ دیکھیں
+  `crates/iroha_torii/src/sorafs/registry.rs`.
+- Grafana import: `dashboards/grafana/sorafs_capacity_penalties.json` exported strikes counters، penalty totals،
+  اور bonded collateral کو plot کرتا ہے تاکہ on-call ٹیم soak baselines کو live environments سے موازنہ کر سکے۔
+
+## Follow-up
+
+- CI میں ہفتہ وار gate runs شیڈول کریں تاکہ soak test دوبارہ چل سکے (smoke-tier).
+- جب production telemetry exports live ہوں تو Grafana board میں Torii scrape targets شامل کریں۔

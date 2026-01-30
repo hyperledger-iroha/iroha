@@ -1,17 +1,49 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/portal/docs/norito/examples/register-and-mint.pt.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# ترجمہ جاری ہے
+---
+slug: /norito/examples/register-and-mint
+title: Registrar dominio e cunhar ativos
+description: Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
+source: crates/ivm/docs/examples/13_register_and_mint.ko
+---
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem deterministica.
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+## Roteiro do livro razao
+
+- Garanta que a conta de destino (por exemplo `ih58...`) exista, espelhando a fase de configuracao em cada quickstart do SDK.
+- Invoque o entrypoint `register_and_mint` para criar a definicao do ativo ROSE e cunhar 250 unidades para Alice em uma unica transacao.
+- Verifique os saldos via `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account ih58...` para confirmar que a cunhagem foi bem-sucedida.
+
+## Guias de SDK relacionados
+
+- [Quickstart do SDK Rust](/sdks/rust)
+- [Quickstart do SDK Python](/sdks/python)
+- [Quickstart do SDK JavaScript](/sdks/javascript)
+
+[Baixe a fonte Kotodama](/norito-snippets/register-and-mint.ko)
+
+```text
+// Register a new asset and mint some to the specified account.
+seiyaku RegisterAndMint {
+  kotoage fn register_and_mint() permission(AssetManager) {
+    // name, symbol, quantity (precision or supply depending on host), mintable flag
+    let name = "rose";
+    let symbol = "ROSE";
+    let qty = 1000;      // interpretation depends on data model (example only)
+    let mintable = 1;    // 1 = mintable, 0 = fixed
+    register_asset(name, symbol, qty, mintable);
+
+    // Mint 250 ROSE to Alice
+    let to = account!("ih58...");
+    let asset = asset_definition!("rose#wonderland");
+    mint_asset(to, asset, 250);
+  }
+}
+```

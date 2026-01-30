@@ -131,8 +131,10 @@ fn derive_npos_timing(config: &ChaosConfig) -> NposTiming {
     let propose_ms = clamp_nonzero_ms(duration_ms(timeouts.propose));
     let prevote_ms = clamp_nonzero_ms(duration_ms(timeouts.prevote));
     let precommit_ms = clamp_nonzero_ms(duration_ms(timeouts.precommit));
-    let commit_timeout_ms = clamp_nonzero_ms(duration_ms(timeouts.commit));
-    let da_ms = clamp_nonzero_ms(duration_ms(timeouts.da));
+    // Keep commit/DA windows at least as large as the target commit time for DA stability.
+    let commit_timeout_ms =
+        clamp_nonzero_ms(duration_ms(timeouts.commit).max(commit_time_ms));
+    let da_ms = clamp_nonzero_ms(duration_ms(timeouts.da).max(commit_time_ms));
     let aggregator_ms = clamp_nonzero_ms(duration_ms(timeouts.aggregator));
     NposTiming {
         block_ms,
@@ -1215,8 +1217,10 @@ mod tests {
         let timing = derive_npos_timing(&config);
         let expected =
             SumeragiNposTimeouts::from_block_time(Duration::from_millis(timing.block_ms));
-        assert_eq!(timing.commit_timeout_ms, duration_ms(expected.commit));
-        assert_ne!(timing.commit_timeout_ms, timing.commit_time_ms);
+        let expected_commit = duration_ms(expected.commit).max(timing.commit_time_ms);
+        let expected_da = duration_ms(expected.da).max(timing.commit_time_ms);
+        assert_eq!(timing.commit_timeout_ms, expected_commit);
+        assert_eq!(timing.da_ms, expected_da);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

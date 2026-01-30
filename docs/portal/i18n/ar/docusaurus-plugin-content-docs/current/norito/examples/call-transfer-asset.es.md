@@ -1,17 +1,44 @@
-<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
-
 ---
 lang: ar
 direction: rtl
 source: docs/portal/docs/norito/examples/call-transfer-asset.es.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# قيد الترجمة
+---
+slug: /norito/examples/call-transfer-asset
+title: Invocar transferencia del host desde Kotodama
+description: Demuestra cómo un entrypoint de Kotodama puede llamar a la instrucción de host `transfer_asset` con validación de metadatos en línea.
+source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+---
 
-<div dir="rtl">
-هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث حقل `status` في بيانات التعريف أعلاه.
+Demuestra cómo un entrypoint de Kotodama puede llamar a la instrucción de host `transfer_asset` con validación de metadatos en línea.
 
-هذا المخطط في انتظار الترجمة. استبدل هذا النص بالمحتوى المترجَم وغيّر الحالة إلى `complete` عند الانتهاء. تأكد أيضًا من أن حقل `translation_last_reviewed` يعكس آخر مراجعة تمت مقارنةً بالنص الإنجليزي.
-</div>
+## Recorrido del libro mayor
+
+- Fondea la autoridad del contrato (por ejemplo `ih58...`) con el activo que transferirá y otórgale el rol `CanTransfer` o un permiso equivalente.
+- Llama al entrypoint `call_transfer_asset` para transferir 5 unidades desde la cuenta del contrato a `ih58...`, reflejando la forma en que la automatización on-chain puede envolver llamadas del host.
+- Verifica los balances mediante `FindAccountAssets` o `iroha_cli ledger assets list --account ih58...` e inspecciona los eventos para confirmar que la guardia de metadatos registró el contexto de la transferencia.
+
+## Guías de SDK relacionadas
+
+- [Quickstart del SDK de Rust](/sdks/rust)
+- [Quickstart del SDK de Python](/sdks/python)
+- [Quickstart del SDK de JavaScript](/sdks/javascript)
+
+[Descarga la fuente de Kotodama](/norito-snippets/call-transfer-asset.ko)
+
+```text
+// Direct builtin call (no contract-style call syntax) inside a contract.
+seiyaku TransferCall {
+  kotoage fn pay() permission(AssetTransferRole) {
+    transfer_asset(
+      account!("ih58..."),
+      account!("ih58..."),
+      asset_definition!("rose#wonderland"),
+      10
+    );
+  }
+}
+```

@@ -3,14 +3,11 @@ package org.hyperledger.iroha.android.governance;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
-import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.instructions.CastPlainBallotInstruction;
 import org.hyperledger.iroha.android.model.instructions.CastZkBallotInstruction;
 import org.hyperledger.iroha.android.model.instructions.EnactReferendumInstruction;
 import org.hyperledger.iroha.android.model.instructions.FinalizeReferendumInstruction;
 import org.hyperledger.iroha.android.model.instructions.GovernanceInstructionUtils;
-import org.hyperledger.iroha.android.model.instructions.InstructionBuilders;
-import org.hyperledger.iroha.android.model.instructions.InstructionKind;
 import org.hyperledger.iroha.android.model.instructions.PersistCouncilForEpochInstruction;
 import org.hyperledger.iroha.android.model.instructions.ProposeDeployContractInstruction;
 
@@ -46,19 +43,13 @@ public final class GovernanceInstructionBuilderTests {
             .setWindow(new GovernanceInstructionUtils.AtWindow(10, 20))
             .setVotingMode(GovernanceInstructionUtils.VotingMode.PLAIN)
             .build();
-    final InstructionBox box = InstructionBuilders.proposeDeployContract(instruction);
-    assert "apps".equals(box.arguments().get("namespace")) : "namespace mismatch";
-    assert "Plain".equals(box.arguments().get("mode")) : "mode mismatch";
-
-    final InstructionBox decoded =
-        InstructionBox.fromNorito(InstructionKind.CUSTOM, box.arguments());
-    assert decoded.payload() instanceof ProposeDeployContractInstruction : "payload type mismatch";
-    final ProposeDeployContractInstruction payload =
-        (ProposeDeployContractInstruction) decoded.payload();
-    assert "demo.contract".equals(payload.contractId()) : "contract id mismatch";
-    assert payload.window() != null : "window missing";
-    assert payload.window().lower() == 10 : "window lower mismatch";
-    assert payload.votingMode() == GovernanceInstructionUtils.VotingMode.PLAIN : "mode mismatch";
+    final Map<String, String> args = instruction.toArguments();
+    assert "apps".equals(args.get("namespace")) : "namespace mismatch";
+    assert "Plain".equals(args.get("mode")) : "mode mismatch";
+    assert "demo.contract".equals(instruction.contractId()) : "contract id mismatch";
+    assert instruction.window() != null : "window missing";
+    assert instruction.window().lower() == 10 : "window lower mismatch";
+    assert instruction.votingMode() == GovernanceInstructionUtils.VotingMode.PLAIN : "mode mismatch";
   }
 
   private static void castZkBallotRoundTrip() {
@@ -68,10 +59,8 @@ public final class GovernanceInstructionBuilderTests {
             .setProofBase64("AQID")
             .setPublicInputsJson("{\"foo\":1}")
             .build();
-    final InstructionBox decoded = decode(instruction);
-    final CastZkBallotInstruction payload = (CastZkBallotInstruction) decoded.payload();
-    assert "election-1".equals(payload.electionId()) : "election id mismatch";
-    assert "AQID".equals(payload.proofBase64()) : "proof mismatch";
+    assert "election-1".equals(instruction.electionId()) : "election id mismatch";
+    assert "AQID".equals(instruction.proofBase64()) : "proof mismatch";
   }
 
   private static void castZkBallotRejectsDeprecatedPublicInputs() {
@@ -192,11 +181,9 @@ public final class GovernanceInstructionBuilderTests {
             .setDurationBlocks(512)
             .setDirection(1)
             .build();
-    final InstructionBox decoded = decode(instruction);
-    final CastPlainBallotInstruction payload = (CastPlainBallotInstruction) decoded.payload();
-    assert "ref-42".equals(payload.referendumId()) : "referendum id mismatch";
-    assert "125000".equals(payload.amount()) : "amount mismatch";
-    assert payload.direction() == 1 : "direction mismatch";
+    assert "ref-42".equals(instruction.referendumId()) : "referendum id mismatch";
+    assert "125000".equals(instruction.amount()) : "amount mismatch";
+    assert instruction.direction() == 1 : "direction mismatch";
   }
 
   private static void enactReferendumRoundTrip() {
@@ -206,10 +193,8 @@ public final class GovernanceInstructionBuilderTests {
             .setPreimageHashHex("d1".repeat(32))
             .setWindow(new GovernanceInstructionUtils.AtWindow(5, 15))
             .build();
-    final InstructionBox decoded = decode(instruction);
-    final EnactReferendumInstruction payload = (EnactReferendumInstruction) decoded.payload();
-    assert "c0".repeat(32).equals(payload.referendumIdHex()) : "referendum id hex mismatch";
-    assert payload.window().upper() == 15 : "enact window mismatch";
+    assert "c0".repeat(32).equals(instruction.referendumIdHex()) : "referendum id hex mismatch";
+    assert instruction.window().upper() == 15 : "enact window mismatch";
   }
 
   private static void finalizeReferendumRoundTrip() {
@@ -218,11 +203,8 @@ public final class GovernanceInstructionBuilderTests {
             .setReferendumId("ref-final")
             .setProposalIdHex("e1".repeat(32))
             .build();
-    final InstructionBox decoded = decode(instruction);
-    final FinalizeReferendumInstruction payload =
-        (FinalizeReferendumInstruction) decoded.payload();
-    assert "ref-final".equals(payload.referendumId()) : "referendum id mismatch";
-    assert "e1".repeat(32).equals(payload.proposalIdHex()) : "proposal id mismatch";
+    assert "ref-final".equals(instruction.referendumId()) : "referendum id mismatch";
+    assert "e1".repeat(32).equals(instruction.proposalIdHex()) : "proposal id mismatch";
   }
 
   private static void persistCouncilRoundTrip() {
@@ -236,18 +218,11 @@ public final class GovernanceInstructionBuilderTests {
             .setVerified(2)
             .setDerivedBy(GovernanceInstructionUtils.CouncilDerivationKind.VRF)
             .build();
-    final InstructionBox decoded = decode(instruction);
-    final PersistCouncilForEpochInstruction payload =
-        (PersistCouncilForEpochInstruction) decoded.payload();
-    assert payload.members().equals(List.of("alice@sora", "bob@sora")) : "members mismatch";
-    assert payload.alternates().equals(List.of("carol@sora")) : "alternates mismatch";
-    assert payload.candidatesCount() == 5 : "candidates mismatch";
-    assert payload.verified() == 2 : "verified mismatch";
-    assert payload.derivedBy() == GovernanceInstructionUtils.CouncilDerivationKind.VRF
+    assert instruction.members().equals(List.of("alice@sora", "bob@sora")) : "members mismatch";
+    assert instruction.alternates().equals(List.of("carol@sora")) : "alternates mismatch";
+    assert instruction.candidatesCount() == 5 : "candidates mismatch";
+    assert instruction.verified() == 2 : "verified mismatch";
+    assert instruction.derivedBy() == GovernanceInstructionUtils.CouncilDerivationKind.VRF
         : "derived_by mismatch";
-  }
-
-  private static InstructionBox decode(final InstructionBox.InstructionPayload payload) {
-    return InstructionBox.fromNorito(InstructionKind.CUSTOM, payload.toArguments());
   }
 }

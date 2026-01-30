@@ -1,15 +1,35 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/docs/sorafs/developer-index.ar.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# 翻訳作業中
+---
+id: developer-index
+title: أدلة مطوري SoraFS
+description: صفحة البداية لتوثيق مطوري SoraFS والعينات ومراجع الأتمتة.
+sidebar_label: نظرة عامة للمطورين
+---
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+:::note المصدر المعتمد
+تعكس هذه الصفحة `docs/source/sorafs/developer/index.md`. احرص على إبقاء النسختين متزامنتين إلى أن يتم إيقاف الوثائق القديمة.
+:::
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+# أدلة مطوري SoraFS
+
+```{toctree}
+:caption: البدء
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

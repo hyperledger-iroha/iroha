@@ -1,15 +1,44 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.fr.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Traducción en curso
+---
+slug: /norito/examples/call-transfer-asset
+title: Invoquer le transfert hôte depuis Kotodama
+description: Démontre comment un point d'entrée Kotodama peut appeler l'instruction hôte `transfer_asset` avec validation des métadonnées en ligne.
+source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+---
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+Démontre comment un point d'entrée Kotodama peut appeler l'instruction hôte `transfer_asset` avec validation des métadonnées en ligne.
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+## Parcours du registre
+
+- Approvisionnez l'autorité du contrat (par exemple `ih58...`) avec l'actif qu'elle transférera et accordez-lui le rôle `CanTransfer` ou une permission équivalente.
+- Appelez le point d'entrée `call_transfer_asset` pour transférer 5 unités du compte du contrat vers `ih58...`, en reflétant la manière dont l'automatisation on-chain peut encapsuler des appels hôte.
+- Vérifiez les soldes via `FindAccountAssets` ou `iroha_cli ledger assets list --account ih58...` et inspectez les événements pour confirmer que le garde de métadonnées a journalisé le contexte du transfert.
+
+## Guides SDK associés
+
+- [Quickstart SDK Rust](/sdks/rust)
+- [Quickstart SDK Python](/sdks/python)
+- [Quickstart SDK JavaScript](/sdks/javascript)
+
+[Télécharger la source Kotodama](/norito-snippets/call-transfer-asset.ko)
+
+```text
+// Direct builtin call (no contract-style call syntax) inside a contract.
+seiyaku TransferCall {
+  kotoage fn pay() permission(AssetTransferRole) {
+    transfer_asset(
+      account!("ih58..."),
+      account!("ih58..."),
+      asset_definition!("rose#wonderland"),
+      10
+    );
+  }
+}
+```

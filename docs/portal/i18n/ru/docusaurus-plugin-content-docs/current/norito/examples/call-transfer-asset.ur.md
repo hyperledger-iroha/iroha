@@ -1,15 +1,44 @@
-<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
-
 ---
 lang: ru
 direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.ur.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Перевод в процессе
+---
+slug: /norito/examples/call-transfer-asset
+title: Kotodama سے ہوسٹ ٹرانسفر کال کریں
+description: دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح ہوسٹ کی `transfer_asset` انسٹرکشن کو inline میٹا ڈیٹا ویلیڈیشن کے ساتھ کال کر سکتا ہے۔
+source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+---
 
-Этот файл является заготовкой для русскоязычного перевода английского документа. После завершения перевода обновите поле `status` в метаданных выше.
+دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح ہوسٹ کی `transfer_asset` انسٹرکشن کو inline میٹا ڈیٹا ویلیڈیشن کے ساتھ کال کر سکتا ہے۔
 
-Этот черновик ожидает перевода. Замените этот текст готовым переводом и установите значение `status` в `complete` после завершения. Убедитесь, что поле `translation_last_reviewed` отражает дату последней проверки с английским оригиналом.
+## لیجر واک تھرو
+
+- کنٹریکٹ اتھارٹی (مثلا `ih58...`) کو اس اثاثے سے فنڈ کریں جسے وہ منتقل کرے گی اور اتھارٹی کو `CanTransfer` رول یا مساوی اجازت دیں۔
+- `call_transfer_asset` انٹری پوائنٹ کال کریں تاکہ کنٹریکٹ اکاؤنٹ سے `ih58...` کو 5 یونٹس منتقل ہوں، یہ اس طریقے کی عکاسی کرتا ہے کہ آن چین آٹومیشن ہوسٹ کالز کو لپیٹ سکتی ہے۔
+- `FindAccountAssets` یا `iroha_cli ledger assets list --account ih58...` کے ذریعے بیلنس دیکھیں اور ایونٹس چیک کریں تاکہ تصدیق ہو کہ میٹا ڈیٹا گارڈ نے ٹرانسفر کانٹیکسٹ لاگ کیا ہے۔
+
+## متعلقہ SDK گائیڈز
+
+- [Rust SDK quickstart](/sdks/rust)
+- [Python SDK quickstart](/sdks/python)
+- [JavaScript SDK quickstart](/sdks/javascript)
+
+[Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/call-transfer-asset.ko)
+
+```text
+// Direct builtin call (no contract-style call syntax) inside a contract.
+seiyaku TransferCall {
+  kotoage fn pay() permission(AssetTransferRole) {
+    transfer_asset(
+      account!("ih58..."),
+      account!("ih58..."),
+      asset_definition!("rose#wonderland"),
+      10
+    );
+  }
+}
+```

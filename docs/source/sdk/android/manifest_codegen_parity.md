@@ -109,8 +109,10 @@ builders can stay aligned with the Rust data model.
      `ApprovePinManifest`, `RetirePinManifest`, and `BindManifestAlias`
      (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ApprovePinManifestInstruction.java`,
      `java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RetirePinManifestInstruction.java`,
-     `java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/BindManifestAliasInstruction.java`) plus convenience helpers in
-     `InstructionBuilders`. Round-trip tests live under
+     `java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/BindManifestAliasInstruction.java`).
+     Note: transaction encoding now requires wire-framed instruction payloads;
+     the argument-map helpers are retained only for parity checks. Round-trip
+     tests live under
      `java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsManifestInstructionBuilderTests.java`
      so CI will fail if the Norito arguments diverge from the Rust schema hashes.
 

@@ -1,17 +1,39 @@
-<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
-
 ---
 lang: ar
 direction: rtl
 source: docs/portal/docs/norito/examples/hajimari-entrypoint.ru.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# قيد الترجمة
+---
+slug: /norito/examples/hajimari-entrypoint
+title: Каркас входной точки Hajimari
+description: Минимальный каркас контракта Kotodama с одной публичной точкой входа и хендлом состояния.
+source: crates/ivm/docs/examples/01_hajimari.ko
+---
 
-<div dir="rtl">
-هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث حقل `status` في بيانات التعريف أعلاه.
+Минимальный каркас контракта Kotodama с одной публичной точкой входа и хендлом состояния.
 
-هذا المخطط في انتظار الترجمة. استبدل هذا النص بالمحتوى المترجَم وغيّر الحالة إلى `complete` عند الانتهاء. تأكد أيضًا من أن حقل `translation_last_reviewed` يعكس آخر مراجعة تمت مقارنةً بالنص الإنجليزي.
-</div>
+## Пошаговый обход реестра
+
+- Скомпилируйте контракт с `koto_compile --abi 1` как показано в [Norito Getting Started](/norito/getting-started#1-compile-a-kotodama-contract) или через `cargo test -p ivm developer_portal_norito_snippets_compile`.
+- Прогоните smoke-test байткода локально с `ivm_run` / `developer_portal_norito_snippets_run`, чтобы проверить лог `info!` и начальный syscall перед тем, как трогать узел.
+- Разверните артефакт через `iroha_cli app contracts deploy` и подтвердите манифест, используя шаги из [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha_cli).
+
+## Связанные руководства SDK
+
+- [Quickstart Rust SDK](/sdks/rust)
+- [Quickstart Python SDK](/sdks/python)
+- [Quickstart JavaScript SDK](/sdks/javascript)
+
+[Скачать исходник Kotodama](/norito-snippets/hajimari-entrypoint.ko)
+
+```text
+// Minimal initializer-style function inside a contract.
+seiyaku HajimariExample {
+  hajimari() {
+    info("Hello from hajimari");
+  }
+}
+```

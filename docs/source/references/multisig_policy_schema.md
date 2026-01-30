@@ -65,15 +65,19 @@ early feedback before Torii admission rejects the payload.
 
 ## Controller registration
 
-`MultisigRegister` now requires callers to supply the controller account id
-explicitly. The controller must live in the signatory domain and use a
-randomly generated public key; deterministic controller ids are not supported.
+`MultisigRegister` still requires callers to supply the `account` field, but the
+on-chain controller id is derived from the multisig spec. Registration rekeys
+the supplied account to the canonical `AccountController::Multisig` identifier
+computed from the spec once validation succeeds.
 
-- Tooling should mint a fresh keypair, use the public key as the controller id,
-  and discard the private key. Controllers never sign transactions directly.
-- Newly registered controllers persist `multisig/spec` metadata.
+- Tooling may still mint a fresh keypair for the `account` field and discard the
+  private key, because multisig controllers never sign transactions directly.
+- Newly registered controllers persist `multisig/spec` metadata and are rekeyed
+  to the canonical multisig account id.
 - JSON decoding errors when the `account` field is omitted, so clients must send
-  the controller id explicitly instead of relying on deterministic derivation.
+  it even though the final account id is deterministic.
+- Signatories must be single-key accounts; nested multisig controllers are
+  rejected.
 
 ## Deterministic digest
 

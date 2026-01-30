@@ -1,6 +1,7 @@
 # Changelog
 
 ## v0.1.0 (unreleased)
+- Added ByteBuffer decode overloads plus CRC64 helpers for buffer-backed payloads.
 - Revalidated parity after the Rust Norito enum named-variant self-delimiting decode fix; Java bindings required no implementation changes beyond rerunning the parity suite.
 - Revalidated parity after the Rust Norito GPU zstd loader wrapped its CUDA
   symbol lookups in explicit `unsafe {}` blocks for Rust 2024 linting; Java
@@ -78,7 +79,7 @@
   Norito BTreeSet serialization fix
 - Added compression profiles (`FAST`, `BALANCED`, `COMPACT`) via `CompressionConfig.zstdProfile`,
   matching the Python heuristics and surfacing runtime validation for the `zstd-jni` backend.
-- Initial Java Norito codec (JDK 25-ready)
+- Initial Java Norito codec (JDK 21-ready)
 - Header encode/decode, CRC64-XZ, type adapters, packed sequences/structs
 - CLI inspector (`NoritoDump`) and assertion-based test harness
 - Adds optional Zstandard compression (when `com.github.luben:zstd-jni` is on the classpath)

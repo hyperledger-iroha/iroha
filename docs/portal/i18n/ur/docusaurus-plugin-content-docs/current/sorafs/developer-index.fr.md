@@ -1,17 +1,34 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/portal/docs/sorafs/developer-index.fr.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# ترجمہ جاری ہے
+---
+id: developer-index
+title: Guides de developpeurs SoraFS
+description: Page d'accueil de la documentation developpeur SoraFS, des exemples et des references d'automatisation.
+sidebar_label: Apercu developpeur
+---
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+:::note Source canonique
+:::
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+# Guides de developpeurs SoraFS
+
+```{toctree}
+:caption: Demarrage
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

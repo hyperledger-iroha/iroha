@@ -1,18 +1,34 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/intro.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c6357008a996599e339144303ad2be57e5ab3ad7802ec7ec3f05948f6daacfc6
 source_last_modified: "2025-11-14T04:43:20.257536+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+# Добро пожаловать на портал разработчиков SORA Nexus
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+Портал разработчиков SORA Nexus объединяет интерактивную документацию, учебные материалы SDK и справочники API для операторов Nexus и контрибьюторов Hyperledger Iroha. Он дополняет основной сайт документации, выводя на первый план практические гайды и спецификации, генерируемые напрямую из этого репозитория. Лендинг теперь включает тематические точки входа Norito/SoraFS, подписанные снимки OpenAPI и отдельный справочник Norito Streaming, чтобы контрибьюторы могли найти контракт контрольной плоскости стриминга, не пролистывая корневую спецификацию.
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+## Что можно сделать здесь
+
+- **Изучить Norito** - начните с обзора и quickstart, чтобы понять модель сериализации и инструменты bytecode.
+- **Запустить SDK** - следуйте quickstart для JavaScript и Rust уже сегодня; руководства для Python, Swift и Android появятся по мере миграции рецептов.
+- **Просмотреть справочники API** - страница Torii OpenAPI отображает актуальную спецификацию REST, а таблицы конфигурации ссылаются на канонические Markdown источники.
+- **Подготовить развертывания** - эксплуатационные runbook-и (telemetry, settlement, Nexus overlays) переносятся из `docs/source/` и появятся здесь по мере миграции.
+
+## Текущий статус
+
+- ✅ Тематический лендинг Docusaurus v3 с обновленной типографикой, hero/cards на градиентах и тайлами ресурсов, включая сводку Norito Streaming.
+- ✅ Плагин Torii OpenAPI подключен к `npm run sync-openapi`, с проверками подписанных снимков и CSP-guard защитами, применяемыми `buildSecurityHeaders`.
+- ✅ Preview и probe coverage выполняются в CI (`docs-portal-preview.yml` + `scripts/portal-probe.mjs`), теперь они гейтят doc по streaming, quickstarts SoraFS и reference checklists перед публикацией артефактов.
+- ✅ Quickstarts Norito, SoraFS и SDK плюс секции справочников уже в боковой панели; новые импорты из `docs/source/` (streaming, orchestration, runbooks) появляются здесь по мере их написания.
+
+## Как принять участие
+
+- См. `docs/portal/README.md` для локальных команд разработки (`npm install`, `npm run start`, `npm run build`).
+- Задачи миграции контента отслеживаются вместе с пунктами roadmap `DOCS-*`. Вклад приветствуется - переносите секции из `docs/source/` и добавляйте страницу в боковую панель.
+- Если вы добавляете генерируемый артефакт (specs, config tables), задокументируйте команду сборки, чтобы будущие участники могли легко его обновить.

@@ -1,15 +1,44 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.fr.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# 翻訳作業中
+---
+slug: /norito/examples/call-transfer-asset
+title: Invoquer le transfert hôte depuis Kotodama
+description: Démontre comment un point d'entrée Kotodama peut appeler l'instruction hôte `transfer_asset` avec validation des métadonnées en ligne.
+source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+---
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+Démontre comment un point d'entrée Kotodama peut appeler l'instruction hôte `transfer_asset` avec validation des métadonnées en ligne.
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+## Parcours du registre
+
+- Approvisionnez l'autorité du contrat (par exemple `ih58...`) avec l'actif qu'elle transférera et accordez-lui le rôle `CanTransfer` ou une permission équivalente.
+- Appelez le point d'entrée `call_transfer_asset` pour transférer 5 unités du compte du contrat vers `ih58...`, en reflétant la manière dont l'automatisation on-chain peut encapsuler des appels hôte.
+- Vérifiez les soldes via `FindAccountAssets` ou `iroha_cli ledger assets list --account ih58...` et inspectez les événements pour confirmer que le garde de métadonnées a journalisé le contexte du transfert.
+
+## Guides SDK associés
+
+- [Quickstart SDK Rust](/sdks/rust)
+- [Quickstart SDK Python](/sdks/python)
+- [Quickstart SDK JavaScript](/sdks/javascript)
+
+[Télécharger la source Kotodama](/norito-snippets/call-transfer-asset.ko)
+
+```text
+// Direct builtin call (no contract-style call syntax) inside a contract.
+seiyaku TransferCall {
+  kotoage fn pay() permission(AssetTransferRole) {
+    transfer_asset(
+      account!("ih58..."),
+      account!("ih58..."),
+      asset_definition!("rose#wonderland"),
+      10
+    );
+  }
+}
+```

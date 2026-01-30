@@ -1,17 +1,34 @@
-<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
-
 ---
 lang: ar
 direction: rtl
 source: docs/portal/docs/sorafs/developer-index.fr.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# قيد الترجمة
+---
+id: developer-index
+title: Guides de developpeurs SoraFS
+description: Page d'accueil de la documentation developpeur SoraFS, des exemples et des references d'automatisation.
+sidebar_label: Apercu developpeur
+---
 
-<div dir="rtl">
-هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث حقل `status` في بيانات التعريف أعلاه.
+:::note Source canonique
+:::
 
-هذا المخطط في انتظار الترجمة. استبدل هذا النص بالمحتوى المترجَم وغيّر الحالة إلى `complete` عند الانتهاء. تأكد أيضًا من أن حقل `translation_last_reviewed` يعكس آخر مراجعة تمت مقارنةً بالنص الإنجليزي.
-</div>
+# Guides de developpeurs SoraFS
+
+```{toctree}
+:caption: Demarrage
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

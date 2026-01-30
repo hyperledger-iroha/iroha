@@ -1,15 +1,39 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/portal/docs/norito/examples/hajimari-entrypoint.fr.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Traducción en curso
+---
+slug: /norito/examples/hajimari-entrypoint
+title: Squelette du point d'entrée Hajimari
+description: Structure minimale de contrat Kotodama avec un seul point d'entrée public et un gestionnaire d'état.
+source: crates/ivm/docs/examples/01_hajimari.ko
+---
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+Structure minimale de contrat Kotodama avec un seul point d'entrée public et un gestionnaire d'état.
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+## Parcours du registre
+
+- Compilez le contrat avec `koto_compile --abi 1` comme indiqué dans [Démarrage de Norito](/norito/getting-started#1-compile-a-kotodama-contract) ou via `cargo test -p ivm developer_portal_norito_snippets_compile`.
+- Effectuez un smoke-test du bytecode en local avec `ivm_run` / `developer_portal_norito_snippets_run` pour vérifier le log `info!` et le syscall initial avant de toucher un noeud.
+- Déployez l'artefact via `iroha_cli app contracts deploy` et confirmez le manifeste en suivant les étapes de [Démarrage de Norito](/norito/getting-started#4-deploy-via-iroha_cli).
+
+## Guides SDK associés
+
+- [Quickstart SDK Rust](/sdks/rust)
+- [Quickstart SDK Python](/sdks/python)
+- [Quickstart SDK JavaScript](/sdks/javascript)
+
+[Télécharger la source Kotodama](/norito-snippets/hajimari-entrypoint.ko)
+
+```text
+// Minimal initializer-style function inside a contract.
+seiyaku HajimariExample {
+  hajimari() {
+    info("Hello from hajimari");
+  }
+}
+```

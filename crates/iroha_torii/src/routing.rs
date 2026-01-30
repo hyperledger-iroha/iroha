@@ -33835,7 +33835,7 @@ mod public_lane_tests {
         },
     };
     use iroha_primitives::numeric::Numeric;
-    use iroha_test_samples::ALICE_ID;
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
 
     use super::*;
 

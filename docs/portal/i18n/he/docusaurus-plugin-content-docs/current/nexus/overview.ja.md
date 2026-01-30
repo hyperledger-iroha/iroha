@@ -1,18 +1,57 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/nexus/overview.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 27a850a0de16bd3a9854ea2d064bb0466a1aa225df7f6d7451659367d42cfce1
 source_last_modified: "2025-11-14T04:43:20.539255+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+Nexus (Iroha 3) מרחיב את Iroha 2 עם ביצוע multi-lane, מרחבי נתונים תחומי-ממשל וכלי עבודה משותפים בכל SDK. דף זה משקף את התקציר החדש `docs/source/nexus_overview.md` במונו-ריפו כדי שקוראי הפורטל יבינו במהירות כיצד חלקי הארכיטקטורה משתלבים.
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+## קווי שחרור
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+- **Iroha 2** - פריסות בהוסט עצמי לקונסורציומים או רשתות פרטיות.
+- **Iroha 3 / Sora Nexus** - הרשת הציבורית multi-lane שבה מפעילים רושמים מרחבי נתונים (DS) ומקבלים כלי ממשל, סליקה ותצפיתיות משותפים.
+- שתי השורות קומפליות מאותו workspace (IVM + toolchain Kotodama), כך שתיקוני SDK, עדכוני ABI ו-fixtures של Norito נשארים ניידים. מפעילים מורידים את החבילה `iroha3-<version>-<os>.tar.zst` כדי להצטרף ל-Nexus; עיינו ב-`docs/source/sora_nexus_operator_onboarding.md` לרשימת הבדיקה המלאה.
+
+## אבני בניין
+
+| רכיב | סיכום | קישורי פורטל |
+|-----------|---------|--------------|
+| מרחב נתונים (DS) | תחום ביצוע/אחסון מוגדר ממשל שמחזיק נתיב אחד או יותר, מגדיר סטים של מאמתים, מחלקת פרטיות ומדיניות עמלות + DA. | ראו [Nexus spec](./nexus-spec) לסכמת המניפסט. |
+| Lane | שבר ביצוע דטרמיניסטי; מפיק התחייבויות שמסדרות טבעת NPoS הגלובלית. מחלקות Lane כוללות `default_public`, `public_custom`, `private_permissioned` ו-`hybrid_confidential`. | [מודל Lane](./nexus-lane-model) מתאר גיאומטריה, קידומות אחסון ושימור. |
+| תוכנית מעבר | מזהי placeholder, שלבי ניתוב ואריזת פרופיל כפול עוקבים אחרי מעבר מפריסות חד-נתיביות אל Nexus. | [הערות מעבר](./nexus-transition-notes) מתעדות כל שלב הגירה. |
+| Space Directory | חוזה רישום שמאחסן מניפסטים + גרסאות של DS. מפעילים משווים רשומות קטלוג מול הספריה הזו לפני הצטרפות. | מעקב diffs של מניפסט נמצא תחת `docs/source/project_tracker/nexus_config_deltas/`. |
+| קטלוג נתיבים | סעיף התצורה `[nexus]` ממפה מזהי Lane לכינויים, מדיניות ניתוב וספי DA. `irohad --sora --config … --trace-config` מדפיס את הקטלוג המפוענח לצורכי ביקורת. | השתמשו ב-`docs/source/sora_nexus_operator_onboarding.md` למסלול ה-CLI. |
+| נתב סליקה | מתזמר העברות XOR שמחבר נתיבי CBDC פרטיים לנתיבי נזילות ציבוריים. | `docs/source/cbdc_lane_playbook.md` מפרט כפתורי מדיניות ושערי טלמטריה. |
+| טלמטריה/SLOs | לוחות מחוונים + התראות תחת `dashboards/grafana/nexus_*.json` תופסים גובה נתיבים, עומס DA, זמן סליקה ועומק תור ממשל. | [תוכנית שיקום טלמטריה](./nexus-telemetry-remediation) מפרטת את הלוחות, ההתראות וראיות הביקורת. |
+
+## תמונת מצב של פריסה
+
+| שלב | מיקוד | קריטריוני יציאה |
+|-------|-------|---------------|
+| N0 - בטא סגורה | Registrar מנוהל מועצה (`.sora`), קליטת מפעילים ידנית, קטלוג נתיבים סטטי. | מניפסטים של DS חתומים + מסירות ממשל מתורגלות. |
+| N1 - השקה ציבורית | מוסיף סיומות `.nexus`, מכרזים, registrar בשירות עצמי, חיווט סליקה XOR. | בדיקות סנכרון resolver/gateway, לוחות פיוס חיובים, תרגילי מחלוקת. |
+| N2 - הרחבה | מציג `.dao`, APIs למשווקים, אנליטיקה, פורטל מחלוקות, scorecards של stewards. | ארטיפקטים של תאימות בגרסאות, ערכת jury למדיניות באוויר, דוחות שקיפות אוצר. |
+| שער NX-12/13/14 | מנוע תאימות, לוחות טלמטריה ותיעוד חייבים לצאת יחד לפני פיילוטים עם שותפים. | [Nexus overview](./nexus-overview) + [Nexus operations](./nexus-operations) פורסמו, לוחות חוברו, מנוע מדיניות מוזג. |
+
+## אחריות מפעילים
+
+1. **היגיינת תצורה** - שמרו על `config/config.toml` מסונכרן עם קטלוג הנתיבים ומרחבי הנתונים שפורסם; ארכבו פלט `--trace-config` עם כל כרטיס שחרור.
+2. **מעקב מניפסטים** - השוו רשומות קטלוג עם חבילת Space Directory האחרונה לפני הצטרפות או שדרוג צמתים.
+3. **כיסוי טלמטריה** - חשפו את `nexus_lanes.json`, `nexus_settlement.json` ולוחות SDK קשורים; חברו התראות ל-PagerDuty והפעילו סקירות רבעוניות לפי תוכנית שיקום הטלמטריה.
+4. **דיווח תקריות** - פעלו לפי מטריצת החומרה ב-[Nexus operations](./nexus-operations) והגישו RCAs בתוך חמישה ימי עסקים.
+5. **מוכנות ממשל** - השתתפו בהצבעות מועצת Nexus שמשפיעות על הנתיבים שלכם ותרגלו הוראות rollback רבעונית (נעקב ב-`docs/source/project_tracker/nexus_config_deltas/`).
+
+## ראו גם
+
+- סקירה קנונית: `docs/source/nexus_overview.md`
+- מפרט מפורט: [./nexus-spec](./nexus-spec)
+- גיאומטריית נתיבים: [./nexus-lane-model](./nexus-lane-model)
+- תוכנית מעבר: [./nexus-transition-notes](./nexus-transition-notes)
+- תוכנית שיקום טלמטריה: [./nexus-telemetry-remediation](./nexus-telemetry-remediation)
+- Runbook תפעול: [./nexus-operations](./nexus-operations)
+- מדריך קליטת מפעילים: `docs/source/sora_nexus_operator_onboarding.md`

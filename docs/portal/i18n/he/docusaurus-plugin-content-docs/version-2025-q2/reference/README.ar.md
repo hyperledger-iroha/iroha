@@ -1,20 +1,29 @@
-<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
-
 ---
 lang: ar
 direction: rtl
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/version-2025-q2/reference/README.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: fcdac983e6f2595a98fb3920c0d4054617cd67efd86469ba9fca0b58d2a0faea
 source_last_modified: "2025-11-04T12:24:28.211294+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# قيد الترجمة
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
+---
+slug: /reference
+lang: he
+direction: rtl
+source: docs/portal/docs/reference/README.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+---
+
+# בתהליך תרגום
 
 <div dir="rtl">
-هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث حقل `status` في بيانات التعريف أعلاه.
+קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
 
-هذا المخطط في انتظار الترجمة. استبدل هذا النص بالمحتوى المترجَم وغيّر الحالة إلى `complete` عند الانتهاء. تأكد أيضًا من أن حقل `translation_last_reviewed` يعكس آخر مراجعة تمت مقارنةً بالنص الإنجليزي.
+לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
 </div>

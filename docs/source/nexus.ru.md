@@ -138,9 +138,10 @@ authority (приватные ключи находятся только в па
 - `GET /v1/space-directory/uaids/{uaid}` — разрешить текущие привязки dataspace
   для UAID (нормализованные адреса, dataspace ids, program bindings). Добавьте
   `address_format=compressed` для вывода Sora Name Service (IH58 предпочтительно; compressed (`sora`) — второй по предпочтению, только для Sora).
-- `GET /v1/space-directory/uaids/{uaid}/portfolio` —
+- `GET /v1/accounts/{uaid}/portfolio` —
   агрегатор на Norito, зеркалящий `ToriiClient.getUaidPortfolio`, чтобы кошельки
-  отображали универсальные holdings без сканирования состояния по dataspaces.
+  отображали универсальные holdings без сканирования состояния по dataspaces. Передайте
+  `asset_id=<asset#definition::owner>`, чтобы отфильтровать снимок по одному активу.
 - `GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}` — получить канонический
   JSON манифест, метаданные жизненного цикла и хэш для аудита.
 - `POST /v1/space-directory/manifests` — отправить новые или заменяющие манифесты

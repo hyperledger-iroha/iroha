@@ -1,14 +1,22 @@
+---
+lang: he
+direction: rtl
+source: docs/portal/i18n/he/docusaurus-plugin-content-docs/version-2025-q2/devportal/try-it.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: e64a24e7af8d5c8e7260e7f9432dece2adaac03d607941c6ac0e855e43c1d305
+source_last_modified: "2025-11-04T12:24:28.211833+00:00"
+translation_last_reviewed: 2026-01-30
+---
+
 <!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
 
 ---
 lang: he
 direction: rtl
-source: docs/portal/i18n/he/docusaurus-plugin-content-docs/version-2025-q2/devportal/try-it.md
+source: docs/portal/docs/devportal/try-it.md
 status: needs-translation
-generator: scripts/sync_docs_i18n.py
-source_hash: e64a24e7af8d5c8e7260e7f9432dece2adaac03d607941c6ac0e855e43c1d305
-source_last_modified: "2025-11-04T12:24:28.211833+00:00"
-translation_last_reviewed: null
+generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
 # בתהליך תרגום

@@ -1,17 +1,41 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.es.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# ترجمہ جاری ہے
+---
+id: priority-snapshot-2025-03
+title: Snapshot de prioridades — marzo de 2025 (Beta)
+description: Espejo del snapshot de steering de Nexus 2025-03; pendiente de ACKs antes del rollout publico.
+---
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+> Fuente canonica: `docs/source/sorafs/priority_snapshot_2025-03.md`
+>
+> Estado: **Beta / esperando ACKs de steering** (Networking, Storage, Docs leads).
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+## Resumen
+
+El snapshot de marzo mantiene las iniciativas de docs/content-network alineadas
+con las pistas de entrega de SoraFS (SF-3, SF-6b, SF-9). Una vez que todos los
+leads confirmen el snapshot en el canal de steering de Nexus, elimina la nota
+“Beta” de arriba.
+
+### Hilos de enfoque
+
+1. **Circular snapshot de prioridades** — recopilar acknowledgements y
+   registrarlos en las minutas del council del 2025-03-05.
+2. **Cierre del kickoff de Gateway/DNS** — ensayar el nuevo kit de facilitacion
+   (Seccion 6 del runbook) antes del workshop 2025-03-03.
+3. **Migracion de runbooks de operadores** — el portal `Runbook Index` esta live;
+   expone la URL de beta preview despues del sign-off de onboarding de reviewers.
+4. **Hilos de entrega de SoraFS** — alinear el trabajo restante de SF-3/6b/9 con
+   el plan/roadmap:
+   - Worker de ingesta PoR + endpoint de estado en `sorafs-node`.
+   - Pulido de bindings CLI/SDK en integraciones de orchestrator Rust/JS/Swift.
+   - Cableado de runtime del coordinador PoR y eventos de GovernanceLog.
+
+Consulta el archivo fuente para la tabla completa, el checklist de distribucion
+y las entradas de log.

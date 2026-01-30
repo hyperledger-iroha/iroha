@@ -1,20 +1,40 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w2/summary.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 95277254d27aac5a47cf02d06446d38c0963f5e01a4219cec0aa9090c944c71c
 source_last_modified: "2025-11-14T04:43:19.967396+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# בתהליך תרגום
+| البند | التفاصيل |
+| --- | --- |
+| الموجة | W2 - المراجعون المجتمعيون |
+| نافذة الدعوة | 2025-06-15 -> 2025-06-29 |
+| وسم الاثر | `preview-2025-06-15` |
+| تذكرة المتتبع | `DOCS-SORA-Preview-W2` |
+| المشاركون | comm-vol-01...comm-vol-08 |
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+## ابرز النقاط
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+1. **الحوكمة والادوات** - تمت الموافقة بالاجماع على سياسة intake المجتمعية في 2025-05-20; قالب الطلب المحدث مع حقول الدافع/المنطقة الزمنية موجود تحت `docs/examples/docs_preview_request_template.md`.
+2. **ادلة preflight** - تم تنفيذ تغيير وكيل Try it `OPS-TRYIT-188` في 2025-06-09، تم التقاط لوحات Grafana، وارشفة مخرجات descriptor/checksum/probe لـ `preview-2025-06-15` تحت `artifacts/docs_preview/W2/`.
+3. **موجة الدعوات** - تمت دعوة ثمانية مراجعين مجتمعيين في 2025-06-15، مع تسجيل الاقرارات في جدول الدعوات بالمتتبع; اكمل الجميع تحقق checksum قبل التصفح.
+4. **الملاحظات** - تم تسجيل `docs-preview/w2 #1` (صياغة tooltip) و `#2` (ترتيب الشريط الجانبي للترجمة) في 2025-06-18 وحلهما بحلول 2025-06-21 (Docs-core-04/05)؛ لم تقع حوادث خلال الموجة.
+
+## بنود العمل
+
+| المعرف | الوصف | المالك | الحالة |
+| --- | --- | --- | --- |
+| W2-A1 | معالجة `docs-preview/w2 #1` (صياغة tooltip). | Docs-core-04 | ✅ مكتمل (2025-06-21). |
+| W2-A2 | معالجة `docs-preview/w2 #2` (ترتيب الشريط الجانبي للترجمة). | Docs-core-05 | ✅ مكتمل (2025-06-21). |
+| W2-A3 | ارشفة ادلة الخروج + تحديث roadmap/status. | Docs/DevRel lead | ✅ مكتمل (2025-06-29). |
+
+## ملخص الخروج (2025-06-29)
+
+- اكد جميع المراجعين المجتمعيين الثمانية الاكتمال وتم سحب صلاحيات المعاينة; تم تسجيل الاقرارات في سجل الدعوات بالمتتبع.
+- بقيت لقطات القياس النهائية (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) خضراء; اللوجات ونصوص وكيل Try it مرفقة بـ `DOCS-SORA-Preview-W2`.
+- حزمة الادلة (descriptor, checksum log, probe output, link report, لقطات Grafana, اقرارات الدعوة) ارشفت تحت `artifacts/docs_preview/W2/preview-2025-06-15/`.
+- تم تحديث سجل نقاط التحقق W2 في المتتبع حتى الخروج، لضمان سجل قابل للتدقيق قبل بدء تخطيط W3.

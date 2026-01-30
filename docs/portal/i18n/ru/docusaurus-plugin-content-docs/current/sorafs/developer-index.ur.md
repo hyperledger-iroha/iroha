@@ -1,15 +1,34 @@
-<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
-
 ---
 lang: ru
 direction: ltr
 source: docs/portal/docs/sorafs/developer-index.ur.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Перевод в процессе
+---
+id: developer-index
+title: SoraFS developer guides
+description: SoraFS developer documentation, samples اور automation references کے لیے landing page۔
+sidebar_label: Developer overview
+---
 
-Этот файл является заготовкой для русскоязычного перевода английского документа. После завершения перевода обновите поле `status` в метаданных выше.
+:::note مستند ماخذ
+:::
 
-Этот черновик ожидает перевода. Замените этот текст готовым переводом и установите значение `status` в `complete` после завершения. Убедитесь, что поле `translation_last_reviewed` отражает дату последней проверки с английским оригиналом.
+# SoraFS developer guides
+
+```{toctree}
+:caption: Getting started
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

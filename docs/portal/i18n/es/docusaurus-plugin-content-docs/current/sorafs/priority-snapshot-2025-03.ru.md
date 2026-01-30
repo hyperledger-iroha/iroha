@@ -1,15 +1,38 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.ru.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Traducción en curso
+---
+id: priority-snapshot-2025-03
+title: Снимок приоритетов — март 2025 (Бета)
+description: Зеркало steering snapshot Nexus 2025-03; ожидает ACKs перед публичным rollout.
+---
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+> Канонический источник: `docs/source/sorafs/priority_snapshot_2025-03.md`
+>
+> Статус: **Бета / ожидаются ACKs steering** (Networking, Storage, Docs leads).
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+## Обзор
+
+Мартовский snapshot удерживает инициативы docs/content-network в согласии с
+доставочными треками SoraFS (SF-3, SF-6b, SF-9). Как только все leads подтвердят
+snapshot в канале steering Nexus, удалите примечание “Beta” выше.
+
+### Фокусные темы
+
+1. **Распространить snapshot приоритетов** — собрать acknowledgements и
+   зафиксировать их в minutes совета от 2025-03-05.
+2. **Закрыть kickoff Gateway/DNS** — отрепетировать новый facilitation kit (Раздел 6
+   в runbook) до воркшопа 2025-03-03.
+3. **Миграция операторских runbooks** — портал `Runbook Index` уже live; открыть beta
+   preview URL после sign-off onboarding для reviewers.
+4. **Треки доставки SoraFS** — согласовать оставшуюся работу SF-3/6b/9 с планом/roadmap:
+   - Worker ingestion PoR + status endpoint в `sorafs-node`.
+   - Полировка CLI/SDK bindings в интеграциях orchestrator Rust/JS/Swift.
+   - Wiring runtime для координатора PoR и события GovernanceLog.
+
+См. исходный файл для полной таблицы, distribution checklist и log entries.

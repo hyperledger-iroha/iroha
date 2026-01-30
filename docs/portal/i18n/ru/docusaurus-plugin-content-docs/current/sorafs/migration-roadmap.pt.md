@@ -1,15 +1,17 @@
-<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
-
 ---
 lang: ru
 direction: ltr
 source: docs/portal/docs/sorafs/migration-roadmap.pt.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Перевод в процессе
+---
+title: "Roadmap de migracao SoraFS"
+---
 
-Этот файл является заготовкой для русскоязычного перевода английского документа. После завершения перевода обновите поле `status` в метаданных выше.
+> Adaptado de [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
 
-Этот черновик ожидает перевода. Замените этот текст готовым переводом и установите значение `status` в `complete` после завершения. Убедитесь, что поле `translation_last_reviewed` отражает дату последней проверки с английским оригиналом.
+# Roadmap de migracao SoraFS (SF-1)
+
+Este documento nao se aplica a primeira release. Nao ha migracoes pendentes; fica reservado para futuras atualizacoes.

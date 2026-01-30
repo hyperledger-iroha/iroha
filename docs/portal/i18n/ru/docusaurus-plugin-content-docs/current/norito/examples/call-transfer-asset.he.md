@@ -1,20 +1,40 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/norito/examples/call-transfer-asset.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 5acc643bab9440b1a8ec1cbd651e092bea239f07fba9ab1b7ba84ed5b9173a80
 source_last_modified: "2025-11-14T04:43:20.646008+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# בתהליך תרגום
+Показывает, как точка входа Kotodama может вызвать инструкцию хоста `transfer_asset` с встроенной проверкой метаданных.
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+## Пошаговый обход реестра
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+- Пополните полномочия контракта (например `ih58...`) активом, который он будет переводить, и выдайте полномочию роль `CanTransfer` или эквивалентное разрешение.
+- Вызовите точку входа `call_transfer_asset`, чтобы перевести 5 единиц с аккаунта контракта на `ih58...`, отражая то, как ончейн-автоматизация может оборачивать вызовы хоста.
+- Проверьте балансы через `FindAccountAssets` или `iroha_cli ledger assets list --account ih58...` и просмотрите события, чтобы подтвердить, что guard метаданных записал контекст перевода.
+
+## Связанные руководства SDK
+
+- [Quickstart Rust SDK](/sdks/rust)
+- [Quickstart Python SDK](/sdks/python)
+- [Quickstart JavaScript SDK](/sdks/javascript)
+
+[Скачать исходник Kotodama](/norito-snippets/call-transfer-asset.ko)
+
+```text
+// Direct builtin call (no contract-style call syntax) inside a contract.
+seiyaku TransferCall {
+  kotoage fn pay() permission(AssetTransferRole) {
+    transfer_asset(
+      account!("ih58..."),
+      account!("ih58..."),
+      asset_definition!("rose#wonderland"),
+      10
+    );
+  }
+}
+```

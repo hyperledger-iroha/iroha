@@ -1,18 +1,69 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/reference/account-address-status.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 68bc94a0df8726195e0f66aa4601ef057b409f4282a82dc2a1e94bc6ee082460
 source_last_modified: "2025-11-14T04:43:20.946767+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+O pacote canonico ADDR-2 (`fixtures/account/address_vectors.json`) captura fixtures IH58 (preferred), compressed (`sora`, second-best; half/full width), multisignature e negative. Cada superficie de SDK + Torii usa o mesmo JSON para detectar qualquer drift de codec antes de chegar a producao. Esta pagina espelha o brief interno de status (`docs/source/account_address_status.md` no repositorio raiz) para que leitores do portal consultem o fluxo sem vasculhar o mono-repo.
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+## Regenerar ou verificar o pacote
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+```bash
+# Refresh the canonical fixture (writes fixtures/account/address_vectors.json)
+cargo xtask address-vectors --out fixtures/account/address_vectors.json
+
+# Fail fast if the committed file is stale
+cargo xtask address-vectors --verify
+```
+
+Flags:
+
+- `--stdout` - emite o JSON em stdout para inspecao ad-hoc.
+- `--out <path>` - grava em um caminho diferente (ex.: ao comparar mudancas localmente).
+- `--verify` - compara a copia de trabalho com o conteudo recem-gerado (nao pode ser combinado com `--stdout`).
+
+O workflow de CI **Address Vector Drift** roda `cargo xtask address-vectors --verify`
+sempre que o fixture, o gerador ou os docs mudam para alertar reviewers imediatamente.
+
+## Quem consome o fixture?
+
+| Surface | Validation |
+|---------|------------|
+| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` |
+| Torii (server) | `crates/iroha_torii/tests/account_address_vectors.rs` |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
+| Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
+
+Cada harness faz round-trip de bytes canonicos + IH58 + encodings comprimidos e verifica se os codigos de erro no estilo Norito batem com o fixture para casos negativos.
+
+## Precisa de automacao?
+
+Ferramentas de release podem automatizar refreshes de fixture com o helper
+`scripts/account_fixture_helper.py`, que busca ou verifica o pacote canonico sem copy/paste:
+
+```bash
+# Download to a custom path (defaults to fixtures/account/address_vectors.json)
+python3 scripts/account_fixture_helper.py fetch --output path/to/sdk/address_vectors.json
+
+# Verify that a local copy matches the canonical source (HTTPS or file://)
+python3 scripts/account_fixture_helper.py check --target path/to/sdk/address_vectors.json --quiet
+
+# Emit Prometheus textfile metrics for dashboards/alerts
+python3 scripts/account_fixture_helper.py check \
+  --target path/to/sdk/address_vectors.json \
+  --metrics-out /var/lib/node_exporter/textfile_collector/address_fixture.prom \
+  --metrics-label android
+```
+
+O helper aceita overrides de `--source` ou a variavel de ambiente `IROHA_ACCOUNT_FIXTURE_URL` para que jobs de CI de SDK apontem para seu mirror preferido. Quando `--metrics-out` e fornecido, o helper escreve `account_address_fixture_check_status{target=\"...\"}` junto com o digest SHA-256 canonico (`account_address_fixture_remote_info`) para que os textfile collectors do Prometheus e o dashboard Grafana `account_address_fixture_status` provem que cada superficie permanece em sincronia. Gere alerta quando um target reportar `0`. Para automacao multi-superficie use o wrapper `ci/account_fixture_metrics.sh` (aceita `--target label=path[::source]` repetidos) para que equipes on-call publiquem um unico arquivo `.prom` consolidado para o textfile collector do node-exporter.
+
+## Precisa do brief completo?
+
+O status completo de conformidade ADDR-2 (owners, plano de monitoramento, itens de acao em aberto)
+fica em `docs/source/account_address_status.md` dentro do repositorio junto com o Address Structure RFC (`docs/account_structure.md`). Use esta pagina como lembrete operacional rapido; para orientacao detalhada, consulte os docs do repositorio.

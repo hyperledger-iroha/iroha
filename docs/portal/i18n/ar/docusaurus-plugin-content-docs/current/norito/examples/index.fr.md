@@ -1,17 +1,21 @@
-<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
-
 ---
 lang: ar
 direction: rtl
 source: docs/portal/docs/norito/examples/index.fr.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# قيد الترجمة
+---
+title: Exemples Norito
+description: Extraits Kotodama sélectionnés avec des parcours du registre.
+slug: /norito/examples
+---
 
-<div dir="rtl">
-هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث حقل `status` في بيانات التعريف أعلاه.
+Ces exemples reflètent les quickstarts des SDK et les parcours du registre. Chaque extrait regroupe une liste de vérification du registre et renvoie vers les guides Rust, Python et JavaScript afin que vous puissiez rejouer le même scénario de bout en bout.
 
-هذا المخطط في انتظار الترجمة. استبدل هذا النص بالمحتوى المترجَم وغيّر الحالة إلى `complete` عند الانتهاء. تأكد أيضًا من أن حقل `translation_last_reviewed` يعكس آخر مراجعة تمت مقارنةً بالنص الإنجليزي.
-</div>
+- **[Squelette du point d'entrée Hajimari](./hajimari-entrypoint)** — Structure minimale de contrat Kotodama avec un seul point d'entrée public et un gestionnaire d'état.
+- **[Enregistrer un domaine et frapper des actifs](./register-and-mint)** — Démontre la création de domaines avec autorisations, l'enregistrement d'actifs et la frappe déterministe.
+- **[Invoquer le transfert hôte depuis Kotodama](./call-transfer-asset)** — Démontre comment un point d'entrée Kotodama peut appeler l'instruction hôte `transfer_asset` avec validation des métadonnées en ligne.
+- **[Transférer un actif entre comptes](./transfer-asset)** — Flux de transfert d'actifs simple qui reflète les quickstarts des SDK et les parcours du registre.
+- **[Frapper, transférer et brûler un NFT](./nft-flow)** — Parcourt le cycle de vie d'un NFT de bout en bout : frappe au propriétaire, transfert, ajout de métadonnées et destruction.

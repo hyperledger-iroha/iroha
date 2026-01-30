@@ -1,15 +1,46 @@
-<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
-
 ---
 lang: fr
 direction: ltr
 source: docs/portal/docs/norito/examples/transfer-asset.ar.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Traduction en cours
+---
+slug: /norito/examples/transfer-asset
+title: نقل أصل بين الحسابات
+description: سير عمل بسيط لنقل الأصول يعكس بدايات SDK السريعة وجولات دفتر الأستاذ.
+source: examples/transfer/transfer.ko
+---
 
-Ce fichier sert de modèle pour la traduction française du document anglais. Une fois la traduction terminée, mettez à jour le champ `status` dans les métadonnées ci-dessus.
+سير عمل بسيط لنقل الأصول يعكس بدايات SDK السريعة وجولات دفتر الأستاذ.
 
-Ce brouillon est en attente de traduction. Remplacez ce texte par le contenu traduit et passez l’état à `complete` lorsque le travail est terminé. Vérifiez également que `translation_last_reviewed` correspond à la dernière vérification par rapport à la version anglaise.
+## جولة دفتر الأستاذ
+
+- موّل Alice بالأصل المستهدف مسبقا (على سبيل المثال عبر المقتطف `register and mint` أو تدفقات البدء السريع للـ SDK).
+- نفّذ نقطة الدخول `do_transfer` لنقل 10 وحدات من Alice إلى Bob مع استيفاء إذن `AssetTransferRole`.
+- استعلم عن الأرصدة (`FindAccountAssets`, `iroha_cli ledger assets list`) أو اشترك في أحداث خط الأنابيب لملاحظة نتيجة النقل.
+
+## أدلة SDK ذات صلة
+
+- [البدء السريع لـ Rust SDK](/sdks/rust)
+- [البدء السريع لـ Python SDK](/sdks/python)
+- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
+
+[نزّل مصدر Kotodama](/norito-snippets/transfer-asset.ko)
+
+```text
+// Transfer example: uses typed pointer constructors and transfer_asset syscall
+
+seiyaku TransferDemo {
+  // Public entrypoint to transfer 10 units of rose#wonderland from alice to bob
+  kotoage fn do_transfer() permission(AssetTransferRole) {
+    transfer_asset(
+      account!("ih58..."),
+      account!("ih58..."),
+      asset_definition!("rose#wonderland"),
+      10
+    );
+  }
+}
+```

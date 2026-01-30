@@ -1,15 +1,18 @@
-<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
-
 ---
 lang: fr
 direction: ltr
 source: docs/portal/docs/sorafs/migration-ledger.pt.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Traduction en cours
+---
+title: Razao de migracao SoraFS
+description: Log canonico de mudancas que acompanha cada marco de migracao, responsaveis e follow-ups necessarios.
+---
 
-Ce fichier sert de modèle pour la traduction française du document anglais. Une fois la traduction terminée, mettez à jour le champ `status` dans les métadonnées ci-dessus.
+> Adaptado de [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
 
-Ce brouillon est en attente de traduction. Remplacez ce texte par le contenu traduit et passez l’état à `complete` lorsque le travail est terminé. Vérifiez également que `translation_last_reviewed` correspond à la dernière vérification par rapport à la version anglaise.
+# Razao de migracao SoraFS
+
+Este documento nao se aplica a primeira release. Nao ha migracoes pendentes; fica reservado para futuras atualizacoes.

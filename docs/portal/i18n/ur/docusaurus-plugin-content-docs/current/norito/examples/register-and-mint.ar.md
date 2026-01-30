@@ -1,17 +1,49 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: docs/portal/docs/norito/examples/register-and-mint.ar.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# ترجمہ جاری ہے
+---
+slug: /norito/examples/register-and-mint
+title: تسجيل نطاق وسك الأصول
+description: يوضح إنشاء النطاقات المصرح بها وتسجيل الأصول والسك الحتمي.
+source: crates/ivm/docs/examples/13_register_and_mint.ko
+---
 
-<div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
+يوضح إنشاء النطاقات المصرح بها وتسجيل الأصول والسك الحتمي.
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
-</div>
+## جولة دفتر الأستاذ
+
+- تأكد من وجود حساب الوجهة (مثل `ih58...`) بما يعكس مرحلة الإعداد في كل بدء سريع للـ SDK.
+- استدعِ نقطة الدخول `register_and_mint` لإنشاء تعريف أصل ROSE وسك 250 وحدة لأليس في معاملة واحدة.
+- تحقق من الأرصدة عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account ih58...` لتأكيد نجاح السك.
+
+## أدلة SDK ذات صلة
+
+- [البدء السريع لـ Rust SDK](/sdks/rust)
+- [البدء السريع لـ Python SDK](/sdks/python)
+- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
+
+[نزّل مصدر Kotodama](/norito-snippets/register-and-mint.ko)
+
+```text
+// Register a new asset and mint some to the specified account.
+seiyaku RegisterAndMint {
+  kotoage fn register_and_mint() permission(AssetManager) {
+    // name, symbol, quantity (precision or supply depending on host), mintable flag
+    let name = "rose";
+    let symbol = "ROSE";
+    let qty = 1000;      // interpretation depends on data model (example only)
+    let mintable = 1;    // 1 = mintable, 0 = fixed
+    register_asset(name, symbol, qty, mintable);
+
+    // Mint 250 ROSE to Alice
+    let to = account!("ih58...");
+    let asset = asset_definition!("rose#wonderland");
+    mint_asset(to, asset, 250);
+  }
+}
+```

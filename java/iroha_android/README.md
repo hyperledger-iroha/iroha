@@ -91,20 +91,13 @@ quarantine deterministically derived controller ids and will reject registration
 propose/approve attempts that use them.
 
 ```java
+import java.util.Base64;
 import org.hyperledger.iroha.android.model.InstructionBox;
-import org.hyperledger.iroha.android.model.instructions.InstructionBuilders;
-import org.hyperledger.iroha.android.multisig.MultisigSpec;
-
-MultisigSpec spec =
-    MultisigSpec.builder()
-        .setQuorum(2)
-        .setTransactionTtlMs(60_000)
-        .addSignatory("alice@wonderland", 1)
-        .addSignatory("bob@wonderland", 1)
-        .build();
 
 InstructionBox registerMultisig =
-    InstructionBuilders.registerMultisig("controller@wonderland", spec);
+    InstructionBox.fromWirePayload(
+        "<WIRE_NAME_REGISTER_MULTISIG>",
+        Base64.getDecoder().decode("<WIRE_PAYLOAD_BASE64>"));
 ```
 
 ## Subscriptions

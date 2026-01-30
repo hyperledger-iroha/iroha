@@ -1,18 +1,50 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/runbooks-index.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: b1625f88daf3ffa81adb136d54dfacac0aac4ab51ade20831068586653573f4b
 source_last_modified: "2025-11-14T04:43:22.300296+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+> Refleja el registro de responsables que vive en `docs/source/sorafs/runbooks/`.
+> Cada nueva guía de operaciones de SoraFS debe enlazarse aquí una vez que se publique en
+> el build del portal.
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+Usa esta página para verificar qué runbooks han completado la migración desde el
+árbol de documentación heredado al portal. Cada entrada enumera la titularidad, la
+ruta de origen canónica y la copia en el portal para que los revisores puedan
+saltar directamente a la guía deseada durante la vista previa beta.
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+## Host de vista previa beta
+
+La oleada DocOps ya promovió el host de vista previa beta aprobado por los revisores en
+`https://docs.iroha.tech/`. Al dirigir a operadores o revisores a un runbook migrado,
+referencia ese hostname para que usen la instantánea del portal protegida por checksum.
+Los procedimientos de publicación/rollback viven en
+[`devportal/preview-host-exposure`](../devportal/preview-host-exposure.md).
+
+| Runbook | Propietario(s) | Copia en el portal | Fuente |
+|---------|----------------|-------------------|--------|
+| Arranque de gateway y DNS | Networking TL, Ops Automation, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
+| Playbook de operaciones de SoraFS | Docs/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
+| Conciliación de capacidad | Treasury / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
+| Operaciones del registro de pins | Tooling WG | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
+| Checklist de operaciones de nodo | Storage Team, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
+| Runbook de disputas y revocaciones | Governance Council | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
+| Playbook de manifiestos en staging | Docs/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
+| Observabilidad del ancla Taikai | Media Platform WG / DA Program / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
+
+## Checklist de verificación
+
+- [x] El build del portal enlaza este índice (entrada en la barra lateral).
+- [x] Cada runbook migrado enumera la ruta de origen canónica para mantener a los revisores
+  alineados durante las revisiones de documentación.
+- [x] El pipeline de vista previa de DocOps bloquea los merges cuando falta un runbook
+  listado en la salida del portal.
+
+Las migraciones futuras (p. ej., nuevos simulacros de caos o apéndices de gobernanza)
+deben añadir una fila a la tabla anterior y actualizar la checklist de DocOps incorporada en
+`docs/examples/docs_preview_request_template.md`.

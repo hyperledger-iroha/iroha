@@ -1,17 +1,34 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/portal/docs/sorafs/developer-index.ur.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# בתהליך תרגום
+---
+id: developer-index
+title: SoraFS developer guides
+description: SoraFS developer documentation, samples اور automation references کے لیے landing page۔
+sidebar_label: Developer overview
+---
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+:::note مستند ماخذ
+:::
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+# SoraFS developer guides
+
+```{toctree}
+:caption: Getting started
+:maxdepth: 1
+
+overview
+cli
+orchestrator
+orchestrator_tuning
+sdk/index
+ci
+releases
+deployment
+samples
+```

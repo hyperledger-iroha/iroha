@@ -3,14 +3,11 @@ package org.hyperledger.iroha.android.sorafs;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Map;
-import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.instructions.CompleteReplicationOrderInstruction;
-import org.hyperledger.iroha.android.model.instructions.InstructionBuilders;
-import org.hyperledger.iroha.android.model.instructions.InstructionKind;
 import org.hyperledger.iroha.android.model.instructions.IssueReplicationOrderInstruction;
 import org.hyperledger.iroha.android.model.instructions.RecordReplicationReceiptInstruction;
 
-/** Ensures the replication order builders round-trip through InstructionBox. */
+/** Ensures the replication order builders emit the expected argument schema. */
 public final class SorafsReplicationInstructionBuilderTests {
 
   private SorafsReplicationInstructionBuilderTests() {}
@@ -43,23 +40,15 @@ public final class SorafsReplicationInstructionBuilderTests {
             .setDeadlineEpoch(28)
             .build();
 
-    final InstructionBox box =
-        InstructionBuilders.issueReplicationOrder(payloadInstruction);
-    assert "IssueReplicationOrder".equals(box.arguments().get("action"))
+    final Map<String, String> args = payloadInstruction.toArguments();
+    assert "IssueReplicationOrder".equals(args.get("action"))
         : "action mismatch";
-    assert ORDER_ID.equals(box.arguments().get("order_id_hex")) : "order_id_hex mismatch";
-    assert payload.equals(box.arguments().get("order_payload_base64")) : "payload mismatch";
-
-    final InstructionBox decoded =
-        InstructionBox.fromNorito(InstructionKind.CUSTOM, box.arguments());
-    assert decoded.payload() instanceof IssueReplicationOrderInstruction
-        : "Expected IssueReplicationOrderInstruction";
-    final IssueReplicationOrderInstruction rehydrated =
-        (IssueReplicationOrderInstruction) decoded.payload();
-    assert ORDER_ID.equals(rehydrated.orderIdHex()) : "rehydrated orderId mismatch";
-    assert payload.equals(rehydrated.orderPayloadBase64()) : "rehydrated payload mismatch";
-    assert rehydrated.issuedEpoch() == 20 : "issued epoch mismatch";
-    assert rehydrated.deadlineEpoch() == 28 : "deadline epoch mismatch";
+    assert ORDER_ID.equals(args.get("order_id_hex")) : "order_id_hex mismatch";
+    assert payload.equals(args.get("order_payload_base64")) : "payload mismatch";
+    assert ORDER_ID.equals(payloadInstruction.orderIdHex()) : "rehydrated orderId mismatch";
+    assert payload.equals(payloadInstruction.orderPayloadBase64()) : "rehydrated payload mismatch";
+    assert payloadInstruction.issuedEpoch() == 20 : "issued epoch mismatch";
+    assert payloadInstruction.deadlineEpoch() == 28 : "deadline epoch mismatch";
   }
 
   private static void testIssueReplicationOrderRejectsInvalidBase64() {
@@ -106,19 +95,11 @@ public final class SorafsReplicationInstructionBuilderTests {
             .setOrderIdHex(ORDER_ID)
             .setCompletionEpoch(31)
             .build();
-    final InstructionBox box =
-        InstructionBuilders.completeReplicationOrder(instruction);
-    assert "CompleteReplicationOrder".equals(box.arguments().get("action"))
+    final Map<String, String> args = instruction.toArguments();
+    assert "CompleteReplicationOrder".equals(args.get("action"))
         : "action mismatch";
-    assert "31".equals(box.arguments().get("completion_epoch")) : "completion epoch mismatch";
-
-    final InstructionBox decoded =
-        InstructionBox.fromNorito(InstructionKind.CUSTOM, box.arguments());
-    assert decoded.payload() instanceof CompleteReplicationOrderInstruction
-        : "Expected CompleteReplicationOrderInstruction";
-    final CompleteReplicationOrderInstruction payload =
-        (CompleteReplicationOrderInstruction) decoded.payload();
-    assert payload.completionEpoch() == 31 : "completion epoch mismatch";
+    assert "31".equals(args.get("completion_epoch")) : "completion epoch mismatch";
+    assert instruction.completionEpoch() == 31 : "completion epoch mismatch";
   }
 
   private static void testCompleteReplicationOrderRejectsNegativeEpoch() {
@@ -142,22 +123,13 @@ public final class SorafsReplicationInstructionBuilderTests {
             .setTimestamp(1_717_171_111L)
             .setPorSampleDigestHex("aabbccdd")
             .build();
-    final InstructionBox box =
-        InstructionBuilders.recordReplicationReceipt(instruction);
-    final Map<String, String> args = box.arguments();
+    final Map<String, String> args = instruction.toArguments();
     assert "RecordReplicationReceipt".equals(args.get("action")) : "action mismatch";
     assert PROVIDER_ID.equals(args.get("provider_id_hex")) : "provider id mismatch";
     assert "Accepted".equals(args.get("status")) : "status mismatch";
     assert "aabbccdd".equals(args.get("por_sample_digest_hex")) : "por digest mismatch";
-
-    final InstructionBox decoded =
-        InstructionBox.fromNorito(InstructionKind.CUSTOM, args);
-    assert decoded.payload() instanceof RecordReplicationReceiptInstruction
-        : "Expected RecordReplicationReceiptInstruction";
-    final RecordReplicationReceiptInstruction payload =
-        (RecordReplicationReceiptInstruction) decoded.payload();
-    assert payload.timestamp() == 1_717_171_111L : "timestamp mismatch";
-    assert payload.status() == RecordReplicationReceiptInstruction.Status.ACCEPTED
+    assert instruction.timestamp() == 1_717_171_111L : "timestamp mismatch";
+    assert instruction.status() == RecordReplicationReceiptInstruction.Status.ACCEPTED
         : "status mismatch";
   }
 

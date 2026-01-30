@@ -3,15 +3,13 @@ package org.hyperledger.iroha.android.nexus;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.Objects;
-import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.instructions.ExpireSpaceDirectoryManifestInstruction;
-import org.hyperledger.iroha.android.model.instructions.InstructionBuilders;
-import org.hyperledger.iroha.android.model.instructions.InstructionKind;
 import org.hyperledger.iroha.android.model.instructions.PublishSpaceDirectoryManifestInstruction;
 import org.hyperledger.iroha.android.model.instructions.RevokeSpaceDirectoryManifestInstruction;
 
-/** Ensures the Space Directory manifest instructions round-trip through InstructionBox. */
+/** Ensures the Space Directory manifest instructions emit the expected argument schema. */
 public final class SpaceDirectoryInstructionBuilderTests {
 
   private static final String UAID =
@@ -27,20 +25,12 @@ public final class SpaceDirectoryInstructionBuilderTests {
         PublishSpaceDirectoryManifestInstruction.builder()
             .setManifestJson(manifestJson)
             .build();
-    final InstructionBox publishBox =
-        InstructionBuilders.publishSpaceDirectoryManifest(publish);
-    assert "PublishSpaceDirectoryManifest".equals(publishBox.arguments().get("action"))
+    final Map<String, String> publishArgs = publish.toArguments();
+    assert "PublishSpaceDirectoryManifest".equals(publishArgs.get("action"))
         : "action mismatch for publish";
-    assert Objects.equals(manifestJson, publishBox.arguments().get("manifest_json"))
+    assert Objects.equals(manifestJson, publishArgs.get("manifest_json"))
         : "manifest_json mismatch";
-    final InstructionBox publishDecoded =
-        InstructionBox.fromNorito(InstructionKind.CUSTOM, publishBox.arguments());
-    assert publishDecoded.payload() instanceof PublishSpaceDirectoryManifestInstruction
-        : "Expected PublishSpaceDirectoryManifestInstruction payload";
-    final PublishSpaceDirectoryManifestInstruction publishPayload =
-        (PublishSpaceDirectoryManifestInstruction) publishDecoded.payload();
-    assert Objects.equals(manifestJson, publishPayload.manifestJson())
-        : "manifestJson getter mismatch";
+    assert Objects.equals(manifestJson, publish.manifestJson()) : "manifestJson getter mismatch";
 
     final String reason = "Emergency deny request #INC-2026-42";
     final RevokeSpaceDirectoryManifestInstruction revoke =
@@ -50,41 +40,28 @@ public final class SpaceDirectoryInstructionBuilderTests {
             .setRevokedEpoch(4610)
             .setReason(reason)
             .build();
-    final InstructionBox revokeBox =
-        InstructionBuilders.revokeSpaceDirectoryManifest(revoke);
-    assert "RevokeSpaceDirectoryManifest".equals(revokeBox.arguments().get("action"))
+    final Map<String, String> revokeArgs = revoke.toArguments();
+    assert "RevokeSpaceDirectoryManifest".equals(revokeArgs.get("action"))
         : "action mismatch for revoke";
-    assert Objects.equals(Long.toString(DATASPACE), revokeBox.arguments().get("dataspace"))
+    assert Objects.equals(Long.toString(DATASPACE), revokeArgs.get("dataspace"))
         : "dataspace mismatch";
-    assert reason.equals(revokeBox.arguments().get("reason")) : "reason mismatch";
-    final InstructionBox revokeDecoded =
-        InstructionBox.fromNorito(InstructionKind.CUSTOM, revokeBox.arguments());
-    assert revokeDecoded.payload() instanceof RevokeSpaceDirectoryManifestInstruction
-        : "Expected RevokeSpaceDirectoryManifestInstruction payload";
-    final RevokeSpaceDirectoryManifestInstruction revokePayload =
-        (RevokeSpaceDirectoryManifestInstruction) revokeDecoded.payload();
-    assert DATASPACE == revokePayload.dataspace() : "dataspace getter mismatch";
-    assert 4610L == revokePayload.revokedEpoch() : "revokedEpoch getter mismatch";
-    assert reason.equals(revokePayload.reason()) : "Decoded reason mismatch";
+    assert reason.equals(revokeArgs.get("reason")) : "reason mismatch";
+    assert DATASPACE == revoke.dataspace() : "dataspace getter mismatch";
+    assert 4610L == revoke.revokedEpoch() : "revokedEpoch getter mismatch";
+    assert reason.equals(revoke.reason()) : "Decoded reason mismatch";
 
-    final InstructionBox expireBox =
-        InstructionBuilders.expireSpaceDirectoryManifest(
-            ExpireSpaceDirectoryManifestInstruction.builder()
-                .setUaid(UAID)
-                .setDataspace(DATASPACE)
-                .setExpiredEpoch(4600)
-                .build());
-    assert "ExpireSpaceDirectoryManifest".equals(expireBox.arguments().get("action"))
+    final ExpireSpaceDirectoryManifestInstruction expire =
+        ExpireSpaceDirectoryManifestInstruction.builder()
+            .setUaid(UAID)
+            .setDataspace(DATASPACE)
+            .setExpiredEpoch(4600)
+            .build();
+    final Map<String, String> expireArgs = expire.toArguments();
+    assert "ExpireSpaceDirectoryManifest".equals(expireArgs.get("action"))
         : "action mismatch for expire";
-    assert "4600".equals(expireBox.arguments().get("expired_epoch"))
+    assert "4600".equals(expireArgs.get("expired_epoch"))
         : "expired_epoch mismatch";
-    final InstructionBox expireDecoded =
-        InstructionBox.fromNorito(InstructionKind.CUSTOM, expireBox.arguments());
-    assert expireDecoded.payload() instanceof ExpireSpaceDirectoryManifestInstruction
-        : "Expected ExpireSpaceDirectoryManifestInstruction payload";
-    final ExpireSpaceDirectoryManifestInstruction expirePayload =
-        (ExpireSpaceDirectoryManifestInstruction) expireDecoded.payload();
-    assert 4600L == expirePayload.expiredEpoch() : "expiredEpoch getter mismatch";
+    assert 4600L == expire.expiredEpoch() : "expiredEpoch getter mismatch";
 
     System.out.println(
         "[IrohaAndroid] SpaceDirectoryInstructionBuilderTests passed (publish/revoke/expire).");

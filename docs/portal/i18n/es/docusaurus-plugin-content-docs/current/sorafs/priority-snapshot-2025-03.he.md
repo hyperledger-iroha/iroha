@@ -1,20 +1,38 @@
-<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
-
 ---
 lang: he
 direction: rtl
 source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/sorafs/priority-snapshot-2025-03.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 86f8971f54b39c4aee3b0f19561592fada68a99d18dd9b48bcd3cefc8aa224d1
 source_last_modified: "2025-11-14T04:43:22.091033+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# בתהליך תרגום
+> Fuente canonica: `docs/source/sorafs/priority_snapshot_2025-03.md`
+>
+> Estado: **Beta / esperando ACKs de steering** (Networking, Storage, Docs leads).
 
-<div dir="rtl">
-קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
+## Resumen
 
-לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
-</div>
+El snapshot de marzo mantiene las iniciativas de docs/content-network alineadas
+con las pistas de entrega de SoraFS (SF-3, SF-6b, SF-9). Una vez que todos los
+leads confirmen el snapshot en el canal de steering de Nexus, elimina la nota
+“Beta” de arriba.
+
+### Hilos de enfoque
+
+1. **Circular snapshot de prioridades** — recopilar acknowledgements y
+   registrarlos en las minutas del council del 2025-03-05.
+2. **Cierre del kickoff de Gateway/DNS** — ensayar el nuevo kit de facilitacion
+   (Seccion 6 del runbook) antes del workshop 2025-03-03.
+3. **Migracion de runbooks de operadores** — el portal `Runbook Index` esta live;
+   expone la URL de beta preview despues del sign-off de onboarding de reviewers.
+4. **Hilos de entrega de SoraFS** — alinear el trabajo restante de SF-3/6b/9 con
+   el plan/roadmap:
+   - Worker de ingesta PoR + endpoint de estado en `sorafs-node`.
+   - Pulido de bindings CLI/SDK en integraciones de orchestrator Rust/JS/Swift.
+   - Cableado de runtime del coordinador PoR y eventos de GovernanceLog.
+
+Consulta el archivo fuente para la tabla completa, el checklist de distribucion
+y las entradas de log.

@@ -1,6 +1,6 @@
 # norito-java
 
-`norito-java` is a pure-Java (JDK 25-ready) reference implementation of the
+`norito-java` is a pure-Java (JDK 21-ready) reference implementation of the
 Norito serialization codec. It mirrors the behaviour of the Rust and Python
 implementations so tooling can construct and inspect deterministic payloads
 without native dependencies.
@@ -19,6 +19,8 @@ without native dependencies.
 - CLI inspector `NoritoDump` for quick header introspection
 - Streaming resume helpers (`KeyUpdateState`/`ContentKeyState`) plus baseline RLE
   block decoding with explicit end-of-block validation.
+- Zero-copy decode helpers for `ByteBuffer` payloads and CRC64 parity across
+  buffer-backed inputs.
 
 ## Rust trait parity
 The JVM binding follows the Rust `NoritoSerialize`/`NoritoDeserialize`
@@ -43,8 +45,8 @@ cd java/norito_java
 ./run_tests.sh
 ```
 
-By default the script uses `javac --release 21` when available, falling back to
-`javac` defaults. Enable assertions (`-ea`) to ensure test checks run.
+The script targets `javac --release 21` (JDK 21+) to keep the artifact Android
+friendly. Enable assertions (`-ea`) to ensure test checks run.
 
 ## Usage Example
 ```java
@@ -154,8 +156,8 @@ available.
   drift; Java bindings required no code changes beyond rerunning the parity
   suite.
 
-## Installation (JDK 25 on macOS)
-Homebrew’s Temurin cask ships the current GA JDK 25 release:
+## Installation (JDK 21 on macOS)
+Homebrew’s Temurin cask ships the current GA JDK 21 release:
 
 ```bash
 brew update
@@ -165,13 +167,13 @@ brew install --cask temurin
 Select the installed JDK and verify:
 
 ```bash
-export JAVA_HOME=$(/usr/libexec/java_home -v 25)
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
 java -version
 ```
 
 Alternatively, download Oracle’s macOS bundle from
 https://www.oracle.com/java/technologies/downloads/ and set `JAVA_HOME` via
-`/usr/libexec/java_home -v 25` after installation.
+`/usr/libexec/java_home -v 21` after installation.
 
 ## License
 Licensed under the Apache License, Version 2.0. See `LICENSE` for details.

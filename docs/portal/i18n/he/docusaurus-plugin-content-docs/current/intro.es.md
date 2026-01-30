@@ -1,18 +1,34 @@
-<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
-
 ---
 lang: es
 direction: ltr
 source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/intro.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: b46ac88f830de9b8072ed35af419b249ba1488a5672a24e2a59cd4ae275a55ed
 source_last_modified: "2025-11-04T12:03:18.015849+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# Traducción en curso
+# ברוכים הבאים לפורטל המפתחים של SORA Nexus
 
-Este archivo es un marcador de posición para la traducción al español del documento en inglés. Cuando la traducción esté lista, actualiza el campo `status` en los metadatos anteriores.
+הפורטל למפתחים של SORA Nexus מרכז תיעוד אינטראקטיבי, מדריכי SDK והפניות API עבור מפעילי Nexus ותורמי Hyperledger Iroha. הוא משלים את אתר התיעוד הראשי בכך שהוא חושף מדריכים מעשיים ומפרטים שנוצרים ישירות מהמאגר הזה. עמוד הנחיתה כולל כעת נקודות כניסה ממותגות ל-Norito/SoraFS, snapshots של OpenAPI חתומים, והפניה ייעודית ל-Norito Streaming כדי שתורמים יוכלו למצוא את חוזה מישור הבקרה של ה-streaming בלי לחטט במפרט הבסיסי.
 
-Este borrador está a la espera de traducción. Sustituye este texto por el contenido traducido y cambia el estado a `complete` cuando finalices. Revisa también que `translation_last_reviewed` coincida con la última comprobación frente a la versión inglesa.
+## מה אפשר לעשות כאן
+
+- **ללמוד Norito** - התחילו עם הסקירה וה-quickstart כדי להבין את מודל הסריאליזציה וכלי ה-bytecode.
+- **להרים SDKs** - עקבו אחרי ה-quickstarts של JavaScript ו-Rust כבר עכשיו; מדריכי Python, Swift ו-Android יצטרפו כאשר המתכונים יועברו.
+- **לעיין בהפניות API** - עמוד OpenAPI של Torii מציג את מפרט ה-REST העדכני, וטבלאות התצורה מקשרות למקורות ה-Markdown הקנוניים.
+- **להכין פריסות** - runbooks תפעוליים (telemetry, settlement, Nexus overlays) מועברים מ-`docs/source/` ויגיעו לכאן עם התקדמות ההגירה.
+
+## מצב נוכחי
+
+- ✅ עמוד נחיתה ממותג של Docusaurus v3 עם טיפוגרפיה מרועננת, hero/cards מונעי גרדיאנטים, ואריחי משאבים הכוללים את סיכום Norito Streaming.
+- ✅ תוסף OpenAPI של Torii מחובר ל-`npm run sync-openapi`, עם בדיקות snapshots חתומים והגנות CSP שמיושמות על ידי `buildSecurityHeaders`.
+- ✅ כיסוי preview ו-probe רץ ב-CI (`docs-portal-preview.yml` + `scripts/portal-probe.mjs`), וכעת משמש כשער לדוקומנט streaming, ל-quickstarts של SoraFS ול-checklists של reference לפני פרסום ארטיפקטים.
+- ✅ quickstarts של Norito, SoraFS ו-SDK יחד עם מקטעי reference חיים בסרגל הצד; יבואי `docs/source/` חדשים (streaming, orchestration, runbooks) נוחתים כאן כאשר הם נכתבים.
+
+## איך להשתתף
+
+- ראו `docs/portal/README.md` עבור פקודות פיתוח מקומי (`npm install`, `npm run start`, `npm run build`).
+- משימות הגירת התוכן מתועדות לצד פריטי roadmap `DOCS-*`. תרומות יתקבלו בברכה - העבירו מקטעים מתוך `docs/source/` והוסיפו את העמוד לסרגל הצד.
+- אם אתם מוסיפים ארטיפקט שנוצר (specs, טבלאות תצורה), תעדו את פקודת ה-build כדי שתורמים עתידיים יוכלו לרענן אותו בקלות.

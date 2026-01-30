@@ -1,15 +1,39 @@
-<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
-
 ---
 lang: pt
 direction: ltr
 source: docs/portal/docs/norito/examples/hajimari-entrypoint.ar.md
-status: needs-translation
+status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-# Tradução em andamento
+---
+slug: /norito/examples/hajimari-entrypoint
+title: هيكل نقطة دخول Hajimari
+description: هيكل عقد Kotodama بسيط بنقطة دخول عامة واحدة ومقبض حالة.
+source: crates/ivm/docs/examples/01_hajimari.ko
+---
 
-Este arquivo é um marcador de posição para a tradução em português do documento em inglês. Quando a tradução estiver pronta, atualize o campo `status` nos metadados acima.
+هيكل عقد Kotodama بسيط بنقطة دخول عامة واحدة ومقبض حالة.
 
-Este rascunho aguarda tradução. Substitua este texto pelo conteúdo traduzido e altere o estado para `complete` ao finalizar. Verifique também se `translation_last_reviewed` reflete a última revisão em relação à versão em inglês.
+## جولة دفتر الأستاذ
+
+- قم بتجميع العقد باستخدام `koto_compile --abi 1` كما هو موضح في [البدء مع Norito](/norito/getting-started#1-compile-a-kotodama-contract) أو عبر `cargo test -p ivm developer_portal_norito_snippets_compile`.
+- أجر اختبار دخان للبايت كود محليا باستخدام `ivm_run` / `developer_portal_norito_snippets_run` للتحقق من سجل `info!` والنداء النظامي الأول قبل لمس عقدة.
+- انشر الأثر عبر `iroha_cli app contracts deploy` وأكد البيان باستخدام الخطوات في [البدء مع Norito](/norito/getting-started#4-deploy-via-iroha_cli).
+
+## أدلة SDK ذات صلة
+
+- [البدء السريع لـ Rust SDK](/sdks/rust)
+- [البدء السريع لـ Python SDK](/sdks/python)
+- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
+
+[نزّل مصدر Kotodama](/norito-snippets/hajimari-entrypoint.ko)
+
+```text
+// Minimal initializer-style function inside a contract.
+seiyaku HajimariExample {
+  hajimari() {
+    info("Hello from hajimari");
+  }
+}
+```

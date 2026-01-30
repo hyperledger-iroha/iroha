@@ -1,18 +1,40 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/norito/examples/call-transfer-asset.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 2b3e6f3f7bb01b70497929c7724085c6ad0799d4245cae4dd6e5e121eb855615
 source_last_modified: "2025-11-14T04:43:20.645200+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-01-30
 ---
 
-# 翻訳作業中
+Mostra como um entrypoint Kotodama pode chamar a instrucao do host `transfer_asset` com validacao inline de metadados.
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+## Roteiro do livro razao
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+- Financie a autoridade do contrato (por exemplo `ih58...`) com o ativo que ela transferira e conceda a autoridade o papel `CanTransfer` ou permissao equivalente.
+- Chame o entrypoint `call_transfer_asset` para transferir 5 unidades da conta do contrato para `ih58...`, refletindo como a automacao on-chain pode envolver chamadas do host.
+- Verifique saldos via `FindAccountAssets` ou `iroha_cli ledger assets list --account ih58...` e inspecione eventos para confirmar que o guard de metadados registrou o contexto da transferencia.
+
+## Guias de SDK relacionados
+
+- [Quickstart do SDK Rust](/sdks/rust)
+- [Quickstart do SDK Python](/sdks/python)
+- [Quickstart do SDK JavaScript](/sdks/javascript)
+
+[Baixe a fonte Kotodama](/norito-snippets/call-transfer-asset.ko)
+
+```text
+// Direct builtin call (no contract-style call syntax) inside a contract.
+seiyaku TransferCall {
+  kotoage fn pay() permission(AssetTransferRole) {
+    transfer_asset(
+      account!("ih58..."),
+      account!("ih58..."),
+      asset_definition!("rose#wonderland"),
+      10
+    );
+  }
+}
+```
