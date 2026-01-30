@@ -1912,96 +1912,98 @@ impl Actor {
         if self.kura.get_block_height_by_hash(key.0).is_some() {
             return;
         }
-        let Some(payload) = self.rbc_session_payload_bytes(&key) else {
-            return;
-        };
-        let payload_hash = Hash::new(&payload);
-        let mut payload_mismatch: Option<Hash> = None;
-        {
-            if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
-                if let Some(expected) = session.payload_hash() {
-                    if expected != payload_hash {
-                        session.invalid = true;
-                        payload_mismatch = Some(expected);
+        let payload = self.rbc_session_payload_bytes(&key);
+        if let Some(payload) = payload {
+            let payload_hash = Hash::new(&payload);
+            let mut payload_mismatch: Option<Hash> = None;
+            {
+                if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
+                    if let Some(expected) = session.payload_hash() {
+                        if expected != payload_hash {
+                            session.invalid = true;
+                            payload_mismatch = Some(expected);
+                        }
                     }
                 }
             }
-        }
-        if let Some(expected) = payload_mismatch {
-            warn!(
-                height = key.1,
-                view = key.2,
-                expected = ?expected,
-                observed = ?payload_hash,
-                "reconstructed RBC payload hash mismatches session; marking invalid"
-            );
-            self.clear_pending_rbc(&key);
-            if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
-                self.update_rbc_status_entry(key, &session, false);
-                self.persist_rbc_session(key, &session);
+            if let Some(expected) = payload_mismatch {
+                warn!(
+                    height = key.1,
+                    view = key.2,
+                    expected = ?expected,
+                    observed = ?payload_hash,
+                    "reconstructed RBC payload hash mismatches session; marking invalid"
+                );
+                self.clear_pending_rbc(&key);
+                if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
+                    self.update_rbc_status_entry(key, &session, false);
+                    self.persist_rbc_session(key, &session);
+                }
+                self.publish_rbc_backlog_snapshot();
             }
-            self.publish_rbc_backlog_snapshot();
-        }
-        if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
-            if let (Some(block_header), Some(leader_signature)) =
-                (session.block_header, session.leader_signature.clone())
-            {
-                if block_header.hash() == key.0 {
-                    match BlockPayload::decode(&mut &payload[..]) {
-                        Ok(mut payload) => {
-                            let mut expected_header = block_header;
-                            expected_header.result_merkle_root = None;
-                            if payload.header == expected_header {
-                                payload.header = block_header;
-                                let block =
-                                    SignedBlock::presigned_with_payload(leader_signature, payload);
-                                if let Err(err) = self.handle_block_created(
-                                    super::message::BlockCreated { block },
-                                    None,
-                                ) {
-                                    warn!(
-                                        ?err,
-                                        height = key.1,
-                                        view = key.2,
-                                        block = %key.0,
-                                        "failed to handle recovered BlockCreated from RBC payload"
+            if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
+                if let (Some(block_header), Some(leader_signature)) =
+                    (session.block_header, session.leader_signature.clone())
+                {
+                    if block_header.hash() == key.0 {
+                        match BlockPayload::decode(&mut &payload[..]) {
+                            Ok(mut payload) => {
+                                let mut expected_header = block_header;
+                                expected_header.result_merkle_root = None;
+                                if payload.header == expected_header {
+                                    payload.header = block_header;
+                                    let block = SignedBlock::presigned_with_payload(
+                                        leader_signature,
+                                        payload,
                                     );
+                                    if let Err(err) = self.handle_block_created(
+                                        super::message::BlockCreated { block },
+                                        None,
+                                    ) {
+                                        warn!(
+                                            ?err,
+                                            height = key.1,
+                                            view = key.2,
+                                            block = %key.0,
+                                            "failed to handle recovered BlockCreated from RBC payload"
+                                        );
+                                    } else {
+                                        debug!(
+                                            height = key.1,
+                                            view = key.2,
+                                            block = %key.0,
+                                            "recovered BlockCreated from RBC payload"
+                                        );
+                                        return;
+                                    }
                                 } else {
-                                    debug!(
+                                    warn!(
                                         height = key.1,
                                         view = key.2,
                                         block = %key.0,
-                                        "recovered BlockCreated from RBC payload"
+                                        "skipping RBC payload recovery: header mismatch"
                                     );
-                                    return;
                                 }
-                            } else {
+                            }
+                            Err(err) => {
                                 warn!(
-                                    height = key.1,
-                                    view = key.2,
-                                    block = %key.0,
-                                    "skipping RBC payload recovery: header mismatch"
+                                ?err,
+                                height = key.1,
+                                view = key.2,
+                                block = %key.0,
+                                    "skipping RBC payload recovery: decode failed"
                                 );
                             }
                         }
-                        Err(err) => {
-                            warn!(
-                            ?err,
+                    } else {
+                        warn!(
                             height = key.1,
                             view = key.2,
-                            block = %key.0,
-                                "skipping RBC payload recovery: decode failed"
-                            );
-                        }
+                            expected = ?key.0,
+                            observed = ?block_header.hash(),
+                            "skipping RBC payload recovery: block header hash mismatch"
+                        );
                     }
-                } else {
-                    warn!(
-                        height = key.1,
-                        view = key.2,
-                        expected = ?key.0,
-                        observed = ?block_header.hash(),
-                        "skipping RBC payload recovery: block header hash mismatch"
-                    );
                 }
             }
         }
@@ -5480,6 +5482,11 @@ impl Actor {
                 .rbc
                 .ready_rebroadcast_last_sent
                 .remove(key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .deliver_rebroadcast_last_sent
+                .remove(key);
             self.subsystems.da_rbc.rbc.ready_deferral.remove(key);
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(key);
             self.subsystems
@@ -5532,6 +5539,11 @@ impl Actor {
                 .da_rbc
                 .rbc
                 .ready_rebroadcast_last_sent
+                .remove(key);
+            self.subsystems
+                .da_rbc
+                .rbc
+                .deliver_rebroadcast_last_sent
                 .remove(key);
             self.subsystems.da_rbc.rbc.ready_deferral.remove(key);
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(key);

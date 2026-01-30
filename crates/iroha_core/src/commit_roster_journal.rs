@@ -556,16 +556,18 @@ mod tests {
         journal.upsert(cert1.clone(), checkpoint1, None);
         journal.upsert(cert2.clone(), checkpoint2, None);
 
-        journal
-            .truncate_to_height(1)
-            .expect("truncate to height");
+        journal.truncate_to_height(1).expect("truncate to height");
 
-        assert!(journal
-            .get(cert1.height, cert1.subject_block_hash)
-            .is_some());
-        assert!(journal
-            .get(cert2.height, cert2.subject_block_hash)
-            .is_none());
+        assert!(
+            journal
+                .get(cert1.height, cert1.subject_block_hash)
+                .is_some()
+        );
+        assert!(
+            journal
+                .get(cert2.height, cert2.subject_block_hash)
+                .is_none()
+        );
     }
 
     #[test]
