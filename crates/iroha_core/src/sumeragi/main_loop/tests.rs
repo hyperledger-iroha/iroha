@@ -15787,10 +15787,16 @@ async fn handle_qc_validates_pending_block_on_commit_qc() {
 
     actor.handle_qc(qc).expect("handle qc");
 
-    assert!(
-        actor.block_known_for_lock(block_hash),
-        "commit QC should validate pending block when payload is present"
-    );
+    if !actor.block_known_for_lock(block_hash) {
+        let outcome = actor.validate_pending_block_for_voting_inline(
+            block_hash,
+            &actor.effective_commit_topology(),
+        );
+        panic!(
+            "commit QC should validate pending block when payload is present; manual outcome: {:?}",
+            outcome
+        );
+    }
 
     harness.shutdown.send();
 }
