@@ -55,7 +55,8 @@ para a conta de origem quando o timer expira.
 `PublicLaneValidatorStatus` enumera fases do ciclo de vida:
 
 - `PendingActivation(epoch)` - aguardando a epoca de ativacao especificada pela governanca; o payload de tupla
-  guarda a epoca de ativacao mais cedo derivada de `epoch_length_blocks`.
+  guarda a epoca de ativacao mais cedo calculada como `current_epoch + 1`
+  (as epocas derivam de `epoch_length_blocks`).
 - `Active` - participa do consenso e pode receber recompensas.
 - `Jailed { reason }` - suspenso temporariamente (downtime, breach de telemetria, etc.).
 - `Exiting { releases_at_ms }` - unbonding; recompensas deixam de acumular.
@@ -159,7 +160,8 @@ Regras de validacao:
 - `initial_stake` >= `min_self_stake` (parametro de governanca).
 - Metadata DEVE incluir hooks de contato/telemetria antes da ativacao.
 - A governanca aprova/nega a entrada; ate la o status e `PendingActivation` e o runtime
-  promove o validador para `Active` no proximo limite de epoca assim que a epoca alvo for alcancada.
+  promove o validador para `Active` no proximo limite de epoca assim que a epoca alvo
+  (`current_epoch + 1` no registro) for alcancada.
 
 ### 2.2 `BondPublicLaneStake`
 
@@ -212,8 +214,9 @@ Este ISI e idempotente por `(lane_id, epoch)` e fundamenta a contabilidade notur
   antes de `RegisterPublicLaneValidator` ter sucesso. Fingerprints genesis e
   `use_stake_snapshot_roster` decidem se o runtime deriva o roster a partir de snapshots de stake
   ou recorre a peers genesis.
-- **Operacoes de ativacao/saida:** registros entram em `PendingActivation` e sao auto-promovidos no
-  primeiro bloco cuja epoca atinge o limite programado (`epoch_length_blocks`). Operadores tambem
+- **Operacoes de ativacao/saida:** registros entram em `PendingActivation` com alvo
+  `current_epoch + 1` e sao auto-promovidos no primeiro bloco cuja epoca atinge o limite programado
+  (`epoch_length_blocks`). Operadores tambem
   podem chamar `ActivatePublicLaneValidator` apos o limite para forcar a promocao. Saidas movem
   validadores para `Exiting(release_at_ms)` e liberam capacidade apenas quando o timestamp do bloco
   alcanca `release_at_ms`; re-registracao apos slash ainda requer saida para que o registro fique
@@ -222,7 +225,8 @@ Este ISI e idempotente por `(lane_id, epoch)` e fundamenta a contabilidade notur
   ate o timer expirar.
 - **Config knobs:** `nexus.staking.min_validator_stake`, `nexus.staking.stake_asset_id`,
   `nexus.staking.stake_escrow_account_id`, `nexus.staking.slash_sink_account_id`,
-  `nexus.staking.unbonding_delay`, `nexus.staking.withdraw_grace`, `nexus.staking.max_validators`,
+  `nexus.staking.unbonding_delay`, `nexus.staking.withdraw_grace`,
+  `nexus.staking.max_validators`,
   `nexus.staking.max_slash_bps`, `nexus.staking.reward_dust_threshold`, e os switches de modo acima.
   Passe-os via `iroha_config::parameters::actual::Nexus` e exponha em `status.md` quando valores GA
   forem ratificados.

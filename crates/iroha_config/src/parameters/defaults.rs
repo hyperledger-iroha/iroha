@@ -1844,8 +1844,6 @@ pub mod nexus {
         pub const WITHDRAW_GRACE: Duration = Duration::from_secs(0);
         /// Maximum slash ratio (basis points, 10_000 = 100%).
         pub const MAX_SLASH_BPS: u16 = 10_000;
-        /// Number of epochs to wait before a newly registered validator becomes active.
-        pub const VALIDATOR_ACTIVATION_LAG_EPOCHS: u64 = 1;
         /// Minimum reward amount (base units) that will be paid out; smaller amounts are skipped.
         pub const REWARD_DUST_THRESHOLD: u64 = 0;
         /// Asset definition used for staking bonds (defaults to the Nexus fee asset).

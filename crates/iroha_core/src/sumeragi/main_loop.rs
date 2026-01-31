@@ -6642,12 +6642,36 @@ impl Actor {
     }
 
     fn effective_commit_topology_from_view(&self, view: &StateView<'_>) -> Vec<PeerId> {
-        derive_active_topology_for_mode(
+        let roster = derive_active_topology_for_mode(
             view,
             self.common_config.trusted_peers.value(),
             self.common_config.peer.id(),
             self.consensus_mode,
-        )
+        );
+        if !roster.is_empty() {
+            return roster;
+        }
+        if !view.commit_topology().is_empty() || !view.world().peers().is_empty() {
+            return roster;
+        }
+        if self.genesis_block_hash().is_none() || view.height() == 0 {
+            return roster;
+        }
+        let mut genesis_roster = self.genesis_roster_from_genesis_block();
+        if genesis_roster.is_empty() {
+            return roster;
+        }
+        let (consensus_mode, _, _) = self.consensus_context_for_height(1);
+        genesis_roster = roster::canonicalize_roster_for_mode(genesis_roster, consensus_mode);
+        if genesis_roster.is_empty() {
+            return roster;
+        }
+        info!(
+            height = view.height(),
+            roster_len = genesis_roster.len(),
+            "using genesis roster fallback for empty commit topology"
+        );
+        genesis_roster
     }
 
     fn effective_commit_topology(&self) -> Vec<PeerId> {

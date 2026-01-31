@@ -58,7 +58,8 @@ Torii/SDKs יכולים להתחיל לחווט את מטעני Norito לפני 
 `PublicLaneValidatorStatus` מונה את שלבי מחזור החיים:
 
 - `PendingActivation(epoch)` — ממתין ל‑epoch ההפעלה שקבעה הממשל; מטען הטופס שומר את
-  ה‑epoch המוקדם ביותר שנגזר מ‑`epoch_length_blocks`.
+  ה‑epoch המוקדם ביותר המחושב כ‑`current_epoch + 1`
+  (ה‑epochs נגזרים מ‑`epoch_length_blocks`).
 - `Active` — משתתף בקונצנזוס ויכול לקבל תגמולים.
 - `Jailed { reason }` — מושעה זמנית (downtime, הפרת טלמטריה וכו').
 - `Exiting { releases_at_ms }` — unbonding; התגמולים מפסיקים להצטבר.
@@ -157,7 +158,8 @@ Guardrails של runtime:
 - `initial_stake` >= `min_self_stake` (פרמטר ממשל).
 - Metadata חייבת לכלול hooks של קשר/טלמטריה לפני ההפעלה.
 - הממשל מאשר/דוחה את הרשומה; עד אז הסטטוס הוא `PendingActivation` וה‑runtime מקדם את
-  המאמת ל‑`Active` בגבול ה‑epoch הבא לאחר שה‑epoch היעד הושג.
+  המאמת ל‑`Active` בגבול ה‑epoch הבא לאחר שה‑epoch היעד הושג
+  (`current_epoch + 1` בזמן הרישום).
 
 ### 2.2 `BondPublicLaneStake`
 
@@ -209,7 +211,8 @@ ISI זה idempotent לכל `(lane_id, epoch)` ומהווה בסיס לחשבונ
   רשום עם מפתח קונצנזוס פעיל ב‑commit topology לפני הצלחת `RegisterPublicLaneValidator`.
   genesis fingerprints ו‑`use_stake_snapshot_roster` קובעים אם runtime מפיק roster מ‑stake snapshots
   או נופל חזרה ל‑genesis peers.
-- **Activation/exit operations:** רישומים נכנסים ל‑`PendingActivation` ומקודמים אוטומטית בבלוק הראשון
+- **Activation/exit operations:** רישומים נכנסים ל‑`PendingActivation` עבור
+  `current_epoch + 1` ומקודמים אוטומטית בבלוק הראשון
   שה‑epoch שלו מגיע לגבול (`epoch_length_blocks`). מפעילים יכולים גם לקרוא ל‑`ActivatePublicLaneValidator`
   אחרי הגבול כדי לכפות קידום. יציאות מעבירות מאמתים ל‑`Exiting(release_at_ms)` ומשחררות קיבולת רק כאשר
   חותמת זמן הבלוק מגיעה ל‑`release_at_ms`; רישום מחדש אחרי slash עדיין דורש יציאה כדי שהרשומה תסומן
@@ -217,7 +220,8 @@ ISI זה idempotent לכל `(lane_id, epoch)` ומהווה בסיס לחשבונ
   finalizer היציאה, כך שיציאות עתידיות חוסמות רישומים חדשים עד לסיום הטיימר.
 - **Config knobs:** `nexus.staking.min_validator_stake`, `nexus.staking.stake_asset_id`,
   `nexus.staking.stake_escrow_account_id`, `nexus.staking.slash_sink_account_id`,
-  `nexus.staking.unbonding_delay`, `nexus.staking.withdraw_grace`, `nexus.staking.max_validators`,
+  `nexus.staking.unbonding_delay`, `nexus.staking.withdraw_grace`,
+  `nexus.staking.max_validators`,
   `nexus.staking.max_slash_bps`, `nexus.staking.reward_dust_threshold`, וה‑mode switches לעיל. העבירו
   אותם דרך `iroha_config::parameters::actual::Nexus` וחשפו ב‑`status.md` לאחר אישור ערכי GA.
 - **Torii/CLI quickstart:**

@@ -1548,7 +1548,6 @@ impl Actor {
         &mut self,
         height: u64,
         view: u64,
-        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
         pending_queue_len: usize,
         now: Instant,
     ) {
@@ -1580,9 +1579,7 @@ impl Actor {
             (pending.block.clone(), pending.block.hash())
         };
 
-        let proposal_roster = self
-            .roster_from_commit_qc_history_roll_forward(height, Some(highest_qc.subject_block_hash))
-            .unwrap_or_else(|| self.effective_commit_topology());
+        let proposal_roster = self.effective_commit_topology();
         if proposal_roster.is_empty() {
             trace!(
                 height,
@@ -2103,13 +2100,7 @@ impl Actor {
         {
             // Rebroadcast cached proposals when the leader is still responsible for the slot so
             // peers that missed the initial messages can recover without forcing a view change.
-            self.maybe_rebroadcast_cached_proposal(
-                height,
-                view_idx,
-                highest_qc,
-                pending_queue_len,
-                now,
-            );
+            self.maybe_rebroadcast_cached_proposal(height, view_idx, pending_queue_len, now);
             if pending_queue_len > 0 {
                 iroha_logger::info!(
                     height,

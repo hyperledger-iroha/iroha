@@ -164,8 +164,7 @@ impl Execute for RegisterPublicLaneValidator {
             )
             .max(1);
         let current_epoch = current_epoch(block_height, epoch_length)?;
-        let activation_lag_epochs = state_transaction.nexus.staking.validator_activation_lag_epochs;
-        let pending_activation_epoch = current_epoch.saturating_add(activation_lag_epochs);
+        let pending_activation_epoch = current_epoch.saturating_add(1);
         let pending_status = PublicLaneValidatorStatus::PendingActivation(pending_activation_epoch);
         let record = PublicLaneValidatorRecord {
             lane_id: self.lane_id,

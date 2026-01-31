@@ -2850,6 +2850,143 @@ async fn genesis_commit_roster_seeded_when_missing() {
     harness.shutdown.send();
 }
 
+#[test]
+fn effective_commit_topology_falls_back_to_genesis_roster_when_empty() {
+    use iroha_config::base::WithOrigin;
+    use iroha_config::parameters::actual::Common as CommonConfig;
+    use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+
+    let (peer_a, pop_a, _kp_a) = bls_peer("127.0.0.1:20001");
+    let (peer_b, pop_b, _kp_b) = bls_peer("127.0.0.1:20002");
+    let chain_id: ChainId = "genesis-roster-fallback".parse().expect("chain id parses");
+    let genesis = GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
+        .set_topology(vec![
+            GenesisTopologyEntry::new(peer_a.id().clone(), pop_a),
+            GenesisTopologyEntry::new(peer_b.id().clone(), pop_b),
+        ])
+        .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+        .expect("genesis block should be built");
+
+    let kura = Kura::blank_kura_for_testing();
+    kura.store_block(genesis.0.clone())
+        .expect("store genesis block");
+
+    let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
+    let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
+    let genesis_account =
+        iroha_data_model::prelude::Account::new(genesis_id.clone()).build(&genesis_id);
+    let world = World::with([genesis_domain], [genesis_account], []);
+    let mut state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
+    state.chain_id = chain_id.clone();
+    state.push_block_hash_for_testing(genesis.0.hash());
+    let state = Arc::new(state);
+
+    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let address: SocketAddr = "127.0.0.1:0".parse().expect("socket address parses");
+    let local_peer = Peer::new(address.into(), PeerId::new(key_pair.public_key().clone()));
+    let trusted_peers = trusted_with_pops(local_peer.clone(), Vec::new(), BTreeMap::new());
+    let common_config = CommonConfig {
+        chain: chain_id.clone(),
+        key_pair: key_pair.clone(),
+        peer: local_peer,
+        trusted_peers: WithOrigin::inline(trusted_peers),
+        default_account_domain_label: WithOrigin::inline(
+            iroha_config::parameters::defaults::common::default_account_domain_label(),
+        ),
+        chain_discriminant: WithOrigin::inline(
+            iroha_config::parameters::defaults::common::chain_discriminant(),
+        ),
+    };
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+
+    let time_source = TimeSource::new_system();
+    let queue = Arc::new(Queue::test(QueueConfig::default(), &time_source));
+    let events_sender: crate::EventsSender = tokio::sync::broadcast::Sender::new(1);
+    let network = crate::IrohaNetwork::closed_for_tests();
+    let peers_gossiper = crate::peers_gossiper::PeersGossiperHandle::closed_for_tests();
+    let spool_dir = tempfile::tempdir().expect("tempdir");
+    let genesis_network = crate::sumeragi::GenesisWithPubKey {
+        genesis: Some(genesis.clone()),
+        public_key: key_pair.public_key().clone(),
+    };
+    let rbc_status_handle = rbc_status::register_handle();
+    let block_sync_gossip_limit =
+        usize::try_from(iroha_config::parameters::defaults::network::BLOCK_GOSSIP_SIZE.get())
+            .unwrap_or(usize::MAX);
+    let block_payload_dedup = Arc::new(Mutex::new(crate::sumeragi::BlockPayloadDedupCache::new(
+        crate::sumeragi::BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+        crate::sumeragi::BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+    )));
+
+    #[cfg(feature = "telemetry")]
+    let telemetry =
+        crate::telemetry::Telemetry::new(Arc::new(crate::telemetry::Metrics::default()), true);
+
+    #[cfg(feature = "telemetry")]
+    let actor = Actor::new(
+        consensus_cfg,
+        common_config,
+        iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS.get(),
+        iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC.get(),
+        events_sender,
+        Arc::clone(&state),
+        Arc::clone(&queue),
+        Arc::clone(&kura),
+        network,
+        spool_dir.path().to_path_buf(),
+        peers_gossiper,
+        genesis_network,
+        crate::kura::BlockCount(1),
+        block_sync_gossip_limit,
+        telemetry,
+        None,
+        None,
+        None,
+        None,
+        block_payload_dedup,
+        rbc_status_handle,
+    )
+    .expect("actor init");
+
+    #[cfg(not(feature = "telemetry"))]
+    let actor = Actor::new(
+        consensus_cfg,
+        common_config,
+        iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS.get(),
+        iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC.get(),
+        events_sender,
+        Arc::clone(&state),
+        Arc::clone(&queue),
+        Arc::clone(&kura),
+        network,
+        spool_dir.path().to_path_buf(),
+        peers_gossiper,
+        genesis_network,
+        crate::kura::BlockCount(1),
+        block_sync_gossip_limit,
+        None,
+        None,
+        None,
+        None,
+        block_payload_dedup,
+        rbc_status_handle,
+    )
+    .expect("actor init");
+
+    let expected = super::roster::canonicalize_roster_for_mode(
+        vec![peer_a.id().clone(), peer_b.id().clone()],
+        ConsensusMode::Permissioned,
+    );
+    let roster = actor.effective_commit_topology();
+    assert_eq!(
+        roster, expected,
+        "empty topology should fall back to genesis roster"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn merge_committee_signatures_commit_merge_entry() {
     let mut harness = test_actor_harness(1).await;
@@ -40870,15 +41007,13 @@ async fn pacemaker_rebroadcasts_cached_proposal_when_leader() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn pacemaker_uses_commit_qc_roster_for_proposal_leader() {
+async fn pacemaker_ignores_commit_qc_roster_for_leader_selection() {
     use crate::sumeragi::status;
 
     status::reset_commit_certs_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
-    consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
-    let configured_chunk_max_bytes = consensus_cfg.rbc.chunk_max_bytes;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
 
@@ -40893,7 +41028,6 @@ async fn pacemaker_uses_commit_qc_roster_for_proposal_leader() {
 
     let block1 = sample_block(1, 0, None);
     let block2 = sample_block(2, 0, Some(block1.hash()));
-    let parent_block = sample_block(3, 0, Some(block2.hash()));
     actor
         .kura
         .store_block(block1.clone())
@@ -40902,14 +41036,9 @@ async fn pacemaker_uses_commit_qc_roster_for_proposal_leader() {
         .kura
         .store_block(block2.clone())
         .expect("store block 2");
-    actor
-        .kura
-        .store_block(parent_block.clone())
-        .expect("store parent block");
     let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
     state.push_block_hash_for_testing(block1.hash());
     state.push_block_hash_for_testing(block2.hash());
-    state.push_block_hash_for_testing(parent_block.hash());
 
     let local = actor.common_config.peer.id().clone();
     let mut active_roster = actor.effective_commit_topology();
@@ -40929,18 +41058,27 @@ async fn pacemaker_uses_commit_qc_roster_for_proposal_leader() {
         topo_block.commit();
     }
 
-    let parent_hash = parent_block.hash();
-    let validator_set = active_roster.clone();
+    let parent_hash = block2.hash();
+    let mut qc_roster = active_roster.clone();
+    while qc_roster.first() != Some(&local) {
+        qc_roster.rotate_left(1);
+    }
+    assert_eq!(
+        qc_roster.first(),
+        Some(&local),
+        "commit QC roster should select local as view 0 leader"
+    );
+
     let mut signers = BTreeSet::new();
     signers.insert(ValidatorIndex::try_from(0).expect("signer index fits"));
-    let signers_bitmap = super::build_signers_bitmap(&signers, validator_set.len());
-    let topology = super::network_topology::Topology::new(validator_set.clone());
+    let signers_bitmap = super::build_signers_bitmap(&signers, qc_roster.len());
+    let topology = super::network_topology::Topology::new(qc_roster.clone());
     let bls_aggregate_signature = aggregate_signature_for_bitmap(
         &actor.common_config.chain,
         PERMISSIONED_TAG,
         Phase::Commit,
         parent_hash,
-        3,
+        2,
         0,
         0,
         &signers_bitmap,
@@ -40952,14 +41090,14 @@ async fn pacemaker_uses_commit_qc_roster_for_proposal_leader() {
         subject_block_hash: parent_hash,
         parent_state_root: zero_state_root(),
         post_state_root: zero_state_root(),
-        height: 3,
+        height: 2,
         view: 0,
         epoch: 0,
         mode_tag: PERMISSIONED_TAG.to_string(),
         highest_qc: None,
-        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash: HashOf::new(&qc_roster),
         validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set,
+        validator_set: qc_roster.clone(),
         aggregate: QcAggregate {
             signers_bitmap,
             bls_aggregate_signature,
@@ -40970,43 +41108,27 @@ async fn pacemaker_uses_commit_qc_roster_for_proposal_leader() {
     actor.highest_qc = None;
 
     let committed_height = actor.state.view().height() as u64;
-    let tracked_height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let expected_chunk_cap = super::rbc_chunk_payload_cap(
-        actor.common_config.peer.id(),
-        actor.consensus_payload_frame_cap,
-    );
-    let expected_chunk_max_bytes = configured_chunk_max_bytes.min(expected_chunk_cap);
-    assert_eq!(
-        actor.config.rbc.chunk_max_bytes, expected_chunk_max_bytes,
-        "RBC chunk size should honor the consensus payload cap"
-    );
+    let tracked_height = committed_height.saturating_add(1);
     let highest_qc = actor.latest_committed_qc().expect("committed qc");
-    let prev_block = super::propose::resolve_prev_block_for_proposal(
-        tracked_height,
-        &highest_qc,
-        &actor.kura,
-        &actor.pending.pending_blocks,
-    );
-    assert!(
-        prev_block.is_some(),
-        "parent block must be available for proposal assembly"
-    );
-    let proposal_roster = actor
-        .roster_from_commit_qc_history_roll_forward(tracked_height, Some(parent_hash))
-        .expect("commit certificate roster");
-    let canonical_roster = super::roster::canonicalize_roster(proposal_roster.clone());
-    assert_eq!(
-        proposal_roster, canonical_roster,
-        "commit certificate roster should be canonicalized"
-    );
-    assert!(
-        proposal_roster.contains(&local),
-        "commit certificate roster should include local peer"
-    );
+    let required = super::network_topology::Topology::new(active_roster.clone())
+        .min_votes_for_commit();
+    let mut recorded = 0usize;
+    for peer in active_roster.iter() {
+        if peer == &local {
+            continue;
+        }
+        actor.subsystems.propose.new_view_tracker.record(
+            tracked_height,
+            0,
+            peer.clone(),
+            highest_qc,
+        );
+        recorded = recorded.saturating_add(1);
+        if recorded >= required {
+            break;
+        }
+    }
+
     let offline_grace = actor.commit_quorum_timeout();
     let now = Instant::now();
     let start = now
@@ -41014,40 +41136,31 @@ async fn pacemaker_uses_commit_qc_roster_for_proposal_leader() {
         .unwrap_or(now);
     actor.phase_tracker.start_new_round(tracked_height, start);
 
-    let proposed = actor.on_pacemaker_propose_ready(now);
-    if !proposed {
-        let highest_qc = actor.latest_committed_qc().expect("committed qc");
-        let mut topology = super::network_topology::Topology::new(proposal_roster.clone());
-        let leader_index = actor
-            .leader_index_for(&mut topology, tracked_height, 0)
-            .expect("leader index");
-        let local_pos = topology
+    let mut qc_topology = super::network_topology::Topology::new(qc_roster.clone());
+    let qc_leader = actor
+        .leader_index_for(&mut qc_topology, tracked_height, 0)
+        .expect("leader index for commit QC roster");
+    assert_eq!(
+        qc_topology
             .position(actor.common_config.peer.id().public_key())
-            .expect("local in roster");
-        let local_idx = u32::try_from(local_pos).expect("local idx fits u32");
-        let assembled = actor
-            .assemble_and_broadcast_proposal(
-                tracked_height,
-                0,
-                highest_qc,
-                &mut topology,
-                leader_index,
-                local_idx,
-                now,
-            )
-            .expect("proposal assembly should succeed via commit certificate roster");
-        assert!(
-            assembled,
-            "pacemaker returned false and fallback assembly did not build a proposal"
-        );
-    }
+            .expect("local in commit QC roster"),
+        qc_leader,
+        "commit QC roster would select local as leader"
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        !proposed,
+        "pacemaker should not propose when local is not leader in the active roster"
+    );
     assert!(
         actor
             .subsystems
             .propose
-            .proposals_seen
-            .contains(&(tracked_height, 0)),
-        "proposal should be observed using commit certificate roster"
+            .proposal_cache
+            .get_proposal(tracked_height, 0)
+            .is_none(),
+        "proposal should not be assembled when active roster selects another leader"
     );
 
     status::reset_commit_certs_for_tests();
@@ -41282,6 +41395,39 @@ async fn pacemaker_uses_active_roster_when_commit_qc_roster_excludes_local() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn live_vote_roster_prefers_active_topology() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let active = actor.effective_commit_topology();
+
+    let mut rotated = active.clone();
+    if rotated.len() > 1 {
+        rotated.rotate_left(1);
+    }
+    let cache_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBB; Hash::LENGTH]));
+    actor.cache_vote_roster(cache_hash, height, 0, rotated);
+
+    let live = actor.roster_for_live_vote_with_mode(height, consensus_mode);
+    assert_eq!(
+        live, active,
+        "live roster should ignore cached/persisted rosters"
+    );
+
+    let future = actor.roster_for_live_vote_with_mode(height.saturating_add(5), consensus_mode);
+    assert!(
+        future.is_empty(),
+        "live roster should be empty beyond the committed height"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_qc_roll_forward_prefers_active_roster_when_keys_disabled() {
     use crate::sumeragi::status;
     use iroha_data_model::consensus::ConsensusKeyStatus;
@@ -41384,7 +41530,7 @@ async fn commit_qc_roll_forward_prefers_active_roster_when_keys_disabled() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn pacemaker_bootstraps_with_commit_qc_when_active_roster_empty() {
+async fn pacemaker_defers_when_active_roster_empty() {
     use crate::sumeragi::status;
 
     status::reset_commit_certs_for_tests();
@@ -41417,10 +41563,8 @@ async fn pacemaker_bootstraps_with_commit_qc_when_active_roster_empty() {
     state.push_block_hash_for_testing(block1.hash());
     state.push_block_hash_for_testing(block2.hash());
 
-    let _local = actor.common_config.peer.id().clone();
     let validator_set = actor.effective_commit_topology();
     let parent_hash = block2.hash();
-
     let mut signers = BTreeSet::new();
     for idx in 0..validator_set.len() {
         signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
@@ -41497,50 +41641,20 @@ async fn pacemaker_bootstraps_with_commit_qc_when_active_roster_empty() {
         .unwrap_or(now);
     actor.phase_tracker.start_new_round(tracked_height, start);
 
-    let proposal_roster = actor
-        .roster_from_commit_qc_history_roll_forward(tracked_height, Some(parent_hash))
-        .expect("commit QC roster should be available");
-    assert!(
-        !proposal_roster.is_empty(),
-        "commit QC roster should not be empty"
-    );
-    let mut topology = super::network_topology::Topology::new(proposal_roster);
-    let leader_index = actor
-        .leader_index_for(&mut topology, tracked_height, 0)
-        .expect("leader index should resolve");
-    let local_pos = topology.position(actor.common_config.peer.id().public_key());
-    let local_is_leader = local_pos == Some(leader_index);
-
     let proposed = actor.on_pacemaker_propose_ready(now);
-    if local_is_leader {
-        assert!(
-            proposed,
-            "pacemaker should bootstrap from commit QC roster when local is leader"
-        );
-        assert!(
-            actor
-                .subsystems
-                .propose
-                .proposal_cache
-                .get_proposal(tracked_height, 0)
-                .is_some(),
-            "proposal should be assembled using commit QC roster despite empty active topology"
-        );
-    } else {
-        assert!(
-            !proposed,
-            "pacemaker should defer when local is not leader for the commit QC roster"
-        );
-        assert!(
-            actor
-                .subsystems
-                .propose
-                .proposal_cache
-                .get_proposal(tracked_height, 0)
-                .is_none(),
-            "non-leader should not assemble a proposal"
-        );
-    }
+    assert!(
+        !proposed,
+        "pacemaker should defer when the active roster is empty"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, 0)
+            .is_none(),
+        "no proposal should be assembled when active roster is empty"
+    );
 
     status::reset_commit_certs_for_tests();
     harness.shutdown.send();

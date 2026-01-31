@@ -1210,7 +1210,6 @@ fn minimal_config_snapshot() {
                     unbonding_delay: 0ns,
                     withdraw_grace: 0ns,
                     max_slash_bps: 10000,
-                    validator_activation_lag_epochs: 1,
                     reward_dust_threshold: 0,
                     stake_asset_id: "xor#nexus",
                     stake_escrow_account_id: "gas@ivm",
