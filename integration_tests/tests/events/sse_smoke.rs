@@ -1,7 +1,7 @@
 //! SSE smoke test: verify that `/v1/events/sse` streams trigger and data events.
 
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, ErrorKind, Write},
     net::{TcpStream, ToSocketAddrs},
     ops::Deref,
     sync::{
@@ -44,6 +44,18 @@ impl Drop for SseReader {
 
 fn sse_reader_should_stop(deadline: Instant, shutdown: &AtomicBool) -> bool {
     shutdown.load(Ordering::Acquire) || Instant::now() >= deadline
+}
+
+fn is_read_timeout(err: &std::io::Error) -> bool {
+    matches!(err.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock)
+}
+
+fn parse_sse_data_line(line: &str) -> Option<&str> {
+    let line = line.trim_end_matches(['\r', '\n']);
+    let rest = line.strip_prefix("data:")?;
+    let rest = rest.strip_prefix(' ').unwrap_or(rest);
+    let rest = rest.trim();
+    if rest.is_empty() { None } else { Some(rest) }
 }
 
 /// Wait for the SSE reader to establish a connection (the reader emits a
@@ -217,15 +229,29 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> SseReader {
 
                 let mut reader = BufReader::new(stream);
                 let mut line = String::new();
-                // Consume headers
+                // Consume headers.
+                let mut headers_complete = false;
                 loop {
                     if sse_reader_should_stop(deadline, &shutdown_flag) {
                         return;
                     }
                     line.clear();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
-                        break;
+                    match reader.read_line(&mut line) {
+                        Ok(0) => break,
+                        Ok(_) => {
+                            if line.trim_end().is_empty() {
+                                headers_complete = true;
+                                break;
+                            }
+                        }
+                        Err(err) if is_read_timeout(&err) => continue,
+                        Err(_) => break,
                     }
+                }
+                if !headers_complete {
+                    std::thread::sleep(backoff);
+                    backoff = std::cmp::min(backoff * 2, Duration::from_secs(1));
+                    continue;
                 }
                 // Signal readiness so the test can submit transactions only after the
                 // SSE connection is live.
@@ -241,12 +267,14 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> SseReader {
                     }
                     line.clear();
                     match reader.read_line(&mut line) {
-                        Ok(0) | Err(_) => break,
+                        Ok(0) => break,
+                        Err(err) if is_read_timeout(&err) => continue,
+                        Err(_) => break,
                         Ok(_) => {
-                            if let Some(rest) = line.strip_prefix("data: ")
-                                && tx.send(rest.trim().to_owned()).is_err()
-                            {
-                                return;
+                            if let Some(rest) = parse_sse_data_line(&line) {
+                                if tx.send(rest.to_owned()).is_err() {
+                                    return;
+                                }
                             }
                         }
                     }
@@ -302,4 +330,69 @@ fn sse_reader_should_stop_honors_deadline_and_shutdown() {
 
     shutdown.store(true, Ordering::Release);
     assert!(sse_reader_should_stop(future, &shutdown));
+}
+
+#[test]
+fn is_read_timeout_matches_timeout_kinds() {
+    assert!(is_read_timeout(&std::io::Error::new(
+        ErrorKind::TimedOut,
+        "timed out"
+    )));
+    assert!(is_read_timeout(&std::io::Error::new(
+        ErrorKind::WouldBlock,
+        "would block"
+    )));
+    assert!(!is_read_timeout(&std::io::Error::new(
+        ErrorKind::Other,
+        "other"
+    )));
+}
+
+#[test]
+fn parse_sse_data_line_accepts_optional_space() {
+    assert_eq!(
+        parse_sse_data_line("data: {\"ok\":true}\r\n"),
+        Some("{\"ok\":true}")
+    );
+    assert_eq!(
+        parse_sse_data_line("data:{\"ok\":true}\n"),
+        Some("{\"ok\":true}")
+    );
+    assert_eq!(parse_sse_data_line("data:\r\n"), None);
+    assert_eq!(parse_sse_data_line(": comment\n"), None);
+}
+
+#[test]
+fn sse_reader_connects_and_reads_data_lines() -> Result<()> {
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    let addr = listener.local_addr()?;
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept SSE client");
+        let headers = concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Content-Type: text/event-stream\r\n",
+            "Cache-Control: no-cache\r\n",
+            "\r\n"
+        );
+        stream.write_all(headers.as_bytes()).expect("write headers");
+        stream
+            .write_all(b"data:{\"noop\":true}\n\n")
+            .expect("write data");
+        stream
+            .write_all(b"data: {\"ok\":true}\n\n")
+            .expect("write data");
+        let _ = stream.flush();
+    });
+
+    let rx = spawn_sse_reader(addr.into());
+    wait_for_sse_ready(&rx)?;
+    let payload = wait_for_sse(&rx, Duration::from_secs(5), |val| {
+        val.get("ok").and_then(JsonValue::as_bool) == Some(true)
+    })?;
+    assert_eq!(payload.get("ok").and_then(JsonValue::as_bool), Some(true));
+    drop(rx);
+    let _ = server.join();
+    Ok(())
 }

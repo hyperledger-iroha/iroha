@@ -114,7 +114,7 @@ Useful knobs:
 - `SS_GLYPH_POOL_MODE=auto|single_low|single_low_extreme|lowhigh|all`
 - `SS_KATAKANA_MODE=v27|iroha` (default `v27`; `iroha` uses the Iroha + archaic list)
 - `SS_PALETTE_PRESET=v27|v26_preview|defi_crimson|v26_crimson|defi_crimson_bold|v26_ink|v26_teal|v26_mono|logo_forward` (optional recolor for procedural/symbol renders)
-- `SS_ACTIVE_BANDS=inner-outer[,inner-outer...]` keeps data to annular bands (katabox default `40-243` to mimic v26 preview density).
+- `SS_ACTIVE_BANDS=inner-outer[,inner-outer...]` keeps data to annular bands (katabox default `35-243` to mimic v26 preview density).
 - `SS_DYNAMIC_RADIUS=0` (default) keeps all cells dynamic; set >0 to split dynamic vs static regions
 - `SS_DYNAMIC_POOL=low` / `SS_STATIC_POOL=high` to tune density split when enabled
 - `SS_FONT_INDEX=0` and `SS_GLYPH_SIZE=15` (matches dynamic glyphs)
@@ -129,7 +129,7 @@ Katakana overlay (v26-style boxes + diff glyphs)
 - `SS_KATAKANA_ALPHA`, `SS_KATAKANA_SCALE`, `SS_KATAKANA_BOX_ALPHA`, `SS_KATAKANA_BOX_SCALE` tune opacity/size.
 - `SS_RING_DIM_ANGLES=0,120,240` and `SS_RING_DIM_TOL=4` tune the orientation dot pattern.
 Logo emphasis
-- `SS_LOGO_SCALE` controls logo size (v27 default 0.318; katabox default 0.18).
+- `SS_LOGO_SCALE` controls logo size (v27 default 0.318; katabox default 0.15).
 - Katabox defaults bias toward a denser v26-like grid (`SS_GRID_N=50`, `SS_CELL_SIZE=10`, `SS_GRID_OFFSET=6`) and smaller glyphs (`SS_GLYPH_SIZE=9`, `SS_GLYPH_THRESH=70`).
 - `SS_LOGO_THRESH_1/2/3` adjust logo shade thresholds (lower = bolder logo).
 - `SS_LOGO_OVERLAY=1` draws the logo on top of data (for visibility).

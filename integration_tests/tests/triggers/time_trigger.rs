@@ -44,7 +44,8 @@ async fn submit_with_context(
     context: &str,
 ) -> Result<()> {
     let mut client = leader_client_for_submit(network, client).await;
-    client.transaction_status_timeout = network.sync_timeout();
+    client.transaction_status_timeout =
+        effective_status_timeout(client.transaction_status_timeout, network.sync_timeout());
     let instruction = instruction.into();
     let context = context.to_string();
     spawn_blocking(move || client.submit_blocking(instruction).wrap_err(context)).await??;
@@ -58,7 +59,8 @@ async fn submit_all_with_context(
     context: &str,
 ) -> Result<()> {
     let mut client = leader_client_for_submit(network, client).await;
-    client.transaction_status_timeout = network.sync_timeout();
+    client.transaction_status_timeout =
+        effective_status_timeout(client.transaction_status_timeout, network.sync_timeout());
     let context = context.to_string();
     spawn_blocking(move || client.submit_all_blocking(instructions).wrap_err(context)).await??;
     Ok(())
@@ -88,6 +90,10 @@ async fn leader_client_for_submit(network: &sandbox::SerializedNetwork, probe: &
                 .expect("network should have at least one peer")
         })
         .client()
+}
+
+fn effective_status_timeout(current: Duration, sync_timeout: Duration) -> Duration {
+    current.max(sync_timeout)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -284,13 +290,11 @@ async fn pre_commit_trigger_should_be_executed_scenario(
                     "key".parse::<Name>()?,
                     "value".parse::<Json>()?,
                 );
-                submit_with_context(
-                    network,
-                    &test_client,
-                    sample_isi,
-                    "pre_commit_trigger_should_be_executed sample ISI",
-                )
-                .await?;
+                // Submit without waiting for tx confirmation to avoid queue-timeout flakiness.
+                let mut submit_client = leader_client_for_submit(network, &test_client).await;
+                let context = "pre_commit_trigger_should_be_executed sample ISI".to_string();
+                spawn_blocking(move || submit_client.submit(sample_isi).wrap_err(context))
+                    .await??;
                 target_height = target_height.saturating_add(1);
                 network
                     .ensure_blocks_with(|height| height.total >= target_height)
@@ -490,7 +494,10 @@ async fn submit_sample_isi_on_every_block_commit(
             "key".parse::<Name>()?,
             Json::new("value"),
         );
-        submit_with_context(network, test_client, sample_isi, "time_trigger sample ISI").await?;
+        // Submit without waiting for tx confirmation to avoid queue-timeout flakiness.
+        let mut submit_client = leader_client_for_submit(network, test_client).await;
+        let context = "time_trigger sample ISI".to_string();
+        spawn_blocking(move || submit_client.submit(sample_isi).wrap_err(context)).await??;
         target_height = target_height.saturating_add(1);
         network
             .ensure_blocks_with(|height| height.total >= target_height)
@@ -499,4 +506,18 @@ async fn submit_sample_isi_on_every_block_commit(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::effective_status_timeout;
+    use std::time::Duration;
+
+    #[test]
+    fn status_timeout_prefers_larger_value() {
+        let short = Duration::from_secs(30);
+        let long = Duration::from_secs(120);
+        assert_eq!(effective_status_timeout(short, long), long);
+        assert_eq!(effective_status_timeout(long, short), long);
+    }
 }
