@@ -3467,6 +3467,7 @@ impl Actor {
             ready: RbcReady,
             reason: &'static str,
             handling_reason: super::status::ConsensusMessageReason,
+            stash_reason: status::PendingRbcStashReason,
         ) -> Result<()> {
             let ready_sender = ready.sender;
             let ready_view = ready.view;
@@ -3520,6 +3521,10 @@ impl Actor {
                 )
             };
             if accepted {
+                status::inc_pending_rbc_stash(
+                    status::PendingRbcStashKind::Ready,
+                    Some(stash_reason),
+                );
                 info!(
                     ?key,
                     pending_chunks,
@@ -3585,6 +3590,7 @@ impl Actor {
                 ready,
                 "commit roster missing",
                 super::status::ConsensusMessageReason::RosterMissingDeferred,
+                status::PendingRbcStashReason::RosterMissing,
             )?;
             return Ok(());
         }
@@ -3631,6 +3637,7 @@ impl Actor {
                 ready,
                 "commit roster hash mismatch",
                 super::status::ConsensusMessageReason::RosterHashMismatchDeferred,
+                status::PendingRbcStashReason::RosterHashMismatch,
             )?;
             return Ok(());
         }
@@ -3654,6 +3661,7 @@ impl Actor {
                 ready,
                 "commit roster unverified",
                 super::status::ConsensusMessageReason::RosterUnverifiedDeferred,
+                status::PendingRbcStashReason::RosterUnverified,
             )?;
             self.request_missing_block_for_pending_rbc(key, "rbc_ready_unverified_roster", None);
             return Ok(());

@@ -17396,6 +17396,44 @@ async fn handle_rbc_ready_refreshes_roster_when_unverified() {
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_ready_stash_roster_missing_updates_pending_counters() {
+    let mut harness = test_actor_harness(4).await;
+    super::status::reset_pending_rbc_for_tests();
+
+    let actor = &mut harness.actor;
+    let height = actor.state.view().height() as u64 + 5;
+    let key = (
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC2; 32])),
+        height,
+        0,
+    );
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let epoch = actor.epoch_for_height(height);
+    let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, epoch)
+        .expect("session");
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    let ready = crate::sumeragi::consensus::RbcReady {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch,
+        roster_hash: Hash::prehashed([0xAA; Hash::LENGTH]),
+        chunk_root: Hash::prehashed([0xBB; Hash::LENGTH]),
+        sender: 0,
+        signature: vec![0x11],
+    };
+    actor.handle_rbc_ready(ready).expect("ready handled");
+
+    let snapshot = super::status::pending_rbc_snapshot();
+    assert_eq!(snapshot.stash_ready_total, 1);
+    assert_eq!(snapshot.stash_ready_roster_missing_total, 1);
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn rbc_session_needs_payload_skips_full_payload() {
     let payload = b"payload".to_vec();
@@ -30094,6 +30132,34 @@ fn defer_qc_for_missing_block_records_telemetry() {
             .sumeragi_missing_block_fetch_targets
             .get_sample_count(),
         1
+    );
+}
+
+#[cfg(feature = "telemetry")]
+#[test]
+fn note_missing_block_fetch_records_none_target_label() {
+    let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+    let telemetry = crate::telemetry::Telemetry::new(metrics.clone(), true);
+
+    telemetry.note_missing_block_fetch(
+        crate::telemetry::MissingBlockFetchOutcome::NoTargets,
+        0,
+        Duration::from_millis(1),
+        None,
+    );
+
+    let no_targets = metrics
+        .sumeragi_missing_block_fetch_total
+        .with_label_values(&["no_targets"])
+        .get();
+    assert_eq!(no_targets, 1);
+    let none_targets = metrics
+        .sumeragi_missing_block_fetch_target_total
+        .with_label_values(&["none"])
+        .get();
+    assert_eq!(
+        none_targets, 1,
+        "missing-block fetch target telemetry should record no-target attempts"
     );
 }
 
