@@ -1,6 +1,6 @@
 //! Connected peers count and reconfiguration under register/unregister.
 
-use std::{fmt::Write as _, iter::once, time::Duration};
+use std::{fmt::Write as _, time::Duration};
 
 use assert_matches::assert_matches;
 use eyre::{Result, WrapErr, eyre};
@@ -148,7 +148,6 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
         return Ok(());
     };
-    let roster_client = network.client();
     let expected_connected = expected_connected_peers(n_peers);
 
     if sandbox::handle_result(
@@ -171,6 +170,7 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
         network.peers().iter().choose_multiple(&mut rng, n_peers)
     };
     let removed_peer = randomized_peers.remove(0);
+    let roster_client = leader_peer(randomized_peers.iter().copied()).client();
 
     // Unregister a peer and wait for the roster to reflect the change.
     let client = leader_peer(randomized_peers.iter().copied()).client();
@@ -235,7 +235,15 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     );
     let client = leader_peer(randomized_peers.iter().copied()).client();
     submit_instruction_or_warn(client.clone(), register_peer, context).await?;
-    network.ensure_blocks(3).await?;
+    timeout(
+        network.sync_timeout(),
+        randomized_peers
+            .iter()
+            .map(|peer| peer.once_block(3))
+            .collect::<FuturesUnordered<_>>()
+            .collect::<Vec<_>>(),
+    )
+    .await?;
     if sandbox::handle_result(
         wait_for_peer_roster(&roster_client, n_peers, network.sync_timeout()).await,
         context,
@@ -245,20 +253,11 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
         return Ok(());
     }
     let expected_connected = expected_connected_peers(n_peers);
-    if sandbox::handle_result(
-        timeout(network.sync_timeout(), removed_peer.once_block(3))
-            .await
-            .map_err(eyre::Report::new),
-        context,
-    )?
-    .is_none()
-    {
-        return Ok(());
-    }
 
+    // The removed peer disconnects on unregister, so assert only on the active roster.
     if sandbox::handle_result(
         assert_peers_status(
-            randomized_peers.iter().copied().chain(once(removed_peer)),
+            randomized_peers.iter().copied(),
             3,
             expected_connected,
             network.sync_timeout(),

@@ -10224,7 +10224,6 @@ impl NexusStaking {
             )));
             return None;
         }
-
         Some(actual::NexusStaking {
             public_validator_mode: self.public_validator_mode.into(),
             restricted_validator_mode: self.restricted_validator_mode.into(),
