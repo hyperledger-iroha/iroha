@@ -57,7 +57,6 @@ const IZANAMI_FUTURE_HEIGHT_WINDOW: i64 = 2;
 const IZANAMI_FUTURE_VIEW_WINDOW: i64 = 2;
 const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 1_500;
 const IZANAMI_NPOS_COMMIT_TIME_MS: i64 = 2_000;
-const IZANAMI_NPOS_TIMEOUT_SCALE_DEN: u64 = 3;
 const IZANAMI_PIPELINE_DYNAMIC_PREPASS: bool = true;
 const IZANAMI_PIPELINE_ACCESS_SET_CACHE_ENABLED: bool = true;
 const IZANAMI_PIPELINE_PARALLEL_OVERLAY: bool = true;
@@ -129,11 +128,8 @@ fn derive_npos_timing(config: &ChaosConfig) -> NposTiming {
         if let Some(duration) = config.pipeline_time {
             let (block_ms, _commit_ms) = split_pipeline_time(duration);
             // Favor block cadence for soak tests; commit time must be >= block time.
-            let timeout_block_ms = block_ms
-                .checked_div(IZANAMI_NPOS_TIMEOUT_SCALE_DEN)
-                .unwrap_or(1)
-                .max(1);
-            (block_ms, block_ms, timeout_block_ms, false)
+            // Use the block cadence for timeout derivation to avoid over-eager reschedules.
+            (block_ms, block_ms, block_ms, true)
         } else {
             let block_ms = u64::try_from(IZANAMI_NPOS_BLOCK_TIME_MS)
                 .expect("izanami block time must be non-negative");
@@ -1249,15 +1245,12 @@ mod tests {
         };
 
         let timing = derive_npos_timing(&config);
-        let timeout_block_ms = timing
-            .block_ms
-            .checked_div(IZANAMI_NPOS_TIMEOUT_SCALE_DEN)
-            .unwrap_or(1)
-            .max(1);
         let expected =
-            SumeragiNposTimeouts::from_block_time(Duration::from_millis(timeout_block_ms));
-        assert_eq!(timing.commit_timeout_ms, duration_ms(expected.commit));
-        assert_eq!(timing.da_ms, duration_ms(expected.da));
+            SumeragiNposTimeouts::from_block_time(Duration::from_millis(timing.block_ms));
+        let expected_commit = duration_ms(expected.commit).max(timing.commit_time_ms);
+        let expected_da = duration_ms(expected.da).max(timing.commit_time_ms);
+        assert_eq!(timing.commit_timeout_ms, expected_commit);
+        assert_eq!(timing.da_ms, expected_da);
     }
 
     #[test]

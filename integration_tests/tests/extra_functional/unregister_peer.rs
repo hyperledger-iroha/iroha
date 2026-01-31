@@ -279,9 +279,7 @@ async fn wait_for_asset(
     let mut last_err: Option<Report> = None;
     loop {
         match find_asset(client, account, asset_definition).await {
-            Ok(Some(value))
-                if expected.as_ref().is_none_or(|expected| value == *expected) =>
-            {
+            Ok(Some(value)) if expected.as_ref().is_none_or(|expected| value == *expected) => {
                 return Ok(value);
             }
             Ok(_) => {}
