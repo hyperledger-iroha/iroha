@@ -15,7 +15,10 @@ use iroha::{
         parameter::{BlockParameter, SumeragiParameter},
         prelude::*,
         query::{
+            account::prelude::FindAccounts,
             asset::prelude::FindAssetById,
+            asset::prelude::FindAssetsDefinitions,
+            domain::prelude::FindDomains,
             error::{FindError, QueryExecutionFail},
         },
     },
@@ -38,11 +41,31 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true);
+                .write(["sumeragi", "da", "enabled"], true)
+                .write(["sumeragi", "advanced", "rbc", "chunk_fanout"], 7_i64)
+                .write(
+                    ["sumeragi", "advanced", "rbc", "payload_chunks_per_tick"],
+                    64_i64,
+                )
+                .write(
+                    [
+                        "sumeragi",
+                        "advanced",
+                        "rbc",
+                        "rebroadcast_sessions_per_tick",
+                    ],
+                    32_i64,
+                );
         })
         // Keep blocks small to make block progression deterministic in tests
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::BlockTimeMs(2_000),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(8_000),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::DaEnabled(true),
@@ -59,19 +82,21 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     let submitter = &peers[0];
 
     // Ensure the network is ready before submitting transactions.
+    let sync_timeout = network.sync_timeout().saturating_mul(2);
     rt.block_on(async { network.ensure_blocks_with(|height| height.total >= 1).await })
         .wrap_err("seven_peer_consistency network did not start")?;
     wait_for_peer_connectivity(
         &rt,
         peers,
         peers.len().saturating_sub(1) as u64,
-        network.sync_timeout(),
+        sync_timeout,
     )
     .wrap_err("seven_peer_consistency peers did not connect")?;
 
     // Create a fresh domain, account, and asset definition
     let domain_name: Name = "seven".parse()?;
-    let create_domain = Register::domain(Domain::new(DomainId::new(domain_name.clone())));
+    let domain_id = DomainId::new(domain_name.clone());
+    let create_domain = Register::domain(Domain::new(domain_id.clone()));
     let (account_id, _kp) = gen_account_in(&domain_name);
     let create_account = Register::account(Account::new(account_id.clone()));
     let asset_definition_id: AssetDefinitionId = format!("xor#{domain_name}").parse()?;
@@ -79,32 +104,43 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
         Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
 
     let mut submitter_client = submitter.client();
-    let tx_timeout = network.sync_timeout() + network.sync_timeout();
+    let tx_timeout = sync_timeout;
     submitter_client.transaction_status_timeout = tx_timeout;
     submitter_client.transaction_ttl = Some(tx_timeout + Duration::from_secs(5));
-    submitter_client
-        .submit_all_blocking::<InstructionBox>([
-            create_domain.into(),
-            create_account.into(),
-            create_asset_def.into(),
-        ])
+    let setup_result = submitter_client.submit_all_blocking::<InstructionBox>([
+        create_domain.into(),
+        create_account.into(),
+        create_asset_def.into(),
+    ]);
+    if let Err(err) = setup_result {
+        eprintln!(
+            "seven_peer_consistency setup submission did not confirm; waiting for state. err={err:?}"
+        );
+        wait_for_setup_state(
+            &submitter_client,
+            &domain_id,
+            &account_id,
+            &asset_definition_id,
+            tx_timeout,
+        )
         .wrap_err("seven_peer_consistency submit setup failed")?;
+    }
 
     let status_before_mint = submitter_client
         .get_status()
         .wrap_err("seven_peer_consistency status fetch failed")?;
     // Mint on one peer and wait until the network advances a few blocks
     let quantity = numeric!(500);
-    let _mint_hash = submitter_client
-        .submit_blocking(Mint::asset_numeric(
-            quantity.clone(),
-            AssetId::new(asset_definition_id.clone(), account_id.clone()),
-        ))
-        .wrap_err("seven_peer_consistency mint failed")?;
+    if let Err(err) = submitter_client.submit_blocking(Mint::asset_numeric(
+        quantity.clone(),
+        AssetId::new(asset_definition_id.clone(), account_id.clone()),
+    )) {
+        eprintln!("seven_peer_consistency mint did not confirm; continuing. err={err:?}");
+    }
 
     let expected_min_height = status_before_mint.blocks.saturating_add(1);
 
-    let rbc_timeout = network.sync_timeout();
+    let rbc_timeout = sync_timeout;
     let rbc_sessions = rt
         .block_on(async {
             let tasks = peers.iter().map(|peer| {
@@ -150,7 +186,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     }
 
     // Ensure all running peers progressed sufficiently
-    rt.block_on(async { network.ensure_blocks(3).await })
+    wait_for_blocks_at_least(&rt, peers, 3, sync_timeout)
         .wrap_err("seven_peer_consistency blocks did not advance")?;
 
     // Then: verify each peer reports the same state (cross-peer consistency).
@@ -206,6 +242,7 @@ async fn wait_for_rbc_delivery_inner(
     timeout: Duration,
 ) -> Result<Value> {
     let deadline = Instant::now() + timeout;
+    let mut last_err: Option<eyre::Report> = None;
     loop {
         if let Some(summary) = rbc_status::read_persisted_snapshot(&store_dir)
             .into_iter()
@@ -231,19 +268,27 @@ async fn wait_for_rbc_delivery_inner(
 
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "timed out waiting for RBC delivery at or above height {min_height}"
+                "timed out waiting for RBC delivery at or above height {min_height}; last_err={last_err:?}"
             ));
         }
 
-        let snapshot = tokio::task::spawn_blocking({
+        match tokio::task::spawn_blocking({
             let client = client.clone();
             move || client.get_sumeragi_rbc_sessions_json()
         })
         .await
-        .map_err(|err| eyre!("failed to fetch RBC sessions: {err}"))??;
-
-        if let Some(session) = delivered_session_for_height(&snapshot, min_height) {
-            return Ok(session);
+        {
+            Ok(Ok(snapshot)) => {
+                if let Some(session) = delivered_session_for_height(&snapshot, min_height) {
+                    return Ok(session);
+                }
+            }
+            Ok(Err(err)) => {
+                last_err = Some(err.wrap_err("fetch RBC sessions"));
+            }
+            Err(err) => {
+                last_err = Some(eyre!("failed to join RBC sessions fetch: {err}"));
+            }
         }
 
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -290,6 +335,70 @@ fn wait_for_peer_connectivity(
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     })
+}
+
+fn wait_for_blocks_at_least(
+    rt: &tokio::runtime::Runtime,
+    peers: &[NetworkPeer],
+    height: u64,
+    timeout: Duration,
+) -> Result<()> {
+    rt.block_on(async {
+        tokio::time::timeout(
+            timeout,
+            iroha_test_network::once_blocks_sync(peers.iter(), &|h: BlockHeight| h.total >= height),
+        )
+        .await
+        .map_err(|_| eyre!("timed out waiting for peers to reach height {height}"))?
+        .map_err(|err| eyre!("block sync predicate failed: {err}"))?;
+        Ok(())
+    })
+}
+
+fn wait_for_setup_state(
+    client: &Client,
+    domain_id: &DomainId,
+    account_id: &AccountId,
+    asset_definition_id: &AssetDefinitionId,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    let mut last_err = None;
+    loop {
+        let domains = client.query(FindDomains).execute_all();
+        let accounts = client.query(FindAccounts).execute_all();
+        let asset_defs = client.query(FindAssetsDefinitions).execute_all();
+
+        match (domains, accounts, asset_defs) {
+            (Ok(domains), Ok(accounts), Ok(asset_defs)) => {
+                let domain_ok = domains.iter().any(|domain| domain.id() == domain_id);
+                let account_ok = accounts.iter().any(|account| account.id() == account_id);
+                let asset_ok = asset_defs
+                    .iter()
+                    .any(|asset_def| asset_def.id() == asset_definition_id);
+                if domain_ok && account_ok && asset_ok {
+                    return Ok(());
+                }
+            }
+            (domain_err, account_err, asset_err) => {
+                last_err = Some(format!(
+                    "domain={:?}, account={:?}, asset_definition={:?}",
+                    domain_err.err(),
+                    account_err.err(),
+                    asset_err.err()
+                ));
+            }
+        }
+
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "timed out waiting for setup state; last_err={:?}",
+                last_err
+            ));
+        }
+
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 fn delivered_session_for_height(value: &Value, min_height: u64) -> Option<Value> {

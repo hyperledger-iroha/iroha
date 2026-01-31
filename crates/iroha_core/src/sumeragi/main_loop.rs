@@ -138,6 +138,7 @@ use locked_qc::{
 use pacing::{
     AdaptiveAction, AdaptiveObservabilityMetrics, AdaptiveObservabilityState, BackpressureGate,
     Pacemaker, PacemakerBackpressure, ProposeAttemptMonitor, TickTimingMonitor,
+    TickTimingThresholds,
 };
 use pending_block::{
     DaGateStatus, PendingBlock, ValidationGateOutcome, ValidationStatus, recompute_da_gate_status,
@@ -3387,8 +3388,7 @@ impl NewViewTracker {
             .iter()
             .rev()
             .find_map(|((entry_height, entry_view), entry)| {
-                (*entry_height == height
-                    && entry.count_in_roster(&roster_set, None) >= required)
+                (*entry_height == height && entry.count_in_roster(&roster_set, None) >= required)
                     .then_some(*entry_view)
             })
     }
@@ -4152,6 +4152,7 @@ pub(super) struct Actor {
     locked_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     tick_counter: u64,
     tick_timing: TickTimingMonitor,
+    tick_timing_thresholds: TickTimingThresholds,
     last_qc_rebuild: Instant,
     relay_backpressure: RelayBackpressure,
     queue_drop_backpressure: QueueDropBackpressure,
@@ -8444,6 +8445,7 @@ impl Actor {
             locked_qc: None,
             tick_counter: 0,
             tick_timing: TickTimingMonitor::new(now),
+            tick_timing_thresholds: TickTimingThresholds::default(),
             last_qc_rebuild: initial_qc_rebuild,
             relay_backpressure: RelayBackpressure::default(),
             queue_drop_backpressure: QueueDropBackpressure::default(),
@@ -9291,6 +9293,19 @@ impl Actor {
             block_time.min(time_budget)
         };
         tick_max_gap = tick_max_gap.max(tick_min_gap);
+        let tick_lag_threshold = tick_max_gap
+            .saturating_add(tick_min_gap)
+            .max(TICK_LAG_LOG_THRESHOLD);
+        let tick_cost_threshold = if self.config.worker.tick_work_budget_cap.is_zero() {
+            TICK_COST_LOG_THRESHOLD
+        } else {
+            self.config
+                .worker
+                .tick_work_budget_cap
+                .max(TICK_COST_LOG_THRESHOLD)
+        };
+        self.tick_timing_thresholds =
+            TickTimingThresholds::new(tick_lag_threshold, tick_cost_threshold);
 
         cfg.time_budget = time_budget;
         cfg.drain_budget_cap = self.config.worker.iteration_drain_budget_cap;
@@ -9417,13 +9432,13 @@ impl Actor {
         let (missing_block_progress, missing_block_cost) = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.retry_missing_block");
             let step_start = Instant::now();
-            let progress = self.retry_missing_block_requests(now);
+            let progress = self.retry_missing_block_requests(now, tick_deadline);
             (progress, step_start.elapsed())
         };
         let (reschedule_progress, reschedule_cost) = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.reschedule_pending");
             let step_start = Instant::now();
-            let progress = self.reschedule_stale_pending_blocks();
+            let progress = self.reschedule_stale_pending_blocks(tick_deadline);
             (progress, step_start.elapsed())
         };
         let (idle_view_progress, idle_view_cost) = {
@@ -9539,7 +9554,13 @@ impl Actor {
             }
         }
         let tick_cost = tick_start.elapsed();
-        let timing = self.tick_timing.observe(tick_start, tick_cost);
+        let thresholds = self.tick_timing_thresholds;
+        let timing = self.tick_timing.observe_with_thresholds(
+            tick_start,
+            tick_cost,
+            thresholds.lag,
+            thresholds.cost,
+        );
         if timing.log_gap || timing.log_cost {
             let pacemaker_remaining = self
                 .subsystems

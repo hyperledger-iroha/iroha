@@ -2192,7 +2192,7 @@ impl Actor {
         }
 
         if matches!(trigger, CommitPipelineTrigger::Event) {
-            let _ = self.reschedule_stale_pending_blocks();
+            let _ = self.reschedule_stale_pending_blocks(None);
             let queue_depths = super::status::worker_queue_depth_snapshot();
             let consensus_queue_backlog = queue_depths.vote_rx > 0
                 || queue_depths.block_payload_rx > 0
@@ -2281,11 +2281,22 @@ impl Actor {
                 let view = self.state.view();
                 self.pending_fast_path_timeout(&view, consensus_mode)
             };
-            let validation_outcome = if fast_timeout <= std::time::Duration::from_secs(1) {
+            let mut validation_outcome = if fast_timeout <= std::time::Duration::from_secs(1) {
                 self.validate_pending_block_for_voting_inline(hash, &commit_topology)
             } else {
                 self.validate_pending_block_for_voting(hash, &commit_topology)
             };
+            if matches!(validation_outcome, ValidationGateOutcome::Deferred) {
+                if let Some(pending) = self.pending.pending_blocks.get(&hash) {
+                    let pending_age = pending.age();
+                    if pending_age >= fast_timeout
+                        && !self.subsystems.validation.inflight.contains_key(&hash)
+                    {
+                        validation_outcome =
+                            self.validate_pending_block_for_voting_inline(hash, &commit_topology);
+                    }
+                }
+            }
             let validation_cost = validation_start.elapsed();
             match validation_outcome {
                 ValidationGateOutcome::Valid => {}

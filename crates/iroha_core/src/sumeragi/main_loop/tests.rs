@@ -14290,11 +14290,12 @@ async fn try_form_qc_from_votes_skips_when_higher_new_view_quorum_exists() {
         epoch,
     };
     for peer in topology.as_ref().iter().take(required) {
-        actor
-            .subsystems
-            .propose
-            .new_view_tracker
-            .record(height, view + 1, peer.clone(), highest_qc);
+        actor.subsystems.propose.new_view_tracker.record(
+            height,
+            view + 1,
+            peer.clone(),
+            highest_qc,
+        );
     }
 
     for signer_idx in 0..required {
@@ -28887,7 +28888,7 @@ async fn retry_missing_block_requests_triggers_view_change_after_dwell() {
     );
 
     assert!(
-        actor.retry_missing_block_requests(now),
+        actor.retry_missing_block_requests(now, None),
         "retry should issue a request or view change"
     );
     let stats = actor
@@ -28901,6 +28902,61 @@ async fn retry_missing_block_requests_triggers_view_change_after_dwell() {
     );
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.missing_payload_total, 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retry_missing_block_requests_respects_tick_budget() {
+    let mut harness = test_actor_harness(4).await;
+    let _guard = super::status::view_change_proof_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+    let actor = &mut harness.actor;
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view, now);
+
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBD; Hash::LENGTH]));
+    if actor.block_payload_available_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBE; Hash::LENGTH]));
+    }
+
+    let retry_window = Duration::from_millis(10);
+    let dwell_start = now - retry_window - Duration::from_millis(1);
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window,
+            view_change_window: Some(retry_window),
+            first_seen: dwell_start,
+            last_requested: dwell_start,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+
+    let deadline = now.checked_sub(Duration::from_millis(1)).unwrap_or(now);
+    assert!(
+        !actor.retry_missing_block_requests(now, Some(deadline)),
+        "exhausted tick budget should skip missing-block retries"
+    );
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("request entry retained");
+    assert_eq!(stats.attempts, 0);
+    assert_eq!(stats.last_requested, dwell_start);
+    let snapshot = super::status::snapshot().view_change_causes;
+    assert_eq!(snapshot.missing_payload_total, 0);
 
     harness.shutdown.send();
 }
@@ -28952,7 +29008,7 @@ async fn retry_missing_block_requests_defers_view_change_when_rbc_pending() {
     );
 
     assert!(
-        actor.retry_missing_block_requests(now),
+        actor.retry_missing_block_requests(now, None),
         "retry should attempt fetch or deferred view change"
     );
     let stats = actor
@@ -29024,7 +29080,7 @@ async fn retry_missing_block_requests_defers_view_change_when_rbc_backlog_near_h
     );
 
     assert!(
-        actor.retry_missing_block_requests(now),
+        actor.retry_missing_block_requests(now, None),
         "retry should attempt fetch or deferred view change"
     );
     let stats = actor
@@ -29100,7 +29156,7 @@ async fn retry_missing_block_requests_defers_view_change_when_rbc_ready_deferral
     );
 
     assert!(
-        actor.retry_missing_block_requests(now),
+        actor.retry_missing_block_requests(now, None),
         "retry should attempt fetch or deferred view change"
     );
     let stats = actor
@@ -29157,7 +29213,7 @@ async fn retry_missing_block_requests_defers_view_change_when_pending_block_near
     );
 
     assert!(
-        actor.retry_missing_block_requests(now),
+        actor.retry_missing_block_requests(now, None),
         "retry should attempt fetch or deferred view change"
     );
     let stats = actor
@@ -29217,7 +29273,7 @@ async fn retry_missing_block_requests_defers_view_change_when_queue_drops_seen()
     super::status::record_worker_queue_drop(super::status::WorkerQueueKind::RbcChunks);
 
     assert!(
-        actor.retry_missing_block_requests(now),
+        actor.retry_missing_block_requests(now, None),
         "retry should attempt fetch or deferred view change"
     );
     let stats = actor
@@ -29280,7 +29336,7 @@ async fn retry_missing_block_requests_defers_view_change_when_queue_blocks_seen(
     );
 
     assert!(
-        actor.retry_missing_block_requests(now),
+        actor.retry_missing_block_requests(now, None),
         "retry should attempt fetch or deferred view change"
     );
     let stats = actor
@@ -29339,7 +29395,7 @@ async fn retry_missing_block_requests_uses_active_roster_when_commit_topology_em
         },
     );
 
-    let progress = actor.retry_missing_block_requests(now);
+    let progress = actor.retry_missing_block_requests(now, None);
     assert!(
         progress,
         "retry should attempt fetch using active roster fallback"
@@ -29428,7 +29484,7 @@ async fn retry_missing_block_requests_uses_commit_roster_snapshot_without_valida
         },
     );
 
-    let progress = actor.retry_missing_block_requests(now);
+    let progress = actor.retry_missing_block_requests(now, None);
     assert!(
         progress,
         "retry should proceed using local commit roster snapshot"
@@ -39757,11 +39813,12 @@ async fn emit_new_view_vote_allows_without_higher_view_quorum() {
     let required = topology.min_votes_for_view_change();
 
     for peer in topology.as_ref().iter().take(required.saturating_sub(1)) {
-        actor
-            .subsystems
-            .propose
-            .new_view_tracker
-            .record(height, higher_view, peer.clone(), committed_qc);
+        actor.subsystems.propose.new_view_tracker.record(
+            height,
+            higher_view,
+            peer.clone(),
+            committed_qc,
+        );
     }
 
     assert!(
@@ -39795,11 +39852,12 @@ async fn emit_new_view_vote_skips_when_higher_view_quorum_exists() {
     let required = topology.min_votes_for_view_change();
 
     for peer in topology.as_ref().iter().take(required) {
-        actor
-            .subsystems
-            .propose
-            .new_view_tracker
-            .record(height, higher_view, peer.clone(), committed_qc);
+        actor.subsystems.propose.new_view_tracker.record(
+            height,
+            higher_view,
+            peer.clone(),
+            committed_qc,
+        );
     }
 
     assert!(
@@ -44036,6 +44094,12 @@ async fn validation_records_state_roots_for_valid_block() {
         .iter()
         .find(|kp| kp.public_key() == leader_peer.public_key())
         .expect("leader keypair must be available");
+    let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let signer_idx = signature_topology
+        .position(leader_kp.public_key())
+        .expect("leader index in topology");
     let block = heartbeat_block_for_state(
         &actor.state,
         &actor.chain_id,
@@ -44043,11 +44107,13 @@ async fn validation_records_state_roots_for_valid_block() {
         view,
         Some(parent_hash),
         leader_kp,
-        0,
+        u64::try_from(signer_idx).expect("signer index fits u64"),
     );
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let view_u64 = block.header().view_change_index();
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let commit_topology = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
 
     actor.pending.pending_blocks.insert(
         block_hash,
@@ -44086,27 +44152,13 @@ async fn validation_inline_records_state_roots_for_valid_block() {
         .unwrap_or(0)
         .saturating_add(1);
     let view = 0;
-    let commit_topology = actor.effective_commit_topology();
-    let leader_peer = commit_topology
-        .first()
-        .expect("commit topology must contain the leader");
-    let leader_kp = harness
-        .key_pairs
-        .iter()
-        .find(|kp| kp.public_key() == leader_peer.public_key())
-        .expect("leader keypair must be available");
-    let block = heartbeat_block_for_state(
-        &actor.state,
-        &actor.chain_id,
-        height,
-        view,
-        Some(parent_hash),
-        leader_kp,
-        0,
-    );
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let view_u64 = block.header().view_change_index();
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let commit_topology = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
 
     actor.pending.pending_blocks.insert(
         block_hash,
@@ -51828,7 +51880,7 @@ async fn da_gate_context_does_not_block_quorum_reschedule() {
     }
 
     assert!(
-        actor.reschedule_stale_pending_blocks(),
+        actor.reschedule_stale_pending_blocks(None),
         "DA gate context should not block quorum reschedule"
     );
     let pending_after = actor
@@ -51935,7 +51987,7 @@ async fn stake_quorum_timeout_reschedules_and_records_view_change() {
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     assert!(
-        actor.reschedule_stale_pending_blocks(),
+        actor.reschedule_stale_pending_blocks(None),
         "stake quorum miss should reschedule pending block"
     );
     let pending_after = actor
@@ -51990,7 +52042,7 @@ async fn reschedule_defers_missing_local_data_until_availability_timeout() {
         "availability timeout should exceed quorum timeout in DA mode"
     );
     assert!(
-        !actor.reschedule_stale_pending_blocks(),
+        !actor.reschedule_stale_pending_blocks(None),
         "missing local data should defer quorum reschedule before availability timeout"
     );
     let pending_after = actor
@@ -52014,7 +52066,7 @@ async fn reschedule_defers_missing_local_data_until_availability_timeout() {
     }
 
     assert!(
-        actor.reschedule_stale_pending_blocks(),
+        actor.reschedule_stale_pending_blocks(None),
         "missing local data should allow reschedule after availability timeout"
     );
     let pending_after = actor
@@ -52063,7 +52115,7 @@ async fn reschedule_skips_fast_timeout_with_da_enabled() {
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     assert!(
-        !actor.reschedule_stale_pending_blocks(),
+        !actor.reschedule_stale_pending_blocks(None),
         "fast timeout should not reschedule while DA is enabled"
     );
     let pending_after = actor
@@ -52111,7 +52163,7 @@ async fn reschedule_defers_fast_timeout_while_validation_inflight() {
     actor.subsystems.validation.inflight.insert(block_hash, 1);
 
     assert!(
-        !actor.reschedule_stale_pending_blocks(),
+        !actor.reschedule_stale_pending_blocks(None),
         "fast timeout should not reschedule while validation is inflight"
     );
     let pending_after = actor
@@ -52134,7 +52186,7 @@ async fn reschedule_defers_fast_timeout_while_validation_inflight() {
     }
 
     assert!(
-        actor.reschedule_stale_pending_blocks(),
+        actor.reschedule_stale_pending_blocks(None),
         "pending should reschedule once quorum timeout elapses even with validation inflight"
     );
     let pending_after = actor
@@ -52175,7 +52227,7 @@ async fn reschedule_defers_quorum_timeout_while_rbc_incomplete() {
     actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
 
     assert!(
-        !actor.reschedule_stale_pending_blocks(),
+        !actor.reschedule_stale_pending_blocks(None),
         "incomplete RBC sessions should defer quorum reschedule"
     );
     let pending_after = actor
@@ -52215,7 +52267,7 @@ async fn reschedule_defers_quorum_timeout_while_vote_queue_backlogged() {
     super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
 
     assert!(
-        !actor.reschedule_stale_pending_blocks(),
+        !actor.reschedule_stale_pending_blocks(None),
         "vote backlog should defer quorum reschedule"
     );
     let pending_after = actor
@@ -52231,7 +52283,7 @@ async fn reschedule_defers_quorum_timeout_while_vote_queue_backlogged() {
     super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Votes, 1);
 
     assert!(
-        actor.reschedule_stale_pending_blocks(),
+        actor.reschedule_stale_pending_blocks(None),
         "clearing vote backlog should allow quorum reschedule"
     );
     let pending_after = actor
@@ -52276,12 +52328,66 @@ async fn reschedule_stale_pending_blocks_skips_empty_roster() {
     );
 
     assert!(
-        !actor.reschedule_stale_pending_blocks(),
+        !actor.reschedule_stale_pending_blocks(None),
         "empty roster should skip reschedule"
     );
     assert!(
         actor.pending.pending_blocks.contains_key(&block_hash),
         "pending block should be retained when roster is empty"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reschedule_stale_pending_blocks_respects_tick_budget() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let view_idx = block.header().view_change_index();
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let deadline = Instant::now()
+        .checked_sub(Duration::from_millis(1))
+        .unwrap_or(Instant::now());
+    assert!(
+        !actor.reschedule_stale_pending_blocks(Some(deadline)),
+        "exhausted tick budget should skip reschedule sweep"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_none(),
+        "pending should not be rescheduled when budget is exhausted"
+    );
+
+    assert!(
+        actor.reschedule_stale_pending_blocks(None),
+        "pending should reschedule once budget is available"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_some(),
+        "pending should be rescheduled without budget pressure"
     );
 
     harness.shutdown.send();
@@ -52329,7 +52435,7 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_payloads() {
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     assert!(
-        actor.reschedule_stale_pending_blocks(),
+        actor.reschedule_stale_pending_blocks(None),
         "aborted payloads past retention should be evicted"
     );
     assert!(
@@ -52373,7 +52479,7 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_payloads_without_active(
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     assert!(
-        actor.reschedule_stale_pending_blocks(),
+        actor.reschedule_stale_pending_blocks(None),
         "aborted payloads should be evicted even without active pending blocks"
     );
     assert!(
@@ -52443,7 +52549,7 @@ async fn reschedule_stale_pending_blocks_retains_aborted_with_votes() {
         vote,
     );
 
-    actor.reschedule_stale_pending_blocks();
+    actor.reschedule_stale_pending_blocks(None);
     assert!(
         actor.pending.pending_blocks.contains_key(&block_hash),
         "aborted payload should be retained while votes are present"
@@ -52491,7 +52597,7 @@ async fn reschedule_stale_pending_blocks_retains_aborted_above_committed_height(
     pending.inserted_at = Instant::now() - within_retention;
     actor.pending.pending_blocks.insert(block_hash, pending);
 
-    actor.reschedule_stale_pending_blocks();
+    actor.reschedule_stale_pending_blocks(None);
     assert!(
         actor.pending.pending_blocks.contains_key(&block_hash),
         "aborted payloads above committed height should be retained within the window"
@@ -52538,7 +52644,7 @@ async fn reschedule_stale_pending_blocks_evicts_aborted_above_committed_height_a
     pending.inserted_at = Instant::now() - retention - Duration::from_millis(1);
     actor.pending.pending_blocks.insert(block_hash, pending);
 
-    actor.reschedule_stale_pending_blocks();
+    actor.reschedule_stale_pending_blocks(None);
     assert!(
         !actor.pending.pending_blocks.contains_key(&block_hash),
         "aborted payloads above committed height should be evicted after retention"
@@ -52624,7 +52730,7 @@ async fn reschedule_stale_pending_blocks_targets_snapshot_roster() {
     }
 
     assert!(
-        actor.reschedule_stale_pending_blocks(),
+        actor.reschedule_stale_pending_blocks(None),
         "pending block should be rescheduled"
     );
 
@@ -52693,7 +52799,7 @@ async fn reschedule_stale_pending_blocks_skips_when_commit_qc_cached() {
         .qc_cache
         .insert((Phase::Commit, block_hash, height, view_idx, epoch), qc);
 
-    actor.reschedule_stale_pending_blocks();
+    actor.reschedule_stale_pending_blocks(None);
 
     let pending_after = actor
         .pending
@@ -52851,6 +52957,90 @@ async fn commit_pipeline_skips_fast_timeout_with_da_enabled() {
     assert!(
         pending_after.last_quorum_reschedule.is_none(),
         "commit pipeline should not reschedule at fast timeout in DA mode"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_inlines_validation_after_fast_timeout_when_worker_queue_full() {
+    use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1500)));
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1500)));
+        block.commit();
+    }
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let commit_topology = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+    let fast_timeout = {
+        let view = actor.state.view();
+        actor.pending_fast_path_timeout(&view, consensus_mode)
+    };
+    assert!(
+        fast_timeout > Duration::from_secs(1),
+        "test requires worker-dispatched validation"
+    );
+
+    let (_work_tx, _work_rx) =
+        std::sync::mpsc::sync_channel::<super::validation::ValidationWork>(0);
+    actor.subsystems.validation.work_txs = vec![_work_tx];
+    actor.subsystems.validation.result_rx = None;
+    actor.subsystems.validation.inflight.clear();
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    let outcome = actor.validate_pending_block_for_voting_inline(block_hash, &commit_topology);
+    assert!(
+        matches!(outcome, ValidationGateOutcome::Valid),
+        "block should validate inline before testing fallback: {outcome:?}"
+    );
+    let mut pending = actor
+        .pending
+        .pending_blocks
+        .remove(&block_hash)
+        .expect("pending retained after inline validation");
+    pending.validation_status = ValidationStatus::Pending;
+    pending.parent_state_root = None;
+    pending.post_state_root = None;
+    pending.inserted_at = Instant::now() - fast_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert_eq!(
+        pending_after.validation_status,
+        ValidationStatus::Valid,
+        "fast-timeout fallback should validate inline when worker queues are full"
+    );
+    assert!(
+        pending_after.parent_state_root.is_some(),
+        "inline validation should record parent state root"
+    );
+    assert!(
+        pending_after.post_state_root.is_some(),
+        "inline validation should record post state root"
     );
 
     harness.shutdown.send();
@@ -57720,6 +57910,38 @@ fn tick_timing_monitor_logs_long_tick_cost() {
         "tick cost over threshold should request logging"
     );
     assert!(!report.log_gap);
+}
+
+#[test]
+fn tick_timing_monitor_respects_custom_thresholds() {
+    let base = Instant::now();
+    let mut monitor = super::TickTimingMonitor::new(base);
+    let tick_start = base + Duration::from_millis(10);
+    let tick_cost = Duration::from_millis(9);
+
+    let report = monitor.observe_with_thresholds(
+        tick_start,
+        tick_cost,
+        Duration::from_millis(5),
+        Duration::from_millis(8),
+    );
+    assert!(report.log_gap, "custom gap threshold should be honored");
+    assert!(report.log_cost, "custom cost threshold should be honored");
+
+    let suppressed = monitor.observe_with_thresholds(
+        tick_start + Duration::from_millis(2),
+        Duration::from_millis(1),
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+    );
+    assert!(
+        !suppressed.log_gap,
+        "higher thresholds should suppress logs"
+    );
+    assert!(
+        !suppressed.log_cost,
+        "higher thresholds should suppress logs"
+    );
 }
 
 #[test]
