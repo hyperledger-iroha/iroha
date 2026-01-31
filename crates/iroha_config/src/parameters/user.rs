@@ -5180,7 +5180,7 @@ pub struct AdaptiveObservability {
 /// User-level configuration for deterministic pacing governor.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct SumeragiPacingGovernor {
-    /// Enable adaptive pacing-factor adjustments.
+    /// Deterministic pacing governor is always enabled (setting `false` is invalid).
     #[config(
         env = "SUMERAGI_PACING_GOVERNOR_ENABLED",
         default = "defaults::sumeragi::PACING_GOVERNOR_ENABLED"
@@ -6144,6 +6144,14 @@ impl SumeragiPacingGovernor {
         } = self;
 
         let mut ok = true;
+        if !enabled {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.advanced.pacing_governor.enabled must be true for this release",
+                ),
+            );
+            ok = false;
+        }
         if window_blocks < 2 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
@@ -6207,7 +6215,7 @@ impl SumeragiPacingGovernor {
         }
 
         Some(actual::SumeragiPacingGovernor {
-            enabled,
+            enabled: true,
             window_blocks,
             view_change_pressure_permille,
             view_change_clear_permille,
@@ -15853,6 +15861,25 @@ mod pacing_governor_tests {
             step_down_bps: 0,
             min_factor_bps: 9_000,
             max_factor_bps: 8_000,
+        };
+        let mut emitter = Emitter::new();
+        assert!(user.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn pacing_governor_rejects_disabled() {
+        let user = SumeragiPacingGovernor {
+            enabled: false,
+            window_blocks: 2,
+            view_change_pressure_permille: 1,
+            view_change_clear_permille: 1,
+            commit_spacing_pressure_permille: 1,
+            commit_spacing_clear_permille: 1,
+            step_up_bps: 1,
+            step_down_bps: 1,
+            min_factor_bps: 10_000,
+            max_factor_bps: 10_000,
         };
         let mut emitter = Emitter::new();
         assert!(user.parse(&mut emitter).is_none());

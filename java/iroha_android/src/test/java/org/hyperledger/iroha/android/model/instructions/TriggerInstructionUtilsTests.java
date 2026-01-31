@@ -22,7 +22,7 @@ public final class TriggerInstructionUtilsTests {
 
   private static void rejectsNonWireInstructions() {
     final InstructionBox nonWire =
-        RegisterDomainInstruction.builder().setDomainId("wonderland").build().toInstructionBox();
+        RegisterDomainInstruction.builder().setDomainName("wonderland").build().toInstructionBox();
     final Map<String, String> target = new LinkedHashMap<>();
     assertThrows(
         () -> TriggerInstructionUtils.appendInstructions(List.of(nonWire), target),

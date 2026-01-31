@@ -6,41 +6,16 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  DEFAULTS_DIR: defaults
-  WASM_TARGET_DIR: wasm/target/prebuilt
   ARTIFACTS_DIR: tmp/artifacts
   BIN_PATH: /usr/local/bin
 
 jobs:
-  build_wasm_libs:
-    runs-on: ubuntu-latest
-    container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build wasm libs
-        run: ./scripts/build_wasm.sh libs
-      - name: Upload wasm libs to reuse in other jobs
-        uses: actions/upload-artifact@v4
-        with:
-          name: wasm-libs
-          path: ${{ env.WASM_TARGET_DIR }}/libs
-
   dev_image:
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
-    needs: build_wasm_libs
     steps:
       - uses: actions/checkout@v4
-      - name: Download wasm libs
-        uses: actions/download-artifact@v4
-        with:
-          name: wasm-libs
-          path: ${{ env.DEFAULTS_DIR }}/libs
-      - name: Move the default executor
-        run: mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
       - name: Set up Docker Buildx
         id: buildx
         if: always()

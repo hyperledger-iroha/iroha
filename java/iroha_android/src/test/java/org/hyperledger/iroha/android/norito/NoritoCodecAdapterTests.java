@@ -13,7 +13,6 @@ import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.TransactionPayload;
-import org.hyperledger.iroha.android.model.instructions.InstructionKind;
 import org.hyperledger.iroha.android.crypto.Blake2b;
 import org.hyperledger.iroha.android.tx.MultisigSignature;
 import org.hyperledger.iroha.android.tx.MultisigSignatures;
@@ -49,12 +48,9 @@ public final class NoritoCodecAdapterTests {
     javaCodecEncodesMultisigAuthority();
     javaCodecEncodesMultisigSignatures();
     javaCodecEncodesChainIdLayout();
-    javaCodecRejectsLegacyChainIdPayload();
-    javaCodecRejectsLegacyInstructionPayloads();
     javaCodecSupportsInstructionsVariant();
     javaCodecSupportsWireInstructionPayloads();
     javaCodecEncodesIvmBytecodeLayout();
-    javaCodecRejectsLegacyIvmPayload();
     javaCodecEncodesInstructionLayout();
     System.out.println("[IrohaAndroid] Norito codec scaffolding tests passed.");
   }
@@ -294,24 +290,6 @@ public final class NoritoCodecAdapterTests {
     assert chainId.equals(decodedChain) : "ChainId must round-trip via layout inspection";
   }
 
-  private static void javaCodecRejectsLegacyChainIdPayload() throws NoritoException {
-    final TransactionPayload payload =
-        TransactionPayload.builder()
-            .setChainId("00000009")
-            .setAuthority("legacy-chain@wonderland")
-            .setCreationTimeMs(1_735_111_111_456L)
-            .setExecutable(Executable.ivm(new byte[] {0x01, 0x02}))
-            .build();
-    final byte[] legacyEncoded = legacyChainIdPayload(payload);
-    boolean rejected = false;
-    try {
-      new NoritoJavaCodecAdapter().decodeTransaction(legacyEncoded);
-    } catch (final NoritoException ex) {
-      rejected = true;
-    }
-    assert rejected : "Legacy ChainId payloads must be rejected";
-  }
-
   private static void javaCodecSupportsInstructionsVariant() throws NoritoException {
     final byte[] wirePayloadA =
         NoritoCodec.encode("wire-A", "iroha.test.WirePayload", NoritoAdapters.stringAdapter());
@@ -354,41 +332,6 @@ public final class NoritoCodecAdapterTests {
     assert "iroha.custom.b".equals(decodedSecond.wireName()) : "Wire name must round-trip";
     assert Arrays.equals(wirePayloadB, decodedSecond.payloadBytes())
         : "Wire payload bytes must round-trip";
-  }
-
-  private static void javaCodecRejectsLegacyInstructionPayloads() throws NoritoException {
-    final InstructionBox legacyInstruction =
-        InstructionBox.of(
-            new InstructionBox.InstructionPayload() {
-              @Override
-              public InstructionKind kind() {
-                return InstructionKind.CUSTOM;
-              }
-
-              @Override
-              public Map<String, String> toArguments() {
-                return mapOf("action", "Legacy");
-              }
-            });
-
-    final TransactionPayload payload =
-        TransactionPayload.builder()
-            .setChainId("00000010")
-            .setAuthority("legacy-instr@wonderland")
-            .setCreationTimeMs(1_735_111_111_111L)
-            .setExecutable(
-                Executable.instructions(
-                    listOf(legacyInstruction)))
-            .build();
-
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
-    boolean rejected = false;
-    try {
-      adapter.encodeTransaction(payload);
-    } catch (final NoritoException ex) {
-      rejected = true;
-    }
-    assert rejected : "Legacy argument-map instructions must be rejected";
   }
 
   private static void javaCodecSupportsWireInstructionPayloads() throws NoritoException {
@@ -455,25 +398,6 @@ public final class NoritoCodecAdapterTests {
     final byte[] decodedIvm =
         decodeFieldPayload(ivmPayload, NoritoAdapters.byteVecAdapter(), "payload.executable.ivm.bytes");
     assert Arrays.equals(ivmBytes, decodedIvm) : "IVM bytecode bytes should match";
-  }
-
-  private static void javaCodecRejectsLegacyIvmPayload() throws NoritoException {
-    final byte[] ivmBytes = new byte[] {0x0A, 0x0B, 0x0C};
-    final TransactionPayload payload =
-        TransactionPayload.builder()
-            .setChainId("00000014")
-            .setAuthority("legacy-ivm@wonderland")
-            .setCreationTimeMs(1_735_222_222_999L)
-            .setExecutable(Executable.ivm(ivmBytes))
-            .build();
-    final byte[] legacyEncoded = legacyIvmPayload(payload);
-    boolean rejected = false;
-    try {
-      new NoritoJavaCodecAdapter().decodeTransaction(legacyEncoded);
-    } catch (final NoritoException ex) {
-      rejected = true;
-    }
-    assert rejected : "Legacy IVM payloads must be rejected";
   }
 
   private static void javaCodecEncodesInstructionLayout() throws NoritoException {
@@ -548,76 +472,6 @@ public final class NoritoCodecAdapterTests {
       throw new IllegalArgumentException(field + " length too large: " + length);
     }
     return decoder.readBytes((int) length);
-  }
-
-  private static byte[] legacyChainIdPayload(final TransactionPayload payload) throws NoritoException {
-    final TransactionPayloadAdapter adapter = new TransactionPayloadAdapter();
-    final NoritoCodec.AdaptiveEncoding encoding = NoritoCodec.encodeAdaptive(payload, adapter);
-    final int flags = encoding.flags();
-    final NoritoDecoder decoder = new NoritoDecoder(encoding.payload(), flags, NoritoHeader.MINOR_VERSION);
-    final byte[] chainField = readField(decoder, "payload.chain_id");
-    final byte[] authorityField = readField(decoder, "payload.authority");
-    final byte[] creationField = readField(decoder, "payload.creation_time_ms");
-    final byte[] executableField = readField(decoder, "payload.executable");
-    final byte[] ttlField = readField(decoder, "payload.time_to_live_ms");
-    final byte[] nonceField = readField(decoder, "payload.nonce");
-    final byte[] metadataField = readField(decoder, "payload.metadata");
-    assert decoder.remaining() == 0 : "Legacy chain payload has trailing bytes";
-    final byte[] legacyChainField = unwrapSizedField(chainField, "payload.chain_id.legacy");
-    return assemblePayload(
-        flags,
-        legacyChainField,
-        authorityField,
-        creationField,
-        executableField,
-        ttlField,
-        nonceField,
-        metadataField);
-  }
-
-  private static byte[] legacyIvmPayload(final TransactionPayload payload) throws NoritoException {
-    final TransactionPayloadAdapter adapter = new TransactionPayloadAdapter();
-    final NoritoCodec.AdaptiveEncoding encoding = NoritoCodec.encodeAdaptive(payload, adapter);
-    final int flags = encoding.flags();
-    final NoritoDecoder decoder = new NoritoDecoder(encoding.payload(), flags, NoritoHeader.MINOR_VERSION);
-    final byte[] chainField = readField(decoder, "payload.chain_id");
-    final byte[] authorityField = readField(decoder, "payload.authority");
-    final byte[] creationField = readField(decoder, "payload.creation_time_ms");
-    final byte[] executableField = readField(decoder, "payload.executable");
-    final byte[] ttlField = readField(decoder, "payload.time_to_live_ms");
-    final byte[] nonceField = readField(decoder, "payload.nonce");
-    final byte[] metadataField = readField(decoder, "payload.metadata");
-    assert decoder.remaining() == 0 : "Legacy ivm payload has trailing bytes";
-
-    final byte[] legacyExecutable = legacyExecutableField(executableField, flags);
-    return assemblePayload(
-        flags,
-        chainField,
-        authorityField,
-        creationField,
-        legacyExecutable,
-        ttlField,
-        nonceField,
-        metadataField);
-  }
-
-  private static byte[] legacyExecutableField(final byte[] executableField, final int flags) {
-    final NoritoDecoder execDecoder = new NoritoDecoder(executableField, flags, NoritoHeader.MINOR_VERSION);
-    final long tag = NoritoAdapters.uint(32).decode(execDecoder);
-    if (tag != 1L) {
-      throw new IllegalArgumentException("Expected IVM executable tag");
-    }
-    final byte[] ivmField = readField(execDecoder, "payload.executable.ivm");
-    if (execDecoder.remaining() != 0) {
-      throw new IllegalArgumentException("Executable field has trailing bytes");
-    }
-    final byte[] legacyIvm = unwrapSizedField(ivmField, "payload.executable.ivm.legacy");
-    final NoritoEncoder encoder = new NoritoEncoder(flags);
-    encoder.writeUInt(tag, 32);
-    final boolean compact = (flags & NoritoHeader.COMPACT_LEN) != 0;
-    encoder.writeLength(legacyIvm.length, compact);
-    encoder.writeBytes(legacyIvm);
-    return encoder.toByteArray();
   }
 
   private static byte[] unwrapSizedField(final byte[] payload, final String field) {

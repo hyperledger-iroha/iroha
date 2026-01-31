@@ -7522,6 +7522,39 @@ impl Actor {
             || self.kura.block_payload_available_by_hash(hash)
     }
 
+    fn force_rbc_delivery_for_block_sync(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        payload_hash: Hash,
+    ) -> bool {
+        if !self.runtime_da_enabled() {
+            return false;
+        }
+        let snapshot = {
+            let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) else {
+                return false;
+            };
+            if session.is_invalid() || session.delivered {
+                return false;
+            }
+            if session.payload_hash() != Some(payload_hash) {
+                return false;
+            }
+            if session.received_chunks() != session.total_chunks() {
+                return false;
+            }
+            session.delivered = true;
+            session.deliver_sender = None;
+            session.deliver_signature = None;
+            session.sent_ready = true;
+            session.clone()
+        };
+        self.update_rbc_status_entry(key, &snapshot, false);
+        self.persist_rbc_session(key, &snapshot);
+        self.publish_rbc_backlog_snapshot();
+        true
+    }
+
     fn block_payload_available_for_progress(&self, hash: HashOf<BlockHeader>) -> bool {
         if let Some(pending) = self.pending.pending_blocks.get(&hash) {
             return !matches!(pending.validation_status, ValidationStatus::Invalid);

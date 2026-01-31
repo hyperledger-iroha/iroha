@@ -11,6 +11,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Test one crate: `cargo test -p <crate>`
 - Run one test: `cargo test -p <crate> <test_name> -- --nocapture`
 - Swift SDK: from the `IrohaSwift` directory run `swift test` to execute the Swift package tests.
+- Android SDK: from `java/iroha_android` run `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test`.
 
 ## Overview
 - Hyperledger Iroha is a blockchain platform

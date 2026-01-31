@@ -4953,6 +4953,133 @@ async fn block_sync_update_accepts_uncertified_next_height_after_block_created_i
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_marks_rbc_delivered_when_local_peer_missing_from_roster() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let (committed_height, committed_hash) = {
+        let view = actor.state.view();
+        (
+            u64::try_from(view.height()).unwrap_or(u64::MAX),
+            view.latest_block_hash(),
+        )
+    };
+    let block_height = committed_height.saturating_add(1).max(2);
+    let view_index = 0_u64;
+    let parent_hash = committed_hash.unwrap_or(genesis_hash);
+
+    let local_peer = actor.common_config.peer.id().clone();
+    let mut roster: Vec<PeerId> = harness
+        .key_pairs
+        .iter()
+        .filter(|kp| PeerId::new(kp.public_key().clone()) != local_peer)
+        .map(|kp| PeerId::new(kp.public_key().clone()))
+        .collect();
+    assert!(!roster.is_empty(), "test requires non-empty commit roster");
+    roster = super::roster::canonicalize_roster_for_mode(roster, ConsensusMode::Permissioned);
+    assert!(
+        !roster.iter().any(|peer| peer == &local_peer),
+        "local peer must be excluded from roster"
+    );
+
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(block_height);
+    let signature_topology =
+        super::topology_for_view(&topology, block_height, view_index, mode_tag, prf_seed);
+    let leader_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("signer in topology");
+    let leader_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == leader_peer.public_key())
+        .expect("leader keypair exists in harness");
+    let leader_idx = signature_topology
+        .position(leader_kp.public_key())
+        .expect("leader index in topology");
+    let block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        block_height,
+        view_index,
+        Some(parent_hash),
+        leader_kp,
+        u64::try_from(leader_idx).expect("leader index fits u64"),
+    );
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let session_key = (block.hash(), block_height, view_index);
+    let session = Actor::build_rbc_session_from_payload(
+        &payload_bytes,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        actor.epoch_for_height(block_height),
+    )
+    .expect("rbc session");
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(session_key, session);
+    actor.record_rbc_session_roster(session_key, roster.clone(), super::RbcRosterSource::Derived);
+
+    let signers: Vec<&KeyPair> = roster
+        .iter()
+        .map(|peer| {
+            harness
+                .key_pairs
+                .iter()
+                .find(|kp| kp.public_key() == peer.public_key())
+                .expect("roster keypair exists in harness")
+        })
+        .collect();
+    let mut signer_indices = BTreeSet::new();
+    for idx in 0..roster.len() {
+        signer_indices.insert(
+            ValidatorIndex::try_from(idx).expect("validator index fits for test roster length"),
+        );
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signer_indices, roster.len());
+    let header = block.header();
+    let qc = commit_qc_with_signers(
+        &actor.common_config.chain,
+        mode_tag,
+        &header,
+        zero_state_root(),
+        zero_state_root(),
+        &signers,
+        signers_bitmap,
+    );
+
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_qc = Some(qc);
+    update.validator_checkpoint = None;
+    update.stake_snapshot = None;
+    update.commit_votes.clear();
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+
+    let session = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&session_key)
+        .expect("RBC session exists");
+    assert!(
+        session.delivered_payload_matches(&payload_hash),
+        "block sync update should force RBC delivery for non-roster peer"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_sync_update_accepts_uncertified_next_height_in_npos_genesis_bootstrap() {
     use crate::sumeragi::status;
 

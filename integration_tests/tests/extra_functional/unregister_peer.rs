@@ -92,16 +92,18 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         }
         return Err(err);
     }
-    let new_peer_synced = match timeout(sync_timeout, new_peer.once_block(expected_height)).await {
-        Ok(_) => true,
-        Err(err) => {
-            // TODO: Tighten back once block sync reliably delivers commit QCs to newly joined peers.
-            eprintln!(
-                "warning: new peer did not sync to height {expected_height} before timeout: {err}"
-            );
-            false
-        }
-    };
+    if sandbox::handle_result(
+        timeout(sync_timeout, new_peer.once_block(expected_height))
+            .await
+            .wrap_err_with(|| {
+                format!("new peer did not sync to height {expected_height} before timeout")
+            }),
+        stringify!(network_stable_after_add_and_after_remove_peer),
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
     run_blocking_with_timeout(
         {
             let client = client.clone();
@@ -157,25 +159,22 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         None => return Ok(()),
     };
     assert_eq!(main_bootstrap_asset, numeric!(100));
-    // Allow the new peer to sync while we wait for its asset view to converge below.
-    // Then the new peer should already have the mint result.
-    if new_peer_synced {
-        let new_peer_asset = match sandbox::handle_result(
-            wait_for_asset(
-                &new_peer_client,
-                &account,
-                &asset_def,
-                sync_timeout,
-                Some(numeric!(100)),
-            )
-            .await,
-            stringify!(network_stable_after_add_and_after_remove_peer),
-        )? {
-            Some(value) => value,
-            None => return Ok(()),
-        };
-        assert_eq!(new_peer_asset, numeric!(100));
-    }
+    // The new peer should already have the mint result.
+    let new_peer_asset = match sandbox::handle_result(
+        wait_for_asset(
+            &new_peer_client,
+            &account,
+            &asset_def,
+            sync_timeout,
+            Some(numeric!(100)),
+        )
+        .await,
+        stringify!(network_stable_after_add_and_after_remove_peer),
+    )? {
+        Some(value) => value,
+        None => return Ok(()),
+    };
+    assert_eq!(new_peer_asset, numeric!(100));
 
     // When a peer is unregistered
     submit_or_skip(
@@ -229,25 +228,23 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
         None => return Ok(()),
     };
     assert_eq!(main_asset, numeric!(300));
-    if new_peer_synced {
-        // Removed peers should not observe new mints after unregister.
-        sleep(PIPELINE_TIME * 5).await;
-        let unregistered_asset = match sandbox::handle_result(
-            wait_for_asset(
-                &new_peer_client,
-                &account,
-                &asset_def,
-                sync_timeout,
-                Some(numeric!(100)),
-            )
-            .await,
-            stringify!(network_stable_after_add_and_after_remove_peer),
-        )? {
-            Some(value) => value,
-            None => return Ok(()),
-        };
-        assert_eq!(unregistered_asset, numeric!(100));
-    }
+    // Removed peers should not observe new mints after unregister.
+    sleep(PIPELINE_TIME * 5).await;
+    let unregistered_asset = match sandbox::handle_result(
+        wait_for_asset(
+            &new_peer_client,
+            &account,
+            &asset_def,
+            sync_timeout,
+            Some(numeric!(100)),
+        )
+        .await,
+        stringify!(network_stable_after_add_and_after_remove_peer),
+    )? {
+        Some(value) => value,
+        None => return Ok(()),
+    };
+    assert_eq!(unregistered_asset, numeric!(100));
 
     Ok(())
 }

@@ -2454,8 +2454,8 @@ pub mod sumeragi {
     pub const ADAPTIVE_COLLECTOR_REDUNDANT_R: u8 = 3;
     /// Cooldown (ms) before adaptive mitigation may re-apply or reset after a trigger.
     pub const ADAPTIVE_COOLDOWN_MS: u64 = 5_000;
-    /// Enable deterministic pacing governor by default.
-    pub const PACING_GOVERNOR_ENABLED: bool = false;
+    /// Deterministic pacing governor is always enabled.
+    pub const PACING_GOVERNOR_ENABLED: bool = true;
     /// Number of recent blocks to sample for the pacing governor window.
     pub const PACING_GOVERNOR_WINDOW_BLOCKS: usize = 20;
     /// View-change pressure threshold (permille of view-change increments per block).

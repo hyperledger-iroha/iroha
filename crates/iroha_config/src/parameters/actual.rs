@@ -3535,7 +3535,7 @@ impl Default for AdaptiveObservability {
 /// Deterministic pacing governor configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiPacingGovernor {
-    /// Enable adaptive pacing-factor adjustments.
+    /// Deterministic pacing governor is always enabled (retained for config parity).
     pub enabled: bool,
     /// Number of recent blocks to sample when evaluating pressure.
     pub window_blocks: usize,
