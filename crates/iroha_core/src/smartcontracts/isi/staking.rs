@@ -164,7 +164,12 @@ impl Execute for RegisterPublicLaneValidator {
             )
             .max(1);
         let current_epoch = current_epoch(block_height, epoch_length)?;
-        let pending_activation_epoch = current_epoch.saturating_add(1);
+        // Genesis must allow immediate activation so bootstrap validators can produce block 1.
+        let pending_activation_epoch = if state_transaction._curr_block.is_genesis() {
+            current_epoch
+        } else {
+            current_epoch.saturating_add(1)
+        };
         let pending_status = PublicLaneValidatorStatus::PendingActivation(pending_activation_epoch);
         let record = PublicLaneValidatorRecord {
             lane_id: self.lane_id,
@@ -2539,6 +2544,40 @@ mod tests {
             view.world.assets().get(&escrow_asset).is_some(),
             "staking assets must remain bonded"
         );
+    }
+
+    #[test]
+    fn genesis_activation_allows_same_block() {
+        let mut state = setup_state();
+
+        let mut state_block = state.block(block_header_with_height(1));
+        let mut stx = state_block.transaction();
+
+        let (validator, _delegator, _escrow, _asset_def_id) = prepare_accounts(&mut stx);
+        RegisterPublicLaneValidator {
+            lane_id: LaneId::SINGLE,
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Numeric::new(1_000, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register validator in genesis");
+
+        ActivatePublicLaneValidator {
+            lane_id: LaneId::SINGLE,
+            validator: validator.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("activate validator in genesis");
+
+        let record = stx
+            .world
+            .public_lane_validators
+            .get(&(LaneId::SINGLE, validator))
+            .cloned()
+            .expect("validator record exists");
+        assert!(matches!(record.status, PublicLaneValidatorStatus::Active));
     }
 
     #[test]
