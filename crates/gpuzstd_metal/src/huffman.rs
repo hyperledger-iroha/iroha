@@ -49,7 +49,7 @@ pub(crate) fn decode_literals(
     if output_len == 0 {
         return Ok(Vec::new());
     }
-    let mut reader = ZstdBitReaderRev::new(encoded)?;
+    let mut reader = BitReader::new(encoded);
     let mut tree_child0 = vec![-1i32; MAX_NODES];
     let mut tree_child1 = vec![-1i32; MAX_NODES];
     let mut tree_symbol = vec![-1i16; MAX_NODES];
@@ -85,6 +85,7 @@ pub(crate) fn decode_literals(
             node = next as usize;
         }
     }
+    output.reverse();
     Ok(output)
 }
 
@@ -358,51 +359,6 @@ impl ZstdBitWriter {
         self.buffer >>= 8;
         self.bit_count -= 8;
         Ok(())
-    }
-}
-
-struct ZstdBitReaderRev<'a> {
-    data: &'a [u8],
-    bit_pos: u32,
-}
-
-impl<'a> ZstdBitReaderRev<'a> {
-    fn new(data: &'a [u8]) -> Result<Self, HuffmanError> {
-        if data.is_empty() {
-            return Err(HuffmanError::InvalidTable);
-        }
-        let last = *data.last().unwrap();
-        if last == 0 {
-            return Err(HuffmanError::InvalidTable);
-        }
-        let highbit = 7u32 - last.leading_zeros();
-        let total_bits = (data.len() as u32 - 1) * 8 + highbit;
-        Ok(Self {
-            data,
-            bit_pos: total_bits,
-        })
-    }
-
-    fn read_bits(&mut self, bits: u32) -> Result<u64, HuffmanError> {
-        if bits > MAX_BITS as u32 {
-            return Err(HuffmanError::Bitstream(BitstreamError::InvalidBits));
-        }
-        if bits == 0 {
-            return Ok(0);
-        }
-        if bits > self.bit_pos {
-            return Err(HuffmanError::Bitstream(BitstreamError::UnexpectedEof));
-        }
-        let mut value = 0u64;
-        for i in 0..bits {
-            self.bit_pos -= 1;
-            let idx = self.bit_pos;
-            let byte = self.data[(idx >> 3) as usize];
-            let bit = (byte >> (idx & 7)) & 1;
-            let shift = bits - 1 - i;
-            value |= (bit as u64) << shift;
-        }
-        Ok(value)
     }
 }
 

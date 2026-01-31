@@ -1379,6 +1379,15 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
             .map(|peer| reqwest::Url::parse(&format!("{}/metrics", peer.torii_url())))
             .collect::<Result<_, _>>()
             .wrap_err("compose peer metrics URLs")?;
+        let lagging_index = 1usize;
+        let lagging_sumeragi_url = peer_sumeragi_urls
+            .get(lagging_index)
+            .cloned()
+            .ok_or_else(|| eyre!("missing lagging peer sumeragi status URL"))?;
+        let lagging_metrics_url = peer_metrics_urls
+            .get(lagging_index)
+            .cloned()
+            .ok_or_else(|| eyre!("missing lagging peer metrics URL"))?;
 
         let status_before = fetch_status(&client).await?;
         let mut expected_height = status_before.blocks;
@@ -1418,47 +1427,42 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
             return Ok(());
         }
 
-        let mut baseline_stash = Vec::with_capacity(peer_sumeragi_urls.len());
-        let mut baseline_fetch_totals = Vec::with_capacity(peer_metrics_urls.len());
+        let mut baseline_stash = PendingRbcStashCounters::default();
+        let mut baseline_fetch_total = 0.0;
         let baseline_deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            baseline_stash.clear();
-            baseline_fetch_totals.clear();
             let mut ready = true;
-            for (idx, url) in peer_sumeragi_urls.iter().enumerate() {
-                let response = http
-                    .get(url.clone())
-                    .header("Accept", "application/json")
-                    .send()
-                    .await
-                    .wrap_err("fetch baseline sumeragi status")?;
-                if !response.status().is_success() {
-                    ready = false;
-                    break;
-                }
+            let response = http
+                .get(lagging_sumeragi_url.clone())
+                .header("Accept", "application/json")
+                .send()
+                .await
+                .wrap_err("fetch baseline sumeragi status")?;
+            if !response.status().is_success() {
+                ready = false;
+            } else {
                 let body = response.text().await.wrap_err("baseline sumeragi status body")?;
-                let status_value: Value = json::from_str(&body)
-                    .wrap_err("parse baseline sumeragi status JSON")?;
-                baseline_stash.push(parse_pending_rbc_stash_counters(&status_value));
+                let status_value: Value =
+                    json::from_str(&body).wrap_err("parse baseline sumeragi status JSON")?;
+                baseline_stash = parse_pending_rbc_stash_counters(&status_value);
+            }
 
-                let response = http
-                    .get(peer_metrics_urls[idx].clone())
-                    .send()
-                    .await
-                    .wrap_err("fetch baseline metrics")?;
-                if !response.status().is_success() {
-                    ready = false;
-                    break;
-                }
+            let response = http
+                .get(lagging_metrics_url.clone())
+                .send()
+                .await
+                .wrap_err("fetch baseline metrics")?;
+            if !response.status().is_success() {
+                ready = false;
+            } else {
                 let body = response.text().await.wrap_err("baseline metrics body")?;
                 let reader = MetricsReader::new(&body);
-                baseline_fetch_totals.push(
-                    reader
-                        .max_with_prefix("sumeragi_missing_block_fetch_target_total")
-                        .unwrap_or(0.0),
-                );
+                baseline_fetch_total = reader
+                    .max_with_prefix("sumeragi_missing_block_fetch_target_total")
+                    .unwrap_or(0.0);
             }
-            if ready && baseline_stash.len() == peer_sumeragi_urls.len() {
+
+            if ready {
                 break;
             }
             if Instant::now() > baseline_deadline {
@@ -1475,60 +1479,85 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
             .await
             .wrap_err("submit trigger log instruction")??;
 
-        let baseline_stash_totals: Vec<u64> = baseline_stash
-            .iter()
-            .map(PendingRbcStashCounters::total)
-            .collect();
-        let stash_already_active = baseline_stash_totals.iter().any(|total| *total > 0);
-        let fetch_already_active = baseline_fetch_totals.iter().any(|total| *total > 0.0);
-        let mut last_stash_totals = baseline_stash_totals.clone();
-        let mut last_fetch_totals = baseline_fetch_totals.clone();
+        let baseline_unverified_total = baseline_stash
+            .stash_ready_roster_unverified_total
+            .saturating_add(baseline_stash.stash_deliver_roster_unverified_total);
+        let unverified_already_active = baseline_unverified_total > 0;
+        let fetch_already_active = baseline_fetch_total > 0.0;
+        let mut last_unverified_total = baseline_unverified_total;
+        let mut last_fetch_total = baseline_fetch_total;
+        let mut last_lagging_height = None;
         let pending_deadline = Instant::now() + Duration::from_secs(30);
         loop {
             if Instant::now() > pending_deadline {
                 return Err(eyre!(
-                    "timed out waiting for pending RBC stash + missing-block fetch; stash_baseline={baseline_stash_totals:?}, stash_last={last_stash_totals:?}, fetch_baseline={baseline_fetch_totals:?}, fetch_last={last_fetch_totals:?}"
+                    "timed out waiting for unverified RBC stash + missing-block fetch or lagging catch-up; unverified_baseline={baseline_unverified_total}, unverified_last={last_unverified_total}, fetch_baseline={baseline_fetch_total}, fetch_last={last_fetch_total}, lagging_height={last_lagging_height:?}, expected_height={expected_height}"
                 ));
             }
-            let mut stash_observed = stash_already_active;
+            let mut unverified_observed = unverified_already_active;
             let mut fetch_observed = fetch_already_active;
-            for (idx, url) in peer_sumeragi_urls.iter().enumerate() {
-                let response = http
-                    .get(url.clone())
-                    .header("Accept", "application/json")
-                    .send()
-                    .await
-                    .wrap_err("fetch sumeragi status")?;
-                if response.status().is_success() {
-                    let body = response.text().await.wrap_err("sumeragi status body")?;
-                    let status_value: Value =
-                        json::from_str(&body).wrap_err("parse sumeragi status JSON")?;
-                    let counters = parse_pending_rbc_stash_counters(&status_value);
-                    let total = counters.total();
-                    last_stash_totals[idx] = total;
-                    if total > baseline_stash_totals[idx] {
-                        stash_observed = true;
-                    }
-                }
+            let mut lagging_caught_up = false;
 
-                let response = http
-                    .get(peer_metrics_urls[idx].clone())
-                    .send()
-                    .await
-                    .wrap_err("fetch metrics")?;
-                if response.status().is_success() {
-                    let body = response.text().await.wrap_err("metrics body")?;
-                    let reader = MetricsReader::new(&body);
-                    let target_total = reader
-                        .max_with_prefix("sumeragi_missing_block_fetch_target_total")
-                        .unwrap_or(0.0);
-                    last_fetch_totals[idx] = target_total;
-                    if target_total > baseline_fetch_totals[idx] {
-                        fetch_observed = true;
+            let response = http
+                .get(lagging_sumeragi_url.clone())
+                .header("Accept", "application/json")
+                .send()
+                .await
+                .wrap_err("fetch sumeragi status")?;
+            if response.status().is_success() {
+                let body = response.text().await.wrap_err("sumeragi status body")?;
+                let status_value: Value =
+                    json::from_str(&body).wrap_err("parse sumeragi status JSON")?;
+                let counters = parse_pending_rbc_stash_counters(&status_value);
+                let unverified_total = counters
+                    .stash_ready_roster_unverified_total
+                    .saturating_add(counters.stash_deliver_roster_unverified_total);
+                last_unverified_total = unverified_total;
+                if unverified_total > baseline_unverified_total {
+                    unverified_observed = true;
+                }
+            }
+
+            let response = http
+                .get(lagging_metrics_url.clone())
+                .send()
+                .await
+                .wrap_err("fetch metrics")?;
+            if response.status().is_success() {
+                let body = response.text().await.wrap_err("metrics body")?;
+                let reader = MetricsReader::new(&body);
+                let target_total = reader
+                    .max_with_prefix("sumeragi_missing_block_fetch_target_total")
+                    .unwrap_or(0.0);
+                last_fetch_total = target_total;
+                if target_total > baseline_fetch_total {
+                    fetch_observed = true;
+                }
+            }
+
+            let response = http
+                .get(lagging_status_url.clone())
+                .header("Accept", "application/json")
+                .send()
+                .await
+                .wrap_err("fetch lagging status")?;
+            if response.status().is_success() {
+                let body = response.text().await.wrap_err("lagging status body")?;
+                let status_value: Value =
+                    json::from_str(&body).wrap_err("parse lagging status JSON")?;
+                if let Some(height) = status_value
+                    .as_object()
+                    .and_then(|obj| obj.get("blocks"))
+                    .and_then(|value| extract_u64(value).ok())
+                {
+                    last_lagging_height = Some(height);
+                    if height >= expected_height {
+                        lagging_caught_up = true;
                     }
                 }
             }
-            if stash_observed && fetch_observed {
+
+            if (unverified_observed && fetch_observed) || lagging_caught_up {
                 break;
             }
             sleep(Duration::from_millis(200)).await;
