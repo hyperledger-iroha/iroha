@@ -138,19 +138,19 @@ def main() -> None:
     glyph_idx = np.zeros((steps, len(cells)), dtype=np.uint8)
     bits = np.zeros((steps, len(cells)), dtype=np.uint8)
     packed_len = (CELL_SIZE * CELL_SIZE + 7) // 8
-    mask_bits = np.zeros((steps, len(cells), packed_len), dtype=np.uint8)
 
     bright = np.array(DATA_BRIGHT, dtype=np.uint8)
     dim = np.array(DATA_DIM, dtype=np.uint8)
 
-    ring_mask = (frames == np.array(RING_BRIGHT, dtype=np.uint8)).all(axis=3) | (
-        frames == np.array(RING_DIM, dtype=np.uint8)
-    ).all(axis=3)
-    ring_idx = np.zeros((steps, H, W), dtype=np.uint8)
-    for f in range(steps):
-        frame = frames[f]
-        ring_idx[f][(frame == np.array(RING_BRIGHT, dtype=np.uint8)).all(axis=2)] = 1
-        ring_idx[f][(frame == np.array(RING_DIM, dtype=np.uint8)).all(axis=2)] = 2
+    ring_b = (frames == np.array(RING_BRIGHT, dtype=np.uint8)).all(axis=3)
+    ring_d = (frames == np.array(RING_DIM, dtype=np.uint8)).all(axis=3)
+    ring_mask = ring_b | ring_d
+    ring_any = ring_mask.any(axis=0)
+    b_count = ring_b.sum(axis=0)
+    d_count = ring_d.sum(axis=0)
+    ring_layer = np.zeros((H, W, 3), dtype=np.uint8)
+    ring_layer[ring_any] = np.array(RING_BRIGHT, dtype=np.uint8)
+    ring_layer[d_count > b_count] = np.array(RING_DIM, dtype=np.uint8)
     logo_mask = np.zeros(frames.shape[:3], dtype=bool)
     for col in LOGO_SHADES:
         logo_mask |= (frames == np.array(col, dtype=np.uint8)).all(axis=3)
@@ -194,7 +194,6 @@ def main() -> None:
             else:
                 raise RuntimeError("missing data colors in tile")
             union = bmask | dmask
-            mask_bits[f, i] = np.packbits(union.reshape(-1).astype(np.uint8))
             ring_tile = ring_mask[:, y0 : y0 + CELL_SIZE, x0 : x0 + CELL_SIZE].any(axis=0)
             logo_tile = logo_mask[:, y0 : y0 + CELL_SIZE, x0 : x0 + CELL_SIZE].any(axis=0)
             idx = None
@@ -219,16 +218,54 @@ def main() -> None:
                 idx = best_idx
             glyph_idx[f, i] = idx
 
+    # Precompute allowed masks per cell (data-any) to model logo clipping.
+    allowed_masks = np.zeros((len(cells), packed_len), dtype=np.uint8)
+    for i, cell in enumerate(cells):
+        allowed = data_any[cell.y0 : cell.y0 + CELL_SIZE, cell.x0 : cell.x0 + CELL_SIZE]
+        allowed_masks[i] = np.packbits(allowed.reshape(-1).astype(np.uint8))
+
+    # Build low-density glyph masks and map each frame/cell to a glyph index.
+    glyph_masks = [render_glyph_mask(font, g) for g in glyphs]
+    glyph_masks_packed = np.stack(
+        [np.packbits(m.reshape(-1).astype(np.uint8)) for m in glyph_masks],
+        axis=0,
+    )
+
+    glyph_idx_ref = np.zeros((steps, len(cells)), dtype=np.uint8)
+    for f in range(steps):
+        for i, cell in enumerate(cells):
+            union = (frames[f, cell.y0 : cell.y0 + CELL_SIZE, cell.x0 : cell.x0 + CELL_SIZE] == bright).all(axis=2) | (
+                frames[f, cell.y0 : cell.y0 + CELL_SIZE, cell.x0 : cell.x0 + CELL_SIZE] == dim
+            ).all(axis=2)
+            if not union.any():
+                raise RuntimeError("missing data colors in tile")
+            allowed = np.unpackbits(allowed_masks[i], bitorder="big")[: CELL_SIZE * CELL_SIZE].reshape(
+                (CELL_SIZE, CELL_SIZE)
+            )
+            best_idx = 0
+            best = 1.0
+            for gi, gm in enumerate(glyph_masks):
+                diff = float(np.mean(union != (gm & allowed)))
+                if diff < best:
+                    best = diff
+                    best_idx = gi
+                    if best == 0.0:
+                        break
+            if best > 0.0:
+                raise RuntimeError("no exact glyph match for tile")
+            glyph_idx_ref[f, i] = best_idx
+
     np.savez(
         OUT_NPZ,
         cells=np.array([[c.x0, c.y0] for c in cells], dtype=np.int16),
-        glyph_idx=glyph_idx,
+        glyph_idx=glyph_idx_ref,
         bits=bits,
-        mask_bits=mask_bits,
+        glyph_masks=glyph_masks_packed,
+        allowed_masks=allowed_masks,
         glyphs=np.array(glyphs),
         static_layer=static_layer.astype(np.uint8),
         palette=pal_arr,
-        ring_idx=ring_idx,
+        ring_layer=ring_layer,
         cell_size=np.array(CELL_SIZE, dtype=np.int32),
         grid_n=np.array(GRID_N, dtype=np.int32),
         data_radius=np.array(DATA_RADIUS, dtype=np.float32),

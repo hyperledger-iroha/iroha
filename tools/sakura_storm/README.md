@@ -10,8 +10,9 @@ Files
 - `analysis_v27_glyph_fit.py`: Fits katakana font/size/threshold against dynamic cell masks.
 - `analysis_v27_static_masks.py`: Summarizes static cell mask shapes and best-fit box padding.
 - `gen_sakura_v27_procedural.py`: Procedural generator (no model) using inferred parameters.
-- `extract_v27_symbols.py`: Extracts per-cell glyph indices + bits from the reference GIF.
-- `gen_sakura_v27_symbols.py`: Renders a GIF from the extracted symbol stream (including per-frame ring + masks for exact match).
+- `extract_v27_symbols.py`: Extracts per-cell glyph indices + bits from the reference GIF, plus
+  a 15‑glyph mask palette and per‑cell allowed‑mask (logo clipping) so the replay stays exact.
+- `gen_sakura_v27_symbols.py`: Renders a GIF from the extracted symbol stream (exact match using glyph masks + allowed masks + static ring layer).
 - `compare_v27.py`: Quick diff metrics between a candidate and the reference.
 - `v27_model.npz`: The extracted model used for generation.
 
@@ -63,6 +64,9 @@ python3 extract_v27_symbols.py
 
 python3 gen_sakura_v27_symbols.py
 ```
+Notes:
+- The ring is a static layer drawn before data; data glyphs occlude ring pixels.
+- Logo acts as a static per‑cell clip mask (allowed‑mask) applied to glyphs.
 Defaults now mirror the reverse‑engineered layout (32x16 grid, radial band mask, logo‑mask exclusion, and a low‑density glyph pool).
 Useful knobs:
 - `SS_ACTIVE_BANDS=""` (defaults off; ring holes come from the ring overlay)

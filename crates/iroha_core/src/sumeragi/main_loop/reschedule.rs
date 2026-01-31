@@ -9,8 +9,14 @@ impl Actor {
         &self,
         key: super::rbc_store::SessionKey,
         commit_topology: &super::network_topology::Topology,
+        pending_age: Duration,
+        availability_timeout: Duration,
     ) -> bool {
         if !self.runtime_da_enabled() {
+            return false;
+        }
+        // After the availability timeout, allow reschedules even if RBC is still incomplete.
+        if availability_timeout != Duration::ZERO && pending_age >= availability_timeout {
             return false;
         }
         if self.block_payload_available_locally(key.0) {
@@ -236,7 +242,12 @@ impl Actor {
                     );
                     continue;
                 }
-                if self.rbc_availability_unresolved_for_reschedule(rbc_key, &commit_topology) {
+                if self.rbc_availability_unresolved_for_reschedule(
+                    rbc_key,
+                    &commit_topology,
+                    pending_age,
+                    availability_timeout,
+                ) {
                     debug!(
                         height = pending.height,
                         view = pending.view,

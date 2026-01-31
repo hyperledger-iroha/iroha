@@ -10262,6 +10262,78 @@ async fn commit_pipeline_reports_stage_timings() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn drain_commit_results_reports_stage_timings() {
+    let mut harness = test_actor_harness(1).await;
+
+    let block = sample_block(1, 0, None);
+    let failed_block = block.clone();
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let pending = PendingBlock::new(block, payload_hash, 1, 0);
+    let lock = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        height: 1,
+        view: 0,
+        epoch: 0,
+    };
+    let commit_topology = harness.actor.effective_commit_topology();
+    let signature_topology = commit_topology.clone();
+    let inflight = CommitInFlight {
+        id: 7,
+        lock,
+        block_hash,
+        pending,
+        commit_topology,
+        signature_topology,
+        qc_signers: None,
+        commit_qc: None,
+        allow_quorum_bypass: false,
+        post_commit_qc: None,
+        enqueue_time: Instant::now(),
+    };
+    harness.actor.subsystems.commit.inflight = Some(inflight);
+
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    harness.actor.subsystems.commit.result_rx = Some(result_rx);
+
+    let outcome = commit::CommitOutcome::Rejected {
+        failed_block,
+        error: BlockValidationError::PrevBlockHashMismatch {
+            expected: None,
+            actual: None,
+        },
+        pipeline_events: Vec::new(),
+    };
+    let timings = commit::CommitStageTimings {
+        qc_verify_ms: Some(3),
+        persist_ms: Some(5),
+        kura_store_ms: Some(7),
+        state_apply_ms: Some(11),
+        state_commit_ms: Some(13),
+    };
+    result_tx
+        .send(commit::CommitResult {
+            id: 7,
+            outcome,
+            timings,
+        })
+        .expect("send commit result");
+
+    let summary = harness.actor.drain_commit_results();
+    assert!(summary.progress, "commit results should be drained");
+    assert_eq!(summary.results, 1, "expected one drained result");
+    assert_eq!(summary.qc_verify_ms, 3);
+    assert_eq!(summary.persist_ms, 5);
+    assert_eq!(summary.kura_store_ms, 7);
+    assert_eq!(summary.state_apply_ms, 11);
+    assert_eq!(summary.state_commit_ms, 13);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_pipeline_qc_rebuild_cooldown_uses_chain_block_time() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -33588,7 +33660,7 @@ async fn force_view_change_if_idle_waits_for_pacemaker_attempt() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn force_view_change_if_idle_skips_when_rbc_backlog() {
+async fn force_view_change_if_idle_allows_after_timeout_with_rbc_backlog() {
     use std::borrow::Cow;
 
     let mut harness = test_actor_harness(4).await;
@@ -33662,12 +33734,15 @@ async fn force_view_change_if_idle_skips_when_rbc_backlog() {
         .phase_tracker
         .on_view_change(height, current_view, start);
     assert!(
-        !actor.force_view_change_if_idle(now),
-        "idle view change should not trigger after timeout while RBC backlog is unresolved"
+        actor.force_view_change_if_idle(now),
+        "idle view change should trigger after timeout even if RBC backlog is unresolved"
     );
     let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_qc_total, 0);
-    assert!(snapshot.last_cause.is_none());
+    assert_eq!(snapshot.missing_qc_total, 1);
+    assert_eq!(
+        snapshot.last_cause,
+        Some(ViewChangeCause::MissingQc.as_str().to_string())
+    );
 
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
@@ -50568,9 +50643,53 @@ async fn rbc_availability_gate_skips_when_payload_is_local() {
         actor.block_payload_available_locally(block.hash()),
         "test requires a locally available payload"
     );
+    let availability_timeout = actor.availability_timeout(actor.quorum_timeout(true), true);
     assert!(
-        !actor.rbc_availability_unresolved_for_reschedule((block.hash(), 1, 0), &topology),
+        !actor.rbc_availability_unresolved_for_reschedule(
+            (block.hash(), 1, 0),
+            &topology,
+            Duration::ZERO,
+            availability_timeout,
+        ),
         "local payload availability should resolve RBC gating"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rbc_availability_gate_yields_after_availability_timeout() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let block = sample_block(1, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::prehashed([0x33; 32]);
+    let pending = PendingBlock::new(block, payload_hash, 1, 0);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let session = RbcSession::test_new(2, Some(payload_hash), None, 0);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert((block_hash, 1, 0), session);
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let availability_timeout = actor.availability_timeout(actor.quorum_timeout(true), true);
+    let pending_age = availability_timeout + Duration::from_millis(1);
+    assert!(
+        !actor.rbc_availability_unresolved_for_reschedule(
+            (block_hash, 1, 0),
+            &topology,
+            pending_age,
+            availability_timeout,
+        ),
+        "availability timeout should lift RBC reschedule gating"
     );
 
     harness.shutdown.send();
@@ -52885,6 +53004,7 @@ async fn reschedule_defers_quorum_timeout_while_rbc_incomplete() {
     let payload_hash = Hash::new(&payload_bytes);
     let view_idx = block.header().view_change_index();
     let quorum_timeout = actor.quorum_timeout(true);
+    let availability_timeout = actor.availability_timeout(quorum_timeout, true);
 
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
     pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
@@ -52906,6 +53026,28 @@ async fn reschedule_defers_quorum_timeout_while_rbc_incomplete() {
     assert!(
         pending_after.last_quorum_reschedule.is_none(),
         "pending should not be quorum-rescheduled while RBC is incomplete"
+    );
+
+    let mut pending = actor
+        .pending
+        .pending_blocks
+        .remove(&block_hash)
+        .expect("pending retained");
+    pending.inserted_at = Instant::now() - availability_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    assert!(
+        actor.reschedule_stale_pending_blocks(None),
+        "availability timeout should allow reschedule even with RBC backlog"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_some(),
+        "pending should be quorum-rescheduled once availability timeout expires"
     );
 
     harness.shutdown.send();

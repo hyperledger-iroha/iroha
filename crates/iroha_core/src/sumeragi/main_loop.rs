@@ -9984,6 +9984,13 @@ impl Actor {
                 commit_pipeline_blocks_considered = commit_pipeline_timings.blocks_considered,
                 commit_pipeline_blocks_processed = commit_pipeline_timings.blocks_processed,
                 commit_pipeline_drain_ms = commit_pipeline_timings.drain_results.as_millis(),
+                commit_pipeline_drain_results = commit_pipeline_timings.drain_result_count,
+                commit_pipeline_drain_qc_verify_ms = commit_pipeline_timings.drain_qc_verify_ms,
+                commit_pipeline_drain_persist_ms = commit_pipeline_timings.drain_persist_ms,
+                commit_pipeline_drain_kura_store_ms = commit_pipeline_timings.drain_kura_store_ms,
+                commit_pipeline_drain_state_apply_ms = commit_pipeline_timings.drain_state_apply_ms,
+                commit_pipeline_drain_state_commit_ms =
+                    commit_pipeline_timings.drain_state_commit_ms,
                 commit_pipeline_abort_ms = commit_pipeline_timings.abort_inflight.as_millis(),
                 commit_pipeline_event_reschedule_ms =
                     commit_pipeline_timings.event_reschedule.as_millis(),
@@ -13222,7 +13229,19 @@ impl Actor {
             now.saturating_duration_since(queue_since.unwrap_or(now))
         };
         let timed_out = idle_round_timed_out(true, age, timeout);
-        if rbc_backlog || relay_backpressure || consensus_queue_backpressure {
+        // Only defer idle view-change while RBC/relay backlog is within the timeout window.
+        // After the idle timeout elapses, allow view changes to break deadlocks.
+        let backlog_blocking = rbc_backlog || relay_backpressure;
+        if backlog_blocking && !timed_out {
+            if rbc_backlog {
+                trace!("skipping idle view-change due to unresolved RBC backlog");
+            }
+            if relay_backpressure {
+                trace!("skipping idle view-change due to relay backpressure");
+            }
+            return false;
+        }
+        if consensus_queue_backpressure {
             if timed_out {
                 debug!(
                     rbc_backlog,
@@ -13233,18 +13252,10 @@ impl Actor {
                     block_payload_rx_depth = queue_depths.block_payload_rx,
                     rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                     block_rx_depth = queue_depths.block_rx,
-                    "skipping idle view-change despite timeout due to unresolved backpressure"
+                    "skipping idle view-change despite timeout due to consensus queue backpressure"
                 );
             } else {
-                if rbc_backlog {
-                    trace!("skipping idle view-change due to unresolved RBC backlog");
-                }
-                if relay_backpressure {
-                    trace!("skipping idle view-change due to relay backpressure");
-                }
-                if consensus_queue_backpressure {
-                    trace!("skipping idle view-change due to consensus queue backpressure");
-                }
+                trace!("skipping idle view-change due to consensus queue backpressure");
             }
             return false;
         }

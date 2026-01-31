@@ -110,7 +110,11 @@ def main() -> None:
     bits = data["bits"]
     glyphs = [str(g) for g in data["glyphs"].tolist()]
     mask_bits = data.get("mask_bits")
+    glyph_masks_ref = data.get("glyph_masks_ref")
+    glyph_masks_packed = data.get("glyph_masks")
+    allowed_masks = data.get("allowed_masks")
     ring_idx = data.get("ring_idx")
+    ring_layer = data.get("ring_layer")
     cell_size = int(data.get("cell_size", 16))
     bg = data.get("bg", np.array([11, 7, 12], dtype=np.uint8))
     data_bright = data.get("data_bright", np.array([255, 233, 246], dtype=np.uint8))
@@ -125,14 +129,24 @@ def main() -> None:
         raise ValueError("bits shape does not match glyph_idx")
 
     glyph_masks = None
-    if mask_bits is None:
+    if glyph_masks_packed is not None:
+        glyph_masks = []
+        for row in glyph_masks_packed:
+            flat = np.unpackbits(row, bitorder="big")[: cell_size * cell_size]
+            glyph_masks.append(flat.reshape((cell_size, cell_size)).astype(bool))
+    elif glyph_masks_ref is not None:
+        glyph_masks = []
+        for row in glyph_masks_ref:
+            flat = np.unpackbits(row, bitorder="big")[: cell_size * cell_size]
+            glyph_masks.append(flat.reshape((cell_size, cell_size)).astype(bool))
+    elif mask_bits is None:
         font = ImageFont.truetype(FONT_PATH, GLYPH_SIZE, index=FONT_INDEX)
         glyph_masks = [render_glyph_mask(font, g, cell_size) for g in glyphs]
 
     logo_layer = None if static_layer is not None else build_logo_layer(W, H, logo_shades)
-    ring_layer = None
-    if static_layer is None and ring_idx is None:
-        ring_layer = build_ring_layer(W, H, ring_bright, ring_dim)
+    ring_layer_img = None
+    if ring_layer is None and static_layer is None and ring_idx is None:
+        ring_layer_img = build_ring_layer(W, H, ring_bright, ring_dim)
 
     frames: List[Image.Image] = []
     for f in range(steps):
@@ -141,6 +155,10 @@ def main() -> None:
         else:
             base = np.zeros((H, W, 3), dtype=np.uint8)
             base[:] = bg
+        if ring_layer is not None:
+            mask = (ring_layer != np.array([0, 0, 0], dtype=np.uint8)).any(axis=2)
+            if mask.any():
+                base[mask] = ring_layer[mask]
         frame = Image.fromarray(base, mode="RGB").convert("RGBA")
         draw_arr = np.array(frame, dtype=np.uint8)
         for i, (x0, y0) in enumerate(cells):
@@ -150,6 +168,10 @@ def main() -> None:
                 mask = flat.reshape((cell_size, cell_size)).astype(bool)
             else:
                 mask = glyph_masks[int(glyph_idx[f, i])]
+                if allowed_masks is not None:
+                    allowed_flat = np.unpackbits(allowed_masks[i], bitorder="big")[: cell_size * cell_size]
+                    allowed = allowed_flat.reshape((cell_size, cell_size)).astype(bool)
+                    mask = mask & allowed
             color = data_bright if int(bits[f, i]) == 1 else data_dim
             region = draw_arr[y0 : y0 + cell_size, x0 : x0 + cell_size]
             region[mask] = (int(color[0]), int(color[1]), int(color[2]), 255)
@@ -163,8 +185,8 @@ def main() -> None:
             if mask_d.any():
                 arr[mask_d] = (int(ring_dim[0]), int(ring_dim[1]), int(ring_dim[2]), 255)
             frame = Image.fromarray(arr, mode="RGBA")
-        elif ring_layer is not None:
-            frame = Image.alpha_composite(frame, ring_layer)
+        elif ring_layer_img is not None:
+            frame = Image.alpha_composite(frame, ring_layer_img)
         if logo_layer is not None:
             frame = Image.alpha_composite(frame, logo_layer)
         frames.append(frame.convert("RGB"))
