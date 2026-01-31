@@ -240,7 +240,9 @@ impl Actor {
             if stored.phase != phase || stored.height != height || stored.epoch != epoch {
                 continue;
             }
-            let entry = highest_view_by_signer.entry(stored.signer).or_insert(stored.view);
+            let entry = highest_view_by_signer
+                .entry(stored.signer)
+                .or_insert(stored.view);
             if stored.view > *entry {
                 *entry = stored.view;
             }
@@ -453,12 +455,18 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(super) fn retry_missing_block_requests(&mut self, now: Instant) -> bool {
+    pub(super) fn retry_missing_block_requests(
+        &mut self,
+        now: Instant,
+        tick_deadline: Option<Instant>,
+    ) -> bool {
         if self.pending.missing_block_requests.is_empty() {
             return false;
         }
 
         let mut progress = false;
+        let mut active_roster_permissioned: Option<Vec<PeerId>> = None;
+        let mut active_roster_npos: Option<Vec<PeerId>> = None;
         let pending_keys: Vec<_> = self
             .pending
             .missing_block_requests
@@ -466,6 +474,9 @@ impl Actor {
             .copied()
             .collect();
         for block_hash in pending_keys {
+            if Self::tick_budget_exhausted(tick_deadline, Instant::now()) {
+                break;
+            }
             if self.block_payload_available_locally(block_hash) {
                 self.clear_missing_block_request(
                     &block_hash,
@@ -541,15 +552,21 @@ impl Actor {
             if roster.is_none() {
                 let (consensus_mode, _, _) =
                     self.consensus_context_for_height(stats_snapshot.height);
-                let view = self.state.view();
-                let active = super::roster::derive_active_topology_for_mode(
-                    &view,
-                    self.common_config.trusted_peers.value(),
-                    self.common_config.peer.id(),
-                    consensus_mode,
-                );
-                if !active.is_empty() {
-                    roster = Some(active);
+                let cache = match consensus_mode {
+                    ConsensusMode::Permissioned => &mut active_roster_permissioned,
+                    ConsensusMode::Npos => &mut active_roster_npos,
+                };
+                if cache.is_none() {
+                    let view = self.state.view();
+                    *cache = Some(super::roster::derive_active_topology_for_mode(
+                        &view,
+                        self.common_config.trusted_peers.value(),
+                        self.common_config.peer.id(),
+                        consensus_mode,
+                    ));
+                }
+                if let Some(active) = cache.as_ref().filter(|active| !active.is_empty()) {
+                    roster = Some(active.clone());
                 }
             }
             let topology = roster

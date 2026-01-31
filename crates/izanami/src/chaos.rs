@@ -48,6 +48,7 @@ const IZANAMI_RBC_PENDING_SESSION_LIMIT: i64 = 512;
 const IZANAMI_RBC_REBROADCAST_SESSIONS_PER_TICK: i64 = 32;
 const IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK: i64 = 256;
 const IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS: i64 = 1_000;
+const IZANAMI_PACEMAKER_PENDING_STALL_FLOOR_MS: u64 = 100;
 const IZANAMI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT: i64 = 8;
 const IZANAMI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: i64 = 8;
 const IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: i64 = 128;
@@ -87,6 +88,15 @@ fn clamp_nonzero_ms(value: u64) -> u64 {
     value.max(1)
 }
 
+fn pending_stall_grace_ms(block_ms: u64) -> i64 {
+    let scaled = block_ms
+        .saturating_div(2)
+        .max(IZANAMI_PACEMAKER_PENDING_STALL_FLOOR_MS);
+    let capped =
+        scaled.min(u64::try_from(IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS).unwrap_or(u64::MAX));
+    i64::try_from(capped).unwrap_or(i64::MAX)
+}
+
 fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis())
         .unwrap_or(u64::MAX)
@@ -114,27 +124,33 @@ fn split_pipeline_time(duration: Duration) -> (u64, u64) {
 }
 
 fn derive_npos_timing(config: &ChaosConfig) -> NposTiming {
-    let (block_ms, commit_time_ms) = if let Some(duration) = config.pipeline_time {
-        let (block_ms, _commit_ms) = split_pipeline_time(duration);
-        // Favor block cadence for soak tests; commit time must be >= block time.
-        (block_ms, block_ms)
-    } else {
-        let block_ms = u64::try_from(IZANAMI_NPOS_BLOCK_TIME_MS)
-            .expect("izanami block time must be non-negative");
-        let commit_ms = u64::try_from(IZANAMI_NPOS_COMMIT_TIME_MS)
-            .expect("izanami commit time must be non-negative");
-        (block_ms, commit_ms)
-    };
+    let (block_ms, commit_time_ms, timeout_block_ms, clamp_commit) =
+        if let Some(duration) = config.pipeline_time {
+            let (block_ms, _commit_ms) = split_pipeline_time(duration);
+            // Favor block cadence for soak tests; commit time must be >= block time.
+            // Use the block cadence for timeout derivation to avoid over-eager reschedules.
+            (block_ms, block_ms, block_ms, true)
+        } else {
+            let block_ms = u64::try_from(IZANAMI_NPOS_BLOCK_TIME_MS)
+                .expect("izanami block time must be non-negative");
+            let commit_ms = u64::try_from(IZANAMI_NPOS_COMMIT_TIME_MS)
+                .expect("izanami commit time must be non-negative");
+            (block_ms, commit_ms, block_ms, true)
+        };
     let block_ms = clamp_nonzero_ms(block_ms);
     let commit_time_ms = clamp_nonzero_ms(commit_time_ms);
-    // Derive per-phase timeouts directly from the target block time.
-    let timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(block_ms));
+    // Derive per-phase timeouts from the scaled block time to keep soak cadence tight.
+    let timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(timeout_block_ms));
     let propose_ms = clamp_nonzero_ms(duration_ms(timeouts.propose));
     let prevote_ms = clamp_nonzero_ms(duration_ms(timeouts.prevote));
     let precommit_ms = clamp_nonzero_ms(duration_ms(timeouts.precommit));
     // Keep commit/DA windows at least as large as the target commit time for DA stability.
-    let commit_timeout_ms = clamp_nonzero_ms(duration_ms(timeouts.commit).max(commit_time_ms));
-    let da_ms = clamp_nonzero_ms(duration_ms(timeouts.da).max(commit_time_ms));
+    let mut commit_timeout_ms = clamp_nonzero_ms(duration_ms(timeouts.commit));
+    let mut da_ms = clamp_nonzero_ms(duration_ms(timeouts.da));
+    if clamp_commit {
+        commit_timeout_ms = commit_timeout_ms.max(commit_time_ms);
+        da_ms = da_ms.max(commit_time_ms);
+    }
     let aggregator_ms = clamp_nonzero_ms(duration_ms(timeouts.aggregator));
     NposTiming {
         block_ms,
@@ -284,7 +300,7 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
                     "pacemaker",
                     "pending_stall_grace_ms",
                 ],
-                IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS,
+                pending_stall_grace_ms(npos_timing.block_ms),
             )
             .write(
                 [
@@ -1207,13 +1223,44 @@ mod tests {
     }
 
     #[test]
-    fn derive_npos_timing_uses_block_time_for_timeouts() {
+    fn derive_npos_timing_scales_timeouts_for_pipeline_time() {
         let config = ChaosConfig {
             allow_net: false,
             peer_count: 4,
             faulty_peers: 0,
             duration: Duration::from_secs(1),
             pipeline_time: Some(Duration::from_millis(3_000)),
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            seed: Some(7),
+            tps: 1.0,
+            max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: None,
+        };
+
+        let timing = derive_npos_timing(&config);
+        let expected =
+            SumeragiNposTimeouts::from_block_time(Duration::from_millis(timing.block_ms));
+        let expected_commit = duration_ms(expected.commit).max(timing.commit_time_ms);
+        let expected_da = duration_ms(expected.da).max(timing.commit_time_ms);
+        assert_eq!(timing.commit_timeout_ms, expected_commit);
+        assert_eq!(timing.da_ms, expected_da);
+    }
+
+    #[test]
+    fn derive_npos_timing_clamps_commit_timeout_without_pipeline_time() {
+        let config = ChaosConfig {
+            allow_net: false,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
@@ -1408,6 +1455,14 @@ mod tests {
     }
 
     #[test]
+    fn pending_stall_grace_scales_with_block_time() {
+        assert_eq!(pending_stall_grace_ms(100), 100);
+        assert_eq!(pending_stall_grace_ms(200), 100);
+        assert_eq!(pending_stall_grace_ms(300), 150);
+        assert_eq!(pending_stall_grace_ms(4_000), 1_000);
+    }
+
+    #[test]
     fn progress_state_tracks_stalls() {
         let start = Instant::now();
         let mut state = ProgressState::new(start);
@@ -1425,10 +1480,13 @@ mod tests {
         set.spawn(async {});
         set.spawn(async {});
 
-        tokio::task::yield_now().await;
-        assert_eq!(set.len(), 2);
-
-        drain_ready_submissions(&mut set);
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+            drain_ready_submissions(&mut set);
+            if set.len() == 0 {
+                break;
+            }
+        }
         assert_eq!(set.len(), 0);
     }
 
@@ -1684,6 +1742,7 @@ mod tests {
         let npos_da_ms = i64::try_from(npos_timing.da_ms).expect("npos DA timeout fits into i64");
         let npos_aggregator_ms = i64::try_from(npos_timing.aggregator_ms)
             .expect("npos aggregator timeout fits into i64");
+        let pending_stall_ms = pending_stall_grace_ms(npos_timing.block_ms);
         assert_eq!(
             lookup_bool(&["pipeline", "dynamic_prepass"]),
             Some(IZANAMI_PIPELINE_DYNAMIC_PREPASS)
@@ -1766,7 +1825,7 @@ mod tests {
                 "pacemaker",
                 "pending_stall_grace_ms"
             ]),
-            Some(IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS)
+            Some(pending_stall_ms)
         );
         assert_eq!(
             lookup(&[

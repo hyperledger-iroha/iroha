@@ -12,7 +12,10 @@ use iroha::{
             error::{InstructionExecutionError, InvalidParameterError},
         },
         prelude::*,
-        query::{error::FindError, trigger::{FindActiveTriggerIds, FindTriggers}},
+        query::{
+            error::FindError,
+            trigger::{FindActiveTriggerIds, FindTriggers},
+        },
         transaction::Executable,
     },
 };
