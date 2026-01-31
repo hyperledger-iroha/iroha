@@ -1751,6 +1751,8 @@ pub mod nexus {
 
         /// Aggregate on-disk budget for Iroha3 storage (bytes).
         pub const MAX_DISK_USAGE_BYTES: Bytes<u64> = Bytes(256 * 1024 * 1024 * 1024);
+        /// Block interval between disk budget enforcement scans (0 = every block).
+        pub const BUDGET_ENFORCE_INTERVAL_BLOCKS: u64 = 10;
         /// WSV hot-tier deterministic payload size budget (bytes).
         pub const MAX_WSV_MEMORY_BYTES: Bytes<u64> = Bytes(8 * 1024 * 1024 * 1024);
         /// Budget share for Kura block storage (basis points).
@@ -2454,8 +2456,6 @@ pub mod sumeragi {
     pub const ADAPTIVE_COLLECTOR_REDUNDANT_R: u8 = 3;
     /// Cooldown (ms) before adaptive mitigation may re-apply or reset after a trigger.
     pub const ADAPTIVE_COOLDOWN_MS: u64 = 5_000;
-    /// Deterministic pacing governor is always enabled.
-    pub const PACING_GOVERNOR_ENABLED: bool = true;
     /// Number of recent blocks to sample for the pacing governor window.
     pub const PACING_GOVERNOR_WINDOW_BLOCKS: usize = 20;
     /// View-change pressure threshold (permille of view-change increments per block).

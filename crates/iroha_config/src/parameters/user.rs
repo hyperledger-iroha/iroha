@@ -5180,12 +5180,6 @@ pub struct AdaptiveObservability {
 /// User-level configuration for deterministic pacing governor.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct SumeragiPacingGovernor {
-    /// Deterministic pacing governor is always enabled (setting `false` is invalid).
-    #[config(
-        env = "SUMERAGI_PACING_GOVERNOR_ENABLED",
-        default = "defaults::sumeragi::PACING_GOVERNOR_ENABLED"
-    )]
-    pub enabled: bool,
     /// Number of recent blocks to sample for pressure evaluation.
     #[config(
         env = "SUMERAGI_PACING_GOVERNOR_WINDOW_BLOCKS",
@@ -6131,7 +6125,6 @@ impl From<actual::AdaptiveObservability> for AdaptiveObservability {
 impl SumeragiPacingGovernor {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::SumeragiPacingGovernor> {
         let Self {
-            enabled,
             window_blocks,
             view_change_pressure_permille,
             view_change_clear_permille,
@@ -6144,14 +6137,6 @@ impl SumeragiPacingGovernor {
         } = self;
 
         let mut ok = true;
-        if !enabled {
-            emitter.emit(
-                Report::new(ParseError::InvalidSumeragiConfig).attach(
-                    "sumeragi.advanced.pacing_governor.enabled must be true for this release",
-                ),
-            );
-            ok = false;
-        }
         if window_blocks < 2 {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
@@ -6215,7 +6200,6 @@ impl SumeragiPacingGovernor {
         }
 
         Some(actual::SumeragiPacingGovernor {
-            enabled: true,
             window_blocks,
             view_change_pressure_permille,
             view_change_clear_permille,
@@ -6232,7 +6216,6 @@ impl SumeragiPacingGovernor {
 impl From<actual::SumeragiPacingGovernor> for SumeragiPacingGovernor {
     fn from(value: actual::SumeragiPacingGovernor) -> Self {
         Self {
-            enabled: value.enabled,
             window_blocks: value.window_blocks,
             view_change_pressure_permille: value.view_change_pressure_permille,
             view_change_clear_permille: value.view_change_clear_permille,
@@ -9921,6 +9904,9 @@ pub struct NexusStorage {
     /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
     #[config(default = "defaults::nexus::storage::MAX_DISK_USAGE_BYTES")]
     pub max_disk_usage_bytes: Bytes<u64>,
+    /// Block interval between disk budget enforcement scans (0 = every block).
+    #[config(default = "defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS")]
+    pub budget_enforce_interval_blocks: u64,
     /// WSV hot-tier deterministic payload size budget (bytes).
     #[config(default = "defaults::nexus::storage::MAX_WSV_MEMORY_BYTES")]
     pub max_wsv_memory_bytes: Bytes<u64>,
@@ -9933,6 +9919,8 @@ impl Default for NexusStorage {
     fn default() -> Self {
         Self {
             max_disk_usage_bytes: defaults::nexus::storage::MAX_DISK_USAGE_BYTES,
+            budget_enforce_interval_blocks:
+                defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
             max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
             disk_budget_weights: NexusStorageWeights::default(),
         }
@@ -9944,6 +9932,7 @@ impl NexusStorage {
         let weights = self.disk_budget_weights.parse(emitter)?;
         Some(actual::NexusStorage {
             max_disk_usage_bytes: self.max_disk_usage_bytes,
+            budget_enforce_interval_blocks: self.budget_enforce_interval_blocks,
             max_wsv_memory_bytes: self.max_wsv_memory_bytes,
             disk_budget_weights: weights,
         })
@@ -15850,7 +15839,6 @@ mod pacing_governor_tests {
     #[test]
     fn pacing_governor_rejects_invalid_bounds() {
         let user = SumeragiPacingGovernor {
-            enabled: true,
             window_blocks: 1,
             view_change_pressure_permille: 0,
             view_change_clear_permille: 10,
@@ -15860,25 +15848,6 @@ mod pacing_governor_tests {
             step_down_bps: 0,
             min_factor_bps: 9_000,
             max_factor_bps: 8_000,
-        };
-        let mut emitter = Emitter::new();
-        assert!(user.parse(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn pacing_governor_rejects_disabled() {
-        let user = SumeragiPacingGovernor {
-            enabled: false,
-            window_blocks: 2,
-            view_change_pressure_permille: 1,
-            view_change_clear_permille: 1,
-            commit_spacing_pressure_permille: 1,
-            commit_spacing_clear_permille: 1,
-            step_up_bps: 1,
-            step_down_bps: 1,
-            min_factor_bps: 10_000,
-            max_factor_bps: 10_000,
         };
         let mut emitter = Emitter::new();
         assert!(user.parse(&mut emitter).is_none());

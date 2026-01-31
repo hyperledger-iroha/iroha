@@ -13241,23 +13241,22 @@ impl Actor {
             }
             return false;
         }
-        if consensus_queue_backpressure {
-            if timed_out {
-                debug!(
-                    rbc_backlog,
-                    relay_backpressure,
-                    consensus_queue_backpressure,
-                    consensus_queue_backlog,
-                    vote_rx_depth = queue_depths.vote_rx,
-                    block_payload_rx_depth = queue_depths.block_payload_rx,
-                    rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
-                    block_rx_depth = queue_depths.block_rx,
-                    "skipping idle view-change despite timeout due to consensus queue backpressure"
-                );
-            } else {
-                trace!("skipping idle view-change due to consensus queue backpressure");
-            }
+        if consensus_queue_backpressure && !timed_out {
+            trace!("skipping idle view-change due to consensus queue backpressure");
             return false;
+        }
+        if consensus_queue_backpressure && timed_out {
+            debug!(
+                rbc_backlog,
+                relay_backpressure,
+                consensus_queue_backpressure,
+                consensus_queue_backlog,
+                vote_rx_depth = queue_depths.vote_rx,
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                block_rx_depth = queue_depths.block_rx,
+                "overriding consensus queue backpressure after idle timeout"
+            );
         }
         if !timed_out {
             return false;

@@ -90,9 +90,8 @@ When advanced overrides are unset (0/None), derive values deterministically:
 - `max(block_time, propose_timeout * rtt_floor_multiplier)` capped by `max_backoff`.
 
 ### Deterministic pacing governor (always enabled)
-- `sumeragi.advanced.pacing_governor.enabled` must be `true`; the governor
-  always adjusts `SumeragiParameters.pacing_factor_bps` deterministically at
-  block boundaries.
+- The governor is always enabled and adjusts `SumeragiParameters.pacing_factor_bps`
+  deterministically at block boundaries.
 - Evaluate the last `window_blocks` committed headers and compute:
   - View-change pressure = average view-change index delta per block (permille).
   - Commit spacing pressure = average inter-block spacing vs target block time (permille).
@@ -140,7 +139,7 @@ set (non-zero/non-null). Values below reference `iroha_config` defaults:
   - `store_max_sessions`: 1_024
   - `store_max_bytes`: 512 MiB
 - Pacing governor (always enabled):
-  - `enabled`: true (must remain enabled)
+  - `enabled`: true
   - `window_blocks`: 20
   - `view_change_pressure_permille`: 200
   - `view_change_clear_permille`: 50

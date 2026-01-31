@@ -5,6 +5,8 @@ from typing import Dict, List, Tuple
 import numpy as np
 from PIL import Image
 
+from v27_params import V27
+
 
 BASE_DIR = os.path.dirname(__file__)
 REF_GIF = os.getenv(
@@ -15,10 +17,10 @@ REF_GIF = os.getenv(
     ),
 )
 
-DATA_COLS = {(255, 233, 246), (255, 234, 246), (68, 40, 54), (69, 40, 54)}
-RING_BRIGHT = (255, 246, 252)
-RING_DIM = (62, 36, 50)
-LOGO_COLS = {(30, 16, 25), (36, 18, 28), (43, 20, 32)}
+DATA_COLS = {V27.data_bright, V27.data_dim}
+RING_BRIGHT = V27.ring_bright
+RING_DIM = V27.ring_dim
+LOGO_COLS = set(V27.logo_shades)
 
 
 @dataclass

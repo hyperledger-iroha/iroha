@@ -155,7 +155,7 @@ compression kernels are enabled.
 The workspace now builds Norito with the `gpu-compression` feature enabled by default,
 so GPU zstd backends are compiled in; runtime availability still depends on hardware,
 the helper library (`libgpuzstd_*`/`gpuzstd_cuda.dll`), and the `allow_gpu_compression`
-  Build the Metal helper with `cargo build -p gpuzstd_metal --release` and place `libgpuzstd_metal.dylib` on the loader path. The current Metal helper runs a deterministic GPU prepass and uses CPU zstd for encode/decode; TODO: move match-finding and entropy coding onto Metal kernels.
+  Build the Metal helper with `cargo build -p gpuzstd_metal --release` and place `libgpuzstd_metal.dylib` on the loader path. The current Metal helper runs GPU match-finding/sequence generation and uses the CPU zstd entropy coder + decoder to emit standard frames.
 config flag.
 
 | Field | Default | Purpose |

@@ -211,7 +211,7 @@ unsafe fn init_backend() -> Option<Backend> {
     if !has_device {
         return None;
     }
-    let lib = unsafe { dlopen(c"libgpuzstd_metal.dylib".as_ptr(), RTLD_LAZY) };
+    let lib = unsafe { dlopen_metal_helper() };
     if lib.is_null() {
         return None;
     }
@@ -234,6 +234,34 @@ unsafe fn init_backend() -> Option<Backend> {
         compress: compress_fn,
         decompress: decompress_fn,
     })
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+unsafe fn dlopen_metal_helper() -> *mut c_void {
+    use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("libgpuzstd_metal.dylib"));
+            candidates.push(dir.join("../lib/libgpuzstd_metal.dylib"));
+        }
+    }
+    candidates.push(PathBuf::from("libgpuzstd_metal.dylib"));
+
+    for path in candidates {
+        let bytes = path.as_os_str().as_bytes();
+        if bytes.contains(&0) {
+            continue;
+        }
+        if let Ok(cpath) = CString::new(bytes) {
+            let handle = unsafe { dlopen(cpath.as_ptr(), RTLD_LAZY) };
+            if !handle.is_null() {
+                return handle;
+            }
+        }
+    }
+    std::ptr::null_mut()
 }
 
 #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]

@@ -182,6 +182,16 @@ impl TransactionPlan {
             update.apply(state, succeeded);
         }
     }
+
+    pub fn burn_trigger_repetitions(&self) -> Option<(TriggerId, u32)> {
+        self.instructions.iter().find_map(|instruction| {
+            let burn = instruction.as_any().downcast_ref::<BurnBox>()?;
+            match burn {
+                BurnBox::TriggerRepetitions(burn) => Some((burn.destination.clone(), burn.object)),
+                BurnBox::Asset(_) => None,
+            }
+        })
+    }
 }
 
 fn json_pair<K, V>(key: K, value: V) -> JsonValue
@@ -654,6 +664,22 @@ impl WorkloadEngine {
         }
         let mut guard = self.state.lock().await;
         plan.apply_updates(&mut guard, succeeded);
+    }
+
+    pub async fn sync_trigger_repetitions(&self, trigger_id: &TriggerId, repeats: Option<u32>) {
+        let mut guard = self.state.lock().await;
+        match repeats {
+            Some(count) if count > 0 => {
+                guard.trigger_repetitions.insert(trigger_id.clone(), count);
+                if !guard.repeatable_triggers.contains(trigger_id) {
+                    guard.repeatable_triggers.push(trigger_id.clone());
+                }
+            }
+            _ => {
+                guard.trigger_repetitions.remove(trigger_id);
+                guard.repeatable_triggers.retain(|id| id != trigger_id);
+            }
+        }
     }
 
     #[cfg(test)]
@@ -2745,7 +2771,7 @@ impl ChaosState {
         if !self.repeatable_triggers.contains(&trigger_id) {
             self.repeatable_triggers.push(trigger_id.clone());
         }
-        self.trigger_repetitions.entry(trigger_id).or_insert(0);
+        self.trigger_repetitions.entry(trigger_id).or_insert(1);
     }
 
     fn pending_trigger_repetitions(&self, trigger_id: &TriggerId) -> u32 {
@@ -3758,6 +3784,46 @@ mod tests {
                 .unwrap_or(0)
                 == 0,
             "failed submissions should release pending burn reservations"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn workload_sync_trigger_repetitions_updates_tracking() {
+        let PreparedChaos {
+            state,
+            genesis: _,
+            recipes,
+        } = prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let engine = WorkloadEngine::new(state, recipes);
+        let trigger_id: TriggerId = "repeatable_trigger_sync".parse().expect("valid trigger id");
+
+        engine.sync_trigger_repetitions(&trigger_id, Some(3)).await;
+        {
+            let guard = engine.state.lock().await;
+            assert_eq!(
+                guard
+                    .trigger_repetitions
+                    .get(&trigger_id)
+                    .copied()
+                    .unwrap_or(0),
+                3,
+                "sync should update tracked repetitions"
+            );
+            assert!(
+                guard.repeatable_triggers.contains(&trigger_id),
+                "sync should track repeatable trigger ids"
+            );
+        }
+
+        engine.sync_trigger_repetitions(&trigger_id, None).await;
+        let guard = engine.state.lock().await;
+        assert!(
+            !guard.repeatable_triggers.contains(&trigger_id),
+            "sync removal should untrack repeatable trigger ids"
+        );
+        assert!(
+            !guard.trigger_repetitions.contains_key(&trigger_id),
+            "sync removal should clear repetition tracking"
         );
     }
 

@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, LazyLock,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -4377,6 +4377,8 @@ pub struct State {
     /// Stored behind a lock so Torii/app-side lifecycle handlers can update the lane catalog at
     /// runtime without requiring exclusive ownership of the whole `State`.
     pub nexus: parking_lot::RwLock<iroha_config::parameters::actual::Nexus>,
+    /// Last block height where Nexus storage budget enforcement ran.
+    nexus_storage_budget_last_check_height: AtomicU64,
     /// Tiered state backend coordinating hot/cold snapshots.
     pub tiered_backend: parking_lot::Mutex<TieredStateBackend>,
     /// Fraud monitoring configuration snapshot.
@@ -12326,6 +12328,7 @@ impl State {
             pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor::default(),
             streaming,
             nexus: parking_lot::RwLock::new(nexus),
+            nexus_storage_budget_last_check_height: AtomicU64::new(0),
             tiered_backend: parking_lot::Mutex::new(TieredStateBackend::default()),
             fraud_monitoring: default_fraud_monitoring_cfg(),
             zk: iroha_config::parameters::actual::Zk {
@@ -14193,6 +14196,8 @@ impl State {
         let previous_lane_config = self.nexus.read().lane_config.clone();
         self.apply_lane_geometry_updates(&previous_lane_config, &nexus.lane_config)?;
         *self.nexus.write() = nexus;
+        self.nexus_storage_budget_last_check_height
+            .store(0, Ordering::Relaxed);
         let _ = self.refresh_axt_policies_from_directory();
         #[cfg(feature = "telemetry")]
         {
@@ -14412,17 +14417,38 @@ impl State {
         self.merge_ledger.reconfigure_cache(sanitized);
     }
 
+    fn should_enforce_nexus_storage_budget(&self, block_height: u64, interval_blocks: u64) -> bool {
+        if interval_blocks == 0 {
+            self.nexus_storage_budget_last_check_height
+                .store(block_height, Ordering::Relaxed);
+            return true;
+        }
+        let last_checked = self
+            .nexus_storage_budget_last_check_height
+            .load(Ordering::Relaxed);
+        if last_checked != 0 && block_height.saturating_sub(last_checked) < interval_blocks {
+            return false;
+        }
+        self.nexus_storage_budget_last_check_height
+            .store(block_height, Ordering::Relaxed);
+        true
+    }
+
     #[allow(clippy::too_many_lines)]
-    fn enforce_nexus_storage_budget(&self) {
+    fn enforce_nexus_storage_budget(&self, block_height: u64) {
         let nexus = self.nexus.read();
         if !nexus.enabled {
             return;
         }
         let max_disk = nexus.storage.max_disk_usage_bytes.get();
+        let interval_blocks = nexus.storage.budget_enforce_interval_blocks;
         if max_disk == 0 {
             return;
         }
         drop(nexus);
+        if !self.should_enforce_nexus_storage_budget(block_height, interval_blocks) {
+            return;
+        }
 
         let soranet_spool_dir = self.streaming.soranet.provision_spool_dir.clone();
         let soravpn_spool_dir = self.streaming.soravpn.provision_spool_dir.clone();
@@ -16152,7 +16178,7 @@ impl<'state> StateBlock<'state> {
                 }
             }
         }
-        state_ref.enforce_nexus_storage_budget();
+        state_ref.enforce_nexus_storage_budget(block_height);
         Ok(())
     }
 
@@ -16364,9 +16390,6 @@ impl<'state> StateBlock<'state> {
 
     fn apply_pacing_governor(&mut self, block: &CommittedBlock) -> Option<EventBox> {
         let cfg = self.pacing_governor;
-        if !cfg.enabled {
-            return None;
-        }
 
         let prev_factor = self
             .state_ref
@@ -21204,6 +21227,7 @@ pub(crate) mod deserialize {
             streaming,
             crypto: parking_lot::RwLock::new(Arc::new(initial_crypto.clone())),
             nexus: parking_lot::RwLock::new(nexus),
+            nexus_storage_budget_last_check_height: AtomicU64::new(0),
             tiered_backend: parking_lot::Mutex::new(TieredStateBackend::default()),
             fraud_monitoring: default_fraud_monitoring_cfg(),
             zk: default_zk(),
@@ -22146,13 +22170,14 @@ mod tests {
             enabled: true,
             storage: iroha_config::parameters::actual::NexusStorage {
                 max_disk_usage_bytes: iroha_config::base::util::Bytes(max_disk_usage),
+                budget_enforce_interval_blocks: 0,
                 ..Default::default()
             },
             ..Default::default()
         };
         state.set_nexus(nexus).expect("apply nexus config");
 
-        state.enforce_nexus_storage_budget();
+        state.enforce_nexus_storage_budget(1);
 
         assert!(
             !soranet_spool.join("a-file.norito").exists(),
@@ -22163,6 +22188,75 @@ mod tests {
             "newer spool entry should remain"
         );
         assert!(snapshot_dir.exists(), "cold snapshot should remain");
+    }
+
+    #[test]
+    fn enforce_nexus_storage_budget_respects_interval_blocks() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let soranet_spool = temp_dir.path().join("soranet");
+
+        std::fs::create_dir_all(&soranet_spool).expect("create soranet spool");
+        let spool_file = soranet_spool.join("a-file.norito");
+        std::fs::write(&spool_file, vec![0u8; 60]).expect("write spool file");
+
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let mut streaming = state.streaming.clone();
+        streaming.soranet.provision_spool_dir = soranet_spool.clone();
+        state.set_streaming(streaming);
+
+        let kura_used = state.kura.disk_usage_bytes().expect("measure kura bytes");
+        let soranet_used = dir_size(&soranet_spool).expect("measure soranet spool");
+        let total_used = kura_used.saturating_add(soranet_used);
+        let interval_blocks = 10;
+
+        let nexus_ok = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            storage: iroha_config::parameters::actual::NexusStorage {
+                max_disk_usage_bytes: iroha_config::base::util::Bytes(total_used),
+                budget_enforce_interval_blocks: interval_blocks,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        state.set_nexus(nexus_ok).expect("apply nexus config");
+        state.enforce_nexus_storage_budget(1);
+        assert!(
+            spool_file.exists(),
+            "spool entry should remain under budget"
+        );
+
+        let max_disk_usage = total_used.saturating_sub(1).max(1);
+        {
+            let mut nexus = state.nexus.write();
+            nexus.storage.max_disk_usage_bytes = iroha_config::base::util::Bytes(max_disk_usage);
+        }
+        state.enforce_nexus_storage_budget(2);
+        assert!(spool_file.exists(), "spool eviction should be deferred");
+
+        state.enforce_nexus_storage_budget(11);
+        assert!(
+            !spool_file.exists(),
+            "spool entry should be evicted once interval passes"
+        );
     }
 
     #[test]
@@ -29896,7 +29990,6 @@ mod tests {
 
         state.set_sumeragi_pacing_governor(
             iroha_config::parameters::actual::SumeragiPacingGovernor {
-                enabled: true,
                 window_blocks: 3,
                 view_change_pressure_permille: 100,
                 view_change_clear_permille: 10,

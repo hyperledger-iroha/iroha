@@ -6,6 +6,8 @@ from typing import Dict, List, Tuple
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from v27_params import KATAKANA, KATAKANA_V27, PALETTE_PRESETS, V27
+
 BASE_DIR = os.path.dirname(__file__)
 REF_GIF = os.getenv(
     "SS_REF_GIF",
@@ -21,26 +23,38 @@ OUT_NPZ = os.getenv(
     else os.path.join(BASE_DIR, "v27_symbols.npz"),
 )
 
-W = int(os.getenv("SS_W", "512"))
-H = int(os.getenv("SS_H", "512"))
-GRID_N = int(os.getenv("SS_GRID_N", "32"))
-CELL_SIZE = int(os.getenv("SS_CELL_SIZE", "16"))
-DATA_RADIUS = float(os.getenv("SS_DATA_RADIUS", "247.0"))
+W = int(os.getenv("SS_W", str(V27.w)))
+H = int(os.getenv("SS_H", str(V27.h)))
+GRID_N = int(os.getenv("SS_GRID_N", str(V27.grid_n)))
+CELL_SIZE = int(os.getenv("SS_CELL_SIZE", str(V27.cell_size)))
+DATA_RADIUS = float(os.getenv("SS_DATA_RADIUS", str(V27.data_radius)))
 
 # Palette (v27)
-BG = (11, 7, 12)
-DATA_BRIGHT = (255, 233, 246)
-DATA_DIM = (69, 40, 54)
-RING_BRIGHT = (255, 246, 252)
-RING_DIM = (62, 36, 50)
-LOGO_SHADES = [(30, 16, 25), (36, 18, 28), (43, 20, 32)]
+BG = V27.bg
+DATA_BRIGHT = V27.data_bright
+DATA_DIM = V27.data_dim
+RING_BRIGHT = V27.ring_bright
+RING_DIM = V27.ring_dim
+LOGO_SHADES = list(V27.logo_shades)
 
 # Glyphs
-KATAKANA = list("アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン")
 FONT_PATH = os.getenv("SS_FONT_PATH", "/System/Library/Fonts/Hiragino Sans GB.ttc")
-FONT_INDEX = int(os.getenv("SS_FONT_INDEX", "0"))
-GLYPH_SIZE = int(os.getenv("SS_GLYPH_SIZE", "15"))
-GLYPH_THRESH = int(os.getenv("SS_GLYPH_THRESH", "96"))
+FONT_INDEX = int(os.getenv("SS_FONT_INDEX", str(V27.font_index)))
+GLYPH_SIZE = int(os.getenv("SS_GLYPH_SIZE", str(V27.glyph_size)))
+GLYPH_THRESH = int(os.getenv("SS_GLYPH_THRESH", str(V27.glyph_thresh)))
+KATAKANA_MODE = os.getenv("SS_KATAKANA_MODE", "v27").strip().lower()
+PALETTE_PRESET = os.getenv("SS_PALETTE_PRESET", "").strip().lower()
+
+if PALETTE_PRESET:
+    preset = PALETTE_PRESETS.get(PALETTE_PRESET)
+    if preset is None:
+        raise ValueError(f"unknown PALETTE_PRESET {PALETTE_PRESET!r}")
+    BG = preset["bg"]
+    DATA_BRIGHT = preset["data_bright"]
+    DATA_DIM = preset["data_dim"]
+    RING_BRIGHT = preset["ring_bright"]
+    RING_DIM = preset["ring_dim"]
+    LOGO_SHADES = list(preset["logo_shades"])
 
 
 @dataclass
@@ -72,9 +86,17 @@ def render_glyph_mask(font: ImageFont.FreeTypeFont, glyph: str) -> np.ndarray:
     return arr > GLYPH_THRESH
 
 
-def build_low_pool(font: ImageFont.FreeTypeFont) -> List[str]:
+def resolve_katakana() -> List[str]:
+    if KATAKANA_MODE in ("v27", "legacy"):
+        return KATAKANA_V27[:]
+    if KATAKANA_MODE in ("iroha", "iroha_extra"):
+        return KATAKANA[:]
+    raise ValueError(f"unknown KATAKANA_MODE {KATAKANA_MODE!r}")
+
+
+def build_low_pool(font: ImageFont.FreeTypeFont, glyphs: List[str]) -> List[str]:
     densities: List[Tuple[str, float]] = []
-    for g in KATAKANA:
+    for g in glyphs:
         mask = render_glyph_mask(font, g)
         densities.append((g, float(np.mean(mask))))
     densities.sort(key=lambda x: x[1])
@@ -123,7 +145,7 @@ def main() -> None:
     pal_arr = np.array(palette, dtype=np.uint8)
 
     font = ImageFont.truetype(FONT_PATH, GLYPH_SIZE, index=FONT_INDEX)
-    glyphs = build_low_pool(font)
+    glyphs = build_low_pool(font, resolve_katakana())
     glyph_masks = [render_glyph_mask(font, g) for g in glyphs]
     glyph_lookup: Dict[bytes, int] = {}
     for idx, mask in enumerate(glyph_masks):

@@ -81,6 +81,7 @@ lane_count = 3
 
 [nexus.storage]
 max_disk_usage_bytes = 274877906944
+budget_enforce_interval_blocks = 10
 max_wsv_memory_bytes = 8589934592
 
 [nexus.storage.disk_budget_weights]

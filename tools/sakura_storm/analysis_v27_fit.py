@@ -4,6 +4,8 @@ from typing import Dict, List, Tuple
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from v27_params import KATAKANA, KATAKANA_V27, V27
+
 
 BASE_DIR = os.path.dirname(__file__)
 REF_GIF = os.getenv(
@@ -14,12 +16,13 @@ REF_GIF = os.getenv(
     ),
 )
 FONT_PATH = os.getenv("SS_FONT_PATH", "/System/Library/Fonts/Hiragino Sans GB.ttc")
-FONT_INDEX = int(os.getenv("SS_FONT_INDEX", "2"))
+FONT_INDEX = int(os.getenv("SS_FONT_INDEX", str(V27.font_index)))
 GRID_N_HINT = int(os.getenv("SS_GRID_N_HINT", "32"))
 CELL_HINT = int(os.getenv("SS_CELL_SIZE_HINT", "16"))
 OFFSET_HINT = int(os.getenv("SS_GRID_OFFSET_HINT", "0"))
-DATA_R_HINT = float(os.getenv("SS_DATA_R_HINT", "247.0"))
+DATA_R_HINT = float(os.getenv("SS_DATA_R_HINT", str(V27.data_radius)))
 RADIAL_THRESH = float(os.getenv("SS_RADIAL_THRESH", "0.1"))
+KATAKANA_MODE = os.getenv("SS_KATAKANA_MODE", "v27").strip().lower()
 
 
 def load_frames(path: str) -> np.ndarray:
@@ -155,11 +158,18 @@ def eval_grid(mask_any: np.ndarray, cell: int, grid_n: int, offset: int) -> Tupl
     return best_err, float(best_r), len(active)
 
 
+def resolve_katakana() -> List[str]:
+    if KATAKANA_MODE in ("v27", "legacy"):
+        return KATAKANA_V27[:]
+    if KATAKANA_MODE in ("iroha", "iroha_extra"):
+        return KATAKANA[:]
+    raise ValueError(f"unknown KATAKANA_MODE {KATAKANA_MODE!r}")
+
+
 def glyph_stats(cell: int, thresh: int = 64) -> Tuple[float, float]:
     font = ImageFont.truetype(FONT_PATH, max(8, cell), index=FONT_INDEX)
-    katakana = list("アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン")
     counts = []
-    for g in katakana:
+    for g in resolve_katakana():
         img = Image.new("L", (cell, cell), 0)
         draw = ImageDraw.Draw(img)
         bbox = draw.textbbox((0, 0), g, font=font)

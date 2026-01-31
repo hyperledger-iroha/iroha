@@ -100,6 +100,7 @@ LaneConfigEntry {
 ## ميزانيات التخزين
 
 - `nexus.storage.max_disk_usage_bytes` يحدد ميزانية القرص الاجمالية التي يجب ان تستهلكها عقد Nexus عبر Kura ولقطات WSV الباردة وتخزين SoraFS و spools البث (SoraNet/SoraVPN).
+- `nexus.storage.budget_enforce_interval_blocks` يحدد الفاصل (بعدد الكتل المؤكدة) بين عمليات فحص ميزانية التخزين؛ 0 يعني كل كتلة.
 - عند تجاوز الميزانية الكلية، تكون الازالة حتمية: يتم تقليم spools تزويد SoraNet بترتيب المسار النسبي، ثم spools SoraVPN، ثم لقطات tiered-state الباردة من الاقدم الى الاحدث (مع offload الى `da_store_root` عند ضبطه)، ثم مقاطع Kura المتقاعدة، واخيرا يتم تفريغ اجسام الكتل النشطة لـ Kura الى `da_blocks/` لاعادة الترطيب عبر DA عند القراءة.
 - `nexus.storage.max_wsv_memory_bytes` يحد طبقة WSV الساخنة عبر تمرير قياس WSV الحتمي في الذاكرة الى `tiered_state.hot_retained_bytes`؛ قد يتجاوز الاحتفاظ المسموح الميزانية مؤقتا، لكن التجاوز مرئي عبر telemetria (`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`).
 - `nexus.storage.disk_budget_weights` يقسم ميزانية القرص بين المكونات باستخدام نقاط الاساس (يجب ان تساوي 10,000). تطبق الحدود المشتقة على `kura.max_disk_usage_bytes` و`tiered_state.max_cold_bytes` و`sorafs.storage.max_capacity_bytes` و`streaming.soranet.provision_spool_max_bytes` و`streaming.soravpn.provision_spool_max_bytes`.

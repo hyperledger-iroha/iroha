@@ -44,9 +44,6 @@ pub(crate) fn evaluate_pacing_governor(
     current_factor_bps: u32,
     target_block_time_ms: u64,
 ) -> Option<PacingGovernorDecision> {
-    if !cfg.enabled {
-        return None;
-    }
     if samples.len() < 2 || target_block_time_ms == 0 {
         return None;
     }
@@ -131,7 +128,6 @@ mod tests {
 
     fn cfg() -> SumeragiPacingGovernor {
         SumeragiPacingGovernor {
-            enabled: true,
             window_blocks: 3,
             view_change_pressure_permille: 100,
             view_change_clear_permille: 10,
