@@ -4982,7 +4982,7 @@ async fn block_sync_update_accepts_uncertified_next_height_after_block_created_i
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn block_sync_update_marks_rbc_delivered_when_local_peer_missing_from_roster() {
+async fn force_rbc_delivery_for_block_sync_marks_delivered_when_session_complete() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -5028,7 +5028,7 @@ async fn block_sync_update_marks_rbc_delivered_when_local_peer_missing_from_rost
     let leader_idx = signature_topology
         .position(leader_kp.public_key())
         .expect("leader index in topology");
-    let block = heartbeat_block_for_state(
+    let mut block = heartbeat_block_for_state(
         actor.state.as_ref(),
         &actor.common_config.chain,
         block_height,
@@ -5037,6 +5037,23 @@ async fn block_sync_update_marks_rbc_delivered_when_local_peer_missing_from_rost
         leader_kp,
         u64::try_from(leader_idx).expect("leader index fits u64"),
     );
+    for (idx, peer) in signature_topology.as_ref().iter().enumerate() {
+        if idx == leader_idx {
+            continue;
+        }
+        let kp = harness
+            .key_pairs
+            .iter()
+            .find(|candidate| candidate.public_key() == peer.public_key())
+            .expect("signer keypair exists in harness");
+        let sig = SignatureOf::from_hash(kp.private_key(), block.header().hash());
+        block
+            .add_signature(BlockSignature::new(
+                u64::try_from(idx).expect("signer index fits u64"),
+                sig,
+            ))
+            .expect("signature added");
+    }
     let payload_bytes = super::proposals::block_payload_bytes(&block);
     let payload_hash = Hash::new(&payload_bytes);
     let session_key = (block.hash(), block_height, view_index);
@@ -5054,54 +5071,37 @@ async fn block_sync_update_marks_rbc_delivered_when_local_peer_missing_from_rost
         .sessions
         .insert(session_key, session);
     actor.record_rbc_session_roster(session_key, roster.clone(), super::RbcRosterSource::Derived);
-
-    let signers: Vec<&KeyPair> = roster
-        .iter()
-        .map(|peer| {
-            harness
-                .key_pairs
-                .iter()
-                .find(|kp| kp.public_key() == peer.public_key())
-                .expect("roster keypair exists in harness")
-        })
-        .collect();
-    let mut signer_indices = BTreeSet::new();
-    for idx in 0..roster.len() {
-        signer_indices.insert(
-            ValidatorIndex::try_from(idx).expect("validator index fits for test roster length"),
-        );
-    }
-    let signers_bitmap = super::build_signers_bitmap(&signer_indices, roster.len());
-    let header = block.header();
-    let qc = commit_qc_with_signers(
-        &actor.common_config.chain,
-        mode_tag,
-        &header,
-        zero_state_root(),
-        zero_state_root(),
-        &signers,
-        signers_bitmap,
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .contains_key(&session_key),
+        "RBC session should be seeded before BlockSyncUpdate"
     );
 
-    let mut update = super::message::BlockSyncUpdate::from(&block);
-    update.commit_qc = Some(qc);
-    update.validator_checkpoint = None;
-    update.stake_snapshot = None;
-    update.commit_votes.clear();
+    assert!(
+        actor.force_rbc_delivery_for_block_sync(session_key, payload_hash),
+        "force delivery should succeed for complete RBC session"
+    );
 
-    actor
-        .handle_block_sync_update(update, None)
-        .expect("block sync update");
-
-    let session = actor
+    let delivered_in_session = actor
         .subsystems
         .da_rbc
         .rbc
         .sessions
         .get(&session_key)
-        .expect("RBC session exists");
+        .is_some_and(|session| session.delivered_payload_matches(&payload_hash));
+    let delivered_in_status = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .status_handle
+        .get(&session_key)
+        .is_some_and(|summary| summary.delivered && summary.payload_hash == Some(payload_hash));
     assert!(
-        session.delivered_payload_matches(&payload_hash),
+        delivered_in_session || delivered_in_status,
         "block sync update should force RBC delivery for non-roster peer"
     );
 
@@ -11512,7 +11512,10 @@ async fn emit_precommit_vote_requires_validated_pending() {
         None,
         Some((zero_state_root(), zero_state_root())),
     );
-    assert!(!emitted, "precommit vote should be blocked before validation");
+    assert!(
+        !emitted,
+        "precommit vote should be blocked before validation"
+    );
     assert!(
         actor.vote_log.is_empty(),
         "vote log should remain empty when validation is pending"
@@ -12199,11 +12202,6 @@ async fn rbc_ready_rebroadcast_is_rate_limited_per_session() {
     });
     let required = harness.actor.rbc_deliver_quorum(&topology);
     let ready_quorum = required != 0 && session.ready_signatures.len() >= required;
-    let should_send = if ready_quorum {
-        should_rebroadcast || local_ready
-    } else {
-        true
-    };
     let background_log = attach_background_log(&mut harness.actor);
     let _ = take_background_log(&background_log);
     harness
@@ -24929,6 +24927,23 @@ fn trusted_with_pops(
         others: others.into_iter().collect(),
         pops,
     }
+}
+
+#[test]
+fn p2p_topology_includes_world_and_trusted_peers() {
+    let (me_peer, _pop, _kp) = bls_peer("127.0.0.1:10001");
+    let (trusted_peer, _trusted_pop, _trusted_kp) = bls_peer("127.0.0.1:10002");
+    let (world_peer, _world_pop, _world_kp) = bls_peer("127.0.0.1:10003");
+
+    let trusted = trusted_with_pops(me_peer.clone(), vec![trusted_peer.clone()], BTreeMap::new());
+    let mut world = BTreeSet::new();
+    world.insert(world_peer.id().clone());
+
+    let topology = super::commit::p2p_topology_with_trusted(&world, &trusted);
+
+    assert!(topology.contains(me_peer.id()));
+    assert!(topology.contains(trusted_peer.id()));
+    assert!(topology.contains(world_peer.id()));
 }
 
 fn state_with_peers(peers: Vec<PeerId>) -> State {
@@ -41203,11 +41218,12 @@ async fn pacemaker_uses_active_roster_when_commit_qc_roster_excludes_local() {
         if peer == &local {
             continue;
         }
-        actor
-            .subsystems
-            .propose
-            .new_view_tracker
-            .record(tracked_height, view, peer.clone(), highest_qc);
+        actor.subsystems.propose.new_view_tracker.record(
+            tracked_height,
+            view,
+            peer.clone(),
+            highest_qc,
+        );
         recorded = recorded.saturating_add(1);
         if recorded.saturating_add(1) >= required {
             break;
@@ -53339,7 +53355,7 @@ async fn commit_pipeline_inlines_validation_after_fast_timeout_when_worker_queue
     actor.subsystems.validation.result_rx = None;
     actor.subsystems.validation.inflight.clear();
 
-    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    let pending = PendingBlock::new(block, payload_hash, height, view);
     actor.pending.pending_blocks.insert(block_hash, pending);
     let outcome = actor.validate_pending_block_for_voting_inline(block_hash, &commit_topology);
     assert!(
@@ -58715,6 +58731,100 @@ async fn pending_roster_activation_applies_at_activation_height_during_catchup()
         actor.effective_commit_topology(),
         new_roster,
         "commit topology should activate at or after the activation height"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn poll_committed_blocks_refreshes_p2p_topology_without_new_height() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let initial_topology: BTreeSet<_> = actor
+        .state
+        .view()
+        .world
+        .peers()
+        .iter()
+        .cloned()
+        .collect();
+    actor.last_advertised_topology = initial_topology.clone();
+    actor.last_committed_height = actor.state.view().height() as u64;
+
+    let (new_peer, _pop, _kp) = bls_peer("127.0.0.1:10005");
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut peers_block = state.world.peers.block();
+        let mut peers_tx = peers_block.transaction();
+        peers_tx.push(new_peer.id().clone());
+        peers_tx.apply();
+        peers_block.commit();
+    }
+
+    assert!(
+        !actor.poll_committed_blocks(),
+        "no new heights should be processed"
+    );
+    assert!(
+        actor.last_advertised_topology.contains(new_peer.id()),
+        "p2p topology should refresh when world peers change without height updates"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn refresh_p2p_topology_skips_removal_until_local_seen() {
+    let _guard = LocalRemovedGuard::new(false);
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let local_peer = actor.common_config.peer.id().clone();
+
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut peers_block = state.world.peers.block();
+        let mut peers_tx = peers_block.transaction();
+        if let Some(idx) = peers_tx.iter().position(|peer| peer == &local_peer) {
+            peers_tx.remove(idx);
+        }
+        peers_tx.apply();
+        peers_block.commit();
+    }
+
+    actor.local_peer_seen_in_world = false;
+    actor.refresh_p2p_topology();
+
+    assert!(
+        !super::status::local_peer_removed(),
+        "local peer should not be marked removed before it is seen in world"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn refresh_p2p_topology_marks_removed_after_local_seen() {
+    let _guard = LocalRemovedGuard::new(false);
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let local_peer = actor.common_config.peer.id().clone();
+
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        let mut peers_block = state.world.peers.block();
+        let mut peers_tx = peers_block.transaction();
+        if let Some(idx) = peers_tx.iter().position(|peer| peer == &local_peer) {
+            peers_tx.remove(idx);
+        }
+        peers_tx.apply();
+        peers_block.commit();
+    }
+
+    actor.refresh_p2p_topology();
+    assert!(
+        super::status::local_peer_removed(),
+        "local peer should be marked removed after being seen in world"
     );
 
     harness.shutdown.send();
