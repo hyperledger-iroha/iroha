@@ -1,6 +1,9 @@
 # Status
 
-Last update: 2026-01-30
+Last update: 2026-01-31
+- Sumeragi: suppress commit QC aggregation for lower views once a higher NEW_VIEW quorum exists at the same height; QC signers now ignore lower-view votes when a signer has moved to a higher view; added unit coverage for both paths.
+- Tests: `cargo test -p iroha_core qc_signers_for_votes_ignores_lower_view_after_higher_view_vote -- --nocapture`, `cargo test -p iroha_core try_form_qc_from_votes_skips_when_higher_new_view_quorum_exists -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused `should_send` in `iroha_core` tests).
+- Integration tests: `cargo test -p integration_tests --test mod extra_functional::unstable_network::unstable_network_5_peers_1_fault -- --nocapture` (ok), `cargo test -p integration_tests --test mod extra_functional::unstable_network::unstable_network_8_peers_1_fault -- --nocapture` (ok).
 - Sumeragi: validate pending blocks inline when commit QCs arrive for known payloads so commit certificates no longer stall behind deferred validation; added unit coverage for the commit-QC validation path.
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-target-unit cargo test -p iroha_core handle_qc_validates_pending_block_on_commit_qc -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused `should_send` in `iroha_core` tests).
 - Integration tests: `CARGO_TARGET_DIR=/tmp/iroha-target-integ cargo test -p integration_tests extra_functional::unstable_network::unstable_network_8_peers_1_fault -- --nocapture` (ok; test ran ~17m).

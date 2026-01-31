@@ -3372,6 +3372,26 @@ impl NewViewTracker {
                 }
             })
     }
+
+    fn highest_quorum_view_for_height(
+        &self,
+        height: u64,
+        required: usize,
+        roster: &[PeerId],
+    ) -> Option<u64> {
+        if roster.is_empty() {
+            return None;
+        }
+        let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
+        self.entries
+            .iter()
+            .rev()
+            .find_map(|((entry_height, entry_view), entry)| {
+                (*entry_height == height
+                    && entry.count_in_roster(&roster_set, None) >= required)
+                    .then_some(*entry_view)
+            })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
