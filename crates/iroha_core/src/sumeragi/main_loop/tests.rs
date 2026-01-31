@@ -34,7 +34,7 @@ use iroha_crypto::{
     Algorithm, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature, SignatureOf,
 };
 use iroha_data_model::{
-    ChainId, Encode as _,
+    ChainId, Encode as _, Registrable,
     asset::{AssetDefinitionId, AssetId},
     block::{
         BlockHeader, BlockSignature, SignedBlock,

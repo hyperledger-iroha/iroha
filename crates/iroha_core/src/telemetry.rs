@@ -12055,7 +12055,7 @@ mod tests {
             let (leader_public_key, leader_private_key) =
                 KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
             let local_peer_id = PeerId::new(leader_public_key);
-            let mut world = World::default();
+            let world = World::default();
             {
                 let mut peers_block = world.peers.block();
                 let _ = peers_block.get_mut().push(local_peer_id.clone());
@@ -12210,7 +12210,7 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let (local_pk, _) = KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
         let local_peer_id = PeerId::new(local_pk);
-        let mut world = World::default();
+        let world = World::default();
         {
             let mut peers_block = world.peers.block();
             let _ = peers_block.get_mut().push(local_peer_id.clone());
