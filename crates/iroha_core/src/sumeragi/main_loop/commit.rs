@@ -1,6 +1,7 @@
 //! Commit/finalization pipeline helpers.
 
 use std::{
+    cmp::Reverse,
     collections::BTreeSet,
     sync::{Arc, mpsc},
     time::Instant,
@@ -2255,8 +2256,9 @@ impl Actor {
             .iter()
             .map(|(hash, pending)| (pending.height, pending.view, *hash))
             .collect();
-        pending_hashes
-            .sort_by(|(h1, v1, hash1), (h2, v2, hash2)| (h1, v1, hash1).cmp(&(h2, v2, hash2)));
+        pending_hashes.sort_by(|(h1, v1, hash1), (h2, v2, hash2)| {
+            (h1, Reverse(*v1), hash1).cmp(&(h2, Reverse(*v2), hash2))
+        });
         for (pending_height, pending_view, hash) in pending_hashes {
             if self.commit_pipeline_budget_exhausted(tick_deadline, Instant::now()) {
                 break;

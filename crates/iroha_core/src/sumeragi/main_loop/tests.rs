@@ -9960,7 +9960,7 @@ async fn commit_pipeline_qc_rebuild_cooldown_uses_chain_block_time() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn commit_pipeline_votes_lowest_view_first_for_same_height() {
+async fn commit_pipeline_votes_highest_view_first_for_same_height() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -10041,12 +10041,18 @@ async fn commit_pipeline_votes_lowest_view_first_for_same_height() {
         .filter(|vote| vote.phase == Phase::Commit && vote.height == height)
         .collect();
     assert!(!local_precommits.is_empty());
-    let lowest = local_precommits
+    let highest = local_precommits
         .iter()
-        .min_by_key(|vote| vote.view)
+        .max_by_key(|vote| vote.view)
         .expect("at least one precommit");
-    assert_eq!(lowest.view, low_view);
-    assert_eq!(lowest.block_hash, low_view_block.hash());
+    assert_eq!(highest.view, high_view);
+    assert_eq!(highest.block_hash, high_view_block.hash());
+    assert!(
+        !local_precommits
+            .iter()
+            .any(|vote| vote.view == low_view && vote.block_hash == low_view_block.hash()),
+        "should not emit a lower-view precommit when a higher-view block is available"
+    );
 
     harness.shutdown.send();
 }
@@ -14248,6 +14254,71 @@ async fn try_form_qc_from_votes_skips_when_conflicts_locked_chain() {
             epoch
         )),
         "conflicting precommit QC should not be aggregated"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn try_form_qc_from_votes_skips_when_higher_new_view_quorum_exists() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor.locked_qc = None;
+
+    let view_state = actor.state.view();
+    let height = view_state.height() as u64 + 1;
+    let parent = view_state.latest_block_hash();
+    drop(view_state);
+    let view = 0;
+    let block = sample_block(height, view, parent);
+    actor.kura.store_block(block.clone()).expect("store block");
+
+    let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let chain = actor.common_config.chain.clone();
+    let required = topology.min_votes_for_commit();
+
+    let highest_qc = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: parent.unwrap_or_else(|| {
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH]))
+        }),
+        height: height.saturating_sub(1),
+        view,
+        epoch,
+    };
+    for peer in topology.as_ref().iter().take(required) {
+        actor
+            .subsystems
+            .propose
+            .new_view_tracker
+            .record(height, view + 1, peer.clone(), highest_qc);
+    }
+
+    for signer_idx in 0..required {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash: block.hash(),
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view,
+            epoch,
+            highest_qc: None,
+            signer: u32::try_from(signer_idx).expect("signer index fits u32"),
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_view(&mut vote, &chain, &topology, &harness.key_pairs);
+        actor.handle_vote(vote);
+    }
+
+    assert!(
+        !actor
+            .qc_cache
+            .contains_key(&(Phase::Commit, block.hash(), height, view, epoch)),
+        "commit QC should be skipped when higher NEW_VIEW quorum exists"
     );
 
     harness.shutdown.send();
@@ -34522,6 +34593,117 @@ async fn qc_signers_for_votes_revalidates_on_roster_hash_mismatch() {
     assert!(
         mismatched_signers.is_empty(),
         "mismatched roster hash should force signature revalidation"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn qc_signers_for_votes_ignores_lower_view_after_higher_view_vote() {
+    let mut harness = test_actor_harness(3).await;
+    let actor = &mut harness.actor;
+    let chain = actor.common_config.chain.clone();
+    let height = 1u64;
+    let epoch = actor.epoch_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    assert_eq!(
+        consensus_mode,
+        ConsensusMode::Permissioned,
+        "test assumes permissioned consensus"
+    );
+
+    let roster: Vec<PeerId> = harness
+        .key_pairs
+        .iter()
+        .map(|keypair| PeerId::new(keypair.public_key().clone()))
+        .collect();
+    let topology = super::network_topology::Topology::new(roster);
+    let block_hash_low =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x19; Hash::LENGTH]));
+    let block_hash_high =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x1A; Hash::LENGTH]));
+
+    let mut vote_low = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: block_hash_low,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: 0,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view_with_seed(
+        &mut vote_low,
+        &chain,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
+
+    let mut vote_high = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: block_hash_high,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: 1,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view_with_seed(
+        &mut vote_high,
+        &chain,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
+
+    for vote in [&vote_low, &vote_high] {
+        let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+        let signature_topology =
+            super::topology_for_view(&topology, height, vote.view, mode_tag, prf_seed);
+        let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
+        actor.vote_log.insert(key, vote.clone());
+        actor
+            .vote_validation_cache
+            .insert(key, super::VoteValidationCacheEntry { roster_hash });
+    }
+
+    let signature_topology_low =
+        super::topology_for_view(&topology, height, vote_low.view, mode_tag, prf_seed);
+    let signers_low = actor.qc_signers_for_votes(
+        Phase::Commit,
+        block_hash_low,
+        height,
+        vote_low.view,
+        epoch,
+        &signature_topology_low,
+    );
+    assert!(
+        !signers_low.contains(&vote_low.signer),
+        "lower-view vote should be ignored once a higher view vote exists"
+    );
+
+    let signature_topology_high =
+        super::topology_for_view(&topology, height, vote_high.view, mode_tag, prf_seed);
+    let signers_high = actor.qc_signers_for_votes(
+        Phase::Commit,
+        block_hash_high,
+        height,
+        vote_high.view,
+        epoch,
+        &signature_topology_high,
+    );
+    assert!(
+        signers_high.contains(&vote_high.signer),
+        "highest-view vote should still be counted"
     );
 
     harness.shutdown.send();
