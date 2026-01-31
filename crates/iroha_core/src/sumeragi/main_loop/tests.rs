@@ -199,6 +199,19 @@ fn zero_state_root() -> Hash {
     Hash::prehashed([0u8; 32])
 }
 
+fn insert_validated_pending(actor: &mut Actor, block: SignedBlock) -> HashOf<BlockHeader> {
+    let block_hash = block.hash();
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.validation_status = ValidationStatus::Valid;
+    pending.parent_state_root = Some(zero_state_root());
+    pending.post_state_root = Some(zero_state_root());
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    block_hash
+}
+
 fn pending_session_key(height: u64) -> SessionKey {
     let height_byte = u8::try_from(height).expect("height fits in u8 for test session key");
     (
@@ -2600,6 +2613,7 @@ async fn observer_skips_votes_and_exec_artifacts() {
         height,
         view,
         epoch,
+        ValidationStatus::Valid,
         &topology,
         None,
         Some((zero_state_root(), zero_state_root())),
@@ -3930,6 +3944,21 @@ fn online_peer_deferral_applies_after_successful_proposal() {
         should_defer,
         "deferral should apply once online peer tracking has been established"
     );
+}
+
+#[test]
+fn online_peer_count_filters_non_validator_peers() {
+    let (peer_a, _, _) = bls_peer("127.0.0.1:22000");
+    let (peer_b, _, _) = bls_peer("127.0.0.1:22001");
+    let (peer_c, _, _) = bls_peer("127.0.0.1:22002");
+    let roster = vec![peer_a.id().clone(), peer_b.id().clone()];
+    let mut online = std::collections::HashSet::new();
+    online.insert(peer_a);
+    online.insert(peer_b);
+    online.insert(peer_c);
+
+    let count = super::count_online_validators(&online, &roster);
+    assert_eq!(count, 2);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -9649,7 +9678,8 @@ async fn quorum_reschedule_skips_requeue_when_precommit_votes_present() {
     let height = block.header().height().get();
     let view = block.header().view_change_index();
     let parent_hash = block.header().prev_block_hash();
-    let pending = PendingBlock::new(block, payload_hash, height, view);
+    let pending = PendingBlock::new(block.clone(), payload_hash, height, view);
+    insert_validated_pending(actor, block);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
 
     assert_eq!(actor.queue.queued_len(), 0, "queue should start empty");
@@ -9660,6 +9690,7 @@ async fn quorum_reschedule_skips_requeue_when_precommit_votes_present() {
             height,
             view,
             epoch,
+            ValidationStatus::Valid,
             &topology,
             parent_hash,
             Some((Hash::new([]), Hash::new([]))),
@@ -9699,7 +9730,8 @@ async fn quorum_reschedule_skips_requeue_when_commit_votes_present() {
     let height = block.header().height().get();
     let view = block.header().view_change_index();
     let parent_hash = block.header().prev_block_hash();
-    let pending = PendingBlock::new(block, payload_hash, height, view);
+    let pending = PendingBlock::new(block.clone(), payload_hash, height, view);
+    insert_validated_pending(actor, block);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
 
     assert_eq!(actor.queue.queued_len(), 0, "queue should start empty");
@@ -9710,6 +9742,7 @@ async fn quorum_reschedule_skips_requeue_when_commit_votes_present() {
             height,
             view,
             epoch,
+            ValidationStatus::Valid,
             &topology,
             parent_hash,
             Some((Hash::new([]), Hash::new([]))),
@@ -9767,6 +9800,7 @@ async fn commit_vote_quorum_uses_cached_roster_after_topology_reorder() {
     let height = block.header().height().get();
     let view = block.header().view_change_index();
     let parent_hash = block.header().prev_block_hash();
+    insert_validated_pending(actor, block.clone());
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
 
     let epoch = actor.epoch_for_height(height);
@@ -9776,6 +9810,7 @@ async fn commit_vote_quorum_uses_cached_roster_after_topology_reorder() {
             height,
             view,
             epoch,
+            ValidationStatus::Valid,
             &topology,
             parent_hash,
             Some((Hash::new([]), Hash::new([]))),
@@ -11385,6 +11420,7 @@ async fn commit_vote_targets_collectors_or_topology() {
     let block = sample_block(height, 0, None);
     let block_hash = block.hash();
     let parent_hash = block.header().prev_block_hash();
+    insert_validated_pending(actor, block.clone());
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let epoch = actor.epoch_for_height(height);
 
@@ -11395,6 +11431,7 @@ async fn commit_vote_targets_collectors_or_topology() {
         1,
         0,
         epoch,
+        ValidationStatus::Valid,
         &topology,
         parent_hash,
         Some((Hash::new([]), Hash::new([]))),
@@ -11443,6 +11480,42 @@ async fn commit_vote_targets_collectors_or_topology() {
     assert_eq!(
         actual_targets, expected_set,
         "commit votes should target deterministic collectors or topology fallback"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn emit_precommit_vote_requires_validated_pending() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 1;
+    let view = 0;
+    let epoch = actor.epoch_for_height(height);
+    let block = sample_block(height, view, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.validation_status = ValidationStatus::Pending;
+    let validation_status = pending.validation_status;
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let emitted = actor.emit_precommit_vote(
+        block_hash,
+        height,
+        view,
+        epoch,
+        validation_status,
+        &topology,
+        None,
+        Some((zero_state_root(), zero_state_root())),
+    );
+    assert!(!emitted, "precommit vote should be blocked before validation");
+    assert!(
+        actor.vote_log.is_empty(),
+        "vote log should remain empty when validation is pending"
     );
 
     harness.shutdown.send();
@@ -13014,7 +13087,7 @@ async fn precommit_vote_skips_payload_broadcast_for_aborted_pending() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_vote_broadcasts_payload_when_pending_untracked() {
+async fn precommit_vote_broadcasts_payload_when_pending_tracked() {
     let mut harness = test_actor_harness(4).await;
 
     let _genesis_hash = seed_genesis_block_for_state(harness.actor.state.as_ref());
@@ -13023,6 +13096,7 @@ async fn precommit_vote_broadcasts_payload_when_pending_untracked() {
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block.clone(), payload_hash, 2, 0);
+    insert_validated_pending(&mut harness.actor, block.clone());
 
     let _ = harness.background_rx.try_iter().count();
 
@@ -13033,6 +13107,7 @@ async fn precommit_vote_broadcasts_payload_when_pending_untracked() {
         2,
         0,
         0,
+        ValidationStatus::Valid,
         &topology,
         block.header().prev_block_hash(),
         Some((Hash::new([]), Hash::new([]))),
@@ -13073,7 +13148,7 @@ async fn precommit_vote_broadcasts_payload_when_pending_untracked() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_vote_payload_broadcast_skips_aborted_pending_untracked() {
+async fn precommit_vote_payload_broadcast_skips_aborted_pending_tracked() {
     let mut harness = test_actor_harness(4).await;
 
     let _genesis_hash = seed_genesis_block_for_state(harness.actor.state.as_ref());
@@ -13083,6 +13158,7 @@ async fn precommit_vote_payload_broadcast_skips_aborted_pending_untracked() {
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let mut pending = PendingBlock::new(block.clone(), payload_hash, 2, 0);
     pending.mark_aborted();
+    insert_validated_pending(&mut harness.actor, block.clone());
 
     let _ = harness.background_rx.try_iter().count();
 
@@ -13093,6 +13169,7 @@ async fn precommit_vote_payload_broadcast_skips_aborted_pending_untracked() {
         2,
         0,
         0,
+        ValidationStatus::Valid,
         &topology,
         block.header().prev_block_hash(),
         Some((Hash::new([]), Hash::new([]))),
@@ -13201,6 +13278,7 @@ async fn precommit_vote_block_sync_update_targets_snapshot_roster() {
         2,
         view_idx,
         0,
+        ValidationStatus::Valid,
         &topology,
         block.header().prev_block_hash(),
         Some((Hash::new([]), Hash::new([]))),
@@ -13293,6 +13371,7 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
     let height = 1;
     let block = sample_block(height, 0, None);
     let block_hash = block.hash();
+    insert_validated_pending(actor, block.clone());
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let epoch = actor.epoch_for_height(height);
 
@@ -13303,6 +13382,7 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
         1,
         0,
         epoch,
+        ValidationStatus::Valid,
         &topology,
         block.header().prev_block_hash(),
         Some((Hash::new([]), Hash::new([]))),
@@ -13367,6 +13447,7 @@ async fn rebroadcast_precommit_votes_fall_back_to_topology_when_collectors_below
     let height = 1;
     let block = sample_block(height, 0, None);
     let block_hash = block.hash();
+    insert_validated_pending(actor, block.clone());
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let epoch = actor.epoch_for_height(height);
 
@@ -13375,6 +13456,7 @@ async fn rebroadcast_precommit_votes_fall_back_to_topology_when_collectors_below
         1,
         0,
         epoch,
+        ValidationStatus::Valid,
         &topology,
         block.header().prev_block_hash(),
         Some((Hash::new([]), Hash::new([]))),
@@ -14129,6 +14211,7 @@ async fn precommit_vote_skips_when_block_conflicts_with_locked_chain() {
     let epoch = actor.epoch_for_height(height);
     let block1 = sample_block(height, 0, None);
     let block2 = sample_block(height, 1, None);
+    insert_validated_pending(actor, block2.clone());
 
     actor
         .kura
@@ -14151,6 +14234,7 @@ async fn precommit_vote_skips_when_block_conflicts_with_locked_chain() {
         height,
         1,
         epoch,
+        ValidationStatus::Valid,
         &topology,
         block2.header().prev_block_hash(),
         Some((Hash::new([]), Hash::new([]))),
@@ -14171,6 +14255,7 @@ async fn precommit_vote_allows_when_block_extends_locked_chain() {
     let epoch = actor.epoch_manager.as_ref().map_or(0, EpochManager::epoch);
     let block1 = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
     let block2 = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, Some(block1.hash()));
+    insert_validated_pending(actor, block2.clone());
 
     actor
         .kura
@@ -14193,6 +14278,7 @@ async fn precommit_vote_allows_when_block_extends_locked_chain() {
         2,
         0,
         epoch,
+        ValidationStatus::Valid,
         &topology,
         block2.header().prev_block_hash(),
         Some((Hash::new([]), Hash::new([]))),
@@ -14213,12 +14299,15 @@ async fn precommit_vote_rejects_older_view_after_newer_vote() {
     let height = 1;
     let block1 = sample_block(height, 0, None);
     let block2 = sample_block(height, 1, None);
+    insert_validated_pending(actor, block1.clone());
+    insert_validated_pending(actor, block2.clone());
 
     let emitted_first = actor.emit_precommit_vote(
         block1.hash(),
         height,
         1,
         epoch,
+        ValidationStatus::Valid,
         &topology,
         block1.header().prev_block_hash(),
         Some((Hash::new([]), Hash::new([]))),
@@ -14230,6 +14319,7 @@ async fn precommit_vote_rejects_older_view_after_newer_vote() {
         height,
         0,
         epoch,
+        ValidationStatus::Valid,
         &topology,
         block2.header().prev_block_hash(),
         Some((Hash::new([]), Hash::new([]))),
@@ -38261,8 +38351,9 @@ async fn emit_precommit_vote_uses_activation_height_mode_tag() {
     let height = 2u64;
     let view = 0u64;
     let epoch = actor.epoch_for_height(height);
-    let block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD6; Hash::LENGTH]));
+    let block = sample_block(height, view, None);
+    let block_hash = block.hash();
+    insert_validated_pending(actor, block);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
 
     assert!(
@@ -38271,6 +38362,7 @@ async fn emit_precommit_vote_uses_activation_height_mode_tag() {
             height,
             view,
             epoch,
+            ValidationStatus::Valid,
             &topology,
             None,
             Some((Hash::new([]), Hash::new([]))),
@@ -41065,6 +41157,115 @@ async fn npos_commit_qc_roster_roll_forward_canonicalizes_order() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pacemaker_uses_active_roster_when_commit_qc_roster_excludes_local() {
+    use std::borrow::Cow;
+
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    actor.locked_qc = None;
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(1);
+    let highest_qc = QcHeaderRef {
+        subject_block_hash: genesis_hash,
+        height: committed_height,
+        view: 0,
+        epoch: actor.epoch_for_height(committed_height),
+        phase: Phase::Commit,
+    };
+
+    let roster = actor.effective_commit_topology();
+    let local = actor.common_config.peer.id().clone();
+    let local_pos = roster
+        .iter()
+        .position(|peer| peer == &local)
+        .expect("local peer in topology");
+    let view = u64::try_from(local_pos).unwrap_or_default();
+    let required = super::network_topology::Topology::new(roster.clone()).min_votes_for_commit();
+
+    let mut recorded = 0usize;
+    for peer in roster.iter() {
+        if peer == &local {
+            continue;
+        }
+        actor
+            .subsystems
+            .propose
+            .new_view_tracker
+            .record(tracked_height, view, peer.clone(), highest_qc);
+        recorded = recorded.saturating_add(1);
+        if recorded.saturating_add(1) >= required {
+            break;
+        }
+    }
+
+    let offline_grace = actor.commit_quorum_timeout();
+    let now = Instant::now();
+    let start = now
+        .checked_sub(offline_grace + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor.phase_tracker.start_new_round(tracked_height, start);
+
+    let header = {
+        let view = actor.state.view();
+        let committed = view.latest_block().expect("committed block");
+        committed.header()
+    };
+    let signers: Vec<&KeyPair> = harness.key_pairs.iter().skip(1).take(1).collect();
+    let qc = commit_qc_with_signers(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        &header,
+        zero_state_root(),
+        zero_state_root(),
+        &signers,
+        vec![0b1],
+    );
+    status::record_commit_qc(qc);
+
+    let qc_roster = actor
+        .roster_from_commit_qc_history_roll_forward(tracked_height, Some(genesis_hash))
+        .expect("commit QC roster");
+    assert!(
+        !qc_roster.contains(&local),
+        "commit QC roster should exclude local peer for this test"
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        proposed,
+        "pacemaker should use the active roster even when commit QC roster excludes local"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, view)
+            .is_some(),
+        "proposal should be assembled using the active roster"
+    );
+
+    status::reset_commit_certs_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_qc_roll_forward_prefers_active_roster_when_keys_disabled() {
     use crate::sumeragi::status;
     use iroha_data_model::consensus::ConsensusKeyStatus;
@@ -41847,17 +42048,20 @@ async fn precommit_vote_allows_newer_view_after_conflict() {
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let height = actor.state.view().height() as u64 + 1;
     let epoch = actor.current_epoch();
-    let block_a =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
-    let block_b =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
+    let block_a = sample_block(height, 0, None);
+    let block_b = sample_block(height, 1, None);
+    let block_a_hash = block_a.hash();
+    let block_b_hash = block_b.hash();
+    insert_validated_pending(actor, block_a);
+    insert_validated_pending(actor, block_b);
 
     assert!(
         actor.emit_precommit_vote(
-            block_a,
+            block_a_hash,
             height,
             0,
             epoch,
+            ValidationStatus::Valid,
             &topology,
             None,
             Some((Hash::new([]), Hash::new([]))),
@@ -41866,10 +42070,11 @@ async fn precommit_vote_allows_newer_view_after_conflict() {
     );
     assert!(
         actor.emit_precommit_vote(
-            block_b,
+            block_b_hash,
             height,
             1,
             epoch,
+            ValidationStatus::Valid,
             &topology,
             None,
             Some((Hash::new([]), Hash::new([]))),
@@ -41888,13 +42093,13 @@ async fn precommit_vote_allows_newer_view_after_conflict() {
     assert!(
         votes
             .iter()
-            .any(|vote| vote.block_hash == block_a && vote.view == 0),
+            .any(|vote| vote.block_hash == block_a_hash && vote.view == 0),
         "precommit vote for view 0 should be recorded"
     );
     assert!(
         votes
             .iter()
-            .any(|vote| vote.block_hash == block_b && vote.view == 1),
+            .any(|vote| vote.block_hash == block_b_hash && vote.view == 1),
         "precommit vote for view 1 should be recorded"
     );
 
@@ -41910,8 +42115,9 @@ async fn precommit_vote_allows_newer_view_for_same_block() {
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let height = actor.state.view().height() as u64 + 1;
     let epoch = actor.current_epoch();
-    let block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x33; Hash::LENGTH]));
+    let block = sample_block(height, 0, None);
+    let block_hash = block.hash();
+    insert_validated_pending(actor, block);
 
     assert!(
         actor.emit_precommit_vote(
@@ -41919,6 +42125,7 @@ async fn precommit_vote_allows_newer_view_for_same_block() {
             height,
             0,
             epoch,
+            ValidationStatus::Valid,
             &topology,
             None,
             Some((Hash::new([]), Hash::new([]))),
@@ -41931,6 +42138,7 @@ async fn precommit_vote_allows_newer_view_for_same_block() {
             height,
             1,
             epoch,
+            ValidationStatus::Valid,
             &topology,
             None,
             Some((Hash::new([]), Hash::new([]))),
