@@ -3330,6 +3330,8 @@ impl Kura {
         fsync_mode: FsyncMode,
         retention: Option<NonZeroUsize>,
     ) -> bool {
+        // Sidecars are best-effort; only fsync when strict durability is requested.
+        let should_sync = matches!(fsync_mode, FsyncMode::On);
         if height == 0 {
             iroha_logger::warn!(height, kind, "refusing to store sidecar for zero height");
             return false;
@@ -3508,7 +3510,7 @@ impl Kura {
                 iroha_logger::warn!(?err, ?data_path, kind, "failed to append sidecar payload");
                 return false;
             }
-            if matches!(fsync_mode, FsyncMode::On) {
+            if should_sync {
                 if let Err(err) = data.sync_data() {
                     iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
                     return false;
@@ -3533,18 +3535,18 @@ impl Kura {
                         "failed to roll back sidecar payload"
                     );
                 }
-                if matches!(fsync_mode, FsyncMode::On) {
+                if should_sync {
                     let _ = data.sync_data();
                 }
                 return false;
             }
-            if matches!(fsync_mode, FsyncMode::On) {
+            if should_sync {
                 if let Err(err) = index.sync_data() {
                     iroha_logger::warn!(?err, ?index_path, kind, "failed to sync sidecar index");
                     return false;
                 }
             }
-            if matches!(fsync_mode, FsyncMode::On) {
+            if should_sync {
                 if let Some(parent) = data_path.parent() {
                     if let Err(err) = sync_dir(parent) {
                         iroha_logger::warn!(
@@ -8375,6 +8377,35 @@ mod tests {
             kura.read_pipeline_metadata(1).is_none(),
             "height mismatch should be rejected"
         );
+    }
+
+    #[test]
+    fn sidecar_fsync_mode_tracks_kura_config() {
+        use iroha_config::base::WithOrigin;
+
+        let temp_dir = TempDir::new().unwrap();
+        let (kura, _count) = Kura::new(
+            &Config {
+                init_mode: InitMode::Strict,
+                store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: BLOCKS_IN_MEMORY,
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::On,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                block_sync_roster_retention:
+                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention:
+                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .unwrap();
+
+        assert_eq!(kura.sidecar_fsync_mode(), FsyncMode::On);
     }
 
     #[test]

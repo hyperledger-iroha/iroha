@@ -6,11 +6,9 @@ use integration_tests::sandbox;
 use iroha::{
     crypto::KeyPair,
     data_model::{
-        IdBox,
-        ValidationFail,
+        IdBox, ValidationFail,
         isi::{
-            Instruction,
-            InstructionType,
+            Instruction, InstructionType,
             error::{InstructionExecutionError, InvalidParameterError},
         },
         prelude::*,
