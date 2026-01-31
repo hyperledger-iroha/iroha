@@ -4786,7 +4786,7 @@ pub fn inc_kura_store_abort() {
     KURA_STORE_ABORT_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Record a missing-block fetch attempt triggered by a QC-first arrival.
+/// Record a missing-block fetch attempt triggered by QC-first arrival or pending-RBC recovery.
 pub fn record_missing_block_fetch(targets: usize, dwell_ms: u64) {
     #[cfg(test)]
     let _guard = missing_block_fetch_test_guard();

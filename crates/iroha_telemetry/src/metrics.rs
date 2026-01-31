@@ -9595,7 +9595,7 @@ impl Default for Metrics {
         let sumeragi_missing_block_fetch_target_total = IntCounterVec::new(
             Opts::new(
                 "sumeragi_missing_block_fetch_target_total",
-                "Sumeragi missing-block fetch target kind (signers|topology)",
+                "Sumeragi missing-block fetch target kind (signers|topology|none)",
             ),
             &["target"],
         )
