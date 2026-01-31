@@ -41176,8 +41176,8 @@ async fn pacemaker_ignores_commit_qc_roster_for_leader_selection() {
     let committed_height = actor.state.view().height() as u64;
     let tracked_height = committed_height.saturating_add(1);
     let highest_qc = actor.latest_committed_qc().expect("committed qc");
-    let required = super::network_topology::Topology::new(active_roster.clone())
-        .min_votes_for_commit();
+    let required =
+        super::network_topology::Topology::new(active_roster.clone()).min_votes_for_commit();
     let mut recorded = 0usize;
     for peer in active_roster.iter() {
         if peer == &local {

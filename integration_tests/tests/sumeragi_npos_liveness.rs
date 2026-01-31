@@ -144,6 +144,15 @@ async fn wait_for_converged_heights(
     min_height: u64,
     timeout: Duration,
 ) -> Result<Vec<u64>> {
+    wait_for_converged_heights_with_skew(network, min_height, timeout, MAX_HEIGHT_SKEW).await
+}
+
+async fn wait_for_converged_heights_with_skew(
+    network: &Network,
+    min_height: u64,
+    timeout: Duration,
+    allowed_skew: u64,
+) -> Result<Vec<u64>> {
     let deadline = Instant::now() + timeout;
     let mut last_snapshot = Vec::new();
 
@@ -178,26 +187,32 @@ async fn wait_for_converged_heights(
         }
 
         if !heights.is_empty() {
-            let min = *heights.iter().min().unwrap();
-            let max = *heights.iter().max().unwrap();
             last_snapshot.clone_from(&heights);
-            if min >= min_height.saturating_sub(MAX_HEIGHT_SKEW)
-                && max >= min_height
-                && max.saturating_sub(min) <= MAX_HEIGHT_SKEW
-            {
+            if heights_meet_target(&heights, min_height, allowed_skew) {
                 return Ok(heights);
             }
         }
 
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "heights failed to converge within {:?}; target={min_height} allowed_skew={MAX_HEIGHT_SKEW} last_snapshot={last_snapshot:?}",
-                timeout
+                "heights failed to converge within {:?}; target={min_height} allowed_skew={allowed_skew} last_snapshot={last_snapshot:?}",
+                timeout,
             ));
         }
 
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+}
+
+fn heights_meet_target(heights: &[u64], min_height: u64, allowed_skew: u64) -> bool {
+    if heights.is_empty() {
+        return false;
+    }
+    let min = *heights.iter().min().unwrap_or(&0);
+    let max = *heights.iter().max().unwrap_or(&0);
+    min >= min_height.saturating_sub(allowed_skew)
+        && max >= min_height
+        && max.saturating_sub(min) <= allowed_skew
 }
 
 fn detect_height_from_storage(peer: &NetworkPeer) -> Option<u64> {
@@ -234,6 +249,15 @@ fn detect_height_from_storage(peer: &NetworkPeer) -> Option<u64> {
     }
 
     (max_height > 0).then_some(max_height)
+}
+
+#[test]
+fn heights_meet_target_respects_skew_and_min_height() {
+    assert!(heights_meet_target(&[4, 4, 4], 4, 0));
+    assert!(!heights_meet_target(&[3, 4, 4], 4, 0));
+    assert!(heights_meet_target(&[3, 4, 4], 4, 1));
+    assert!(!heights_meet_target(&[3, 4, 6], 4, 1));
+    assert!(!heights_meet_target(&[], 4, 1));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -304,8 +328,14 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
         wait_for_converged_heights(&network, 4, sync_timeout)
             .await
             .wrap_err("initial heights did not converge")?;
-
-        let status_before = client.get_status()?;
+        let baseline_heights = wait_for_converged_heights_with_skew(&network, 4, sync_timeout, 0)
+            .await
+            .wrap_err("initial heights did not fully converge")?;
+        let baseline_height = *baseline_heights.iter().max().unwrap_or(&0);
+        network
+            .ensure_blocks(baseline_height)
+            .await
+            .wrap_err("blocks not persisted before restart")?;
         let pacemaker_url = client
             .torii_url
             .join("v1/sumeragi/pacemaker")
@@ -325,6 +355,10 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
         wait_for_status_responses(&network, sync_timeout)
             .await
             .wrap_err("status not ready after restart")?;
+        network
+            .ensure_blocks(baseline_height)
+            .await
+            .wrap_err("baseline height did not recover after restart")?;
         let resumed_client = primary_peer.client();
         for i in 0..3 {
             let message = format!("npos pacemaker resume seed {i}");
@@ -333,7 +367,7 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
                 .wrap_err_with(|| format!("submit pacemaker resume seed {i}"))?;
         }
         let _resumed_heights =
-            wait_for_converged_heights(&network, status_before.blocks + 1, sync_timeout)
+            wait_for_converged_heights(&network, baseline_height + 1, sync_timeout)
                 .await
                 .wrap_err("post-restart heights did not converge")?;
 
