@@ -374,6 +374,10 @@ pub fn available() -> bool {
 }
 
 pub fn encode_all(payload: Vec<u8>, level: i32) -> io::Result<Vec<u8>> {
+    let min_gpu_bytes = super::heuristics::get().min_compress_bytes_gpu;
+    if payload.len() < min_gpu_bytes {
+        return zstd::encode_all(std::io::Cursor::new(payload), level);
+    }
     match backend() {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         Backend::Metal { compress, .. } => {
@@ -488,6 +492,7 @@ pub fn decode_all(compressed: &[u8], uncompressed_size: u64) -> Result<Vec<u8>, 
 #[cfg(all(test, feature = "gpu-compression"))]
 mod tests {
     use rand::{Rng, SeedableRng, rngs::StdRng};
+    use std::io::Cursor;
 
     use super::*;
     use crate::core::hw;
@@ -512,6 +517,19 @@ mod tests {
     fn availability_probe_runs() {
         // Should simply return a boolean without panicking
         let _ = available();
+    }
+
+    #[test]
+    fn encode_all_small_payload_uses_cpu_path() {
+        let min_gpu = crate::core::heuristics::get().min_compress_bytes_gpu;
+        if min_gpu == 0 {
+            return;
+        }
+        let size = min_gpu.saturating_sub(1).min(1024);
+        let data = vec![0xA5u8; size];
+        let cpu = zstd::encode_all(Cursor::new(&data), 1).expect("cpu encode");
+        let gpu = encode_all(data, 1).expect("gpu encode");
+        assert_eq!(gpu, cpu);
     }
 
     #[test]

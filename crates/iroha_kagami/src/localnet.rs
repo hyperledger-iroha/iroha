@@ -341,6 +341,10 @@ pub const DEFAULT_BIND_HOST: &str = "0.0.0.0";
 pub const DEFAULT_PUBLIC_HOST: &str = "127.0.0.1";
 /// Default total pipeline time (ms) injected for localnet when not overridden.
 const LOCALNET_PIPELINE_TIME_MS: u64 = 1_000;
+/// Localnet pacing governor lower bound (basis points).
+const LOCALNET_PACING_GOVERNOR_MIN_FACTOR_BPS: u32 = 10_000;
+/// Localnet pacing governor upper bound (basis points).
+const LOCALNET_PACING_GOVERNOR_MAX_FACTOR_BPS: u32 = 10_000;
 /// Baseline NPoS timeouts for localnet (keep in sync with config defaults).
 /// Default DA commit-quorum timeout multiplier for localnet configs.
 const LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 1;
@@ -1148,6 +1152,16 @@ fn render_peer_config(
     sumeragi.insert("da".into(), Value::Table(da));
 
     let mut advanced = Table::new();
+    let mut pacing_governor = Table::new();
+    pacing_governor.insert(
+        "min_factor_bps".into(),
+        Value::Integer(i64::from(LOCALNET_PACING_GOVERNOR_MIN_FACTOR_BPS)),
+    );
+    pacing_governor.insert(
+        "max_factor_bps".into(),
+        Value::Integer(i64::from(LOCALNET_PACING_GOVERNOR_MAX_FACTOR_BPS)),
+    );
+    advanced.insert("pacing_governor".into(), Value::Table(pacing_governor));
     let mut da_advanced = Table::new();
     da_advanced.insert(
         "quorum_timeout_multiplier".into(),
@@ -1182,6 +1196,30 @@ fn render_peer_config(
         ),
     );
     advanced.insert("rbc".into(), Value::Table(rbc));
+
+    let msg_channel_cap_votes = i64::try_from(LOCALNET_MSG_CHANNEL_CAP_VOTES)
+        .expect("LOCALNET_MSG_CHANNEL_CAP_VOTES fits i64");
+    let msg_channel_cap_block_payload = i64::try_from(LOCALNET_MSG_CHANNEL_CAP_BLOCK_PAYLOAD)
+        .expect("LOCALNET_MSG_CHANNEL_CAP_BLOCK_PAYLOAD fits i64");
+    let msg_channel_cap_rbc_chunks = i64::try_from(LOCALNET_MSG_CHANNEL_CAP_RBC_CHUNKS)
+        .expect("LOCALNET_MSG_CHANNEL_CAP_RBC_CHUNKS fits i64");
+    let msg_channel_cap_blocks = i64::try_from(LOCALNET_MSG_CHANNEL_CAP_BLOCKS)
+        .expect("LOCALNET_MSG_CHANNEL_CAP_BLOCKS fits i64");
+    let control_msg_channel_cap = i64::try_from(LOCALNET_CONTROL_MSG_CHANNEL_CAP)
+        .expect("LOCALNET_CONTROL_MSG_CHANNEL_CAP fits i64");
+    let mut queues = Table::new();
+    queues.insert("votes".into(), Value::Integer(msg_channel_cap_votes));
+    queues.insert(
+        "block_payload".into(),
+        Value::Integer(msg_channel_cap_block_payload),
+    );
+    queues.insert(
+        "rbc_chunks".into(),
+        Value::Integer(msg_channel_cap_rbc_chunks),
+    );
+    queues.insert("blocks".into(), Value::Integer(msg_channel_cap_blocks));
+    queues.insert("control".into(), Value::Integer(control_msg_channel_cap));
+    advanced.insert("queues".into(), Value::Table(queues));
     sumeragi.insert("advanced".into(), Value::Table(advanced));
 
     let mut persistence = Table::new();
@@ -1234,29 +1272,6 @@ fn render_peer_config(
         nexus.insert("dataspace_catalog".into(), Value::Array(catalog));
     }
     root.insert("nexus".into(), Value::Table(nexus));
-    let msg_channel_cap_votes = i64::try_from(LOCALNET_MSG_CHANNEL_CAP_VOTES)
-        .expect("LOCALNET_MSG_CHANNEL_CAP_VOTES fits i64");
-    let msg_channel_cap_block_payload = i64::try_from(LOCALNET_MSG_CHANNEL_CAP_BLOCK_PAYLOAD)
-        .expect("LOCALNET_MSG_CHANNEL_CAP_BLOCK_PAYLOAD fits i64");
-    let msg_channel_cap_rbc_chunks = i64::try_from(LOCALNET_MSG_CHANNEL_CAP_RBC_CHUNKS)
-        .expect("LOCALNET_MSG_CHANNEL_CAP_RBC_CHUNKS fits i64");
-    let msg_channel_cap_blocks = i64::try_from(LOCALNET_MSG_CHANNEL_CAP_BLOCKS)
-        .expect("LOCALNET_MSG_CHANNEL_CAP_BLOCKS fits i64");
-    let control_msg_channel_cap = i64::try_from(LOCALNET_CONTROL_MSG_CHANNEL_CAP)
-        .expect("LOCALNET_CONTROL_MSG_CHANNEL_CAP fits i64");
-    let mut queues = Table::new();
-    queues.insert("votes".into(), Value::Integer(msg_channel_cap_votes));
-    queues.insert(
-        "block_payload".into(),
-        Value::Integer(msg_channel_cap_block_payload),
-    );
-    queues.insert(
-        "rbc_chunks".into(),
-        Value::Integer(msg_channel_cap_rbc_chunks),
-    );
-    queues.insert("blocks".into(), Value::Integer(msg_channel_cap_blocks));
-    queues.insert("control".into(), Value::Integer(control_msg_channel_cap));
-    sumeragi.insert("queues".into(), Value::Table(queues));
 
     let mut collectors = Table::new();
     if let Some(collectors_k) = collectors_k {
@@ -2556,6 +2571,14 @@ mod tests {
         assert_eq!(
             parsed.sumeragi.rbc.payload_chunks_per_tick, LOCALNET_RBC_PAYLOAD_CHUNKS_PER_TICK,
             "localnet should pace RBC payload chunk fanout"
+        );
+        assert_eq!(
+            parsed.sumeragi.pacing_governor.min_factor_bps, LOCALNET_PACING_GOVERNOR_MIN_FACTOR_BPS,
+            "localnet should clamp pacing governor min factor"
+        );
+        assert_eq!(
+            parsed.sumeragi.pacing_governor.max_factor_bps, LOCALNET_PACING_GOVERNOR_MAX_FACTOR_BPS,
+            "localnet should clamp pacing governor max factor"
         );
         assert_eq!(
             parsed.queue.capacity.get(),

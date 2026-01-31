@@ -3973,19 +3973,29 @@ fn scale_ratio_at_least_one(value: u64, numerator: u64, denominator: u64) -> u64
     scaled.max(1)
 }
 
+// Base NPoS phase budget (propose + DA + prevote + precommit + commit) used to
+// normalize per-phase timeouts so the pipeline budget tracks the target block time.
+const NPOS_PHASE_BUDGET_MS: u64 = defaults::sumeragi::npos::TIMEOUT_PROPOSE_MS
+    + defaults::sumeragi::npos::TIMEOUT_PREVOTE_MS
+    + defaults::sumeragi::npos::TIMEOUT_PRECOMMIT_MS
+    + defaults::sumeragi::npos::TIMEOUT_COMMIT_MS
+    + defaults::sumeragi::npos::TIMEOUT_DA_MS;
+
 impl SumeragiNposTimeouts {
-    /// Derive per-phase timeouts from the provided block time using safe ratios.
+    /// Derive per-phase timeouts from the provided block time using safe ratios
+    /// normalized to the default pipeline budget.
     #[must_use]
     pub fn from_block_time(block_time: Duration) -> Self {
         let mut block_time_ms = u64::try_from(block_time.as_millis()).unwrap_or(u64::MAX);
         if block_time_ms == 0 {
             block_time_ms = defaults::sumeragi::npos::BLOCK_TIME_MS;
         }
+        let phase_budget_ms = NPOS_PHASE_BUDGET_MS.max(1);
         let derive = |default_timeout_ms| {
             Duration::from_millis(scale_ratio_at_least_one(
                 block_time_ms,
                 default_timeout_ms,
-                defaults::sumeragi::npos::BLOCK_TIME_MS,
+                phase_budget_ms,
             ))
         };
         Self {
@@ -7453,57 +7463,70 @@ mod tests {
     fn npos_timeouts_from_block_time_defaults() {
         let defaults_ms = defaults::sumeragi::npos::BLOCK_TIME_MS;
         let timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(defaults_ms));
+        let phase_budget_ms = NPOS_PHASE_BUDGET_MS.max(1);
+        let expected = |default_ms| {
+            Duration::from_millis(scale_ratio_at_least_one(
+                defaults_ms,
+                default_ms,
+                phase_budget_ms,
+            ))
+        };
         assert_eq!(
             timeouts.propose,
-            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_PROPOSE_MS)
+            expected(defaults::sumeragi::npos::TIMEOUT_PROPOSE_MS)
         );
         assert_eq!(
             timeouts.prevote,
-            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_PREVOTE_MS)
+            expected(defaults::sumeragi::npos::TIMEOUT_PREVOTE_MS)
         );
         assert_eq!(
             timeouts.precommit,
-            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_PRECOMMIT_MS)
+            expected(defaults::sumeragi::npos::TIMEOUT_PRECOMMIT_MS)
         );
         assert_eq!(
             timeouts.exec,
-            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_EXEC_MS)
+            expected(defaults::sumeragi::npos::TIMEOUT_EXEC_MS)
         );
         assert_eq!(
             timeouts.witness,
-            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_WITNESS_MS)
+            expected(defaults::sumeragi::npos::TIMEOUT_WITNESS_MS)
         );
         assert_eq!(
             timeouts.commit,
-            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_COMMIT_MS)
+            expected(defaults::sumeragi::npos::TIMEOUT_COMMIT_MS)
         );
         assert_eq!(
             timeouts.da,
-            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_DA_MS)
+            expected(defaults::sumeragi::npos::TIMEOUT_DA_MS)
         );
         assert_eq!(
             timeouts.aggregator,
-            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_AGG_MS)
+            expected(defaults::sumeragi::npos::TIMEOUT_AGG_MS)
         );
+        let pipeline_total = timeouts.propose
+            + timeouts.prevote
+            + timeouts.precommit
+            + timeouts.commit
+            + timeouts.da;
+        assert_eq!(pipeline_total, Duration::from_millis(defaults_ms));
     }
 
     #[test]
     fn npos_timeouts_scale_with_block_time() {
         let base_ms = defaults::sumeragi::npos::BLOCK_TIME_MS;
         let scaled_ms = base_ms.saturating_mul(2);
-        let timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(scaled_ms));
+        let base_timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(base_ms));
+        let scaled_timeouts =
+            SumeragiNposTimeouts::from_block_time(Duration::from_millis(scaled_ms));
         assert_eq!(
-            timeouts.propose,
-            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_PROPOSE_MS * 2)
+            scaled_timeouts.propose,
+            base_timeouts.propose.saturating_mul(2)
         );
         assert_eq!(
-            timeouts.commit,
-            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_COMMIT_MS * 2)
+            scaled_timeouts.commit,
+            base_timeouts.commit.saturating_mul(2)
         );
-        assert_eq!(
-            timeouts.da,
-            Duration::from_millis(defaults::sumeragi::npos::TIMEOUT_DA_MS * 2)
-        );
+        assert_eq!(scaled_timeouts.da, base_timeouts.da.saturating_mul(2));
     }
 
     #[test]

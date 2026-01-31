@@ -155,8 +155,11 @@ compression kernels are enabled.
 The workspace now builds Norito with the `gpu-compression` feature enabled by default,
 so GPU zstd backends are compiled in; runtime availability still depends on hardware,
 the helper library (`libgpuzstd_*`/`gpuzstd_cuda.dll`), and the `allow_gpu_compression`
-  Build the Metal helper with `cargo build -p gpuzstd_metal --release` and place `libgpuzstd_metal.dylib` on the loader path. The current Metal helper runs GPU match-finding/sequence generation and uses the CPU zstd entropy coder + decoder to emit standard frames.
-config flag.
+config flag. Build the Metal helper with `cargo build -p gpuzstd_metal --release` and
+place `libgpuzstd_metal.dylib` on the loader path. The current Metal helper runs GPU
+match-finding/sequence generation and uses the in-crate deterministic zstd frame
+encoder (Huffman/FSE + frame assembly) on the host; decode uses the in-crate frame
+decoder with a CPU zstd fallback for unsupported frames until GPU block decode is wired in.
 
 | Field | Default | Purpose |
 |-------|---------|---------|
@@ -179,6 +182,10 @@ never makes a decision that would change the wire format, and the thresholds are
 per release. When profiling uncovers better break-even points, Norito updates the
 canonical `Heuristics::canonical` implementation and `docs/source/benchmarks.md` plus
 `status.md` record the change alongside the versioned evidence.
+
+The GPU zstd helper enforces the same `min_compress_bytes_gpu` cutoff even when
+called directly (for example via `norito::core::gpu_zstd::encode_all`), so small
+payloads always stay on the CPU path regardless of GPU availability.
 
 ### Troubleshooting and parity checklist
 

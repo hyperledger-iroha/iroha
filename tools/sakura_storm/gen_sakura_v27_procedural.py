@@ -54,6 +54,7 @@ KATAKANA_BOX_ON = os.getenv("SS_KATAKANA_BOX_ON", "")
 KATAKANA_BOX_OFF = os.getenv("SS_KATAKANA_BOX_OFF", "")
 KATAKANA_TEXT_ON = os.getenv("SS_KATAKANA_TEXT_ON", "")
 KATAKANA_TEXT_OFF = os.getenv("SS_KATAKANA_TEXT_OFF", "")
+KATAKANA_OUTSIDE_LOGO = os.getenv("SS_KATAKANA_OUTSIDE_LOGO", "0").strip() == "1"
 
 def resolve_palette() -> Tuple[
     Tuple[int, int, int],
@@ -94,6 +95,30 @@ def parse_color(text: str, default: Tuple[int, int, int]) -> Tuple[int, int, int
     except ValueError:
         return default
     return vals
+
+
+def apply_logo_overlay(arr: np.ndarray, logo_arr: np.ndarray, logo_mask_arr: np.ndarray) -> np.ndarray:
+    if not LOGO_OVERLAY or not logo_mask_arr.any():
+        return arr
+    overlay_color = None
+    if LOGO_OVERLAY_COLOR:
+        overlay_color = parse_color(LOGO_OVERLAY_COLOR, DATA_BRIGHT)
+    out = arr.copy()
+    if LOGO_OVERLAY_ALPHA >= 255:
+        if overlay_color is None:
+            out[logo_mask_arr] = logo_arr[logo_mask_arr]
+        else:
+            out[logo_mask_arr] = np.array(overlay_color, dtype=np.uint8)
+        return out
+    alpha = max(0, min(255, LOGO_OVERLAY_ALPHA)) / 255.0
+    blended = out.astype(np.float32)
+    if overlay_color is None:
+        src = logo_arr.astype(np.float32)
+    else:
+        src = np.zeros_like(out, dtype=np.float32)
+        src[logo_mask_arr] = np.array(overlay_color, dtype=np.float32)
+    blended[logo_mask_arr] = blended[logo_mask_arr] * (1.0 - alpha) + src[logo_mask_arr] * alpha
+    return blended.astype(np.uint8)
 
 
 # Palette (default v27 unless overridden)
@@ -140,6 +165,10 @@ LOGO_ALPHA = int(os.getenv("SS_LOGO_ALPHA", "255"))
 LOGO_THRESH_1 = int(os.getenv("SS_LOGO_THRESH_1", str(V27.logo_thresh_1)))
 LOGO_THRESH_2 = int(os.getenv("SS_LOGO_THRESH_2", str(V27.logo_thresh_2)))
 LOGO_THRESH_3 = int(os.getenv("SS_LOGO_THRESH_3", str(V27.logo_thresh_3)))
+LOGO_OVERLAY = os.getenv("SS_LOGO_OVERLAY", "0").strip() == "1"
+LOGO_OVERLAY_ALPHA = int(os.getenv("SS_LOGO_OVERLAY_ALPHA", "255"))
+LOGO_OVERLAY_COLOR = os.getenv("SS_LOGO_OVERLAY_COLOR", "")
+LOGO_OVERLAY_POST = os.getenv("SS_LOGO_OVERLAY_POST", "0").strip() == "1"
 
 
 # Coding
@@ -445,6 +474,8 @@ def main() -> None:
         ring_arr = np.array(ring_layer, dtype=np.uint8)
         ring_mask_arr = (ring_arr != 0).any(axis=2)
         base[ring_mask_arr] = ring_arr[ring_mask_arr]
+    logo_arr = np.array(logo_layer, dtype=np.uint8)
+    logo_mask_arr = (logo_arr != np.array(BG, dtype=np.uint8)).any(axis=2)
 
     frames: List[Image.Image] = []
     prev_bits_by_cell: dict[Tuple[int, int], int] = {}
@@ -483,6 +514,11 @@ def main() -> None:
             for i, (x0, y0, _) in enumerate(katakana_cells):
                 if overlay_symbols_per_step <= 0:
                     break
+                if KATAKANA_OUTSIDE_LOGO and logo_mask_arr.any():
+                    cx = int(x0 + CELL_SIZE / 2)
+                    cy = int(y0 + CELL_SIZE / 2)
+                    if 0 <= cx < W and 0 <= cy < H and logo_mask_arr[cy, cx]:
+                        continue
                 if not KATAKANA_NONDATA:
                     curr_bit = int(curr_bits_by_cell.get((x0, y0), 0))
                     prev_bit = int(prev_bits_by_cell.get((x0, y0), curr_bit))
@@ -514,9 +550,13 @@ def main() -> None:
                 kdraw.text((tx, ty), glyph, font=katakana_font, fill=text_color + (int(alpha),))
             frame = Image.alpha_composite(frame, kat_layer)
             draw_arr = np.array(frame.convert("RGB"), dtype=np.uint8)
+        if LOGO_OVERLAY and (not LOGO_OVERLAY_POST):
+            draw_arr = apply_logo_overlay(draw_arr, logo_arr, logo_mask_arr)
         if outer_mask is not None:
             draw_arr[~outer_mask] = (BG[0], BG[1], BG[2])
         quant = quantize_to_palette(draw_arr)
+        if LOGO_OVERLAY and LOGO_OVERLAY_POST:
+            quant = apply_logo_overlay(quant, logo_arr, logo_mask_arr)
         frames.append(Image.fromarray(quant, mode="RGB"))
         prev_bits_by_cell = curr_bits_by_cell
 
