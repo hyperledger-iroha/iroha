@@ -88,6 +88,16 @@ pub(super) struct CommitQuorumStatus {
     pub stake_quorum_missing: bool,
 }
 
+pub(super) fn p2p_topology_with_trusted(
+    world_peers: &BTreeSet<PeerId>,
+    trusted: &iroha_config::parameters::actual::TrustedPeers,
+) -> BTreeSet<PeerId> {
+    let mut topology = world_peers.clone();
+    topology.insert(trusted.myself.id().clone());
+    topology.extend(trusted.others.iter().map(|peer| peer.id().clone()));
+    topology
+}
+
 pub(super) fn spawn_commit_worker(
     state: Arc<State>,
     kura: Arc<Kura>,
@@ -4712,6 +4722,9 @@ impl Actor {
             progress = true;
         }
         if !progress {
+            // Refresh P2P topology even when height is unchanged to catch world-peer updates
+            // that land after commit processing (e.g., late-applied peer registrations).
+            self.refresh_p2p_topology();
             if let Some((activate_at, roster)) = self.pending_roster_activation.clone() {
                 if committed_height >= activate_at {
                     if let Err(err) = self.install_elected_roster(&roster) {
@@ -5257,7 +5270,11 @@ impl Actor {
         };
 
         let local_peer = self.common_config.peer.id();
-        let removed = !current.contains(local_peer) && !current.is_empty();
+        let local_in_world = current.contains(local_peer);
+        if local_in_world {
+            self.local_peer_seen_in_world = true;
+        }
+        let removed = self.local_peer_seen_in_world && !local_in_world && !current.is_empty();
         crate::sumeragi::status::set_local_removed_from_world(removed);
         if removed {
             iroha_logger::warn!(
@@ -5315,6 +5332,10 @@ impl Actor {
 
         let advertise = advertise.expect("advertise topology required for decision");
         self.last_advertised_topology.clone_from(&advertise);
+        let network_topology =
+            p2p_topology_with_trusted(&advertise, self.common_config.trusted_peers.value());
+        self.network
+            .update_topology(UpdateTopology(network_topology.into_iter().collect()));
         self.peers_gossiper
             .update_topology(UpdateTopology(advertise.into_iter().collect()));
     }

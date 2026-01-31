@@ -348,10 +348,7 @@ fn should_defer_for_online_peers(
     true
 }
 
-fn count_online_validators(
-    online: &iroha_p2p::OnlinePeers,
-    roster: &[PeerId],
-) -> usize {
+fn count_online_validators(online: &iroha_p2p::OnlinePeers, roster: &[PeerId]) -> usize {
     if roster.is_empty() {
         return 0;
     }
@@ -4123,6 +4120,8 @@ pub(super) struct Actor {
     block_count: BlockCount,
     block_sync_gossip_limit: usize,
     last_advertised_topology: BTreeSet<PeerId>,
+    /// Track whether the local peer has ever appeared in the world state.
+    local_peer_seen_in_world: bool,
     last_commit_topology_hash: Option<HashOf<Vec<PeerId>>>,
     last_commit_topology_membership_hash: Option<HashOf<Vec<PeerId>>>,
     last_committed_height: u64,
@@ -8424,6 +8423,10 @@ impl Actor {
             cache
         };
         let invalid_sig_penalty = InvalidSigPenalty::new(&config);
+        let local_peer_seen_in_world = {
+            let view = state.view();
+            view.world.peers().contains(local_peer_id)
+        };
 
         let mut actor = Self {
             config,
@@ -8445,6 +8448,7 @@ impl Actor {
             block_count,
             block_sync_gossip_limit,
             last_advertised_topology: BTreeSet::new(),
+            local_peer_seen_in_world,
             last_commit_topology_hash: None,
             last_commit_topology_membership_hash: None,
             last_committed_height: block_count.0 as u64,
