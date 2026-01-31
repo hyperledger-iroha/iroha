@@ -2178,6 +2178,27 @@ impl Actor {
         None
     }
 
+    /// Roster selection for locally emitted votes (NEW_VIEW / precommit) at the active height.
+    pub(super) fn roster_for_live_vote_with_mode(
+        &self,
+        height: u64,
+        consensus_mode: ConsensusMode,
+    ) -> Vec<PeerId> {
+        let committed_height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
+        if height > committed_height.saturating_add(1) {
+            return Vec::new();
+        }
+        let view = self.state.view();
+        let roster = super::roster::derive_active_topology_for_mode(
+            &view,
+            self.common_config.trusted_peers.value(),
+            self.common_config.peer.id(),
+            consensus_mode,
+        );
+        drop(view);
+        roster
+    }
+
     // Prefer the cached roster once votes are validated to keep signatures stable across roster changes.
     pub(super) fn roster_for_vote_with_mode(
         &self,

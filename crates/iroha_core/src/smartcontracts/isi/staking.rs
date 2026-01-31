@@ -164,7 +164,8 @@ impl Execute for RegisterPublicLaneValidator {
             )
             .max(1);
         let current_epoch = current_epoch(block_height, epoch_length)?;
-        let pending_activation_epoch = current_epoch;
+        let activation_lag_epochs = state_transaction.nexus.staking.validator_activation_lag_epochs;
+        let pending_activation_epoch = current_epoch.saturating_add(activation_lag_epochs);
         let pending_status = PublicLaneValidatorStatus::PendingActivation(pending_activation_epoch);
         let record = PublicLaneValidatorRecord {
             lane_id: self.lane_id,
@@ -2485,12 +2486,27 @@ mod tests {
             .expect("pending record");
         assert!(matches!(
             pending.status,
-            PublicLaneValidatorStatus::PendingActivation(0)
+            PublicLaneValidatorStatus::PendingActivation(1)
         ));
         stx.apply();
         state_block.commit().unwrap();
 
         let mut activate_block = state.block(block_header_with_height(2));
+        let mut activate_stx = activate_block.transaction();
+        let err = ActivatePublicLaneValidator {
+            lane_id: LaneId::new(1),
+            validator: validator.clone(),
+        }
+        .execute(&ALICE_ID, &mut activate_stx)
+        .expect_err("activation should wait for the next epoch");
+        assert!(matches!(
+            err,
+            Error::InvariantViolation(msg) if msg.contains("activation epoch not reached")
+        ));
+        activate_stx.apply();
+        activate_block.commit().unwrap();
+
+        let mut activate_block = state.block(block_header_with_height(3));
         let mut activate_stx = activate_block.transaction();
         ActivatePublicLaneValidator {
             lane_id: LaneId::new(1),
@@ -2505,8 +2521,8 @@ mod tests {
             .cloned()
             .expect("record present");
         assert!(matches!(record.status, PublicLaneValidatorStatus::Active));
-        assert_eq!(record.activation_epoch, Some(0));
-        assert_eq!(record.activation_height, Some(2));
+        assert_eq!(record.activation_epoch, Some(1));
+        assert_eq!(record.activation_height, Some(3));
         activate_stx.apply();
         activate_block.commit().unwrap();
 
@@ -2516,8 +2532,8 @@ mod tests {
             .public_lane_validators()
             .get(&(LaneId::new(1), validator.clone()))
             .expect("stored record");
-        assert_eq!(stored.activation_epoch, Some(0));
-        assert_eq!(stored.activation_height, Some(2));
+        assert_eq!(stored.activation_epoch, Some(1));
+        assert_eq!(stored.activation_height, Some(3));
 
         let escrow_asset = AssetId::new(asset_def_id, escrow.clone());
         assert!(
@@ -2625,6 +2641,22 @@ mod tests {
         state_block2.commit().unwrap();
 
         let block3 = new_block_with_height(3);
+        let view = state.view();
+        let pending_record = view
+            .world
+            .public_lane_validators()
+            .get(&(LaneId::new(1), validator.clone()))
+            .cloned()
+            .expect("record present after scheduling");
+        assert!(
+            matches!(
+                pending_record.status,
+                PublicLaneValidatorStatus::PendingActivation(1)
+            ),
+            "validator should remain pending until the next epoch"
+        );
+        drop(view);
+
         let state_block3 = state.block(block3.as_ref().header());
         let record = state_block3
             .world
@@ -2634,10 +2666,10 @@ mod tests {
             .expect("record present after scheduling");
         assert!(
             matches!(record.status, PublicLaneValidatorStatus::Active),
-            "validator should auto-activate at epoch boundary"
+            "validator should auto-activate at the next epoch boundary"
         );
-        assert_eq!(record.activation_epoch, Some(0));
-        assert_eq!(record.activation_height, Some(2));
+        assert_eq!(record.activation_epoch, Some(1));
+        assert_eq!(record.activation_height, Some(3));
         state_block3.commit().unwrap();
 
         let view = state.view();
@@ -2650,8 +2682,8 @@ mod tests {
             matches!(stored.status, PublicLaneValidatorStatus::Active),
             "persistent record should remain active"
         );
-        assert_eq!(stored.activation_epoch, Some(0));
-        assert_eq!(stored.activation_height, Some(2));
+        assert_eq!(stored.activation_epoch, Some(1));
+        assert_eq!(stored.activation_height, Some(3));
 
         let escrow_asset = AssetId::new(asset_def_id, escrow);
         assert!(
