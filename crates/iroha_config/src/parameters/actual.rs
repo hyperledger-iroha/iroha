@@ -1912,8 +1912,6 @@ pub struct NexusStaking {
     pub withdraw_grace: Duration,
     /// Maximum slash ratio allowed (basis points, 10_000 = 100%).
     pub max_slash_bps: u16,
-    /// Number of epochs to wait before a newly registered validator becomes active.
-    pub validator_activation_lag_epochs: u64,
     /// Minimum reward amount (base units) paid out; smaller amounts are skipped as dust.
     pub reward_dust_threshold: u64,
     /// Asset definition used for staking bonds (string form).
@@ -1934,7 +1932,6 @@ impl Default for NexusStaking {
             unbonding_delay: defaults::nexus::staking::UNBONDING_DELAY,
             withdraw_grace: defaults::nexus::staking::WITHDRAW_GRACE,
             max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
-            validator_activation_lag_epochs: defaults::nexus::staking::VALIDATOR_ACTIVATION_LAG_EPOCHS,
             reward_dust_threshold: defaults::nexus::staking::REWARD_DUST_THRESHOLD,
             stake_asset_id: defaults::nexus::staking::stake_asset_id(),
             stake_escrow_account_id: defaults::nexus::staking::stake_escrow_account_id(),
