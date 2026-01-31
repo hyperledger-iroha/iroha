@@ -10227,6 +10227,41 @@ async fn commit_pipeline_runs_without_global_cooldown() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_reports_stage_timings() {
+    let mut harness = test_actor_harness(4).await;
+
+    let block = sample_block(1, 0, None);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let mut pending = PendingBlock::new(block, payload_hash, 1, 0);
+    pending.validation_status = ValidationStatus::Valid;
+    pending.parent_state_root = Some(zero_state_root());
+    pending.post_state_root = Some(zero_state_root());
+    harness
+        .actor
+        .pending
+        .pending_blocks
+        .insert(block_hash, pending);
+
+    let timings = harness
+        .actor
+        .process_commit_candidates_with_trigger(CommitPipelineTrigger::Event, None);
+
+    assert!(timings.ran, "commit pipeline timings should record a run");
+    assert_eq!(
+        timings.blocks_considered, 1,
+        "expected commit pipeline to consider the pending block"
+    );
+    assert_eq!(
+        timings.blocks_processed, 1,
+        "expected commit pipeline to process the pending block"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_pipeline_qc_rebuild_cooldown_uses_chain_block_time() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -27316,6 +27351,174 @@ fn validate_commit_qc_roster_accepts_genesis_stub_when_allowed() {
 }
 
 #[test]
+fn validate_commit_qc_roster_cached_memoizes() {
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer = PeerId::new(kp.public_key().clone());
+    let chain: ChainId = "commit-cert-cache".parse().expect("chain id parses");
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA9; Hash::LENGTH]));
+    let topology = super::network_topology::Topology::new(vec![peer.clone()]);
+    let keypairs = vec![kp.clone()];
+    let signers_bitmap = vec![0b0000_0001];
+    let bls_aggregate_signature = aggregate_signature_for_bitmap(
+        &chain,
+        PERMISSIONED_TAG,
+        Phase::Commit,
+        block_hash,
+        1,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
+    let cert = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: 1,
+        view: 0,
+        epoch: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&vec![peer.clone()]),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: vec![peer.clone()],
+        aggregate: QcAggregate {
+            signers_bitmap,
+            bls_aggregate_signature,
+        },
+    };
+    let world = world_with_consensus_keys(topology.as_ref(), &keypairs);
+    let world_view = world.view();
+    let roster_cache =
+        super::RosterValidationCache::from_world(&world_view, super::EPOCH_LENGTH_BLOCKS, None);
+    let inputs =
+        roster_cache.inputs_for_roster(&cert.validator_set, ConsensusMode::Permissioned, None);
+
+    let roster = super::validate_commit_qc_roster_cached(
+        &roster_cache,
+        &cert,
+        block_hash,
+        cert.height,
+        Some(cert.view),
+        ConsensusMode::Permissioned,
+        cert.epoch,
+        &chain,
+        PERMISSIONED_TAG,
+        false,
+        &inputs,
+    )
+    .expect("valid cert roster");
+    assert_eq!(roster, vec![peer.clone()]);
+    let (commit_len, checkpoint_len) = roster_cache.memo_sizes();
+    assert_eq!(commit_len, 1);
+    assert_eq!(checkpoint_len, 0);
+
+    let roster = super::validate_commit_qc_roster_cached(
+        &roster_cache,
+        &cert,
+        block_hash,
+        cert.height,
+        Some(cert.view),
+        ConsensusMode::Permissioned,
+        cert.epoch,
+        &chain,
+        PERMISSIONED_TAG,
+        false,
+        &inputs,
+    )
+    .expect("valid cert roster (cached)");
+    assert_eq!(roster, vec![peer]);
+    let (commit_len, _) = roster_cache.memo_sizes();
+    assert_eq!(commit_len, 1);
+}
+
+#[test]
+fn validate_checkpoint_roster_cached_memoizes() {
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer = PeerId::new(kp.public_key().clone());
+    let chain: ChainId = "checkpoint-cache".parse().expect("chain id parses");
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x8B; Hash::LENGTH]));
+    let topology = super::network_topology::Topology::new(vec![peer.clone()]);
+    let keypairs = vec![kp.clone()];
+    let signers_bitmap = vec![0b0000_0001];
+    let checkpoint_signature = aggregate_vote_signature_for_bitmap(
+        &chain,
+        PERMISSIONED_TAG,
+        block_hash,
+        1,
+        0,
+        0,
+        &signers_bitmap,
+        &topology,
+        &keypairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        1,
+        0,
+        block_hash,
+        zero_state_root(),
+        zero_state_root(),
+        vec![peer.clone()],
+        signers_bitmap,
+        checkpoint_signature,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    let world = world_with_consensus_keys(topology.as_ref(), &keypairs);
+    let world_view = world.view();
+    let roster_cache =
+        super::RosterValidationCache::from_world(&world_view, super::EPOCH_LENGTH_BLOCKS, None);
+    let inputs = roster_cache.inputs_for_roster(
+        &checkpoint.validator_set,
+        ConsensusMode::Permissioned,
+        None,
+    );
+
+    let roster = super::validate_checkpoint_roster_cached(
+        &roster_cache,
+        &checkpoint,
+        block_hash,
+        checkpoint.height,
+        Some(checkpoint.view),
+        ConsensusMode::Permissioned,
+        &chain,
+        PERMISSIONED_TAG,
+        0,
+        Some((zero_state_root(), zero_state_root())),
+        false,
+        &inputs,
+    )
+    .expect("valid checkpoint roster");
+    assert_eq!(roster, vec![peer.clone()]);
+    let (commit_len, checkpoint_len) = roster_cache.memo_sizes();
+    assert_eq!(commit_len, 0);
+    assert_eq!(checkpoint_len, 1);
+
+    let roster = super::validate_checkpoint_roster_cached(
+        &roster_cache,
+        &checkpoint,
+        block_hash,
+        checkpoint.height,
+        Some(checkpoint.view),
+        ConsensusMode::Permissioned,
+        &chain,
+        PERMISSIONED_TAG,
+        0,
+        Some((zero_state_root(), zero_state_root())),
+        false,
+        &inputs,
+    )
+    .expect("valid checkpoint roster (cached)");
+    assert_eq!(roster, vec![peer]);
+    let (_, checkpoint_len) = roster_cache.memo_sizes();
+    assert_eq!(checkpoint_len, 1);
+}
+
+#[test]
 fn validate_commit_qc_roster_rejects_hash_version_mismatch() {
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
     let peer = PeerId::new(kp.public_key().clone());
@@ -41110,8 +41313,8 @@ async fn pacemaker_ignores_commit_qc_roster_for_leader_selection() {
     let committed_height = actor.state.view().height() as u64;
     let tracked_height = committed_height.saturating_add(1);
     let highest_qc = actor.latest_committed_qc().expect("committed qc");
-    let required = super::network_topology::Topology::new(active_roster.clone())
-        .min_votes_for_commit();
+    let required =
+        super::network_topology::Topology::new(active_roster.clone()).min_votes_for_commit();
     let mut recorded = 0usize;
     for peer in active_roster.iter() {
         if peer == &local {

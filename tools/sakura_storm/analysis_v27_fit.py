@@ -14,6 +14,7 @@ REF_GIF = os.getenv(
     ),
 )
 FONT_PATH = os.getenv("SS_FONT_PATH", "/System/Library/Fonts/Hiragino Sans GB.ttc")
+FONT_INDEX = int(os.getenv("SS_FONT_INDEX", "2"))
 GRID_N_HINT = int(os.getenv("SS_GRID_N_HINT", "32"))
 CELL_HINT = int(os.getenv("SS_CELL_SIZE_HINT", "16"))
 OFFSET_HINT = int(os.getenv("SS_GRID_OFFSET_HINT", "0"))
@@ -155,7 +156,7 @@ def eval_grid(mask_any: np.ndarray, cell: int, grid_n: int, offset: int) -> Tupl
 
 
 def glyph_stats(cell: int, thresh: int = 64) -> Tuple[float, float]:
-    font = ImageFont.truetype(FONT_PATH, max(8, cell))
+    font = ImageFont.truetype(FONT_PATH, max(8, cell), index=FONT_INDEX)
     katakana = list("アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン")
     counts = []
     for g in katakana:

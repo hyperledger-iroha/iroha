@@ -6182,7 +6182,7 @@ pub(crate) mod valid {
                         sidecar.proofs = proofs;
                     }
                 }
-                state_block.kura().write_pipeline_metadata(&sidecar);
+                state_block.kura().enqueue_pipeline_metadata(sidecar);
             }
 
             // DSF prepass: union adjacent conflicting read/write relations to find independent components

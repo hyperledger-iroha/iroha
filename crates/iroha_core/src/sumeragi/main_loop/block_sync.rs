@@ -603,7 +603,8 @@ impl Actor {
                         stake_snapshot.as_ref(),
                     );
                     let allow_genesis_stub = block_height == 1 && block_view == 0;
-                    if let Err(err) = validate_commit_qc_roster(
+                    if let Err(err) = super::validate_commit_qc_roster_cached(
+                        &self.roster_validation_cache,
                         &commit_qc,
                         block_hash,
                         block_height,
@@ -1533,7 +1534,8 @@ impl Actor {
                     consensus_mode,
                     stake_snapshot.as_ref(),
                 );
-                super::validate_commit_qc_roster(
+                super::validate_commit_qc_roster_cached(
+                    &self.roster_validation_cache,
                     cert,
                     block_hash,
                     block_height,

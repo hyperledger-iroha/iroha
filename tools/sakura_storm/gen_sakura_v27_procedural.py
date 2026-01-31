@@ -28,16 +28,19 @@ GRID_OFFSET = int(os.getenv("SS_GRID_OFFSET", "0"))
 DATA_RADIUS = float(os.getenv("SS_DATA_RADIUS", "247.0"))
 OUTER_RADIUS = float(os.getenv("SS_OUTER_RADIUS", "245.0"))
 DATA_DENSITY = float(os.getenv("SS_DATA_DENSITY", "1.0"))
-ACTIVE_BANDS = os.getenv("SS_ACTIVE_BANDS", "20-169,184-196,208-220,232-244").strip()
+ACTIVE_BANDS = os.getenv("SS_ACTIVE_BANDS", "").strip()
 MASK_LOGO = os.getenv("SS_MASK_LOGO", "1").strip() == "1"
 LOGO_MASK_THRESH = int(os.getenv("SS_LOGO_MASK_THRESH", "10"))
+DYNAMIC_RADIUS = float(os.getenv("SS_DYNAMIC_RADIUS", "0.0"))
+DYNAMIC_POOL = os.getenv("SS_DYNAMIC_POOL", "low").strip().lower()
+STATIC_POOL = os.getenv("SS_STATIC_POOL", "low").strip().lower()
+STATIC_GLYPH_SEED = int(os.getenv("SS_STATIC_GLYPH_SEED", "9001"))
+BITS_PER_SYMBOL = int(os.getenv("SS_BITS_PER_SYMBOL", "1"))
 
 # Palette (v27)
 BG = (11, 7, 12)
 DATA_BRIGHT = (255, 233, 246)
-DATA_BRIGHT2 = (255, 234, 246)
 DATA_DIM = (69, 40, 54)
-DATA_DIM2 = (68, 40, 54)
 RING_BRIGHT = (255, 246, 252)
 RING_DIM = (62, 36, 50)
 LOGO_SHADES = [(30, 16, 25), (36, 18, 28), (43, 20, 32)]
@@ -49,10 +52,8 @@ PALETTE = np.array(
         LOGO_SHADES[1],
         LOGO_SHADES[2],
         RING_DIM,
-        DATA_DIM2,
         DATA_DIM,
         DATA_BRIGHT,
-        DATA_BRIGHT2,
         RING_BRIGHT,
     ],
     dtype=np.uint8,
@@ -61,9 +62,10 @@ PALETTE = np.array(
 # Glyphs
 KATAKANA = list("アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン")
 FONT_PATH = os.getenv("SS_FONT_PATH", "/System/Library/Fonts/Hiragino Sans GB.ttc")
+FONT_INDEX = int(os.getenv("SS_FONT_INDEX", "0"))
 GLYPH_SIZE = int(os.getenv("SS_GLYPH_SIZE", "15"))
 GLYPH_THRESH = int(os.getenv("SS_GLYPH_THRESH", "96"))
-GLYPH_POOL_MODE = os.getenv("SS_GLYPH_POOL_MODE", "single_low_extreme").strip().lower()
+GLYPH_POOL_MODE = os.getenv("SS_GLYPH_POOL_MODE", "auto").strip().lower()
 GLYPH_SEED = int(os.getenv("SS_GLYPH_SEED", "1337"))
 
 # Rings
@@ -80,10 +82,6 @@ LOGO_PATH = os.getenv(
 LOGO_SCALE = float(os.getenv("SS_LOGO_SCALE", "0.318"))
 LOGO_ALPHA = int(os.getenv("SS_LOGO_ALPHA", "255"))
 
-# Color variant selection (to match dual bright/dim palette usage)
-USE_COLOR_VARIANTS = os.getenv("SS_COLOR_VARIANTS", "1").strip() == "1"
-BRIGHT_ALT_P = float(os.getenv("SS_BRIGHT_ALT_P", "0.135"))
-DIM_ALT_P = float(os.getenv("SS_DIM_ALT_P", "0.58"))
 
 # Coding
 SYMBOL_PERIOD = int(os.getenv("SS_SYMBOL_PERIOD", "1"))
@@ -148,7 +146,7 @@ def ra_encode(message: np.ndarray, rows: List[List[int]]) -> np.ndarray:
     return np.concatenate([message, parity])
 
 
-def render_glyph_mask(font: ImageFont.FreeTypeFont, glyph: str) -> np.ndarray:
+def render_glyph_alpha(font: ImageFont.FreeTypeFont, glyph: str) -> np.ndarray:
     img = Image.new("L", (CELL_SIZE, CELL_SIZE), 0)
     draw = ImageDraw.Draw(img)
     bbox = draw.textbbox((0, 0), glyph, font=font)
@@ -157,27 +155,36 @@ def render_glyph_mask(font: ImageFont.FreeTypeFont, glyph: str) -> np.ndarray:
     tx = CELL_SIZE / 2 - gw / 2
     ty = CELL_SIZE / 2 - gh / 2
     draw.text((tx, ty), glyph, font=font, fill=255)
-    arr = np.array(img)
-    return arr > GLYPH_THRESH
+    return np.array(img)
 
 
-def build_glyph_pools(font: ImageFont.FreeTypeFont) -> Tuple[List[str], List[str]]:
+def build_glyph_pools(font: ImageFont.FreeTypeFont) -> Tuple[List[str], List[str], List[str], List[str]]:
     densities = []
     for g in KATAKANA:
-        m = render_glyph_mask(font, g)
+        alpha = render_glyph_alpha(font, g)
+        m = alpha > GLYPH_THRESH
         densities.append((g, float(np.mean(m))))
     densities.sort(key=lambda x: x[1])
     low = [g for g, _ in densities[: max(4, len(densities) // 3)]]
     low_extreme = [g for g, _ in densities[:4]]
     high = [g for g, _ in densities[-max(4, len(densities) // 3) :]]
+    mid_start = len(densities) // 3
+    mid_end = len(densities) - mid_start
+    mid = [g for g, _ in densities[mid_start:mid_end]]
+    if GLYPH_POOL_MODE in ("auto", ""):
+        return low, high, mid, KATAKANA[:]
     if GLYPH_POOL_MODE in ("all", "single_all"):
-        return KATAKANA[:], KATAKANA[:]
+        return KATAKANA[:], KATAKANA[:], KATAKANA[:], KATAKANA[:]
     if GLYPH_POOL_MODE in ("single_low", "low"):
-        return low, low
+        return low, low, low, low
     if GLYPH_POOL_MODE in ("single_low_extreme", "low_extreme"):
-        return low_extreme, low_extreme
+        return low_extreme, low_extreme, low_extreme, low_extreme
     if GLYPH_POOL_MODE in ("lowhigh", "low_high"):
-        return low, high
+        return low, high, mid, KATAKANA[:]
+    if GLYPH_POOL_MODE in ("mid", "single_mid"):
+        return mid, mid, mid, mid
+    if GLYPH_POOL_MODE in ("high", "single_high"):
+        return high, high, high, high
     raise ValueError(f"unknown GLYPH_POOL_MODE {GLYPH_POOL_MODE!r}")
 
 
@@ -252,11 +259,7 @@ def quantize_to_palette(arr: np.ndarray) -> np.ndarray:
 
 def choose_data_color(bit: int, rng: random.Random) -> Tuple[int, int, int]:
     if bit == 1:
-        if USE_COLOR_VARIANTS and rng.random() < BRIGHT_ALT_P:
-            return DATA_BRIGHT2
         return DATA_BRIGHT
-    if USE_COLOR_VARIANTS and rng.random() < DIM_ALT_P:
-        return DATA_DIM2
     return DATA_DIM
 
 
@@ -264,7 +267,7 @@ def main() -> None:
     cells = build_cells()
     bands = parse_bands(ACTIVE_BANDS)
     logo_mask = build_logo_mask()
-    active_cells = []
+    active_cells: List[Tuple[int, int, float]] = []
     for x0, y0, rr in cells:
         if rr > DATA_RADIUS:
             continue
@@ -276,9 +279,21 @@ def main() -> None:
             if logo_mask[y0 : y0 + CELL_SIZE, x0 : x0 + CELL_SIZE].any():
                 continue
         active_cells.append((x0, y0, rr))
+
+    dynamic_cells: List[Tuple[int, int, float]] = []
+    static_cells: List[Tuple[int, int, float]] = []
+    if DYNAMIC_RADIUS <= 0:
+        dynamic_cells = list(active_cells)
+        static_cells = []
+    else:
+        for cell in active_cells:
+            if cell[2] <= DYNAMIC_RADIUS:
+                dynamic_cells.append(cell)
+            else:
+                static_cells.append(cell)
     symbols_per_step = len(active_cells)
     steps = FRAMES // max(1, SYMBOL_PERIOD)
-    total_symbols = steps * symbols_per_step
+    total_symbols = steps * symbols_per_step * max(1, BITS_PER_SYMBOL)
     k_source = max(8, int(total_symbols * LDPC_RATE))
     if k_source >= total_symbols:
         k_source = max(8, total_symbols - 1)
@@ -287,9 +302,12 @@ def main() -> None:
     ra_rows = build_ra_code(k_source, total_symbols, row_w=LDPC_ROW_W, seed=2027)
     codeword_bits = ra_encode(source_bits, ra_rows)
 
-    font = ImageFont.truetype(FONT_PATH, max(8, GLYPH_SIZE))
-    low_pool, high_pool = build_glyph_pools(font)
-    glyph_masks = {g: render_glyph_mask(font, g) for g in set(low_pool + high_pool)}
+    font = ImageFont.truetype(FONT_PATH, max(8, GLYPH_SIZE), index=FONT_INDEX)
+    low_pool, high_pool, mid_pool, all_pool = build_glyph_pools(font)
+    glyph_masks = {}
+    for g in set(low_pool + high_pool + mid_pool + all_pool):
+        alpha = render_glyph_alpha(font, g)
+        glyph_masks[g] = alpha > GLYPH_THRESH
 
     logo_layer = build_logo_layer()
     ring_layer = build_ring_layer()
@@ -300,8 +318,31 @@ def main() -> None:
     else:
         outer_mask = None
 
+    def select_pool(name: str) -> List[str]:
+        if name in ("low", "single_low"):
+            return low_pool
+        if name in ("low_extreme", "single_low_extreme"):
+            return low_pool[:4] if len(low_pool) >= 4 else low_pool
+        if name in ("high", "single_high"):
+            return high_pool
+        if name in ("mid", "single_mid"):
+            return mid_pool
+        if name in ("all", "single_all"):
+            return all_pool
+        raise ValueError(f"unknown pool {name!r}")
+
+    dynamic_pool = select_pool(DYNAMIC_POOL)
+    static_pool = select_pool(STATIC_POOL)
+
     rng = random.Random(GLYPH_SEED)
     color_rng = random.Random(GLYPH_SEED + 101)
+
+    static_glyphs: dict[Tuple[int, int], np.ndarray] = {}
+    if static_cells:
+        for idx, (x0, y0, _) in enumerate(static_cells):
+            grng = random.Random(STATIC_GLYPH_SEED + idx * 1315423911)
+            glyph = static_pool[grng.randrange(len(static_pool))]
+            static_glyphs[(x0, y0)] = glyph_masks[glyph]
     frames: List[Image.Image] = []
     for f in range(FRAMES):
         step = f // max(1, SYMBOL_PERIOD)
@@ -313,13 +354,20 @@ def main() -> None:
         for idx, (x0, y0, _) in enumerate(active_cells):
             if DATA_DENSITY < 0.999 and rng.random() > DATA_DENSITY:
                 continue
-            bit = int(codeword_bits[step * symbols_per_step + idx])
-            pool = high_pool if bit == 1 else low_pool
-            glyph = pool[rng.randrange(len(pool))]
-            mask = glyph_masks[glyph]
-            color = choose_data_color(bit, color_rng)
+            bit_index = (step * symbols_per_step + idx) * max(1, BITS_PER_SYMBOL)
+            b0 = int(codeword_bits[bit_index])
+            static_mask = static_glyphs.get((x0, y0))
             region = draw_arr[y0 : y0 + CELL_SIZE, x0 : x0 + CELL_SIZE]
-            region[mask] = color + (255,)
+            if static_mask is not None:
+                # Static glyphs: uniform color (bright/dim) over fixed mask
+                color = choose_data_color(b0, color_rng)
+                region[static_mask] = color + (255,)
+            else:
+                # Dynamic glyphs: split bright/dim within glyph using alpha thresholds
+                glyph = dynamic_pool[rng.randrange(len(dynamic_pool))]
+                mask = glyph_masks[glyph]
+                color = choose_data_color(b0, color_rng)
+                region[mask] = color + (255,)
         frame = Image.fromarray(draw_arr, mode="RGBA")
         frame = Image.alpha_composite(frame, ring_layer)
         frame = Image.alpha_composite(frame, logo_layer)

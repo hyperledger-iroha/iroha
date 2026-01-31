@@ -55,7 +55,7 @@ para a conta de origem quando o timer expira.
 `PublicLaneValidatorStatus` enumera fases do ciclo de vida:
 
 - `PendingActivation(epoch)` - aguardando a epoca de ativacao especificada pela governanca; o payload de tupla
-  guarda a epoca de ativacao mais cedo calculada como `current_epoch + 1`
+  guarda a epoca de ativacao mais cedo calculada como `current_epoch + 1` (genesis bootstrap uses `current_epoch`)
   (as epocas derivam de `epoch_length_blocks`).
 - `Active` - participa do consenso e pode receber recompensas.
 - `Jailed { reason }` - suspenso temporariamente (downtime, breach de telemetria, etc.).
@@ -161,7 +161,7 @@ Regras de validacao:
 - Metadata DEVE incluir hooks de contato/telemetria antes da ativacao.
 - A governanca aprova/nega a entrada; ate la o status e `PendingActivation` e o runtime
   promove o validador para `Active` no proximo limite de epoca assim que a epoca alvo
-  (`current_epoch + 1` no registro) for alcancada.
+  (`current_epoch + 1` (genesis bootstrap uses `current_epoch`) no registro) for alcancada.
 
 ### 2.2 `BondPublicLaneStake`
 
@@ -215,7 +215,7 @@ Este ISI e idempotente por `(lane_id, epoch)` e fundamenta a contabilidade notur
   `use_stake_snapshot_roster` decidem se o runtime deriva o roster a partir de snapshots de stake
   ou recorre a peers genesis.
 - **Operacoes de ativacao/saida:** registros entram em `PendingActivation` com alvo
-  `current_epoch + 1` e sao auto-promovidos no primeiro bloco cuja epoca atinge o limite programado
+  `current_epoch + 1` (genesis bootstrap uses `current_epoch`) e sao auto-promovidos no primeiro bloco cuja epoca atinge o limite programado
   (`epoch_length_blocks`). Operadores tambem
   podem chamar `ActivatePublicLaneValidator` apos o limite para forcar a promocao. Saidas movem
   validadores para `Exiting(release_at_ms)` e liberam capacidade apenas quando o timestamp do bloco
