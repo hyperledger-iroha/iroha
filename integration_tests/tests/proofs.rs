@@ -139,15 +139,12 @@ async fn submit_proof_and_query_record() -> Result<()> {
     let backend = "debug/ok";
     let proof_bytes = b"integration_proof_bytes".to_vec();
     let proof = iroha_data_model::proof::ProofBox::new(backend.into(), proof_bytes.clone());
-    let attachment = iroha_data_model::proof::ProofAttachment {
-        backend: backend.into(),
-        proof: proof.clone(),
-        vk_ref: None,
-        vk_inline: None,
-        vk_commitment: None,
-        envelope_hash: None,
-        lane_privacy: None,
-    };
+    let vk = iroha_data_model::proof::VerifyingKeyBox::new(backend.into(), vec![0x01]);
+    let attachment = iroha_data_model::proof::ProofAttachment::new_inline(
+        backend.into(),
+        proof.clone(),
+        vk,
+    );
     let isi = iroha_data_model::isi::zk::VerifyProof::new(attachment);
 
     // Submit as a transaction with a single instruction
@@ -166,10 +163,14 @@ async fn submit_proof_and_query_record() -> Result<()> {
     let pid_str = format!("{pid}");
 
     // Query Torii
-    let url = client
-        .torii_url
-        .join(&format!("/v1/proofs/{pid_str}"))
-        .unwrap();
+    let mut url = client.torii_url.clone();
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .expect("torii_url must be a base URL");
+        segments.clear();
+        segments.extend(&["v1", "proofs", &pid_str]);
+    }
     let snapshot = fetch_proof_snapshot(url).await;
     let Some((backend_got, proof_hash_got, status_got)) =
         sandbox::handle_result(snapshot, "submit_proof_and_query_record::fetch_record")?

@@ -512,7 +512,7 @@ impl Program {
                 name: "iroha3d",
                 env: PROGRAM_IROHAD_ENV,
                 pkg: "irohad",
-                build_args: ["--bin", "iroha3d", "--features", "expensive-telemetry"]
+                build_args: ["--bin", "iroha3d"]
                     .into_iter()
                     .map(OsString::from)
                     .collect(),
@@ -534,6 +534,7 @@ static IROHA_BIN: OnceLock<PathBuf> = OnceLock::new();
 const BUILD_CACHE_DIR: &str = ".iroha_test_network";
 const BUILD_STAMP_VERSION: u32 = 3;
 const IROHA_TEST_TARGET_DIR_ENV: &str = "IROHA_TEST_TARGET_DIR";
+const IROHA_TEST_BUILD_PROFILE_ENV: &str = "IROHA_TEST_BUILD_PROFILE";
 const IROHA_TEST_TARGET_SUBDIR: &str = "iroha-test-network";
 
 #[derive(Debug, Clone)]
@@ -564,13 +565,10 @@ fn resolve_target_dir(repo: &Path) -> PathBuf {
 }
 
 fn default_build_profile() -> String {
-    std::env::var("PROFILE").unwrap_or_else(|_| {
-        if cfg!(debug_assertions) {
-            "debug".to_string()
-        } else {
-            "release".to_string()
-        }
-    })
+    if let Ok(profile) = std::env::var(IROHA_TEST_BUILD_PROFILE_ENV) {
+        return profile;
+    }
+    std::env::var("PROFILE").unwrap_or_else(|_| "release".to_string())
 }
 
 fn build_cache_dir(target_dir: &Path) -> PathBuf {
@@ -7674,16 +7672,16 @@ mod tests {
     #[test]
     fn default_build_profile_respects_env_override() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-        let _clear = EnvVarGuard::cleared("PROFILE");
+        let _clear_profile = EnvVarGuard::cleared("PROFILE");
+        let _clear_override = EnvVarGuard::cleared(IROHA_TEST_BUILD_PROFILE_ENV);
         let default_profile = default_build_profile();
-        if cfg!(debug_assertions) {
-            assert_eq!(default_profile, "debug");
-        } else {
-            assert_eq!(default_profile, "release");
-        }
+        assert_eq!(default_profile, "release");
 
         let _override_guard = EnvVarRestore::set("PROFILE", "release");
         assert_eq!(default_build_profile(), "release");
+
+        let _override_guard = EnvVarRestore::set(IROHA_TEST_BUILD_PROFILE_ENV, "debug");
+        assert_eq!(default_build_profile(), "debug");
     }
 
     #[cfg(unix)]
@@ -9328,7 +9326,7 @@ exit 0
     }
 
     #[test]
-    fn program_spec_irohad_enables_expensive_telemetry() {
+    fn program_spec_irohad_uses_default_features() {
         let spec = Program::Irohad.spec();
         let args: Vec<String> = spec
             .build_args
@@ -9337,8 +9335,7 @@ exit 0
             .collect();
         assert!(args.contains(&"--bin".to_string()));
         assert!(args.contains(&"iroha3d".to_string()));
-        assert!(args.contains(&"--features".to_string()));
-        assert!(args.contains(&"expensive-telemetry".to_string()));
+        assert!(!args.contains(&"--features".to_string()));
     }
 
     #[test]

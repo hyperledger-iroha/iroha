@@ -19913,6 +19913,14 @@ impl StateTransaction<'_, '_> {
         &mut self,
         authority: &AccountId,
     ) -> TransactionResultInner {
+        if self.world.triggers.data_triggers().is_empty() {
+            // No data triggers registered; drop buffered events to keep memory bounded.
+            self.world.internal_event_buf.clear();
+            return Ok(Vec::new());
+        }
+        if self.world.internal_event_buf.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut stack: Vec<(EventBox, TriggerId, u8)> = self
             .capture_data_events()
             .into_iter()
@@ -31254,6 +31262,48 @@ mod tests {
             })
             .unwrap();
         assert!(flag_val.is_none(), "disabled trigger must not mutate state");
+    }
+
+    #[test]
+    fn execute_data_triggers_dfs_clears_events_without_triggers() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+        Register::domain(Domain::new("wonderland".parse().unwrap()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        let flag_key: Name = "flag".parse().expect("valid name");
+        SetKeyValue::account(ALICE_ID.clone(), flag_key, Json::from(norito::json!(true)))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        assert!(
+            !stx.world.internal_event_buf.is_empty(),
+            "expected data events from metadata update"
+        );
+        assert!(
+            stx.world.triggers.data_triggers().is_empty(),
+            "test should run without data triggers"
+        );
+
+        let steps = stx
+            .execute_data_triggers_dfs(&ALICE_ID)
+            .expect("no triggers should yield ok result");
+        assert!(steps.is_empty(), "no data triggers should execute");
+        assert!(
+            stx.world.internal_event_buf.is_empty(),
+            "buffered events should be cleared when no triggers are registered"
+        );
+
+        stx.apply();
+        state_block.commit().unwrap();
     }
 
     #[test]
