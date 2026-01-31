@@ -52,10 +52,48 @@ pub(super) struct CommitStageTimings {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+pub(super) struct CommitDrainSummary {
+    pub(super) progress: bool,
+    pub(super) results: u64,
+    pub(super) qc_verify_ms: u64,
+    pub(super) persist_ms: u64,
+    pub(super) kura_store_ms: u64,
+    pub(super) state_apply_ms: u64,
+    pub(super) state_commit_ms: u64,
+}
+
+impl CommitDrainSummary {
+    fn record(&mut self, timings: CommitStageTimings) {
+        self.results = self.results.saturating_add(1);
+        if let Some(value) = timings.qc_verify_ms {
+            self.qc_verify_ms = self.qc_verify_ms.saturating_add(value);
+        }
+        if let Some(value) = timings.persist_ms {
+            self.persist_ms = self.persist_ms.saturating_add(value);
+        }
+        if let Some(value) = timings.kura_store_ms {
+            self.kura_store_ms = self.kura_store_ms.saturating_add(value);
+        }
+        if let Some(value) = timings.state_apply_ms {
+            self.state_apply_ms = self.state_apply_ms.saturating_add(value);
+        }
+        if let Some(value) = timings.state_commit_ms {
+            self.state_commit_ms = self.state_commit_ms.saturating_add(value);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 pub(super) struct CommitPipelineTimings {
     pub(super) ran: bool,
     pub(super) total: Duration,
     pub(super) drain_results: Duration,
+    pub(super) drain_result_count: u64,
+    pub(super) drain_qc_verify_ms: u64,
+    pub(super) drain_persist_ms: u64,
+    pub(super) drain_kura_store_ms: u64,
+    pub(super) drain_state_apply_ms: u64,
+    pub(super) drain_state_commit_ms: u64,
     pub(super) abort_inflight: Duration,
     pub(super) event_reschedule: Duration,
     pub(super) qc_rebuild: Duration,
@@ -613,8 +651,8 @@ impl Actor {
         })
     }
 
-    fn drain_commit_results(&mut self) -> bool {
-        let mut progress = false;
+    fn drain_commit_results(&mut self) -> CommitDrainSummary {
+        let mut summary = CommitDrainSummary::default();
         while let Some(recv_result) = self
             .subsystems
             .commit
@@ -645,7 +683,8 @@ impl Actor {
                         }
                     };
                     let _ = self.apply_commit_outcome(inflight, result.outcome, result.timings);
-                    progress = true;
+                    summary.record(result.timings);
+                    summary.progress = true;
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -673,13 +712,14 @@ impl Actor {
                             work,
                         );
                         let _ = self.apply_commit_outcome(inflight, outcome, timings);
-                        progress = true;
+                        summary.record(timings);
+                        summary.progress = true;
                     }
                     break;
                 }
             }
         }
-        progress
+        summary
     }
 
     fn start_commit_job(&mut self, inflight: CommitInFlight, work: CommitWork) -> bool {
@@ -1368,6 +1408,8 @@ impl Actor {
                     } else if self.rbc_availability_unresolved_for_reschedule(
                         (block_hash, pending_height, pending_view),
                         &topology,
+                        pending_age,
+                        availability_timeout,
                     ) {
                         debug!(
                             height = pending_height,
@@ -2057,7 +2099,7 @@ impl Actor {
     }
 
     pub(in crate::sumeragi) fn poll_commit_results(&mut self) -> bool {
-        self.drain_commit_results()
+        self.drain_commit_results().progress
     }
 
     fn abort_inflight_commit_if_timed_out(&mut self, now: Instant) -> bool {
@@ -2218,8 +2260,14 @@ impl Actor {
             ..CommitPipelineTimings::default()
         };
         let drain_start = Instant::now();
-        let _ = self.drain_commit_results();
+        let drain_summary = self.drain_commit_results();
         timings.drain_results += drain_start.elapsed();
+        timings.drain_result_count = drain_summary.results;
+        timings.drain_qc_verify_ms = drain_summary.qc_verify_ms;
+        timings.drain_persist_ms = drain_summary.persist_ms;
+        timings.drain_kura_store_ms = drain_summary.kura_store_ms;
+        timings.drain_state_apply_ms = drain_summary.state_apply_ms;
+        timings.drain_state_commit_ms = drain_summary.state_commit_ms;
         let now = Instant::now();
         let abort_start = Instant::now();
         let _ = self.abort_inflight_commit_if_timed_out(now);
