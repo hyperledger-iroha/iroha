@@ -1775,6 +1775,7 @@ impl Actor {
         let tip_height = view_snapshot.height();
         let tip_hash = view_snapshot.latest_block_hash();
         let mut topology_peers = self.effective_commit_topology_from_view(&view_snapshot);
+        let active_topology_peers = topology_peers.clone();
         let pending_queue_len = self.queue.queued_len();
         let active_pending = self.active_pending_blocks_len_for_tip(tip_height, tip_hash);
         let view_height = tip_height;
@@ -1836,9 +1837,12 @@ impl Actor {
             );
         }
 
-        let online_peers = self.network.online_peers(|peers| peers.iter().count());
-        // `online_peers` counts only remote validators; include the local node if it is part of
-        // the commit topology so we do not stall when exactly `required` validators are up.
+        let online_peers = self
+            .network
+            .online_peers(|peers| super::count_online_validators(peers, topology.as_ref()));
+        // `online_peers` counts only remote peers in the current validator roster; include the
+        // local node if it is part of the commit topology so we do not stall when exactly
+        // `required` validators are up.
         let online_total = online_peers + usize::from(local_idx.is_some());
         let mut view_age = self.phase_tracker.view_age(tracked_height, now);
         if view_age.is_none() {
@@ -2402,9 +2406,15 @@ impl Actor {
             }
         }
 
-        let proposal_roster = self
-            .roster_from_commit_qc_history_roll_forward(height, Some(highest_qc.subject_block_hash))
-            .unwrap_or_else(|| self.effective_commit_topology());
+        let proposal_roster = if !active_topology_peers.is_empty() {
+            active_topology_peers
+        } else {
+            self.roster_from_commit_qc_history_roll_forward(
+                height,
+                Some(highest_qc.subject_block_hash),
+            )
+            .unwrap_or_else(|| self.effective_commit_topology())
+        };
         if proposal_roster.is_empty() {
             warn!(
                 height,

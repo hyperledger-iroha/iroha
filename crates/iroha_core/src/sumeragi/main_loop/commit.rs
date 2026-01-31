@@ -2572,6 +2572,7 @@ impl Actor {
                     pending_height,
                     pending_view,
                     vote_epoch,
+                    pending.validation_status,
                     &topology,
                     parent_hash,
                     pending_roots,
@@ -2876,6 +2877,7 @@ impl Actor {
         height: u64,
         view: u64,
         epoch: u64,
+        validation_status: ValidationStatus,
         topology: &super::network_topology::Topology,
         parent_hash: Option<HashOf<BlockHeader>>,
         pending_roots: Option<(Hash, Hash)>,
@@ -2906,6 +2908,16 @@ impl Actor {
                 signer = local_idx,
                 topology_len = signature_topology.as_ref().len(),
                 "skipping precommit: derived validator index outside view-aligned topology"
+            );
+            return false;
+        }
+        if validation_status != ValidationStatus::Valid {
+            warn!(
+                height,
+                view,
+                block = ?block_hash,
+                ?validation_status,
+                "skipping precommit: pending block not validated"
             );
             return false;
         }
