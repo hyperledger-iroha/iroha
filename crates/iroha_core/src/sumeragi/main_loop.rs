@@ -13240,12 +13240,7 @@ impl Actor {
             let expected_height = highest_qc.height.saturating_add(1);
             if valid_phase && height == expected_height {
                 let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-                let roster = self.roster_for_new_view_with_mode(
-                    highest_qc.subject_block_hash,
-                    height,
-                    next_view,
-                    consensus_mode,
-                );
+                let roster = self.roster_for_live_vote_with_mode(height, consensus_mode);
                 if roster.is_empty() {
                     debug!(
                         height,

@@ -1800,17 +1800,6 @@ impl Actor {
             .drop_below_height(tracked_height);
 
         if topology_peers.is_empty() {
-            if let Some(qc) = precommit_qc.as_ref().or(committed_qc.as_ref()) {
-                if let Some(roster) = self.roster_from_commit_qc_history_roll_forward(
-                    tracked_height,
-                    Some(qc.subject_block_hash),
-                ) {
-                    topology_peers = roster;
-                }
-            }
-        }
-
-        if topology_peers.is_empty() {
             if pending_queue_len > 0 {
                 iroha_logger::info!(
                     queue_len = pending_queue_len,
@@ -2406,15 +2395,7 @@ impl Actor {
             }
         }
 
-        let proposal_roster = if !active_topology_peers.is_empty() {
-            active_topology_peers
-        } else {
-            self.roster_from_commit_qc_history_roll_forward(
-                height,
-                Some(highest_qc.subject_block_hash),
-            )
-            .unwrap_or_else(|| self.effective_commit_topology())
-        };
+        let proposal_roster = active_topology_peers;
         if proposal_roster.is_empty() {
             warn!(
                 height,

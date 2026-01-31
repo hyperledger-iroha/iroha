@@ -10183,6 +10183,9 @@ pub struct NexusStaking {
     /// Maximum slash ratio allowed (basis points, 10_000 = 100%).
     #[config(default = "defaults::nexus::staking::MAX_SLASH_BPS")]
     pub max_slash_bps: u16,
+    /// Number of epochs to wait before a newly registered validator becomes active.
+    #[config(default = "defaults::nexus::staking::VALIDATOR_ACTIVATION_LAG_EPOCHS")]
+    pub validator_activation_lag_epochs: u64,
     /// Minimum reward amount (base units) paid out; smaller amounts are skipped as dust.
     #[config(default = "defaults::nexus::staking::REWARD_DUST_THRESHOLD")]
     pub reward_dust_threshold: u64,
@@ -10207,6 +10210,7 @@ impl Default for NexusStaking {
             unbonding_delay_ms: defaults::nexus::staking::UNBONDING_DELAY.into(),
             withdraw_grace_ms: defaults::nexus::staking::WITHDRAW_GRACE.into(),
             max_slash_bps: defaults::nexus::staking::MAX_SLASH_BPS,
+            validator_activation_lag_epochs: defaults::nexus::staking::VALIDATOR_ACTIVATION_LAG_EPOCHS,
             reward_dust_threshold: defaults::nexus::staking::REWARD_DUST_THRESHOLD,
             stake_asset_id: defaults::nexus::staking::stake_asset_id(),
             stake_escrow_account_id: defaults::nexus::staking::stake_escrow_account_id(),
@@ -10224,6 +10228,12 @@ impl NexusStaking {
             )));
             return None;
         }
+        if self.validator_activation_lag_epochs == 0 {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.staking.validator_activation_lag_epochs must be greater than zero",
+            ));
+            return None;
+        }
 
         Some(actual::NexusStaking {
             public_validator_mode: self.public_validator_mode.into(),
@@ -10233,6 +10243,7 @@ impl NexusStaking {
             unbonding_delay: self.unbonding_delay_ms.get(),
             withdraw_grace: self.withdraw_grace_ms.get(),
             max_slash_bps: self.max_slash_bps,
+            validator_activation_lag_epochs: self.validator_activation_lag_epochs,
             reward_dust_threshold: self.reward_dust_threshold,
             stake_asset_id: self.stake_asset_id,
             stake_escrow_account_id: self.stake_escrow_account_id,
