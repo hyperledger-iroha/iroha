@@ -58741,14 +58741,7 @@ async fn poll_committed_blocks_refreshes_p2p_topology_without_new_height() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
-    let initial_topology: BTreeSet<_> = actor
-        .state
-        .view()
-        .world
-        .peers()
-        .iter()
-        .cloned()
-        .collect();
+    let initial_topology: BTreeSet<_> = actor.state.view().world.peers().iter().cloned().collect();
     actor.last_advertised_topology = initial_topology.clone();
     actor.last_committed_height = actor.state.view().height() as u64;
 
