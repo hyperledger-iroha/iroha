@@ -146,9 +146,15 @@ def main() -> None:
     ring_mask = (frames == np.array(RING_BRIGHT, dtype=np.uint8)).all(axis=3) | (
         frames == np.array(RING_DIM, dtype=np.uint8)
     ).all(axis=3)
+    ring_idx = np.zeros((steps, H, W), dtype=np.uint8)
+    for f in range(steps):
+        frame = frames[f]
+        ring_idx[f][(frame == np.array(RING_BRIGHT, dtype=np.uint8)).all(axis=2)] = 1
+        ring_idx[f][(frame == np.array(RING_DIM, dtype=np.uint8)).all(axis=2)] = 2
     logo_mask = np.zeros(frames.shape[:3], dtype=bool)
     for col in LOGO_SHADES:
         logo_mask |= (frames == np.array(col, dtype=np.uint8)).all(axis=3)
+    logo_any = logo_mask.any(axis=0)
 
     # Build static layer: per-pixel mode, excluding any pixel that ever carries data colors.
     data_mask = (frames == bright).all(axis=3) | (frames == dim).all(axis=3)
@@ -163,7 +169,11 @@ def main() -> None:
             counts[i] += (idx == i)
     static_idx = counts.argmax(axis=0).astype(np.uint8)
     bg_idx = palette.index(BG)
-    static_idx[data_any] = bg_idx
+    logo_indices = [palette.index(LOGO_SHADES[0]), palette.index(LOGO_SHADES[1]), palette.index(LOGO_SHADES[2])]
+    logo_counts = counts[logo_indices]
+    logo_choice = np.array(logo_indices, dtype=np.uint8)[logo_counts.argmax(axis=0)]
+    static_idx[logo_any] = logo_choice[logo_any]
+    static_idx[data_any & (~logo_any)] = bg_idx
     static_layer = pal_arr[static_idx]
 
     for f in range(steps):
@@ -218,6 +228,7 @@ def main() -> None:
         glyphs=np.array(glyphs),
         static_layer=static_layer.astype(np.uint8),
         palette=pal_arr,
+        ring_idx=ring_idx,
         cell_size=np.array(CELL_SIZE, dtype=np.int32),
         grid_n=np.array(GRID_N, dtype=np.int32),
         data_radius=np.array(DATA_RADIUS, dtype=np.float32),

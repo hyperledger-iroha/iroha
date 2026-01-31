@@ -164,8 +164,8 @@ impl Execute for RegisterPublicLaneValidator {
             )
             .max(1);
         let current_epoch = current_epoch(block_height, epoch_length)?;
-        let pending_activation_epoch = if block_height <= 1 {
-            // Genesis bootstrap: allow validators to activate within the genesis block.
+        // Genesis must allow immediate activation so bootstrap validators can produce block 1.
+        let pending_activation_epoch = if state_transaction._curr_block.is_genesis() {
             current_epoch
         } else {
             current_epoch.saturating_add(1)
@@ -2547,26 +2547,26 @@ mod tests {
     }
 
     #[test]
-    fn genesis_allows_same_block_validator_activation() {
+    fn genesis_activation_allows_same_block() {
         let mut state = setup_state();
 
         let mut state_block = state.block(block_header_with_height(1));
         let mut stx = state_block.transaction();
 
-        let (validator, _, _escrow, _asset_def_id) = prepare_accounts(&mut stx);
+        let (validator, _delegator, _escrow, _asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
-            lane_id: LaneId::new(1),
+            lane_id: LaneId::SINGLE,
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
             metadata: Metadata::default(),
         }
         .execute(&ALICE_ID, &mut stx)
-        .expect("register validator");
+        .expect("register validator in genesis");
         let pending = stx
             .world
             .public_lane_validators
-            .get(&(LaneId::new(1), validator.clone()))
+            .get(&(LaneId::SINGLE, validator.clone()))
             .expect("pending record");
         assert!(matches!(
             pending.status,
@@ -2574,7 +2574,7 @@ mod tests {
         ));
 
         ActivatePublicLaneValidator {
-            lane_id: LaneId::new(1),
+            lane_id: LaneId::SINGLE,
             validator: validator.clone(),
         }
         .execute(&ALICE_ID, &mut stx)
@@ -2582,7 +2582,7 @@ mod tests {
         let record = stx
             .world
             .public_lane_validators
-            .get(&(LaneId::new(1), validator.clone()))
+            .get(&(LaneId::SINGLE, validator))
             .cloned()
             .expect("record present");
         assert!(matches!(record.status, PublicLaneValidatorStatus::Active));
