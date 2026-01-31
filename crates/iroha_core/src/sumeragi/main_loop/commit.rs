@@ -3092,7 +3092,33 @@ impl Actor {
             );
             return false;
         };
-        let required = topology.min_votes_for_commit();
+        if highest_qc.epoch > epoch {
+            warn!(
+                height,
+                view,
+                highest_epoch = highest_qc.epoch,
+                local_epoch = epoch,
+                "skipping NEW_VIEW vote: highest QC epoch exceeds local epoch"
+            );
+            return false;
+        }
+        if let Some(higher_view) = self.local_higher_view_new_view_vote(
+            height,
+            view,
+            consensus_mode,
+            mode_tag,
+            prf_seed,
+        ) {
+            info!(
+                height,
+                view,
+                higher_view,
+                signer = local_idx,
+                "skipping NEW_VIEW vote: local validator already voted in a higher view"
+            );
+            return false;
+        }
+        let required = topology.min_votes_for_view_change();
         if let Some(higher_view) = self
             .subsystems
             .propose
@@ -3204,6 +3230,45 @@ impl Actor {
             });
         }
         true
+    }
+
+    fn local_higher_view_new_view_vote(
+        &self,
+        height: u64,
+        view: u64,
+        consensus_mode: ConsensusMode,
+        mode_tag: &str,
+        prf_seed: Option<[u8; 32]>,
+    ) -> Option<u64> {
+        let local_peer = self.common_config.peer.id();
+        let mut highest: Option<u64> = None;
+        for vote in self.vote_log.values() {
+            if vote.phase != crate::sumeragi::consensus::Phase::NewView {
+                continue;
+            }
+            if vote.height != height || vote.view <= view {
+                continue;
+            }
+            let roster = self.roster_for_new_view_with_mode(
+                vote.block_hash,
+                vote.height,
+                vote.view,
+                consensus_mode,
+            );
+            if roster.is_empty() {
+                continue;
+            }
+            let topology = super::network_topology::Topology::new(roster);
+            let signature_topology =
+                topology_for_view(&topology, vote.height, vote.view, mode_tag, prf_seed);
+            let signer_peer = usize::try_from(vote.signer)
+                .ok()
+                .and_then(|idx| signature_topology.as_ref().get(idx));
+            if signer_peer == Some(local_peer) {
+                highest = Some(highest.map_or(vote.view, |current| current.max(vote.view)));
+            }
+        }
+        highest
     }
 
     pub(super) fn commit_vote_quorum_status_for_block_detail(

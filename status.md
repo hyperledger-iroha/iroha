@@ -1,6 +1,8 @@
 # Status
 
 Last update: 2026-01-31
+- Triggers: wait for burn-to-zero pruning in the by-call trigger repetition test before executing to avoid racey execution.
+- Tests: `cargo test -p integration_tests trigger_burn_repetitions -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`).
 - Sumeragi: guard NEW_VIEW vote emission when a higher-view quorum already exists at the same height; added unit coverage to ensure the first quorum still emits.
 - Tests: `cargo test -p iroha_core emit_new_view_vote_ -- --nocapture` (NEW_VIEW tests ok; command timed out after ~4m while running remaining test binaries; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused `should_send` in `iroha_core` tests).
 - Integration tests: align `sumeragi_rbc_background_queue_synchronous` with the no-drop background-post behavior when `sumeragi.debug.disable_background_worker` is enabled.
