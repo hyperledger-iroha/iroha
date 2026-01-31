@@ -34,7 +34,7 @@ use iroha_crypto::{
     Algorithm, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature, SignatureOf,
 };
 use iroha_data_model::{
-    ChainId, Encode as _, Registrable,
+    ChainId, Encode as _, Level, Registrable,
     asset::{AssetDefinitionId, AssetId},
     block::{
         BlockHeader, BlockSignature, SignedBlock,
@@ -47,7 +47,7 @@ use iroha_data_model::{
         types::{BlobDigest, StorageTicketId},
     },
     domain::DomainId,
-    isi::InstructionBox,
+    isi::{InstructionBox, Log},
     merge::MergeCommitteeSignature,
     nexus::{
         DataSpaceId, LaneId, LaneRelayEnvelope, LaneStorageProfile, LaneVisibility,
@@ -55,7 +55,10 @@ use iroha_data_model::{
     },
     parameter::TransactionParameters,
     peer::{Peer, PeerId},
-    prelude::{AccountId, Domain, Register, TransactionBuilder},
+    prelude::{
+        Account, AccountId, Action, Domain, ExecutionTime, Register, Repeats, TimeEventFilter,
+        TransactionBuilder, Trigger,
+    },
     sorafs::pin_registry::ManifestDigest,
     transaction::{
         SignedTransaction, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
@@ -89,6 +92,7 @@ use crate::{
     kura::Kura,
     query::store::LiveQueryStore,
     queue::{Queue, SingleLaneRouter},
+    smartcontracts::Execute,
     state::{State, StateReadOnly, World},
     sumeragi::consensus::{
         ExecWitness, PERMISSIONED_TAG, Phase, QcAggregate, QcHeaderRef, ValidatorIndex,
@@ -42976,6 +42980,177 @@ async fn block_created_drops_empty_payload() {
     assert_eq!(entry.total, 1);
 
     super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn qc_drop_empty_block_clears_votes_and_pending() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let height = 1_u64;
+    let view = 0_u64;
+    let block = empty_block(height, view, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    let epoch = actor.epoch_for_height(height);
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: None,
+        signer: ValidatorIndex::try_from(0).expect("signer index fits"),
+        bls_sig: Vec::new(),
+    };
+    let vote_key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+    actor.vote_log.insert(vote_key, vote);
+    let roster_hash = HashOf::new(&Vec::<PeerId>::new());
+    actor
+        .vote_validation_cache
+        .insert(vote_key, super::VoteValidationCacheEntry { roster_hash });
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        vec![0x01],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    let dropped = actor.should_drop_qc_on_empty_block(&qc, actor.block_known_locally(block_hash));
+    assert!(dropped, "empty block QC should be dropped");
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "pending empty block should be removed"
+    );
+    assert!(
+        !actor.vote_log.contains_key(&vote_key),
+        "votes for empty block should be cleared"
+    );
+    assert!(
+        !actor.vote_validation_cache.contains_key(&vote_key),
+        "vote validation cache should be cleared"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn qc_empty_block_with_time_trigger_is_not_dropped() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let header1 = BlockHeader::new(
+        NonZeroU64::new(1).expect("height non-zero"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut state_block1 = actor.state.block(header1);
+    {
+        let mut stx = state_block1.transaction();
+        let domain_id: DomainId = "wonderland".parse().expect("domain parses");
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
+            .expect("register domain");
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
+            .expect("register account");
+        let trigger = Trigger::new(
+            "precommit_probe".parse().expect("trigger name"),
+            Action::new(
+                vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "probe".to_owned(),
+                ))],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                TimeEventFilter::new(ExecutionTime::PreCommit),
+            ),
+        );
+        Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register trigger");
+        stx.apply();
+    }
+    state_block1.commit().expect("commit trigger block");
+
+    let height = 2_u64;
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let header = BlockHeader {
+        height: NonZeroU64::new(height).expect("height non-zero"),
+        prev_block_hash: parent,
+        merkle_root: None,
+        result_merkle_root: None,
+        da_proof_policies_hash: None,
+        da_commitments_hash: None,
+        da_pin_intents_hash: None,
+        creation_time_ms: 1,
+        view_change_index: view,
+        confidential_features: None,
+    };
+    let key_pair = KeyPair::random();
+    let (_, private_key) = key_pair.into_parts();
+    let signature = SignatureOf::from_hash(&private_key, header.hash());
+    let block_signature = BlockSignature::new(0, signature);
+    let block = SignedBlock::presigned(block_signature, header, Vec::<SignedTransaction>::new());
+
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block.clone(), payload_hash, height, view),
+    );
+
+    {
+        let view_state = actor.state.view();
+        assert!(
+            view_state.time_triggers_due_for_block(&block.header()),
+            "time trigger should be due for empty block"
+        );
+    }
+
+    let epoch = actor.epoch_for_height(height);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        vec![0x01],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    let dropped = actor.should_drop_qc_on_empty_block(&qc, actor.block_known_locally(block_hash));
+    assert!(
+        !dropped,
+        "empty block with time triggers should not be dropped"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "pending empty block with time triggers should remain"
+    );
+
     harness.shutdown.send();
 }
 

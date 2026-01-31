@@ -874,6 +874,40 @@ fn repetitions_from_repeats(repeats: Repeats) -> Option<u32> {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum MintPrecheck {
+    Proceed { on_chain: u32 },
+    SkipMissing,
+    SkipQueryFailed,
+}
+
+fn evaluate_mint_precheck<E>(result: Result<Option<u32>, E>) -> MintPrecheck {
+    match result {
+        Ok(Some(0)) | Ok(None) => MintPrecheck::SkipMissing,
+        Ok(Some(on_chain)) => MintPrecheck::Proceed { on_chain },
+        Err(_) => MintPrecheck::SkipQueryFailed,
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum BurnPrecheck {
+    Proceed { on_chain: u32 },
+    SkipMissing,
+    SkipInsufficient { on_chain: u32 },
+    SkipQueryFailed,
+}
+
+fn evaluate_burn_precheck<E>(result: Result<Option<u32>, E>, burn_amount: u32) -> BurnPrecheck {
+    match result {
+        Ok(None) => BurnPrecheck::SkipMissing,
+        Ok(Some(on_chain)) if on_chain <= burn_amount => {
+            BurnPrecheck::SkipInsufficient { on_chain }
+        }
+        Ok(Some(on_chain)) => BurnPrecheck::Proceed { on_chain },
+        Err(_) => BurnPrecheck::SkipQueryFailed,
+    }
+}
+
 fn query_trigger_repetitions(client: &Client, trigger_id: &TriggerId) -> Result<Option<u32>> {
     let iter = client.query(FindTriggers::new()).execute()?;
     for trigger in iter {
@@ -885,11 +919,17 @@ fn query_trigger_repetitions(client: &Client, trigger_id: &TriggerId) -> Result<
     Ok(None)
 }
 
-fn record_plan_skip(metrics: &Metrics, plan_label: &'static str, expect_success: bool) {
+fn record_plan_skip(
+    metrics: &Metrics,
+    plan_label: &'static str,
+    expect_success: bool,
+    reason: &'static str,
+) {
     debug!(
         target: "izanami::workload",
         plan = plan_label,
-        "skipping plan submission due to on-chain trigger repetition drift"
+        reason,
+        "skipping plan submission"
     );
     if expect_success {
         metrics.record_failure();
@@ -914,8 +954,10 @@ async fn submit_plan(
     let metrics = Arc::clone(metrics);
     let submission_counter = Arc::clone(submission_counter);
     let workload = Arc::clone(workload);
+    let burn_target = plan.burn_trigger_repetitions();
+    let mint_target = plan.mint_trigger_repetitions();
 
-    if let Some((trigger_id, burn_amount)) = plan.burn_trigger_repetitions() {
+    if let Some((trigger_id, burn_amount)) = burn_target.clone() {
         let peer_for_query = peer.clone();
         let signer_for_query = signer.clone();
         let trigger_id_for_query = trigger_id.clone();
@@ -927,41 +969,117 @@ async fn submit_plan(
             query_trigger_repetitions(&client, &trigger_id_for_query)
         })
         .await;
-        match query_result {
-            Ok(Ok(Some(on_chain))) if on_chain < burn_amount => {
+        let precheck = match query_result {
+            Ok(result) => evaluate_burn_precheck(result, burn_amount),
+            Err(err) => {
+                debug!(
+                    target: "izanami::workload",
+                    ?err,
+                    plan = plan_label,
+                    "trigger repetition query task failed"
+                );
+                BurnPrecheck::SkipQueryFailed
+            }
+        };
+        match precheck {
+            BurnPrecheck::Proceed { on_chain } => {
                 workload
                     .sync_trigger_repetitions(&trigger_id, Some(on_chain))
                     .await;
-                record_plan_skip(&metrics, plan_label, expect_success);
-                workload.record_result(&plan, false).await;
-                return;
             }
-            Ok(Ok(None)) => {
+            BurnPrecheck::SkipMissing => {
                 workload.sync_trigger_repetitions(&trigger_id, None).await;
-                record_plan_skip(&metrics, plan_label, expect_success);
+                record_plan_skip(
+                    &metrics,
+                    plan_label,
+                    expect_success,
+                    "on-chain trigger repetition drift",
+                );
                 workload.record_result(&plan, false).await;
                 return;
             }
-            Ok(Err(err)) => {
-                warn!(
-                    target: "izanami::workload",
-                    ?err,
-                    plan = plan_label,
-                    "trigger repetition query failed; proceeding with submission"
+            BurnPrecheck::SkipInsufficient { on_chain } => {
+                workload
+                    .sync_trigger_repetitions(&trigger_id, Some(on_chain))
+                    .await;
+                record_plan_skip(
+                    &metrics,
+                    plan_label,
+                    expect_success,
+                    "on-chain trigger repetition drift",
                 );
+                workload.record_result(&plan, false).await;
+                return;
             }
-            Err(err) => {
-                warn!(
-                    target: "izanami::workload",
-                    ?err,
-                    plan = plan_label,
-                    "trigger repetition query task failed; proceeding with submission"
+            BurnPrecheck::SkipQueryFailed => {
+                record_plan_skip(
+                    &metrics,
+                    plan_label,
+                    expect_success,
+                    "trigger repetition query failed",
                 );
+                workload.record_result(&plan, false).await;
+                return;
             }
-            _ => {}
         }
     }
 
+    if let Some((trigger_id, _mint_amount)) = mint_target.clone() {
+        let peer_for_query = peer.clone();
+        let signer_for_query = signer.clone();
+        let trigger_id_for_query = trigger_id.clone();
+        let query_result = spawn_blocking(move || {
+            let client = peer_for_query.client_for(
+                &signer_for_query.id,
+                signer_for_query.key_pair.private_key().clone(),
+            );
+            query_trigger_repetitions(&client, &trigger_id_for_query)
+        })
+        .await;
+        let precheck = match query_result {
+            Ok(result) => evaluate_mint_precheck(result),
+            Err(err) => {
+                debug!(
+                    target: "izanami::workload",
+                    ?err,
+                    plan = plan_label,
+                    "trigger repetition query task failed"
+                );
+                MintPrecheck::SkipQueryFailed
+            }
+        };
+        match precheck {
+            MintPrecheck::Proceed { on_chain } => {
+                workload
+                    .sync_trigger_repetitions(&trigger_id, Some(on_chain))
+                    .await;
+            }
+            MintPrecheck::SkipMissing => {
+                workload.sync_trigger_repetitions(&trigger_id, None).await;
+                record_plan_skip(
+                    &metrics,
+                    plan_label,
+                    expect_success,
+                    "on-chain trigger repetition drift",
+                );
+                workload.record_result(&plan, false).await;
+                return;
+            }
+            MintPrecheck::SkipQueryFailed => {
+                record_plan_skip(
+                    &metrics,
+                    plan_label,
+                    expect_success,
+                    "trigger repetition query failed",
+                );
+                workload.record_result(&plan, false).await;
+                return;
+            }
+        }
+    }
+
+    let peer_for_post = peer.clone();
+    let signer_for_post = signer.clone();
     let succeeded = run_submission(plan_label, expect_success, metrics, move || {
         let client = peer.client_for(&signer.id, signer.key_pair.private_key().clone());
         let metadata = submission_metadata(&submission_counter);
@@ -970,6 +1088,30 @@ async fn submit_plan(
             .map(|_| ())
     })
     .await;
+    if !succeeded {
+        if let Some((trigger_id, _)) = mint_target {
+            let trigger_id_for_query = trigger_id.clone();
+            let query_result = spawn_blocking(move || {
+                let client = peer_for_post.client_for(
+                    &signer_for_post.id,
+                    signer_for_post.key_pair.private_key().clone(),
+                );
+                query_trigger_repetitions(&client, &trigger_id_for_query)
+            })
+            .await;
+            match query_result {
+                Ok(Ok(Some(on_chain))) if on_chain > 0 => {
+                    workload
+                        .sync_trigger_repetitions(&trigger_id, Some(on_chain))
+                        .await;
+                }
+                Ok(Ok(Some(_))) | Ok(Ok(None)) => {
+                    workload.sync_trigger_repetitions(&trigger_id, None).await;
+                }
+                _ => {}
+            }
+        }
+    }
     workload.record_result(&plan, succeeded).await;
 }
 
@@ -1127,6 +1269,50 @@ mod tests {
     #[test]
     fn repetitions_from_repeats_indefinitely_returns_none() {
         assert_eq!(repetitions_from_repeats(Repeats::Indefinitely), None);
+    }
+
+    #[test]
+    fn evaluate_mint_precheck_handles_trigger_states() {
+        assert_eq!(
+            evaluate_mint_precheck::<color_eyre::eyre::Report>(Ok(Some(3))),
+            MintPrecheck::Proceed { on_chain: 3 }
+        );
+        assert_eq!(
+            evaluate_mint_precheck::<color_eyre::eyre::Report>(Ok(Some(0))),
+            MintPrecheck::SkipMissing
+        );
+        assert_eq!(
+            evaluate_mint_precheck::<color_eyre::eyre::Report>(Ok(None)),
+            MintPrecheck::SkipMissing
+        );
+        assert_eq!(
+            evaluate_mint_precheck::<&'static str>(Err("boom")),
+            MintPrecheck::SkipQueryFailed
+        );
+    }
+
+    #[test]
+    fn evaluate_burn_precheck_handles_trigger_states() {
+        assert_eq!(
+            evaluate_burn_precheck::<color_eyre::eyre::Report>(Ok(Some(5)), 3),
+            BurnPrecheck::Proceed { on_chain: 5 }
+        );
+        assert_eq!(
+            evaluate_burn_precheck::<color_eyre::eyre::Report>(Ok(Some(3)), 3),
+            BurnPrecheck::SkipInsufficient { on_chain: 3 }
+        );
+        assert_eq!(
+            evaluate_burn_precheck::<color_eyre::eyre::Report>(Ok(Some(1)), 2),
+            BurnPrecheck::SkipInsufficient { on_chain: 1 }
+        );
+        assert_eq!(
+            evaluate_burn_precheck::<color_eyre::eyre::Report>(Ok(None), 1),
+            BurnPrecheck::SkipMissing
+        );
+        assert_eq!(
+            evaluate_burn_precheck::<&'static str>(Err("boom"), 1),
+            BurnPrecheck::SkipQueryFailed
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

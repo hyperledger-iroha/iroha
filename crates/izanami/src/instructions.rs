@@ -192,6 +192,16 @@ impl TransactionPlan {
             }
         })
     }
+
+    pub fn mint_trigger_repetitions(&self) -> Option<(TriggerId, u32)> {
+        self.instructions.iter().find_map(|instruction| {
+            let mint = instruction.as_any().downcast_ref::<MintBox>()?;
+            match mint {
+                MintBox::TriggerRepetitions(mint) => Some((mint.destination.clone(), mint.object)),
+                MintBox::Asset(_) => None,
+            }
+        })
+    }
 }
 
 fn json_pair<K, V>(key: K, value: V) -> JsonValue
@@ -1698,10 +1708,10 @@ impl ChaosState {
         let tracked = *self.trigger_repetitions.get(&trigger_id).unwrap_or(&0);
         let pending = self.pending_trigger_repetitions(&trigger_id);
         let available = tracked.saturating_sub(pending);
-        if available == 0 {
+        if available <= 1 {
             return self.plan_mint_trigger_repetitions(rng);
         }
-        let burn_amount = rng.random_range(1..=available);
+        let burn_amount = rng.random_range(1..=available.saturating_sub(1));
         self.reserve_trigger_repetitions(&trigger_id, burn_amount);
         instructions.push(InstructionBox::from(Burn::trigger_repetitions(
             burn_amount,
@@ -3674,6 +3684,30 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn mint_trigger_repetitions_plan_exposes_target() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(222);
+
+        let register_plan = state
+            .plan_mint_trigger_repetitions(&mut rng)
+            .expect("register repeatable trigger");
+        register_plan.apply_updates(&mut state, true);
+
+        let mint_plan = state
+            .plan_mint_trigger_repetitions(&mut rng)
+            .expect("mint repetitions");
+        let (trigger_id, amount) = mint_plan
+            .mint_trigger_repetitions()
+            .expect("mint plan should contain trigger repetitions");
+        assert!(
+            state.repeatable_triggers.contains(&trigger_id),
+            "mint plan should target a tracked trigger"
+        );
+        assert!(amount > 0, "mint amount should be positive");
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn workload_record_result_applies_updates_on_success() {
         let PreparedChaos {
@@ -3844,7 +3878,7 @@ mod tests {
     }
 
     #[test]
-    fn burn_trigger_repetitions_removes_depleted_trigger() {
+    fn burn_trigger_repetitions_keeps_trigger_alive() {
         let PreparedChaos { mut state, .. } =
             prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
         let mut rng = StdRng::seed_from_u64(141);
@@ -3857,20 +3891,27 @@ mod tests {
             .first()
             .cloned()
             .expect("repeatable trigger");
-        state.trigger_repetitions.insert(trigger_id.clone(), 1);
+        state.trigger_repetitions.insert(trigger_id.clone(), 2);
 
         let burn = state
             .plan_burn_trigger_repetitions(&mut rng)
             .expect("burn plan");
         assert_eq!(burn.label, "burn_trigger_repetitions");
+        let (_, amount) = burn.burn_trigger_repetitions().expect("burn plan amount");
+        assert!(amount < 2, "burn should leave at least one repetition");
         burn.apply_updates(&mut state, true);
         assert!(
-            !state.repeatable_triggers.contains(&trigger_id),
-            "depleted trigger should be removed from repeatable list"
+            state.repeatable_triggers.contains(&trigger_id),
+            "burn should not remove repeatable trigger"
         );
         assert!(
-            !state.trigger_repetitions.contains_key(&trigger_id),
-            "depleted trigger should be removed from repetition tracking"
+            state
+                .trigger_repetitions
+                .get(&trigger_id)
+                .copied()
+                .unwrap_or(0)
+                >= 1,
+            "burn should leave at least one repetition"
         );
     }
 

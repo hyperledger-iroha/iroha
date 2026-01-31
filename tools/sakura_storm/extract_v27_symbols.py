@@ -27,6 +27,7 @@ W = int(os.getenv("SS_W", str(V27.w)))
 H = int(os.getenv("SS_H", str(V27.h)))
 GRID_N = int(os.getenv("SS_GRID_N", str(V27.grid_n)))
 CELL_SIZE = int(os.getenv("SS_CELL_SIZE", str(V27.cell_size)))
+GRID_OFFSET = int(os.getenv("SS_GRID_OFFSET", str(V27.grid_offset)))
 DATA_RADIUS = float(os.getenv("SS_DATA_RADIUS", str(V27.data_radius)))
 
 # Palette (v27)
@@ -108,9 +109,11 @@ def build_cells(frames: np.ndarray) -> List[Cell]:
     cy = H / 2.0
     cells: List[Cell] = []
     for r in range(GRID_N):
-        y0 = r * CELL_SIZE
+        y0 = GRID_OFFSET + r * CELL_SIZE
         for c in range(GRID_N):
-            x0 = c * CELL_SIZE
+            x0 = GRID_OFFSET + c * CELL_SIZE
+            if x0 < 0 or y0 < 0 or x0 + CELL_SIZE > W or y0 + CELL_SIZE > H:
+                continue
             cell_cx = x0 + CELL_SIZE / 2.0
             cell_cy = y0 + CELL_SIZE / 2.0
             rr = math.hypot(cell_cx - cx, cell_cy - cy)

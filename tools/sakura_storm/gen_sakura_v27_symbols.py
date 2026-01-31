@@ -44,6 +44,10 @@ LOGO_ALPHA = int(os.getenv("SS_LOGO_ALPHA", "255"))
 LOGO_THRESH_1 = int(os.getenv("SS_LOGO_THRESH_1", str(V27.logo_thresh_1)))
 LOGO_THRESH_2 = int(os.getenv("SS_LOGO_THRESH_2", str(V27.logo_thresh_2)))
 LOGO_THRESH_3 = int(os.getenv("SS_LOGO_THRESH_3", str(V27.logo_thresh_3)))
+LOGO_OVERLAY = os.getenv("SS_LOGO_OVERLAY", "0").strip() == "1"
+LOGO_OVERLAY_ALPHA = int(os.getenv("SS_LOGO_OVERLAY_ALPHA", "255"))
+LOGO_OVERLAY_COLOR = os.getenv("SS_LOGO_OVERLAY_COLOR", "")
+LOGO_OVERLAY_POST = os.getenv("SS_LOGO_OVERLAY_POST", "0").strip() == "1"
 
 # Outer mask
 OUTER_RADIUS = float(os.getenv("SS_OUTER_RADIUS", str(V27.outer_radius)))
@@ -73,6 +77,7 @@ KATAKANA_FONT_PATH = os.getenv("SS_KATAKANA_FONT_PATH", FONT_PATH)
 KATAKANA_FONT_INDEX = int(os.getenv("SS_KATAKANA_FONT_INDEX", str(FONT_INDEX)))
 KATAKANA_QUANTIZE = os.getenv("SS_KATAKANA_QUANTIZE", "1").strip() == "1"
 FORCE_PALETTE = os.getenv("SS_FORCE_PALETTE", "0").strip() == "1"
+KATAKANA_OUTSIDE_LOGO = os.getenv("SS_KATAKANA_OUTSIDE_LOGO", "0").strip() == "1"
 
 
 def render_glyph_mask(font: ImageFont.FreeTypeFont, glyph: str, cell: int) -> np.ndarray:
@@ -107,6 +112,30 @@ def parse_color(text: str, default: Tuple[int, int, int]) -> Tuple[int, int, int
     except ValueError:
         return default
     return vals
+
+
+def apply_logo_overlay(arr: np.ndarray, logo_arr: np.ndarray, logo_mask_arr: np.ndarray, fallback: Tuple[int, int, int]) -> np.ndarray:
+    if not LOGO_OVERLAY or not logo_mask_arr.any():
+        return arr
+    overlay_color = None
+    if LOGO_OVERLAY_COLOR:
+        overlay_color = parse_color(LOGO_OVERLAY_COLOR, fallback)
+    out = arr.copy()
+    if LOGO_OVERLAY_ALPHA >= 255:
+        if overlay_color is None:
+            out[logo_mask_arr] = logo_arr[logo_mask_arr]
+        else:
+            out[logo_mask_arr] = np.array(overlay_color, dtype=np.uint8)
+        return out
+    alpha = max(0, min(255, LOGO_OVERLAY_ALPHA)) / 255.0
+    blended = out.astype(np.float32)
+    if overlay_color is None:
+        src = logo_arr.astype(np.float32)
+    else:
+        src = np.zeros_like(out, dtype=np.float32)
+        src[logo_mask_arr] = np.array(overlay_color, dtype=np.float32)
+    blended[logo_mask_arr] = blended[logo_mask_arr] * (1.0 - alpha) + src[logo_mask_arr] * alpha
+    return blended.astype(np.uint8)
 
 
 def quantize_to_palette(arr: np.ndarray, palette: np.ndarray) -> np.ndarray:
@@ -280,7 +309,13 @@ def main() -> None:
         font = ImageFont.truetype(FONT_PATH, GLYPH_SIZE, index=FONT_INDEX)
         glyph_masks = [render_glyph_mask(font, g, cell_size) for g in glyphs]
 
-    logo_layer = None if static_layer is not None else build_logo_layer(W, H, logo_shades, bg)
+    needs_logo_mask = LOGO_OVERLAY or KATAKANA_OUTSIDE_LOGO
+    logo_layer = None if (static_layer is not None and not needs_logo_mask) else build_logo_layer(W, H, logo_shades, bg)
+    logo_arr = None
+    logo_mask_arr = None
+    if logo_layer is not None:
+        logo_arr = np.array(logo_layer, dtype=np.uint8)
+        logo_mask_arr = (logo_arr != bg).any(axis=2)
     ring_layer_img = None
     if ring_layer is None and (static_layer is None or RING_OVERRIDE) and ring_idx is None:
         ring_layer_img = build_ring_layer(W, H, ring_bright, ring_dim)
@@ -339,6 +374,11 @@ def main() -> None:
             for i, (x0, y0) in enumerate(katakana_cells):
                 if overlay_symbols_per_step <= 0:
                     break
+                if KATAKANA_OUTSIDE_LOGO and logo_mask_arr is not None and logo_mask_arr.any():
+                    cx = int(x0 + cell_size / 2)
+                    cy = int(y0 + cell_size / 2)
+                    if 0 <= cx < W and 0 <= cy < H and logo_mask_arr[cy, cx]:
+                        continue
                 if not KATAKANA_NONDATA:
                     idx = cell_index.get((x0, y0))
                     if idx is None:
@@ -374,6 +414,13 @@ def main() -> None:
                 kdraw.text((tx, ty), glyph, font=katakana_font, fill=text_color + (int(alpha),))
             frame = Image.alpha_composite(frame, kat_layer)
             draw_arr = np.array(frame.convert("RGB"), dtype=np.uint8)
+        if LOGO_OVERLAY and (not LOGO_OVERLAY_POST) and logo_arr is not None and logo_mask_arr is not None:
+            draw_arr = apply_logo_overlay(
+                draw_arr,
+                logo_arr,
+                logo_mask_arr,
+                (int(data_bright[0]), int(data_bright[1]), int(data_bright[2])),
+            )
         if ring_idx is not None:
             arr = np.array(draw_arr, dtype=np.uint8)
             mask_b = ring_idx[f] == 1
@@ -385,6 +432,13 @@ def main() -> None:
             draw_arr = arr
         if (KATAKANA_OVERLAY and KATAKANA_QUANTIZE) or FORCE_PALETTE:
             draw_arr = quantize_to_palette(draw_arr, palette)
+        if LOGO_OVERLAY and LOGO_OVERLAY_POST and logo_arr is not None and logo_mask_arr is not None:
+            draw_arr = apply_logo_overlay(
+                draw_arr,
+                logo_arr,
+                logo_mask_arr,
+                (int(data_bright[0]), int(data_bright[1]), int(data_bright[2])),
+            )
         if OUTER_RADIUS > 0.0 and static_layer is None:
             yy, xx = np.indices((H, W))
             rr = np.sqrt((xx - W / 2.0) ** 2 + (yy - H / 2.0) ** 2)

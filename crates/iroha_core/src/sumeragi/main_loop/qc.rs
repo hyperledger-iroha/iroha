@@ -1557,15 +1557,80 @@ impl Actor {
     }
 
     pub(super) fn block_is_empty(&self, hash: HashOf<BlockHeader>) -> Option<bool> {
+        let view = self.state.view();
         if let Some(height) = self.kura.get_block_height_by_hash(hash) {
             if let Some(block) = self.kura.get_block(height) {
-                return Some(block.is_empty());
+                if !block.is_empty() {
+                    return Some(false);
+                }
+                if view.time_triggers_due_for_block(&block.header()) {
+                    return Some(false);
+                }
+                return Some(true);
             }
         }
-        self.pending
-            .pending_blocks
-            .get(&hash)
-            .map(|pending| pending.block.is_empty())
+        self.pending.pending_blocks.get(&hash).map(|pending| {
+            if !pending.block.is_empty() {
+                return false;
+            }
+            if view.time_triggers_due_for_block(&pending.block.header()) {
+                return false;
+            }
+            true
+        })
+    }
+
+    fn drop_empty_block_state(&mut self, qc: &crate::sumeragi::consensus::Qc) {
+        let block_hash = qc.subject_block_hash;
+        let block_height = qc.height;
+        let view = qc.view;
+
+        let _ = super::drop_pending_block_and_requeue(
+            &mut self.pending.pending_blocks,
+            block_hash,
+            self.queue.as_ref(),
+            self.state.as_ref(),
+        );
+        self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+        self.clean_rbc_sessions_for_block(block_hash, block_height);
+        self.qc_cache
+            .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+        self.qc_signer_tally
+            .retain(|(_, hash, _, _, _), _| *hash != block_hash);
+        self.subsystems
+            .propose
+            .proposal_cache
+            .pop_proposal(block_height, view);
+        self.subsystems
+            .propose
+            .proposal_cache
+            .pop_hint(block_height, view);
+
+        let mut drop_keys = Vec::new();
+        for (key, vote) in &self.vote_log {
+            if vote.block_hash == block_hash && vote.height == block_height {
+                drop_keys.push(*key);
+            }
+        }
+        if !drop_keys.is_empty() {
+            for key in drop_keys {
+                self.vote_log.remove(&key);
+                self.vote_validation_cache.remove(&key);
+            }
+            self.qc_signer_tally
+                .retain(|(phase, hash, height, _, _), _| {
+                    *phase != crate::sumeragi::consensus::Phase::Commit
+                        || *hash != block_hash
+                        || *height != block_height
+                });
+            self.qc_cache.retain(|(phase, hash, height, _, _), _| {
+                *phase != crate::sumeragi::consensus::Phase::Commit
+                    || *hash != block_hash
+                    || *height != block_height
+            });
+        }
+        self.vote_roster_cache.remove(&block_hash);
+        self.block_signer_cache.remove_block(&block_hash);
     }
 
     pub(super) fn has_nonempty_pending_at_height(&self, height: u64) -> bool {
@@ -1761,7 +1826,7 @@ impl Actor {
     }
 
     pub(super) fn should_drop_qc_on_empty_block(
-        &self,
+        &mut self,
         qc: &crate::sumeragi::consensus::Qc,
         block_known: bool,
     ) -> bool {
@@ -1785,6 +1850,7 @@ impl Actor {
                 super::status::ConsensusMessageOutcome::Dropped,
                 super::status::ConsensusMessageReason::InvalidPayload,
             );
+            self.drop_empty_block_state(qc);
             return true;
         }
         false

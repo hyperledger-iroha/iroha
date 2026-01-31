@@ -251,9 +251,14 @@ pub unsafe extern "C" fn gpu_zstd_decompress(
     if capacity == 0 {
         return RC_NO_SPACE;
     }
-    // CPU zstd decode preserves the standard frame format for all consumers.
-    let decoded = match zstd::decode_all(Cursor::new(src_slice)) {
+    let decoded = match zstd_frame::decode_frame(src_slice) {
         Ok(bytes) => bytes,
+        Err(zstd_frame::ZstdDecodeError::Unsupported) => {
+            match zstd::decode_all(Cursor::new(src_slice)) {
+                Ok(bytes) => bytes,
+                Err(_) => return RC_ZSTD,
+            }
+        }
         Err(_) => return RC_ZSTD,
     };
     if decoded.len() > capacity {
@@ -270,6 +275,16 @@ pub unsafe extern "C" fn gpu_zstd_decompress(
 mod tests {
     use super::*;
     use crate::{fse, huffman};
+    use std::time::Instant;
+
+    fn lcg_payload(len: usize, mut seed: u64) -> Vec<u8> {
+        let mut out = vec![0u8; len];
+        for byte in &mut out {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            *byte = (seed >> 32) as u8;
+        }
+        out
+    }
 
     fn try_gpu_compress(payload: &[u8]) -> Result<Vec<u8>, i32> {
         let mut out = vec![0u8; payload.len().saturating_mul(4).saturating_add(512)];
@@ -371,6 +386,118 @@ mod tests {
         };
         let decoded = zstd::decode_all(Cursor::new(&compressed)).expect("cpu decode");
         assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn gpu_determinism_corpus_roundtrip() {
+        let corpus = [
+            b"gpuzstd verification corpus".as_slice(),
+            &[0u8; 1][..],
+            &[0x5a; 64][..],
+            &[0xa5; 1023][..],
+            &[0x33; 1024][..],
+        ];
+        let random_1 = lcg_payload(257, 0x1234_5678_9abc_def0);
+        let random_2 = lcg_payload(4096, 0xfeed_beef_cafe_f00d);
+
+        for payload in corpus
+            .into_iter()
+            .chain([random_1.as_slice(), random_2.as_slice()])
+        {
+            let compressed_a = match try_gpu_compress(payload) {
+                Ok(bytes) => bytes,
+                Err(rc) => {
+                    if skip_if_unavailable(rc) {
+                        return;
+                    }
+                    panic!("gpu compress failed: {rc}");
+                }
+            };
+            let compressed_b = match try_gpu_compress(payload) {
+                Ok(bytes) => bytes,
+                Err(rc) => {
+                    if skip_if_unavailable(rc) {
+                        return;
+                    }
+                    panic!("gpu compress failed: {rc}");
+                }
+            };
+            assert_eq!(compressed_a, compressed_b);
+
+            let decoded_cpu = zstd::decode_all(Cursor::new(&compressed_a)).expect("cpu decode");
+            assert_eq!(decoded_cpu, payload);
+
+            let decoded_gpu = match try_gpu_decompress(&compressed_a, payload.len()) {
+                Ok(bytes) => bytes,
+                Err(rc) => {
+                    if skip_if_unavailable(rc) {
+                        return;
+                    }
+                    panic!("gpu decompress failed: {rc}");
+                }
+            };
+            assert_eq!(decoded_gpu, payload);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn gpu_vs_cpu_benchmark() {
+        let sizes = [4 * 1024, 32 * 1024, 128 * 1024, 1024 * 1024];
+        let iterations = [10usize, 6, 4, 2];
+
+        for (&size, &iters) in sizes.iter().zip(iterations.iter()) {
+            let payload = lcg_payload(size, 0x1234_5678_9abc_def0 ^ size as u64);
+            let cpu_start = Instant::now();
+            for _ in 0..iters {
+                let _ = zstd::encode_all(Cursor::new(&payload), 1).expect("cpu encode");
+            }
+            let cpu_elapsed = cpu_start.elapsed();
+
+            let gpu_start = Instant::now();
+            let mut last = None;
+            for _ in 0..iters {
+                let compressed = match try_gpu_compress(&payload) {
+                    Ok(bytes) => bytes,
+                    Err(rc) => {
+                        if skip_if_unavailable(rc) {
+                            return;
+                        }
+                        panic!("gpu compress failed: {rc}");
+                    }
+                };
+                last = Some(compressed);
+            }
+            let gpu_elapsed = gpu_start.elapsed();
+
+            if let Some(compressed) = last {
+                let decoded = zstd::decode_all(Cursor::new(&compressed)).expect("cpu decode");
+                assert_eq!(decoded.len(), payload.len());
+            }
+
+            let cpu_avg = cpu_elapsed.as_secs_f64() * 1e6 / iters as f64;
+            let gpu_avg = gpu_elapsed.as_secs_f64() * 1e6 / iters as f64;
+            println!(
+                "size={} bytes iters={} cpu_avg_us={:.1} gpu_avg_us={:.1}",
+                size, iters, cpu_avg, gpu_avg
+            );
+        }
+    }
+
+    #[test]
+    fn gpu_decode_rejects_invalid_frames() {
+        let invalid = [0u8, 1, 2, 3, 4, 5];
+        let mut out = [0u8; 64];
+        let mut out_len = out.len();
+        let rc = unsafe {
+            gpu_zstd_decompress(
+                invalid.as_ptr(),
+                invalid.len(),
+                out.as_mut_ptr(),
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, RC_ZSTD);
     }
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]

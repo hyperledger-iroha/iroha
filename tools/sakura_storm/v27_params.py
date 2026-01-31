@@ -149,6 +149,15 @@ PALETTE_PRESETS = {
         "ring_dim": V27.ring_dim,
         "logo_shades": V27.logo_shades,
     },
+    # Extracted from the v26 fullwidth katakana preview palette.
+    "v26_preview": {
+        "bg": (12, 9, 14),
+        "data_bright": (255, 225, 240),
+        "data_dim": (118, 70, 90),
+        "ring_bright": (255, 244, 250),
+        "ring_dim": (92, 56, 72),
+        "logo_shades": ((29, 16, 24), (36, 18, 28), (43, 20, 32)),
+    },
     # Derived from the v26 "defi_crimson" scheme (BG/CELL_BG/RING/GLYPH).
     "defi_crimson": {
         "bg": (6, 7, 10),

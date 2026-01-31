@@ -2,14 +2,26 @@
 
 This document describes the deterministic GPU pipeline used by the Metal helper
 for zstd compression. It is a design and implementation guide for the
-`gpuzstd_metal` helper that must produce the exact same bytes as the CPU zstd
-implementation for the same input and parameters.
+`gpuzstd_metal` helper that emits standard zstd frames and deterministic bytes
+for a given sequence stream. Outputs must roundtrip with CPU decoders; byte-for-
+byte parity with the CPU compressor is not required because sequence generation
+differs.
 
 ## Goals
 
-- Bit-for-bit parity with CPU zstd at the same compression level and parameters.
+- Emit standard zstd frames that decode identically with CPU zstd; byte parity
+  with the CPU compressor is not required.
 - Deterministic outputs across hardware, drivers, and thread scheduling.
 - Explicit bounds checks and predictable buffer lifetimes.
+
+## Current implementation note
+
+- Match finding and sequence generation run on GPU.
+- Frame assembly and entropy coding (Huffman/FSE) currently run on the host
+  using the in-crate encoder; GPU Huffman/FSE kernels are parity-tested but not
+  yet wired into the full frame path.
+- Decode uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames;
+  full GPU block decode remains in progress.
 
 ## Encoding pipeline (high level)
 
@@ -35,7 +47,7 @@ implementation for the same input and parameters.
 6. Bitstream writer
    - Pack bits little-endian (LSB-first).
    - Flush on byte boundaries; pad with zeros only.
-   - Enforce overflow and capacity checks.
+   - Mask values to declared bit widths and enforce capacity checks.
 7. Block and frame assembly
    - Emit block headers (type, size, last-block flag).
    - Serialize literals and sequences into compressed blocks.
@@ -88,3 +100,11 @@ implementation for the same input and parameters.
 - CPU golden vectors for the bitstream writer/reader.
 - Corpus parity tests comparing GPU and CPU outputs.
 - Fuzz coverage for malformed frames and boundary conditions.
+
+## Benchmarking
+
+Run `cargo test -p gpuzstd_metal gpu_vs_cpu_benchmark -- --ignored --nocapture` to
+compare CPU vs GPU encode latency across payload sizes. The test skips on hosts
+without a Metal-capable device; capture the output alongside hardware details
+when adjusting the GPU offload thresholds. Norito enforces the same cutoff in
+`gpu_zstd::encode_all`, so direct callers match the heuristic gate.
