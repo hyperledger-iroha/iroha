@@ -1,6 +1,15 @@
 # Status
 
 Last update: 2026-01-31
+- NPoS pacemaker downtime: require fully converged baseline heights (no skew) plus persisted blocks before restart, reuse that baseline after restart, and unit-test convergence checks for height/skew gating.
+- Tests: `cargo test -p integration_tests --test mod sumeragi_npos_liveness::npos_pacemaker_resumes_after_downtime -- --nocapture` (ok; warnings: unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused `mut` in `iroha_core`).
+- Formatting: `cargo fmt --all` (stable rustfmt warnings about nightly-only options).
+- SSE smoke: keep the SSE reader connected across read timeouts, accept `data:` lines with or without a space, and add local TCP parsing coverage alongside timeout/data-line unit tests.
+- Tests: `cargo test -p integration_tests sse_smoke_scenarios -- --nocapture` (ok; warnings: unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused `mut` in `iroha_core`).
+- Tests: `cargo test -p integration_tests sse_reader_connects_and_reads_data_lines -- --nocapture` (ok; warnings: unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused `mut` in `iroha_core`).
+- Tests: `cargo test -p integration_tests is_read_timeout_matches_timeout_kinds -- --nocapture` (ok; warnings: unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused `mut` in `iroha_core`).
+- Tests: `cargo test -p integration_tests parse_sse_data_line_accepts_optional_space -- --nocapture` (timed out after 300s; test passed before timeout; warnings: unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused `mut` in `iroha_core`).
+- Formatting: `cargo fmt --all` (stable rustfmt warnings about nightly-only options).
 - Triggers: in `trigger_failure_should_not_cancel_other_triggers_execution`, tolerate tx-confirmation timeouts/queued-too-long for the failing by-call trigger and submit the probe log non-blocking while waiting for a new non-empty block.
 - Tests: `cargo test -p integration_tests trigger_failure_should_not_cancel_other_triggers_execution -- --nocapture` (ok; warnings: unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused `mut` in `iroha_core`).
 - Telemetry: count missing-block fetch targets with a `none` label when no target is available, and increment READY pending-RBC stash counters for roster-missing/hash-mismatch/unverified paths; updated Sumeragi docs to advertise the `none` label.
