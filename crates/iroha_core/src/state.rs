@@ -25852,7 +25852,6 @@ mod tests {
         let catalog =
             LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-        let lane_id = lane_config.primary().lane_id;
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
                 lane_catalog: catalog,
@@ -26015,7 +26014,6 @@ mod tests {
         let catalog =
             LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-        let lane_id = lane_config.primary().lane_id;
         state
             .set_nexus(iroha_config::parameters::actual::Nexus {
                 lane_catalog: catalog,
