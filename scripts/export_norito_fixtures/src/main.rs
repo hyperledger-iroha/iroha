@@ -949,44 +949,21 @@ fn parse_instruction(value: &Value) -> Result<RawInstruction> {
     let wire_name = obj
         .get("wire_name")
         .and_then(Value::as_str)
-        .map(str::to_owned);
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("instruction wire payload requires wire_name"))?;
     let payload_base64 = obj
         .get("payload_base64")
         .and_then(Value::as_str)
-        .map(str::to_owned);
-    if wire_name.is_some() ^ payload_base64.is_some() {
-        bail!("instruction wire payload requires wire_name and payload_base64");
-    }
-    let kind = obj.get("kind").and_then(Value::as_str).map(str::to_owned);
-    if wire_name.is_some() && (kind.is_some() || obj.contains_key("arguments")) {
-        bail!("instruction wire payload must not include legacy kind/arguments");
-    }
-    let mut arguments = BTreeMap::new();
-    if let Some(args_value) = obj.get("arguments") {
-        let args_obj = args_value
-            .as_object()
-            .ok_or_else(|| anyhow::anyhow!("instruction arguments must be objects"))?;
-        for (key, value) in args_obj {
-            arguments.insert(key.clone(), value_to_string(value));
-        }
-    }
-    let kind = match kind {
-        Some(kind) => kind,
-        None => {
-            if wire_name.is_none() {
-                bail!("instruction kind missing");
-            }
-            String::new()
-        }
-    };
-    if wire_name.is_none() && arguments.is_empty() {
-        bail!("instruction arguments missing");
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("instruction wire payload requires payload_base64"))?;
+    if obj.contains_key("kind") || obj.contains_key("arguments") {
+        bail!("legacy instruction fields are not supported; use wire_name/payload_base64");
     }
     Ok(RawInstruction {
-        kind,
-        arguments,
-        wire_name,
-        payload_base64,
+        kind: String::new(),
+        arguments: BTreeMap::new(),
+        wire_name: Some(wire_name),
+        payload_base64: Some(payload_base64),
     })
 }
 
@@ -2944,7 +2921,23 @@ mod tests {
         let err = parse_instruction(&Value::Object(instruction_value))
             .expect_err("legacy arguments should be rejected for wire payloads");
         assert!(
-            err.to_string().contains("wire payload"),
+            err.to_string().contains("legacy instruction fields"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_instruction_requires_wire_payload() {
+        let mut args_value = Map::new();
+        args_value.insert("action".into(), Value::String("RegisterDomain".into()));
+        args_value.insert("domain".into(), Value::String("wonderland".into()));
+        let mut instruction_value = Map::new();
+        instruction_value.insert("kind".into(), Value::String("Register".into()));
+        instruction_value.insert("arguments".into(), Value::Object(args_value));
+        let err = parse_instruction(&Value::Object(instruction_value))
+            .expect_err("wire payload should be required");
+        assert!(
+            err.to_string().contains("wire payload requires wire_name"),
             "unexpected error: {err}"
         );
     }

@@ -36,7 +36,10 @@ impl Actor {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub(super) fn reschedule_stale_pending_blocks(&mut self) -> bool {
+    pub(super) fn reschedule_stale_pending_blocks(
+        &mut self,
+        tick_deadline: Option<Instant>,
+    ) -> bool {
         if self.pending.pending_blocks.is_empty() {
             return false;
         }
@@ -51,6 +54,7 @@ impl Actor {
         }
 
         let reschedule_start = Instant::now();
+        let mut budget_exhausted = false;
         let mut active_roster: Option<Vec<PeerId>> = None;
         let local_peer_id = self.common_config.peer.id().clone();
         let da_enabled = self.runtime_da_enabled();
@@ -68,9 +72,14 @@ impl Actor {
         let queue_depths = super::status::worker_queue_depth_snapshot();
         let now = Instant::now();
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
-        let (tip_height, tip_hash) = {
+        let (tip_height, tip_hash, fast_timeout_permissioned, fast_timeout_npos) = {
             let view = self.state.view();
-            (view.height(), view.latest_block_hash())
+            (
+                view.height(),
+                view.latest_block_hash(),
+                self.pending_fast_path_timeout(&view, ConsensusMode::Permissioned),
+                self.pending_fast_path_timeout(&view, ConsensusMode::Npos),
+            )
         };
 
         let mut stale_pending = Vec::new();
@@ -82,6 +91,10 @@ impl Actor {
         let mut stale_removed = 0usize;
         let mut aborted_removed = 0usize;
         for (hash, pending) in &self.pending.pending_blocks {
+            if Self::tick_budget_exhausted(tick_deadline, Instant::now()) {
+                budget_exhausted = true;
+                break;
+            }
             if pending.aborted {
                 if self.kura.get_block_height_by_hash(*hash).is_some() {
                     aborted_expired.push((*hash, pending.height, pending.view));
@@ -131,9 +144,9 @@ impl Actor {
             }
             let (consensus_mode, _, _) = self.consensus_context_for_height(pending.height);
             let pending_age = pending.age();
-            let fast_timeout = {
-                let view = self.state.view();
-                self.pending_fast_path_timeout(&view, consensus_mode)
+            let fast_timeout = match consensus_mode {
+                ConsensusMode::Permissioned => fast_timeout_permissioned,
+                ConsensusMode::Npos => fast_timeout_npos,
             };
             if pending_age < fast_timeout {
                 continue;
@@ -267,6 +280,10 @@ impl Actor {
         let prevote_timeout_len = prevote_timeouts.len();
 
         for (hash, height, view) in aborted_expired {
+            if Self::tick_budget_exhausted(tick_deadline, Instant::now()) {
+                budget_exhausted = true;
+                break;
+            }
             let expected_epoch = self.epoch_for_height(height);
             let keep_commit_qc = cached_qc_for(
                 &self.qc_cache,
@@ -296,6 +313,10 @@ impl Actor {
         }
 
         for (hash, height) in stale_pending {
+            if Self::tick_budget_exhausted(tick_deadline, Instant::now()) {
+                budget_exhausted = true;
+                break;
+            }
             self.pending.pending_blocks.remove(&hash);
             self.clean_rbc_sessions_for_block(hash, height);
             self.qc_cache
@@ -308,6 +329,10 @@ impl Actor {
 
         let mut progress = aborted_removed > 0;
         for (key, age, vote_count, min_votes, stake_quorum_missing) in to_reschedule {
+            if Self::tick_budget_exhausted(tick_deadline, Instant::now()) {
+                budget_exhausted = true;
+                break;
+            }
             if let Some(pending) = self.pending.pending_blocks.remove(&key.0) {
                 self.reschedule_pending_quorum_block(
                     pending,
@@ -328,6 +353,10 @@ impl Actor {
         }
 
         for (key, pending_age, qc, commit_roster) in prevote_timeouts {
+            if Self::tick_budget_exhausted(tick_deadline, Instant::now()) {
+                budget_exhausted = true;
+                break;
+            }
             if let Some(pending) = self.pending.pending_blocks.remove(&key.0) {
                 let roster_len = commit_roster.len();
                 let vote_count = qc
@@ -442,6 +471,7 @@ impl Actor {
                 aborted_removed,
                 backoff_skipped = reschedule_backoff_skipped,
                 missing_data_skipped = missing_data_backoff_skipped,
+                budget_exhausted,
                 scan_ms = scan_cost.as_millis(),
                 total_ms = total_cost.as_millis(),
                 "reschedule sweep timing"

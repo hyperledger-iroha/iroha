@@ -9413,13 +9413,13 @@ impl Actor {
         let (missing_block_progress, missing_block_cost) = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.retry_missing_block");
             let step_start = Instant::now();
-            let progress = self.retry_missing_block_requests(now);
+            let progress = self.retry_missing_block_requests(now, tick_deadline);
             (progress, step_start.elapsed())
         };
         let (reschedule_progress, reschedule_cost) = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.reschedule_pending");
             let step_start = Instant::now();
-            let progress = self.reschedule_stale_pending_blocks();
+            let progress = self.reschedule_stale_pending_blocks(tick_deadline);
             (progress, step_start.elapsed())
         };
         let (idle_view_progress, idle_view_cost) = {

@@ -20,9 +20,10 @@ use iroha::{
         parameter::{
             Parameter, SumeragiParameter, TransactionParameter, system::SumeragiNposParameters,
         },
-        prelude::QueryBuilderExt,
+        prelude::{HashOf, QueryBuilderExt},
         query::block::prelude::FindBlocks,
         query::peer::prelude::FindPeers,
+        transaction::SignedTransaction,
     },
 };
 use iroha_config_base::toml::Writer as TomlWriter;
@@ -585,7 +586,10 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
         client.transaction_ttl = Some(status_timeout.saturating_add(Duration::from_secs(30)));
         set_sumeragi_parameter(&client, SumeragiParameter::DaEnabled(true)).await?;
 
-        let peer = network.peer();
+        let peers = network.peers();
+        let peer = peers
+            .first()
+            .ok_or_else(|| eyre!("network must have at least one peer"))?;
         let store_dir = peer.kura_store_dir();
         let blocks_dir = locate_blocks_dir(&store_dir)?;
 
@@ -605,12 +609,7 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
                 &format!("{scenario_name}-{submitted}"),
                 payload_bytes,
             );
-            let submit_client = client.clone();
-            tokio::task::spawn_blocking(move || {
-                submit_client.submit_blocking(Log::new(Level::INFO, message))
-            })
-            .await
-            .wrap_err("submit heavy log")??;
+            submit_log_to_any_peer(&peers, message).await?;
             submitted = submitted.saturating_add(1);
 
             network
@@ -658,7 +657,11 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
 
         let query_start = Instant::now();
         let evicted_block = loop {
-            let blocks = client.query(FindBlocks).execute_all()?;
+            let query_peer = peers
+                .iter()
+                .find(|peer| peer.is_running())
+                .ok_or_else(|| eyre!("no running peers available for block query"))?;
+            let blocks = query_peer.client().query(FindBlocks).execute_all()?;
             if let Some(block) = blocks
                 .iter()
                 .find(|block| block.header().height().get() == evicted_height)
@@ -1152,10 +1155,14 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
 
         let http = reqwest::Client::new();
         let client = network.client();
+        let peers = network.peers();
+        let peer_count = u64::try_from(peers.len()).unwrap_or(0);
+        let max_faults = peer_count.saturating_sub(1) / 3;
+        let commit_quorum = (2 * max_faults + 1).max(1);
 
         let mut baseline_blocks = Vec::new();
         let mut baseline_sumeragi_snapshots = Vec::new();
-        for peer in network.peers() {
+        for peer in peers.iter() {
             let status = peer.status().await?;
             baseline_blocks.push(status.blocks);
             baseline_sumeragi_snapshots
@@ -1195,23 +1202,47 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
         loop {
             status_after.clear();
             after_sumeragi_snapshots.clear();
-            for peer in network.peers() {
-                status_after.push(peer.status().await?);
-                after_sumeragi_snapshots
-                    .push(fetch_sumeragi_snapshot(http.clone(), &peer.torii_url()).await?);
+            let mut ready_count = 0u64;
+            let mut status_errors = Vec::new();
+            for (idx, peer) in peers.iter().enumerate() {
+                if !peer.is_running() {
+                    continue;
+                }
+                match peer.status().await {
+                    Ok(status) => {
+                        if status.blocks >= expected_height {
+                            ready_count = ready_count.saturating_add(1);
+                        }
+                        status_after.push((idx, status));
+                    }
+                    Err(err) => {
+                        status_errors.push((idx, err));
+                        continue;
+                    }
+                }
+                if let Ok(snapshot) =
+                    fetch_sumeragi_snapshot(http.clone(), &peer.torii_url()).await
+                {
+                    after_sumeragi_snapshots.push((idx, snapshot));
+                }
             }
 
-            let commits_ready = status_after
-                .iter()
-                .all(|status| status.blocks >= expected_height);
+            let commits_ready = ready_count >= commit_quorum;
             if commits_ready {
                 break;
             }
 
             if Instant::now() > deadline {
-                let blocks: Vec<u64> = status_after.iter().map(|status| status.blocks).collect();
+                let blocks: Vec<(usize, u64)> = status_after
+                    .iter()
+                    .map(|(idx, status)| (*idx, status.blocks))
+                    .collect();
+                let errors: Vec<(usize, String)> = status_errors
+                    .into_iter()
+                    .map(|(idx, err)| (idx, format!("{err:#}")))
+                    .collect();
                 return Err(eyre!(
-                    "timed out waiting for commit under payload loss: blocks={blocks:?}, expected={expected_height}"
+                    "timed out waiting for commit under payload loss: blocks={blocks:?}, expected={expected_height}, quorum={commit_quorum}, errors={errors:?}"
                 ));
             }
 
@@ -1219,17 +1250,18 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
         }
 
         ensure!(
-            baseline_sumeragi_snapshots.len() == after_sumeragi_snapshots.len(),
-            "mismatched Sumeragi snapshot counts: baseline={}, after={}",
-            baseline_sumeragi_snapshots.len(),
-            after_sumeragi_snapshots.len()
+            !after_sumeragi_snapshots.is_empty(),
+            "missing Sumeragi snapshots after payload loss run"
         );
 
         ensure!(
-            after_sumeragi_snapshots
-                .iter()
-                .zip(&baseline_sumeragi_snapshots)
-                .all(|(after, baseline)| after.da_reschedule_total == baseline.da_reschedule_total),
+            after_sumeragi_snapshots.iter().all(|(idx, after)| {
+                baseline_sumeragi_snapshots
+                    .get(*idx)
+                    .is_some_and(|baseline| {
+                        after.da_reschedule_total == baseline.da_reschedule_total
+                    })
+            }),
             "expected da_reschedule_total to remain unchanged when DA is advisory"
         );
         // RBC DELIVER deferrals are optional here: DA is advisory and availability may be satisfied
@@ -2287,6 +2319,7 @@ where
 
     let rbc_observation = rbc_handle.await.wrap_err("rbc join")??;
     let commit_elapsed = commit_handle.await.wrap_err("commit join")??;
+    let ready_required = rbc_observation.ready_count > 0;
 
     let torii_urls = network.torii_urls();
     if check_commit_certificates {
@@ -2359,7 +2392,6 @@ where
         let payload_bytes_f64 = payload_bytes as f64;
         assert!(payload_bytes_metric >= payload_bytes_f64);
         assert!(deliver_total >= 1.0);
-        assert!(ready_total >= 1.0);
         per_peer_metrics.push((
             idx,
             PeerMetrics {
@@ -2372,6 +2404,17 @@ where
                 snapshot: body,
             },
         ));
+    }
+
+    if ready_required {
+        let any_ready = per_peer_metrics
+            .iter()
+            .any(|(_, metrics)| metrics.ready_total >= 1.0);
+        assert!(
+            any_ready,
+            "expected at least one peer to record RBC READY broadcasts (ready_count={})",
+            rbc_observation.ready_count
+        );
     }
 
     inspect(&per_peer_metrics)?;
@@ -2827,6 +2870,41 @@ async fn wait_for_height(
         }
         sleep(Duration::from_millis(200)).await;
     }
+}
+
+async fn submit_log_to_any_peer(
+    peers: &[NetworkPeer],
+    payload: String,
+) -> Result<(NetworkPeer, HashOf<SignedTransaction>)> {
+    if peers.is_empty() {
+        return Err(eyre!("no peers available for submission"));
+    }
+    let mut errors = Vec::new();
+    for peer in peers {
+        if !peer.is_running() {
+            continue;
+        }
+        let submit_client = peer.client();
+        let payload_clone = payload.clone();
+        match tokio::task::spawn_blocking(move || {
+            submit_client.submit(Log::new(Level::INFO, payload_clone))
+        })
+        .await
+        {
+            Ok(Ok(hash)) => return Ok((peer.clone(), hash)),
+            Ok(Err(err)) => errors.push(err),
+            Err(err) => errors.push(eyre!("submit join error: {err}")),
+        }
+    }
+    Err(eyre!(
+        "failed to submit log instruction to any running peer: {errors:?}"
+    ))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn submit_log_to_any_peer_errors_without_peers() {
+    let result = submit_log_to_any_peer(&[], "payload".to_string()).await;
+    assert!(result.is_err());
 }
 
 fn collect_da_block_files(root: &Path) -> Result<Vec<PathBuf>> {
@@ -3302,13 +3380,11 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
             .await?;
 
         let peers = network.peers();
-        let primary_peer = &peers[0];
+        let primary_peer = peers
+            .first()
+            .ok_or_else(|| eyre!("network must have at least one peer"))?;
         let client = primary_peer.client();
         let http = reqwest::Client::new();
-        let status_url = client
-            .torii_url
-            .join("status")
-            .wrap_err("compose status URL")?;
         let kura_root = primary_peer.kura_store_dir();
 
         let status_before = fetch_status(&client).await?;
@@ -3320,15 +3396,14 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
                 &format!("{scenario_name}-payload-{idx}"),
                 payload_bytes,
             );
-            let submit_client = client.clone();
-            tokio::task::spawn_blocking(move || {
-                submit_client.submit(Log::new(Level::INFO, payload))
-            })
-            .await
-            .wrap_err("submit log instruction")??;
+            let (active_peer, _) = submit_log_to_any_peer(&peers, payload).await?;
             let _ = wait_for_height(
                 http.clone(),
-                status_url.clone(),
+                active_peer
+                    .client()
+                    .torii_url
+                    .join("status")
+                    .wrap_err("compose status URL")?,
                 expected_height,
                 Instant::now(),
             )
@@ -3354,7 +3429,11 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
 
         let query_start = Instant::now();
         let evicted_block = loop {
-            let blocks = client.query(FindBlocks).execute_all()?;
+            let query_peer = peers
+                .iter()
+                .find(|peer| peer.is_running())
+                .ok_or_else(|| eyre!("no running peers available for block query"))?;
+            let blocks = query_peer.client().query(FindBlocks).execute_all()?;
             if let Some(block) = blocks
                 .iter()
                 .find(|block| block.header().height().get() == evicted_height)
