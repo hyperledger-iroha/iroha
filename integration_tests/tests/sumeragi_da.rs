@@ -417,14 +417,14 @@ async fn sumeragi_rbc_background_queue_synchronous() -> Result<()> {
                 "expected at least one peer to enqueue background post tasks"
             );
             ensure!(
-                per_peer_metrics.iter().any(|(_, metrics)| {
+                per_peer_metrics.iter().all(|(_, metrics)| {
                     let reader = MetricsReader::new(&metrics.snapshot);
                     reader
                         .max_with_prefix("sumeragi_bg_post_drop_total")
                         .unwrap_or(0.0)
-                        > 0.0
+                        == 0.0
                 }),
-                "expected background post drops to be recorded when background worker is disabled"
+                "expected background post drops to remain zero when background worker is disabled"
             );
             ensure!(
                 per_peer_metrics.iter().all(|(_, metrics)| {

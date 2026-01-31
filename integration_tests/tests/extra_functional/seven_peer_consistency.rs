@@ -48,7 +48,12 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
                     64_i64,
                 )
                 .write(
-                    ["sumeragi", "advanced", "rbc", "rebroadcast_sessions_per_tick"],
+                    [
+                        "sumeragi",
+                        "advanced",
+                        "rbc",
+                        "rebroadcast_sessions_per_tick",
+                    ],
                     32_i64,
                 );
         })

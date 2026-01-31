@@ -235,6 +235,18 @@ impl Actor {
         let chain_id = &self.common_config.chain;
         let (_, mode_tag, _) = self.consensus_context_for_height(height);
         let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
+        let mut highest_view_by_signer: BTreeMap<ValidatorIndex, u64> = BTreeMap::new();
+        for stored in self.vote_log.values() {
+            if stored.phase != phase || stored.height != height || stored.epoch != epoch {
+                continue;
+            }
+            let entry = highest_view_by_signer
+                .entry(stored.signer)
+                .or_insert(stored.view);
+            if stored.view > *entry {
+                *entry = stored.view;
+            }
+        }
         self.vote_log
             .values()
             .filter(|stored| {
@@ -250,6 +262,13 @@ impl Actor {
                     .get(&key)
                     .is_some_and(|entry| entry.roster_hash == roster_hash)
                     || vote_signature_valid(vote, signature_topology, chain_id, mode_tag)
+            })
+            .filter(|vote| {
+                highest_view_by_signer
+                    .get(&vote.signer)
+                    .copied()
+                    .unwrap_or(vote.view)
+                    == view
             })
             .map(|vote| vote.signer)
             .collect()
@@ -1003,6 +1022,27 @@ impl Actor {
                 "skipping QC aggregation for aborted pending block"
             );
             return;
+        }
+        if phase == crate::sumeragi::consensus::Phase::Commit {
+            // Avoid aggregating a lower-view commit QC once a higher NEW_VIEW quorum exists,
+            // to prevent divergent commits during view changes.
+            if let Some(higher_view) = self
+                .subsystems
+                .propose
+                .new_view_tracker
+                .highest_quorum_view_for_height(height, required, topology.as_ref())
+            {
+                if higher_view > view {
+                    iroha_logger::info!(
+                        height,
+                        view,
+                        higher_view,
+                        block = ?block_hash,
+                        "skipping commit QC aggregation: higher NEW_VIEW quorum observed"
+                    );
+                    return;
+                }
+            }
         }
 
         let snapshot = self.qc_signer_snapshot(

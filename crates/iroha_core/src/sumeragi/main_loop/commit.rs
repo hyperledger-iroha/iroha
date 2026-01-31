@@ -1,6 +1,7 @@
 //! Commit/finalization pipeline helpers.
 
 use std::{
+    cmp::Reverse,
     collections::BTreeSet,
     sync::{Arc, mpsc},
     time::Instant,
@@ -2255,8 +2256,9 @@ impl Actor {
             .iter()
             .map(|(hash, pending)| (pending.height, pending.view, *hash))
             .collect();
-        pending_hashes
-            .sort_by(|(h1, v1, hash1), (h2, v2, hash2)| (h1, v1, hash1).cmp(&(h2, v2, hash2)));
+        pending_hashes.sort_by(|(h1, v1, hash1), (h2, v2, hash2)| {
+            (h1, Reverse(*v1), hash1).cmp(&(h2, Reverse(*v2), hash2))
+        });
         for (pending_height, pending_view, hash) in pending_hashes {
             if self.commit_pipeline_budget_exhausted(tick_deadline, Instant::now()) {
                 break;
@@ -3101,6 +3103,24 @@ impl Actor {
             );
             return false;
         };
+        let required = topology.min_votes_for_commit();
+        if let Some(higher_view) = self
+            .subsystems
+            .propose
+            .new_view_tracker
+            .highest_quorum_view_for_height(height, required, topology.as_ref())
+        {
+            if higher_view > view {
+                info!(
+                    height,
+                    view,
+                    higher_view,
+                    signer = local_idx,
+                    "skipping NEW_VIEW vote: higher view quorum already observed"
+                );
+                return false;
+            }
+        }
         let sent_key = (
             crate::sumeragi::consensus::Phase::NewView,
             height,
