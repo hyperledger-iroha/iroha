@@ -6,9 +6,11 @@ use integration_tests::sandbox;
 use iroha::{
     crypto::KeyPair,
     data_model::{
+        IdBox,
         ValidationFail,
         isi::{
             Instruction,
+            InstructionType,
             error::{InstructionExecutionError, InvalidParameterError},
         },
         prelude::*,
@@ -56,6 +58,31 @@ async fn submit_instruction_and_wait(
     let context = context.to_string();
     spawn_blocking(move || client.submit_blocking(instruction).wrap_err(context)).await??;
     Ok(())
+}
+
+fn is_trigger_register_collision(err: &eyre::Report, trigger_id: &TriggerId) -> bool {
+    err.chain().any(|cause| {
+        if let Some(InstructionExecutionError::Repetition(repetition)) =
+            cause.downcast_ref::<InstructionExecutionError>()
+        {
+            if *repetition.instruction() == InstructionType::Register {
+                if let IdBox::TriggerId(id) = &repetition.id {
+                    return id == trigger_id;
+                }
+            }
+        }
+        if let Some(ValidationFail::InstructionFailed(InstructionExecutionError::Repetition(
+            repetition,
+        ))) = cause.downcast_ref::<ValidationFail>()
+        {
+            if *repetition.instruction() == InstructionType::Register {
+                if let IdBox::TriggerId(id) = &repetition.id {
+                    return id == trigger_id;
+                }
+            }
+        }
+        false
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -941,27 +968,57 @@ async fn trigger_burn_repetitions() -> Result<()> {
         let asset_definition_id = "rose#wonderland".parse()?;
         let account_id = ALICE_ID.clone();
         let asset_id = AssetId::new(asset_definition_id, account_id.clone());
-        let trigger_id = "trigger".parse::<TriggerId>()?;
+        let base_trigger_name = "trigger_burn_repetitions";
+        let mut attempt = 0_u32;
+        let max_attempts = 5_u32;
+        let trigger_id = loop {
+            let candidate = if attempt == 0 {
+                base_trigger_name.to_owned()
+            } else {
+                format!("{base_trigger_name}_{attempt}")
+            };
+            let trigger_id = candidate.parse::<TriggerId>()?;
 
-        let trigger_instructions = vec![Mint::asset_numeric(1u32, asset_id)];
-        let register_trigger = Register::trigger(Trigger::new(
-            trigger_id.clone(),
-            Action::new(
-                trigger_instructions,
-                1_u32,
-                account_id.clone(),
-                ExecuteTriggerEventFilter::new()
-                    .for_trigger(trigger_id.clone())
-                    .under_authority(account_id),
-            ),
-        ));
-        submit_instruction_and_wait(
-            &network,
-            test_client.clone(),
-            register_trigger,
-            stringify!(trigger_burn_repetitions),
-        )
-        .await?;
+            let trigger_instructions = vec![Mint::asset_numeric(1u32, asset_id.clone())];
+            let register_trigger = Register::trigger(Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    trigger_instructions,
+                    1_u32,
+                    account_id.clone(),
+                    ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(account_id.clone()),
+                ),
+            ));
+            match submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                register_trigger,
+                stringify!(trigger_burn_repetitions),
+            )
+            .await
+            {
+                Ok(()) => break trigger_id,
+                Err(err) => {
+                    if is_trigger_register_collision(&err, &trigger_id) {
+                        if attempt >= max_attempts {
+                            return Err(err.wrap_err(format!(
+                                "trigger id collision retry limit ({max_attempts}) exceeded"
+                            )));
+                        }
+                        let next = format!("{base_trigger_name}_{}", attempt + 1);
+                        eprintln!(
+                            "Trigger id collision for `{}`; retrying with `{}`",
+                            trigger_id, next
+                        );
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(err);
+                }
+            }
+        };
 
         submit_instruction_and_wait(
             &network,
