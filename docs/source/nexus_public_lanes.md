@@ -50,7 +50,7 @@ funds to the originating account once the timer expires.
 
 `PublicLaneValidatorStatus` enumerates lifecycle phases:
 
-- `PendingActivation(epoch)` — waiting for the governance-specified activation epoch; the tuple payload stores the earliest activation epoch derived from the configured `epoch_length_blocks`.
+- `PendingActivation(epoch)` — waiting for the governance-specified activation epoch; the tuple payload stores the earliest activation epoch computed as `current_epoch + 1` (epochs are derived from `epoch_length_blocks`).
 - `Active` — participates in consensus and can collect rewards.
 - `Jailed { reason }` — temporarily suspended (downtime, telemetry breach, etc.).
 - `Exiting { releases_at_ms }` — unbonding; rewards stop accruing.
@@ -156,7 +156,7 @@ Validation rules:
 
 - `initial_stake` ≥ `min_self_stake` (governance parameter).
 - Metadata MUST include contact/telemetry hooks before activation.
-- Governance approves/denies the entry; until then the status is `PendingActivation` and the runtime promotes the validator to `Active` at the next epoch boundary once the target activation epoch is reached.
+- Governance approves/denies the entry; until then the status is `PendingActivation` and the runtime promotes the validator to `Active` at the next epoch boundary once the target activation epoch (`current_epoch + 1` at registration) is reached.
 
 ### 2.2 `BondPublicLaneStake`
 
@@ -220,9 +220,9 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
   succeeds. Genesis fingerprints and `use_stake_snapshot_roster` decide whether
   the runtime derives the roster from stake snapshots or falls back to genesis
   peers.
-- **Activation/exit operations:** registrations land in `PendingActivation` and
-  auto-promote at the first block whose epoch meets the scheduled boundary
-  (`epoch_length_blocks`). Operators can also call
+- **Activation/exit operations:** registrations land in `PendingActivation` for
+  `current_epoch + 1` and auto-promote at the first block whose epoch meets that
+  boundary (epochs are derived from `epoch_length_blocks`). Operators can also call
   `ActivatePublicLaneValidator` after the boundary to force promotion. Exits
   move validators to `Exiting(release_at_ms)` and free capacity only once the
   block timestamp reaches `release_at_ms`; re-registration after a slash still
@@ -235,7 +235,8 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
   `nexus.staking.slash_sink_account_id`, `nexus.staking.unbonding_delay`,
   `nexus.staking.withdraw_grace`, `nexus.staking.max_validators`,
   `nexus.staking.max_slash_bps`, `nexus.staking.reward_dust_threshold`, and the
-  validator-mode switches above. Thread them through
+  validator-mode switches above.
+  Thread them through
   `iroha_config::parameters::actual::Nexus` and surface them in `status.md`
   once GA values are ratified.
 - **Torii/CLI quickstart:**

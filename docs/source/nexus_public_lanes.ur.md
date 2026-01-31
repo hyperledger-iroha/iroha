@@ -58,8 +58,9 @@ Torii/SDKs مکمل runtime امپلیمنٹیشن سے پہلے Norito payloads
 
 `PublicLaneValidatorStatus` لائف سائیکل فیزز درج کرتا ہے:
 
-- `PendingActivation(epoch)` — گورننس کے مقرر کردہ activation epoch کا انتظار؛ ٹپل payload `epoch_length_blocks`
-  سے نکلا ہوا earliest activation epoch محفوظ کرتا ہے۔
+- `PendingActivation(epoch)` — گورننس کے مقرر کردہ activation epoch کا انتظار؛ ٹپل payload
+  `current_epoch + 1` سے نکلا ہوا earliest activation epoch محفوظ کرتا ہے
+  (`epoch_length_blocks` سے epochs derive ہوتے ہیں)۔
 - `Active` — consensus میں حصہ لیتا ہے اور ریوارڈز حاصل کر سکتا ہے۔
 - `Jailed { reason }` — عارضی معطلی (downtime، ٹیلی میٹری breach وغیرہ)۔
 - `Exiting { releases_at_ms }` — unbonding؛ ریوارڈز رک جاتے ہیں۔
@@ -159,7 +160,8 @@ Validation rules:
 - `initial_stake` >= `min_self_stake` (گورننس پیرامیٹر)۔
 - Metadata میں activation سے پہلے contact/telemetry hooks شامل ہونا لازمی ہے۔
 - گورننس entry کو approve/deny کرتی ہے؛ تب تک status `PendingActivation` رہتا ہے اور runtime validator کو
-  `Active` میں promote کرتا ہے جب target activation epoch پہنچ جائے اور اگلی epoch boundary آئے۔
+  `Active` میں promote کرتا ہے جب target activation epoch
+  (`current_epoch + 1` at registration) پہنچ جائے اور اگلی epoch boundary آئے۔
 
 ### 2.2 `BondPublicLaneStake`
 
@@ -210,8 +212,9 @@ NX-9 کے بعد runtime logic `PublicLaneRewardRecord` annotations emit کرے 
   commit topology میں ایک registered peer کے live consensus key کی موجودگی مانگتے ہیں تاکہ `RegisterPublicLaneValidator`
   succeed ہو۔ Genesis fingerprints اور `use_stake_snapshot_roster` یہ طے کرتے ہیں کہ runtime roster کو stake snapshots
   سے derive کرے یا genesis peers پر fallback کرے۔
-- **Activation/exit operations:** registrations `PendingActivation` میں آتی ہیں اور `epoch_length_blocks` حد پوری
-  ہونے والے پہلے بلاک پر auto-promote ہوتی ہیں۔ Operators حد کے بعد `ActivatePublicLaneValidator` call کر کے
+- **Activation/exit operations:** registrations `PendingActivation` میں آتی ہیں، `current_epoch + 1`
+  کو target رکھتی ہیں اور `epoch_length_blocks` حد پوری ہونے والے پہلے بلاک پر auto-promote ہوتی ہیں۔ Operators حد کے بعد
+  `ActivatePublicLaneValidator` call کر کے
   promotion فورس کر سکتے ہیں۔ Exits validators کو `Exiting(release_at_ms)` میں لے جاتی ہیں اور capacity صرف
   اسی وقت آزاد ہوتی ہے جب بلاک timestamp `release_at_ms` تک پہنچ جائے؛ slash کے بعد re-registration کے لئے
   exit ضروری رہتا ہے تاکہ ریکارڈ `Exited` ہو اور capacity reclaimed ہو۔ Capacity checks `nexus.staking.max_validators`
@@ -219,7 +222,8 @@ NX-9 کے بعد runtime logic `PublicLaneRewardRecord` annotations emit کرے 
   ہونے تک بلاک کرتے ہیں۔
 - **Config knobs:** `nexus.staking.min_validator_stake`, `nexus.staking.stake_asset_id`,
   `nexus.staking.stake_escrow_account_id`, `nexus.staking.slash_sink_account_id`,
-  `nexus.staking.unbonding_delay`, `nexus.staking.withdraw_grace`, `nexus.staking.max_validators`,
+  `nexus.staking.unbonding_delay`, `nexus.staking.withdraw_grace`,
+  `nexus.staking.max_validators`,
   `nexus.staking.max_slash_bps`, `nexus.staking.reward_dust_threshold`, اور اوپر والے validator-mode switches۔
   انہیں `iroha_config::parameters::actual::Nexus` کے ذریعے تھریڈ کریں اور GA اقدار منظور ہونے کے بعد
   `status.md` میں ظاہر کریں۔
