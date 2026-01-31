@@ -164,7 +164,12 @@ impl Execute for RegisterPublicLaneValidator {
             )
             .max(1);
         let current_epoch = current_epoch(block_height, epoch_length)?;
-        let pending_activation_epoch = current_epoch.saturating_add(1);
+        let pending_activation_epoch = if block_height <= 1 {
+            // Genesis bootstrap: allow validators to activate within the genesis block.
+            current_epoch
+        } else {
+            current_epoch.saturating_add(1)
+        };
         let pending_status = PublicLaneValidatorStatus::PendingActivation(pending_activation_epoch);
         let record = PublicLaneValidatorRecord {
             lane_id: self.lane_id,
@@ -2539,6 +2544,53 @@ mod tests {
             view.world.assets().get(&escrow_asset).is_some(),
             "staking assets must remain bonded"
         );
+    }
+
+    #[test]
+    fn genesis_allows_same_block_validator_activation() {
+        let mut state = setup_state();
+
+        let mut state_block = state.block(block_header_with_height(1));
+        let mut stx = state_block.transaction();
+
+        let (validator, _, _escrow, _asset_def_id) = prepare_accounts(&mut stx);
+        RegisterPublicLaneValidator {
+            lane_id: LaneId::new(1),
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Numeric::new(1_000, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register validator");
+        let pending = stx
+            .world
+            .public_lane_validators
+            .get(&(LaneId::new(1), validator.clone()))
+            .expect("pending record");
+        assert!(matches!(
+            pending.status,
+            PublicLaneValidatorStatus::PendingActivation(0)
+        ));
+
+        ActivatePublicLaneValidator {
+            lane_id: LaneId::new(1),
+            validator: validator.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("activate validator in genesis");
+        let record = stx
+            .world
+            .public_lane_validators
+            .get(&(LaneId::new(1), validator.clone()))
+            .cloned()
+            .expect("record present");
+        assert!(matches!(record.status, PublicLaneValidatorStatus::Active));
+        assert_eq!(record.activation_epoch, Some(0));
+        assert_eq!(record.activation_height, Some(1));
+
+        stx.apply();
+        state_block.commit().unwrap();
     }
 
     #[test]

@@ -52,6 +52,8 @@ const IZANAMI_PACEMAKER_PENDING_STALL_FLOOR_MS: u64 = 100;
 const IZANAMI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT: i64 = 8;
 const IZANAMI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: i64 = 8;
 const IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: i64 = 128;
+const IZANAMI_PACING_GOVERNOR_MIN_FACTOR_BPS: i64 = 10_000;
+const IZANAMI_PACING_GOVERNOR_MAX_FACTOR_BPS: i64 = 10_000;
 const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 1;
 const IZANAMI_FUTURE_HEIGHT_WINDOW: i64 = 2;
 const IZANAMI_FUTURE_VIEW_WINDOW: i64 = 2;
@@ -328,6 +330,14 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
                     "rbc_backlog_chunk_soft_limit",
                 ],
                 IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
+            )
+            .write(
+                ["sumeragi", "advanced", "pacing_governor", "min_factor_bps"],
+                IZANAMI_PACING_GOVERNOR_MIN_FACTOR_BPS,
+            )
+            .write(
+                ["sumeragi", "advanced", "pacing_governor", "max_factor_bps"],
+                IZANAMI_PACING_GOVERNOR_MAX_FACTOR_BPS,
             )
             .write(
                 ["sumeragi", "advanced", "rbc", "pending_max_chunks"],

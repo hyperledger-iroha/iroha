@@ -140,11 +140,8 @@ async fn submit_proof_and_query_record() -> Result<()> {
     let proof_bytes = b"integration_proof_bytes".to_vec();
     let proof = iroha_data_model::proof::ProofBox::new(backend.into(), proof_bytes.clone());
     let vk = iroha_data_model::proof::VerifyingKeyBox::new(backend.into(), vec![0x01]);
-    let attachment = iroha_data_model::proof::ProofAttachment::new_inline(
-        backend.into(),
-        proof.clone(),
-        vk,
-    );
+    let attachment =
+        iroha_data_model::proof::ProofAttachment::new_inline(backend.into(), proof.clone(), vk);
     let isi = iroha_data_model::isi::zk::VerifyProof::new(attachment);
 
     // Submit as a transaction with a single instruction

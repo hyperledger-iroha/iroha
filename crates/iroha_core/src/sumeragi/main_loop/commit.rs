@@ -4,7 +4,7 @@ use std::{
     cmp::Reverse,
     collections::BTreeSet,
     sync::{Arc, mpsc},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest};
@@ -49,6 +49,28 @@ pub(super) struct CommitStageTimings {
     pub(super) kura_store_ms: Option<u64>,
     pub(super) state_apply_ms: Option<u64>,
     pub(super) state_commit_ms: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct CommitPipelineTimings {
+    pub(super) ran: bool,
+    pub(super) total: Duration,
+    pub(super) drain_results: Duration,
+    pub(super) abort_inflight: Duration,
+    pub(super) event_reschedule: Duration,
+    pub(super) qc_rebuild: Duration,
+    pub(super) validation: Duration,
+    pub(super) gate: Duration,
+    pub(super) finalize: Duration,
+    pub(super) blocks_considered: u64,
+    pub(super) blocks_processed: u64,
+}
+
+impl CommitPipelineTimings {
+    fn finish(mut self, start: Instant) -> Self {
+        self.total = start.elapsed();
+        self
+    }
 }
 
 #[derive(Debug)]
@@ -979,6 +1001,7 @@ impl Actor {
                     exec_depth = params_snapshot.2,
                     "state parameters after commit"
                 );
+                self.refresh_p2p_topology();
                 if let Some(qc) = cached_qc.as_ref() {
                     super::status::record_commit_qc(qc.clone());
                 }
@@ -2030,7 +2053,7 @@ impl Actor {
 
 impl Actor {
     pub(super) fn process_commit_candidates(&mut self) {
-        self.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event, None);
+        let _ = self.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event, None);
     }
 
     pub(in crate::sumeragi) fn poll_commit_results(&mut self) -> bool {
@@ -2188,16 +2211,27 @@ impl Actor {
         &mut self,
         trigger: CommitPipelineTrigger,
         tick_deadline: Option<Instant>,
-    ) {
+    ) -> CommitPipelineTimings {
+        let pipeline_start = Instant::now();
+        let mut timings = CommitPipelineTimings {
+            ran: true,
+            ..CommitPipelineTimings::default()
+        };
+        let drain_start = Instant::now();
         let _ = self.drain_commit_results();
+        timings.drain_results += drain_start.elapsed();
         let now = Instant::now();
+        let abort_start = Instant::now();
         let _ = self.abort_inflight_commit_if_timed_out(now);
+        timings.abort_inflight += abort_start.elapsed();
         if self.commit_pipeline_budget_exhausted(tick_deadline, now) {
-            return;
+            return timings.finish(pipeline_start);
         }
 
         if matches!(trigger, CommitPipelineTrigger::Event) {
+            let reschedule_start = Instant::now();
             let _ = self.reschedule_stale_pending_blocks(None);
+            timings.event_reschedule += reschedule_start.elapsed();
             let queue_depths = super::status::worker_queue_depth_snapshot();
             let consensus_queue_backlog = queue_depths.vote_rx > 0
                 || queue_depths.block_payload_rx > 0
@@ -2228,7 +2262,7 @@ impl Actor {
                 self.telemetry
                     .note_commit_pipeline_tick(self.mode_tag(), inflight);
             }
-            return;
+            return timings.finish(pipeline_start);
         }
 
         if matches!(trigger, CommitPipelineTrigger::Tick) {
@@ -2238,7 +2272,7 @@ impl Actor {
                 .note_commit_pipeline_tick(self.mode_tag(), true);
         }
         if self.commit_pipeline_budget_exhausted(tick_deadline, Instant::now()) {
-            return;
+            return timings.finish(pipeline_start);
         }
 
         let block_time = {
@@ -2252,7 +2286,9 @@ impl Actor {
         if enable_qc_pipeline && should_rebuild_qcs {
             self.last_qc_rebuild = now;
             let active_commit_topology = self.effective_commit_topology();
+            let rebuild_start = Instant::now();
             self.rebuild_qcs_from_cached_votes(&active_commit_topology);
+            timings.qc_rebuild += rebuild_start.elapsed();
         }
 
         let mut pending_hashes: Vec<_> = self
@@ -2268,6 +2304,7 @@ impl Actor {
             if self.commit_pipeline_budget_exhausted(tick_deadline, Instant::now()) {
                 break;
             }
+            timings.blocks_considered = timings.blocks_considered.saturating_add(1);
             let block_start = Instant::now();
             let validation_start = Instant::now();
             let (consensus_mode, _, _) = self.consensus_context_for_height(pending_height);
@@ -2303,6 +2340,8 @@ impl Actor {
                 }
             }
             let validation_cost = validation_start.elapsed();
+            timings.validation += validation_cost;
+            timings.blocks_processed = timings.blocks_processed.saturating_add(1);
             match validation_outcome {
                 ValidationGateOutcome::Valid => {}
                 ValidationGateOutcome::Deferred => {
@@ -2487,6 +2526,7 @@ impl Actor {
             }
 
             let gate_cost = gate_start.elapsed();
+            timings.gate += gate_cost;
 
             if let Some(msg) = replay_msg.take() {
                 for peer in &commit_topology {
@@ -2672,9 +2712,12 @@ impl Actor {
                 let _ = self.finalize_pending_block(qc_header, pending, None);
                 self.pending.pending_processing.set(None);
                 self.pending.pending_processing_parent.set(None);
+                let finalize_cost = finalize_start.elapsed();
+                timings.finalize += finalize_cost;
                 continue;
             }
             let finalize_cost = finalize_start.elapsed();
+            timings.finalize += finalize_cost;
             self.pending.pending_blocks.insert(hash, pending);
 
             let cached_precommit_votes = qc_cache_for_subject(&self.qc_cache, hash)
@@ -2710,6 +2753,7 @@ impl Actor {
                 break;
             }
         }
+        timings.finish(pipeline_start)
     }
 
     pub(super) fn local_precommit_vote_for(

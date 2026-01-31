@@ -1680,7 +1680,8 @@ impl Actor {
                     stake_snapshot,
                 );
                 let allow_genesis_stub = qc.height == 1 && qc.view == 0;
-                if let Err(err) = super::validate_commit_qc_roster(
+                if let Err(err) = super::validate_commit_qc_roster_cached(
+                    &self.roster_validation_cache,
                     qc,
                     qc.subject_block_hash,
                     qc.height,

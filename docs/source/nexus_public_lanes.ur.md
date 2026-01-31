@@ -59,7 +59,7 @@ Torii/SDKs مکمل runtime امپلیمنٹیشن سے پہلے Norito payloads
 `PublicLaneValidatorStatus` لائف سائیکل فیزز درج کرتا ہے:
 
 - `PendingActivation(epoch)` — گورننس کے مقرر کردہ activation epoch کا انتظار؛ ٹپل payload
-  `current_epoch + 1` سے نکلا ہوا earliest activation epoch محفوظ کرتا ہے
+  `current_epoch + 1` (genesis bootstrap uses `current_epoch`) سے نکلا ہوا earliest activation epoch محفوظ کرتا ہے
   (`epoch_length_blocks` سے epochs derive ہوتے ہیں)۔
 - `Active` — consensus میں حصہ لیتا ہے اور ریوارڈز حاصل کر سکتا ہے۔
 - `Jailed { reason }` — عارضی معطلی (downtime، ٹیلی میٹری breach وغیرہ)۔
@@ -161,7 +161,7 @@ Validation rules:
 - Metadata میں activation سے پہلے contact/telemetry hooks شامل ہونا لازمی ہے۔
 - گورننس entry کو approve/deny کرتی ہے؛ تب تک status `PendingActivation` رہتا ہے اور runtime validator کو
   `Active` میں promote کرتا ہے جب target activation epoch
-  (`current_epoch + 1` at registration) پہنچ جائے اور اگلی epoch boundary آئے۔
+  (`current_epoch + 1` (genesis bootstrap uses `current_epoch`) at registration) پہنچ جائے اور اگلی epoch boundary آئے۔
 
 ### 2.2 `BondPublicLaneStake`
 
@@ -212,7 +212,7 @@ NX-9 کے بعد runtime logic `PublicLaneRewardRecord` annotations emit کرے 
   commit topology میں ایک registered peer کے live consensus key کی موجودگی مانگتے ہیں تاکہ `RegisterPublicLaneValidator`
   succeed ہو۔ Genesis fingerprints اور `use_stake_snapshot_roster` یہ طے کرتے ہیں کہ runtime roster کو stake snapshots
   سے derive کرے یا genesis peers پر fallback کرے۔
-- **Activation/exit operations:** registrations `PendingActivation` میں آتی ہیں، `current_epoch + 1`
+- **Activation/exit operations:** registrations `PendingActivation` میں آتی ہیں، `current_epoch + 1` (genesis bootstrap uses `current_epoch`)
   کو target رکھتی ہیں اور `epoch_length_blocks` حد پوری ہونے والے پہلے بلاک پر auto-promote ہوتی ہیں۔ Operators حد کے بعد
   `ActivatePublicLaneValidator` call کر کے
   promotion فورس کر سکتے ہیں۔ Exits validators کو `Exiting(release_at_ms)` میں لے جاتی ہیں اور capacity صرف

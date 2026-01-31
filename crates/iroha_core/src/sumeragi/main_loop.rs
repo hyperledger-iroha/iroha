@@ -1577,12 +1577,100 @@ impl RosterValidationInputs {
     }
 }
 
+const ROSTER_VALIDATION_MEMO_CAPACITY: usize = 256;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CommitQcMemoKey {
+    cert_hash: Hash,
+    consensus_mode: BlockSyncRosterCacheMode,
+    stake_snapshot_hash: Option<Hash>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CheckpointMemoKey {
+    checkpoint_hash: Hash,
+    epoch: u64,
+    consensus_mode: BlockSyncRosterCacheMode,
+    stake_snapshot_hash: Option<Hash>,
+}
+
+#[derive(Debug)]
+struct MemoCache<K, V> {
+    entries: BTreeMap<K, V>,
+    order: VecDeque<K>,
+    capacity: usize,
+}
+
+impl<K, V> MemoCache<K, V>
+where
+    K: Clone + Ord,
+    V: Clone,
+{
+    fn new(capacity: usize) -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            order: VecDeque::new(),
+            capacity,
+        }
+    }
+
+    fn get(&mut self, key: &K) -> Option<V> {
+        let value = self.entries.get(key).cloned()?;
+        self.touch(key.clone());
+        Some(value)
+    }
+
+    fn insert(&mut self, key: K, value: V) {
+        if self.capacity == 0 {
+            return;
+        }
+        self.entries.insert(key.clone(), value);
+        self.touch(key);
+        self.evict();
+    }
+
+    fn touch(&mut self, key: K) {
+        self.order.retain(|entry| entry != &key);
+        self.order.push_back(key);
+    }
+
+    fn evict(&mut self) {
+        while self.entries.len() > self.capacity {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+#[derive(Debug)]
+struct RosterValidationMemo {
+    commit_qc: MemoCache<CommitQcMemoKey, Vec<PeerId>>,
+    checkpoint: MemoCache<CheckpointMemoKey, Vec<PeerId>>,
+}
+
+impl RosterValidationMemo {
+    fn new(capacity: usize) -> Self {
+        Self {
+            commit_qc: MemoCache::new(capacity),
+            checkpoint: MemoCache::new(capacity),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RosterValidationCache {
     epoch_schedule: super::EpochScheduleSnapshot,
     pops: BTreeMap<PublicKey, Vec<u8>>,
     stake_map: BTreeMap<PeerId, Numeric>,
     fallback_stake: Numeric,
+    memo: Arc<Mutex<RosterValidationMemo>>,
 }
 
 impl RosterValidationCache {
@@ -1612,6 +1700,9 @@ impl RosterValidationCache {
             pops,
             stake_map,
             fallback_stake,
+            memo: Arc::new(Mutex::new(RosterValidationMemo::new(
+                ROSTER_VALIDATION_MEMO_CAPACITY,
+            ))),
         }
     }
 
@@ -1642,6 +1733,81 @@ impl RosterValidationCache {
 
     fn stake_snapshot_for_roster(&self, roster: &[PeerId]) -> Option<CommitStakeSnapshot> {
         commit_stake_snapshot_from_map(roster, &self.stake_map, &self.fallback_stake)
+    }
+
+    fn commit_qc_memo_key(
+        &self,
+        cert: &Qc,
+        consensus_mode: ConsensusMode,
+        inputs: &RosterValidationInputs,
+    ) -> CommitQcMemoKey {
+        CommitQcMemoKey {
+            cert_hash: Hash::from(HashOf::new(cert)),
+            consensus_mode: BlockSyncRosterCacheMode::from(consensus_mode),
+            stake_snapshot_hash: inputs
+                .stake_snapshot
+                .as_ref()
+                .map(|snapshot| Hash::from(HashOf::new(snapshot))),
+        }
+    }
+
+    fn checkpoint_memo_key(
+        &self,
+        checkpoint: &ValidatorSetCheckpoint,
+        epoch: u64,
+        consensus_mode: ConsensusMode,
+        inputs: &RosterValidationInputs,
+    ) -> CheckpointMemoKey {
+        CheckpointMemoKey {
+            checkpoint_hash: Hash::from(HashOf::new(checkpoint)),
+            epoch,
+            consensus_mode: BlockSyncRosterCacheMode::from(consensus_mode),
+            stake_snapshot_hash: inputs
+                .stake_snapshot
+                .as_ref()
+                .map(|snapshot| Hash::from(HashOf::new(snapshot))),
+        }
+    }
+
+    fn memo_commit_qc_get(&self, key: &CommitQcMemoKey) -> Option<Vec<PeerId>> {
+        let mut guard = self
+            .memo
+            .lock()
+            .expect("roster validation memo mutex poisoned");
+        guard.commit_qc.get(key)
+    }
+
+    fn memo_commit_qc_insert(&self, key: CommitQcMemoKey, roster: Vec<PeerId>) {
+        let mut guard = self
+            .memo
+            .lock()
+            .expect("roster validation memo mutex poisoned");
+        guard.commit_qc.insert(key, roster);
+    }
+
+    fn memo_checkpoint_get(&self, key: &CheckpointMemoKey) -> Option<Vec<PeerId>> {
+        let mut guard = self
+            .memo
+            .lock()
+            .expect("roster validation memo mutex poisoned");
+        guard.checkpoint.get(key)
+    }
+
+    fn memo_checkpoint_insert(&self, key: CheckpointMemoKey, roster: Vec<PeerId>) {
+        let mut guard = self
+            .memo
+            .lock()
+            .expect("roster validation memo mutex poisoned");
+        guard.checkpoint.insert(key, roster);
+    }
+
+    #[cfg(test)]
+    fn memo_sizes(&self) -> (usize, usize) {
+        let guard = self
+            .memo
+            .lock()
+            .expect("roster validation memo mutex poisoned");
+        (guard.commit_qc.len(), guard.checkpoint.len())
     }
 }
 
@@ -5441,7 +5607,8 @@ fn selection_from_roster_artifacts(
             inputs
         });
         let validate_start = Instant::now();
-        let result = validate_commit_qc_roster(
+        let result = validate_commit_qc_roster_cached(
+            roster_cache,
             cert,
             block_hash,
             block_height,
@@ -5518,7 +5685,8 @@ fn selection_from_roster_artifacts(
             })
         };
         let validate_start = Instant::now();
-        let result = validate_checkpoint_roster(
+        let result = validate_checkpoint_roster_cached(
+            roster_cache,
             chk,
             block_hash,
             block_height,
@@ -5936,6 +6104,144 @@ fn block_sync_update_with_roster(
         }
     }
     update
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_commit_qc_roster_cached(
+    roster_cache: &RosterValidationCache,
+    cert: &Qc,
+    block_hash: HashOf<BlockHeader>,
+    block_height: u64,
+    block_view: Option<u64>,
+    consensus_mode: ConsensusMode,
+    expected_epoch: u64,
+    chain_id: &ChainId,
+    mode_tag: &str,
+    allow_genesis_stub: bool,
+    inputs: &RosterValidationInputs,
+) -> Result<Vec<PeerId>, RosterValidationError> {
+    if cert.subject_block_hash != block_hash {
+        return Err(RosterValidationError::BlockHashMismatch);
+    }
+    if cert.height != block_height {
+        return Err(RosterValidationError::HeightMismatch {
+            expected: block_height,
+            actual: cert.height,
+        });
+    }
+    if let Some(block_view) = block_view {
+        if cert.view != block_view {
+            return Err(RosterValidationError::ViewMismatch {
+                expected: block_view,
+                actual: cert.view,
+            });
+        }
+    }
+    if cert.epoch != expected_epoch {
+        return Err(RosterValidationError::EpochMismatch {
+            expected: expected_epoch,
+            actual: cert.epoch,
+        });
+    }
+    if cert.phase != crate::sumeragi::consensus::Phase::Commit {
+        return Err(RosterValidationError::PhaseMismatch);
+    }
+    if cert.mode_tag != mode_tag {
+        return Err(RosterValidationError::ModeTagMismatch);
+    }
+    let genesis_stub = allow_genesis_stub
+        && block_height == 1
+        && cert.view == 0
+        && cert.aggregate.bls_aggregate_signature.is_empty()
+        && cert.aggregate.signers_bitmap.iter().all(|byte| *byte == 0);
+    if cert.aggregate.bls_aggregate_signature.is_empty() {
+        if genesis_stub {
+            return Ok(cert.validator_set.clone());
+        }
+        return Err(RosterValidationError::AggregateSignatureMissing);
+    }
+    let memo_key = roster_cache.commit_qc_memo_key(cert, consensus_mode, inputs);
+    if let Some(roster) = roster_cache.memo_commit_qc_get(&memo_key) {
+        return Ok(roster);
+    }
+    let roster = validate_commit_qc_roster(
+        cert,
+        block_hash,
+        block_height,
+        block_view,
+        consensus_mode,
+        expected_epoch,
+        chain_id,
+        mode_tag,
+        allow_genesis_stub,
+        inputs,
+    )?;
+    roster_cache.memo_commit_qc_insert(memo_key, roster.clone());
+    Ok(roster)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_checkpoint_roster_cached(
+    roster_cache: &RosterValidationCache,
+    checkpoint: &ValidatorSetCheckpoint,
+    block_hash: HashOf<BlockHeader>,
+    block_height: u64,
+    block_view: Option<u64>,
+    consensus_mode: ConsensusMode,
+    chain_id: &ChainId,
+    mode_tag: &str,
+    epoch: u64,
+    roots: Option<(Hash, Hash)>,
+    allow_genesis_stub: bool,
+    inputs: &RosterValidationInputs,
+) -> Result<Vec<PeerId>, RosterValidationError> {
+    if checkpoint.block_hash != block_hash {
+        return Err(RosterValidationError::BlockHashMismatch);
+    }
+    if checkpoint.height != block_height {
+        return Err(RosterValidationError::HeightMismatch {
+            expected: block_height,
+            actual: checkpoint.height,
+        });
+    }
+    if let Some(block_view) = block_view {
+        if checkpoint.view != block_view {
+            return Err(RosterValidationError::ViewMismatch {
+                expected: block_view,
+                actual: checkpoint.view,
+            });
+        }
+    }
+    let genesis_stub = allow_genesis_stub
+        && block_height == 1
+        && checkpoint.view == 0
+        && checkpoint.bls_aggregate_signature.is_empty()
+        && checkpoint.signers_bitmap.iter().all(|byte| *byte == 0);
+    if checkpoint.bls_aggregate_signature.is_empty() {
+        if genesis_stub {
+            return Ok(checkpoint.validator_set.clone());
+        }
+        return Err(RosterValidationError::AggregateSignatureMissing);
+    }
+    let memo_key = roster_cache.checkpoint_memo_key(checkpoint, epoch, consensus_mode, inputs);
+    if let Some(roster) = roster_cache.memo_checkpoint_get(&memo_key) {
+        return Ok(roster);
+    }
+    let roster = validate_checkpoint_roster(
+        checkpoint,
+        block_hash,
+        block_height,
+        block_view,
+        consensus_mode,
+        chain_id,
+        mode_tag,
+        epoch,
+        roots,
+        allow_genesis_stub,
+        inputs,
+    )?;
+    roster_cache.memo_checkpoint_insert(memo_key, roster.clone());
+    Ok(roster)
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -9526,6 +9832,7 @@ impl Actor {
         let rbc_outbound_progress = self.flush_rbc_outbound_chunks(now);
         let rbc_session_ttl_progress = self.prune_stale_rbc_sessions(SystemTime::now());
         let mut commit_pipeline_cost = Duration::ZERO;
+        let mut commit_pipeline_timings = commit::CommitPipelineTimings::default();
         let mut propose_cost = Duration::ZERO;
         progress |= rbc_persist_progress
             || rbc_seed_progress
@@ -9548,10 +9855,10 @@ impl Actor {
             || commit_wakeup
         {
             self.pending.commit_pipeline_wakeup = false;
-            let pipeline_start = Instant::now();
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.commit_pipeline");
-            self.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, tick_deadline);
-            commit_pipeline_cost = pipeline_start.elapsed();
+            commit_pipeline_timings = self
+                .process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, tick_deadline);
+            commit_pipeline_cost = commit_pipeline_timings.total;
             progress = true;
         }
         let proposal_backpressure = {
@@ -9666,6 +9973,17 @@ impl Actor {
                 reschedule_ms = reschedule_cost.as_millis(),
                 idle_view_ms = idle_view_cost.as_millis(),
                 commit_pipeline_ms = commit_pipeline_cost.as_millis(),
+                commit_pipeline_ran = commit_pipeline_timings.ran,
+                commit_pipeline_blocks_considered = commit_pipeline_timings.blocks_considered,
+                commit_pipeline_blocks_processed = commit_pipeline_timings.blocks_processed,
+                commit_pipeline_drain_ms = commit_pipeline_timings.drain_results.as_millis(),
+                commit_pipeline_abort_ms = commit_pipeline_timings.abort_inflight.as_millis(),
+                commit_pipeline_event_reschedule_ms =
+                    commit_pipeline_timings.event_reschedule.as_millis(),
+                commit_pipeline_qc_rebuild_ms = commit_pipeline_timings.qc_rebuild.as_millis(),
+                commit_pipeline_validation_ms = commit_pipeline_timings.validation.as_millis(),
+                commit_pipeline_gate_ms = commit_pipeline_timings.gate.as_millis(),
+                commit_pipeline_finalize_ms = commit_pipeline_timings.finalize.as_millis(),
                 pacemaker_eval_ms = pacemaker_eval_cost.as_millis(),
                 propose_ms = propose_cost.as_millis(),
                 progress,

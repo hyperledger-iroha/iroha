@@ -818,9 +818,13 @@ fn process_trust_records(
             }
             continue;
         }
+        let sender_trusted =
+            trusted_peers.contains(from_peer.id()) || current_topology.contains(from_peer.id());
+        let allow_trusted_introduction = sender_trusted && info.trusted;
         let peer_allowed = current_topology.contains(&info.peer_id)
             || allow_public
-            || trusted_peers.contains(&info.peer_id);
+            || trusted_peers.contains(&info.peer_id)
+            || allow_trusted_introduction;
         if !peer_allowed {
             if !allow_public {
                 iroha_logger::warn!(
@@ -1389,7 +1393,7 @@ mod tests {
 
         let info = PeerTrustInfo {
             peer_id: unknown_peer.id().clone(),
-            trusted: true,
+            trusted: false,
             score: 1,
         };
         let signature = Signature::new(
@@ -1443,7 +1447,7 @@ mod tests {
 
         let info = PeerTrustInfo {
             peer_id: unknown_peer.id().clone(),
-            trusted: true,
+            trusted: false,
             score: 1,
         };
         let signature = Signature::new(
@@ -1554,6 +1558,60 @@ mod tests {
                 .next()
                 .expect("contains one peer"),
             unknown_peer.id()
+        );
+        assert_eq!(trust_book.score(from_peer.id(), now), 0);
+    }
+
+    #[test]
+    fn trust_gossip_allows_trusted_sender_to_introduce_peer() {
+        let kp_sender = KeyPair::from_seed(vec![41, 42, 43, 44], Algorithm::Ed25519);
+        let kp_unknown = KeyPair::from_seed(vec![45, 46, 47, 48], Algorithm::Ed25519);
+        let from_peer = Peer::new(
+            "127.0.0.1:9300".parse().expect("addr"),
+            kp_sender.public_key().clone(),
+        );
+        let unknown_peer = Peer::new(
+            "127.0.0.1:9301".parse().expect("addr"),
+            kp_unknown.public_key().clone(),
+        );
+
+        let info = PeerTrustInfo {
+            peer_id: unknown_peer.id().clone(),
+            trusted: true,
+            score: 1,
+        };
+        let signature = Signature::new(
+            kp_sender.private_key(),
+            &PeersGossiper::trust_payload(&info),
+        )
+        .payload()
+        .to_vec();
+        let trust = vec![SignedPeerTrust { info, signature }];
+        let now = Instant::now();
+        let mut trust_book = TrustBook::new(
+            Duration::from_millis(0),
+            TrustPenalties {
+                bad_gossip: 4,
+                unknown_peer: 3,
+            },
+            -2,
+        );
+        trust_book.seed([from_peer.id().clone()], now);
+
+        let outcome = process_trust_records(
+            trust,
+            &from_peer,
+            false,
+            &BTreeSet::new(),
+            &BTreeSet::from([from_peer.id().clone()]),
+            &mut trust_book,
+            now,
+        );
+
+        assert!(!outcome.drop_sender);
+        assert!(
+            outcome.newly_trusted.contains(unknown_peer.id()),
+            "trusted sender should be able to introduce a new peer"
         );
         assert_eq!(trust_book.score(from_peer.id(), now), 0);
     }

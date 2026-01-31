@@ -421,6 +421,7 @@ pub struct VrfEpochRecord {
     /// Participation entries for validators observed so far.
     pub participants: Vec<VrfParticipantRecord>,
     /// Late reveals accepted after the reveal window (do not affect entropy).
+    #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub late_reveals: Vec<VrfLateRevealRecord>,
     /// Validators that committed without revealing within the epoch (finalized epochs only).
@@ -482,6 +483,36 @@ mod tests {
         assert!(decoded.finalized);
         assert_eq!(decoded.committed_no_reveal, vec![2, 4]);
         assert_eq!(decoded.no_participation, vec![6]);
+    }
+
+    #[test]
+    fn vrf_epoch_record_accepts_missing_late_reveals() {
+        let record = VrfEpochRecord {
+            epoch: 7,
+            seed: [0x22; 32],
+            epoch_length: 120,
+            commit_deadline_offset: 40,
+            reveal_deadline_offset: 80,
+            roster_len: 4,
+            finalized: false,
+            updated_at_height: 120,
+            participants: Vec::new(),
+            late_reveals: Vec::new(),
+            committed_no_reveal: Vec::new(),
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        };
+        let mut value = norito::json::to_value(&record).expect("serialize vrf epoch record");
+        if let norito::json::Value::Object(map) = &mut value {
+            map.remove("late_reveals");
+        }
+        let decoded: VrfEpochRecord =
+            norito::json::from_value(value).expect("decode without late_reveals");
+        assert!(decoded.late_reveals.is_empty());
+        assert_eq!(decoded.epoch, record.epoch);
+        assert_eq!(decoded.seed, record.seed);
     }
 
     #[test]

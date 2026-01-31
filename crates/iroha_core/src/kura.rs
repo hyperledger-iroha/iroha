@@ -3,6 +3,7 @@
 //! new [`Block`](iroha_data_model::block::SignedBlock)s on the
 //! blockchain.
 use std::{
+    collections::VecDeque,
     fmt::Debug,
     io::{BufWriter, ErrorKind, Read, Seek, SeekFrom, Write},
     num::NonZeroUsize,
@@ -97,6 +98,8 @@ pub struct Kura {
     block_plain_text_path: Mutex<Option<PathBuf>>,
     /// Serialize sidecar writes to avoid index/data races.
     sidecar_lock: Mutex<()>,
+    /// Queue of pipeline sidecar writes flushed by the Kura writer thread.
+    pipeline_sidecar_queue: Mutex<VecDeque<PipelineRecoverySidecar>>,
     /// Root directory where Kura stores lane segments.
     store_root: PathBuf,
     /// Active block directory for the primary lane.
@@ -587,6 +590,7 @@ impl Kura {
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(block_plain_text_path),
             sidecar_lock: Mutex::new(()),
+            pipeline_sidecar_queue: Mutex::new(VecDeque::new()),
             store_root,
             active_blocks_dir: Mutex::new(blocks_root.clone()),
             active_merge_path: Mutex::new(merge_log_path.clone()),
@@ -618,6 +622,7 @@ impl Kura {
             block_notify_rx: Mutex::new(Some(block_notify_rx)),
             block_plain_text_path: Mutex::new(None),
             sidecar_lock: Mutex::new(()),
+            pipeline_sidecar_queue: Mutex::new(VecDeque::new()),
             store_root: PathBuf::new(),
             active_blocks_dir: Mutex::new(PathBuf::new()),
             active_merge_path: Mutex::new(PathBuf::new()),
@@ -1464,6 +1469,8 @@ impl Kura {
                 info!("Kura block thread is being shut down. Writing remaining blocks to store.");
                 should_exit = true;
             }
+
+            kura.flush_pipeline_sidecars();
 
             let block_data = kura.block_data.lock();
             let in_memory_len = block_data.len();
@@ -2884,6 +2891,34 @@ impl Kura {
 
     fn sidecar_fsync_mode(&self) -> FsyncMode {
         self.block_store.lock().fsync.mode
+    }
+
+    /// Enqueue pipeline recovery metadata for asynchronous persistence.
+    ///
+    /// This avoids consensus-path I/O; the Kura writer thread flushes the queue.
+    pub fn enqueue_pipeline_metadata(&self, sidecar: PipelineRecoverySidecar) {
+        {
+            let mut queue = self.pipeline_sidecar_queue.lock();
+            queue.push_back(sidecar);
+        }
+        if let Err(err) = self.block_notify_tx.send(BlockNotify::NewBlock) {
+            iroha_logger::warn!(?err, "failed to notify block writer about pipeline sidecar");
+        }
+    }
+
+    fn flush_pipeline_sidecars(&self) -> usize {
+        let sidecars = {
+            let mut queue = self.pipeline_sidecar_queue.lock();
+            if queue.is_empty() {
+                return 0;
+            }
+            queue.drain(..).collect::<Vec<_>>()
+        };
+        let count = sidecars.len();
+        for sidecar in sidecars {
+            self.write_pipeline_metadata(&sidecar);
+        }
+        count
     }
 
     /// Write per-block pipeline recovery metadata sidecar under the store dir. Best-effort: errors
@@ -8045,6 +8080,50 @@ mod tests {
         assert_eq!(got.block_hash, block_hash);
         assert_eq!(got.dag.key_count, 0);
         assert_eq!(got.format_label(), "pipeline.recovery.v1");
+    }
+
+    #[test]
+    fn pipeline_sidecar_enqueue_flushes() {
+        use iroha_config::base::WithOrigin;
+        let temp_dir = TempDir::new().unwrap();
+        let (kura, _count) = Kura::new(
+            &Config {
+                init_mode: InitMode::Strict,
+                store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
+                max_disk_usage_bytes:
+                    iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+                blocks_in_memory: BLOCKS_IN_MEMORY,
+                debug_output_new_blocks: false,
+                merge_ledger_cache_capacity:
+                    iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+                fsync_mode: iroha_config::kura::FsyncMode::Batched,
+                fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+                block_sync_roster_retention:
+                    iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+                roster_sidecar_retention:
+                    iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            },
+            &RuntimeLaneConfig::default(),
+        )
+        .unwrap();
+
+        let block_hash = store_dummy_blocks(&kura, 1)[0];
+        let sidecar = PipelineRecoverySidecar::new_v1(
+            1,
+            block_hash,
+            PipelineDagSnapshot {
+                fingerprint: [0u8; 32],
+                key_count: 0,
+            },
+            Vec::new(),
+        );
+        kura.enqueue_pipeline_metadata(sidecar);
+        assert!(kura.read_pipeline_metadata(1).is_none());
+
+        kura.flush_pipeline_sidecars();
+        let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
+        assert_eq!(got.height, 1);
+        assert_eq!(got.block_hash, block_hash);
     }
 
     #[test]
