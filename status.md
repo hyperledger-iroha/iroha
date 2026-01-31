@@ -1,6 +1,10 @@
 # Status
 
 Last update: 2026-01-31
+- Sumeragi: guard NEW_VIEW vote emission when a higher-view quorum already exists at the same height; added unit coverage to ensure the first quorum still emits.
+- Tests: `cargo test -p iroha_core emit_new_view_vote_ -- --nocapture` (NEW_VIEW tests ok; command timed out after ~4m while running remaining test binaries; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused `should_send` in `iroha_core` tests).
+- Integration tests: align `sumeragi_rbc_background_queue_synchronous` with the no-drop background-post behavior when `sumeragi.debug.disable_background_worker` is enabled.
+- Tests: not run (integration test expectation update only).
 - Sumeragi: suppress commit QC aggregation for lower views once a higher NEW_VIEW quorum exists at the same height; QC signers now ignore lower-view votes when a signer has moved to a higher view; added unit coverage for both paths.
 - Tests: `cargo test -p iroha_core qc_signers_for_votes_ignores_lower_view_after_higher_view_vote -- --nocapture`, `cargo test -p iroha_core try_form_qc_from_votes_skips_when_higher_new_view_quorum_exists -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused `should_send` in `iroha_core` tests).
 - Integration tests: `cargo test -p integration_tests --test mod extra_functional::unstable_network::unstable_network_5_peers_1_fault -- --nocapture` (ok), `cargo test -p integration_tests --test mod extra_functional::unstable_network::unstable_network_8_peers_1_fault -- --nocapture` (ok).

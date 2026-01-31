@@ -3372,7 +3372,7 @@ async fn vote_verify_worker_records_vote_after_async_check() {
     let worker_joins = actor.attach_vote_verify_worker();
 
     let height = 1;
-    let view = 0;
+    let view = 0u64;
     let topology_peers = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(topology_peers);
     let chain_id = actor.chain_id.clone();
@@ -3442,7 +3442,7 @@ async fn vote_signature_topology_cache_reuses_arc() {
     let actor = &mut harness.actor;
 
     let height = 1;
-    let view = 0;
+    let view = 0u64;
     let topology_peers = actor.effective_commit_topology();
     let roster_hash = HashOf::new(&topology_peers);
     let topology = super::network_topology::Topology::new(topology_peers);
@@ -3472,7 +3472,7 @@ async fn vote_validation_inbound_defers_then_dispatches() {
     let actor = &mut harness.actor;
 
     let height = 1;
-    let view = 0;
+    let view = 0u64;
     let topology_peers = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(topology_peers);
     let chain_id = actor.chain_id.clone();
@@ -3748,7 +3748,7 @@ async fn vote_verify_defers_when_queue_full_and_dispatches_later() {
     let actor = &mut harness.actor;
 
     let height = 1;
-    let view = 0;
+    let view = 0u64;
     let topology_peers = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(topology_peers);
     let chain_id = actor.chain_id.clone();
@@ -7369,7 +7369,7 @@ fn cached_qc_for_filters_epoch() {
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
     let height = 5;
-    let view = 0;
+    let view = 0u64;
     let signers_bitmap = vec![0b0000_0001];
     let qc_epoch0 = qc_with_bitmap(
         &chain,
@@ -8825,7 +8825,7 @@ async fn block_sync_caches_qc_before_block_known() {
     let roster = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(roster.clone());
     let height = 2;
-    let view = 0;
+    let view = 0u64;
     let signature_topology =
         super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, None);
     let signer_peer = signature_topology
@@ -8915,7 +8915,7 @@ async fn block_sync_cache_rejects_qc_epoch_mismatch() {
     let roster = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(roster.clone());
     let height = 2;
-    let view = 0;
+    let view = 0u64;
     let signature_topology =
         super::topology_for_view(&topology, height, view, PERMISSIONED_TAG, None);
     let signer_peer = signature_topology
@@ -11807,7 +11807,7 @@ async fn rebroadcast_rbc_payload_skips_when_queue_backpressured() {
 #[tokio::test(flavor = "current_thread")]
 async fn rebroadcast_stalled_rbc_payloads_flushes_pending_with_roster() {
     let mut harness = test_actor_harness(4).await;
-    let view = 0;
+    let view = 0u64;
     let (parent, height) = {
         let view = harness.actor.state.view();
         (view.latest_block_hash(), view.height().saturating_add(1))
@@ -39737,6 +39737,79 @@ async fn new_view_votes_target_collectors_when_local_leads_in_npos() {
     );
     expected.retain(|peer| peer != &local_peer);
     assert_eq!(targets, expected);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn emit_new_view_vote_allows_without_higher_view_quorum() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    seed_genesis_block_for_state(&actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+
+    let committed_qc = actor.latest_committed_qc().expect("committed qc");
+    let height = committed_qc.height.saturating_add(1);
+    let view = 0u64;
+    let higher_view = view.saturating_add(1);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit();
+
+    for peer in topology.as_ref().iter().take(required.saturating_sub(1)) {
+        actor
+            .subsystems
+            .propose
+            .new_view_tracker
+            .record(height, higher_view, peer.clone(), committed_qc);
+    }
+
+    assert!(
+        actor.emit_new_view_vote(height, view, committed_qc, &topology),
+        "NEW_VIEW vote should not be blocked without a higher-view quorum"
+    );
+    assert!(
+        actor
+            .vote_log
+            .values()
+            .any(|vote| vote.phase == Phase::NewView && vote.height == height && vote.view == view),
+        "local NEW_VIEW vote should be recorded"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn emit_new_view_vote_skips_when_higher_view_quorum_exists() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    seed_genesis_block_for_state(&actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+
+    let committed_qc = actor.latest_committed_qc().expect("committed qc");
+    let height = committed_qc.height.saturating_add(1);
+    let view = 0u64;
+    let higher_view = view.saturating_add(1);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit();
+
+    for peer in topology.as_ref().iter().take(required) {
+        actor
+            .subsystems
+            .propose
+            .new_view_tracker
+            .record(height, higher_view, peer.clone(), committed_qc);
+    }
+
+    assert!(
+        !actor.emit_new_view_vote(height, view, committed_qc, &topology),
+        "NEW_VIEW vote should be skipped when a higher-view quorum exists"
+    );
+    assert!(
+        actor.vote_log.is_empty(),
+        "vote log should remain empty after skipping NEW_VIEW vote"
+    );
 
     harness.shutdown.send();
 }

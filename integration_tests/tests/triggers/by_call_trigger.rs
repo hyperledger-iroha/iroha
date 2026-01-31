@@ -12,7 +12,7 @@ use iroha::{
             error::{InstructionExecutionError, InvalidParameterError},
         },
         prelude::*,
-        query::{error::FindError, trigger::FindTriggers},
+        query::{error::FindError, trigger::{FindActiveTriggerIds, FindTriggers}},
         transaction::Executable,
     },
 };
@@ -967,6 +967,30 @@ async fn trigger_burn_repetitions() -> Result<()> {
             stringify!(trigger_burn_repetitions),
         )
         .await?;
+
+        timeout(network.sync_timeout(), async {
+            loop {
+                let still_active = spawn_blocking({
+                    let client = test_client.clone();
+                    let trigger_id = trigger_id.clone();
+                    move || -> Result<bool> {
+                        let ids = client
+                            .query(FindActiveTriggerIds)
+                            .execute_all()
+                            .wrap_err("query active trigger ids")?;
+                        Ok(ids.into_iter().any(|id| id == trigger_id))
+                    }
+                })
+                .await??;
+                if !still_active {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            Ok::<(), eyre::Report>(())
+        })
+        .await
+        .wrap_err("wait for trigger to be pruned after burn")??;
 
         // Executing trigger
         let execute_trigger = ExecuteTrigger::new(trigger_id);
