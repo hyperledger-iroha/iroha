@@ -91,6 +91,7 @@ LaneConfigEntry {
 ## Storage Budgets
 
 - `nexus.storage.max_disk_usage_bytes` defines the total on-disk budget that Nexus nodes should consume across Kura, cold WSV snapshots, SoraFS storage, and streaming spools (SoraNet/SoraVPN).
+- `nexus.storage.budget_enforce_interval_blocks` sets how often (in committed blocks) the storage budget scan runs; set to 0 to enforce every block.
 - When the global disk budget is exceeded, eviction is deterministic: prune SoraNet provision spools in lexicographic path order, then SoraVPN spools, then tiered-state cold snapshots oldest-first (offloading to `da_store_root` when configured), then Kura retired segments, and finally evict active Kura block bodies into `da_blocks/` for DA-backed rehydration on read. Blocks that exceed the Kura budget on their own are persisted directly into `da_blocks/` and indexed as evicted.
 - `nexus.storage.max_wsv_memory_bytes` caps the hot WSV tier by propagating deterministic in-memory WSV sizing into `tiered_state.hot_retained_bytes`; grace retention may temporarily exceed the budget, but the overflow is observable via telemetry (`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`).
 - `nexus.storage.disk_budget_weights` splits the disk budget across components using basis points (must sum to 10,000). The derived caps are applied to `kura.max_disk_usage_bytes`, `tiered_state.max_cold_bytes`, `sorafs.storage.max_capacity_bytes`, `streaming.soranet.provision_spool_max_bytes`, and `streaming.soravpn.provision_spool_max_bytes`.

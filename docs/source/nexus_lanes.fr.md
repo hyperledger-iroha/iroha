@@ -96,6 +96,7 @@ LaneConfigEntry {
 ## Budgets de stockage
 
 - `nexus.storage.max_disk_usage_bytes` définit le budget total sur disque que les nœuds Nexus doivent consommer entre Kura, snapshots WSV froids, stockage SoraFS et spools de streaming (SoraNet/SoraVPN).
+- `nexus.storage.budget_enforce_interval_blocks` définit l'intervalle (en blocs confirmés) entre les scans d'application du budget ; 0 = chaque bloc.
 - Lorsque le budget global est dépassé, l'éviction est déterministe : on purge d'abord les spools de provision SoraNet (ordre lexicographique des chemins), puis les spools SoraVPN, ensuite les snapshots froids du tiered-state (du plus ancien au plus récent, avec offload vers `da_store_root` lorsqu'il est configuré), puis les segments Kura retirés, et enfin on évince les corps de blocs actifs de Kura vers `da_blocks/` pour une réhydratation DA à la lecture.
 - `nexus.storage.max_wsv_memory_bytes` plafonne la couche chaude WSV en propageant le dimensionnement deterministe en memoire du WSV dans `tiered_state.hot_retained_bytes` ; la rétention de grâce peut temporairement dépasser le budget, mais le dépassement est observable via télémétrie (`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`).
 - `nexus.storage.disk_budget_weights` répartit le budget disque entre composants en points de base (doit sommer à 10 000). Les plafonds dérivés s’appliquent à `kura.max_disk_usage_bytes`, `tiered_state.max_cold_bytes`, `sorafs.storage.max_capacity_bytes`, `streaming.soranet.provision_spool_max_bytes` et `streaming.soravpn.provision_spool_max_bytes`.

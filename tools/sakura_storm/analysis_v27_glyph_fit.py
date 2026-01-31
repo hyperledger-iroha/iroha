@@ -5,6 +5,8 @@ from typing import List, Tuple
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from v27_params import KATAKANA, KATAKANA_V27, V27
+
 
 BASE_DIR = os.path.dirname(__file__)
 REF_GIF = os.getenv(
@@ -22,13 +24,13 @@ STROKES = [int(x) for x in os.getenv("SS_STROKES", "0,1").split(",") if x.strip(
 THRESHOLDS = [int(x) for x in os.getenv("SS_THRESHOLDS", "64,96,128,160,192").split(",") if x.strip()]
 SAMPLES = int(os.getenv("SS_SAMPLES", "200"))
 SEED = int(os.getenv("SS_SEED", "1337"))
+KATAKANA_MODE = os.getenv("SS_KATAKANA_MODE", "v27").strip().lower()
 
 
-KATAKANA = list("アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン")
-DATA_COLS = {(255, 233, 246), (255, 234, 246), (68, 40, 54), (69, 40, 54)}
-RING_BRIGHT = (255, 246, 252)
-RING_DIM = (62, 36, 50)
-LOGO_COLS = {(30, 16, 25), (36, 18, 28), (43, 20, 32)}
+DATA_COLS = {V27.data_bright, V27.data_dim}
+RING_BRIGHT = V27.ring_bright
+RING_DIM = V27.ring_dim
+LOGO_COLS = set(V27.logo_shades)
 
 
 def load_frames(path: str) -> np.ndarray:
@@ -92,10 +94,18 @@ def render_glyph_mask(
     return arr > thresh
 
 
+def resolve_katakana() -> List[str]:
+    if KATAKANA_MODE in ("v27", "legacy"):
+        return KATAKANA_V27[:]
+    if KATAKANA_MODE in ("iroha", "iroha_extra"):
+        return KATAKANA[:]
+    raise ValueError(f"unknown KATAKANA_MODE {KATAKANA_MODE!r}")
+
+
 def score_config(masks: List[np.ndarray], font_index: int, size: int, stroke: int, thresh: int) -> float:
     font = ImageFont.truetype(FONT_PATH, size, index=font_index)
     canvas = masks[0].shape[0]
-    glyph_masks = [render_glyph_mask(font, g, canvas, stroke, thresh) for g in KATAKANA]
+    glyph_masks = [render_glyph_mask(font, g, canvas, stroke, thresh) for g in resolve_katakana()]
     diffs = []
     for m in masks:
         best = 1.0

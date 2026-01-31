@@ -2,16 +2,14 @@
 name = "gpuzstd_metal"
 version.workspace = true
 edition = "2024"
+license.workspace = true
+authors.workspace = true
 
 [lib]
 crate-type = ["cdylib"]
 
-[features]
-default = []
-
 [dependencies]
-zstd = { workspace = true }
-zstd-sys = { version = "2.0.16", features = ["experimental"] }
+zstd.workspace = true
 
 [build-dependencies]
 cc = "1.2.45"

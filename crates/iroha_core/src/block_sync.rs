@@ -3074,14 +3074,22 @@ pub mod message {
                             block = %block_hash,
                             "forwarding block sync update to sumeragi"
                         );
-                        if let Some(nz_height) = NonZeroU64::new(block_height) {
-                            block_sync.seen_blocks.insert((nz_height, block_hash));
-                        } else {
-                            warn!(
-                                block_height,
-                                "skipping block sync update with zero block height"
-                            );
-                            continue;
+                        // Only mark seen blocks once they are persisted locally so retries
+                        // are not suppressed for uncommitted payloads.
+                        if block_sync
+                            .kura
+                            .get_block_height_by_hash(block_hash)
+                            .is_some()
+                        {
+                            if let Some(nz_height) = NonZeroU64::new(block_height) {
+                                block_sync.seen_blocks.insert((nz_height, block_hash));
+                            } else {
+                                warn!(
+                                    block_height,
+                                    "skipping block sync update with zero block height"
+                                );
+                                continue;
+                            }
                         }
                         let mut msg = BlockSyncUpdate::from(&block);
                         let incoming_roster = roster_by_hash.get(&block_hash);
@@ -3307,7 +3315,7 @@ pub mod message {
             collections::{BTreeMap, BTreeSet},
             num::{NonZeroU32, NonZeroU64},
             sync::Arc,
-            time::Duration,
+            time::{Duration, Instant},
         };
 
         use iroha_config::parameters::actual::ConsensusMode;
@@ -3432,6 +3440,87 @@ pub mod message {
                 unblock_tx.send(()).expect("unblock");
                 handle_message.await;
                 unblock.join().expect("unblock thread");
+            });
+        }
+
+        #[test]
+        fn share_blocks_does_not_mark_uncommitted_blocks_seen() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("tokio runtime");
+
+            runtime.block_on(async {
+                let (sumeragi, _block_rx) = test_sumeragi_handle(1);
+                let kura = Kura::blank_kura_for_testing();
+                let state = Arc::new(State::new_for_testing(
+                    World::new(),
+                    Arc::clone(&kura),
+                    LiveQueryStore::start_test(),
+                ));
+                let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let peer = Peer::new(
+                    "127.0.0.1:0".parse().expect("valid socket address"),
+                    peer_id,
+                );
+                let sender_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let mut block_sync = BlockSynchronizer {
+                    sumeragi,
+                    kura,
+                    peer,
+                    gossip_period: Duration::from_secs(1),
+                    gossip_max_period: Duration::from_secs(1),
+                    gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
+                    gossip_backoff: Duration::from_secs(1),
+                    gossip_next_deadline: Instant::now(),
+                    network: crate::IrohaNetwork::closed_for_tests(),
+                    relay_ttl: 1,
+                    block_sync_frame_cap: 1024,
+                    state,
+                    telemetry: None,
+                    seen_blocks: BTreeSet::new(),
+                    unknown_prev_hashes: BTreeMap::new(),
+                    request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
+                        Duration::from_secs(1),
+                        Duration::from_secs(1),
+                    )),
+                    latest_height: 0,
+                    last_peers: BTreeSet::new(),
+                    last_drop_count: 0,
+                    last_drop_at: None,
+                    fallback_consensus_mode: ConsensusMode::Permissioned,
+                };
+                block_sync
+                    .request_tracker
+                    .record_request(sender_peer_id.clone(), Instant::now());
+
+                let keypair = KeyPair::random();
+                let block =
+                    ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                        let height = NonZeroU64::new(1).expect("non-zero height");
+                        header.set_height(height);
+                        header.set_prev_block_hash(None);
+                    });
+                let blocks = vec![block.into()];
+                let qcs = vec![None];
+                let rosters = vec![RosterMetadata {
+                    commit_qc: None,
+                    validator_checkpoint: None,
+                    stake_snapshot: None,
+                }];
+                let msg = message::Message::ShareBlocks(message::ShareBlocks::new(
+                    blocks,
+                    sender_peer_id,
+                    qcs,
+                    rosters,
+                ));
+
+                msg.handle_message(&mut block_sync).await;
+
+                assert!(
+                    block_sync.seen_blocks.is_empty(),
+                    "uncommitted blocks should not be marked seen"
+                );
             });
         }
 

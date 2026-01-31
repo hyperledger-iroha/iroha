@@ -651,7 +651,7 @@ impl Actor {
         })
     }
 
-    fn drain_commit_results(&mut self) -> CommitDrainSummary {
+    pub(super) fn drain_commit_results(&mut self) -> CommitDrainSummary {
         let mut summary = CommitDrainSummary::default();
         while let Some(recv_result) = self
             .subsystems

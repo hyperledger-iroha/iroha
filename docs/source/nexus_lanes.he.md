@@ -100,6 +100,7 @@ LaneConfigEntry {
 ## תקציבי אחסון
 
 - `nexus.storage.max_disk_usage_bytes` מגדיר את תקציב הדיסק הכולל שעל צמתים של Nexus לצרוך בין Kura, צילומי WSV קרים, אחסון SoraFS ו-spools של streaming (SoraNet/SoraVPN).
+- `nexus.storage.budget_enforce_interval_blocks` מגדיר את מרווח הבדיקה (במספר בלוקים שאושרו) בין סריקות אכיפת התקציב; 0 = בכל בלוק.
 - כאשר התקציב הכולל נחצה, ההדחה דטרמיניסטית: תחילה מקצצים את spools ההקצאה של SoraNet לפי סדר נתיב לקסיקוגרפי, אחר כך את spools SoraVPN, לאחר מכן את צילומי ה-WSV הקרים של tiered-state מהישן לחדש (עם offload אל `da_store_root` כאשר מוגדר), אחר כך את סגמנטי Kura שפרשו, ולבסוף מפנים את גופי הבלוקים הפעילים של Kura אל `da_blocks/` לצורך החייאת DA בעת קריאה.
 - `nexus.storage.max_wsv_memory_bytes` מגביל את שכבת ה-WSV החמה על ידי החלת גודל דטרמיניסטי של WSV בזיכרון אל `tiered_state.hot_retained_bytes`; שמירת grace יכולה זמנית לחרוג מהתקציב, אך החריגה נראית בטלמטריה (`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`).
 - `nexus.storage.disk_budget_weights` מחלק את תקציב הדיסק בין רכיבים בנקודות בסיס (חייב להסתכם ב-10,000). התקרות המחושבות מוחלות על `kura.max_disk_usage_bytes`, `tiered_state.max_cold_bytes`, `sorafs.storage.max_capacity_bytes`, `streaming.soranet.provision_spool_max_bytes` ו-`streaming.soravpn.provision_spool_max_bytes`.

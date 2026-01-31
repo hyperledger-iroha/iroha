@@ -4,6 +4,7 @@ from typing import Tuple
 import numpy as np
 from PIL import Image
 
+from v27_params import PALETTE_PRESETS
 
 BASE_DIR = os.path.dirname(__file__)
 MODEL_NPZ = os.getenv("SS_MODEL_NPZ", os.path.join(BASE_DIR, "v27_model.npz"))
@@ -12,6 +13,7 @@ OUT_GIF = os.getenv(
     "SS_OUT_GIF",
     DEFAULT_OUT if os.path.isdir("/tmp/sakura_storm_viz") else os.path.join(BASE_DIR, "sakura_storm_v27_from_model.gif"),
 )
+PALETTE_PRESET = os.getenv("SS_PALETTE_PRESET", "").strip().lower()
 
 
 def parse_color(text: str, default: Tuple[int, int, int]) -> Tuple[int, int, int]:
@@ -31,6 +33,28 @@ def main() -> None:
     frames_idx = data["frames_idx"].astype(np.uint8)
     duration = int(data["duration"]) if "duration" in data else 40
     loop = int(data["loop"]) if "loop" in data else 0
+
+    if PALETTE_PRESET:
+        preset = PALETTE_PRESETS.get(PALETTE_PRESET)
+        if preset is None:
+            raise ValueError(f"unknown PALETTE_PRESET {PALETTE_PRESET!r}")
+
+        def set_color(idx: int, value: Tuple[int, int, int]) -> None:
+            if 0 <= idx < palette.shape[0]:
+                palette[idx] = np.array(value, dtype=np.uint8)
+
+        logo_shades = preset["logo_shades"]
+        set_color(0, preset["bg"])
+        if len(logo_shades) >= 3:
+            set_color(1, logo_shades[0])
+            set_color(2, logo_shades[1])
+            set_color(3, logo_shades[2])
+        set_color(4, preset["ring_dim"])
+        set_color(5, preset["data_dim"])
+        set_color(6, preset["data_dim"])
+        set_color(7, preset["data_bright"])
+        set_color(8, preset["data_bright"])
+        set_color(9, preset["ring_bright"])
 
     # Optional palette overrides: SS_PAL_0=R,G,B
     for i in range(palette.shape[0]):

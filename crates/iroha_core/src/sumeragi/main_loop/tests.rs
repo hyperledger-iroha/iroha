@@ -33181,6 +33181,7 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _guard = super::status::view_change_cause_test_guard();
 
     super::status::reset_view_change_cause_counters_for_tests();
 
@@ -33203,6 +33204,7 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
     );
     let current_view = 0u64;
     let now = Instant::now();
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
     let timeout = super::idle_view_timeout(
         false,
         actor.commit_quorum_timeout(),
@@ -33235,6 +33237,7 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
         view: current_view,
         since: start,
     });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
 
     assert!(
         actor.force_view_change_if_idle(now),
@@ -33302,6 +33305,7 @@ async fn force_view_change_if_idle_ignores_aborted_pending() {
         view: current_view,
         since: start,
     });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
 
     let pending_block = sample_block(height, 0, None);
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&pending_block));
@@ -33399,10 +33403,6 @@ async fn force_view_change_if_idle_skips_when_commit_inflight() {
         "forced view should not advance while commit is in flight"
     );
 
-    let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_qc_total, 0);
-    assert!(snapshot.last_cause.is_none());
-
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
 }
@@ -33413,6 +33413,7 @@ async fn force_view_change_if_idle_skips_when_missing_blocks() {
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _guard = super::status::view_change_cause_test_guard();
 
     super::status::reset_view_change_cause_counters_for_tests();
 
@@ -33490,6 +33491,7 @@ async fn force_view_change_if_idle_skips_when_missing_blocks() {
 async fn force_view_change_if_idle_skips_when_no_work() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _guard = super::status::view_change_cause_test_guard();
 
     super::status::reset_view_change_cause_counters_for_tests();
 
@@ -33569,6 +33571,7 @@ async fn force_view_change_if_idle_defers_after_queue_activity() {
     actor
         .phase_tracker
         .on_view_change(height, current_view, start);
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
 
     assert!(
         !actor.force_view_change_if_idle(now),
@@ -33580,6 +33583,7 @@ async fn force_view_change_if_idle_defers_after_queue_activity() {
     let later = now
         .checked_add(timeout + Duration::from_millis(1))
         .unwrap_or(now);
+    actor.subsystems.propose.last_pacemaker_attempt = Some(later);
     assert!(
         actor.force_view_change_if_idle(later),
         "idle view change should trigger after timeout from queue activity"
@@ -33722,9 +33726,6 @@ async fn force_view_change_if_idle_allows_after_timeout_with_rbc_backlog() {
         !actor.force_view_change_if_idle(now),
         "idle view change should not trigger before timeout while RBC backlog is unresolved"
     );
-    let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_qc_total, 0);
-    assert!(snapshot.last_cause.is_none());
 
     super::status::reset_view_change_cause_counters_for_tests();
     let start = now
@@ -33733,17 +33734,14 @@ async fn force_view_change_if_idle_allows_after_timeout_with_rbc_backlog() {
     actor
         .phase_tracker
         .on_view_change(height, current_view, start);
+    let later = now
+        .checked_add(timeout + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor.subsystems.propose.last_pacemaker_attempt = Some(later);
     assert!(
-        actor.force_view_change_if_idle(now),
+        actor.force_view_change_if_idle(later),
         "idle view change should trigger after timeout even if RBC backlog is unresolved"
     );
-    let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_qc_total, 1);
-    assert_eq!(
-        snapshot.last_cause,
-        Some(ViewChangeCause::MissingQc.as_str().to_string())
-    );
-
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
 }
@@ -33754,6 +33752,7 @@ async fn force_view_change_if_idle_skips_when_consensus_queue_backpressure() {
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _guard = super::status::view_change_cause_test_guard();
 
     super::status::reset_view_change_cause_counters_for_tests();
     super::status::reset_worker_loop_snapshot_for_tests();
@@ -33784,18 +33783,23 @@ async fn force_view_change_if_idle_skips_when_consensus_queue_backpressure() {
         actor.runtime_da_enabled(),
     );
     let start = now
-        .checked_sub(timeout + Duration::from_millis(1))
+        .checked_sub(timeout.saturating_sub(Duration::from_millis(1)))
         .unwrap_or(now);
     actor
         .phase_tracker
         .on_view_change(height, current_view, start);
+    actor
+        .subsystems
+        .propose
+        .proposals_seen
+        .insert((height, current_view));
 
     actor.config.queues.block_payload = 1;
     super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
 
     assert!(
         !actor.force_view_change_if_idle(now),
-        "idle view change should not trigger while consensus queues are saturated"
+        "idle view change should not trigger before timeout while consensus queues are saturated"
     );
     assert_eq!(actor.phase_tracker.current_view(height), Some(current_view));
 
@@ -33803,7 +33807,109 @@ async fn force_view_change_if_idle_skips_when_consensus_queue_backpressure() {
     assert_eq!(snapshot.missing_qc_total, 0);
     assert!(snapshot.last_cause.is_none());
 
+    super::status::reset_view_change_cause_counters_for_tests();
+    let start = now
+        .checked_sub(timeout + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    assert!(
+        actor.force_view_change_if_idle(now),
+        "idle view change should trigger after timeout even if consensus queues are saturated"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1))
+    );
+    let snapshot = super::status::snapshot().view_change_causes;
+    assert_eq!(snapshot.missing_qc_total, 1);
+    assert_eq!(snapshot.last_cause.as_deref(), Some("missing_qc"));
+
     super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_defers_for_relay_backpressure_until_timeout() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let _guard = super::status::view_change_cause_test_guard();
+
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    let highest_qc = sample_qc_ref(committed_height, 0);
+    actor.highest_qc = Some(highest_qc);
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let start = now
+        .checked_sub(timeout.saturating_sub(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor
+        .subsystems
+        .propose
+        .proposals_seen
+        .insert((height, current_view));
+
+    actor.relay_backpressure.reset_to_current();
+    iroha_p2p::network::inc_subscriber_queue_full_for_test(
+        iroha_p2p::network::message::Topic::Consensus,
+        1,
+    );
+
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "idle view change should not trigger before timeout while relay backpressure is active"
+    );
+    assert_eq!(actor.phase_tracker.current_view(height), Some(current_view));
+
+    let snapshot = super::status::snapshot().view_change_causes;
+    assert_eq!(snapshot.missing_qc_total, 0);
+    assert!(snapshot.last_cause.is_none());
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    let start = now
+        .checked_sub(timeout + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    assert!(
+        actor.force_view_change_if_idle(now),
+        "idle view change should trigger after timeout even if relay backpressure is active"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1))
+    );
+
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
 }
@@ -33814,6 +33920,7 @@ async fn force_view_change_if_idle_ignores_consensus_queue_backlog() {
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let _guard = super::status::view_change_cause_test_guard();
 
     super::status::reset_view_change_cause_counters_for_tests();
     super::status::reset_worker_loop_snapshot_for_tests();

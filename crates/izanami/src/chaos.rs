@@ -11,9 +11,11 @@ use std::{
 
 use color_eyre::{Result, eyre::eyre};
 use futures::FutureExt;
+use iroha::client::Client;
 use iroha_config::parameters::actual::SumeragiNposTimeouts;
 use iroha_data_model::{
     parameter::SumeragiParameter, parameter::system::SumeragiNposParameters, prelude::*,
+    query::trigger::prelude::FindTriggers, trigger::action::Repeats,
 };
 use iroha_genesis::GenesisBlock;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
@@ -54,6 +56,9 @@ const IZANAMI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: i64 = 8;
 const IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: i64 = 128;
 const IZANAMI_PACING_GOVERNOR_MIN_FACTOR_BPS: i64 = 10_000;
 const IZANAMI_PACING_GOVERNOR_MAX_FACTOR_BPS: i64 = 10_000;
+const IZANAMI_COLLECTORS_K: u16 = 3;
+const IZANAMI_REDUNDANT_SEND_R: u8 = 3;
+const IZANAMI_PACING_FACTOR_BPS: u32 = 10_000;
 const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 1;
 const IZANAMI_FUTURE_HEIGHT_WINDOW: i64 = 2;
 const IZANAMI_FUTURE_VIEW_WINDOW: i64 = 2;
@@ -205,6 +210,17 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
         )));
         injected.push(InstructionBox::from(SetParameter::new(
             Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(npos_timing.block_ms)),
+        )));
+        injected.push(InstructionBox::from(SetParameter::new(
+            Parameter::Sumeragi(SumeragiParameter::PacingFactorBps(
+                IZANAMI_PACING_FACTOR_BPS,
+            )),
+        )));
+        injected.push(InstructionBox::from(SetParameter::new(
+            Parameter::Sumeragi(SumeragiParameter::CollectorsK(IZANAMI_COLLECTORS_K)),
+        )));
+        injected.push(InstructionBox::from(SetParameter::new(
+            Parameter::Sumeragi(SumeragiParameter::RedundantSendR(IZANAMI_REDUNDANT_SEND_R)),
         )));
         injected.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
             SumeragiNposParameters::default().into_custom_parameter(),
@@ -851,6 +867,37 @@ fn submission_metadata(counter: &AtomicU64) -> Metadata {
     metadata
 }
 
+fn repetitions_from_repeats(repeats: Repeats) -> Option<u32> {
+    match repeats {
+        Repeats::Exactly(count) => Some(count),
+        Repeats::Indefinitely => None,
+    }
+}
+
+fn query_trigger_repetitions(client: &Client, trigger_id: &TriggerId) -> Result<Option<u32>> {
+    let iter = client.query(FindTriggers::new()).execute()?;
+    for trigger in iter {
+        let trigger = trigger?;
+        if trigger.id() == trigger_id {
+            return Ok(repetitions_from_repeats(trigger.action().repeats()));
+        }
+    }
+    Ok(None)
+}
+
+fn record_plan_skip(metrics: &Metrics, plan_label: &'static str, expect_success: bool) {
+    debug!(
+        target: "izanami::workload",
+        plan = plan_label,
+        "skipping plan submission due to on-chain trigger repetition drift"
+    );
+    if expect_success {
+        metrics.record_failure();
+    } else {
+        metrics.record_expected_failure();
+    }
+}
+
 async fn submit_plan(
     peer: &NetworkPeer,
     plan: TransactionPlan,
@@ -867,6 +914,53 @@ async fn submit_plan(
     let metrics = Arc::clone(metrics);
     let submission_counter = Arc::clone(submission_counter);
     let workload = Arc::clone(workload);
+
+    if let Some((trigger_id, burn_amount)) = plan.burn_trigger_repetitions() {
+        let peer_for_query = peer.clone();
+        let signer_for_query = signer.clone();
+        let trigger_id_for_query = trigger_id.clone();
+        let query_result = spawn_blocking(move || {
+            let client = peer_for_query.client_for(
+                &signer_for_query.id,
+                signer_for_query.key_pair.private_key().clone(),
+            );
+            query_trigger_repetitions(&client, &trigger_id_for_query)
+        })
+        .await;
+        match query_result {
+            Ok(Ok(Some(on_chain))) if on_chain < burn_amount => {
+                workload
+                    .sync_trigger_repetitions(&trigger_id, Some(on_chain))
+                    .await;
+                record_plan_skip(&metrics, plan_label, expect_success);
+                workload.record_result(&plan, false).await;
+                return;
+            }
+            Ok(Ok(None)) => {
+                workload.sync_trigger_repetitions(&trigger_id, None).await;
+                record_plan_skip(&metrics, plan_label, expect_success);
+                workload.record_result(&plan, false).await;
+                return;
+            }
+            Ok(Err(err)) => {
+                warn!(
+                    target: "izanami::workload",
+                    ?err,
+                    plan = plan_label,
+                    "trigger repetition query failed; proceeding with submission"
+                );
+            }
+            Err(err) => {
+                warn!(
+                    target: "izanami::workload",
+                    ?err,
+                    plan = plan_label,
+                    "trigger repetition query task failed; proceeding with submission"
+                );
+            }
+            _ => {}
+        }
+    }
 
     let succeeded = run_submission(plan_label, expect_success, metrics, move || {
         let client = peer.client_for(&signer.id, signer.key_pair.private_key().clone());
@@ -1023,6 +1117,16 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn repetitions_from_repeats_exactly_returns_value() {
+        assert_eq!(repetitions_from_repeats(Repeats::Exactly(7)), Some(7));
+    }
+
+    #[test]
+    fn repetitions_from_repeats_indefinitely_returns_none() {
+        assert_eq!(repetitions_from_repeats(Repeats::Indefinitely), None);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

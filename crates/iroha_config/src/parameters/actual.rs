@@ -2070,6 +2070,8 @@ impl Default for LaneRelayEmergency {
 pub struct NexusStorage {
     /// Aggregate on-disk storage budget (bytes).
     pub max_disk_usage_bytes: Bytes<u64>,
+    /// Block interval between disk budget enforcement scans (0 = every block).
+    pub budget_enforce_interval_blocks: u64,
     /// WSV hot-tier deterministic payload size budget (bytes).
     pub max_wsv_memory_bytes: Bytes<u64>,
     /// Budget weights for dividing the disk cap across subsystems.
@@ -2080,6 +2082,8 @@ impl Default for NexusStorage {
     fn default() -> Self {
         Self {
             max_disk_usage_bytes: defaults::nexus::storage::MAX_DISK_USAGE_BYTES,
+            budget_enforce_interval_blocks:
+                defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
             max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
             disk_budget_weights: NexusStorageWeights::default(),
         }
@@ -3535,8 +3539,6 @@ impl Default for AdaptiveObservability {
 /// Deterministic pacing governor configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiPacingGovernor {
-    /// Deterministic pacing governor is always enabled (retained for config parity).
-    pub enabled: bool,
     /// Number of recent blocks to sample when evaluating pressure.
     pub window_blocks: usize,
     /// View-change pressure threshold (permille of view-change increments per block).
@@ -3560,7 +3562,6 @@ pub struct SumeragiPacingGovernor {
 impl Default for SumeragiPacingGovernor {
     fn default() -> Self {
         Self {
-            enabled: defaults::sumeragi::PACING_GOVERNOR_ENABLED,
             window_blocks: defaults::sumeragi::PACING_GOVERNOR_WINDOW_BLOCKS,
             view_change_pressure_permille:
                 defaults::sumeragi::PACING_GOVERNOR_VIEW_CHANGE_PRESSURE_PERMILLE,

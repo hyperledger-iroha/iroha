@@ -253,7 +253,7 @@ Pacemaker (view changes)
 - View-change proofs advance once `f+1` validators raise suspicion (commit failure or quorum timeout); a full commit quorum is not required for a view change.
 
 Deterministic pacing governor (always enabled)
-- Config keys live under `sumeragi.advanced.pacing_governor` (must remain enabled).
+- Config keys live under `sumeragi.advanced.pacing_governor`.
 - Each block evaluates the last `window_blocks` headers and computes view-change pressure
   (average view-change index delta per block, permille) plus commit spacing pressure
   (average inter-block spacing vs target block time, permille).

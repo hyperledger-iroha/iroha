@@ -138,7 +138,6 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # jitter_frac_per_mille = 0          # jitter band size as permille of backoff window (0 disables)
 
 [sumeragi.advanced.pacing_governor]
-# enabled = true # must remain enabled
 # window_blocks = 20
 # view_change_pressure_permille = 200   # view-change increments per block (permille)
 # view_change_clear_permille = 50
