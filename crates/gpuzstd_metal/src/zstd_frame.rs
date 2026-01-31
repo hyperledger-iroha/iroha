@@ -677,13 +677,15 @@ impl ZstdBitWriter {
         if bits > 56 {
             return Err(ZstdEncodeError::InvalidInput);
         }
-        if bits > 0 && bits < 64 && (value >> bits) != 0 {
-            return Err(ZstdEncodeError::InvalidInput);
-        }
         if bits == 0 {
             return Ok(());
         }
-        self.buffer |= value << self.bit_count;
+        let masked = if bits == 64 {
+            value
+        } else {
+            value & ((1u64 << bits) - 1)
+        };
+        self.buffer |= masked << self.bit_count;
         self.bit_count += bits;
         while self.bit_count >= 8 {
             self.push_byte()?;

@@ -127,6 +127,9 @@ Katakana overlay (v26-style boxes + diff glyphs)
 - `SS_KATAKANA_TEXT_ON=R,G,B` / `SS_KATAKANA_TEXT_OFF=R,G,B` customize text colors.
 - `SS_KATAKANA_ALPHA`, `SS_KATAKANA_SCALE`, `SS_KATAKANA_BOX_ALPHA`, `SS_KATAKANA_BOX_SCALE` tune opacity/size.
 - `SS_RING_DIM_ANGLES=0,120,240` and `SS_RING_DIM_TOL=4` tune the orientation dot pattern.
+Logo emphasis
+- `SS_LOGO_SCALE` controls logo size (v27 default 0.318; katabox default 0.40).
+- `SS_LOGO_THRESH_1/2/3` adjust logo shade thresholds (lower = bolder logo).
 Tip: for symbol replay with custom ring orientation, set `SS_RING_OVERRIDE=1`.
 Tip: `SS_FORCE_PALETTE=1` forces palette quantization in symbol replay (useful after overlays).
 Example:

@@ -5365,12 +5365,11 @@ impl Telemetry {
             .sumeragi_missing_block_fetch_total
             .with_label_values(&[outcome.label()])
             .inc();
-        if let Some(kind) = target_kind {
-            self.metrics
-                .sumeragi_missing_block_fetch_target_total
-                .with_label_values(&[kind.label()])
-                .inc();
-        }
+        let target_label = target_kind.map_or("none", |kind| kind.label());
+        self.metrics
+            .sumeragi_missing_block_fetch_target_total
+            .with_label_values(&[target_label])
+            .inc();
         self.metrics
             .sumeragi_missing_block_fetch_targets
             .observe(targets as f64);

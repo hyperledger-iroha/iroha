@@ -64,6 +64,10 @@ def main() -> None:
     env_base.setdefault("SS_KATAKANA_BOX_ALPHA", "140")
     env_base.setdefault("SS_KATAKANA_SCALE", "0.85")
     env_base.setdefault("SS_RING_DIM_ANGLES", "0,120,240")
+    env_base.setdefault("SS_LOGO_SCALE", "0.40")
+    env_base.setdefault("SS_LOGO_THRESH_1", "170")
+    env_base.setdefault("SS_LOGO_THRESH_2", "220")
+    env_base.setdefault("SS_LOGO_THRESH_3", "240")
 
     presets_raw = env_base.get("SS_PALETTE_PRESETS", "").strip()
     if presets_raw:
