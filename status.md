@@ -1,6 +1,8 @@
 # Status
 
 Last update: 2026-01-31
+- Unstable network: allow one resubmit while waiting on supply, keep max-fault selections stable across rounds, and reduce the 12-peer/4-fault case to 1 round; added unit coverage for resubmit gating and fault seed selection.
+- Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-unstable IROHA_TEST_NETWORK_PARALLELISM=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) IROHA_TEST_NETWORK_KEEP_DIRS=1 RUST_LOG=mod::extra_functional::unstable_network=info,iroha_test_network=info cargo test -p integration_tests --test mod extra_functional::unstable_network::unstable_network_12_peers_4_faults -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`; preserved network dir `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_0me26J`).
 - Integration revalidation (READY+DELIVER rebroadcast follow-up): reran seven_peer_consistency/unregister_peer, smart_contract_query_scenarios, sumeragi_da payload-loss/eviction, sumeragi_npos_liveness, and unstable_network 5/8/9-2/9-3 under divisor-64 parallelism; all suites now pass (see detailed entries below).
 - Izanami 1 TPS soak rerun: `RUST_LOG=izanami::summary=info,izanami::workload=warn,iroha_core::sumeragi::main_loop=info,iroha_core::sumeragi=info,iroha_p2p=info IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) CARGO_TARGET_DIR=/tmp/iroha-codex-izanami-warnroot cargo run -p izanami --release --locked -- --allow-net --nexus --peers 4 --faulty 0 --duration 300s --target-blocks 200 --progress-interval 10s --progress-timeout 180s --tps 1 --max-inflight 8 --workload-profile stable` (stopped before target blocks; committed height 111–112 across peers; tick WARNs had `missing_block_ms=0`/`reschedule_ms=0`; network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_fzjloP`; warnings: unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused `stake_escrow`/`slash_sink` in `izanami`).
 - Fixtures: removed legacy instruction argument-map parsing from `export_norito_fixtures`, so instructions are wire-only and fixture JSON injection now errors on legacy `kind`/`arguments` fields.
@@ -8,6 +10,8 @@ Last update: 2026-01-31
 - Tests: `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=/Users/mtakemiya/Library/Android/sdk ANDROID_SDK_ROOT=/Users/mtakemiya/Library/Android/sdk ./gradlew test` (ok; run from `java/iroha_android`, Gradle 8.13; JDK 21 + Android SDK required).
 - Docs: added the Android Gradle test command (JDK 21 + Android SDK env) to `AGENTS.md`.
 - Triggers: retry trigger registration on ID collision in `trigger_burn_repetitions`, logging a clear collision message and selecting a new id.
+- Tests: `cargo test -p integration_tests --test mod trigger_burn_repetitions -- --nocapture` (timed out after 10m; build completed and test was still running).
+- Tests: `cargo test -p integration_tests --test mod trigger_register_collision_is_detected -- --nocapture` (timed out after 10m; stuck waiting on build directory lock).
 - Sumeragi: require pending-block validation before emitting precommit votes; added unit coverage and updated precommit-vote tests to stage validated pending blocks.
 - Tests: `cargo test -p iroha_core emit_precommit_vote_requires_validated_pending -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused `should_send`/unused `mut` in `iroha_core` tests).
 - Triggers: use a unique trigger id in `trigger_burn_repetitions` to avoid collisions with other genesis/test triggers.

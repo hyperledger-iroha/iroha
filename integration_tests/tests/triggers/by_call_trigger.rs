@@ -85,6 +85,18 @@ fn is_trigger_register_collision(err: &eyre::Report, trigger_id: &TriggerId) -> 
     })
 }
 
+#[test]
+fn trigger_register_collision_is_detected() {
+    let trigger_id: TriggerId = "collision_test".parse().expect("valid trigger id");
+    let repetition = iroha::data_model::isi::error::RepetitionError {
+        instruction: InstructionType::Register,
+        id: IdBox::TriggerId(trigger_id.clone()),
+    };
+    let err = InstructionExecutionError::Repetition(repetition);
+    let report = eyre::Report::new(err);
+    assert!(is_trigger_register_collision(&report, &trigger_id));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn call_execute_trigger() -> Result<()> {
     let Some(network) = start_network(stringify!(call_execute_trigger)).await? else {
@@ -1009,8 +1021,10 @@ async fn trigger_burn_repetitions() -> Result<()> {
                         }
                         let next = format!("{base_trigger_name}_{}", attempt + 1);
                         eprintln!(
-                            "Trigger id collision for `{}`; retrying with `{}`",
-                            trigger_id, next
+                            "Trigger id collision for `{}` (attempt {}); retrying with `{}`",
+                            trigger_id,
+                            attempt + 1,
+                            next
                         );
                         attempt += 1;
                         continue;
