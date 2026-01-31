@@ -39754,7 +39754,7 @@ async fn emit_new_view_vote_allows_without_higher_view_quorum() {
     let view = 0u64;
     let higher_view = view.saturating_add(1);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let required = topology.min_votes_for_commit();
+    let required = topology.min_votes_for_view_change();
 
     for peer in topology.as_ref().iter().take(required.saturating_sub(1)) {
         actor
@@ -39792,7 +39792,7 @@ async fn emit_new_view_vote_skips_when_higher_view_quorum_exists() {
     let view = 0u64;
     let higher_view = view.saturating_add(1);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let required = topology.min_votes_for_commit();
+    let required = topology.min_votes_for_view_change();
 
     for peer in topology.as_ref().iter().take(required) {
         actor
@@ -39809,6 +39809,75 @@ async fn emit_new_view_vote_skips_when_higher_view_quorum_exists() {
     assert!(
         actor.vote_log.is_empty(),
         "vote log should remain empty after skipping NEW_VIEW vote"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn emit_new_view_vote_skips_when_local_already_voted_higher_view() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    seed_genesis_block_for_state(&actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+
+    let committed_qc = actor.latest_committed_qc().expect("committed qc");
+    let height = committed_qc.height.saturating_add(1);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let higher_view = 1u64;
+    assert!(
+        actor.emit_new_view_vote(height, higher_view, committed_qc, &topology),
+        "higher view vote should be emitted"
+    );
+
+    let lower_view = 0u64;
+    assert!(
+        !actor.emit_new_view_vote(height, lower_view, committed_qc, &topology),
+        "lower view vote should be skipped after local higher view vote"
+    );
+    assert!(
+        actor.vote_log.values().any(|vote| {
+            vote.phase == Phase::NewView && vote.height == height && vote.view == higher_view
+        }),
+        "higher view vote should be present in the vote log"
+    );
+    assert!(
+        !actor.vote_log.values().any(|vote| {
+            vote.phase == Phase::NewView && vote.height == height && vote.view == lower_view
+        }),
+        "lower view vote should not be recorded after higher view vote"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn emit_new_view_vote_skips_when_highest_qc_epoch_ahead() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    seed_genesis_block_for_state(&actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+
+    let committed_qc = actor.latest_committed_qc().expect("committed qc");
+    let height = committed_qc.height.saturating_add(1);
+    let view = 0u64;
+    let epoch = actor.epoch_for_height(height);
+    let mut highest_qc = committed_qc;
+    highest_qc.epoch = epoch.saturating_add(1);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    assert!(
+        !actor.emit_new_view_vote(height, view, highest_qc, &topology),
+        "NEW_VIEW vote should be skipped when highest QC epoch is ahead of local epoch"
+    );
+    assert!(
+        !actor.vote_log.values().any(|vote| {
+            vote.phase == Phase::NewView && vote.height == height && vote.view == view
+        }),
+        "vote log should remain empty after skipping due to epoch mismatch"
     );
 
     harness.shutdown.send();
