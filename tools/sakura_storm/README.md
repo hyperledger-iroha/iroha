@@ -11,7 +11,7 @@ Files
 - `analysis_v27_static_masks.py`: Summarizes static cell mask shapes and best-fit box padding.
 - `gen_sakura_v27_procedural.py`: Procedural generator (no model) using inferred parameters.
 - `extract_v27_symbols.py`: Extracts per-cell glyph indices + bits from the reference GIF.
-- `gen_sakura_v27_symbols.py`: Renders a GIF from the extracted symbol stream.
+- `gen_sakura_v27_symbols.py`: Renders a GIF from the extracted symbol stream (including per-frame ring + masks for exact match).
 - `compare_v27.py`: Quick diff metrics between a candidate and the reference.
 - `v27_model.npz`: The extracted model used for generation.
 

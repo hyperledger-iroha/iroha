@@ -6149,16 +6149,19 @@ fn validate_commit_qc_roster_cached(
     if cert.mode_tag != mode_tag {
         return Err(RosterValidationError::ModeTagMismatch);
     }
-    let genesis_stub = allow_genesis_stub
-        && block_height == 1
-        && cert.view == 0
-        && cert.aggregate.bls_aggregate_signature.is_empty()
-        && cert.aggregate.signers_bitmap.iter().all(|byte| *byte == 0);
     if cert.aggregate.bls_aggregate_signature.is_empty() {
-        if genesis_stub {
-            return Ok(cert.validator_set.clone());
-        }
-        return Err(RosterValidationError::AggregateSignatureMissing);
+        return validate_commit_qc_roster(
+            cert,
+            block_hash,
+            block_height,
+            block_view,
+            consensus_mode,
+            expected_epoch,
+            chain_id,
+            mode_tag,
+            allow_genesis_stub,
+            inputs,
+        );
     }
     let memo_key = roster_cache.commit_qc_memo_key(cert, consensus_mode, inputs);
     if let Some(roster) = roster_cache.memo_commit_qc_get(&memo_key) {
@@ -6212,16 +6215,20 @@ fn validate_checkpoint_roster_cached(
             });
         }
     }
-    let genesis_stub = allow_genesis_stub
-        && block_height == 1
-        && checkpoint.view == 0
-        && checkpoint.bls_aggregate_signature.is_empty()
-        && checkpoint.signers_bitmap.iter().all(|byte| *byte == 0);
     if checkpoint.bls_aggregate_signature.is_empty() {
-        if genesis_stub {
-            return Ok(checkpoint.validator_set.clone());
-        }
-        return Err(RosterValidationError::AggregateSignatureMissing);
+        return validate_checkpoint_roster(
+            checkpoint,
+            block_hash,
+            block_height,
+            block_view,
+            consensus_mode,
+            chain_id,
+            mode_tag,
+            epoch,
+            roots,
+            allow_genesis_stub,
+            inputs,
+        );
     }
     let memo_key = roster_cache.checkpoint_memo_key(checkpoint, epoch, consensus_mode, inputs);
     if let Some(roster) = roster_cache.memo_checkpoint_get(&memo_key) {

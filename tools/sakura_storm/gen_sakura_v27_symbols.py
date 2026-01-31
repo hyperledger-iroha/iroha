@@ -110,6 +110,7 @@ def main() -> None:
     bits = data["bits"]
     glyphs = [str(g) for g in data["glyphs"].tolist()]
     mask_bits = data.get("mask_bits")
+    ring_idx = data.get("ring_idx")
     cell_size = int(data.get("cell_size", 16))
     bg = data.get("bg", np.array([11, 7, 12], dtype=np.uint8))
     data_bright = data.get("data_bright", np.array([255, 233, 246], dtype=np.uint8))
@@ -129,12 +130,9 @@ def main() -> None:
         glyph_masks = [render_glyph_mask(font, g, cell_size) for g in glyphs]
 
     logo_layer = None if static_layer is not None else build_logo_layer(W, H, logo_shades)
-    ring_layer = build_ring_layer(W, H, ring_bright, ring_dim)
-    logo_mask = None
-    if static_layer is not None:
-        logo_mask = np.zeros((H, W), dtype=bool)
-        for col in logo_shades:
-            logo_mask |= (static_layer == np.array(col, dtype=np.uint8)).all(axis=2)
+    ring_layer = None
+    if static_layer is None and ring_idx is None:
+        ring_layer = build_ring_layer(W, H, ring_bright, ring_dim)
 
     frames: List[Image.Image] = []
     for f in range(steps):
@@ -156,16 +154,19 @@ def main() -> None:
             region = draw_arr[y0 : y0 + cell_size, x0 : x0 + cell_size]
             region[mask] = (int(color[0]), int(color[1]), int(color[2]), 255)
         frame = Image.fromarray(draw_arr, mode="RGBA")
-        frame = Image.alpha_composite(frame, ring_layer)
+        if ring_idx is not None:
+            arr = np.array(frame, dtype=np.uint8)
+            mask_b = ring_idx[f] == 1
+            mask_d = ring_idx[f] == 2
+            if mask_b.any():
+                arr[mask_b] = (int(ring_bright[0]), int(ring_bright[1]), int(ring_bright[2]), 255)
+            if mask_d.any():
+                arr[mask_d] = (int(ring_dim[0]), int(ring_dim[1]), int(ring_dim[2]), 255)
+            frame = Image.fromarray(arr, mode="RGBA")
+        elif ring_layer is not None:
+            frame = Image.alpha_composite(frame, ring_layer)
         if logo_layer is not None:
             frame = Image.alpha_composite(frame, logo_layer)
-        elif logo_mask is not None:
-            arr = np.array(frame, dtype=np.uint8)
-            arr[logo_mask] = np.concatenate(
-                [static_layer[logo_mask], np.full((logo_mask.sum(), 1), 255, dtype=np.uint8)],
-                axis=1,
-            )
-            frame = Image.fromarray(arr, mode="RGBA")
         frames.append(frame.convert("RGB"))
 
     frames[0].save(
