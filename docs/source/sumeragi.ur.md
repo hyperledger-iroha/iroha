@@ -252,8 +252,8 @@ Pacemaker (view changes)
 - View‑0 voting follows the same rules for Set A and Set B validators. On local timeout in view 0, nodes suggest a view change (no widen‑before‑rotate). Timing is driven by on‑chain parameters: `SumeragiParameters` (`BlockTimeMs`/`CommitTimeMs`/`MinFinalityMs`/`PacingFactorBps`) set the base for both modes; the pacing factor scales the block/commit targets (basis points, >= 10_000), and NPoS derives per‑phase timeouts from the scaled block time with optional `sumeragi.advanced.npos.timeouts` overrides. Leader proposal is roughly at 1/3 and expected commit at 2/3 of the pipeline time.
 - View-change proofs advance once `f+1` validators raise suspicion (commit failure or quorum timeout); a full commit quorum is not required for a view change.
 
-Deterministic pacing governor (optional)
-- Config keys live under `sumeragi.advanced.pacing_governor` (disabled by default).
+Deterministic pacing governor (always enabled)
+- Config keys live under `sumeragi.advanced.pacing_governor` (must remain enabled).
 - Each block evaluates the last `window_blocks` headers and computes view-change pressure
   (average view-change index delta per block, permille) plus commit spacing pressure
   (average inter-block spacing vs target block time, permille).

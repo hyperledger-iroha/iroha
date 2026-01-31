@@ -3113,13 +3113,9 @@ impl Actor {
             );
             return false;
         }
-        if let Some(higher_view) = self.local_higher_view_new_view_vote(
-            height,
-            view,
-            consensus_mode,
-            mode_tag,
-            prf_seed,
-        ) {
+        if let Some(higher_view) =
+            self.local_higher_view_new_view_vote(height, view, consensus_mode, mode_tag, prf_seed)
+        {
             info!(
                 height,
                 view,

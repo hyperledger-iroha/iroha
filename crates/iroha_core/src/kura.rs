@@ -2882,6 +2882,10 @@ impl Kura {
         }
     }
 
+    fn sidecar_fsync_mode(&self) -> FsyncMode {
+        self.block_store.lock().fsync.mode
+    }
+
     /// Write per-block pipeline recovery metadata sidecar under the store dir. Best-effort: errors
     /// are logged and ignored.
     pub fn write_pipeline_metadata(&self, sidecar: &PipelineRecoverySidecar) {
@@ -2894,6 +2898,7 @@ impl Kura {
             }
             let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
             let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+            let fsync_mode = self.sidecar_fsync_mode();
             let wrote_norito = match sidecar.encode_framed() {
                 Ok(buf) => Self::append_indexed_sidecar(
                     &data_path,
@@ -2901,6 +2906,7 @@ impl Kura {
                     sidecar.height,
                     &buf,
                     "pipeline sidecar",
+                    fsync_mode,
                     None,
                 ),
                 Err(err) => {
@@ -2944,6 +2950,7 @@ impl Kura {
             }
             let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
             let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
+            let fsync_mode = self.sidecar_fsync_mode();
             let wrote_norito = match sidecar.encode_framed() {
                 Ok(buf) => Self::append_indexed_sidecar(
                     &data_path,
@@ -2951,6 +2958,7 @@ impl Kura {
                     sidecar.height,
                     &buf,
                     "roster sidecar",
+                    fsync_mode,
                     Some(self.roster_sidecar_retention),
                 ),
                 Err(err) => {
@@ -3319,6 +3327,7 @@ impl Kura {
         height: u64,
         payload: &[u8],
         kind: &str,
+        fsync_mode: FsyncMode,
         retention: Option<NonZeroUsize>,
     ) -> bool {
         if height == 0 {
@@ -3499,9 +3508,11 @@ impl Kura {
                 iroha_logger::warn!(?err, ?data_path, kind, "failed to append sidecar payload");
                 return false;
             }
-            if let Err(err) = data.sync_data() {
-                iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
-                return false;
+            if matches!(fsync_mode, FsyncMode::On) {
+                if let Err(err) = data.sync_data() {
+                    iroha_logger::warn!(?err, ?data_path, kind, "failed to sync sidecar payload");
+                    return false;
+                }
             }
 
             let new_entry = SidecarIndexEntry {
@@ -3522,22 +3533,28 @@ impl Kura {
                         "failed to roll back sidecar payload"
                     );
                 }
-                let _ = data.sync_data();
+                if matches!(fsync_mode, FsyncMode::On) {
+                    let _ = data.sync_data();
+                }
                 return false;
             }
-            if let Err(err) = index.sync_data() {
-                iroha_logger::warn!(?err, ?index_path, kind, "failed to sync sidecar index");
-                return false;
-            }
-            if let Some(parent) = data_path.parent() {
-                if let Err(err) = sync_dir(parent) {
-                    iroha_logger::warn!(
-                        ?err,
-                        ?parent,
-                        kind,
-                        "failed to sync sidecar parent directory after update"
-                    );
+            if matches!(fsync_mode, FsyncMode::On) {
+                if let Err(err) = index.sync_data() {
+                    iroha_logger::warn!(?err, ?index_path, kind, "failed to sync sidecar index");
                     return false;
+                }
+            }
+            if matches!(fsync_mode, FsyncMode::On) {
+                if let Some(parent) = data_path.parent() {
+                    if let Err(err) = sync_dir(parent) {
+                        iroha_logger::warn!(
+                            ?err,
+                            ?parent,
+                            kind,
+                            "failed to sync sidecar parent directory after update"
+                        );
+                        return false;
+                    }
                 }
             }
 
@@ -8349,6 +8366,7 @@ mod tests {
                 1,
                 &payload,
                 "pipeline sidecar",
+                FsyncMode::Off,
                 None,
             ),
             "append mismatched sidecar"
@@ -8489,6 +8507,7 @@ mod tests {
                 1,
                 &payload1,
                 "dummy sidecar",
+                FsyncMode::Off,
                 None,
             ),
             "append height 1 must succeed"
@@ -8503,6 +8522,7 @@ mod tests {
                 1,
                 &payload2,
                 "dummy sidecar",
+                FsyncMode::Off,
                 None,
             ),
             "overwrite height 1 must succeed"
@@ -8871,6 +8891,7 @@ mod tests {
                 2,
                 &payload2,
                 "dummy sidecar",
+                FsyncMode::Off,
                 None,
             ),
             "append should succeed and truncate misaligned index"
@@ -9115,6 +9136,7 @@ mod tests {
                 1,
                 &payload,
                 "roster sidecar",
+                FsyncMode::Off,
                 None,
             ),
             "append mismatched roster sidecar"
@@ -9328,6 +9350,7 @@ mod tests {
                 0,
                 &payload,
                 "dummy sidecar",
+                FsyncMode::Off,
                 None,
             ),
             "height 0 should be rejected"
@@ -9352,6 +9375,7 @@ mod tests {
                     height,
                     &payload,
                     "dummy sidecar",
+                    FsyncMode::Off,
                     Some(retention),
                 ),
                 "append at height {height} must succeed"

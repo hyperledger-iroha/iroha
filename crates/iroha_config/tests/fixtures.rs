@@ -1011,7 +1011,7 @@ fn minimal_config_snapshot() {
                     rbc_backlog_chunk_soft_limit: 16,
                 },
                 pacing_governor: SumeragiPacingGovernor {
-                    enabled: false,
+                    enabled: true,
                     window_blocks: 20,
                     view_change_pressure_permille: 200,
                     view_change_clear_permille: 50,

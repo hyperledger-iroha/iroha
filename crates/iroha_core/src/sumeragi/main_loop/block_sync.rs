@@ -982,6 +982,10 @@ impl Actor {
             }
             return Ok(());
         };
+        let local_in_roster = selection
+            .roster
+            .iter()
+            .any(|peer| peer == self.common_config.peer.id());
         super::status::inc_block_sync_roster_source(selection.source.as_str());
         #[cfg(feature = "telemetry")]
         if let Some(telemetry) = self.telemetry_handle() {
@@ -1874,6 +1878,30 @@ impl Actor {
         );
         let qc_apply_ms = u64::try_from(qc_apply_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         qc_apply_result?;
+
+        if self.runtime_da_enabled()
+            && incoming_qc_validated
+            && !local_in_roster
+            && block_known_after_creation
+        {
+            if let Some(payload_hash) = self
+                .pending
+                .pending_blocks
+                .get(&block_hash)
+                .map(|pending| pending.payload_hash)
+            {
+                let key = (block_hash, block_height, block_view);
+                if self.force_rbc_delivery_for_block_sync(key, payload_hash) {
+                    info!(
+                        height = block_height,
+                        view = block_view,
+                        block = %block_hash,
+                        "marking RBC delivered for block sync update outside commit roster"
+                    );
+                    self.request_commit_pipeline();
+                }
+            }
+        }
 
         if creation_ok && !block_known_after_creation {
             if let Some(qc) = incoming_qc.take() {
