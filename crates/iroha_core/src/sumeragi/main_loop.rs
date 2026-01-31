@@ -348,6 +348,20 @@ fn should_defer_for_online_peers(
     true
 }
 
+fn count_online_validators(
+    online: &iroha_p2p::OnlinePeers,
+    roster: &[PeerId],
+) -> usize {
+    if roster.is_empty() {
+        return 0;
+    }
+    let roster_set: BTreeSet<&PeerId> = roster.iter().collect();
+    online
+        .iter()
+        .filter(|peer| roster_set.contains(peer.id()))
+        .count()
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct ParsedQcSigners {
     /// All unique signers present in the bitmap.

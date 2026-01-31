@@ -7,6 +7,10 @@ Last update: 2026-01-31
 - Android SDK tests: dropped legacy Norito payload rejection helpers and refit fixture validation to cover missing wire instruction fields instead.
 - Tests: `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=/Users/mtakemiya/Library/Android/sdk ANDROID_SDK_ROOT=/Users/mtakemiya/Library/Android/sdk ./gradlew test` (ok; run from `java/iroha_android`, Gradle 8.13; JDK 21 + Android SDK required).
 - Docs: added the Android Gradle test command (JDK 21 + Android SDK env) to `AGENTS.md`.
+- Triggers: retry trigger registration on ID collision in `trigger_burn_repetitions`, logging a clear collision message and selecting a new id.
+- Sumeragi: require pending-block validation before emitting precommit votes; added unit coverage and updated precommit-vote tests to stage validated pending blocks.
+- Tests: `cargo test -p iroha_core emit_precommit_vote_requires_validated_pending -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`, unused `should_send`/unused `mut` in `iroha_core` tests).
+- Triggers: use a unique trigger id in `trigger_burn_repetitions` to avoid collisions with other genesis/test triggers.
 - Triggers: wait for burn-to-zero pruning in the by-call trigger repetition test before executing to avoid racey execution.
 - Tests: `cargo test -p integration_tests trigger_burn_repetitions -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`).
 - Integration tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-roadmap-target IROHA_TEST_TARGET_DIR=/tmp/iroha-codex-roadmap-target IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test mod extra_functional::seven_peer_consistency::seven_peer_cross_peer_consistency_basic -- --nocapture` (ok; after raising sync timeouts + RBC fanout/budget tweaks for 7-peer delivery).

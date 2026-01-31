@@ -442,6 +442,15 @@ fn submit_retry_backoff(attempt: usize) -> Duration {
     scaled.min(Duration::from_secs(2))
 }
 
+fn should_resubmit_tx(
+    allow_resubmit: bool,
+    already_resubmitted: bool,
+    now: Instant,
+    resubmit_at: Instant,
+) -> bool {
+    allow_resubmit && !already_resubmitted && now >= resubmit_at
+}
+
 fn permissioned_prf_seed(chain_id: &ChainId) -> [u8; 32] {
     let hash = Hash::new(chain_id.as_str().as_bytes());
     <[u8; 32]>::from(hash)
@@ -921,6 +930,14 @@ impl UnstableNetwork {
         peer_count.saturating_sub(commit_quorum_from_len(peer_count))
     }
 
+    fn fault_round_seed(round_index: usize, n_faulty_peers: usize, fault_budget: usize) -> usize {
+        if n_faulty_peers >= fault_budget {
+            0
+        } else {
+            round_index
+        }
+    }
+
     fn select_faulty_peer_ids(
         peer_ids: &[PeerId],
         n_faulty_peers: usize,
@@ -1073,10 +1090,13 @@ impl UnstableNetwork {
             .cloned()
             .expect("topology always has a leader");
         let collectors_k = collectors_k_for_peers(self.n_peers);
+        let fault_budget = Self::fault_budget_for_peer_count(self.n_peers);
+        let fault_round_seed =
+            Self::fault_round_seed(round_index, self.n_faulty_peers, fault_budget);
         let faulty_ids: HashSet<_> = Self::select_faulty_peer_ids(
             &peer_ids,
             self.n_faulty_peers,
-            round_index,
+            fault_round_seed,
             &chain_id,
             target_height,
             collectors_k,
@@ -1279,6 +1299,7 @@ impl UnstableNetwork {
         let supply_start = Instant::now();
         let supply_deadline = supply_start + sync_timeout;
         let resubmit_at = supply_start + sync_timeout.checked_div(2).unwrap_or(sync_timeout);
+        let allow_resubmit = self.n_faulty_peers > 0;
         let supply_peers: Vec<_> = peers
             .iter()
             .filter(|peer| !faulty_ids.contains(&peer.id()))
@@ -1331,7 +1352,7 @@ impl UnstableNetwork {
                 last_seen = asset_value;
             }
             let now = Instant::now();
-            if submitted_during_partition && !resubmitted && now >= resubmit_at {
+            if should_resubmit_tx(allow_resubmit, resubmitted, now, resubmit_at) {
                 let remaining = supply_deadline.saturating_duration_since(now);
                 if !remaining.is_zero() {
                     if let Err(err) = submit_tx("recovered_retry", remaining).await {
@@ -1540,6 +1561,16 @@ mod tests {
     }
 
     #[test]
+    fn fault_round_seed_sticks_at_budget() {
+        let budget = UnstableNetwork::fault_budget_for_peer_count(12);
+        assert!(budget > 0);
+        let sticky = UnstableNetwork::fault_round_seed(4, budget, budget);
+        assert_eq!(sticky, 0);
+        let rotating = UnstableNetwork::fault_round_seed(4, budget.saturating_sub(1), budget);
+        assert_eq!(rotating, 4);
+    }
+
+    #[test]
     fn non_faulty_sync_timeout_caps_multi_faults() {
         let sync_timeout = Duration::from_secs(180);
         let pipeline_time = Duration::from_secs(9);
@@ -1565,6 +1596,20 @@ mod tests {
         assert_eq!(submit_retry_backoff(1), Duration::from_millis(200));
         assert_eq!(submit_retry_backoff(5), Duration::from_millis(1000));
         assert_eq!(submit_retry_backoff(20), Duration::from_secs(2));
+    }
+
+    #[test]
+    fn resubmit_gate_respects_flags_and_deadline() {
+        let now = Instant::now();
+        assert!(!should_resubmit_tx(false, false, now, now));
+        assert!(!should_resubmit_tx(true, true, now, now));
+        assert!(should_resubmit_tx(true, false, now, now));
+        assert!(!should_resubmit_tx(
+            true,
+            false,
+            now,
+            now + Duration::from_secs(1)
+        ));
     }
 }
 
