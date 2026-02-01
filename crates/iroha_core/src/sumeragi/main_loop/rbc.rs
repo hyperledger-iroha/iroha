@@ -2119,7 +2119,7 @@ impl Actor {
         context: &'static str,
         reason: Option<PendingRbcDropReason>,
     ) {
-        if self.block_payload_available_locally(key.0) {
+        if self.block_known_locally(key.0) {
             return;
         }
         let mut roster = self.ensure_rbc_session_roster(key);
