@@ -1,6 +1,6 @@
 # Status
 
-Last update: 2026-01-31
+Last update: 2026-02-01
 - Izanami 1 TPS 300s/200 blocks run: `RUST_LOG=izanami::summary=info,izanami::progress=info,izanami::workload=warn,iroha_core::sumeragi::main_loop=info,iroha_core::sumeragi::main_loop::commit=debug,iroha_core::sumeragi=info,iroha_p2p=info IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) CARGO_TARGET_DIR=/Users/mtakemiya/dev/iroha/target-izanami-1tps-200 cargo run -p izanami --release --locked -- --allow-net --nexus --peers 4 --faulty 0 --duration 300s --target-blocks 200 --progress-interval 10s --progress-timeout 180s --tps 1 --max-inflight 8 --workload-profile stable` stopped before target; min_height 99 at 300s; no `commit pipeline defers validation` log entries; network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_wTeoI6`, log `/tmp/izanami_1tps_200_20260131_run2.log`; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`, dead-code `stake_escrow`/`slash_sink` in `izanami`.
 - NPoS timeouts: normalize phase scaling to the default pipeline budget (propose+DA+prevote+precommit+commit) so 1s block time yields a 1s pipeline; updated unit coverage in `crates/iroha_config/src/parameters/actual.rs`.
 - Docs: noted NPoS timeout normalization in `docs/source/sumeragi_pacemaker.md`.
@@ -14,6 +14,7 @@ Last update: 2026-01-31
 - Time triggers: run sample ISIs without tx-status confirmation, retry the scenario once on transient queue/timeouts, and use default pipeline time for better consensus headroom.
 - Tests: `cargo test -p integration_tests time_trigger_scenarios -- --nocapture` (failed: tx queued too long; later failed: block height predicate timed out).
 - Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests time_trigger_scenarios -- --nocapture` (timed out after 20m while still running).
+- Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_SERIALIZE_NETWORKS=1 RUST_LOG=info cargo test -p integration_tests time_trigger_scenarios -- --nocapture` (ok; preserved network dir `/var/folders/7l/w31n0ppj4zg874c4szhllss00000gn/T/irohad_test_network_vG19Z6`).
 - Formatting: `cargo fmt --all` (stable rustfmt warnings about nightly-only options).
 - Izanami 1 TPS rerun (4 peers, 300s, target 200, tps 1) using existing binaries (`target/debug/izanami` + `target/release/iroha3d`): stopped before target at committed height 137 (peer log shows height 137), network dir `/tmp/iroha-test-network-izanami-1tps-20260131-run1/irohad_test_network_al0y15`, peer log `/tmp/iroha-test-network-izanami-1tps-20260131-run1/irohad_test_network_al0y15/formidable_sturgeon/run-1-stdout.log`.
 - Izanami 1 TPS rerun (4 peers, 300s, target 200, tps 1) using `/tmp/iroha-codex-izanami-1tps-run2/release/izanami` + `target/release/iroha3d`: stopped before target at committed height 117 (nationwide_zorilla; others at 116); network dir `/tmp/iroha-test-network-izanami-1tps-20260131-run2/irohad_test_network_vQxKSK`, peer log `/tmp/iroha-test-network-izanami-1tps-20260131-run2/irohad_test_network_vQxKSK/nationwide_zorilla/run-1-stdout.log`.
