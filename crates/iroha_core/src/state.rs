@@ -822,13 +822,6 @@ impl PermissionCheckCache {
         self.accounts.get(account)
     }
 
-    fn summary_mut(
-        &mut self,
-        account: &iroha_data_model::account::AccountId,
-    ) -> Option<&mut AccountPermissionSummary> {
-        self.accounts.get_mut(account)
-    }
-
     fn mark_dirty(&mut self, account: &iroha_data_model::account::AccountId) {
         if let Some(summary) = self.accounts.get_mut(account) {
             summary.clear();
@@ -842,67 +835,6 @@ impl PermissionCheckCache {
         for account in accounts {
             self.mark_dirty(account);
         }
-    }
-
-    fn on_account_permission_grant(
-        &mut self,
-        world: &impl WorldReadOnly,
-        account: &iroha_data_model::account::AccountId,
-        permission: &Permission,
-    ) {
-        if let Some(summary) = self.summary_mut(account)
-            && summary.hydrated
-        {
-            summary.apply_grant(world, permission);
-        }
-    }
-
-    fn on_account_permission_revoke(&mut self, account: &iroha_data_model::account::AccountId) {
-        self.mark_dirty(account);
-    }
-
-    fn on_role_permission_grant<'a, I>(
-        &mut self,
-        world: &impl WorldReadOnly,
-        accounts: I,
-        permission: &Permission,
-    ) where
-        I: IntoIterator<Item = &'a iroha_data_model::account::AccountId>,
-    {
-        for account in accounts {
-            if let Some(summary) = self.summary_mut(account)
-                && summary.hydrated
-            {
-                summary.apply_grant(world, permission);
-            }
-        }
-    }
-
-    fn on_role_permission_revoke<'a, I>(&mut self, accounts: I)
-    where
-        I: IntoIterator<Item = &'a iroha_data_model::account::AccountId>,
-    {
-        self.mark_accounts_dirty(accounts);
-    }
-
-    #[allow(single_use_lifetimes)]
-    fn on_role_assigned<'a>(
-        &mut self,
-        world: &impl WorldReadOnly,
-        account: &iroha_data_model::account::AccountId,
-        permissions: impl IntoIterator<Item = &'a Permission>,
-    ) {
-        if let Some(summary) = self.summary_mut(account)
-            && summary.hydrated
-        {
-            for permission in permissions {
-                summary.apply_grant(world, permission);
-            }
-        }
-    }
-
-    fn on_role_revoked(&mut self, account: &iroha_data_model::account::AccountId) {
-        self.mark_dirty(account);
     }
 }
 
