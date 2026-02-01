@@ -125,6 +125,7 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # iteration_budget_cap_ms = 2000       # cap worker loop time budget per iteration
 # iteration_drain_budget_cap_ms = 2000 # cap mailbox drain per iteration
 # tick_work_budget_cap_ms = 500        # cap per-tick proposal/commit work (0 disables)
+# parallel_ingress = true              # run per-queue ingress threads with a ticketed gate
 # validation_worker_threads = 0        # pre-vote validation worker threads (0 = auto)
 # validation_work_queue_cap = 0        # validation work queue per worker (0 = auto)
 # validation_result_queue_cap = 0      # validation result queue (0 = auto)

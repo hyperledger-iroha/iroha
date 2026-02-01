@@ -4,7 +4,11 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 
@@ -558,7 +562,7 @@ mod tests {
         num::NonZeroU64,
         sync::{
             Arc, Mutex,
-            atomic::{AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
             mpsc,
         },
         time::Duration,
@@ -7608,6 +7612,152 @@ mod tests {
 
         assert!(refresh_count.load(Ordering::Relaxed) > 0);
     }
+
+    #[test]
+    fn actor_gate_serializes_access() {
+        let gate = Arc::new(ActorGate::new(Vec::<u8>::new()));
+        let active = Arc::new(AtomicUsize::new(0));
+        let violation = Arc::new(AtomicBool::new(false));
+        let mut joins = Vec::new();
+        for idx in 0..4_u8 {
+            let gate = Arc::clone(&gate);
+            let active = Arc::clone(&active);
+            let violation = Arc::clone(&violation);
+            joins.push(std::thread::spawn(move || {
+                for _ in 0..4 {
+                    let mut guard = gate.enter();
+                    let in_flight = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    if in_flight > 1 {
+                        violation.store(true, Ordering::SeqCst);
+                    }
+                    guard.actor_mut().push(idx);
+                    std::thread::sleep(Duration::from_millis(1));
+                    active.fetch_sub(1, Ordering::SeqCst);
+                }
+            }));
+        }
+        for join in joins {
+            join.join().expect("actor gate thread");
+        }
+        let mut guard = gate.enter();
+        assert_eq!(guard.actor_mut().len(), 16);
+        assert!(!violation.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn run_parallel_worker_exits_when_shutdown_is_sent() {
+        let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_wake_tx, wake_rx) = mpsc::sync_channel::<()>(WORKER_WAKE_CHANNEL_CAP);
+        let actor = RecordingActor::default();
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let shutdown_signal = ShutdownSignal::new();
+        shutdown_signal.send();
+
+        run_parallel_worker(
+            actor,
+            config,
+            vote_rx,
+            block_payload_rx,
+            rbc_chunk_rx,
+            block_rx,
+            consensus_rx,
+            lane_rx,
+            background_rx,
+            wake_rx,
+            shutdown_signal,
+        );
+    }
+
+    #[test]
+    fn run_parallel_worker_refreshes_config_each_iteration() {
+        let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (wake_tx, wake_rx) = mpsc::sync_channel::<()>(WORKER_WAKE_CHANNEL_CAP);
+        let refresh_count = Arc::new(AtomicUsize::new(0));
+        let actor = RefreshingActor {
+            refresh_count: Arc::clone(&refresh_count),
+        };
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let shutdown_signal = ShutdownSignal::new();
+        let shutdown_worker = shutdown_signal.clone();
+
+        let join = std::thread::spawn(move || {
+            run_parallel_worker(
+                actor,
+                config,
+                vote_rx,
+                block_payload_rx,
+                rbc_chunk_rx,
+                block_rx,
+                consensus_rx,
+                lane_rx,
+                background_rx,
+                wake_rx,
+                shutdown_worker,
+            );
+        });
+
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        while refresh_count.load(Ordering::Relaxed) == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        shutdown_signal.send();
+        let _ = wake_tx.send(());
+        join.join().expect("parallel worker thread");
+
+        assert!(refresh_count.load(Ordering::Relaxed) > 0);
+    }
 }
 
 /// QC-based consensus message types and helpers (single-chain).
@@ -9665,6 +9815,82 @@ impl WorkerActor for crate::sumeragi::main_loop::Actor {
     }
 }
 
+struct ActorGate<A> {
+    state: Mutex<ActorGateState<A>>,
+    cvar: Condvar,
+}
+
+struct ActorGateState<A> {
+    actor: A,
+    serving: u64,
+    next_ticket: u64,
+}
+
+struct ActorGuard<'a, A> {
+    gate: &'a ActorGate<A>,
+    ticket: u64,
+    guard: Option<std::sync::MutexGuard<'a, ActorGateState<A>>>,
+}
+
+impl<A> ActorGate<A> {
+    fn new(actor: A) -> Self {
+        Self {
+            state: Mutex::new(ActorGateState {
+                actor,
+                serving: 0,
+                next_ticket: 0,
+            }),
+            cvar: Condvar::new(),
+        }
+    }
+
+    fn enter(&self) -> ActorGuard<'_, A> {
+        let mut guard = self.state.lock().expect("sumeragi actor gate poisoned");
+        let ticket = guard.next_ticket;
+        guard.next_ticket = guard.next_ticket.wrapping_add(1);
+        while guard.serving != ticket {
+            guard = self.cvar.wait(guard).expect("sumeragi actor gate poisoned");
+        }
+        ActorGuard {
+            gate: self,
+            ticket,
+            guard: Some(guard),
+        }
+    }
+}
+
+impl<A> ActorGuard<'_, A> {
+    fn actor_mut(&mut self) -> &mut A {
+        &mut self
+            .guard
+            .as_mut()
+            .expect("sumeragi actor guard missing")
+            .actor
+    }
+}
+
+impl<A> Drop for ActorGuard<'_, A> {
+    fn drop(&mut self) {
+        let Some(mut guard) = self.guard.take() else {
+            return;
+        };
+        if guard.serving == self.ticket {
+            guard.serving = guard.serving.wrapping_add(1);
+        }
+        self.gate.cvar.notify_all();
+    }
+}
+
+fn poll_worker_results<A: WorkerActor>(actor: &mut A) -> bool {
+    let mut progress = false;
+    progress |= actor.poll_commit_results();
+    progress |= actor.poll_validation_results();
+    progress |= actor.poll_qc_verify_results();
+    progress |= actor.poll_vote_verify_results();
+    progress |= actor.poll_rbc_persist_results();
+    progress
+}
+
 const PRIORITY_TIER_COUNT: usize = 7;
 // Keep vote processing ahead of payload tiers; drain fast-path block messages before heavy payloads.
 const VOTE_BURST_CAP: usize = 32;
@@ -10599,6 +10825,264 @@ fn run_worker_loop<A: WorkerActor>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn spawn_queue_worker<A, T, F>(
+    name: &'static str,
+    rx: mpsc::Receiver<T>,
+    gate: Arc<ActorGate<A>>,
+    active: Arc<AtomicUsize>,
+    shutdown_signal: ShutdownSignal,
+    stage: status::WorkerLoopStage,
+    queue_kind: status::WorkerQueueKind,
+    handler_label: &'static str,
+    mut handler: F,
+) -> std::thread::JoinHandle<()>
+where
+    A: WorkerActor + Send + 'static,
+    T: Send + 'static,
+    F: FnMut(&mut A, T) -> Result<()> + Send + 'static,
+{
+    std::thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(move || {
+            loop {
+                if shutdown_signal.is_sent() {
+                    break;
+                }
+                match rx.recv_timeout(Duration::from_millis(IDLE_SHUTDOWN_POLL_MS)) {
+                    Ok(msg) => {
+                        let iter_start = Instant::now();
+                        active.fetch_add(1, Ordering::Relaxed);
+                        let mut guard = gate.enter();
+                        status::set_worker_stage(stage);
+                        if let Err(err) = handler(guard.actor_mut(), msg) {
+                            iroha_logger::error!(
+                                ?err,
+                                queue = ?queue_kind,
+                                handler = handler_label,
+                                "Sumeragi worker handler failed"
+                            );
+                        }
+                        poll_worker_results(guard.actor_mut());
+                        status::record_worker_queue_drain(queue_kind, 1);
+                        status::record_worker_iteration(
+                            u64::try_from(iter_start.elapsed().as_millis()).unwrap_or(u64::MAX),
+                        );
+                        drop(guard);
+                        if active.fetch_sub(1, Ordering::Relaxed) == 1 {
+                            status::set_worker_stage(status::WorkerLoopStage::Idle);
+                        }
+                        std::thread::yield_now();
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        })
+        .expect("sumeragi queue worker thread spawn failed")
+}
+
+fn spawn_tick_worker<A: WorkerActor + Send + 'static>(
+    gate: Arc<ActorGate<A>>,
+    active: Arc<AtomicUsize>,
+    mut cfg: WorkerLoopConfig,
+    wake_rx: mpsc::Receiver<()>,
+    shutdown_signal: ShutdownSignal,
+) -> std::thread::JoinHandle<()>
+where
+    A: WorkerActor + Send + 'static,
+{
+    std::thread::Builder::new()
+        .name("sumeragi-tick".to_owned())
+        .spawn(move || {
+            let mut last_tick = Instant::now();
+            loop {
+                if shutdown_signal.is_sent() {
+                    break;
+                }
+                let iter_start = Instant::now();
+                active.fetch_add(1, Ordering::Relaxed);
+                let (next_deadline, tick_min_gap) = {
+                    let mut guard = gate.enter();
+                    status::set_worker_stage(status::WorkerLoopStage::Tick);
+                    guard.actor_mut().refresh_worker_loop_config(&mut cfg);
+                    let now = Instant::now();
+                    poll_worker_results(guard.actor_mut());
+                    let next_deadline = guard.actor_mut().next_tick_deadline(now);
+                    if next_deadline.is_some_and(|deadline| deadline <= now)
+                        && should_run_tick(now, last_tick, cfg.tick_min_gap)
+                    {
+                        if guard.actor_mut().tick() {
+                            last_tick = now;
+                        }
+                    }
+                    status::record_worker_iteration(
+                        u64::try_from(iter_start.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    );
+                    (next_deadline, cfg.tick_min_gap)
+                };
+                if active.fetch_sub(1, Ordering::Relaxed) == 1 {
+                    status::set_worker_stage(status::WorkerLoopStage::Idle);
+                }
+                std::thread::yield_now();
+
+                if shutdown_signal.is_sent() {
+                    break;
+                }
+                let now = Instant::now();
+                let wait = match next_deadline {
+                    None => Some(Duration::from_millis(IDLE_SHUTDOWN_POLL_MS)),
+                    Some(deadline) => {
+                        let due_wait = deadline.saturating_duration_since(now);
+                        let min_gap_wait = idle_wait_duration(now, last_tick, tick_min_gap);
+                        let mut wait =
+                            min_gap_wait.map_or(due_wait, |min_gap| min_gap.max(due_wait));
+                        if wait.is_zero() {
+                            None
+                        } else {
+                            let shutdown_poll = Duration::from_millis(IDLE_SHUTDOWN_POLL_MS);
+                            if wait > shutdown_poll {
+                                wait = shutdown_poll;
+                            }
+                            Some(wait)
+                        }
+                    }
+                };
+                if let Some(wait) = wait {
+                    match wake_rx.recv_timeout(wait) {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(wait),
+                    }
+                    while wake_rx.try_recv().is_ok() {}
+                }
+            }
+        })
+        .expect("sumeragi tick worker thread spawn failed")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_parallel_worker<A: WorkerActor + Send + 'static>(
+    actor: A,
+    cfg: WorkerLoopConfig,
+    vote_rx: mpsc::Receiver<InboundBlockMessage>,
+    block_payload_rx: mpsc::Receiver<InboundBlockMessage>,
+    rbc_chunk_rx: mpsc::Receiver<InboundBlockMessage>,
+    block_rx: mpsc::Receiver<InboundBlockMessage>,
+    consensus_rx: mpsc::Receiver<ControlFlow>,
+    lane_relay_rx: mpsc::Receiver<LaneRelayMessage>,
+    background_rx: mpsc::Receiver<BackgroundRequest>,
+    wake_rx: mpsc::Receiver<()>,
+    shutdown_signal: ShutdownSignal,
+) {
+    let gate = Arc::new(ActorGate::new(actor));
+    let active = Arc::new(AtomicUsize::new(0));
+
+    let mut joins = Vec::new();
+    joins.push(spawn_queue_worker(
+        "sumeragi-votes",
+        vote_rx,
+        Arc::clone(&gate),
+        Arc::clone(&active),
+        shutdown_signal.clone(),
+        PriorityTier::Votes.stage(),
+        PriorityTier::Votes.queue_kind(),
+        "block_message",
+        move |actor, msg| {
+            if let BlockMessage::QcVote(vote) = &msg.message {
+                iroha_logger::debug!(
+                    height = vote.height,
+                    view = vote.view,
+                    epoch = vote.epoch,
+                    signer = vote.signer,
+                    block_hash = %vote.block_hash,
+                    queue = ?PriorityTier::Votes.queue_kind(),
+                    "received precommit vote"
+                );
+            }
+            actor.on_block_message(msg)
+        },
+    ));
+    joins.push(spawn_queue_worker(
+        "sumeragi-rbc",
+        rbc_chunk_rx,
+        Arc::clone(&gate),
+        Arc::clone(&active),
+        shutdown_signal.clone(),
+        PriorityTier::RbcChunks.stage(),
+        PriorityTier::RbcChunks.queue_kind(),
+        "block_message",
+        move |actor, msg| actor.on_block_message(msg),
+    ));
+    joins.push(spawn_queue_worker(
+        "sumeragi-blocks",
+        block_rx,
+        Arc::clone(&gate),
+        Arc::clone(&active),
+        shutdown_signal.clone(),
+        PriorityTier::Blocks.stage(),
+        PriorityTier::Blocks.queue_kind(),
+        "block_message",
+        move |actor, msg| actor.on_block_message(msg),
+    ));
+    joins.push(spawn_queue_worker(
+        "sumeragi-payloads",
+        block_payload_rx,
+        Arc::clone(&gate),
+        Arc::clone(&active),
+        shutdown_signal.clone(),
+        PriorityTier::BlockPayload.stage(),
+        PriorityTier::BlockPayload.queue_kind(),
+        "block_message",
+        move |actor, msg| actor.on_block_message(msg),
+    ));
+    joins.push(spawn_queue_worker(
+        "sumeragi-consensus",
+        consensus_rx,
+        Arc::clone(&gate),
+        Arc::clone(&active),
+        shutdown_signal.clone(),
+        PriorityTier::Consensus.stage(),
+        PriorityTier::Consensus.queue_kind(),
+        "consensus_control",
+        move |actor, msg| actor.on_consensus_control(msg),
+    ));
+    joins.push(spawn_queue_worker(
+        "sumeragi-lane-relay",
+        lane_relay_rx,
+        Arc::clone(&gate),
+        Arc::clone(&active),
+        shutdown_signal.clone(),
+        PriorityTier::LaneRelay.stage(),
+        PriorityTier::LaneRelay.queue_kind(),
+        "lane_relay",
+        move |actor, msg| actor.on_lane_relay(msg),
+    ));
+    joins.push(spawn_queue_worker(
+        "sumeragi-background",
+        background_rx,
+        Arc::clone(&gate),
+        Arc::clone(&active),
+        shutdown_signal.clone(),
+        PriorityTier::Background.stage(),
+        PriorityTier::Background.queue_kind(),
+        "background",
+        move |actor, msg| actor.on_background_request(msg),
+    ));
+    joins.push(spawn_tick_worker(
+        Arc::clone(&gate),
+        Arc::clone(&active),
+        cfg,
+        wake_rx,
+        shutdown_signal,
+    ));
+
+    for join in joins {
+        if let Err(err) = join.join() {
+            iroha_logger::warn!(?err, "sumeragi worker thread exited with error");
+        }
+    }
+}
+
 #[cfg(test)]
 mod worker_iteration_warn_tests {
     use super::*;
@@ -10768,6 +11252,7 @@ impl SumeragiWorker {
             da_quorum_timeout_multiplier,
             worker_iteration_budget_cap,
         );
+        let parallel_ingress = config.worker.parallel_ingress;
         let mut actor = match crate::sumeragi::main_loop::Actor::new(
             config,
             common_config,
@@ -10852,29 +11337,44 @@ impl SumeragiWorker {
             block_rx_starve_max: starve_max,
             non_vote_starve_max: starve_max,
         };
-        let now = Instant::now();
-        let loop_state = WorkerLoopState {
-            last_tick: now,
-            last_served: [now; PRIORITY_TIER_COUNT],
-            mailbox: WorkerMailboxState::new(),
-        };
-
         status::set_worker_stage(status::WorkerLoopStage::Idle);
-        run_worker_loop(
-            actor.as_mut(),
-            loop_config,
-            loop_state,
-            vote_rx,
-            block_payload_rx,
-            rbc_chunk_rx,
-            block_rx,
-            consensus_rx,
-            lane_relay_rx,
-            background_rx,
-            wake_rx,
-            shutdown_signal,
-        );
-        drop(actor);
+        if parallel_ingress {
+            run_parallel_worker(
+                *actor,
+                loop_config,
+                vote_rx,
+                block_payload_rx,
+                rbc_chunk_rx,
+                block_rx,
+                consensus_rx,
+                lane_relay_rx,
+                background_rx,
+                wake_rx,
+                shutdown_signal,
+            );
+        } else {
+            let now = Instant::now();
+            let loop_state = WorkerLoopState {
+                last_tick: now,
+                last_served: [now; PRIORITY_TIER_COUNT],
+                mailbox: WorkerMailboxState::new(),
+            };
+            run_worker_loop(
+                actor.as_mut(),
+                loop_config,
+                loop_state,
+                vote_rx,
+                block_payload_rx,
+                rbc_chunk_rx,
+                block_rx,
+                consensus_rx,
+                lane_relay_rx,
+                background_rx,
+                wake_rx,
+                shutdown_signal,
+            );
+            drop(actor);
+        }
         if let Err(err) = commit_worker_join.join() {
             iroha_logger::warn!(?err, "sumeragi commit worker thread exited with error");
         }

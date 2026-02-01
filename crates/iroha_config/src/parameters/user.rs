@@ -5362,6 +5362,12 @@ pub struct SumeragiWorker {
         default = "defaults::sumeragi::WORKER_TICK_WORK_BUDGET_CAP_MS"
     )]
     pub tick_work_budget_cap_ms: u64,
+    /// Enable per-queue parallel ingress workers for the Sumeragi loop.
+    #[config(
+        env = "SUMERAGI_WORKER_PARALLEL_INGRESS",
+        default = "defaults::sumeragi::WORKER_PARALLEL_INGRESS"
+    )]
+    pub parallel_ingress: bool,
     /// Validation worker threads for pre-vote checks (0 = auto).
     #[config(
         env = "SUMERAGI_VALIDATION_WORKER_THREADS",
@@ -6615,6 +6621,7 @@ impl Sumeragi {
                 tick_work_budget_cap: std::time::Duration::from_millis(
                     worker.tick_work_budget_cap_ms,
                 ),
+                parallel_ingress: worker.parallel_ingress,
                 validation_worker_threads: worker.validation_worker_threads,
                 validation_work_queue_cap: worker.validation_work_queue_cap,
                 validation_result_queue_cap: worker.validation_result_queue_cap,

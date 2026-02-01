@@ -646,6 +646,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 tick_work_budget_cap: Duration::from_millis(
                     defaults::sumeragi::WORKER_TICK_WORK_BUDGET_CAP_MS,
                 ),
+                parallel_ingress: defaults::sumeragi::WORKER_PARALLEL_INGRESS,
                 validation_worker_threads: defaults::sumeragi::VALIDATION_WORKER_THREADS,
                 validation_work_queue_cap: defaults::sumeragi::VALIDATION_WORK_QUEUE_CAP,
                 validation_result_queue_cap: defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP,

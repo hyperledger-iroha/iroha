@@ -3634,6 +3634,8 @@ pub struct SumeragiWorker {
     pub iteration_drain_budget_cap: Duration,
     /// Cap on per-tick proposal/commit work.
     pub tick_work_budget_cap: Duration,
+    /// Enable per-queue parallel ingress workers for the Sumeragi loop.
+    pub parallel_ingress: bool,
     /// Validation worker threads for pre-vote checks.
     pub validation_worker_threads: usize,
     /// Validation work queue capacity per worker.

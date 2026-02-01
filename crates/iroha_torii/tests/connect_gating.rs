@@ -378,6 +378,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 tick_work_budget_cap: std::time::Duration::from_millis(
                     iroha_config::parameters::defaults::sumeragi::WORKER_TICK_WORK_BUDGET_CAP_MS,
                 ),
+                parallel_ingress: iroha_config::parameters::defaults::sumeragi::WORKER_PARALLEL_INGRESS,
                 validation_worker_threads:
                     iroha_config::parameters::defaults::sumeragi::VALIDATION_WORKER_THREADS,
                 validation_work_queue_cap:
