@@ -3154,11 +3154,28 @@ impl Actor {
         }
         let local_peer_id = self.common_config.peer.id().clone();
         collector_targets.retain(|peer| peer != &local_peer_id);
-        let required = signature_topology.min_votes_for_commit();
-        if collector_targets.len() < required {
+        if collector_targets.is_empty() {
             fallback_to_topology = true;
             collector_targets = signature_topology.as_ref().to_vec();
             collector_targets.retain(|peer| peer != &local_peer_id);
+        }
+        let mut parallel_added = 0usize;
+        if !fallback_to_topology {
+            let parallel = self.config.collectors.parallel_topology_fanout;
+            if parallel > 0 {
+                let mut parallel_targets: Vec<_> = signature_topology
+                    .topology_fanout_from_tail(parallel)
+                    .into_iter()
+                    .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
+                    .collect();
+                parallel_targets.retain(|peer| peer != &local_peer_id);
+                for peer in parallel_targets {
+                    if collector_targets.iter().all(|existing| existing != &peer) {
+                        collector_targets.push(peer);
+                        parallel_added = parallel_added.saturating_add(1);
+                    }
+                }
+            }
         }
         if fallback_to_topology {
             iroha_logger::info!(
@@ -3167,7 +3184,16 @@ impl Actor {
                 block = ?block_hash,
                 signer = local_idx,
                 targets = collector_targets.len(),
-                "sending precommit vote to commit topology (collector plan empty, local-only, or below quorum)"
+                "sending precommit vote to commit topology (collector plan empty or local-only)"
+            );
+        } else if parallel_added > 0 {
+            iroha_logger::info!(
+                height,
+                view,
+                block = ?block_hash,
+                signer = local_idx,
+                targets = collector_targets.len(),
+                "sending precommit vote to collectors with parallel topology fanout"
             );
         } else {
             iroha_logger::info!(
@@ -3302,14 +3328,13 @@ impl Actor {
                 view,
             )
         };
-        let required = signature_topology.min_votes_for_commit();
         let mut fallback_to_topology = false;
         if targets.is_empty() {
             fallback_to_topology = true;
             targets = signature_topology.as_ref().to_vec();
         }
         targets.retain(|peer| peer != &local_peer_id);
-        if targets.len() < required {
+        if targets.is_empty() {
             fallback_to_topology = true;
             targets = signature_topology.as_ref().to_vec();
             targets.retain(|peer| peer != &local_peer_id);
@@ -3327,7 +3352,7 @@ impl Actor {
                 signer = local_idx,
                 leader = %leader,
                 targets = targets.len(),
-                "sending NEW_VIEW vote to commit topology (collector plan empty or below quorum)"
+                "sending NEW_VIEW vote to commit topology (collector plan empty or local-only)"
             );
         } else {
             info!(
@@ -3591,11 +3616,23 @@ impl Actor {
             collector_targets = signature_topology.as_ref().to_vec();
             collector_targets.retain(|peer| peer != &local_peer_id);
         }
-        let required = signature_topology.min_votes_for_commit();
-        if collector_targets.len() < required {
-            fallback_to_topology = true;
-            collector_targets = signature_topology.as_ref().to_vec();
-            collector_targets.retain(|peer| peer != &local_peer_id);
+        let mut parallel_added = 0usize;
+        if !fallback_to_topology {
+            let parallel = self.config.collectors.parallel_topology_fanout;
+            if parallel > 0 {
+                let mut parallel_targets: Vec<_> = signature_topology
+                    .topology_fanout_from_tail(parallel)
+                    .into_iter()
+                    .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
+                    .collect();
+                parallel_targets.retain(|peer| peer != &local_peer_id);
+                for peer in parallel_targets {
+                    if collector_targets.iter().all(|existing| existing != &peer) {
+                        collector_targets.push(peer);
+                        parallel_added = parallel_added.saturating_add(1);
+                    }
+                }
+            }
         }
         if fallback_to_topology {
             iroha_logger::info!(
@@ -3604,7 +3641,16 @@ impl Actor {
                 block = ?block_hash,
                 phase = ?phase,
                 targets = collector_targets.len(),
-                "rebroadcasting votes to commit topology (collector plan empty, local-only, or below quorum)"
+                "rebroadcasting votes to commit topology (collector plan empty or local-only)"
+            );
+        } else if parallel_added > 0 {
+            iroha_logger::info!(
+                height,
+                view,
+                block = ?block_hash,
+                phase = ?phase,
+                targets = collector_targets.len(),
+                "rebroadcasting votes to collectors with parallel topology fanout"
             );
         } else {
             iroha_logger::info!(
@@ -3683,7 +3729,8 @@ impl Actor {
             )
         };
         if !collector_targets.is_empty() {
-            let limit = usize::from(redundant_r.max(1));
+            let redundant_limit = signature_topology.redundant_send_r_floor(redundant_r);
+            let limit = usize::from(redundant_limit.max(1));
             collector_targets.truncate(limit);
         }
         let mut fallback_to_topology = false;
@@ -3698,12 +3745,6 @@ impl Actor {
             collector_targets = signature_topology.as_ref().to_vec();
             collector_targets.retain(|peer| peer != &local_peer_id);
         }
-        let required = signature_topology.min_votes_for_commit();
-        if required > 0 && collector_targets.len() < required {
-            fallback_to_topology = true;
-            collector_targets = signature_topology.as_ref().to_vec();
-            collector_targets.retain(|peer| peer != &local_peer_id);
-        }
         if fallback_to_topology {
             iroha_logger::info!(
                 height,
@@ -3711,7 +3752,7 @@ impl Actor {
                 block = ?block_hash,
                 signer = local_idx,
                 targets = collector_targets.len(),
-                "sending exec witness to commit topology (collector plan empty, local-only, or below quorum)"
+                "sending exec witness to commit topology (collector plan empty or local-only)"
             );
         } else {
             iroha_logger::info!(

@@ -15,7 +15,7 @@ fn sample_peers(n: usize) -> Vec<PeerId> {
 }
 
 #[test]
-fn permissioned_collectors_fallback_to_tail_without_seed() {
+fn permissioned_collectors_fallback_wraps_without_seed() {
     let peers = sample_peers(5);
     let topology = Topology::new(peers.clone());
 
@@ -24,7 +24,7 @@ fn permissioned_collectors_fallback_to_tail_without_seed() {
     let view_bump = deterministic_collectors(&topology, ConsensusMode::Permissioned, 2, None, 2, 1);
 
     let expected: Vec<_> = topology
-        .collector_indices_k(2)
+        .collector_indices_k_fallback(2)
         .into_iter()
         .map(|idx| peers[idx].clone())
         .collect();
@@ -58,4 +58,15 @@ fn npos_collectors_reproducible_for_same_seed() {
     let first = deterministic_collectors(&topology, ConsensusMode::Npos, 3, Some(seed), 4, 2);
     let second = deterministic_collectors(&topology, ConsensusMode::Npos, 3, Some(seed), 4, 2);
     assert_eq!(first, second);
+}
+
+#[test]
+fn collectors_floor_k_to_quorum_with_seed() {
+    let peers = sample_peers(5);
+    let topology = Topology::new(peers);
+    let seed = [0x11; 32];
+
+    let collectors =
+        deterministic_collectors(&topology, ConsensusMode::Permissioned, 2, Some(seed), 1, 0);
+    assert_eq!(collectors.len(), topology.collector_fanout_floor(2));
 }

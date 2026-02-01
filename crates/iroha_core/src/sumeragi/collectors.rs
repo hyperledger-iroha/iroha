@@ -94,7 +94,7 @@ impl Iterator for CollectorPlan {
 ///   derive a pseudo-random but fully deterministic ordering.
 ///
 /// `seed` must be provided for PRF-based selection; callers may pass `None`
-/// to fall back to the contiguous tail slice starting at `proxy_tail_index()`.
+/// to fall back to the quorum-sized wraparound slice starting at `proxy_tail_index()`.
 pub fn deterministic_collectors(
     topology: &Topology,
     mode: ConsensusMode,
@@ -103,26 +103,29 @@ pub fn deterministic_collectors(
     height: u64,
     view: u64,
 ) -> Vec<PeerId> {
+    let effective_k = topology.collector_fanout_floor(k);
+    if effective_k == 0 {
+        return Vec::new();
+    }
     match mode {
         ConsensusMode::Permissioned => {
             if let Some(seed) = seed {
-                let idxs = topology.collector_indices_k_prf(k, seed, height, view);
+                let idxs = topology.collector_indices_k_prf(effective_k, seed, height, view);
                 return idxs
                     .into_iter()
                     .map(|idx| topology.as_ref()[idx].clone())
                     .collect();
             }
             topology
-                .collector_indices_k(k)
+                .collector_indices_k_fallback(effective_k)
                 .into_iter()
                 .map(|idx| topology.as_ref()[idx].clone())
                 .collect()
         }
         ConsensusMode::Npos => {
-            let Some(seed) = seed else {
-                return Vec::new();
-            };
-            let idxs = topology.collector_indices_k_prf(k, seed, height, view);
+            let idxs = seed
+                .map(|seed| topology.collector_indices_k_prf(effective_k, seed, height, view))
+                .unwrap_or_else(|| topology.collector_indices_k_fallback(effective_k));
             idxs.into_iter()
                 .map(|idx| topology.as_ref()[idx].clone())
                 .collect()
@@ -165,7 +168,8 @@ mod tests {
         let seed = [0x11; 32];
         let plan =
             deterministic_collectors(&topology, ConsensusMode::Permissioned, 2, Some(seed), 2, 0);
-        let expected_idxs = topology.collector_indices_k_prf(2, seed, 2, 0);
+        let effective_k = topology.collector_fanout_floor(2);
+        let expected_idxs = topology.collector_indices_k_prf(effective_k, seed, 2, 0);
         let expected: Vec<_> = expected_idxs
             .into_iter()
             .map(|idx| peers[idx].clone())
@@ -183,6 +187,28 @@ mod tests {
         let plan1 = deterministic_collectors(&topology, ConsensusMode::Npos, 3, Some(seed), 5, 2);
         let plan2 = deterministic_collectors(&topology, ConsensusMode::Npos, 3, Some(seed), 5, 2);
         assert_eq!(plan1, plan2);
-        assert_eq!(plan1.len(), 3);
+        assert_eq!(plan1.len(), topology.collector_fanout_floor(3));
+    }
+
+    #[test]
+    fn fallback_collectors_wrap_and_fill_quorum() {
+        let peers: Vec<PeerId> = (0..4)
+            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+            .collect();
+        let topology = Topology::new(peers.clone());
+        let expected_idxs = topology.collector_indices_k_fallback(2);
+        let expected: Vec<_> = expected_idxs
+            .into_iter()
+            .map(|idx| peers[idx].clone())
+            .collect();
+
+        assert_eq!(
+            deterministic_collectors(&topology, ConsensusMode::Permissioned, 2, None, 1, 0),
+            expected
+        );
+        assert_eq!(
+            deterministic_collectors(&topology, ConsensusMode::Npos, 2, None, 1, 0),
+            expected
+        );
     }
 }

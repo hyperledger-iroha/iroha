@@ -141,12 +141,90 @@ impl Topology {
         (start..end_exclusive).collect()
     }
 
+    /// Effective collector fan-out (k) floor for the current topology.
+    ///
+    /// Ensures the requested `k` is at least the commit quorum size, bounded by the number
+    /// of non-leader peers. Returns `0` for empty/single-peer topologies or when `k` is `0`.
+    pub fn collector_fanout_floor(&self, k: usize) -> usize {
+        if self.0.len() <= 1 || k == 0 {
+            return 0;
+        }
+        let required = self.min_votes_for_commit();
+        let max_collectors = self.0.len().saturating_sub(1);
+        k.max(required).min(max_collectors)
+    }
+
+    /// Fallback collector indices when PRF selection is unavailable.
+    ///
+    /// The fallback starts at `proxy_tail_index()` and wraps around to fill at least
+    /// the commit quorum size (bounded by the number of non-leader peers). The
+    /// leader is never included and indices are unique.
+    pub fn collector_indices_k_fallback(&self, k: usize) -> Vec<usize> {
+        if self.0.len() <= 1 {
+            return Vec::new();
+        }
+        let desired = self.collector_fanout_floor(k);
+        if desired == 0 {
+            return Vec::new();
+        }
+
+        let mut indices = Vec::with_capacity(desired);
+        let mut idx = self.proxy_tail_index();
+        let n = self.0.len();
+        for _ in 0..n {
+            if idx != self.leader_index() {
+                indices.push(idx);
+                if indices.len() == desired {
+                    break;
+                }
+            }
+            idx = (idx + 1) % n;
+        }
+        indices
+    }
+
+    /// Deterministic topology fan-out indices starting at `proxy_tail_index()`.
+    ///
+    /// This is a bounded wraparound slice (skipping the leader) that does not force
+    /// the quorum-sized floor. Useful for small parallel fan-out paths where only a
+    /// few extra targets are desired.
+    pub fn topology_fanout_from_tail(&self, count: usize) -> Vec<usize> {
+        if self.0.len() <= 1 || count == 0 {
+            return Vec::new();
+        }
+        let max_collectors = self.0.len().saturating_sub(1);
+        let desired = count.min(max_collectors);
+        if desired == 0 {
+            return Vec::new();
+        }
+        let mut indices = Vec::with_capacity(desired);
+        let mut idx = self.proxy_tail_index();
+        let n = self.0.len();
+        for _ in 0..n {
+            if idx != self.leader_index() {
+                indices.push(idx);
+                if indices.len() == desired {
+                    break;
+                }
+            }
+            idx = (idx + 1) % n;
+        }
+        indices
+    }
+
     /// Deterministic set of collectors (peer ids) for the current topology.
     pub fn collectors_k(&self, k: usize) -> Vec<&PeerId> {
         self.collector_indices_k(k)
             .into_iter()
             .map(|idx| &self.0[idx])
             .collect()
+    }
+
+    /// Clamp the configured redundant send fan-out to at least the commit quorum size.
+    pub fn redundant_send_r_floor(&self, configured: u8) -> u8 {
+        let quorum = self.min_votes_for_commit();
+        let quorum_u8 = u8::try_from(quorum).unwrap_or(u8::MAX);
+        configured.max(quorum_u8).max(1)
     }
 
     /// Rotate peers so that the peer at `idx` becomes leader (index 0),
@@ -1285,6 +1363,57 @@ mod tests {
         let topology = Topology::new(peers);
         // K=2 would be [2,3]; no wrap to 0
         assert_eq!(topology.collector_indices_k(2), vec![2, 3]);
+    }
+
+    #[test]
+    fn collectors_fallback_wraps_to_quorum() {
+        // N = 4; min_votes = 3 => tail idx = 2; skip leader idx = 0.
+        let peers = test_peers(4);
+        let topology = Topology::new(peers);
+        // K=2 should still fill quorum=3 via wraparound: 2,3,1.
+        assert_eq!(topology.collector_indices_k_fallback(2), vec![2, 3, 1]);
+    }
+
+    #[test]
+    fn collectors_fallback_bumps_small_k_to_quorum() {
+        // N = 5; min_votes = 4 => tail idx = 3.
+        let peers = test_peers(5);
+        let topology = Topology::new(peers);
+        // K=1 should still fill quorum=4 via wraparound: 3,4,1,2 (skip leader 0).
+        assert_eq!(topology.collector_indices_k_fallback(1), vec![3, 4, 1, 2]);
+    }
+
+    #[test]
+    fn collector_fanout_floor_respects_quorum_and_bounds() {
+        let peers = test_peers(4);
+        let topology = Topology::new(peers);
+        // N = 4 => min_votes = 3, max collectors = 3.
+        assert_eq!(topology.collector_fanout_floor(1), 3);
+        assert_eq!(topology.collector_fanout_floor(5), 3);
+
+        let peers = test_peers(2);
+        let topology = Topology::new(peers);
+        // N = 2 => min_votes = 2, max collectors = 1.
+        assert_eq!(topology.collector_fanout_floor(1), 1);
+        assert_eq!(topology.collector_fanout_floor(2), 1);
+    }
+
+    #[test]
+    fn topology_fanout_from_tail_wraps_and_skips_leader() {
+        // N = 4; min_votes = 3 => tail idx = 2; skip leader idx = 0.
+        let peers = test_peers(4);
+        let topology = Topology::new(peers);
+        assert_eq!(topology.topology_fanout_from_tail(2), vec![2, 3]);
+        assert_eq!(topology.topology_fanout_from_tail(3), vec![2, 3, 1]);
+    }
+
+    #[test]
+    fn redundant_send_r_floor_bumps_to_quorum() {
+        // N = 5 => min_votes_for_commit = 4.
+        let peers = test_peers(5);
+        let topology = Topology::new(peers);
+        assert_eq!(topology.redundant_send_r_floor(2), 4);
+        assert_eq!(topology.redundant_send_r_floor(6), 6);
     }
 
     #[test]

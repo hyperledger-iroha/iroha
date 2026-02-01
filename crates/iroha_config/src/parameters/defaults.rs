@@ -2316,6 +2316,8 @@ pub mod sumeragi {
     /// Redundant send fanout (r): how many distinct collectors a validator sends to over time.
     /// Default targets 2f+1 for a 4-peer topology (r=3).
     pub const COLLECTORS_REDUNDANT_SEND_R: u8 = 3;
+    /// Extra topology fanout alongside collector routing (0 = disabled).
+    pub const COLLECTORS_PARALLEL_TOPOLOGY_FANOUT: usize = 1;
     /// Optional cap on transactions per block (None = unlimited).
     pub const BLOCK_MAX_TRANSACTIONS: Option<NonZeroUsize> = None;
     /// Commit-time threshold (ms) for applying fast-finality proposal caps.
@@ -2352,6 +2354,12 @@ pub mod sumeragi {
     pub const VALIDATION_WORK_QUEUE_CAP: usize = 0;
     /// Validation worker result-queue capacity (shared, 0 = auto).
     pub const VALIDATION_RESULT_QUEUE_CAP: usize = 0;
+    /// QC verify worker threads (0 = auto).
+    pub const QC_VERIFY_WORKER_THREADS: usize = 0;
+    /// QC verify work queue capacity per worker (0 = auto).
+    pub const QC_VERIFY_WORK_QUEUE_CAP: usize = 0;
+    /// QC verify result queue capacity (shared, 0 = auto).
+    pub const QC_VERIFY_RESULT_QUEUE_CAP: usize = 0;
     /// Cap on deferred vote-validation backlog before dropping inbound votes.
     pub const VALIDATION_PENDING_CAP: usize = 8_192;
     /// Default runtime consensus mode: "permissioned".

@@ -16,11 +16,14 @@ rebroadcasts reuse collector targets with a commit-topology fallback.
   a reproducible `Vec<PeerId>` for the `(height, view)` pair.
 * Permissioned mode uses PRF-based collector selection seeded by the epoch PRF/VRF state.
   The helper derives a deterministic per-`(height, view)` ordering from the canonical
-  roster and excludes the leader. When a PRF seed is unavailable, it falls back to the
-  contiguous tail slice to preserve deterministic behaviour.
+  roster and excludes the leader. When a PRF seed is unavailable, it falls back to a
+  wraparound slice starting at `proxy_tail_index()` to preserve deterministic behaviour.
 * NPoS mode continues to use the per-epoch PRF, with the helper centralising the
   computation so every caller receives the same order. The seed is derived from the
   epoch randomness supplied by `EpochManager`.
+* Validators may also send commit votes to a small parallel topology fanout
+  (`collectors.parallel_topology_fanout`) to reduce collector-hop latency without
+  full broadcast fan-out.
 * `CollectorPlan` tracks consumption of the ordered targets and records whether
   the gossip fallback was triggered. Telemetry updates
   (`collect_aggregator_ms`, `sumeragi_redundant_sends_*`,
@@ -35,7 +38,7 @@ rebroadcasts reuse collector targets with a commit-topology fallback.
    ordering is portable across components and tests.
 2. **Rotation:** PRF-based selection rotates the primary collector across heights
    and views in both modes, preventing a single Set B validator from permanently
-   owning aggregation duties. The deterministic tail-slice fallback is used only
+   owning aggregation duties. The deterministic wraparound fallback is used only
    when the PRF seed is unavailable.
 3. **Observability:** Telemetry keeps reporting per-collector assignments and the
    fallback path emits a warning when gossip is engaged so operators can detect
@@ -54,8 +57,8 @@ rebroadcasts reuse collector targets with a commit-topology fallback.
   fall back to the full commit topology (excluding self) to avoid deadlock.
 * When quorum stalls, the reschedule path rebroadcasts cached votes via the
   collector plan, falling back to the commit topology when collectors are
-  empty, local-only, or below quorum. This provides a bounded "gossip" fallback
-  without paying full broadcast cost on the steady-state fast path.
+  empty or local-only. This provides a bounded "gossip" fallback without paying
+  full broadcast cost on the steady-state fast path.
 * Each drop of a proposal due to the locked QC gate increments
   `block_created_dropped_by_lock_total`; failed header validation paths raise
   `block_created_hint_mismatch_total` and
@@ -73,9 +76,8 @@ rebroadcasts reuse collector targets with a commit-topology fallback.
   proposal pipeline completes.
 * `Sumeragi` builds collector plans via `init_collector_plan` and targets
   collectors when emitting availability/precommit votes. Availability and
-  precommit votes fall back to the commit topology when collectors are empty,
-  local-only, or below quorum, and rebroadcasts fall back under the same
-  conditions.
+  precommit votes fall back to the commit topology when collectors are empty or
+  local-only, and rebroadcasts fall back under the same conditions.
 * Unit and integration tests validate PRF determinism, fallback selection, and
   backoff state transitions.
 

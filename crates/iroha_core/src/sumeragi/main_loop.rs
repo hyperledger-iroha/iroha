@@ -5217,9 +5217,9 @@ impl Actor {
     pub(super) fn attach_qc_verify_worker(&mut self) -> Vec<std::thread::JoinHandle<()>> {
         let handle = qc_verify::spawn_qc_verify_workers(
             self.wake_tx.clone(),
-            self.config.worker.validation_worker_threads,
-            self.config.worker.validation_work_queue_cap,
-            self.config.worker.validation_result_queue_cap,
+            self.config.worker.qc_verify_worker_threads,
+            self.config.worker.qc_verify_work_queue_cap,
+            self.config.worker.qc_verify_result_queue_cap,
         );
         self.subsystems.qc_verify.work_txs = handle.work_txs;
         self.subsystems.qc_verify.result_rx = Some(handle.result_rx);
@@ -9015,7 +9015,8 @@ impl Actor {
         self.reset_collector_state();
         self.subsystems.propose.collector_plan_subject = Some((height, view));
         let (k, redundant_r) = self.collector_plan_params_for_mode(consensus_mode);
-        self.subsystems.propose.collector_redundant_limit = redundant_r.max(1);
+        let redundant_floor = topology.redundant_send_r_floor(redundant_r);
+        self.subsystems.propose.collector_redundant_limit = redundant_floor;
         self.subsystems
             .propose
             .adaptive_state

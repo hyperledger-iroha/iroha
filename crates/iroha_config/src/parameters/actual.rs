@@ -3593,6 +3593,8 @@ pub struct SumeragiCollectors {
     pub k: usize,
     /// Redundant send fanout (r): number of distinct collectors targeted on retries.
     pub redundant_send_r: u8,
+    /// Additional topology fanout alongside collector routing (0 = disabled).
+    pub parallel_topology_fanout: usize,
 }
 
 /// Block assembly limits.
@@ -3638,6 +3640,12 @@ pub struct SumeragiWorker {
     pub validation_work_queue_cap: usize,
     /// Validation result queue capacity (shared).
     pub validation_result_queue_cap: usize,
+    /// QC verify worker threads.
+    pub qc_verify_worker_threads: usize,
+    /// QC verify work queue capacity per worker.
+    pub qc_verify_work_queue_cap: usize,
+    /// QC verify result queue capacity (shared).
+    pub qc_verify_result_queue_cap: usize,
     /// Cap on deferred vote-validation backlog before dropping inbound votes.
     pub validation_pending_cap: usize,
 }

@@ -220,7 +220,6 @@ impl Execute for RegisterBox {
             Self::Nft(isi) => isi.execute(authority, state_transaction),
             Self::Role(isi) => isi.execute(authority, state_transaction),
             Self::Trigger(isi) => {
-                iroha_logger::error!("RegisterBox::Trigger invoke");
                 isi.execute(authority, state_transaction)
             }
         }

@@ -5364,6 +5364,118 @@ mod tests {
     }
 
     #[test]
+    fn run_worker_iteration_prioritizes_votes_over_block_payload_backlog() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        let vote_total = VOTE_BURST_CAP + 1;
+        for _ in 0..vote_total {
+            let vote = Vote {
+                phase: Phase::Prepare,
+                block_hash,
+                parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+                post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: None,
+                signer: 0,
+                bls_sig: Vec::new(),
+            };
+            vote_tx
+                .send(inbound(BlockMessage::QcVote(vote)))
+                .expect("send prevote");
+            status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
+        }
+
+        let proposal = Proposal {
+            header: ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::new(b"tx"),
+                state_root: Hash::new(b"state"),
+                proposer: 0,
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: QcHeaderRef {
+                    height: 0,
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: block_hash,
+                    phase: Phase::Prepare,
+                },
+            },
+            payload_hash: Hash::new(b"payload"),
+        };
+        block_payload_tx
+            .send(inbound(BlockMessage::Proposal(proposal)))
+            .expect("send proposal");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(2),
+            drain_budget_cap: Duration::from_secs(2),
+            vote_rx_drain_budget: Duration::from_secs(2),
+            block_payload_rx_drain_budget: Duration::from_secs(2),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: vote_total,
+            block_rx_drain_budget: Duration::from_secs(2),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(2),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_secs(1),
+            tick_busy_gap: Duration::from_secs(1),
+            tick_max_gap: Duration::from_secs(2),
+            block_rx_starve_max: Duration::from_secs(2),
+            non_vote_starve_max: Duration::from_secs(2),
+        };
+        let now = Instant::now();
+        let mut loop_state = WorkerLoopState {
+            last_tick: now,
+            last_served: [now; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = RecordingActor::default();
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        let payload_index = actor
+            .events
+            .iter()
+            .position(|entry| *entry == "payload")
+            .expect("payload should be drained");
+        assert!(
+            payload_index >= vote_total,
+            "expected votes to be prioritized ahead of block payload backlog"
+        );
+        assert_eq!(stats.votes_handled, vote_total);
+        assert_eq!(stats.block_payloads_handled, 1);
+        assert_eq!(actor.tick_calls, 0);
+    }
+
+    #[test]
     fn run_worker_iteration_tracks_drain_times_for_votes_and_payloads() {
         status::reset_worker_loop_snapshot_for_tests();
 
@@ -9556,8 +9668,8 @@ impl WorkerActor for crate::sumeragi::main_loop::Actor {
 const PRIORITY_TIER_COUNT: usize = 7;
 // Keep vote processing ahead of payload tiers; drain fast-path block messages before heavy payloads.
 const VOTE_BURST_CAP: usize = 32;
-// Shorten vote bursts when blocks are queued to reduce block-queue latency.
-const VOTE_BURST_CAP_WITH_BLOCKS: usize = 8;
+// Keep vote bursts at full size even when blocks are queued to prioritize QC aggregation.
+const VOTE_BURST_CAP_WITH_BLOCKS: usize = 32;
 const BLOCK_PAYLOAD_DRAIN_BACKLOG_DIVISOR: usize = 4;
 const BLOCK_PAYLOAD_DRAIN_BACKLOG_MIN: usize = 2;
 const BLOCK_RX_URGENT_FRACTION: u32 = 4;
@@ -9938,7 +10050,11 @@ fn drain_mailbox<A: WorkerActor>(
             stats.budget_exceeded = true;
             break;
         }
-        let prefer_votes = stats.votes_handled < vote_burst;
+        let votes_pending =
+            budgets.remaining(PriorityTier::Votes) > 0 && mailbox.has_pending(PriorityTier::Votes);
+        let prefer_votes = votes_pending
+            && (stats.votes_handled < vote_burst
+                || mailbox.has_pending(PriorityTier::BlockPayload));
         let Some(tier) = select_next_tier(now, mailbox, budgets, last_served, cfg, prefer_votes)
         else {
             break;
@@ -10348,7 +10464,8 @@ fn select_next_tier(
     if blocks_pending {
         return Some(PriorityTier::Blocks);
     }
-    // After the vote burst, rotate to the oldest pending tier to keep payload/RBC moving.
+    // After the vote burst, rotate to the oldest pending tier while keeping votes ahead of
+    // heavy payload drains when block payloads are backlogged.
     if let Some(tier) =
         select_oldest_pending(now, mailbox, budgets, last_served, &HIGH_PRIORITY_TIERS)
     {
