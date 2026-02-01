@@ -1,6 +1,10 @@
 # Status
 
 Last update: 2026-01-31
+- Time triggers: run sample ISIs without tx-status confirmation, retry the scenario once on transient queue/timeouts, and use default pipeline time for better consensus headroom.
+- Tests: `cargo test -p integration_tests time_trigger_scenarios -- --nocapture` (failed: tx queued too long; later failed: block height predicate timed out).
+- Tests: `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests time_trigger_scenarios -- --nocapture` (timed out after 20m while still running).
+- Formatting: `cargo fmt --all` (stable rustfmt warnings about nightly-only options).
 - Izanami 1 TPS rerun (4 peers, 300s, target 200, tps 1) using existing binaries (`target/debug/izanami` + `target/release/iroha3d`): stopped before target at committed height 137 (peer log shows height 137), network dir `/tmp/iroha-test-network-izanami-1tps-20260131-run1/irohad_test_network_al0y15`, peer log `/tmp/iroha-test-network-izanami-1tps-20260131-run1/irohad_test_network_al0y15/formidable_sturgeon/run-1-stdout.log`.
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-norito-test cargo test -p norito` (ok; warnings about unused `padded` in `norito`).
 - Tests: `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace cargo test --workspace` (timed out after 20m during compile; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`, dead-code fields in `izanami`).
