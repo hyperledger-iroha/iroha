@@ -2762,6 +2762,8 @@ fn seed_genesis_block_for_state(state: &State) -> HashOf<BlockHeader> {
             view.commit_topology().iter().cloned().collect()
         }
     };
+    let topology = super::roster::canonicalize_roster(topology);
+    let topology = super::roster::canonicalize_roster(topology);
     let mut state_block = state.block(genesis.header());
     let valid =
         crate::block::ValidBlock::validate_unchecked(genesis, &mut state_block).unpack(|_| {});
@@ -25580,6 +25582,7 @@ fn validate_qc_against_votes_with_keys_and_aggregate(
 ) -> Result<super::QcValidationOutcome, super::QcValidationError> {
     let world = world_with_consensus_keys(topology.as_ref(), keypairs);
     let world_view = world.view();
+    let prf_seed = prf_seed.or_else(|| Some(prf_seed_for_chain(chain_id)));
     let inputs = roster_validation_inputs_for_view(
         &world_view,
         topology.as_ref(),
