@@ -96,13 +96,15 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 ## - consensus_mode: "permissioned" (default) or "npos"
 ## - collectors.k: number of concurrent collectors per height (K). 1 preserves the original single proxy-tail collector.
 ## - collectors.redundant_send_r: redundant send fanout; upon local timeout in view 0, validators may send their vote to up to r collectors.
+## - collectors.parallel_topology_fanout: additional topology fanout alongside collectors (0 disables).
 ##   Tooling seeds on-chain defaults as 2f+1 based on validator count; config fallback remains 1 if parameters are absent.
 ##
 ## Note: K and r are also stored on-chain in `SumeragiParameters`/`sumeragi_npos_parameters`. At startup, nodes adopt the
 ## on-chain values (and log a mismatch if config differs). Ensure operator configs and on-chain
 ## parameters are aligned to avoid inconsistent pacing. Invalid values (`k == 0` or `r == 0`)
-## are rejected at startup; when collector selection yields too few peers for quorum, votes fall
-## back to the full commit topology.
+## are rejected at startup; collector selection is floored to commit quorum (bounded by non-leader
+## peers), and votes only fall back to the full commit topology when collectors are disabled or
+## local-only.
 [sumeragi]
 # role = "validator"
 # consensus_mode = "permissioned"
@@ -110,6 +112,7 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 [sumeragi.collectors]
 # k = 1
 # redundant_send_r = 3 # example for 4 validators (2f+1)
+# parallel_topology_fanout = 1
 
 [sumeragi.advanced.queues]
 # votes = 8192          # vote channel capacity
@@ -125,6 +128,9 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # validation_worker_threads = 0        # pre-vote validation worker threads (0 = auto)
 # validation_work_queue_cap = 0        # validation work queue per worker (0 = auto)
 # validation_result_queue_cap = 0      # validation result queue (0 = auto)
+# qc_verify_worker_threads = 0         # QC verify worker threads (0 = auto)
+# qc_verify_work_queue_cap = 0         # QC verify work queue per worker (0 = auto)
+# qc_verify_result_queue_cap = 0       # QC verify result queue (0 = auto)
 # validation_pending_cap = 8192        # deferred vote-validation backlog cap
 
 [sumeragi.advanced.pacemaker]

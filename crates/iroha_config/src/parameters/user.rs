@@ -5264,6 +5264,12 @@ pub struct SumeragiCollectors {
         default = "defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R"
     )]
     pub redundant_send_r: u8,
+    /// Additional topology fanout alongside collector routing (0 = disabled).
+    #[config(
+        env = "SUMERAGI_COLLECTORS_PARALLEL_TOPOLOGY_FANOUT",
+        default = "defaults::sumeragi::COLLECTORS_PARALLEL_TOPOLOGY_FANOUT"
+    )]
+    pub parallel_topology_fanout: usize,
 }
 
 /// User-level configuration container for `SumeragiBlock`.
@@ -5374,6 +5380,24 @@ pub struct SumeragiWorker {
         default = "defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP"
     )]
     pub validation_result_queue_cap: usize,
+    /// QC verify worker threads (0 = auto).
+    #[config(
+        env = "SUMERAGI_QC_VERIFY_WORKER_THREADS",
+        default = "defaults::sumeragi::QC_VERIFY_WORKER_THREADS"
+    )]
+    pub qc_verify_worker_threads: usize,
+    /// QC verify work queue capacity per worker (0 = auto).
+    #[config(
+        env = "SUMERAGI_QC_VERIFY_WORK_QUEUE_CAP",
+        default = "defaults::sumeragi::QC_VERIFY_WORK_QUEUE_CAP"
+    )]
+    pub qc_verify_work_queue_cap: usize,
+    /// QC verify result queue capacity (shared, 0 = auto).
+    #[config(
+        env = "SUMERAGI_QC_VERIFY_RESULT_QUEUE_CAP",
+        default = "defaults::sumeragi::QC_VERIFY_RESULT_QUEUE_CAP"
+    )]
+    pub qc_verify_result_queue_cap: usize,
     /// Cap on deferred vote-validation backlog before dropping inbound votes.
     #[config(
         env = "SUMERAGI_VALIDATION_PENDING_CAP",
@@ -6566,6 +6590,7 @@ impl Sumeragi {
             collectors: actual::SumeragiCollectors {
                 k: collectors.k,
                 redundant_send_r: collectors.redundant_send_r,
+                parallel_topology_fanout: collectors.parallel_topology_fanout,
             },
             block: actual::SumeragiBlock {
                 max_transactions: block.max_transactions,
@@ -6593,6 +6618,9 @@ impl Sumeragi {
                 validation_worker_threads: worker.validation_worker_threads,
                 validation_work_queue_cap: worker.validation_work_queue_cap,
                 validation_result_queue_cap: worker.validation_result_queue_cap,
+                qc_verify_worker_threads: worker.qc_verify_worker_threads,
+                qc_verify_work_queue_cap: worker.qc_verify_work_queue_cap,
+                qc_verify_result_queue_cap: worker.qc_verify_result_queue_cap,
                 validation_pending_cap: worker.validation_pending_cap,
             },
             pacemaker: actual::SumeragiPacemaker {

@@ -228,7 +228,7 @@ trust_min_score = -20              # drop trust gossip at or below this score
 - `connect_startup_delay_ms` delays outbound dials immediately after startup to reduce
   connection-refused noise when peers come up in waves (localnet or orchestrated rollouts).
 - NEW_VIEW votes are sent to the deterministic collector set for the current view and always
-  include the leader; if the collector set is below commit quorum, the sender falls back to the
+  include the leader; if the collector set is empty or local-only, the sender falls back to the
   full commit topology. This provides redundancy without relying on full broadcast in the steady state.
 - Trust scoring is deterministic: scores start at 0, penalties subtract `trust_penalty_bad_gossip`,
   and the debt halves every `trust_decay_half_life_ms` until it reaches 0. In permissioned mode,

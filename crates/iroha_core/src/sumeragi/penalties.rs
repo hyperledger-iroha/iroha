@@ -686,6 +686,7 @@ mod tests {
             collectors: SumeragiCollectors {
                 k: 1,
                 redundant_send_r: 1,
+                parallel_topology_fanout: 0,
             },
             block: SumeragiBlock {
                 max_transactions: None,
@@ -719,6 +720,12 @@ mod tests {
                     iroha_config::parameters::defaults::sumeragi::VALIDATION_WORK_QUEUE_CAP,
                 validation_result_queue_cap:
                     iroha_config::parameters::defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP,
+                qc_verify_worker_threads:
+                    iroha_config::parameters::defaults::sumeragi::QC_VERIFY_WORKER_THREADS,
+                qc_verify_work_queue_cap:
+                    iroha_config::parameters::defaults::sumeragi::QC_VERIFY_WORK_QUEUE_CAP,
+                qc_verify_result_queue_cap:
+                    iroha_config::parameters::defaults::sumeragi::QC_VERIFY_RESULT_QUEUE_CAP,
                 validation_pending_cap:
                     iroha_config::parameters::defaults::sumeragi::VALIDATION_PENDING_CAP,
             },

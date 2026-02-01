@@ -14,35 +14,74 @@ translation_last_reviewed: 2026-01-01
 ## Resumo
 
 Esta nota captura a estrategia deterministica de roteamento de collectors ("aggregators") usada por Sumeragi apos a atualizacao de equidade da Fase 3. Cada validador calcula a mesma ordenacao de collectors para uma altura e view de bloco dadas. O design elimina a dependencia de aleatoriedade ad hoc e mantem o fan-out normal de votos limitado pela lista de collectors; quando os collectors estao indisponiveis ou o quorum trava, os rebroadcasts de reescalonamento reutilizam alvos de collectors com fallback para a topologia de commit.
-
 ## Selecao deterministica
 
-- O novo modulo `sumeragi::collectors` expoe `deterministic_collectors(topology, mode, k, seed, height, view)` que retorna um `Vec<PeerId>` reproduzivel para o par `(height, view)`.
-- O modo permissioned usa selecao baseada em PRF com seed do estado PRF/VRF da epoca. O helper deriva uma ordenacao deterministica por `(height, view)` a partir da topologia canonica e exclui o leader. Quando a seed PRF nao esta disponivel, volta ao segmento contiguo de cauda para preservar o determinismo.
-- O modo NPoS continua usando o PRF por epoca, mas o helper agora centraliza o calculo para que cada chamador receba a mesma ordem. A seed e derivada da aleatoriedade de epoca fornecida por `EpochManager`.
-- `CollectorPlan` acompanha o consumo dos alvos ordenados e registra se o fallback de gossip foi acionado. As atualizacoes de telemetria (`collect_aggregator_ms`, `sumeragi_redundant_sends_*`, `sumeragi_gossip_fallback_total`) mostram com que frequencia os fallbacks ocorrem e quanto tempo o fan-out redundante leva.
-
+* The new `sumeragi::collectors` module exposes
+  `deterministic_collectors(topology, mode, k, seed, height, view)` which returns
+  a reproducible `Vec<PeerId>` for the `(height, view)` pair.
+* Permissioned mode uses PRF-based collector selection seeded by the epoch PRF/VRF state.
+  The helper derives a deterministic per-`(height, view)` ordering from the canonical
+  roster and excludes the leader. When a PRF seed is unavailable, it falls back to a
+  wraparound slice starting at `proxy_tail_index()` to preserve deterministic behaviour.
+* NPoS mode continues to use the per-epoch PRF, with the helper centralising the
+  computation so every caller receives the same order. The seed is derived from the
+  epoch randomness supplied by `EpochManager`.
+* Validators may also send commit votes to a small parallel topology fanout
+  (`collectors.parallel_topology_fanout`) to reduce collector-hop latency without
+  full broadcast fan-out.
+* `CollectorPlan` tracks consumption of the ordered targets and records whether
+  the gossip fallback was triggered. Telemetry updates
+  (`collect_aggregator_ms`, `sumeragi_redundant_sends_*`,
+  `sumeragi_gossip_fallback_total`) surface how often fallbacks occur and how
+  long redundant fan-out takes.
 ## Objetivos de equidade
 
-1. **Reprodutibilidade:** A mesma topologia de validadores, modo de consenso, seed PRF e tupla `(height, view)` deve levar aos mesmos collectors primarios/secundarios em cada peer. O helper esconde peculiaridades de topologia (proxy tail, validadores Set B) para que a ordem seja portavel entre componentes e testes.
-2. **Rotacao:** A selecao PRF rotaciona o collector primario entre alturas e views em ambos os modos, evitando que um unico validador Set B detenha permanentemente as tarefas de agregacao. O fallback para o segmento contiguo so e usado quando a seed PRF nao esta disponivel.
-3. **Observabilidade:** A telemetria continua reportando atribuicoes por collector e o caminho de fallback emite um aviso quando gossip e acionado para que operadores detectem collectors com mau comportamento.
-
+1. **Reproducibility:** The same validator topology, consensus mode, PRF seed,
+   and `(height, view)` tuple must lead to identical primary/secondary collectors
+   on every peer. The helper hides topology quirks (proxy tail, Set B validators) so the
+   ordering is portable across components and tests.
+2. **Rotation:** PRF-based selection rotates the primary collector across heights
+   and views in both modes, preventing a single Set B validator from permanently
+   owning aggregation duties. The deterministic wraparound fallback is used only
+   when the PRF seed is unavailable.
+3. **Observability:** Telemetry keeps reporting per-collector assignments and the
+   fallback path emits a warning when gossip is engaged so operators can detect
+   misbehaving collectors.
 ## Retry e backoff de gossip
 
-- Os validadores mantem um `CollectorPlan` no estado de proposta; o plano registra quantos collectors foram contatados e se o limite de fan-out redundante foi atingido.
-- Os planos de collectors sao indexados por `(height, view)` e reinicializados sempre que o assunto muda para que retries de view-change obsoletos nao reutilizem alvos antigos.
-- O redundant send (`r`) e aplicado de forma deterministica ao avancar no plano. Quando nao ha collectors disponiveis para a tupla `(height, view)`, os votos retornam para a topologia completa de commit (excluindo o proprio) para evitar deadlock.
-- Quando o quorum trava, o caminho de reescalonamento rebroadcast os votos em cache via o plano de collectors, voltando a topologia de commit quando collectors estao vazios, sao apenas locais, ou estao abaixo de quorum. Isso fornece um fallback "gossip" limitado sem pagar o custo de broadcast completo no caminho rapido de estado estavel.
-- Cada descarte de proposta por causa do gate de locked QC incrementa `block_created_dropped_by_lock_total`; caminhos de validacao de header que falham elevam `block_created_hint_mismatch_total` e `block_created_proposal_mismatch_total`, ajudando operadores a correlacionar fallbacks repetidos com problemas de correcao do leader. O snapshot `/v1/sumeragi/status` tambem exporta os hashes mais recentes de Highest/Locked QC para que dashboards correlacionem picos de drops com hashes de bloco especificos.
-
+* Validators keep a `CollectorPlan` in the proposal state; the plan records how
+  many collectors have been contacted and whether the redundant fan-out limit
+  has been reached.
+* Collector plans are keyed by `(height, view)` and are reinitialized whenever
+  the subject changes so stale view-change retries do not reuse old collector
+  targets.
+* Redundant send (`r`) is applied deterministically by advancing through the
+  plan. When no collectors are available for the `(height, view)` tuple, votes
+  fall back to the full commit topology (excluding self) to avoid deadlock.
+* When quorum stalls, the reschedule path rebroadcasts cached votes via the
+  collector plan, falling back to the commit topology when collectors are
+  empty or local-only. This provides a bounded "gossip" fallback without paying
+  full broadcast cost on the steady-state fast path.
+* Each drop of a proposal due to the locked QC gate increments
+  `block_created_dropped_by_lock_total`; failed header validation paths raise
+  `block_created_hint_mismatch_total` and
+  `block_created_proposal_mismatch_total`, helping operators correlate repeated
+  fallbacks with leader correctness issues. The `/v1/sumeragi/status` snapshot
+  also exports the latest Highest/Locked QC hashes so dashboards
+  can correlate drop spikes with specific block hashes.
 ## Resumo da implementacao
 
-- O novo modulo publico `sumeragi::collectors` hospeda `CollectorPlan` e `deterministic_collectors` para que testes a nivel de crate e de integracao possam verificar propriedades de equidade sem instanciar o ator de consenso completo.
-- `CollectorPlan` vive no estado de proposta do Sumeragi e e resetado quando o pipeline de propostas termina.
-- `Sumeragi` cria planos de collectors via `init_collector_plan` e mira collectors ao emitir votos de availability/precommit. Votos de availability e precommit retornam a topologia de commit quando collectors estao vazios, sao apenas locais ou estao abaixo de quorum, e os rebroadcasts recuam sob as mesmas condicoes.
-- Testes unitarios e de integracao validam o determinismo do PRF, a selecao de fallback e as transicoes de estado de backoff.
-
+* New public module `sumeragi::collectors` hosts `CollectorPlan` and
+  `deterministic_collectors` so both crate-level and integration tests can verify
+  fairness properties without instantiating the full consensus actor.
+* `CollectorPlan` lives in the Sumeragi proposal state and is reset when the
+  proposal pipeline completes.
+* `Sumeragi` builds collector plans via `init_collector_plan` and targets
+  collectors when emitting availability/precommit votes. Availability and
+  precommit votes fall back to the commit topology when collectors are empty or
+  local-only, and rebroadcasts fall back under the same conditions.
+* Unit and integration tests validate PRF determinism, fallback selection, and
+  backoff state transitions.
 ## Assinatura de revisao
 
 - Reviewed-by: Consensus WG

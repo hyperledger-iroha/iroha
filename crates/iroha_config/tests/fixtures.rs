@@ -976,6 +976,7 @@ fn minimal_config_snapshot() {
                 collectors: SumeragiCollectors {
                     k: 1,
                     redundant_send_r: 3,
+                    parallel_topology_fanout: 1,
                 },
                 block: SumeragiBlock {
                     max_transactions: None,
@@ -998,6 +999,9 @@ fn minimal_config_snapshot() {
                     validation_worker_threads: 0,
                     validation_work_queue_cap: 0,
                     validation_result_queue_cap: 0,
+                    qc_verify_worker_threads: 0,
+                    qc_verify_work_queue_cap: 0,
+                    qc_verify_result_queue_cap: 0,
                     validation_pending_cap: 8192,
                 },
                 pacemaker: SumeragiPacemaker {

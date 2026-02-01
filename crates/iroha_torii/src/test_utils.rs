@@ -621,6 +621,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             collectors: A::SumeragiCollectors {
                 k: 1,
                 redundant_send_r: defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
+                parallel_topology_fanout: defaults::sumeragi::COLLECTORS_PARALLEL_TOPOLOGY_FANOUT,
             },
             block: A::SumeragiBlock {
                 max_transactions: defaults::sumeragi::BLOCK_MAX_TRANSACTIONS,
@@ -648,6 +649,9 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 validation_worker_threads: defaults::sumeragi::VALIDATION_WORKER_THREADS,
                 validation_work_queue_cap: defaults::sumeragi::VALIDATION_WORK_QUEUE_CAP,
                 validation_result_queue_cap: defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP,
+                qc_verify_worker_threads: defaults::sumeragi::QC_VERIFY_WORKER_THREADS,
+                qc_verify_work_queue_cap: defaults::sumeragi::QC_VERIFY_WORK_QUEUE_CAP,
+                qc_verify_result_queue_cap: defaults::sumeragi::QC_VERIFY_RESULT_QUEUE_CAP,
                 validation_pending_cap: defaults::sumeragi::VALIDATION_PENDING_CAP,
             },
             pacemaker: A::SumeragiPacemaker {

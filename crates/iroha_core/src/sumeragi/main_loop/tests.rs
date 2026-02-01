@@ -1169,7 +1169,10 @@ fn test_sumeragi_config() -> SumeragiConfig {
         },
         collectors: SumeragiCollectors {
             k: 1,
-            redundant_send_r: iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
+            redundant_send_r:
+                iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
+            parallel_topology_fanout:
+                iroha_config::parameters::defaults::sumeragi::COLLECTORS_PARALLEL_TOPOLOGY_FANOUT,
         },
         block: SumeragiBlock {
             max_transactions: None,
@@ -1202,6 +1205,12 @@ fn test_sumeragi_config() -> SumeragiConfig {
                 iroha_config::parameters::defaults::sumeragi::VALIDATION_WORK_QUEUE_CAP,
             validation_result_queue_cap:
                 iroha_config::parameters::defaults::sumeragi::VALIDATION_RESULT_QUEUE_CAP,
+            qc_verify_worker_threads:
+                iroha_config::parameters::defaults::sumeragi::QC_VERIFY_WORKER_THREADS,
+            qc_verify_work_queue_cap:
+                iroha_config::parameters::defaults::sumeragi::QC_VERIFY_WORK_QUEUE_CAP,
+            qc_verify_result_queue_cap:
+                iroha_config::parameters::defaults::sumeragi::QC_VERIFY_RESULT_QUEUE_CAP,
             validation_pending_cap:
                 iroha_config::parameters::defaults::sumeragi::VALIDATION_PENDING_CAP,
         },
@@ -11700,7 +11709,6 @@ async fn commit_vote_targets_collectors_or_topology() {
         0,
     );
     let limit = usize::from(redundant_r.max(1));
-    let required = signature_topology.min_votes_for_commit();
     let mut expected_targets: Vec<_> = if collectors.is_empty() {
         signature_topology.as_ref().to_vec()
     } else {
@@ -11708,9 +11716,25 @@ async fn commit_vote_targets_collectors_or_topology() {
     };
     let local_peer_id = actor.common_config.peer.id().clone();
     expected_targets.retain(|peer| peer != &local_peer_id);
-    if expected_targets.len() < required {
+    let fallback_to_topology = expected_targets.is_empty();
+    if fallback_to_topology {
         expected_targets = signature_topology.as_ref().to_vec();
         expected_targets.retain(|peer| peer != &local_peer_id);
+    } else {
+        let parallel = actor.config.collectors.parallel_topology_fanout;
+        if parallel > 0 {
+            let mut parallel_targets: Vec<_> = signature_topology
+                .topology_fanout_from_tail(parallel)
+                .into_iter()
+                .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
+                .collect();
+            parallel_targets.retain(|peer| peer != &local_peer_id);
+            for peer in parallel_targets {
+                if !expected_targets.contains(&peer) {
+                    expected_targets.push(peer);
+                }
+            }
+        }
     }
     let expected_set: BTreeSet<_> = expected_targets.into_iter().collect();
 
@@ -13649,7 +13673,6 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
         0,
     );
     let limit = usize::from(redundant_r.max(1));
-    let required = signature_topology.min_votes_for_commit();
     let mut expected_targets: Vec<_> = if collectors.is_empty() {
         signature_topology.as_ref().to_vec()
     } else {
@@ -13657,9 +13680,25 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
     };
     let local_peer_id = actor.common_config.peer.id().clone();
     expected_targets.retain(|peer| peer != &local_peer_id);
-    if expected_targets.len() < required {
+    let fallback_to_topology = expected_targets.is_empty();
+    if fallback_to_topology {
         expected_targets = signature_topology.as_ref().to_vec();
         expected_targets.retain(|peer| peer != &local_peer_id);
+    } else {
+        let parallel = actor.config.collectors.parallel_topology_fanout;
+        if parallel > 0 {
+            let mut parallel_targets: Vec<_> = signature_topology
+                .topology_fanout_from_tail(parallel)
+                .into_iter()
+                .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
+                .collect();
+            parallel_targets.retain(|peer| peer != &local_peer_id);
+            for peer in parallel_targets {
+                if !expected_targets.contains(&peer) {
+                    expected_targets.push(peer);
+                }
+            }
+        }
     }
     let expected_set: BTreeSet<_> = expected_targets.into_iter().collect();
 
@@ -13670,13 +13709,26 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
         .iter()
         .cloned()
         .collect();
-    if actual_targets.is_empty() {
-        actual_targets = signature_topology.as_ref().to_vec();
-    }
     actual_targets.retain(|peer| peer != &local_peer_id);
-    if actual_targets.len() < required {
+    let fallback_to_topology = actual_targets.is_empty();
+    if fallback_to_topology {
         actual_targets = signature_topology.as_ref().to_vec();
         actual_targets.retain(|peer| peer != &local_peer_id);
+    } else {
+        let parallel = actor.config.collectors.parallel_topology_fanout;
+        if parallel > 0 {
+            let mut parallel_targets: Vec<_> = signature_topology
+                .topology_fanout_from_tail(parallel)
+                .into_iter()
+                .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
+                .collect();
+            parallel_targets.retain(|peer| peer != &local_peer_id);
+            for peer in parallel_targets {
+                if !actual_targets.contains(&peer) {
+                    actual_targets.push(peer);
+                }
+            }
+        }
     }
     let actual_targets: BTreeSet<_> = actual_targets.into_iter().collect();
 
@@ -13689,7 +13741,7 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rebroadcast_precommit_votes_fall_back_to_topology_when_collectors_below_quorum() {
+async fn rebroadcast_precommit_votes_keep_collectors_when_below_quorum() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let height = 1;
@@ -13736,12 +13788,25 @@ async fn rebroadcast_precommit_votes_fall_back_to_topology_when_collectors_below
         .subsystems
         .propose
         .collectors_contacted
-        .extend(planned_collectors.into_iter());
+        .extend(planned_collectors.iter().cloned());
 
     let _ = actor.rebroadcast_block_votes(Phase::Commit, block_hash, 1, 0);
 
-    let mut expected_targets = signature_topology.as_ref().to_vec();
-    expected_targets.retain(|peer| peer != &local_peer_id);
+    let mut expected_targets = planned_collectors;
+    let parallel = actor.config.collectors.parallel_topology_fanout;
+    if parallel > 0 {
+        let mut parallel_targets: Vec<_> = signature_topology
+            .topology_fanout_from_tail(parallel)
+            .into_iter()
+            .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
+            .collect();
+        parallel_targets.retain(|peer| peer != &local_peer_id);
+        for peer in parallel_targets {
+            if !expected_targets.contains(&peer) {
+                expected_targets.push(peer);
+            }
+        }
+    }
     let expected_set: BTreeSet<_> = expected_targets.into_iter().collect();
 
     let actual_targets: BTreeSet<_> = harness
@@ -13759,7 +13824,93 @@ async fn rebroadcast_precommit_votes_fall_back_to_topology_when_collectors_below
 
     assert_eq!(
         actual_targets, expected_set,
-        "precommit vote rebroadcasts should fall back to commit topology when collectors are below quorum"
+        "precommit vote rebroadcasts should retain collector targets even when below quorum"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn exec_witness_targets_collectors_even_when_redundant_r_below_quorum() {
+    use iroha_data_model::parameter::system::{Parameter, SumeragiParameter};
+
+    let mut harness = test_actor_harness(7).await;
+    let actor = &mut harness.actor;
+
+    {
+        let mut block = actor.state.world.block();
+        let params = block.parameters.get_mut();
+        params.set_parameter(Parameter::Sumeragi(SumeragiParameter::RedundantSendR(1)));
+        block.commit();
+    }
+
+    let height = 1u64;
+    let view = 0u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE3; Hash::LENGTH]));
+    let witness = ExecWitness {
+        reads: Vec::new(),
+        writes: Vec::new(),
+        fastpq_transcripts: Vec::new(),
+        fastpq_batches: Vec::new(),
+    };
+
+    let _ = harness.background_rx.try_iter().count();
+    actor.emit_exec_artifacts(block_hash, height, view, witness);
+
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let topology_peers = actor.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+    let topology = super::network_topology::Topology::new(topology_peers);
+    let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
+    let (collectors_k, redundant_r) = actor.collector_plan_params_for_mode(consensus_mode);
+    let mut expected_targets = if collectors_k == 0 {
+        Vec::new()
+    } else {
+        super::collectors::deterministic_collectors(
+            &signature_topology,
+            consensus_mode,
+            collectors_k,
+            prf_seed,
+            height,
+            view,
+        )
+    };
+    if !expected_targets.is_empty() {
+        let limit = usize::from(
+            signature_topology
+                .redundant_send_r_floor(redundant_r)
+                .max(1),
+        );
+        expected_targets.truncate(limit);
+    }
+    let local_peer_id = actor.common_config.peer.id().clone();
+    expected_targets.retain(|peer| peer != &local_peer_id);
+    if expected_targets.is_empty() {
+        expected_targets = signature_topology.as_ref().to_vec();
+        expected_targets.retain(|peer| peer != &local_peer_id);
+    }
+    let expected_set: BTreeSet<_> = expected_targets.into_iter().collect();
+
+    let actual_targets: BTreeSet<_> = harness
+        .background_rx
+        .try_iter()
+        .filter_map(|post| match post {
+            BackgroundPost::Post {
+                peer,
+                msg: BlockMessage::ExecWitness(_),
+                ..
+            } => Some(peer),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        actual_targets, expected_set,
+        "exec witness should target deterministic collectors even when redundant_r is below quorum"
+    );
+    assert!(
+        actual_targets.len() < signature_topology.as_ref().len().saturating_sub(1),
+        "exec witness targets should not fall back to the full topology"
     );
 
     harness.shutdown.send();
@@ -24063,6 +24214,33 @@ async fn init_collector_plan_uses_epoch_for_height() {
         topology.as_ref(),
     );
     assert_eq!(membership.view_hash, Some(expected_hash));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn init_collector_plan_bumps_redundant_limit_to_quorum() {
+    let mut harness = test_actor_harness(5).await;
+    harness.actor.config.collectors.redundant_send_r = 1;
+    {
+        let state = Arc::get_mut(&mut harness.actor.state).expect("state uniquely held");
+        let mut block = state.world.block();
+        let params = block.parameters.get_mut();
+        params.sumeragi.collectors_redundant_send_r = 1;
+        block.commit();
+    }
+    let height = 4;
+    let view = 0;
+    let topology =
+        super::network_topology::Topology::new(harness.actor.effective_commit_topology());
+
+    harness.actor.init_collector_plan(&topology, height, view);
+
+    let expected = topology.redundant_send_r_floor(1);
+    assert_eq!(
+        harness.actor.subsystems.propose.collector_redundant_limit,
+        expected
+    );
 
     harness.shutdown.send();
 }
@@ -40504,7 +40682,7 @@ async fn new_view_gossip_targets_excludes_sender_and_local() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn new_view_votes_target_topology_when_collectors_below_quorum() {
+async fn new_view_votes_target_collectors_even_when_below_quorum() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     let background_log: Arc<Mutex<Vec<super::BackgroundRequestLogEntry>>> =
@@ -40520,7 +40698,7 @@ async fn new_view_votes_target_topology_when_collectors_below_quorum() {
 
     let roster = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(roster);
-    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
     let local_peer = actor.common_config.peer.id().clone();
 
@@ -40544,12 +40722,31 @@ async fn new_view_votes_target_topology_when_collectors_below_quorum() {
         })
         .collect();
 
-    let expected: Vec<_> = signature_topology
-        .as_ref()
-        .iter()
-        .filter(|peer| *peer != &local_peer)
-        .cloned()
-        .collect();
+    let (collectors_k, _) = actor.collector_plan_params_for_mode(consensus_mode);
+    let mut expected = if collectors_k == 0 {
+        Vec::new()
+    } else {
+        super::collectors::deterministic_collectors(
+            &signature_topology,
+            consensus_mode,
+            collectors_k,
+            prf_seed,
+            height,
+            view,
+        )
+    };
+    if expected.is_empty() {
+        expected = signature_topology.as_ref().to_vec();
+    }
+    expected.retain(|peer| peer != &local_peer);
+    if expected.is_empty() {
+        expected = signature_topology.as_ref().to_vec();
+        expected.retain(|peer| peer != &local_peer);
+    }
+    let leader = signature_topology.leader().clone();
+    if leader != local_peer && !expected.contains(&leader) {
+        expected.push(leader);
+    }
     assert_eq!(targets, expected);
 
     harness.shutdown.send();

@@ -15,34 +15,74 @@ translator: manual
 ## סקירה כללית
 
 מסמך זה מתאר את אסטרטגיית הניתוב הדטרמיניסטית של האוספים (“Aggregators”) שבה משתמשת Sumeragi לאחר עדכון הפיירנס של שלב 3. כל מאמת מחשב את אותו סדר אוספים עבור זוג גובה-בלוק/תצוגה, מה שמבטל תלות באקראיות אד-הוק ומבטיח שאם האוספים הייעודיים אינם מגיבים, החזרות מסלימות למניפה (“gossip”) חסומה.
-
 ## בחירה דטרמיניסטית
 
-- המודול החדש `sumeragi::collectors` מספק את `deterministic_collectors(topology, mode, k, seed, height, view)` ומחזיר `Vec<PeerId>` שחוזר על עצמו עבור זוג `(height, view)`.
-- במצב Permissioned בחירת האוספים נעשית בעזרת PRF עם seed ממצב PRF/VRF של האפוק. פונקציית העזר מפיקה סדר דטרמיניסטי עבור `(height, view)` מהטופולוגיה הקנונית ומוציאה את הלידר. כאשר seed PRF אינו זמין יש fallback למקטע הזנב הרציף.
-- במצב NPoS, ה-PRF לכל אפוק נותר כפי שהיה, אך פונקציית העזר מרכזת את החישוב כך שכל קורא יקבל את אותו סדר. ה-seed נגזר מהאקראיות של האפוק המסופקת ע״י `EpochManager`.
-- `CollectorPlan` עוקב אחרי ניצול סדר היעדים ומסמן אם fallback לגוסיפ הופעל. מדדי טלמטריה (`collect_aggregator_ms`, ‏`sumeragi_redundant_sends_*`, ‏`sumeragi_gossip_fallback_total`) מראים באיזו תדירות ההסלמה מתרחשת וכמה זמן נמשך הפאן-אאוט.
-
+* The new `sumeragi::collectors` module exposes
+  `deterministic_collectors(topology, mode, k, seed, height, view)` which returns
+  a reproducible `Vec<PeerId>` for the `(height, view)` pair.
+* Permissioned mode uses PRF-based collector selection seeded by the epoch PRF/VRF state.
+  The helper derives a deterministic per-`(height, view)` ordering from the canonical
+  roster and excludes the leader. When a PRF seed is unavailable, it falls back to a
+  wraparound slice starting at `proxy_tail_index()` to preserve deterministic behaviour.
+* NPoS mode continues to use the per-epoch PRF, with the helper centralising the
+  computation so every caller receives the same order. The seed is derived from the
+  epoch randomness supplied by `EpochManager`.
+* Validators may also send commit votes to a small parallel topology fanout
+  (`collectors.parallel_topology_fanout`) to reduce collector-hop latency without
+  full broadcast fan-out.
+* `CollectorPlan` tracks consumption of the ordered targets and records whether
+  the gossip fallback was triggered. Telemetry updates
+  (`collect_aggregator_ms`, `sumeragi_redundant_sends_*`,
+  `sumeragi_gossip_fallback_total`) surface how often fallbacks occur and how
+  long redundant fan-out takes.
 ## מטרות הפיירנס
 
-1. **שחזוריות:** אותה טופולוגיית מאמתים, אותו מצב קונצנזוס, אותו seed PRF ואותו זוג `(height, view)` חייבים להניב ראשיים/משניים זהים בכל peer. פונקציית העזר מסתירה מאפיינים טופולוגיים (proxy tail, צופים) כך שהסדר נייד בין רכיבים ובדיקות.
-2. **סבביות:** בחירת PRF מסובבת את האוסף הראשי בין גבהים ותצוגות בשני המצבים, כדי שאף צופה לא ישלוט תמיד באיסוף. ה-fallback למקטע הרציף משמש רק כשאין seed PRF.
-3. **תצפיות:** הטלמטריה ממשיכה לדווח על שיוכי אוספים והמסלול החלופי מפיק אזהרה כשהגוסיפ נכנס לפעולה, כך שמפעילים יכולים לזהות אוספים בעייתיים.
-
+1. **Reproducibility:** The same validator topology, consensus mode, PRF seed,
+   and `(height, view)` tuple must lead to identical primary/secondary collectors
+   on every peer. The helper hides topology quirks (proxy tail, Set B validators) so the
+   ordering is portable across components and tests.
+2. **Rotation:** PRF-based selection rotates the primary collector across heights
+   and views in both modes, preventing a single Set B validator from permanently
+   owning aggregation duties. The deterministic wraparound fallback is used only
+   when the PRF seed is unavailable.
+3. **Observability:** Telemetry keeps reporting per-collector assignments and the
+   fallback path emits a warning when gossip is engaged so operators can detect
+   misbehaving collectors.
 ## חזרות ו-backoff של גוסיפ
 
-- מאמתים מחזיקים `CollectorPlan` לצד `VotingBlock` שבטיפול. התוכנית רושמת את מספר האוספים שנוצר קשר איתם ואם בוצעה הסלמה לגוסיפ.
-- שליחה עודפת (`r`) מיושמת דטרמיניסטית בהתקדמות לאורך התוכנית. כאשר לא נשארים אוספים נוספים – או שכל הניסיונות מוצו ללא אישור – התוכנית מסמנת שהופעל fallback. המדד `collect_aggregator_gossip_total` ב-`/v1/sumeragi/phases` משקף את מדד Prometheus כדי שמפעילים יוכלו להתראה על מיצוי חוזר.
-- fallback שולח את הבלוק וה-prevote החתומים לכל peer אחר בטופולוגיה (למעט העצמי). זה מבטיח חיות גם אם כל האוספים המתוכננים כשלו, ומחקה את פייל-סייפ הישן של “שידור לכולם” תוך שמירה על מיקוד בזמן עבודה רגיל.
-- ה-fallback מתרחש פעם אחת בלבד לכל בלוק כדי למנוע הצפת רשת. כל השלכה של הצעה בשל שער commit certificate נעול מעלה את `block_created_dropped_by_lock_total`; מסלולי כשלי ולידציית כותרת מעלים את `block_created_hint_mismatch_total` ואת `block_created_proposal_mismatch_total`, ומאפשרים למפעילים לקשר fallback חוזר לבעיות במנהיג. תמונת `/v1/sumeragi/status` מציגה את ה-Highest/Locked QC העדכניים כך שניתן לחבר פסגות drop להאש־בלוקים מסוימים.
-
+* Validators keep a `CollectorPlan` in the proposal state; the plan records how
+  many collectors have been contacted and whether the redundant fan-out limit
+  has been reached.
+* Collector plans are keyed by `(height, view)` and are reinitialized whenever
+  the subject changes so stale view-change retries do not reuse old collector
+  targets.
+* Redundant send (`r`) is applied deterministically by advancing through the
+  plan. When no collectors are available for the `(height, view)` tuple, votes
+  fall back to the full commit topology (excluding self) to avoid deadlock.
+* When quorum stalls, the reschedule path rebroadcasts cached votes via the
+  collector plan, falling back to the commit topology when collectors are
+  empty or local-only. This provides a bounded "gossip" fallback without paying
+  full broadcast cost on the steady-state fast path.
+* Each drop of a proposal due to the locked QC gate increments
+  `block_created_dropped_by_lock_total`; failed header validation paths raise
+  `block_created_hint_mismatch_total` and
+  `block_created_proposal_mismatch_total`, helping operators correlate repeated
+  fallbacks with leader correctness issues. The `/v1/sumeragi/status` snapshot
+  also exports the latest Highest/Locked QC hashes so dashboards
+  can correlate drop spikes with specific block hashes.
 ## סיכום יישום
 
-- מודול ציבורי חדש `sumeragi::collectors` מאחסן את `CollectorPlan` ו-`deterministic_collectors`, כך שבדיקות רמה-קרייט ובדיקות אינטגרציה יכולות לאמת פיירנס ללא הפעלת שחקן הקונצנזוס המלא.
-- `VotingBlock` שומר עתה `CollectorPlan` ומספק פונקציות עזר לזיהוי מיצוי התוכנית ולהפעלת גוסיפ בדיוק פעם אחת.
-- `Sumeragi` משתמשת ב-`collector_targets_for_round()` כדי לבנות את התוכנית וב-`gossip_vote_to_all_collectors()` כדי לממש את השידור החלופי.
-- בדיקות יחידה ואינטגרציה מאמתות דטרמיניזם של PRF, בחירת fallback ומעברי מצבי backoff.
-
+* New public module `sumeragi::collectors` hosts `CollectorPlan` and
+  `deterministic_collectors` so both crate-level and integration tests can verify
+  fairness properties without instantiating the full consensus actor.
+* `CollectorPlan` lives in the Sumeragi proposal state and is reset when the
+  proposal pipeline completes.
+* `Sumeragi` builds collector plans via `init_collector_plan` and targets
+  collectors when emitting availability/precommit votes. Availability and
+  precommit votes fall back to the commit topology when collectors are empty or
+  local-only, and rebroadcasts fall back under the same conditions.
+* Unit and integration tests validate PRF determinism, fallback selection, and
+  backoff state transitions.
 ## חתימות ביקורת
 
 - Reviewed-by: Consensus WG
