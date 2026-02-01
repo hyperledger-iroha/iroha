@@ -8,6 +8,9 @@ Last update: 2026-02-01
 - Tests: full workspace tests not run (user requested no full workspace tests).
 - Izanami 1 TPS rerun (4 peers, 300s, target 200, tps 1) using existing binaries (`target/debug/izanami` + `target/release/iroha3d`): stopped before target at min_height 62; network dir `/tmp/iroha-test-network-izanami-1tps-20260201T054440/irohad_test_network_56VhGX`, log `/tmp/izanami_1tps_20260201T054440.log`.
 - NPoS localnet 1 Hz rerun after the drain-cap change (release, block/commit 1000ms): `/private/tmp/iroha-localnet-npos-1hz-20260201T101516`; 100x1 Hz `ledger transaction ping --no-wait` with `/v1/sumeragi/status` sampling in `sumeragi_status_1hz_20260201T130626.jsonl` (ping log `ping_1hz_20260201T130626.log`); `commit_qc.height` 1->49 (+48 over 120 samples, ~0.40 blocks/s), `view_change_install_total` +0, `missing_block_fetch.total` +3, `pending_rbc.bytes` max 3893 (sessions max 1); effective block/commit time 2000/4000 with `pacing_factor_bps=10000`.
+- Iterable queries: tolerate pre-existing `CanRegisterTrigger` grants in `find_active_trigger_ids_includes_registered` by ignoring repeated grant errors for the same permission.
+- Tests: `cargo test -p integration_tests find_active_trigger_ids_includes_registered -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`).
+- Formatting: `cargo fmt --all` (stable rustfmt warns about nightly-only options).
 - Permission cache: removed unused `PermissionCheckCache` mutation hooks now that detached permission replays use `Grant`/`Revoke` execution, clearing dead-code warnings.
 - Formatting: `cargo fmt --all` (stable rustfmt warns about nightly-only options).
 - Tests: not run (user requested no full workspace tests).
