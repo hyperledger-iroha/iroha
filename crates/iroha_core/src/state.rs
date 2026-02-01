@@ -16582,13 +16582,17 @@ impl<'state> StateBlock<'state> {
         }
         // Snapshot after releasing the view lock to avoid lock-order inversion
         // between `view_lock` and `tiered_backend`.
+        #[cfg(feature = "telemetry")]
         let mut snapshot_recorded = false;
         let snapshot_err = if use_background {
             let payload = tiered_payload.expect("tiered payload missing");
             if state_ref.tiered_snapshot_worker.schedule(payload) {
                 None
             } else {
-                snapshot_recorded = true;
+                #[cfg(feature = "telemetry")]
+                {
+                    snapshot_recorded = true;
+                }
                 let diff = tiered_diff.expect("tiered diff missing");
                 let mut backend_guard = tiered_backend.lock();
                 backend_guard
@@ -16596,7 +16600,10 @@ impl<'state> StateBlock<'state> {
                     .err()
             }
         } else {
-            snapshot_recorded = true;
+            #[cfg(feature = "telemetry")]
+            {
+                snapshot_recorded = true;
+            }
             let diff = tiered_diff.expect("tiered diff missing");
             let mut backend_guard = tiered_backend.lock();
             backend_guard

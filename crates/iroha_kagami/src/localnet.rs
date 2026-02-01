@@ -369,6 +369,10 @@ const LOCALNET_API_HIGH_LOAD_TX_THRESHOLD: usize = LOCALNET_QUEUE_CAPACITY;
 const LOCALNET_TORII_TX_RATE_PER_AUTHORITY_PER_SEC: u32 = 1_000_000;
 /// Default Torii tx burst limit (per authority) for localnet.
 const LOCALNET_TORII_TX_BURST_PER_AUTHORITY: u32 = 2_000_000;
+/// Default Torii pre-auth rate limit (per IP) for localnet.
+const LOCALNET_TORII_PREAUTH_RATE_PER_IP_PER_SEC: u32 = 1_000_000;
+/// Default Torii pre-auth burst limit (per IP) for localnet.
+const LOCALNET_TORII_PREAUTH_BURST_PER_IP: u32 = 2_000_000;
 /// Torii pre-auth allowlist to keep localnet CLI traffic from tripping bans.
 const LOCALNET_PREAUTH_ALLOW_CIDRS: [&str; 2] = ["127.0.0.0/8", "::1/128"];
 /// Multiplier applied to block+commit time for localnet commit inflight timeout.
@@ -398,6 +402,8 @@ const LOCALNET_CLIENT_TTL_MS: u64 = 600_000;
 const LOCALNET_CLIENT_STATUS_TIMEOUT_MS: u64 = 300_000;
 /// Default Kura fsync mode for localnet (performance-oriented).
 const LOCALNET_KURA_FSYNC_MODE: &str = "off";
+/// Ed25519 signature batch size for perf-profile localnets (0 disables batching).
+const LOCALNET_SIGNATURE_BATCH_MAX_ED25519: usize = 64;
 /// Logger filter for perf-profile localnets to avoid per-transaction log floods.
 const LOCALNET_PERF_LOGGER_FILTER: &str = "info,iroha_torii::routing=warn";
 const STREAM_ID_PUBLIC: &str =
@@ -733,6 +739,7 @@ fn generate_localnet_with_line<T: Write>(
     let npos_bootstrap = localnet_uses_npos(opts.consensus_mode, opts.next_consensus_mode);
     let perf_spec = opts.perf_profile.map(LocalnetPerfProfile::spec);
     let logger_filter = perf_spec.map(|_| LOCALNET_PERF_LOGGER_FILTER);
+    let signature_batch_max_ed25519 = perf_spec.map(|_| LOCALNET_SIGNATURE_BATCH_MAX_ED25519);
     // Nexus stays enabled for Sora profiles and whenever NPoS bootstrap is requested.
     let nexus_enabled = localnet_should_enable_nexus(opts.sora_profile, npos_bootstrap);
     let dataspace_fault_tolerance =
@@ -868,6 +875,7 @@ fn generate_localnet_with_line<T: Write>(
             commit_inflight_timeout_ms,
             tx_gossip_overrides,
             logger_filter,
+            signature_batch_max_ed25519,
         );
         let path = out_dir.join(format!("peer{idx}.toml"));
         fs::write(&path, rendered)
@@ -1065,6 +1073,7 @@ fn render_peer_config(
     commit_inflight_timeout_ms: u64,
     tx_gossip_overrides: Option<LocalnetTxGossipOverrides>,
     logger_filter: Option<&str>,
+    signature_batch_max_ed25519: Option<usize>,
 ) -> String {
     use toml::{Table, Value};
 
@@ -1299,6 +1308,12 @@ fn render_peer_config(
     root.insert("sumeragi".into(), Value::Table(sumeragi));
 
     let mut pipeline = Table::new();
+    if let Some(batch_max) = signature_batch_max_ed25519 {
+        pipeline.insert(
+            "signature_batch_max_ed25519".into(),
+            Value::Integer(i64::try_from(batch_max).expect("batch size fits i64")),
+        );
+    }
     pipeline.insert("signature_batch_max_bls".into(), Value::Integer(4i64));
     if let Some(gas_account_id) = gas_account_id {
         let mut gas = Table::new();
@@ -1501,6 +1516,14 @@ fn render_peer_config(
                 .map(|cidr| Value::String((*cidr).to_string()))
                 .collect::<Vec<_>>(),
         ),
+    );
+    torii.insert(
+        "preauth_rate_per_ip_per_sec".into(),
+        Value::Integer(i64::from(LOCALNET_TORII_PREAUTH_RATE_PER_IP_PER_SEC)),
+    );
+    torii.insert(
+        "preauth_burst_per_ip".into(),
+        Value::Integer(i64::from(LOCALNET_TORII_PREAUTH_BURST_PER_IP)),
     );
     torii.insert(
         "api_allow_cidrs".into(),
@@ -2613,6 +2636,19 @@ mod tests {
             "localnet should raise Torii tx burst limits"
         );
         assert_eq!(
+            parsed
+                .torii
+                .preauth_rate_per_ip_per_sec
+                .map(NonZeroU32::get),
+            Some(LOCALNET_TORII_PREAUTH_RATE_PER_IP_PER_SEC),
+            "localnet should raise Torii pre-auth rate limits"
+        );
+        assert_eq!(
+            parsed.torii.preauth_burst_per_ip.map(NonZeroU32::get),
+            Some(LOCALNET_TORII_PREAUTH_BURST_PER_IP),
+            "localnet should raise Torii pre-auth burst limits"
+        );
+        assert_eq!(
             parsed.torii.api_high_load_tx_threshold,
             Some(LOCALNET_API_HIGH_LOAD_TX_THRESHOLD),
             "localnet should defer API rate limiting until high load"
@@ -2806,6 +2842,10 @@ mod tests {
             .parse()
             .expect("perf logger filter should parse");
         assert_eq!(parsed.logger.filter, Some(expected_filter));
+        assert_eq!(
+            parsed.pipeline.signature_batch_max_ed25519,
+            LOCALNET_SIGNATURE_BATCH_MAX_ED25519
+        );
 
         let genesis_path = temp.path().join("genesis.json");
         let manifest = genesis_json_from_path(&genesis_path);
@@ -2856,6 +2896,10 @@ mod tests {
             .parse()
             .expect("perf logger filter should parse");
         assert_eq!(parsed.logger.filter, Some(expected_filter));
+        assert_eq!(
+            parsed.pipeline.signature_batch_max_ed25519,
+            LOCALNET_SIGNATURE_BATCH_MAX_ED25519
+        );
 
         let genesis_path = temp.path().join("genesis.json");
         let manifest = genesis_json_from_path(&genesis_path);
