@@ -2470,7 +2470,8 @@ mod tests {
         let mut state = setup_state();
         set_epoch_length(&mut state, 2);
 
-        let mut state_block = state.block(block_header_with_height(1));
+        // Start at height 3 to avoid genesis, which allows immediate activation.
+        let mut state_block = state.block(block_header_with_height(3));
         let mut stx = state_block.transaction();
 
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
@@ -2490,12 +2491,12 @@ mod tests {
             .expect("pending record");
         assert!(matches!(
             pending.status,
-            PublicLaneValidatorStatus::PendingActivation(1)
+            PublicLaneValidatorStatus::PendingActivation(2)
         ));
         stx.apply();
         state_block.commit().unwrap();
 
-        let mut activate_block = state.block(block_header_with_height(2));
+        let mut activate_block = state.block(block_header_with_height(4));
         let mut activate_stx = activate_block.transaction();
         let err = ActivatePublicLaneValidator {
             lane_id: LaneId::new(1),
@@ -2510,7 +2511,7 @@ mod tests {
         activate_stx.apply();
         activate_block.commit().unwrap();
 
-        let mut activate_block = state.block(block_header_with_height(3));
+        let mut activate_block = state.block(block_header_with_height(5));
         let mut activate_stx = activate_block.transaction();
         ActivatePublicLaneValidator {
             lane_id: LaneId::new(1),
@@ -2525,8 +2526,8 @@ mod tests {
             .cloned()
             .expect("record present");
         assert!(matches!(record.status, PublicLaneValidatorStatus::Active));
-        assert_eq!(record.activation_epoch, Some(1));
-        assert_eq!(record.activation_height, Some(3));
+        assert_eq!(record.activation_epoch, Some(2));
+        assert_eq!(record.activation_height, Some(5));
         activate_stx.apply();
         activate_block.commit().unwrap();
 
@@ -2536,8 +2537,8 @@ mod tests {
             .public_lane_validators()
             .get(&(LaneId::new(1), validator.clone()))
             .expect("stored record");
-        assert_eq!(stored.activation_epoch, Some(1));
-        assert_eq!(stored.activation_height, Some(3));
+        assert_eq!(stored.activation_epoch, Some(2));
+        assert_eq!(stored.activation_height, Some(5));
 
         let escrow_asset = AssetId::new(asset_def_id, escrow.clone());
         assert!(
@@ -2668,7 +2669,8 @@ mod tests {
         let mut state = setup_state();
         set_epoch_length(&mut state, 2);
 
-        let block1 = new_block_with_height(1);
+        // Start at height 3 to avoid genesis, which allows immediate activation.
+        let block1 = new_block_with_height(3);
         let mut state_block = state.block(block1.as_ref().header());
         let mut stx = state_block.transaction();
 
@@ -2685,13 +2687,13 @@ mod tests {
         stx.apply();
         state_block.commit().unwrap();
 
-        let block2 = new_block_with_height(2);
+        let block2 = new_block_with_height(4);
         let mut state_block2 = state.block(block2.as_ref().header());
         let stx2 = state_block2.transaction();
         stx2.apply();
         state_block2.commit().unwrap();
 
-        let block3 = new_block_with_height(3);
+        let block3 = new_block_with_height(5);
         let view = state.view();
         let pending_record = view
             .world
@@ -2702,7 +2704,7 @@ mod tests {
         assert!(
             matches!(
                 pending_record.status,
-                PublicLaneValidatorStatus::PendingActivation(1)
+                PublicLaneValidatorStatus::PendingActivation(2)
             ),
             "validator should remain pending until the next epoch"
         );
@@ -2719,8 +2721,8 @@ mod tests {
             matches!(record.status, PublicLaneValidatorStatus::Active),
             "validator should auto-activate at the next epoch boundary"
         );
-        assert_eq!(record.activation_epoch, Some(1));
-        assert_eq!(record.activation_height, Some(3));
+        assert_eq!(record.activation_epoch, Some(2));
+        assert_eq!(record.activation_height, Some(5));
         state_block3.commit().unwrap();
 
         let view = state.view();
@@ -2733,8 +2735,8 @@ mod tests {
             matches!(stored.status, PublicLaneValidatorStatus::Active),
             "persistent record should remain active"
         );
-        assert_eq!(stored.activation_epoch, Some(1));
-        assert_eq!(stored.activation_height, Some(3));
+        assert_eq!(stored.activation_epoch, Some(2));
+        assert_eq!(stored.activation_height, Some(5));
 
         let escrow_asset = AssetId::new(asset_def_id, escrow);
         assert!(
