@@ -1187,8 +1187,8 @@ mod tests {
         (program, parsed.header_len, parsed.metadata)
     }
 
-    fn norito_blob<T: NoritoEncode>(value: &T) -> Vec<u8> {
-        value.encode()
+    fn norito_blob<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
+        norito::to_bytes(value).expect("norito encode payload with header")
     }
 
     fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {

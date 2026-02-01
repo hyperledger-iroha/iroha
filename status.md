@@ -1,6 +1,10 @@
 # Status
 
 Last update: 2026-02-01
+- Norito fixtures: refreshed burn/mint instruction fixtures (`burn_asset_numeric.json`, `burn_asset_fractional.json`, `mint_asset_numeric.json`) to match current canonical Norito encoding.
+- Tests: `cargo test -p integration_tests --test norito_burn_fixture -- --nocapture` failed due to an existing compile error in `crates/iroha_core/src/pipeline/overlay.rs` (undeclared `NoritoEncode`, plus unused `NoritoSerialize` import) and existing `norito` `padded` warnings.
+- Staking tests: avoid genesis-height blocks when asserting epoch-boundary activation; updated expected activation epoch/height in the manual and auto-promotion tests.
+- Tests: `cargo test -p iroha_core smartcontracts::isi::staking::tests::pending_activation_advances_on_epoch_boundary -- --nocapture` (ok; existing warnings about unused `padded` in `norito` and unused `mut` in `iroha_core`).
 - Pipeline events: emit `EventBox::PipelineBatch` when multiple pipeline events are produced per commit; Torii WS/SSE and client/mochi consumers expand batches; data-model docs and tests updated to cover batch filtering and batching behavior.
 - Tests: `cargo test -p iroha_data_model --features transparent_api pipeline_batch_filters_match_any_event -- --nocapture` (ok); `cargo test -p iroha_core emit_pipeline_events_batches_multiple_messages -- --nocapture` failed due to `crates/iroha_core/src/state/tiered.rs` `measured_bytes` ambiguity errors (plus existing warnings in `norito`/`iroha_data_model`).
 - Proposal path perf: cached confidential feature digest in `State` (dirty invalidation on registry updates), cached tx encoded size/gas cost in the queue, proposal assembly now reuses cached sizes/gas, and stale-pending checks reuse the tip snapshot; added unit coverage for digest cache + queue metadata.
