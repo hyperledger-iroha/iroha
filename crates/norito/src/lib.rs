@@ -8583,15 +8583,17 @@ where
 
     let min_size = ::core::mem::size_of::<core::Archived<T>>();
     let logical_len = payload.len();
-    let mut padded: Option<Vec<u8>> = None;
-    let backing: &[u8] = if min_size > 0 && logical_len < min_size {
+    let padded = if min_size > 0 && logical_len < min_size {
         let mut buf = Vec::with_capacity(min_size);
         buf.extend_from_slice(&payload);
         buf.resize(min_size, 0);
-        padded = Some(buf);
-        padded.as_deref().expect("pad present")
+        Some(buf)
     } else {
-        payload.as_slice()
+        None
+    };
+    let backing: &[u8] = match padded.as_deref() {
+        Some(buf) => buf,
+        None => payload.as_slice(),
     };
 
     let archived = core::archived_from_slice::<T>(backing)?;
@@ -8631,15 +8633,17 @@ where
     let flags_hint = header.minor;
     let min_size = ::core::mem::size_of::<core::Archived<T>>();
     let logical_len = payload.len();
-    let mut padded: Option<Vec<u8>> = None;
-    let backing: &[u8] = if min_size > 0 && logical_len < min_size {
+    let padded = if min_size > 0 && logical_len < min_size {
         let mut buf = Vec::with_capacity(min_size);
         buf.extend_from_slice(payload);
         buf.resize(min_size, 0);
-        padded = Some(buf);
-        padded.as_deref().expect("pad present")
+        Some(buf)
     } else {
-        payload
+        None
+    };
+    let backing: &[u8] = match padded.as_deref() {
+        Some(buf) => buf,
+        None => payload,
     };
     let archived = core::archived_from_slice::<T>(backing)?;
     guarded_try_deserialize(|| {

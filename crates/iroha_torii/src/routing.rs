@@ -42262,7 +42262,7 @@ pub mod profiling {
                         Error::Pprof(eyre::eyre!("generate pprof from report fail: {}", e))
                     })?;
 
-                    profile.write_to_vec(&mut body).map_err(|e| {
+                    profile.encode(&mut body).map_err(|e| {
                         Error::Pprof(eyre::eyre!("encode pprof into bytes fail: {}", e))
                     })?;
                 }
@@ -42273,6 +42273,23 @@ pub mod profiling {
                 // profile already running return error
                 Err(Error::Pprof(eyre::eyre!("profiling already running")))
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn profiling_encodes_pprof_payload() {
+            let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+            let params = ProfileParams {
+                frequency: nonzero!(99_u16),
+                seconds: nonzero!(1_u64),
+            };
+
+            let payload = handle_profile(params, lock).await.expect("profile payload");
+            assert!(!payload.is_empty(), "pprof payload should not be empty");
         }
     }
 }
