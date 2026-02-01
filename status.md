@@ -1,6 +1,14 @@
 # Status
 
 Last update: 2026-02-01
+- Permission cache: removed unused `PermissionCheckCache` mutation hooks now that detached permission replays use `Grant`/`Revoke` execution, clearing dead-code warnings.
+- Formatting: `cargo fmt --all` (stable rustfmt warns about nightly-only options).
+- Tests: not run (user requested no full workspace tests).
+- Detached permission integration: detached-permission tests now skip pipeline-detached metrics when Nexus is disabled (metrics gated), while still validating last-wins semantics for account/role grant/revoke ordering.
+- Tests: `cargo test -p integration_tests --test roles role_permission_revoke_then_grant_last_wins_detached -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`, dead-code `PermissionCheckCache` helpers in `iroha_core`).
+- Tests: `cargo test -p integration_tests --test permissions account_permission_revoke_then_grant_last_wins_detached -- --nocapture` (ok; same warnings).
+- Tests: `cargo test -p integration_tests --test nft nft_lifecycle_scenarios -- --nocapture` (ok; same warnings).
+- Formatting: `cargo fmt --all` (stable rustfmt warns about nightly-only options).
 - Sumeragi collectors: exec-witness routing now uses the redundant-send quorum floor and only falls back to the full topology when collectors are empty/local-only; added exec-witness collector-target coverage alongside the parallel topology fanout and QC-verify worker config knobs.
 - Tests: `cargo test -p iroha_core --lib exec_witness_targets_collectors_even_when_redundant_r_below_quorum -- --nocapture`, `cargo test -p iroha_core --lib precommit_vote_targets_collectors_without_broadcast -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`).
 - Formatting: `cargo fmt --all` (stable rustfmt warns about nightly-only options).

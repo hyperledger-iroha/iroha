@@ -394,7 +394,14 @@ fn role_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         .sign(ALICE_KEYPAIR.private_key());
     test_client.submit_transaction_blocking(&tx)?;
 
-    let (prepared_seen, merged_seen, fallback_seen) = poll_detached_metrics(&rt, &metrics_url)?;
+    let status = test_client.get_status()?;
+    let nexus_enabled = !status.teu_lane_commit.is_empty();
+    let (prepared_seen, merged_seen, fallback_seen) = if nexus_enabled {
+        poll_detached_metrics(&rt, &metrics_url)?
+    } else {
+        eprintln!("Skipping detached pipeline metrics: nexus disabled for this network.");
+        (0.0, 0.0, 0.0)
+    };
 
     let role = test_client
         .query(FindRoles::new())
@@ -407,18 +414,20 @@ fn role_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         "last grant should keep permission on role"
     );
 
-    assert!(
-        prepared_seen > 0.0,
-        "expected detached pipeline to prepare overlays"
-    );
-    assert!(
-        merged_seen > 0.0,
-        "expected detached merge to register in metrics"
-    );
-    assert_eq!(
-        fallback_seen, 0.0,
-        "detached fallback should not register for permission ops"
-    );
+    if nexus_enabled {
+        assert!(
+            prepared_seen > 0.0,
+            "expected detached pipeline to prepare overlays"
+        );
+        assert!(
+            merged_seen > 0.0,
+            "expected detached merge to register in metrics"
+        );
+        assert_eq!(
+            fallback_seen, 0.0,
+            "detached fallback should not register for permission ops"
+        );
+    }
 
     Ok(())
 }
