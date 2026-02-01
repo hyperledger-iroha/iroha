@@ -4,11 +4,11 @@ use std::{
     io::ErrorKind,
     path::PathBuf,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use eyre::Result;
-use integration_tests::sandbox;
+use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::{
     client::Client,
     crypto::KeyPair,
@@ -19,10 +19,11 @@ use iroha::{
 };
 use iroha_data_model::isi::{register::RegisterBox, transfer::TransferBox};
 use iroha_executor_data_model::permission::{
-    asset::CanTransferAsset, domain::CanModifyDomainMetadata, nft::CanModifyNftMetadata,
+    account::CanModifyAccountMetadata, asset::CanTransferAsset, domain::CanModifyDomainMetadata,
+    nft::CanModifyNftMetadata,
 };
 use iroha_test_network::*;
-use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR, gen_account_in};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, gen_account_in};
 use tokio::{
     runtime::Runtime,
     time::{sleep, timeout},
@@ -30,6 +31,31 @@ use tokio::{
 
 fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()
+}
+
+fn poll_detached_metrics(rt: &Runtime, metrics_url: &reqwest::Url) -> Result<(f64, f64, f64)> {
+    let http = reqwest::Client::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut prepared_seen: f64 = 0.0;
+    let mut merged_seen: f64 = 0.0;
+    let mut fallback_seen: f64 = 0.0;
+
+    while Instant::now() < deadline {
+        let snapshot = rt.block_on(async {
+            let response = http.get(metrics_url.clone()).send().await?;
+            response.error_for_status()?.text().await
+        })?;
+        let metrics = MetricsReader::new(&snapshot);
+        prepared_seen = prepared_seen.max(metrics.get("pipeline_detached_prepared"));
+        merged_seen = merged_seen.max(metrics.get("pipeline_detached_merged"));
+        fallback_seen = fallback_seen.max(metrics.get("pipeline_detached_fallback"));
+        if merged_seen > 0.0 || fallback_seen > 0.0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    Ok((prepared_seen, merged_seen, fallback_seen))
 }
 
 async fn read_peer_log_with_retry(
@@ -267,6 +293,70 @@ fn permissions_disallow_asset_transfer() {
     ));
     let alice_assets = get_assets(&iroha, &alice_id);
     assert_eq!(alice_assets, alice_start_assets);
+}
+
+#[test]
+fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_default_pipeline_time()
+        .with_config_layer(|layer| {
+            layer
+                .write(["pipeline", "parallel_overlay"], true)
+                .write(["pipeline", "parallel_apply"], true)
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full");
+        });
+    let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
+        builder,
+        stringify!(account_permission_revoke_then_grant_last_wins_detached),
+    )?
+    else {
+        return Ok(());
+    };
+    let client = network.client();
+    let metrics_url = client.torii_url.join("/metrics")?;
+
+    let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
+    client.submit_blocking(Register::account(Account::new(mouse_id.clone())))?;
+
+    let perm: Permission = CanModifyAccountMetadata {
+        account: mouse_id.clone(),
+    }
+    .into();
+    client.submit_blocking(Grant::account_permission(perm.clone(), ALICE_ID.clone()))?;
+
+    let revoke = Revoke::account_permission(perm.clone(), ALICE_ID.clone());
+    let grant = Grant::account_permission(perm.clone(), ALICE_ID.clone());
+    let tx = TransactionBuilder::new(network.chain_id(), ALICE_ID.clone())
+        .with_instructions([InstructionBox::from(revoke), InstructionBox::from(grant)])
+        .sign(ALICE_KEYPAIR.private_key());
+    client.submit_transaction_blocking(&tx)?;
+
+    let (prepared_seen, merged_seen, fallback_seen) = poll_detached_metrics(&rt, &metrics_url)?;
+
+    let permissions = client
+        .query(FindPermissionsByAccountId::new(ALICE_ID.clone()))
+        .execute_all()?;
+    assert!(
+        permissions.iter().any(|permission| permission == &perm),
+        "last grant should keep permission on account"
+    );
+
+    assert!(
+        prepared_seen > 0.0,
+        "expected detached pipeline to prepare overlays"
+    );
+    assert!(
+        merged_seen > 0.0,
+        "expected detached merge to register in metrics"
+    );
+    assert_eq!(
+        fallback_seen, 0.0,
+        "detached fallback should not register for permission ops"
+    );
+
+    Ok(())
 }
 
 #[test]
