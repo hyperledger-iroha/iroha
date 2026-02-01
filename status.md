@@ -1,6 +1,9 @@
 # Status
 
 Last update: 2026-02-01
+- Iterable queries: tolerate pre-existing `CanRegisterTrigger` grants in `find_active_trigger_ids_includes_registered` by ignoring repeated grant errors for the same permission.
+- Tests: `cargo test -p integration_tests find_active_trigger_ids_includes_registered -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`).
+- Formatting: `cargo fmt --all` (stable rustfmt warns about nightly-only options).
 - Permission cache: removed unused `PermissionCheckCache` mutation hooks now that detached permission replays use `Grant`/`Revoke` execution, clearing dead-code warnings.
 - Formatting: `cargo fmt --all` (stable rustfmt warns about nightly-only options).
 - Tests: not run (user requested no full workspace tests).

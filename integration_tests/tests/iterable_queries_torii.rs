@@ -12,6 +12,36 @@ use iroha_test_network::NetworkBuilder;
 use nonzero_ext::nonzero;
 use sandbox::start_network_blocking_or_skip as start_network_or_skip;
 
+fn is_permission_grant_repetition(
+    err: &eyre::Report,
+    expected: &iroha::data_model::permission::Permission,
+) -> bool {
+    use iroha::data_model::{
+        IdBox, ValidationFail,
+        isi::{InstructionType, error::InstructionExecutionError},
+    };
+
+    err.chain().any(|cause| {
+        let matches = |repetition: &iroha::data_model::isi::error::RepetitionError| {
+            *repetition.instruction() == InstructionType::Grant
+                && matches!(&repetition.id, IdBox::Permission(permission) if permission == expected)
+        };
+
+        if let Some(InstructionExecutionError::Repetition(repetition)) =
+            cause.downcast_ref::<InstructionExecutionError>()
+        {
+            return matches(repetition);
+        }
+        if let Some(ValidationFail::InstructionFailed(InstructionExecutionError::Repetition(
+            repetition,
+        ))) = cause.downcast_ref::<ValidationFail>()
+        {
+            return matches(repetition);
+        }
+        false
+    })
+}
+
 #[test]
 fn blocks_iterable_start_and_continue() -> Result<()> {
     use iroha::data_model::query::{
@@ -223,12 +253,17 @@ fn find_active_trigger_ids_includes_registered() -> Result<()> {
     };
     let client = network.client();
     // Ensure Alice may register by-call triggers explicitly to avoid permission denials.
-    client.submit_blocking(Grant::account_permission(
-        iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
-            authority: ALICE_ID.clone(),
-        },
-        ALICE_ID.clone(),
-    ))?;
+    let permission = iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
+        authority: ALICE_ID.clone(),
+    };
+    let expected_permission: iroha::data_model::permission::Permission = permission.clone().into();
+    if let Err(err) =
+        client.submit_blocking(Grant::account_permission(permission, ALICE_ID.clone()))
+    {
+        if !is_permission_grant_repetition(&err, &expected_permission) {
+            return Err(err);
+        }
+    }
 
     // Register a by-call trigger that won't fire automatically; keep it active.
     let trig_id: TriggerId = "qtrig_active_ids".parse()?;
