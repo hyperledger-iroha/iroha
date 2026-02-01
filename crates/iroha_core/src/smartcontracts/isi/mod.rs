@@ -219,9 +219,7 @@ impl Execute for RegisterBox {
             Self::AssetDefinition(isi) => isi.execute(authority, state_transaction),
             Self::Nft(isi) => isi.execute(authority, state_transaction),
             Self::Role(isi) => isi.execute(authority, state_transaction),
-            Self::Trigger(isi) => {
-                isi.execute(authority, state_transaction)
-            }
+            Self::Trigger(isi) => isi.execute(authority, state_transaction),
         }
     }
 }
@@ -361,7 +359,10 @@ mod tests {
     use std::sync::Arc;
 
     use iroha_crypto::KeyPair;
-    use iroha_data_model::{isi::error::InvalidParameterError, permission};
+    use iroha_data_model::{
+        events::execute_trigger::ExecuteTriggerEventFilter, isi::error::InvalidParameterError,
+        permission,
+    };
     use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
@@ -740,6 +741,45 @@ mod tests {
             .inspect_by_id(&trigger_id, |_| ())
             .is_some();
         assert!(!active, "zero-repeat triggers must not be registered");
+
+        Ok(())
+    }
+
+    #[test]
+    async fn register_box_trigger_executes() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_test_domains(&kura)?;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut state_transaction = state_block.transaction();
+        let trigger_id = "boxed_trigger".parse::<TriggerId>()?;
+
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Indefinitely,
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            ),
+        );
+        RegisterBox::Trigger(Register::trigger(trigger))
+            .execute(&ALICE_ID, &mut state_transaction)?;
+
+        state_transaction.apply();
+        state_block.commit().unwrap();
+
+        let registered = state
+            .view()
+            .world
+            .triggers()
+            .inspect_by_id(&trigger_id, |_| ())
+            .is_some();
+        assert!(registered, "trigger should be registered via RegisterBox");
 
         Ok(())
     }
