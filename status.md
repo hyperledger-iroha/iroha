@@ -1,6 +1,10 @@
 # Status
 
 Last update: 2026-02-01
+- Detached permissions: account/role permission changes in detached deltas now apply last-write-wins semantics so grant/revoke ordering matches sequential behavior; role permission grant/revoke ordering covered in integration tests.
+- Tests: `cargo test -p iroha_core detached_can_modify_nft_metadata_checks_grants_and_revokes -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`).
+- Tests: `cargo test -p integration_tests role_permission_revoke_then_grant_last_wins_detached -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`).
+- Formatting: `cargo fmt --all` (stable rustfmt warns about nightly-only options).
 - NFT metadata permissions: integrated delta-aware permission checks into detached parallel apply so NFT metadata edits can stay in the detached path without bypassing authz; kept stricter genesis detection when skipping NFT metadata checks in the initial executor.
 - Tests: `cargo test -p iroha_core detached_nft_metadata_records_delta -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`).
 - Tests: `cargo test -p iroha_core detached_can_modify_nft_metadata -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`).

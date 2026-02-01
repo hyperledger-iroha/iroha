@@ -6697,12 +6697,6 @@ impl<T: Ord> SortedUniqueVec<T> {
     }
 }
 
-impl<T> SortedUniqueVec<T> {
-    fn iter(&self) -> std::slice::Iter<'_, T> {
-        self.inner.iter()
-    }
-}
-
 impl<T> IntoIterator for SortedUniqueVec<T> {
     type Item = T;
     type IntoIter = std::vec::IntoIter<T>;
@@ -6763,6 +6757,37 @@ impl NameIntern {
 enum AssetEventScriptEntry {
     Added(u32),
     Removed(u32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionDeltaOp {
+    Grant,
+    Revoke,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RoleDeltaOp {
+    Grant,
+    Revoke,
+}
+
+#[derive(Debug, Clone)]
+enum DetachedPermissionOp {
+    AccountPermission {
+        account: AccountId,
+        permission: Permission,
+        op: PermissionDeltaOp,
+    },
+    RolePermission {
+        role: RoleId,
+        permission: Permission,
+        op: PermissionDeltaOp,
+    },
+    RoleAssignment {
+        account: AccountId,
+        role: RoleId,
+        op: RoleDeltaOp,
+    },
 }
 
 #[derive(Default, Debug, Clone)]
@@ -6836,32 +6861,31 @@ pub struct DetachedStateTransactionDelta {
     asset_def_kv_set_vals: Vec<iroha_primitives::json::Json>,
     asset_def_kv_del_ids: Vec<iroha_data_model::asset::AssetDefinitionId>,
     asset_def_kv_del_key_ids: Vec<NameId>,
-    // Account permissions and roles
-    perm_grants: SortedUniqueVec<(
-        iroha_data_model::account::AccountId,
-        iroha_data_model::permission::Permission,
-    )>,
-    perm_revokes: SortedUniqueVec<(
-        iroha_data_model::account::AccountId,
-        iroha_data_model::permission::Permission,
-    )>,
-    role_grants: SortedUniqueVec<(
-        iroha_data_model::account::AccountId,
-        iroha_data_model::role::RoleId,
-    )>,
-    role_revokes: SortedUniqueVec<(
-        iroha_data_model::account::AccountId,
-        iroha_data_model::role::RoleId,
-    )>,
+    // Account permissions and roles (maps for last-write checks)
+    perm_ops: std::collections::BTreeMap<
+        (
+            iroha_data_model::account::AccountId,
+            iroha_data_model::permission::Permission,
+        ),
+        PermissionDeltaOp,
+    >,
+    role_ops: std::collections::BTreeMap<
+        (
+            iroha_data_model::account::AccountId,
+            iroha_data_model::role::RoleId,
+        ),
+        RoleDeltaOp,
+    >,
     // Role permission changes
-    role_perm_grants: SortedUniqueVec<(
-        iroha_data_model::role::RoleId,
-        iroha_data_model::permission::Permission,
-    )>,
-    role_perm_revokes: SortedUniqueVec<(
-        iroha_data_model::role::RoleId,
-        iroha_data_model::permission::Permission,
-    )>,
+    role_perm_ops: std::collections::BTreeMap<
+        (
+            iroha_data_model::role::RoleId,
+            iroha_data_model::permission::Permission,
+        ),
+        PermissionDeltaOp,
+    >,
+    // Ordered permission/role operations for deterministic replay.
+    permission_ops: Vec<DetachedPermissionOp>,
     // Peer registrations
     peer_adds: SortedUniqueVec<iroha_data_model::peer::PeerId>,
     peer_removes: SortedUniqueVec<iroha_data_model::peer::PeerId>,
@@ -7129,7 +7153,14 @@ impl DetachedStateTransactionDelta {
         account: iroha_data_model::account::AccountId,
         perm: iroha_data_model::permission::Permission,
     ) {
-        self.perm_grants.insert((account, perm));
+        let op = PermissionDeltaOp::Grant;
+        self.perm_ops.insert((account.clone(), perm.clone()), op);
+        self.permission_ops
+            .push(DetachedPermissionOp::AccountPermission {
+                account,
+                permission: perm,
+                op,
+            });
     }
     /// Record a permission revoke from an account.
     pub fn revoke_permission(
@@ -7137,7 +7168,14 @@ impl DetachedStateTransactionDelta {
         account: iroha_data_model::account::AccountId,
         perm: iroha_data_model::permission::Permission,
     ) {
-        self.perm_revokes.insert((account, perm));
+        let op = PermissionDeltaOp::Revoke;
+        self.perm_ops.insert((account.clone(), perm.clone()), op);
+        self.permission_ops
+            .push(DetachedPermissionOp::AccountPermission {
+                account,
+                permission: perm,
+                op,
+            });
     }
     /// Record a role grant to an account.
     pub fn grant_role(
@@ -7145,7 +7183,10 @@ impl DetachedStateTransactionDelta {
         account: iroha_data_model::account::AccountId,
         role: iroha_data_model::role::RoleId,
     ) {
-        self.role_grants.insert((account, role));
+        let op = RoleDeltaOp::Grant;
+        self.role_ops.insert((account.clone(), role.clone()), op);
+        self.permission_ops
+            .push(DetachedPermissionOp::RoleAssignment { account, role, op });
     }
     /// Record a role revoke from an account.
     pub fn revoke_role(
@@ -7153,7 +7194,10 @@ impl DetachedStateTransactionDelta {
         account: iroha_data_model::account::AccountId,
         role: iroha_data_model::role::RoleId,
     ) {
-        self.role_revokes.insert((account, role));
+        let op = RoleDeltaOp::Revoke;
+        self.role_ops.insert((account.clone(), role.clone()), op);
+        self.permission_ops
+            .push(DetachedPermissionOp::RoleAssignment { account, role, op });
     }
     /// Record a role-permission grant.
     pub fn grant_role_permission(
@@ -7161,7 +7205,14 @@ impl DetachedStateTransactionDelta {
         role: iroha_data_model::role::RoleId,
         perm: iroha_data_model::permission::Permission,
     ) {
-        self.role_perm_grants.insert((role, perm));
+        let op = PermissionDeltaOp::Grant;
+        self.role_perm_ops.insert((role.clone(), perm.clone()), op);
+        self.permission_ops
+            .push(DetachedPermissionOp::RolePermission {
+                role,
+                permission: perm,
+                op,
+            });
     }
     /// Record a role-permission revoke.
     pub fn revoke_role_permission(
@@ -7169,7 +7220,14 @@ impl DetachedStateTransactionDelta {
         role: iroha_data_model::role::RoleId,
         perm: iroha_data_model::permission::Permission,
     ) {
-        self.role_perm_revokes.insert((role, perm));
+        let op = PermissionDeltaOp::Revoke;
+        self.role_perm_ops.insert((role.clone(), perm.clone()), op);
+        self.permission_ops
+            .push(DetachedPermissionOp::RolePermission {
+                role,
+                permission: perm,
+                op,
+            });
     }
     /// Record a peer registration.
     pub fn register_peer(&mut self, id: iroha_data_model::peer::PeerId) {
@@ -7201,62 +7259,55 @@ impl DetachedStateTransactionDelta {
             return Ok(true);
         }
 
-        let is_target_permission = |permission: &Permission| -> bool {
-            permission
-                .payload()
-                .try_into_any_norito::<CanModifyNftMetadata>()
-                .is_ok_and(|token| token.nft == *nft_id)
-        };
+        let target_perm: Permission = CanModifyNftMetadata {
+            nft: nft_id.clone(),
+        }
+        .into();
+        let direct_op = self
+            .perm_ops
+            .get(&(authority.clone(), target_perm.clone()))
+            .copied();
 
-        let direct_revoked = self
-            .perm_revokes
-            .iter()
-            .any(|(acc, perm)| acc == authority && is_target_permission(perm));
-        if !direct_revoked {
-            if self
-                .perm_grants
-                .iter()
-                .any(|(acc, perm)| acc == authority && is_target_permission(perm))
-            {
-                return Ok(true);
-            }
-            let permissions = world
-                .account_permissions_iter(authority)
-                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
-            if permissions.into_iter().any(is_target_permission) {
-                return Ok(true);
+        match direct_op {
+            Some(PermissionDeltaOp::Grant) => return Ok(true),
+            Some(PermissionDeltaOp::Revoke) => {}
+            None => {
+                let permissions = world
+                    .account_permissions_iter(authority)
+                    .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
+                if permissions.into_iter().any(|perm| perm == &target_perm) {
+                    return Ok(true);
+                }
             }
         }
 
         let mut roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
-        for (acc, role) in &self.role_grants {
-            if acc == authority {
-                roles.insert(role.clone());
+        for ((acc, role), op) in &self.role_ops {
+            if acc != authority {
+                continue;
             }
-        }
-        for (acc, role) in &self.role_revokes {
-            if acc == authority {
-                roles.remove(role);
+            match op {
+                RoleDeltaOp::Grant => {
+                    roles.insert(role.clone());
+                }
+                RoleDeltaOp::Revoke => {
+                    roles.remove(role);
+                }
             }
         }
 
         for role in roles {
-            let role_revoked = self
-                .role_perm_revokes
-                .iter()
-                .any(|(role_id, perm)| role_id == &role && is_target_permission(perm));
-            if role_revoked {
-                continue;
-            }
-            if self
-                .role_perm_grants
-                .iter()
-                .any(|(role_id, perm)| role_id == &role && is_target_permission(perm))
+            match self
+                .role_perm_ops
+                .get(&(role.clone(), target_perm.clone()))
+                .copied()
             {
-                return Ok(true);
+                Some(PermissionDeltaOp::Grant) => return Ok(true),
+                Some(PermissionDeltaOp::Revoke) => continue,
+                None => {}
             }
             if let Some(role_def) = world.roles().get(&role) {
-                if role_def.permissions.iter().any(is_target_permission) {
+                if role_def.permissions.iter().any(|perm| perm == &target_perm) {
                     return Ok(true);
                 }
             }
@@ -7291,12 +7342,13 @@ impl DetachedStateTransactionDelta {
         // supported ISIs. Tests exercise the same operations through both paths to
         // guarantee identical validation and event emission; extend cautiously and keep
         // the merge logic deterministic to avoid shared mutable state across workers.
+        use crate::smartcontracts::Execute as _;
+        use iroha_data_model::isi::{Grant, Revoke};
         use iroha_data_model::{
             events::data::prelude::{
-                AccountEvent, AccountPermissionChanged, AccountRoleChanged, AssetChanged,
-                AssetDefinitionEvent, AssetDefinitionOwnerChanged, AssetEvent, ConfigurationEvent,
-                DomainEvent, DomainOwnerChanged, MetadataChanged, NftEvent, NftOwnerChanged,
-                ParameterChanged, PeerEvent, RoleEvent,
+                AccountEvent, AssetChanged, AssetDefinitionEvent, AssetDefinitionOwnerChanged,
+                AssetEvent, ConfigurationEvent, DomainEvent, DomainOwnerChanged, MetadataChanged,
+                NftEvent, NftOwnerChanged, ParameterChanged, PeerEvent,
             },
             transaction::error::TransactionRejectionReason,
         };
@@ -7724,114 +7776,45 @@ impl DetachedStateTransactionDelta {
                 }
             }
 
-            // Apply role-permission changes
-            let current_epoch = stx.block_height();
-            for (role, perm) in self.role_perm_grants {
-                let affected_accounts = stx.accounts_with_role(&role);
-                let role_ref = stx.world.roles.get_mut(&role).ok_or_else(|| {
-                    iroha_data_model::ValidationFail::NotPermitted(format!(
-                        "role not found: {role}"
-                    ))
-                })?;
-                let _ = role_ref.permissions.insert(perm.clone());
-                role_ref
-                    .permission_epochs
-                    .entry(perm.clone())
-                    .or_insert(current_epoch);
-                stx.perm_cache.on_role_permission_grant(
-                    &stx.world,
-                    affected_accounts.iter(),
-                    &perm,
-                );
-                let role_event = role.clone();
-                let perm_event = perm.clone();
-                stx.world.emit_events(Some(RoleEvent::PermissionAdded(
-                    iroha_data_model::events::data::prelude::RolePermissionChanged {
-                        role: role_event,
-                        permission: perm_event,
+            // Replay permission/role operations in recorded order using the same ISI semantics.
+            for op in self.permission_ops {
+                let result = match op {
+                    DetachedPermissionOp::AccountPermission {
+                        account,
+                        permission,
+                        op,
+                    } => match op {
+                        PermissionDeltaOp::Grant => Grant::account_permission(permission, account)
+                            .execute(authority, &mut stx),
+                        PermissionDeltaOp::Revoke => {
+                            Revoke::account_permission(permission, account)
+                                .execute(authority, &mut stx)
+                        }
                     },
-                )));
-            }
-            for (role, perm) in self.role_perm_revokes {
-                let affected_accounts = stx.accounts_with_role(&role);
-                let role_ref = stx.world.roles.get_mut(&role).ok_or_else(|| {
-                    iroha_data_model::ValidationFail::NotPermitted(format!(
-                        "role not found: {role}"
-                    ))
-                })?;
-                let _ = role_ref.permissions.remove(&perm);
-                role_ref.permission_epochs.remove(&perm);
-                stx.world.emit_events(Some(RoleEvent::PermissionRemoved(
-                    iroha_data_model::events::data::prelude::RolePermissionChanged {
+                    DetachedPermissionOp::RolePermission {
                         role,
-                        permission: perm,
+                        permission,
+                        op,
+                    } => {
+                        match op {
+                            PermissionDeltaOp::Grant => Grant::role_permission(permission, role)
+                                .execute(authority, &mut stx),
+                            PermissionDeltaOp::Revoke => Revoke::role_permission(permission, role)
+                                .execute(authority, &mut stx),
+                        }
+                    }
+                    DetachedPermissionOp::RoleAssignment { account, role, op } => match op {
+                        RoleDeltaOp::Grant => {
+                            Grant::account_role(role, account).execute(authority, &mut stx)
+                        }
+                        RoleDeltaOp::Revoke => {
+                            Revoke::account_role(role, account).execute(authority, &mut stx)
+                        }
                     },
-                )));
-                stx.perm_cache
-                    .on_role_permission_revoke(affected_accounts.iter());
-            }
-
-            // Apply permission grants/revokes
-            for (acc, perm) in self.perm_grants {
-                let _ = stx.world.account(&acc)?;
-                let _ = stx.world.add_account_permission(&acc, perm.clone());
-                stx.perm_cache
-                    .on_account_permission_grant(&stx.world, &acc, &perm);
-                let perm_event = perm.clone();
-                stx.world.emit_events(Some(AccountEvent::PermissionAdded(
-                    AccountPermissionChanged {
-                        account: acc.clone(),
-                        permission: perm_event,
-                    },
-                )));
-            }
-            for (acc, perm) in self.perm_revokes {
-                let _ = stx.world.account(&acc)?;
-                let _ = stx.world.remove_account_permission(&acc, &perm);
-                stx.world.emit_events(Some(AccountEvent::PermissionRemoved(
-                    AccountPermissionChanged {
-                        account: acc.clone(),
-                        permission: perm,
-                    },
-                )));
-                stx.perm_cache.on_account_permission_revoke(&acc);
-            }
-            // Apply role grants/revokes
-            for (acc, role) in self.role_grants {
-                let _ = stx.world.account(&acc)?;
-                let role_permissions_snapshot = stx
-                    .world
-                    .roles
-                    .get(&role)
-                    .map(|role_def| role_def.permissions.clone());
-                stx.world.account_roles.insert(
-                    crate::role::RoleIdWithOwner::new(acc.clone(), role.clone()),
-                    (),
-                );
-                stx.world
-                    .emit_events(Some(AccountEvent::RoleGranted(AccountRoleChanged {
-                        account: acc.clone(),
-                        role: role.clone(),
-                    })));
-                if let Some(permissions) = role_permissions_snapshot {
-                    stx.perm_cache
-                        .on_role_assigned(&stx.world, &acc, permissions.iter());
-                } else {
-                    stx.perm_cache.on_role_revoked(&acc);
+                };
+                if let Err(err) = result {
+                    return Err(ValidationFail::InstructionFailed(err));
                 }
-            }
-            for (acc, role) in self.role_revokes {
-                let _ = stx.world.account(&acc)?;
-                let _ = stx
-                    .world
-                    .account_roles
-                    .remove(crate::role::RoleIdWithOwner::new(acc.clone(), role.clone()));
-                stx.world
-                    .emit_events(Some(AccountEvent::RoleRevoked(AccountRoleChanged {
-                        account: acc.clone(),
-                        role,
-                    })));
-                stx.perm_cache.on_role_revoked(&acc);
             }
 
             // Apply parameter changes and emit configuration events (old/new)
@@ -28829,13 +28812,179 @@ mod tests {
             "explicit grant should allow metadata edits"
         );
 
-        delta.revoke_permission(ALICE_ID.clone(), perm);
+        delta.revoke_permission(ALICE_ID.clone(), perm.clone());
         assert!(
             !delta
                 .can_modify_nft_metadata(&view, &ALICE_ID, &nft_id)
                 .expect("permission check"),
             "revoke should remove direct permission"
         );
+
+        delta.grant_permission(ALICE_ID.clone(), perm);
+        assert!(
+            delta
+                .can_modify_nft_metadata(&view, &ALICE_ID, &nft_id)
+                .expect("permission check"),
+            "last grant should win over earlier revoke"
+        );
+    }
+
+    #[test]
+    fn detached_can_modify_nft_metadata_respects_role_grant_order() {
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain = Domain::new(domain_id).build(&BOB_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+        let nft_id: NftId = "nft_role_grant$wonderland".parse().expect("nft id");
+        let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
+        let role_id: RoleId = "nft_editor".parse().expect("role id");
+        let perm: Permission = CanModifyNftMetadata {
+            nft: nft_id.clone(),
+        }
+        .into();
+        let role = Role::new(role_id.clone(), BOB_ID.clone())
+            .add_permission(perm)
+            .build(&BOB_ID);
+
+        let world = World::with_assets_and_roles(
+            [domain],
+            [alice_account, bob_account],
+            [],
+            [],
+            [nft],
+            [role],
+        );
+        let view = world.view();
+        let mut delta = DetachedStateTransactionDelta::default();
+
+        assert!(
+            !delta
+                .can_modify_nft_metadata(&view, &ALICE_ID, &nft_id)
+                .expect("permission check"),
+            "role not yet granted should deny NFT metadata edits"
+        );
+
+        delta.grant_role(ALICE_ID.clone(), role_id.clone());
+        assert!(
+            delta
+                .can_modify_nft_metadata(&view, &ALICE_ID, &nft_id)
+                .expect("permission check"),
+            "role grant should allow NFT metadata edits"
+        );
+
+        delta.revoke_role(ALICE_ID.clone(), role_id.clone());
+        assert!(
+            !delta
+                .can_modify_nft_metadata(&view, &ALICE_ID, &nft_id)
+                .expect("permission check"),
+            "role revoke should remove metadata permission"
+        );
+
+        delta.grant_role(ALICE_ID.clone(), role_id);
+        assert!(
+            delta
+                .can_modify_nft_metadata(&view, &ALICE_ID, &nft_id)
+                .expect("permission check"),
+            "last role grant should win over earlier revoke"
+        );
+    }
+
+    #[test]
+    fn detached_can_modify_nft_metadata_respects_role_permission_ops() {
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain = Domain::new(domain_id).build(&BOB_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+        let nft_id: NftId = "nft_role_perm$wonderland".parse().expect("nft id");
+        let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
+        let role_id: RoleId = "nft_editor_perm".parse().expect("role id");
+        let role = Role::new(role_id.clone(), BOB_ID.clone()).build(&BOB_ID);
+
+        let mut world = World::with_assets_and_roles(
+            [domain],
+            [alice_account, bob_account],
+            [],
+            [],
+            [nft],
+            [role],
+        );
+        world
+            .account_roles
+            .insert(RoleIdWithOwner::new(ALICE_ID.clone(), role_id.clone()), ());
+        let view = world.view();
+        let perm: Permission = CanModifyNftMetadata {
+            nft: nft_id.clone(),
+        }
+        .into();
+
+        let mut delta = DetachedStateTransactionDelta::default();
+        assert!(
+            !delta
+                .can_modify_nft_metadata(&view, &ALICE_ID, &nft_id)
+                .expect("permission check"),
+            "role without permissions should deny NFT metadata edits"
+        );
+
+        delta.grant_role_permission(role_id.clone(), perm.clone());
+        assert!(
+            delta
+                .can_modify_nft_metadata(&view, &ALICE_ID, &nft_id)
+                .expect("permission check"),
+            "role permission grant should allow NFT metadata edits"
+        );
+
+        delta.revoke_role_permission(role_id.clone(), perm.clone());
+        assert!(
+            !delta
+                .can_modify_nft_metadata(&view, &ALICE_ID, &nft_id)
+                .expect("permission check"),
+            "role permission revoke should remove metadata permission"
+        );
+
+        delta.grant_role_permission(role_id, perm);
+        assert!(
+            delta
+                .can_modify_nft_metadata(&view, &ALICE_ID, &nft_id)
+                .expect("permission check"),
+            "last role permission grant should win over earlier revoke"
+        );
+    }
+
+    #[test]
+    fn detached_merge_rejects_permission_revoke_without_grant() {
+        use iroha_executor_data_model::permission::account::CanModifyAccountMetadata;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain = Domain::new(domain_id).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let world = World::with([domain], [account], []);
+        let state = State::new(world, kura, query_handle);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+
+        let perm: Permission = CanModifyAccountMetadata {
+            account: ALICE_ID.clone(),
+        }
+        .into();
+        let mut delta = DetachedStateTransactionDelta::default();
+        delta.revoke_permission(ALICE_ID.clone(), perm.clone());
+        delta.grant_permission(ALICE_ID.clone(), perm);
+
+        let err = delta
+            .merge_into(&mut state_block, &ALICE_ID)
+            .expect_err("missing permission revoke must reject");
+
+        match err {
+            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                iroha_data_model::ValidationFail::InstructionFailed(
+                    InstructionExecutionError::Find(FindError::Permission(_)),
+                ),
+            ) => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]
