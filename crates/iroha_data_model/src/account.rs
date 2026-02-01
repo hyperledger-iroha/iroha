@@ -351,10 +351,14 @@ mod model {
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for AccountId {
     fn write_json(&self, out: &mut String) {
-        let ih58 = self
-            .canonical_ih58()
-            .expect("AccountId should encode to IH58 for JSON");
-        let literal = format!("{ih58}@{}", self.domain());
+        let literal = match self.canonical_ih58() {
+            Ok(ih58) => format!("{ih58}@{}", self.domain()),
+            Err(_) => {
+                let payload = self.encode();
+                let encoded = hex::encode(payload);
+                format!("norito:{encoded}@{}", self.domain())
+            }
+        };
         norito::json::JsonSerialize::json_serialize(&literal, out);
     }
 }
@@ -365,6 +369,34 @@ impl norito::json::JsonDeserialize for AccountId {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
+        if let Some(rest) = AccountId::strip_prefix_case_insensitive(&value, "norito:") {
+            let (hex_literal, domain_literal) = rest
+                .rsplit_once('@')
+                .map(|(hex, domain)| (hex, Some(domain)))
+                .unwrap_or((rest, None));
+            let payload = hex::decode(hex_literal).map_err(|err| {
+                norito::json::Error::Message(format!(
+                    "invalid norito AccountId hex payload: {err}"
+                ))
+            })?;
+            let mut cursor = std::io::Cursor::new(payload);
+            let decoded = <AccountId as Decode>::decode(&mut cursor)
+                .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            if let Some(domain_literal) = domain_literal {
+                let domain: DomainId = domain_literal.parse().map_err(|err| {
+                    norito::json::Error::Message(format!(
+                        "invalid norito AccountId domain literal: {err}"
+                    ))
+                })?;
+                if decoded.domain() != &domain {
+                    return Err(norito::json::Error::Message(
+                        "norito AccountId domain mismatch".to_string(),
+                    ));
+                }
+            }
+            return Ok(decoded);
+        }
+
         value
             .parse::<AccountId>()
             .map_err(|err| norito::json::Error::Message(err.to_string()))
@@ -2011,7 +2043,7 @@ mod tests {
 
 #[cfg(all(test, feature = "json"))]
 mod json_tests {
-    use iroha_crypto::{Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
 
     use super::*;
     use crate::{
@@ -2055,6 +2087,32 @@ mod json_tests {
         let expected = format!("\"{ih58}@{}\"", id.domain());
         assert_eq!(json, expected);
 
+        let decoded: AccountId = norito::json::from_json(&json).expect("deserialize account id");
+        assert_eq!(decoded, id);
+    }
+
+    #[test]
+    fn account_id_json_roundtrip_large_multisig_uses_norito_literal() {
+        let _guard = guard_chain_discriminant();
+        let domain: DomainId = "weights".parse().expect("domain id");
+        let member_count = (u8::MAX as usize) + 1;
+        let mut members = Vec::with_capacity(member_count);
+        for idx in 0..member_count {
+            let mut seed = vec![0_u8; 32];
+            seed[..8].copy_from_slice(&(idx as u64).to_le_bytes());
+            let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+            let member =
+                MultisigMember::new(keypair.public_key().clone(), 1).expect("member");
+            members.push(member);
+        }
+        let policy = MultisigPolicy::new(1, members).expect("policy");
+        let id = AccountId::new_multisig(domain.clone(), policy);
+
+        let json = norito::json::to_json(&id).expect("serialize account id");
+        assert!(
+            json.contains("norito:"),
+            "large multisig account should use norito literal"
+        );
         let decoded: AccountId = norito::json::from_json(&json).expect("deserialize account id");
         assert_eq!(decoded, id);
     }
