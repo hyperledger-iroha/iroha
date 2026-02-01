@@ -1939,6 +1939,7 @@ impl Actor {
         }
         let qc_replay_start = Instant::now();
         if !commit_topology.is_empty() {
+            self.cache_vote_roster(block_hash, height, view, commit_topology.clone());
             let topology = super::network_topology::Topology::new(commit_topology.clone());
             let epochs = distinct_epochs_for_block_votes(
                 &self.vote_log,
