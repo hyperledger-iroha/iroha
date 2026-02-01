@@ -16820,6 +16820,38 @@ async fn handle_vote_seeds_missing_block_fetch_when_roster_missing() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn request_missing_block_for_pending_rbc_with_aborted_payload() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let key = insert_pending_block(actor, 1, 0);
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get_mut(&key.0)
+        .expect("pending block exists");
+    pending.mark_aborted();
+
+    assert!(
+        actor.block_payload_available_locally(key.0),
+        "test requires the payload to remain available"
+    );
+    assert!(
+        !actor.block_known_locally(key.0),
+        "aborted payloads should not count as known blocks"
+    );
+
+    actor.request_missing_block_for_pending_rbc(key, "test_aborted_payload", None);
+
+    assert!(
+        actor.pending.missing_block_requests.contains_key(&key.0),
+        "missing-block fetch should be queued for aborted payloads"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn handle_qc_accepts_stale_precommit_qc_for_unknown_block() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;

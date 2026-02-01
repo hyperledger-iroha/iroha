@@ -7,9 +7,10 @@ use iroha::{
     crypto::KeyPair,
     data_model::{
         IdBox, ValidationFail,
+        events::pipeline::{TransactionEventFilter, TransactionStatus},
         isi::{
             Instruction, InstructionType,
-            error::{InstructionExecutionError, InvalidParameterError},
+            error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         },
         prelude::*,
         query::{
@@ -17,6 +18,7 @@ use iroha::{
             trigger::{FindActiveTriggerIds, FindTriggers},
         },
         transaction::Executable,
+        transaction::error::TransactionRejectionReason,
     },
 };
 use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
@@ -83,6 +85,31 @@ fn is_trigger_register_collision(err: &eyre::Report, trigger_id: &TriggerId) -> 
     })
 }
 
+fn is_permission_grant_repetition(
+    err: &eyre::Report,
+    expected: &iroha::data_model::permission::Permission,
+) -> bool {
+    err.chain().any(|cause| {
+        let matches = |repetition: &RepetitionError| {
+            *repetition.instruction() == InstructionType::Grant
+                && matches!(&repetition.id, IdBox::Permission(permission) if permission == expected)
+        };
+
+        if let Some(InstructionExecutionError::Repetition(repetition)) =
+            cause.downcast_ref::<InstructionExecutionError>()
+        {
+            return matches(repetition);
+        }
+        if let Some(ValidationFail::InstructionFailed(InstructionExecutionError::Repetition(
+            repetition,
+        ))) = cause.downcast_ref::<ValidationFail>()
+        {
+            return matches(repetition);
+        }
+        false
+    })
+}
+
 fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
     err.chain().any(|cause| {
         let msg = cause.to_string();
@@ -102,6 +129,21 @@ fn trigger_register_collision_is_detected() {
     let err = InstructionExecutionError::Repetition(repetition);
     let report = eyre::Report::new(err);
     assert!(is_trigger_register_collision(&report, &trigger_id));
+}
+
+#[test]
+fn permission_grant_repetition_is_detected() {
+    let permission: iroha::data_model::permission::Permission = CanRegisterTrigger {
+        authority: ALICE_ID.clone(),
+    }
+    .into();
+    let repetition = RepetitionError {
+        instruction: InstructionType::Grant,
+        id: IdBox::Permission(permission.clone()),
+    };
+    let err = InstructionExecutionError::Repetition(repetition);
+    let report = eyre::Report::new(err);
+    assert!(is_permission_grant_repetition(&report, &permission));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -489,15 +531,22 @@ async fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> 
             let permission_on_registration = CanRegisterTrigger {
                 authority: account_id.clone(),
             };
+            let expected_permission: iroha::data_model::permission::Permission =
+                permission_on_registration.clone().into();
 
             // Ensure the caller explicitly has permission to register the trigger on their own behalf.
-            submit_instruction_and_wait(
+            if let Err(err) = submit_instruction_and_wait(
                 &network,
                 test_client.clone(),
                 Grant::account_permission(permission_on_registration, account_id.clone()),
                 stringify!(trigger_should_be_able_to_modify_its_own_repeats_count),
             )
-            .await?;
+            .await
+            {
+                if !is_permission_grant_repetition(&err, &expected_permission) {
+                    return Err(err);
+                }
+            }
 
             let trigger_instructions: Vec<InstructionBox> = vec![
                 Mint::trigger_repetitions(1_u32, trigger_id.clone()).into(),
@@ -600,6 +649,8 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
             let permission_on_registration = CanRegisterTrigger {
                 authority: ALICE_ID.clone(),
             };
+            let expected_permission: iroha::data_model::permission::Permission =
+                permission_on_registration.clone().into();
 
             // Trigger with 'alice' as authority
             let trigger_id = "alice_trigger".parse::<TriggerId>()?;
@@ -660,13 +711,18 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
             println!("Rabbit couldn't register the trigger");
 
             // Give permissions to the rabbit
-            submit_instruction_and_wait(
+            if let Err(err) = submit_instruction_and_wait(
                 &network,
                 test_client.clone(),
                 Grant::account_permission(permission_on_registration, rabbit_account_id.clone()),
                 stringify!(only_account_with_permission_can_register_trigger),
             )
-            .await?;
+            .await
+            {
+                if !is_permission_grant_repetition(&err, &expected_permission) {
+                    return Err(err);
+                }
+            }
             println!("Rabbit has got the permission");
 
             // Trying register the trigger with permissions
@@ -1002,18 +1058,23 @@ async fn trigger_burn_repetitions() -> Result<()> {
 
     run_or_skip(stringify!(trigger_burn_repetitions), || async {
         // Explicitly allow Alice to register by-call triggers.
-        submit_instruction_and_wait(
+        let permission_on_registration = CanRegisterTrigger {
+            authority: ALICE_ID.clone(),
+        };
+        let expected_permission: iroha::data_model::permission::Permission =
+            permission_on_registration.clone().into();
+        if let Err(err) = submit_instruction_and_wait(
             &network,
             test_client.clone(),
-            Grant::account_permission(
-                CanRegisterTrigger {
-                    authority: ALICE_ID.clone(),
-                },
-                ALICE_ID.clone(),
-            ),
+            Grant::account_permission(permission_on_registration, ALICE_ID.clone()),
             stringify!(trigger_burn_repetitions),
         )
-        .await?;
+        .await
+        {
+            if !is_permission_grant_repetition(&err, &expected_permission) {
+                return Err(err);
+            }
+        }
 
         let asset_definition_id = "rose#wonderland".parse()?;
         let account_id = ALICE_ID.clone();
@@ -1104,16 +1165,59 @@ async fn trigger_burn_repetitions() -> Result<()> {
         .await
         .wrap_err("wait for trigger to be pruned after burn")??;
 
-        // Executing trigger
-        let execute_trigger = ExecuteTrigger::new(trigger_id);
-        let _err = spawn_blocking({
+        // Executing trigger should be rejected without repetitions, but avoid logging a warning
+        // by observing the pipeline event instead of waiting on the confirmation stream.
+        let execute_trigger = ExecuteTrigger::new(trigger_id.clone());
+        let instruction = Instruction::into_instruction_box(Box::new(execute_trigger));
+        let transaction =
+            test_client.build_transaction_from_items([instruction], Metadata::default());
+        let hash = transaction.hash();
+        let mut events = timeout(
+            network.sync_timeout(),
+            test_client.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
+        )
+        .await
+        .wrap_err("timed out opening pipeline event stream")??;
+        spawn_blocking({
             let client = test_client.clone();
-            move || {
-                client.submit_blocking(Instruction::into_instruction_box(Box::new(execute_trigger)))
-            }
+            let transaction = transaction.clone();
+            move || client.submit_transaction(&transaction)
         })
-        .await?
-        .expect_err("Should fail without repetitions");
+        .await??;
+
+        timeout(network.sync_timeout(), async {
+            loop {
+                let Some(next) = events.next().await else {
+                    return Err(eyre::eyre!("transaction event stream closed"));
+                };
+                let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = next? else {
+                    continue;
+                };
+                match event.status() {
+                    TransactionStatus::Queued => {}
+                    TransactionStatus::Rejected(reason) => match reason.as_ref() {
+                        TransactionRejectionReason::Validation(
+                            ValidationFail::InstructionFailed(InstructionExecutionError::Find(
+                                FindError::Trigger(id),
+                            )),
+                        ) => {
+                            assert_eq!(id, &trigger_id);
+                            break;
+                        }
+                        other => {
+                            return Err(eyre::eyre!("unexpected rejection reason: {other:?}"));
+                        }
+                    },
+                    status => {
+                        return Err(eyre::eyre!("unexpected transaction status: {status:?}"));
+                    }
+                }
+            }
+            Ok::<(), eyre::Report>(())
+        })
+        .await
+        .wrap_err("timed out waiting for trigger rejection")??;
+        events.close().await;
 
         Ok(())
     })
