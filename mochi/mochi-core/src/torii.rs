@@ -3321,6 +3321,11 @@ impl EventSummary {
                     detail,
                 }
             }
+            EventBox::PipelineBatch(events) => Self {
+                category: EventCategory::Pipeline,
+                label: "Pipeline Batch".to_owned(),
+                detail: Some(format!("count={}", events.len())),
+            },
             EventBox::Data(data) => {
                 let (label, detail) = data_summary(data.as_ref());
                 Self {

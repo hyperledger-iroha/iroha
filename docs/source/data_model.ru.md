@@ -88,7 +88,7 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
 - `action::Action { executable: Executable, repeats: Repeats, authority: AccountId, filter: EventFilterBox, metadata }`.
   - `Repeats`: `Indefinitely` or `Exactly(u32)`; ordering and depletion utilities included.
   - Safety: `TriggerCompleted` cannot be used as an action’s filter (validated during (de)serialization).
-- `EventBox`: sum type for pipeline, data, time, execute-trigger, and trigger-completed events; `EventFilterBox` mirrors that for subscriptions and trigger filters.
+- `EventBox`: sum type for pipeline, pipeline-batch, data, time, execute-trigger, and trigger-completed events; `EventFilterBox` mirrors that for subscriptions and trigger filters.
 
 ## Parameters and Configuration
 

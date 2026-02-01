@@ -34,6 +34,7 @@ use iroha_data_model::nexus::{
     LaneStorageProfile, LaneVisibility, UniversalAccountId,
 };
 use iroha_data_model::{
+    Encode,
     account::AccountId,
     events::pipeline::{TransactionEvent, TransactionStatus},
     isi::{
@@ -211,6 +212,10 @@ pub struct Queue {
     txs: DashMap<SignedTxHash, Arc<CheckedTransaction<'static>>>,
     /// Cached routing decision per transaction hash.
     routing_decisions: DashMap<SignedTxHash, RoutingDecision>,
+    /// Cached encoded length per queued transaction hash.
+    tx_encoded_len: DashMap<SignedTxHash, usize>,
+    /// Cached proposal gas cost per queued transaction hash.
+    tx_gas_cost: DashMap<SignedTxHash, u64>,
     /// Hashes of transactions removed from `txs` but still present in `tx_hashes`
     removed_hashes: DashMap<SignedTxHash, ()>,
     /// Amount of transactions per user in the queue
@@ -439,6 +444,8 @@ pub struct TransactionGuard {
     queue: Arc<Queue>,
     routing: RoutingDecision,
     queue_position: u64,
+    encoded_len: usize,
+    gas_cost: u64,
     #[cfg(feature = "telemetry")]
     telemetry: Option<crate::telemetry::StateTelemetry>,
 }
@@ -462,6 +469,18 @@ impl TransactionGuard {
     /// Routing decision associated with the transaction.
     pub fn routing(&self) -> RoutingDecision {
         self.routing
+    }
+
+    #[must_use]
+    /// Encoded payload size (bytes) used for queue budgeting.
+    pub fn encoded_len(&self) -> usize {
+        self.encoded_len
+    }
+
+    #[must_use]
+    /// Gas cost associated with the queued transaction.
+    pub fn gas_cost(&self) -> u64 {
+        self.gas_cost
     }
 
     #[must_use]
@@ -503,6 +522,34 @@ impl Queue {
             .flat_map(|list| list.0.iter())
             .filter_map(|attachment| attachment.lane_privacy.clone())
             .collect()
+    }
+
+    fn compute_tx_encoded_len(tx: &AcceptedTransaction<'_>) -> usize {
+        tx.as_ref().encode().len()
+    }
+
+    pub(crate) fn compute_proposal_gas_cost(tx: &AcceptedTransaction<'_>) -> u64 {
+        match tx.as_ref().instructions() {
+            Executable::Instructions(batch) => gas::meter_instructions(batch.as_ref()),
+            Executable::Ivm(_) => match crate::executor::parse_gas_limit(tx.as_ref().metadata()) {
+                Ok(Some(limit)) => limit,
+                Ok(None) => {
+                    warn!(
+                        tx = %tx.as_ref().hash(),
+                        "missing gas_limit metadata while deriving proposal gas cost"
+                    );
+                    0
+                }
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        tx = %tx.as_ref().hash(),
+                        "invalid gas_limit metadata while deriving proposal gas cost"
+                    );
+                    0
+                }
+            },
+        }
     }
 
     fn extract_lane_identity_metadata(
@@ -1293,6 +1340,8 @@ impl Queue {
                 removed_hashes: DashMap::new(),
                 txs_per_user: DashMap::new(),
                 routing_decisions: DashMap::new(),
+                tx_encoded_len: DashMap::new(),
+                tx_gas_cost: DashMap::new(),
                 push_remove_lock: parking_lot::Mutex::new(()),
                 guard_sequence: AtomicU64::new(0),
                 inflight_guards: AtomicUsize::new(0),
@@ -1743,6 +1792,8 @@ impl Queue {
         let backpressure_telemetry: Option<&StateTelemetry> = Some(telemetry_handle);
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
+        let encoded_len = Self::compute_tx_encoded_len(checked.as_accepted());
+        let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted());
         drop(state_view);
         let hash = checked.as_ref().hash();
         let _guard = self.push_remove_lock.lock();
@@ -1809,6 +1860,8 @@ impl Queue {
                 err: Error::Full,
             });
         }
+        self.tx_encoded_len.insert(hash, encoded_len);
+        self.tx_gas_cost.insert(hash, proposal_gas_cost);
         self.track_expiry_hash(hash);
         #[cfg(feature = "telemetry")]
         self.record_teu_enqueue(
@@ -1883,6 +1936,8 @@ impl Queue {
         self.txs_per_user.clear();
         self.expiry_ring_members.clear();
         self.expiry_ring.lock().clear();
+        self.tx_encoded_len.clear();
+        self.tx_gas_cost.clear();
         #[cfg(feature = "telemetry")]
         {
             self.tx_teu.clear();
@@ -1960,6 +2015,8 @@ impl Queue {
                         expired_transactions.push(tx.into_accepted());
                     }
                 }
+                self.tx_encoded_len.remove(&hash);
+                self.tx_gas_cost.remove(&hash);
                 continue;
             }
 
@@ -1969,6 +2026,16 @@ impl Queue {
                 .map(|entry| *entry.value())
                 .unwrap_or_default();
             let queue_position = self.guard_sequence.fetch_add(1, Ordering::Relaxed);
+            let encoded_len = self
+                .tx_encoded_len
+                .get(&hash)
+                .map(|entry| *entry.value())
+                .unwrap_or_else(|| Self::compute_tx_encoded_len(tx_arc.as_accepted()));
+            let gas_cost = self
+                .tx_gas_cost
+                .get(&hash)
+                .map(|entry| *entry.value())
+                .unwrap_or_else(|| Self::compute_proposal_gas_cost(tx_arc.as_accepted()));
             #[cfg(feature = "telemetry")]
             let telemetry_clone = state_view.telemetry.clone();
             self.record_inflight_guard();
@@ -1977,6 +2044,8 @@ impl Queue {
                 queue: Arc::clone(self),
                 routing,
                 queue_position,
+                encoded_len,
+                gas_cost,
                 #[cfg(feature = "telemetry")]
                 telemetry: Some(telemetry_clone),
             };
@@ -2306,6 +2375,8 @@ impl Queue {
                 }
                 removed = removed.saturating_add(1);
             }
+            self.tx_encoded_len.remove(&hash);
+            self.tx_gas_cost.remove(&hash);
         }
         let remove_ms = Self::duration_to_millis(remove_start.elapsed());
         if removed > 0 && !self.removed_hashes.is_empty() && !self.tx_hashes.is_empty() {
@@ -2387,6 +2458,8 @@ impl Queue {
                 routing_ledger::record(hash, decision);
             }
         }
+        self.tx_encoded_len.remove(&hash);
+        self.tx_gas_cost.remove(&hash);
         // Transaction guards always represent popped hashes; clear any stale marker even if
         // the entry was culled while the guard was in-flight.
         self.removed_hashes.remove(&hash);
@@ -2409,6 +2482,8 @@ impl Queue {
             self.untrack_expiry_hash(&hash);
             let _ = self.routing_decisions.remove(&hash);
             let _ = routing_ledger::take(&hash);
+            self.tx_encoded_len.remove(&hash);
+            self.tx_gas_cost.remove(&hash);
             if let Some(tx_arc) = tx_arc {
                 self.removed_hashes.insert(hash, ());
                 self.decrease_per_user_tx_count(tx_arc.as_ref().as_ref().authority());
@@ -2891,6 +2966,8 @@ pub mod tests {
                     tx_gossip: ArrayQueue::new(cfg.capacity.get()),
                     txs: DashMap::new(),
                     routing_decisions: DashMap::new(),
+                    tx_encoded_len: DashMap::new(),
+                    tx_gas_cost: DashMap::new(),
                     removed_hashes: DashMap::new(),
                     txs_per_user: DashMap::new(),
                     push_remove_lock: parking_lot::Mutex::new(()),
@@ -4073,6 +4150,71 @@ pub mod tests {
             .expect("push should succeed");
 
         assert!(matches!(wake_rx.try_recv(), Ok(())));
+    }
+
+    #[test]
+    fn queued_tx_metadata_cached_in_guard_and_cleared_on_drop() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let tx = accepted_tx_by_someone(&time_source);
+        let encoded_len = tx.as_ref().encode().len();
+        let expected_gas = match tx.as_ref().instructions() {
+            iroha_data_model::transaction::Executable::Instructions(batch) => {
+                crate::gas::meter_instructions(batch.as_ref())
+            }
+            iroha_data_model::transaction::Executable::Ivm(_) => {
+                panic!("expected ISI transaction for gas test")
+            }
+        };
+
+        queue.push(tx, state.view()).expect("push tx");
+
+        let state_view = state.view();
+        let mut expired = Vec::new();
+        let guard = queue
+            .pop_from_queue(&state_view, &mut expired)
+            .expect("guard");
+        assert_eq!(guard.encoded_len(), encoded_len);
+        assert_eq!(guard.gas_cost(), expected_gas);
+        drop(guard);
+
+        assert!(
+            queue.tx_encoded_len.is_empty(),
+            "encoded length cache should clear after guard drop"
+        );
+        assert!(
+            queue.tx_gas_cost.is_empty(),
+            "gas cost cache should clear after guard drop"
+        );
+    }
+
+    #[test]
+    fn queue_metadata_cleared_on_commit_and_clear_all() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push tx");
+
+        let removed = queue.remove_committed_hashes(std::iter::once(hash), None);
+        assert_eq!(removed, 1);
+        assert!(queue.tx_encoded_len.is_empty());
+        assert!(queue.tx_gas_cost.is_empty());
+
+        let tx = accepted_tx_by_someone(&time_source);
+        queue.push(tx, state.view()).expect("push tx");
+        assert!(!queue.tx_encoded_len.is_empty());
+        queue.clear_all();
+        assert!(queue.tx_encoded_len.is_empty());
+        assert!(queue.tx_gas_cost.is_empty());
     }
 
     #[tokio::test]

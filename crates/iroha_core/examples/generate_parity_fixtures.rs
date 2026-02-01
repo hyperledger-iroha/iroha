@@ -39,6 +39,7 @@ fn events_json_filtered(events: &[iroha_data_model::events::prelude::EventBox]) 
                 e,
                 iroha_data_model::events::prelude::EventBox::Time(_)
                     | iroha_data_model::events::prelude::EventBox::Pipeline(_)
+                    | iroha_data_model::events::prelude::EventBox::PipelineBatch(_)
             )
         })
         .cloned()

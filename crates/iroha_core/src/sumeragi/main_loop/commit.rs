@@ -5680,7 +5680,7 @@ mod tests {
         while std::time::Instant::now() < deadline {
             match events_rx.try_recv() {
                 Ok(event) => {
-                    if matches!(event, EventBox::Pipeline(_)) {
+                    if matches!(event, EventBox::Pipeline(_) | EventBox::PipelineBatch(_)) {
                         got_pipeline_event = true;
                         break;
                     }

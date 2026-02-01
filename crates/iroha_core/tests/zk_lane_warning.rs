@@ -67,13 +67,29 @@ async fn zk_lane_emits_warning_on_rejected_trace() {
     let mut warned = false;
     while Instant::now() < deadline {
         if let Ok(ev) = rx.try_recv() {
-            if let iroha_data_model::events::EventBox::Pipeline(pb) = ev {
-                if let PipelineEventBox::Warning(w) = pb {
-                    if w.kind == "zk_trace_rejected" {
-                        warned = true;
+            match ev {
+                iroha_data_model::events::EventBox::Pipeline(pb) => {
+                    if let PipelineEventBox::Warning(w) = pb {
+                        if w.kind == "zk_trace_rejected" {
+                            warned = true;
+                            break;
+                        }
+                    }
+                }
+                iroha_data_model::events::EventBox::PipelineBatch(batch) => {
+                    for pb in batch {
+                        if let PipelineEventBox::Warning(w) = pb {
+                            if w.kind == "zk_trace_rejected" {
+                                warned = true;
+                                break;
+                            }
+                        }
+                    }
+                    if warned {
                         break;
                     }
                 }
+                _ => {}
             }
         }
         sleep(Duration::from_millis(10)).await;

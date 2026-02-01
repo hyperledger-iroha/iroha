@@ -112,12 +112,18 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
     let cb = vb.commit_unchecked().unpack(|_| {});
     let events = sb.apply_without_execution(&cb, Vec::new());
 
-    let warned = events.iter().any(|e| {
-        matches!(
-            e,
-            EventBox::Pipeline(iroha_data_model::events::pipeline::PipelineEventBox::Warning(w))
-                if w.kind == "dag_fingerprint_mismatch"
-        )
+    let warned = events.iter().any(|e| match e {
+        EventBox::Pipeline(iroha_data_model::events::pipeline::PipelineEventBox::Warning(w)) => {
+            w.kind == "dag_fingerprint_mismatch"
+        }
+        EventBox::PipelineBatch(batch) => batch.iter().any(|event| {
+            matches!(
+                event,
+                iroha_data_model::events::pipeline::PipelineEventBox::Warning(w)
+                    if w.kind == "dag_fingerprint_mismatch"
+            )
+        }),
+        _ => false,
     });
     assert!(warned, "expected a pipeline warning event for DAG mismatch");
 }
@@ -215,12 +221,18 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     let cb = vb.commit_unchecked().unpack(|_| {});
     let events = sb.apply_without_execution(&cb, Vec::new());
 
-    let warned = events.iter().any(|e| {
-        matches!(
-            e,
-            EventBox::Pipeline(iroha_data_model::events::pipeline::PipelineEventBox::Warning(w))
-                if w.kind == "dag_fingerprint_mismatch"
-        )
+    let warned = events.iter().any(|e| match e {
+        EventBox::Pipeline(iroha_data_model::events::pipeline::PipelineEventBox::Warning(w)) => {
+            w.kind == "dag_fingerprint_mismatch"
+        }
+        EventBox::PipelineBatch(batch) => batch.iter().any(|event| {
+            matches!(
+                event,
+                iroha_data_model::events::pipeline::PipelineEventBox::Warning(w)
+                    if w.kind == "dag_fingerprint_mismatch"
+            )
+        }),
+        _ => false,
     });
     assert!(!warned, "expected no pipeline warning for stale sidecar");
 }

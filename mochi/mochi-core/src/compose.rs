@@ -504,7 +504,7 @@ impl TransactionPreview {
     fn new(signed: SignedTransaction) -> Self {
         let encoded_hex = encode_hex(&signed.encode_versioned());
         let hash = signed.hash().to_string();
-        let authority = signed.authority().to_string();
+        let authority = account_literal(signed.authority());
         let instructions = match signed.instructions() {
             Executable::Instructions(list) => list.iter().map(|instr| format!("{instr}")).collect(),
             Executable::Ivm(_) => vec!["IVM bytecode executable".to_owned()],
@@ -1033,12 +1033,12 @@ impl InstructionDraft {
         match self {
             InstructionDraft::MintAsset { asset, quantity } => {
                 object.insert("kind".to_owned(), Value::String("mint_asset".to_owned()));
-                object.insert("asset".to_owned(), Value::String(asset.to_string()));
+                object.insert("asset".to_owned(), Value::String(asset_literal(asset)));
                 object.insert("quantity".to_owned(), Value::String(quantity.to_string()));
             }
             InstructionDraft::BurnAsset { asset, quantity } => {
                 object.insert("kind".to_owned(), Value::String("burn_asset".to_owned()));
-                object.insert("asset".to_owned(), Value::String(asset.to_string()));
+                object.insert("asset".to_owned(), Value::String(asset_literal(asset)));
                 object.insert("quantity".to_owned(), Value::String(quantity.to_string()));
             }
             InstructionDraft::TransferAsset {
@@ -1050,11 +1050,11 @@ impl InstructionDraft {
                     "kind".to_owned(),
                     Value::String("transfer_asset".to_owned()),
                 );
-                object.insert("asset".to_owned(), Value::String(asset.to_string()));
+                object.insert("asset".to_owned(), Value::String(asset_literal(asset)));
                 object.insert("quantity".to_owned(), Value::String(quantity.to_string()));
                 object.insert(
                     "destination".to_owned(),
-                    Value::String(destination.to_string()),
+                    Value::String(account_literal(destination)),
                 );
             }
             InstructionDraft::RegisterDomain { domain } => {
@@ -1069,7 +1069,10 @@ impl InstructionDraft {
                     "kind".to_owned(),
                     Value::String("register_account".to_owned()),
                 );
-                object.insert("account".to_owned(), Value::String(account.to_string()));
+                object.insert(
+                    "account".to_owned(),
+                    Value::String(account_literal(account)),
+                );
             }
             InstructionDraft::RegisterAssetDefinition {
                 definition,
@@ -1118,12 +1121,18 @@ impl InstructionDraft {
             InstructionDraft::GrantRole { role, account } => {
                 object.insert("kind".to_owned(), Value::String("grant_role".to_owned()));
                 object.insert("role".to_owned(), Value::String(role.to_string()));
-                object.insert("account".to_owned(), Value::String(account.to_string()));
+                object.insert(
+                    "account".to_owned(),
+                    Value::String(account_literal(account)),
+                );
             }
             InstructionDraft::RevokeRole { role, account } => {
                 object.insert("kind".to_owned(), Value::String("revoke_role".to_owned()));
                 object.insert("role".to_owned(), Value::String(role.to_string()));
-                object.insert("account".to_owned(), Value::String(account.to_string()));
+                object.insert(
+                    "account".to_owned(),
+                    Value::String(account_literal(account)),
+                );
             }
             InstructionDraft::MultisigPropose {
                 account,
@@ -1134,7 +1143,10 @@ impl InstructionDraft {
                     "kind".to_owned(),
                     Value::String("multisig_propose".to_owned()),
                 );
-                object.insert("account".to_owned(), Value::String(account.to_string()));
+                object.insert(
+                    "account".to_owned(),
+                    Value::String(account_literal(account)),
+                );
                 object.insert(
                     "instructions".to_owned(),
                     drafts_to_json_value(instructions),
@@ -1319,6 +1331,19 @@ fn encode_hex(bytes: &[u8]) -> String {
         out.push(TABLE[(byte & 0x0F) as usize] as char);
     }
     out
+}
+
+fn account_literal(account_id: &AccountId) -> String {
+    format!("{account_id}@{}", account_id.domain())
+}
+
+fn asset_literal(asset_id: &AssetId) -> String {
+    let account_literal = account_literal(asset_id.account());
+    if asset_id.definition().domain() == asset_id.account().domain() {
+        format!("{}##{account_literal}", asset_id.definition().name())
+    } else {
+        format!("{}#{account_literal}", asset_id.definition())
+    }
 }
 
 fn parse_asset_id(value: &str) -> Result<AssetId, ComposeError> {
@@ -1557,7 +1582,7 @@ mod tests {
 
     #[test]
     fn mint_preview_produces_summary() {
-        let account = ALICE_ID.to_string();
+        let account = account_literal(&ALICE_ID);
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
         let asset_id = format!("{asset_def}#{account}");
 
@@ -1590,9 +1615,9 @@ mod tests {
 
     #[test]
     fn transfer_draft_parses_inputs() {
-        let asset_str =
-            AssetId::new("rose#wonderland".parse().unwrap(), ALICE_ID.clone()).to_string();
-        let destination = BOB_ID.to_string();
+        let asset_id = AssetId::new("rose#wonderland".parse().unwrap(), ALICE_ID.clone());
+        let asset_str = asset_literal(&asset_id);
+        let destination = account_literal(&BOB_ID);
         let draft =
             InstructionDraft::transfer_from_input(&asset_str, "10.5", &destination).expect("draft");
         matches!(draft, InstructionDraft::TransferAsset { .. });
@@ -1605,8 +1630,8 @@ mod tests {
 
     #[test]
     fn burn_draft_parses_inputs() {
-        let asset_str =
-            AssetId::new("rose#wonderland".parse().unwrap(), ALICE_ID.clone()).to_string();
+        let asset_id = AssetId::new("rose#wonderland".parse().unwrap(), ALICE_ID.clone());
+        let asset_str = asset_literal(&asset_id);
         let draft =
             InstructionDraft::burn_from_input(&asset_str, "3").expect("burn draft should parse");
         matches!(draft, InstructionDraft::BurnAsset { .. });
@@ -1674,12 +1699,13 @@ mod tests {
     #[test]
     fn drafts_json_roundtrip_covers_all_variants() {
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
-        let asset_id = AssetId::new(asset_def.clone(), ALICE_ID.clone()).to_string();
-        let account = ALICE_ID.to_string();
+        let asset_id = AssetId::new(asset_def.clone(), ALICE_ID.clone());
+        let asset_id_str = asset_literal(&asset_id);
+        let account = account_literal(&ALICE_ID);
 
-        let mint = InstructionDraft::mint_from_input(&asset_id, "10").expect("mint draft");
-        let burn = InstructionDraft::burn_from_input(&asset_id, "1").expect("burn draft");
-        let transfer = InstructionDraft::transfer_from_input(&asset_id, "5", &account)
+        let mint = InstructionDraft::mint_from_input(&asset_id_str, "10").expect("mint draft");
+        let burn = InstructionDraft::burn_from_input(&asset_id_str, "1").expect("burn draft");
+        let transfer = InstructionDraft::transfer_from_input(&asset_id_str, "5", &account)
             .expect("transfer draft");
         let register_domain =
             InstructionDraft::register_domain_from_input("wonderland").expect("domain draft");
@@ -1746,20 +1772,25 @@ mod tests {
 
     #[test]
     fn grant_role_draft_parses_inputs() {
-        let account = ALICE_ID.to_string();
+        let account = account_literal(&ALICE_ID);
         let draft =
             InstructionDraft::grant_role_from_input("council", &account).expect("grant draft");
-        assert_eq!(draft.summary(), format!("Grant role council to {account}"));
+        let expected_account = ALICE_ID.to_string();
+        assert_eq!(
+            draft.summary(),
+            format!("Grant role council to {expected_account}")
+        );
     }
 
     #[test]
     fn revoke_role_draft_parses_inputs() {
-        let account = ALICE_ID.to_string();
+        let account = account_literal(&ALICE_ID);
         let draft =
             InstructionDraft::revoke_role_from_input("auditor", &account).expect("revoke draft");
+        let expected_account = ALICE_ID.to_string();
         assert_eq!(
             draft.summary(),
-            format!("Revoke role auditor from {account}")
+            format!("Revoke role auditor from {expected_account}")
         );
     }
 
@@ -1805,7 +1836,8 @@ mod tests {
 
     #[test]
     fn multisig_propose_from_json_requires_instructions() {
-        let err = InstructionDraft::multisig_propose_from_json(&ALICE_ID.to_string(), "[]", None)
+        let account = account_literal(&ALICE_ID);
+        let err = InstructionDraft::multisig_propose_from_json(&account, "[]", None)
             .expect_err("empty proposal should be rejected");
         assert!(matches!(err, ComposeError::InvalidRawDraft { .. }));
     }
@@ -1942,12 +1974,16 @@ mod tests {
             .expect("Bob signer present");
 
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
-        let asset_id = AssetId::new(asset_def, ALICE_ID.clone()).to_string();
-        let mint = InstructionDraft::mint_from_input(&asset_id, "1").expect("mint draft");
+        let asset_id = AssetId::new(asset_def, ALICE_ID.clone());
+        let asset_id_str = asset_literal(&asset_id);
+        let mint = InstructionDraft::mint_from_input(&asset_id_str, "1").expect("mint draft");
         let nested_json = drafts_to_pretty_json(&[mint]).expect("nested json");
-        let draft =
-            InstructionDraft::multisig_propose_from_json(&ALICE_ID.to_string(), &nested_json, None)
-                .expect("multisig draft");
+        let draft = InstructionDraft::multisig_propose_from_json(
+            &account_literal(&ALICE_ID),
+            &nested_json,
+            None,
+        )
+        .expect("multisig draft");
 
         let err = compose_preview_with_authority("chain", &[draft], bob)
             .expect_err("Bob should not be allowed to propose multisig transactions");
@@ -2038,7 +2074,7 @@ mod tests {
             .find(|auth| auth.label() == "Bob (dev)")
             .expect("Bob signer present");
         let pin_manifest_json = r#"{
-  "digest": [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9],
+  "digest": [[9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9]],
   "chunker": {
     "profile_id": 1,
     "namespace": "sorafs",
@@ -2080,7 +2116,7 @@ mod tests {
             .iter()
             .find(|auth| auth.allows_permission(InstructionPermission::MintAsset))
             .expect("signer with mint permission present");
-        let account = signer.account_id().to_string();
+        let account = account_literal(signer.account_id());
         let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
         let asset_id = format!("{asset_def}#{account}");
         let draft = InstructionDraft::mint_from_input(&asset_id, "5").expect("mint draft");

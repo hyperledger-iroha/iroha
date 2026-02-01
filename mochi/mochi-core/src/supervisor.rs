@@ -4879,7 +4879,7 @@ JSON
             let dataspace = dataspace_catalog[0].as_table().expect("dataspace table");
             assert_eq!(
                 dataspace.get("alias").and_then(toml::Value::as_str),
-                Some("global")
+                Some("universal")
             );
             assert_eq!(
                 dataspace.get("id").and_then(toml::Value::as_integer),
@@ -5122,12 +5122,17 @@ JSON
             .expect("build supervisor with kagami verify");
 
         let log = fs::read_to_string(stub.log_path()).expect("read kagami log");
+        let lines: Vec<_> = log.lines().collect();
         assert!(
-            log.contains("genesis generate"),
+            lines.iter().any(|line| *line == "genesis"),
+            "expected kagami genesis invocation, got `{log}`"
+        );
+        assert!(
+            lines.iter().any(|line| *line == "generate"),
             "expected kagami generate invocation, got `{log}`"
         );
         assert!(
-            log.contains("verify"),
+            lines.iter().any(|line| *line == "verify"),
             "expected kagami verify invocation, got `{log}`"
         );
     }
@@ -5264,7 +5269,10 @@ JSON
             let actual_peer_ids: Vec<PeerId> = topology
                 .iter()
                 .map(|entry| {
-                    norito::json::from_value(entry.clone()).expect("topology entry should decode")
+                    let topology_entry: GenesisTopologyEntry =
+                        norito::json::from_value(entry.clone())
+                            .expect("topology entry should decode");
+                    topology_entry.peer
                 })
                 .collect();
             let expected_peer_ids: Vec<PeerId> = supervisor
@@ -5859,6 +5867,10 @@ JSON
 
         let irohad_stub = temp.path().join("irohad_stub.sh");
         let stub_script = r#"#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "iroha-stub iroha3"
+  exit 0
+fi
 exit 1
 "#;
         fs::write(&irohad_stub, stub_script).expect("write irohad stub");

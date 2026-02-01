@@ -12,7 +12,7 @@ use std::{
 use color_eyre::{Result, eyre::eyre};
 use futures::FutureExt;
 use iroha::client::Client;
-use iroha_config::parameters::actual::SumeragiNposTimeouts;
+use iroha_config::{kura::FsyncMode, parameters::actual::SumeragiNposTimeouts};
 use iroha_data_model::{
     parameter::SumeragiParameter, parameter::system::SumeragiNposParameters, prelude::*,
     query::trigger::prelude::FindTriggers, trigger::action::Repeats,
@@ -74,6 +74,7 @@ const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_SECP256K1: i64 = 128;
 const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_PQC: i64 = 64;
 const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_BLS: i64 = 32;
 const IZANAMI_PIPELINE_STATELESS_CACHE_CAP: i64 = 16_384;
+const IZANAMI_KURA_FSYNC_MODE: FsyncMode = FsyncMode::Off;
 const IZANAMI_VALIDATION_WORKER_THREADS: i64 = 0;
 const IZANAMI_VALIDATION_WORK_QUEUE_CAP: i64 = 0;
 const IZANAMI_VALIDATION_RESULT_QUEUE_CAP: i64 = 0;
@@ -276,6 +277,7 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
                 ["pipeline", "stateless_cache_cap"],
                 IZANAMI_PIPELINE_STATELESS_CACHE_CAP,
             )
+            .write(["kura", "fsync_mode"], IZANAMI_KURA_FSYNC_MODE.to_string())
             .write(
                 ["sumeragi", "advanced", "queues", "block_payload"],
                 IZANAMI_BLOCK_PAYLOAD_QUEUE,
@@ -2032,8 +2034,25 @@ mod tests {
             }
             None
         };
+        let read_string = |layer: &Table, path: &[&str]| -> Option<String> {
+            let mut current = layer;
+            for (idx, key) in path.iter().enumerate() {
+                let value = current.get(*key)?;
+                if idx + 1 == path.len() {
+                    return value.as_str().map(str::to_string);
+                }
+                current = value.as_table()?;
+            }
+            None
+        };
         let lookup = |path| layers.iter().rev().find_map(|layer| read_i64(layer, path));
         let lookup_bool = |path| layers.iter().rev().find_map(|layer| read_bool(layer, path));
+        let lookup_string = |path| {
+            layers
+                .iter()
+                .rev()
+                .find_map(|layer| read_string(layer, path))
+        };
         let npos_timing = derive_npos_timing(&config);
         let npos_propose_ms =
             i64::try_from(npos_timing.propose_ms).expect("npos propose timeout fits into i64");
@@ -2086,6 +2105,10 @@ mod tests {
         assert_eq!(
             lookup(&["pipeline", "stateless_cache_cap"]),
             Some(IZANAMI_PIPELINE_STATELESS_CACHE_CAP)
+        );
+        assert_eq!(
+            lookup_string(&["kura", "fsync_mode"]),
+            Some(IZANAMI_KURA_FSYNC_MODE.to_string())
         );
         assert_eq!(
             lookup(&["sumeragi", "advanced", "queues", "block_payload"]),

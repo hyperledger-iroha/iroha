@@ -1169,7 +1169,7 @@ impl ComposerTemplate {
                         (fallback.account_id(), fallback.label())
                     });
                 app.composer_asset_id = template_asset_id("rose#wonderland", owner)
-                    .unwrap_or_else(|| format!("rose#wonderland#{owner}"));
+                    .unwrap_or_else(|| format!("rose#wonderland#{}", account_literal(owner)));
                 app.composer_quantity = "10".to_owned();
                 app.composer_destination_account.clear();
                 app.last_info = Some(format!("Loaded rose mint template for {label}."));
@@ -1214,13 +1214,15 @@ impl ComposerTemplate {
                         .expect("development authorities must not be empty")
                 });
                 app.composer_asset_id = template_asset_id("rose#wonderland", signer.account_id())
-                    .unwrap_or_else(|| format!("rose#wonderland#{}", signer.account_id()));
+                    .unwrap_or_else(|| {
+                        format!("rose#wonderland#{}", account_literal(signer.account_id()))
+                    });
                 app.composer_quantity = "2".to_owned();
                 let destination = signers
                     .iter()
                     .find(|candidate| candidate.account_id() != signer.account_id())
-                    .map(|authority| authority.account_id().to_string())
-                    .unwrap_or_else(|| signer.account_id().to_string());
+                    .map(|authority| account_literal(authority.account_id()))
+                    .unwrap_or_else(|| account_literal(signer.account_id()));
                 app.composer_destination_account = destination;
                 app.last_info = Some(format!(
                     "Loaded rose transfer template for {}.",
@@ -1236,7 +1238,9 @@ impl ComposerTemplate {
                 });
                 let domain = signer.account_id().domain().to_string();
                 app.composer_asset_id = template_asset_id("rose#wonderland", signer.account_id())
-                    .unwrap_or_else(|| format!("rose#wonderland#{}", signer.account_id()));
+                    .unwrap_or_else(|| {
+                        format!("rose#wonderland#{}", account_literal(signer.account_id()))
+                    });
                 app.composer_quantity = "1".to_owned();
                 app.composer_destination_account =
                     sample_account_id_for_domain(&domain, SAMPLE_OTHER_PUBLIC_KEY);
@@ -1303,7 +1307,7 @@ impl ComposerTemplate {
                             .first()
                             .expect("development authorities must not be empty")
                     });
-                app.composer_role_account = recipient.account_id().to_string();
+                app.composer_role_account = account_literal(recipient.account_id());
                 app.last_info = Some("Loaded role grant template.".to_owned());
             }
             ComposerTemplate::RevokeCanRegisterDomain => {
@@ -1320,7 +1324,7 @@ impl ComposerTemplate {
                             .first()
                             .expect("development authorities must not be empty")
                     });
-                app.composer_role_account = recipient.account_id().to_string();
+                app.composer_role_account = account_literal(recipient.account_id());
                 app.last_info = Some("Loaded role revoke template.".to_owned());
             }
             ComposerTemplate::AdmissionPolicyImplicitReceive => {
@@ -1366,14 +1370,14 @@ impl ComposerTemplate {
                     .map(|authority| authority.account_id().domain().to_string())
                     .unwrap_or_else(|| "wonderland".to_owned());
                 let owner = signer
-                    .map(|authority| authority.account_id().to_string())
+                    .map(|authority| account_literal(authority.account_id()))
                     .unwrap_or_else(|| {
                         sample_account_id_for_domain(&domain, SAMPLE_ALICE_PUBLIC_KEY)
                     });
                 app.composer_multisig_account = signers
                     .iter()
-                    .find(|candidate| candidate.account_id().to_string() != owner)
-                    .map(|authority| authority.account_id().to_string())
+                    .find(|candidate| account_literal(candidate.account_id()) != owner)
+                    .map(|authority| account_literal(authority.account_id()))
                     .unwrap_or_else(|| {
                         sample_account_id_for_domain(&domain, SAMPLE_OTHER_PUBLIC_KEY)
                     });
@@ -1381,10 +1385,10 @@ impl ComposerTemplate {
                 instructions = instructions.replace(SAMPLE_ALICE_ACCOUNT_ID, &owner);
                 if let Some(other) = signers
                     .iter()
-                    .find(|candidate| candidate.account_id().to_string() != owner)
+                    .find(|candidate| account_literal(candidate.account_id()) != owner)
                 {
                     instructions = instructions
-                        .replace(SAMPLE_BOB_ACCOUNT_ID, &other.account_id().to_string());
+                        .replace(SAMPLE_BOB_ACCOUNT_ID, &account_literal(other.account_id()));
                 }
                 app.composer_multisig_instructions = instructions;
                 app.composer_multisig_ttl_enabled = true;
@@ -1392,10 +1396,10 @@ impl ComposerTemplate {
                 policy_json = policy_json.replace(SAMPLE_ALICE_ACCOUNT_ID, &owner);
                 if let Some(other) = signers
                     .iter()
-                    .find(|candidate| candidate.account_id().to_string() != owner)
+                    .find(|candidate| account_literal(candidate.account_id()) != owner)
                 {
-                    policy_json =
-                        policy_json.replace(SAMPLE_BOB_ACCOUNT_ID, &other.account_id().to_string());
+                    policy_json = policy_json
+                        .replace(SAMPLE_BOB_ACCOUNT_ID, &account_literal(other.account_id()));
                 }
                 app.composer_multisig_ttl_ms = json::from_str::<MultisigSpec>(&policy_json)
                     .map(|policy| policy.transaction_ttl_ms.get())
@@ -1416,7 +1420,21 @@ impl ComposerTemplate {
 
 fn template_asset_id(definition: &str, owner: &AccountId) -> Option<String> {
     let definition = definition.parse::<AssetDefinitionId>().ok()?;
-    Some(AssetId::new(definition, owner.clone()).to_string())
+    let asset_id = AssetId::new(definition, owner.clone());
+    Some(asset_literal(&asset_id))
+}
+
+fn account_literal(account_id: &AccountId) -> String {
+    format!("{account_id}@{}", account_id.domain())
+}
+
+fn asset_literal(asset_id: &AssetId) -> String {
+    let account_literal = account_literal(asset_id.account());
+    if asset_id.definition().domain() == asset_id.account().domain() {
+        format!("{}##{account_literal}", asset_id.definition().name())
+    } else {
+        format!("{}#{account_literal}", asset_id.definition())
+    }
 }
 
 fn sample_account_id_for_domain(domain: &str, public_key: &str) -> String {
@@ -1774,7 +1792,7 @@ impl SignerEntryState {
             .join(", ");
         Self {
             label: signer.label().to_owned(),
-            account: signer.account_id().to_string(),
+            account: account_literal(signer.account_id()),
             private_key,
             permissions,
             roles,
@@ -3658,6 +3676,24 @@ impl MochiApp {
                 match event.as_ref() {
                     EventBox::Pipeline(pipeline) => {
                         Self::render_pipeline_event(alias, base_kind, pipeline, *raw_len)
+                    }
+                    EventBox::PipelineBatch(_batch) => {
+                        let detail_text = summary
+                            .detail
+                            .clone()
+                            .unwrap_or_else(|| "pipeline batch".to_owned());
+                        let detail = Some(format!(
+                            "{} • raw={}B",
+                            truncate(&detail_text, 160),
+                            raw_len
+                        ));
+                        RenderedEventLine::new(
+                            alias,
+                            format!("[{alias}] {}", truncate(&summary.label, 64)),
+                            detail,
+                            Color32::from_rgb(150, 200, 240),
+                            base_kind,
+                        )
                     }
                     EventBox::Data(_) => {
                         let detail_text = summary
@@ -11573,7 +11609,7 @@ mod tests {
     fn entry_form_to_state_accepts_valid_inputs() {
         let form = SignerEntryForm {
             label: "Test signer".to_owned(),
-            account: ALICE_ID.to_string(),
+            account: account_literal(&ALICE_ID),
             private_key: ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()).to_string(),
             permissions: [InstructionPermission::MintAsset].into_iter().collect(),
             roles: String::new(),
@@ -11582,7 +11618,7 @@ mod tests {
         let state = MochiApp::entry_form_to_state(&form)
             .expect("valid signer form should produce entry state");
         assert_eq!(state.label, "Test signer");
-        assert_eq!(state.account, ALICE_ID.to_string());
+        assert_eq!(state.account, account_literal(&ALICE_ID));
         assert!(
             state
                 .permissions
@@ -11610,7 +11646,7 @@ mod tests {
         let private_key = ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()).to_string();
         let entry = SignerEntryState {
             label: "Alice real".to_owned(),
-            account: ALICE_ID.to_string(),
+            account: account_literal(&ALICE_ID),
             private_key,
             permissions: InstructionPermission::all().into_iter().collect(),
             roles: String::new(),
@@ -11628,7 +11664,7 @@ mod tests {
     fn signer_entries_to_signers_rejects_empty_permissions() {
         let entry = SignerEntryState {
             label: "No perms".to_owned(),
-            account: ALICE_ID.to_string(),
+            account: account_literal(&ALICE_ID),
             private_key: ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()).to_string(),
             permissions: Default::default(),
             roles: String::new(),
@@ -11908,7 +11944,7 @@ mod tests {
 
     #[test]
     fn parse_multisig_policy_parses_json() {
-        let account = ALICE_ID.to_string();
+        let account = account_literal(&ALICE_ID);
         let json = format!(
             r#"{{
   "signatories": {{
@@ -11947,7 +11983,7 @@ mod tests {
         app.composer_admission_fee_asset = "rose#wonderland".to_owned();
         app.composer_admission_fee_amount = "1".to_owned();
         app.composer_admission_fee_destination_burn = false;
-        app.composer_admission_fee_destination_account = ALICE_ID.to_string();
+        app.composer_admission_fee_destination_account = account_literal(&ALICE_ID);
         app.composer_admission_min_initial_amounts = "rose#wonderland = 5".to_owned();
         app.composer_admission_default_role = "basic_user".to_owned();
 
@@ -13374,7 +13410,7 @@ mod tests {
         let mut app = MochiApp::default();
         app.composer_selected_signer = Some(0);
         let asset = AssetId::new("rose#wonderland".parse().unwrap(), ALICE_ID.clone());
-        app.composer_asset_id = asset.to_string();
+        app.composer_asset_id = asset_literal(&asset);
         app.composer_quantity = "5".to_owned();
         app.add_instruction_to_batch(None);
         assert_eq!(app.composer_drafts.len(), 1);
@@ -13387,7 +13423,7 @@ mod tests {
         app.composer_instruction_kind = ComposerInstructionKind::TransferAsset;
         app.composer_selected_signer = Some(0);
         let asset = AssetId::new("rose#wonderland".parse().unwrap(), ALICE_ID.clone());
-        app.composer_asset_id = asset.to_string();
+        app.composer_asset_id = asset_literal(&asset);
         app.composer_quantity = "1".to_owned();
         app.add_instruction_to_batch(None);
         assert!(app.composer_drafts.is_empty(), "draft should not be added");
@@ -13568,7 +13604,7 @@ mod tests {
         );
         assert_ne!(
             app.composer_destination_account,
-            signers[0].account_id().to_string(),
+            account_literal(signers[0].account_id()),
             "destination should differ from the source signer"
         );
     }

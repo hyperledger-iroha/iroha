@@ -98,10 +98,7 @@ use crate::{
     nexus::lane_relay::LaneRelayBroadcaster,
     peers_gossiper::PeersGossiperHandle,
     queue::{BackpressureState, Queue, RoutingDecision},
-    state::{
-        CellVecExt, StakeSnapshot, State, StateView, WorldReadOnly,
-        compute_confidential_feature_digest,
-    },
+    state::{CellVecExt, StakeSnapshot, State, StateView, WorldReadOnly},
     sumeragi::evidence::EvidenceStore,
     telemetry::{MissingBlockFetchOutcome, MissingBlockFetchTargetKind},
     tx::AcceptedTransaction,
@@ -280,9 +277,19 @@ fn missing_quorum_stale(
 }
 
 fn emit_pipeline_events(events_sender: &EventsSender, events: Vec<PipelineEventBox>) {
-    for event in events {
-        if let Err(err) = events_sender.send(EventBox::Pipeline(event)) {
-            debug!(?err, "failed to forward pipeline event");
+    match events.len() {
+        0 => {}
+        1 => {
+            let mut events = events;
+            let event = events.pop().expect("single event");
+            if let Err(err) = events_sender.send(EventBox::Pipeline(event)) {
+                debug!(?err, "failed to forward pipeline event");
+            }
+        }
+        _ => {
+            if let Err(err) = events_sender.send(EventBox::PipelineBatch(events)) {
+                debug!(?err, "failed to forward pipeline event batch");
+            }
         }
     }
 }
