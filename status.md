@@ -1,6 +1,12 @@
 # Status
 
 Last update: 2026-02-01
+- NFT metadata permissions: integrated delta-aware permission checks into detached parallel apply so NFT metadata edits can stay in the detached path without bypassing authz; kept stricter genesis detection when skipping NFT metadata checks in the initial executor.
+- Tests: `cargo test -p iroha_core detached_nft_metadata_records_delta -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`).
+- Tests: `cargo test -p iroha_core detached_can_modify_nft_metadata -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`).
+- Tests: `cargo test -p integration_tests nft_lifecycle_scenarios -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`).
+- Formatting: `cargo fmt --all` (stable rustfmt warns about nightly-only options).
+- Tests: full workspace tests not run (user requested no full workspace tests).
 - Pacemaker: add `sumeragi.advanced.pacemaker.da_fast_reschedule` (default false) to allow fast quorum reschedules in DA mode when payloads are locally available; Izanami now enables it; docs updated in `docs/source/sumeragi_pacemaker.md`.
 - Formatting: `cargo fmt --all` (stable rustfmt warns about nightly-only options).
 - Tests: `cargo test -p iroha_core reschedule_allows_fast_timeout_with_da_payload_available_when_enabled -- --nocapture` failed due to disk-full (`No space left on device`) after compiling dependencies; warnings about unused `padded` in `norito` and unused `mut` in `iroha_data_model`/`iroha_core`.

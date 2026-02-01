@@ -83,7 +83,10 @@ use iroha_data_model::{
     },
     domain::DomainId,
     events::prelude::*,
-    isi::{GrantBox, register::RegisterBox, transfer::TransferBox},
+    isi::{
+        GrantBox, InstructionBox, RemoveKeyValueBox, SetKeyValueBox, register::RegisterBox,
+        transfer::TransferBox,
+    },
     nexus::{
         AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtRejectReason, DataSpaceId, LaneConfig,
         LaneId, LaneRelayEnvelope, ProofBlob, UniversalAccountId, proof_matches_manifest,
@@ -7083,12 +7086,76 @@ pub(crate) mod valid {
                     for account_id in accounts_to_prefetch {
                         let _ = prefetch_account_stores(state_block, &account_id);
                     }
+                    let detached_is_genesis =
+                        block.header().is_genesis() && state_block.block_hashes.is_empty();
+                    let nft_metadata_target = |instruction: &InstructionBox| {
+                        instruction
+                            .as_any()
+                            .downcast_ref::<SetKeyValueBox>()
+                            .and_then(|kv| match kv {
+                                SetKeyValueBox::Nft(set) => Some(set.object.clone()),
+                                _ => None,
+                            })
+                            .or_else(|| {
+                                instruction
+                                        .as_any()
+                                        .downcast_ref::<iroha_data_model::isi::SetKeyValue<
+                                            iroha_data_model::nft::Nft,
+                                        >>()
+                                        .map(|set| set.object.clone())
+                            })
+                            .or_else(|| {
+                                instruction
+                                    .as_any()
+                                    .downcast_ref::<RemoveKeyValueBox>()
+                                    .and_then(|rm| match rm {
+                                        RemoveKeyValueBox::Nft(rm) => Some(rm.object.clone()),
+                                        _ => None,
+                                    })
+                            })
+                            .or_else(|| {
+                                instruction
+                                    .as_any()
+                                    .downcast_ref::<iroha_data_model::isi::RemoveKeyValue<
+                                        iroha_data_model::nft::Nft,
+                                    >>()
+                                    .map(|rm| rm.object.clone())
+                            })
+                    };
                     let eval_detached = |p: &PreparedEntry| {
                         if let Some(Ok(ovl)) = overlays.get(p.idx) {
                             let mut delta = DetachedStateTransactionDelta::default();
                             let mut unsupported = false;
                             let mut reject: Option<TransactionRejectionReason> = None;
                             for instr in ovl.instructions() {
+                                if !detached_is_genesis {
+                                    if let Some(nft_id) = nft_metadata_target(instr) {
+                                        match delta.can_modify_nft_metadata(
+                                            &state_block.world,
+                                            &p.authority,
+                                            &nft_id,
+                                        ) {
+                                            Ok(true) => {}
+                                            Ok(false) => {
+                                                reject = Some(
+                                                    TransactionRejectionReason::Validation(
+                                                        iroha_data_model::ValidationFail::NotPermitted(
+                                                            "Can't modify NFT from domain owned by another account"
+                                                                .to_owned(),
+                                                        ),
+                                                    ),
+                                                );
+                                                break;
+                                            }
+                                            Err(err) => {
+                                                reject = Some(
+                                                    TransactionRejectionReason::Validation(err),
+                                                );
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
                                 match crate::executor::execute_instruction_detached(
                                     &p.authority,
                                     instr,

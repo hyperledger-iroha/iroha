@@ -108,8 +108,8 @@ use iroha_data_model::{
     transaction::signed::{SignedTransaction, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::{
-    asset_definition::CanRegisterAssetDefinition, sorafs::CanOperateSorafsRepair,
-    trigger::CanExecuteTrigger,
+    asset_definition::CanRegisterAssetDefinition, nft::CanModifyNftMetadata,
+    sorafs::CanOperateSorafsRepair, trigger::CanExecuteTrigger,
 };
 use iroha_logger::prelude::*;
 use iroha_primitives::{
@@ -6697,6 +6697,12 @@ impl<T: Ord> SortedUniqueVec<T> {
     }
 }
 
+impl<T> SortedUniqueVec<T> {
+    fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.inner.iter()
+    }
+}
+
 impl<T> IntoIterator for SortedUniqueVec<T> {
     type Item = T;
     type IntoIter = std::vec::IntoIter<T>;
@@ -7174,6 +7180,89 @@ impl DetachedStateTransactionDelta {
     pub fn unregister_peer(&mut self, id: iroha_data_model::peer::PeerId) {
         let _ = self.peer_adds.remove(&id);
         self.peer_removes.insert(id);
+    }
+
+    /// Check whether `authority` may modify metadata for `nft_id` under the current delta.
+    pub(crate) fn can_modify_nft_metadata(
+        &self,
+        world: &impl WorldReadOnly,
+        authority: &AccountId,
+        nft_id: &NftId,
+    ) -> Result<bool, ValidationFail> {
+        let domain_owner = match self.domain_owner_transfer.get(nft_id.domain()) {
+            Some((_, to)) => to.clone(),
+            None => world
+                .domain(nft_id.domain())
+                .map(|domain| domain.owned_by().clone())
+                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
+        };
+
+        if &domain_owner == authority {
+            return Ok(true);
+        }
+
+        let is_target_permission = |permission: &Permission| -> bool {
+            permission
+                .payload()
+                .try_into_any_norito::<CanModifyNftMetadata>()
+                .is_ok_and(|token| token.nft == *nft_id)
+        };
+
+        let direct_revoked = self
+            .perm_revokes
+            .iter()
+            .any(|(acc, perm)| acc == authority && is_target_permission(perm));
+        if !direct_revoked {
+            if self
+                .perm_grants
+                .iter()
+                .any(|(acc, perm)| acc == authority && is_target_permission(perm))
+            {
+                return Ok(true);
+            }
+            let permissions = world
+                .account_permissions_iter(authority)
+                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
+            if permissions.into_iter().any(is_target_permission) {
+                return Ok(true);
+            }
+        }
+
+        let mut roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
+        for (acc, role) in &self.role_grants {
+            if acc == authority {
+                roles.insert(role.clone());
+            }
+        }
+        for (acc, role) in &self.role_revokes {
+            if acc == authority {
+                roles.remove(role);
+            }
+        }
+
+        for role in roles {
+            let role_revoked = self
+                .role_perm_revokes
+                .iter()
+                .any(|(role_id, perm)| role_id == &role && is_target_permission(perm));
+            if role_revoked {
+                continue;
+            }
+            if self
+                .role_perm_grants
+                .iter()
+                .any(|(role_id, perm)| role_id == &role && is_target_permission(perm))
+            {
+                return Ok(true);
+            }
+            if let Some(role_def) = world.roles().get(&role) {
+                if role_def.permissions.iter().any(is_target_permission) {
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
     }
     /// Record a parameter update to be applied at merge.
     pub fn set_parameter(&mut self, param: iroha_data_model::parameter::Parameter) {
@@ -28685,6 +28774,68 @@ mod tests {
         delta.record_mint_consumption(def_id.clone(), 1);
         delta.record_mint_consumption(def_id.clone(), 2);
         assert_eq!(delta.flip_mintable_to_not.get(&def_id).copied(), Some(3));
+    }
+
+    #[test]
+    fn detached_can_modify_nft_metadata_allows_domain_owner() {
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain = Domain::new(domain_id).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+        let nft_id: NftId = "nft_perm_owner$wonderland".parse().expect("nft id");
+        let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
+
+        let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);
+        let view = world.view();
+        let delta = DetachedStateTransactionDelta::default();
+
+        assert!(
+            delta
+                .can_modify_nft_metadata(&view, &ALICE_ID, &nft_id)
+                .expect("permission check"),
+            "domain owner must be allowed to modify NFT metadata"
+        );
+    }
+
+    #[test]
+    fn detached_can_modify_nft_metadata_checks_grants_and_revokes() {
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain = Domain::new(domain_id).build(&BOB_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+        let nft_id: NftId = "nft_perm_grant$wonderland".parse().expect("nft id");
+        let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
+
+        let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);
+        let view = world.view();
+        let perm: Permission = CanModifyNftMetadata {
+            nft: nft_id.clone(),
+        }
+        .into();
+
+        let mut delta = DetachedStateTransactionDelta::default();
+        assert!(
+            !delta
+                .can_modify_nft_metadata(&view, &ALICE_ID, &nft_id)
+                .expect("permission check"),
+            "non-owner without permission should be denied"
+        );
+
+        delta.grant_permission(ALICE_ID.clone(), perm.clone());
+        assert!(
+            delta
+                .can_modify_nft_metadata(&view, &ALICE_ID, &nft_id)
+                .expect("permission check"),
+            "explicit grant should allow metadata edits"
+        );
+
+        delta.revoke_permission(ALICE_ID.clone(), perm);
+        assert!(
+            !delta
+                .can_modify_nft_metadata(&view, &ALICE_ID, &nft_id)
+                .expect("permission check"),
+            "revoke should remove direct permission"
+        );
     }
 
     #[test]

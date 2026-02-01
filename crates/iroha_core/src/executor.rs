@@ -95,10 +95,8 @@ pub(crate) fn execute_instruction_detached(
             SetKeyValueBox::AssetDefinition(s) => {
                 delta.set_asset_def_kv(s.object.clone(), s.key.clone(), s.value.clone());
             }
-            SetKeyValueBox::Nft(_) => {
-                return Err(ValidationFail::InternalError(
-                    "detached: unsupported SetKeyValue<Nft>".to_owned(),
-                ));
+            SetKeyValueBox::Nft(s) => {
+                delta.set_nft_kv(s.object.clone(), s.key.clone(), s.value.clone());
             }
             SetKeyValueBox::Trigger(_) => {
                 return Err(ValidationFail::InternalError(
@@ -119,10 +117,8 @@ pub(crate) fn execute_instruction_detached(
             RemoveKeyValueBox::AssetDefinition(r) => {
                 delta.remove_asset_def_kv(r.object.clone(), r.key.clone())
             }
-            RemoveKeyValueBox::Nft(_) => {
-                return Err(ValidationFail::InternalError(
-                    "detached: unsupported RemoveKeyValue<Nft>".to_owned(),
-                ));
+            RemoveKeyValueBox::Nft(r) => {
+                delta.remove_nft_kv(r.object.clone(), r.key.clone());
             }
             RemoveKeyValueBox::Trigger(_) => {
                 return Err(ValidationFail::InternalError(
@@ -2458,35 +2454,38 @@ mod tests {
     }
 
     #[test]
-    fn detached_nft_metadata_forces_sequential_path() {
+    fn detached_nft_metadata_records_delta() {
+        let (bob_id, _bob_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain = Domain::new(domain_id).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let bob_account = Account::new(bob_id.clone()).build(&bob_id);
         let nft_id: NftId = "nft_detached$wonderland".parse().expect("nft id");
+        let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&bob_id);
+
+        let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let state = State::new_with_chain(world, kura, query_handle, chain);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
         let key: Name = "meta".parse().expect("key");
         let set = SetKeyValue::nft(nft_id.clone(), key.clone(), "value");
-        let remove = RemoveKeyValue::nft(nft_id, key);
-
         let mut delta = crate::state::DetachedStateTransactionDelta::default();
-        let set_err =
-            execute_instruction_detached(&alice(), &InstructionBox::from(set), &mut delta)
-                .expect_err("nft metadata set must be unsupported in detached mode");
-        assert!(
-            matches!(
-                set_err,
-                ValidationFail::InternalError(ref msg) if msg.contains("SetKeyValue<Nft>")
-            ),
-            "expected detached SetKeyValue<Nft> error, got {set_err:?}"
-        );
+        execute_instruction_detached(&bob_id, &InstructionBox::from(set), &mut delta)
+            .expect("detached nft metadata should be supported");
 
-        let mut delta = crate::state::DetachedStateTransactionDelta::default();
-        let remove_err =
-            execute_instruction_detached(&alice(), &InstructionBox::from(remove), &mut delta)
-                .expect_err("nft metadata removal must be unsupported in detached mode");
-        assert!(
-            matches!(
-                remove_err,
-                ValidationFail::InternalError(ref msg) if msg.contains("RemoveKeyValue<Nft>")
-            ),
-            "expected detached RemoveKeyValue<Nft> error, got {remove_err:?}"
-        );
+        let _ = delta
+            .merge_into(&mut block, &bob_id)
+            .expect("merge succeeds");
+        block.commit().expect("commit");
+
+        let view = state.view();
+        let nft_val = view.world().nfts().get(&nft_id).expect("nft exists");
+        let stored = nft_val.content.get(&key).expect("metadata set");
+        assert_eq!(stored, &Json::from("value"));
     }
     use std::collections::{BTreeMap, BTreeSet};
 
