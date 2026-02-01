@@ -95,8 +95,10 @@ pub(crate) fn execute_instruction_detached(
             SetKeyValueBox::AssetDefinition(s) => {
                 delta.set_asset_def_kv(s.object.clone(), s.key.clone(), s.value.clone());
             }
-            SetKeyValueBox::Nft(s) => {
-                delta.set_nft_kv(s.object.clone(), s.key.clone(), s.value.clone());
+            SetKeyValueBox::Nft(_) => {
+                return Err(ValidationFail::InternalError(
+                    "detached: unsupported SetKeyValue<Nft>".to_owned(),
+                ));
             }
             SetKeyValueBox::Trigger(_) => {
                 return Err(ValidationFail::InternalError(
@@ -117,7 +119,11 @@ pub(crate) fn execute_instruction_detached(
             RemoveKeyValueBox::AssetDefinition(r) => {
                 delta.remove_asset_def_kv(r.object.clone(), r.key.clone())
             }
-            RemoveKeyValueBox::Nft(r) => delta.remove_nft_kv(r.object.clone(), r.key.clone()),
+            RemoveKeyValueBox::Nft(_) => {
+                return Err(ValidationFail::InternalError(
+                    "detached: unsupported RemoveKeyValue<Nft>".to_owned(),
+                ));
+            }
             RemoveKeyValueBox::Trigger(_) => {
                 return Err(ValidationFail::InternalError(
                     "detached: unsupported RemoveKeyValue<Trigger>".to_owned(),
@@ -288,7 +294,7 @@ pub(crate) fn execute_instruction_detached(
 /// Can be upgraded with [`Upgrade`](iroha_data_model::isi::Upgrade) instruction.
 #[derive(Debug, Default, Clone)]
 pub enum Executor {
-    /// Initial executor that allows all operations and performs no permission checking.
+    /// Initial executor with minimal built-in permission checks for critical instructions.
     #[default]
     Initial,
     /// User-provided executor with arbitrary logic.
@@ -987,7 +993,6 @@ impl Executor {
 
         match (self, executable) {
             (Self::Initial | Self::UserProvided(_), Executable::Instructions(instructions)) => {
-                let use_runtime_executor = matches!(self, Self::UserProvided(_));
                 // 1) Deterministically meter the instruction batch.
                 let used = isi_gas::meter_instructions(instructions.as_ref());
 
@@ -1007,11 +1012,7 @@ impl Executor {
 
                 // 3) Execute ISIs in order.
                 for isi in instructions {
-                    if use_runtime_executor {
-                        self.execute_instruction(state_transaction, authority, isi)?;
-                    } else {
-                        isi.execute(authority, state_transaction)?;
-                    }
+                    self.execute_instruction(state_transaction, authority, isi)?;
                 }
 
                 // Track confidential gas after successful execution.
@@ -1562,7 +1563,8 @@ impl Executor {
             // or if tx authority has explicit CanRegisterTrigger { authority: <owner> }.
             let trg_owner = reg_trg.object().action().authority().clone();
             #[allow(clippy::used_underscore_binding)]
-            let is_genesis = state_transaction._curr_block.is_genesis();
+            let is_genesis = state_transaction._curr_block.is_genesis()
+                && state_transaction.block_hashes.is_empty();
 
             let is_domain_owner = (!is_genesis) && {
                 let domain = trg_owner.domain().clone();
@@ -1637,14 +1639,28 @@ impl Executor {
             .or_else(|| {
                 instruction
                     .as_any()
+                    .downcast_ref::<iroha_data_model::isi::SetKeyValue<iroha_data_model::nft::Nft>>()
+                    .map(|set| set.object.clone())
+            })
+            .or_else(|| {
+                instruction
+                    .as_any()
                     .downcast_ref::<RemoveKeyValueBox>()
                     .and_then(|rm| match rm {
                         RemoveKeyValueBox::Nft(rm) => Some(rm.object.clone()),
                         _ => None,
                     })
             })
+            .or_else(|| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::RemoveKeyValue<iroha_data_model::nft::Nft>>()
+                    .map(|rm| rm.object.clone())
+            })
         {
-            if !state_transaction._curr_block.is_genesis() {
+            if !(state_transaction._curr_block.is_genesis()
+                && state_transaction.block_hashes.is_empty())
+            {
                 let domain_owner = state_transaction
                     .world
                     .domain(nft_id.domain())
@@ -2440,6 +2456,38 @@ mod tests {
             matches!(err, ValidationFail::InternalError(msg) if msg.contains("peer management"))
         );
     }
+
+    #[test]
+    fn detached_nft_metadata_forces_sequential_path() {
+        let nft_id: NftId = "nft_detached$wonderland".parse().expect("nft id");
+        let key: Name = "meta".parse().expect("key");
+        let set = SetKeyValue::nft(nft_id.clone(), key.clone(), "value");
+        let remove = RemoveKeyValue::nft(nft_id, key);
+
+        let mut delta = crate::state::DetachedStateTransactionDelta::default();
+        let set_err =
+            execute_instruction_detached(&alice(), &InstructionBox::from(set), &mut delta)
+                .expect_err("nft metadata set must be unsupported in detached mode");
+        assert!(
+            matches!(
+                set_err,
+                ValidationFail::InternalError(ref msg) if msg.contains("SetKeyValue<Nft>")
+            ),
+            "expected detached SetKeyValue<Nft> error, got {set_err:?}"
+        );
+
+        let mut delta = crate::state::DetachedStateTransactionDelta::default();
+        let remove_err =
+            execute_instruction_detached(&alice(), &InstructionBox::from(remove), &mut delta)
+                .expect_err("nft metadata removal must be unsupported in detached mode");
+        assert!(
+            matches!(
+                remove_err,
+                ValidationFail::InternalError(ref msg) if msg.contains("RemoveKeyValue<Nft>")
+            ),
+            "expected detached RemoveKeyValue<Nft> error, got {remove_err:?}"
+        );
+    }
     use std::collections::{BTreeMap, BTreeSet};
 
     #[allow(dead_code)]
@@ -2558,24 +2606,43 @@ mod tests {
         ));
 
         let mut stx = block.transaction();
-        println!("unit-test instruction id = {}", instruction.id());
-        #[allow(clippy::explicit_deref_methods)]
-        let instr_any = core::ops::Deref::deref(&instruction).as_any();
-        println!(
-            "unit-test downcast RegisterBox? {}",
-            instr_any.is::<RegisterBox>()
-        );
-        assert!(
-            instr_any
-                .downcast_ref::<Register<AssetDefinition>>()
-                .is_some()
-                || instr_any.downcast_ref::<RegisterBox>().is_some(),
-            "expected instruction to downcast to Register<AssetDefinition> or RegisterBox"
-        );
         let res = executor.execute_instruction(&mut stx, &genesis_id, instruction);
         assert!(
             matches!(res, Err(ValidationFail::NotPermitted(_))),
             "initial executor should deny registering asset definition without permission"
+        );
+    }
+
+    #[test]
+    fn initial_executor_denies_nft_metadata_edit_in_transaction() {
+        let (bob_id, bob_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain: Domain = Domain::new(domain_id).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let bob_account = Account::new(bob_id.clone()).build(&bob_id);
+        let nft_id: NftId = "nft_owner_modify$wonderland".parse().expect("nft id");
+        let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&bob_id);
+
+        let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let instruction = SetKeyValue::nft(nft_id, "foo".parse().expect("key"), "value");
+        let tx = TransactionBuilder::new(chain, bob_id.clone())
+            .with_instructions([instruction])
+            .sign(bob_kp.private_key());
+
+        let executor = super::Executor::Initial;
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let mut stx = block.transaction();
+        let res = executor.execute_transaction(&mut stx, &bob_id, tx, &mut ivm_cache);
+        assert!(
+            matches!(res, Err(ValidationFail::NotPermitted(_))),
+            "initial executor should deny NFT metadata edits by non-domain owners"
         );
     }
 
