@@ -996,6 +996,7 @@ fn minimal_config_snapshot() {
                     iteration_budget_cap: 2s,
                     iteration_drain_budget_cap: 2s,
                     tick_work_budget_cap: 500ms,
+                    parallel_ingress: true,
                     validation_worker_threads: 0,
                     validation_work_queue_cap: 0,
                     validation_result_queue_cap: 0,

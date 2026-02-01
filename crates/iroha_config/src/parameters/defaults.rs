@@ -2348,6 +2348,8 @@ pub mod sumeragi {
     pub const WORKER_ITERATION_DRAIN_BUDGET_CAP_MS: u64 = 2_000;
     /// Cap (ms) on per-tick proposal/commit work (0 disables).
     pub const WORKER_TICK_WORK_BUDGET_CAP_MS: u64 = 500;
+    /// Enable per-queue parallel ingress workers for the Sumeragi loop.
+    pub const WORKER_PARALLEL_INGRESS: bool = true;
     /// Validation worker threads for pre-vote checks (0 = auto).
     pub const VALIDATION_WORKER_THREADS: usize = 0;
     /// Validation worker work-queue capacity per worker (0 = auto).

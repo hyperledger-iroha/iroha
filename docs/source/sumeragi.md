@@ -305,7 +305,7 @@ Actor Model
 - The Sumeragi main loop owns explicit subcomponents (commit, propose/pacemaker, DA/RBC, VRF, merge/lane relay) with isolated mutable state and focused helpers, while shared consensus state (pending blocks, certificate caches, locks) stays in the core actor.
 
 Backpressure & Telemetry
-- Scheduler: the worker loop drains a priority mailbox (Votes → RBC chunks → blocks → block payloads → consensus control → lane relay → background) with starvation guards (`non_vote_starve_max`, `block_rx_starve_max`). The mailbox holds one pending item per tier and refills deterministically, so a fixed inbound trace yields the same processing order across runs.
+- Scheduler: with `sumeragi.advanced.worker.parallel_ingress = true`, per-queue worker threads feed a ticketed gate (one actor at a time, FIFO by ticket) instead of the single-thread priority mailbox; the priority mailbox (Votes → RBC chunks → blocks → block payloads → consensus control → lane relay → background) with starvation guards (`non_vote_starve_max`, `block_rx_starve_max`) is used only when `parallel_ingress = false`.
 - Pre-tick drain is bounded by the next tick deadline (with a tick-min-gap grace when the deadline is immediate) so pacemaker ticks are not delayed by long queue backlogs; remaining messages drain after the tick within the iteration budget.
 - Commit pipeline work runs on the tick path; inbound handlers only request a wakeup so heavy commit processing does not block mailbox drain. The tick path still runs on the max-gap cadence so commits continue without starving message drain.
 - Pre-vote block validation is offloaded to background workers; the main loop schedules validation jobs and applies results on tick to keep drain latency bounded under backlog.
@@ -346,6 +346,7 @@ control = 1024           # control/background/lane channel capacity
 iteration_budget_cap_ms = 2000       # cap worker loop time budget per iteration
 iteration_drain_budget_cap_ms = 2000 # cap mailbox drain per iteration
 tick_work_budget_cap_ms = 500        # cap per-tick proposal/commit work (0 disables)
+parallel_ingress = true              # run per-queue ingress threads with a ticketed gate
 validation_worker_threads = 1        # pre-vote validation worker threads
 validation_work_queue_cap = 4        # validation work queue per worker
 validation_result_queue_cap = 4      # validation result queue
