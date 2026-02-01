@@ -298,7 +298,7 @@ impl NewRole {
     /// Add permission to the [`Role`]
     #[must_use]
     #[inline]
-    pub fn add_permission(mut self, perm: impl Into<Permission>) -> Self {
+    pub fn add_permission(self, perm: impl Into<Permission>) -> Self {
         self.add_permission_with_epoch(perm, 0)
     }
 

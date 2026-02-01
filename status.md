@@ -20,6 +20,20 @@ Last update: 2026-02-01
 - Tests: `cargo test -p izanami make_network_builder_applies_pipeline_time -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`, dead-code `stake_escrow`/`slash_sink` in `izanami`).
 - Formatting: `cargo fmt --all` (stable rustfmt warns about nightly-only options).
 - Izanami 1 TPS rerun (4 peers, 300s, target 200, tps 1) with `kura.fsync_mode=off`: stopped before target at min_height 164 (peers 164-165); network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_Pa4Vny` (peer logs in `run-1-stdout.log`); no mint-trigger missing errors found in peer logs.
+- Tests: `cargo test -p integration_tests triggers::by_call_trigger::trigger_burn_repetitions -- --nocapture` (ok; warning about repeated `Grant` in confirmation stream; `trigger not found` warning avoided).
+- Triggers: avoid tx confirmation stream warnings for expected ExecuteTrigger rejection by observing pipeline events and asserting the rejection reason.
+- Tests: `cargo test -p integration_tests triggers::by_call_trigger::trigger_burn_repetitions -- --nocapture` failed due to pre-existing build error in `crates/iroha_core/src/pipeline/access.rs` (`derive_from_instruction` now needs 5 args).
+- Pipeline access sets: ExecuteTrigger now marks the trigger as writable (not just repetitions) so self-modifying triggers declare the correct write keys; updated access-set coverage.
+- Pipeline access sets: ExecuteTrigger now unions access keys from trigger bodies (instructions or IVM manifest hints) with execution-depth recursion and cycle guards; added targeted access-set coverage.
+- Tests: `cargo test -p iroha_core execute_trigger_includes_ -- --nocapture`, `cargo test -p iroha_core execute_trigger_uses_manifest_hints_for_ivm_triggers -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`).
+- Formatting: `cargo fmt --all` (stable rustfmt warns about nightly-only options).
+- Tests: `cargo test -p iroha_core execute_trigger_keys_cover_definition_and_repetitions -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`, unused `mut` in `propose.rs`/`staking.rs`).
+- Triggers: tolerate pre-existing `CanRegisterTrigger` grants in by-call trigger integration tests by detecting repeated grant errors; added helper test coverage.
+- Tests: `cargo test -p integration_tests triggers::by_call_trigger::trigger_burn_repetitions -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`).
+- Sumeragi RBC: missing-block recovery for pending RBC now skips only when the block is known locally (aborted payloads still request missing-block fetch); added `request_missing_block_for_pending_rbc_with_aborted_payload` unit coverage.
+- Tests: `cargo test -p iroha_core request_missing_block_for_pending_rbc_with_aborted_payload -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`, plus `iroha_core` unused `mut` in `propose.rs` and `staking.rs`).
+- Tests: `cargo test -p integration_tests sumeragi_rbc_unverified_roster_stash_requests_missing_block -- --nocapture` timed out after 20m (the target test reported ok before the timeout; build kept running).
+- Formatting: `cargo fmt --all` (stable rustfmt warns about nightly-only options).
 - Izanami 1 TPS rerun (4 peers, 300s, target 200, tps 1) with `sumeragi.advanced.pacemaker.da_fast_reschedule`: stopped before target at min_height 136; no plan submission failures; network dir `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_O6hWla`, log `/tmp/izanami_1tps_200_20260201T092010Z.log`.
 - Izanami: remove erroneous `RegisterBox::Trigger invoke` error log and add `register_box_trigger_executes` unit coverage.
 - Tests: `cargo test -p iroha_core register_box_trigger_executes -- --nocapture` (ok; warnings about unused `padded` in `norito`, unused `mut` in `iroha_data_model`/`iroha_core`, and dead-code `PermissionCheckCache` methods).
