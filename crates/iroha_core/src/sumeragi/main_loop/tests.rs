@@ -1213,6 +1213,8 @@ fn test_sumeragi_config() -> SumeragiConfig {
             pending_stall_grace: Duration::from_millis(
                 iroha_config::parameters::defaults::sumeragi::PACEMAKER_PENDING_STALL_GRACE_MS,
             ),
+            da_fast_reschedule:
+                iroha_config::parameters::defaults::sumeragi::PACEMAKER_DA_FAST_RESCHEDULE,
             active_pending_soft_limit:
                 iroha_config::parameters::defaults::sumeragi::PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT,
             rbc_backlog_session_soft_limit: iroha_config::parameters::defaults::sumeragi::
@@ -53261,6 +53263,56 @@ async fn reschedule_skips_fast_timeout_with_da_enabled() {
     assert!(
         pending_after.last_quorum_reschedule.is_none(),
         "pending should not be quorum-rescheduled at fast timeout in DA mode"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reschedule_allows_fast_timeout_with_da_payload_available_when_enabled() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.pacemaker.da_fast_reschedule = true;
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    assert!(actor.runtime_da_enabled(), "test requires DA to be enabled");
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let view_idx = block.header().view_change_index();
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let fast_timeout = {
+        let view = actor.state.view();
+        actor.pending_fast_path_timeout(&view, consensus_mode)
+    };
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    assert!(
+        fast_timeout < quorum_timeout,
+        "test requires fast timeout to be shorter than quorum timeout"
+    );
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.validation_status = ValidationStatus::Valid;
+    pending.inserted_at = Instant::now() - fast_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    assert!(
+        actor.reschedule_stale_pending_blocks(None),
+        "fast timeout should reschedule when da_fast_reschedule is enabled"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.last_quorum_reschedule.is_some(),
+        "pending should be quorum-rescheduled at fast timeout when enabled"
     );
 
     harness.shutdown.send();

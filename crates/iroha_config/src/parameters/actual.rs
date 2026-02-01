@@ -3655,6 +3655,8 @@ pub struct SumeragiPacemaker {
     pub jitter_frac_permille: u32,
     /// Grace period before a pending block counts as stalled for backpressure.
     pub pending_stall_grace: Duration,
+    /// Allow fast quorum reschedules in DA mode when payloads are locally available.
+    pub da_fast_reschedule: bool,
     /// Soft limit for blocking pending blocks before backpressure defers proposals.
     pub active_pending_soft_limit: usize,
     /// Soft limit for unresolved RBC backlog sessions before backpressure defers proposals.

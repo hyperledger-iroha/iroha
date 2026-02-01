@@ -398,6 +398,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 pending_stall_grace: core::time::Duration::from_millis(
                     iroha_config::parameters::defaults::sumeragi::PACEMAKER_PENDING_STALL_GRACE_MS,
                 ),
+                da_fast_reschedule:
+                    iroha_config::parameters::defaults::sumeragi::PACEMAKER_DA_FAST_RESCHEDULE,
                 active_pending_soft_limit:
                     iroha_config::parameters::defaults::sumeragi::PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT,
                 rbc_backlog_session_soft_limit:

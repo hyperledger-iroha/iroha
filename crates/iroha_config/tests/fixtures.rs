@@ -1006,6 +1006,7 @@ fn minimal_config_snapshot() {
                     max_backoff: 10s,
                     jitter_frac_permille: 0,
                     pending_stall_grace: 250ms,
+                    da_fast_reschedule: false,
                     active_pending_soft_limit: 1,
                     rbc_backlog_session_soft_limit: 2,
                     rbc_backlog_chunk_soft_limit: 16,
